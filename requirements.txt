@@ -3,3 +3,8 @@ uvicorn
 setuptools
 wheel
 twine
+numpy
+pillow
+opencv-python
+scipy
+platformdirs
