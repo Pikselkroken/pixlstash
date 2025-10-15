@@ -1,10 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.responses import FileResponse
 import uvicorn
 import os
 import json
 from platformdirs import user_config_dir
 from pixelurgy_vault.vault import Vault
+from pixelurgy_vault.picture import Picture
+import shutil
 
 APP_NAME = "pixelurgy-vault"
 CONFIG_FILENAME = "config.json"
@@ -41,12 +43,107 @@ class Server:
     def setup_routes(self):
         @self.app.get("/")
         def read_root():
-            return {"message": "Pixelurgy Vault REST API"}
+            version = self.get_version()
+            return {"message": "Pixelurgy Vault REST API", "version": version}
+
+        from fastapi import Query
+
+        @self.app.get("/pictures/{id}")
+        def get_picture(id: str, info: bool = Query(False)):
+            try:
+                pic = self.vault.pictures[id]
+            except KeyError:
+                return {"error": "Picture not found"}
+            if info:
+                # Return metadata only
+                return {
+                    "id": pic.id,
+                    "file_path": pic.file_path,
+                    "character_id": pic.character_id,
+                    "title": pic.title,
+                    "description": pic.description,
+                    "tags": pic.tags,
+                    "width": pic.width,
+                    "height": pic.height,
+                    "format": pic.format,
+                    "created_at": pic.created_at,
+                    "quality": pic.quality.__dict__ if pic.quality else None,
+                }
+            # Otherwise, deliver the image file
+            return FileResponse(pic.file_path)
 
         @self.app.get("/favicon.ico")
         def favicon():
             favicon_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
             return FileResponse(favicon_path)
+
+        @self.app.post("/pictures")
+        def import_picture(
+            file_path: str = Body(...),
+            character_id: str = Body(...),
+            title: str = Body(...),
+            description: str = Body(None),
+            tags: list = Body(None),
+            format: str = Body(None),
+            width: int = Body(None),
+            height: int = Body(None),
+        ):
+            # Determine extension
+            ext = os.path.splitext(file_path)[1]
+            # Destination folder: image_root/character_id
+            dest_folder = os.path.join(self.vault.get_image_root(), character_id)
+            os.makedirs(dest_folder, exist_ok=True)
+            dest_filename = f"{title}{ext}"
+            dest_path = os.path.join(dest_folder, dest_filename)
+            shutil.copy2(file_path, dest_path)
+            # Create Picture object
+            pic = Picture(
+                file_path=dest_path,
+                character_id=character_id,
+                title=title,
+                description=description,
+                tags=tags,
+                width=width,
+                height=height,
+                format=format,
+            )
+            self.vault.pictures.import_picture(pic)
+            return {"status": "success", "id": pic.id, "file_path": dest_path}
+
+        @self.app.get("/pictures")
+        def list_pictures():
+            print(self.vault.pictures)
+            pics = self.vault.pictures.find()
+            return [
+                {
+                    "id": pic.id,
+                    "file_path": pic.file_path,
+                    "character_id": pic.character_id,
+                    "title": pic.title,
+                    "description": pic.description,
+                    "tags": pic.tags,
+                    "width": pic.width,
+                    "height": pic.height,
+                    "format": pic.format,
+                    "created_at": pic.created_at,
+                    "quality": pic.quality.__dict__ if pic.quality else None,
+                }
+                for pic in pics
+            ]
+
+    def get_version(self):
+        import os
+
+        try:
+            import tomllib
+        except ImportError:
+            import tomli as tomllib
+        pyproject_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "pyproject.toml"
+        )
+        with open(pyproject_path, "rb") as f:
+            data = tomllib.load(f)
+        return data.get("project", {}).get("version", "unknown")
 
 
 if __name__ == "__main__":

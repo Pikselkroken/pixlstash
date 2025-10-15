@@ -21,7 +21,7 @@ class Vault:
         self.db_path = db_path  # Path to SQLite database file
         self.connection: Optional[sqlite3.Connection] = None
         db_exists = os.path.exists(self.db_path)
-        self.connection = sqlite3.connect(self.db_path)
+        self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         if not db_exists:
             self._create_tables()
         if image_root:
@@ -29,6 +29,28 @@ class Vault:
         if description:
             self.set_metadata("description", description)
         self.pictures = Pictures(self.connection)
+
+        # Add Logo.png to every vault
+        import shutil
+        from pixelurgy_vault.picture import Picture
+
+        logo_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Logo.png")
+        logo_dest_folder = self.get_image_root()
+        if logo_dest_folder:
+            os.makedirs(logo_dest_folder, exist_ok=True)
+            logo_dest = os.path.join(logo_dest_folder, "Logo.png")
+            if not os.path.exists(logo_dest):
+                shutil.copy2(logo_src, logo_dest)
+            # Always import the logo as a Picture
+            pic = Picture(
+                file_path=logo_dest,
+                character_id="logo",
+                title="Logo",
+                description="Vault Logo",
+                tags=["logo"],
+                format="png",
+            )
+            self.pictures.import_picture(pic)
 
     def __repr__(self):
         return f"Vault(db_path='{self.db_path}')"
