@@ -51,7 +51,7 @@ class Vault:
                 format="png",
             )
             if not self.pictures.contains(pic):
-                self.pictures.import_picture(pic)
+                self.pictures.import_pictures([pic])
 
     def __repr__(self):
         return f"Vault(db_path='{self.db_path}')"

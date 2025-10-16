@@ -49,35 +49,40 @@ class Pictures:
         for row in cursor.fetchall():
             yield row[0]
 
-    def import_picture(self, picture):
-        """Import a Picture instance into the database."""
+    def import_pictures(self, pictures):
+        """Import a list of Picture instances into the database using executemany for efficiency."""
         cursor = self.connection.cursor()
-        tags_json = json.dumps(picture.tags) if hasattr(picture, "tags") else None
-        quality_json = (
-            json.dumps(picture.quality.__dict__)
-            if hasattr(picture, "quality") and picture.quality
-            else None
-        )
-        cursor.execute(
+        values = []
+        for picture in pictures:
+            tags_json = json.dumps(picture.tags) if hasattr(picture, "tags") else None
+            quality_json = (
+                json.dumps(picture.quality.__dict__)
+                if hasattr(picture, "quality") and picture.quality
+                else None
+            )
+            values.append(
+                (
+                    picture.id,
+                    picture.file_path,
+                    getattr(picture, "character_id", None),
+                    getattr(picture, "title", None),
+                    getattr(picture, "description", None),
+                    tags_json,
+                    getattr(picture, "width", None),
+                    getattr(picture, "height", None),
+                    getattr(picture, "format", None),
+                    getattr(picture, "created_at", None),
+                    quality_json,
+                    getattr(picture, "thumbnail_array", None),
+                )
+            )
+        cursor.executemany(
             """
             INSERT INTO pictures (
                 id, file_path, character_id, title, description, tags, width, height, format, created_at, quality, thumbnail
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                picture.id,
-                picture.file_path,
-                getattr(picture, "character_id", None),
-                getattr(picture, "title", None),
-                getattr(picture, "description", None),
-                tags_json,
-                getattr(picture, "width", None),
-                getattr(picture, "height", None),
-                getattr(picture, "format", None),
-                getattr(picture, "created_at", None),
-                quality_json,
-                getattr(picture, "thumbnail_array", None),
-            ),
+            values,
         )
         self.connection.commit()
 

@@ -99,52 +99,79 @@ class Server:
 
             # Detect content type and dispatch
             content_type = request.headers.get("content-type", "")
+            dest_paths = []
+            titles = []
+
+            character_id = character_id_form if character_id is None else character_id
+            dest_folder = self.vault.get_image_root()
+            if character_id:
+                dest_folder = os.path.join(self.vault.get_image_root(), character_id)
+            os.makedirs(dest_folder, exist_ok=True)
+
             if content_type.startswith("multipart/form-data") and image is not None:
                 # Handle image upload
                 ext = os.path.splitext(image.filename)[1]
-                character_id = (
-                    character_id_form if character_id is None else character_id
-                )
                 description = description_form if description is None else description
                 tags = json.loads(tags_form) if tags_form else []
-                dest_folder = os.path.join(self.vault.get_image_root(), character_id)
-                os.makedirs(dest_folder, exist_ok=True)
                 dest_filename = (
                     f"{os.path.splitext(os.path.basename(image.filename))[0]}{ext}"
                 )
                 dest_path = os.path.join(dest_folder, dest_filename)
                 with open(dest_path, "wb") as f:
                     f.write(await image.read())
+                dest_paths.append(dest_path)
+                titles.append(title)
+
             elif file_path:
-                # Handle file path string
-                ext = os.path.splitext(file_path)[1]
-                dest_folder = os.path.join(self.vault.get_image_root(), character_id)
-                os.makedirs(dest_folder, exist_ok=True)
-                dest_filename = (
-                    f"{os.path.splitext(os.path.basename(file_path))[0]}{ext}"
-                )
-                dest_path = os.path.join(dest_folder, dest_filename)
-                shutil.copy2(file_path, dest_path)
+                source_paths = []
+                if os.path.isdir(file_path):
+                    # Handle directory of images
+                    for entry in os.listdir(file_path):
+                        full_path = os.path.join(file_path, entry)
+                        titles.append(os.path.splitext(entry)[0])
+                        source_paths.append(full_path)
+                else:
+                    source_paths.append(file_path)
+                    titles.append(title)
+
+                for file_path in source_paths:
+                    # Handle file path string
+                    ext = os.path.splitext(file_path)[1]
+                    dest_folder = os.path.join(
+                        self.vault.get_image_root(), character_id
+                    )
+                    os.makedirs(dest_folder, exist_ok=True)
+                    dest_filename = (
+                        f"{os.path.splitext(os.path.basename(file_path))[0]}{ext}"
+                    )
+                    dest_path = os.path.join(dest_folder, dest_filename)
+                    dest_paths.append(dest_path)
+                    shutil.copy2(file_path, dest_path)
             else:
                 return {"error": "No image or file_path provided"}
 
-            # Calculate width, height, and format automatically
-            with Image.open(dest_path) as img:
-                width, height = img.size
-                format = img.format
-            # Create Picture object
-            pic = Picture(
-                file_path=dest_path,
-                character_id=character_id,
-                title=title,
-                description=description,
-                tags=tags,
-                width=width,
-                height=height,
-                format=format,
-            )
-            self.vault.pictures.import_picture(pic)
-            return {"status": "success", "id": pic.id, "file_path": dest_path}
+            ids = []
+            pics = []
+            for i, dest_path in enumerate(dest_paths):
+                # Calculate width, height, and format automatically
+                with Image.open(dest_path) as img:
+                    width, height = img.size
+                    format = img.format
+                # Create Picture object
+                pic = Picture(
+                    file_path=dest_path,
+                    character_id=character_id,
+                    title=titles[i],
+                    description=description,
+                    tags=tags,
+                    width=width,
+                    height=height,
+                    format=format,
+                )
+                pics.append(pic)
+                ids.append(pic.id)
+            self.vault.pictures.import_pictures(pics)
+            return {"status": "success", "ids": ids, "file_paths": dest_paths}
 
         @self.app.get("/pictures")
         async def list_pictures(request: Request):
