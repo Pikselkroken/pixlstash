@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Query
 from fastapi.responses import FileResponse
 import uvicorn
 import os
@@ -7,6 +7,8 @@ from platformdirs import user_config_dir
 from pixelurgy_vault.vault import Vault
 from pixelurgy_vault.picture import Picture
 import shutil
+from PIL import Image
+
 
 APP_NAME = "pixelurgy-vault"
 CONFIG_FILENAME = "config.json"
@@ -46,8 +48,6 @@ class Server:
             version = self.get_version()
             return {"message": "Pixelurgy Vault REST API", "version": version}
 
-        from fastapi import Query
-
         @self.app.get("/pictures/{id}")
         def get_picture(id: str, info: bool = Query(False)):
             try:
@@ -84,9 +84,6 @@ class Server:
             title: str = Body(...),
             description: str = Body(None),
             tags: list = Body(None),
-            format: str = Body(None),
-            width: int = Body(None),
-            height: int = Body(None),
         ):
             # Determine extension
             ext = os.path.splitext(file_path)[1]
@@ -96,6 +93,10 @@ class Server:
             dest_filename = f"{title}{ext}"
             dest_path = os.path.join(dest_folder, dest_filename)
             shutil.copy2(file_path, dest_path)
+            # Calculate width, height, and format automatically
+            with Image.open(dest_path) as img:
+                width, height = img.size
+                format = img.format
             # Create Picture object
             pic = Picture(
                 file_path=dest_path,
@@ -112,7 +113,6 @@ class Server:
 
         @self.app.get("/pictures")
         def list_pictures():
-            print(self.vault.pictures)
             pics = self.vault.pictures.find()
             return [
                 {
