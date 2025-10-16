@@ -63,6 +63,7 @@ def test_benchmark_add_100_images_by_path():
             json_data = {
                 "file_path": img_path,
                 "character_id": "bench",
+                "title": f"benchmark image {i}",
                 "description": f"benchmark image {i}",
                 "tags": [],
             }
@@ -88,22 +89,27 @@ def test_benchmark_add_100_images_by_binary_upload():
         server.vault.image_root = image_root
         client = TestClient(server.app)
         # Create 100 random images
+        from io import BytesIO
+
         images = []
         total_bytes = 0
         for i in range(100):
             arr = np.random.randint(0, 256, (1024, 1024, 3), dtype=np.uint8)
             img = Image.fromarray(arr)
-            img_path = os.path.join(temp_dir, f"image_{i:04d}.png")
-            total_bytes += img.size[0] * img.size[1] * 3  # Rough estimate of bytes)
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            img_bytes = buf.getvalue()
+            images.append(img_bytes)
+            total_bytes += len(img_bytes)
         start = time.time()
-        for i, img in enumerate(images):
-            json_data = {
-                "image": img,
+        for i, img_bytes in enumerate(images):
+            files = {"image": (f"image_{i:04d}.png", img_bytes, "image/png")}
+            data = {
                 "character_id": "bench",
                 "description": f"benchmark image {i}",
-                "tags": [],
+                "tags": "[]",
             }
-            r = client.post("/pictures", data=json_data)
+            r = client.post("/pictures", files=files, data=data)
             assert r.status_code == 200
             resp = r.json()
             assert resp.get("status") == "success"

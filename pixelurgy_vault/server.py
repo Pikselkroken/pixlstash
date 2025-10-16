@@ -107,7 +107,6 @@ class Server:
                 )
                 description = description_form if description is None else description
                 tags = json.loads(tags_form) if tags_form else []
-                print("TAGS:", tags, "CHARACTER_ID:", character_id)
                 dest_folder = os.path.join(self.vault.get_image_root(), character_id)
                 os.makedirs(dest_folder, exist_ok=True)
                 dest_filename = (
