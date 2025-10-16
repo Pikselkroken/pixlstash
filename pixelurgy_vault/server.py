@@ -147,14 +147,23 @@ class Server:
             return {"status": "success", "id": pic.id, "file_path": dest_path}
 
         @self.app.get("/pictures")
-        def list_pictures():
-            pics = self.vault.pictures.find()
+        async def list_pictures(request: Request):
+            # Collect query parameters for filtering
+            query_params = dict(request.query_params)
+            # Convert tags to list if present
+            if "tags" in query_params and isinstance(query_params["tags"], str):
+                import json
+
+                try:
+                    query_params["tags"] = json.loads(query_params["tags"])
+                except Exception:
+                    query_params["tags"] = [query_params["tags"]]
+            pics = self.vault.pictures.find(**query_params)
             return [
                 {
                     "id": pic.id,
                     "file_path": pic.file_path,
                     "character_id": pic.character_id,
-                    "title": pic.title,
                     "description": pic.description,
                     "tags": pic.tags,
                     "width": pic.width,

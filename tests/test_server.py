@@ -6,6 +6,7 @@ from PIL import Image
 import pytest
 from fastapi.testclient import TestClient
 from pixelurgy_vault.server import Server
+import random
 
 
 def test_post_logo_altered_pixel_upload():
@@ -39,7 +40,8 @@ def test_post_logo_altered_pixel_upload():
         assert resp.get("file_path")
 
 
-def test_benchmark_add_100_images_by_path():
+def test_benchmark_add_images_by_path():
+    TEST_SIZE = 50
     with tempfile.TemporaryDirectory() as temp_dir:
         vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
@@ -48,10 +50,9 @@ def test_benchmark_add_100_images_by_path():
         server.vault.db_path = vault_path
         server.vault.image_root = image_root
         client = TestClient(server.app)
-        # Create 100 random images
         image_paths = []
         total_bytes = 0
-        for i in range(100):
+        for i in range(TEST_SIZE):
             arr = np.random.randint(0, 256, (1024, 1024, 3), dtype=np.uint8)
             img = Image.fromarray(arr)
             img_path = os.path.join(temp_dir, f"image_{i:04d}.png")
@@ -75,11 +76,30 @@ def test_benchmark_add_100_images_by_path():
             assert resp.get("file_path")
         end = time.time()
         print(
-            f"Path Benchmark: Added 100 images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
+            f"Path Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
         )
 
+        # Read back and check a few images
+        random_indices = random.sample(range(TEST_SIZE), 3)
+        for check_idx in random_indices:
+            title = f"benchmark image {check_idx}"
+            # Query metadata to get id
+            resp = client.get(f"/pictures?description={title}")
+            assert resp.status_code == 200
+            results = resp.json()
+            assert len(results) > 0
+            pic_id = results[0]["id"]
+            # Fetch image by id
+            img_resp = client.get(f"/pictures/{pic_id}")
+            assert img_resp.status_code == 200
+            # Compare first 1024 bytes for speed
+            with open(image_paths[check_idx], "rb") as f:
+                image = f.read()
+            assert img_resp.content[:1024] == image[:1024]
 
-def test_benchmark_add_100_images_by_binary_upload():
+
+def test_benchmark_add_images_by_binary_upload():
+    TEST_SIZE = 50
     with tempfile.TemporaryDirectory() as temp_dir:
         vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
@@ -88,12 +108,12 @@ def test_benchmark_add_100_images_by_binary_upload():
         server.vault.db_path = vault_path
         server.vault.image_root = image_root
         client = TestClient(server.app)
-        # Create 100 random images
+
         from io import BytesIO
 
         images = []
         total_bytes = 0
-        for i in range(100):
+        for i in range(TEST_SIZE):
             arr = np.random.randint(0, 256, (1024, 1024, 3), dtype=np.uint8)
             img = Image.fromarray(arr)
             buf = BytesIO()
@@ -117,8 +137,24 @@ def test_benchmark_add_100_images_by_binary_upload():
             assert resp.get("file_path")
         end = time.time()
         print(
-            f"Path Benchmark: Added 100 images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
+            f"Path Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
         )
+
+        # Read back and check a few images
+        random_indices = random.sample(range(TEST_SIZE), 3)
+        for check_idx in random_indices:
+            title = f"benchmark image {check_idx}"
+            # Query metadata to get id
+            resp = client.get(f"/pictures?description={title}")
+            assert resp.status_code == 200
+            results = resp.json()
+            assert len(results) > 0
+            pic_id = results[0]["id"]
+            # Fetch image by id
+            img_resp = client.get(f"/pictures/{pic_id}")
+            assert img_resp.status_code == 200
+            # Compare first 1024 bytes for speed
+            assert img_resp.content[:1024] == images[check_idx][:1024]
 
 
 def test_post_logo_altered_pixel_path():
