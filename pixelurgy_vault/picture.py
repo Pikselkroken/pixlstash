@@ -32,6 +32,7 @@ class Picture:
         format: Optional[str] = None,
         created_at: Optional[str] = None,
         thumbnail: Optional[np.ndarray] = None,
+        score: Optional[int] = None,
         quality: Optional[PictureQuality] = None,
     ):
         if not os.path.exists(file_path):
@@ -47,6 +48,7 @@ class Picture:
         self.format = format
         self.created_at = created_at
         self._thumbnail_array = thumbnail  # NumPy array (H, W, C), dtype=uint8
+        self.score = score
         self.quality = quality
 
     @staticmethod

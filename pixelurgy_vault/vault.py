@@ -84,6 +84,7 @@ class Vault:
                 format TEXT,
                 created_at TEXT,
                 thumbnail BLOB,
+                score INTEGER CHECK(score BETWEEN 0 AND 5),
                 quality TEXT
             )
             """

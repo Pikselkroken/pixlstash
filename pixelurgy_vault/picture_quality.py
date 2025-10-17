@@ -10,14 +10,12 @@ class PictureQuality:
 
     def __init__(
         self,
-        subjective_score: Optional[float] = None,
         sharpness: Optional[float] = None,
         edge_density: Optional[float] = None,
         contrast: Optional[float] = None,
         brightness: Optional[float] = None,
         noise_level: Optional[float] = None,
     ):
-        self.subjective_score = subjective_score  # User or model rating (0.0-1.0)
         self.sharpness = sharpness  # Objective sharpness metric (0.0-1.0)
         self.edge_density = edge_density  # Fraction of edge pixels (0.0-1.0)
         self.contrast = contrast  # Normalized contrast (0.0-1.0)
