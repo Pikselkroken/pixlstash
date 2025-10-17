@@ -43,9 +43,9 @@ class Vault:
                 shutil.copy2(logo_src, logo_dest)
             # Always import the logo as a Picture
             pic = Picture(
+                id=Picture.calculate_sha256_from_file_path(logo_dest),
                 file_path=logo_dest,
                 character_id="logo",
-                title="Logo",
                 description="Vault Logo",
                 tags=["logo"],
                 format="png",
@@ -77,15 +77,14 @@ class Vault:
                 id TEXT PRIMARY KEY,
                 file_path TEXT NOT NULL,
                 character_id TEXT,
-                title TEXT,
                 description TEXT,
                 tags TEXT,
                 width INTEGER,
                 height INTEGER,
                 format TEXT,
                 created_at TEXT,
-                quality TEXT,
-                thumbnail BLOB
+                thumbnail BLOB,
+                quality TEXT
             )
             """
         )

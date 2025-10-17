@@ -14,24 +14,19 @@ class Pictures:
         row = cursor.fetchone()
         if not row:
             raise KeyError(f"Picture with id {picture_id} not found.")
-        tags = json.loads(row[5]) if row[5] else []
-        quality = None
-        if row[10]:
-            quality = PictureQuality(**json.loads(row[10]))
         pic = Picture(
+            id=row[0],
             file_path=row[1],
             character_id=row[2],
-            title=row[3],
-            description=row[4],
-            tags=tags,
-            width=row[6],
-            height=row[7],
-            format=row[8],
-            created_at=row[9],
-            thumbnail=row[11],
+            description=row[3],
+            tags=json.loads(row[4]) if row[4] else [],
+            width=row[5],
+            height=row[6],
+            format=row[7],
+            created_at=row[8],
+            thumbnail=row[9],
+            quality=PictureQuality(**json.loads(row[10])) if row[10] else None,
         )
-        pic.id = row[0]
-        pic.quality = quality
         return pic
 
     def __setitem__(self, picture_id, picture):
@@ -65,22 +60,21 @@ class Pictures:
                     picture.id,
                     picture.file_path,
                     getattr(picture, "character_id", None),
-                    getattr(picture, "title", None),
                     getattr(picture, "description", None),
                     tags_json,
                     getattr(picture, "width", None),
                     getattr(picture, "height", None),
                     getattr(picture, "format", None),
                     getattr(picture, "created_at", None),
-                    quality_json,
                     getattr(picture, "thumbnail_array", None),
+                    quality_json,
                 )
             )
         cursor.executemany(
             """
             INSERT INTO pictures (
-                id, file_path, character_id, title, description, tags, width, height, format, created_at, quality, thumbnail
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, file_path, character_id, description, tags, width, height, format, created_at, thumbnail, quality
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -110,23 +104,18 @@ class Pictures:
         rows = cursor.fetchall()
         result = []
         for row in rows:
-            tags = json.loads(row[5]) if row[5] else []
-            quality = None
-            if row[10]:
-                quality = PictureQuality(**json.loads(row[10]))
             pic = Picture(
+                id=row[0],
                 file_path=row[1],
                 character_id=row[2],
-                title=row[3],
-                description=row[4],
-                tags=tags,
-                width=row[4],
-                height=row[5],
-                format=row[6],
-                created_at=row[7],
-                thumbnail=row[10],
+                description=row[3],
+                tags=json.loads(row[4]) if row[4] else [],
+                width=row[5],
+                height=row[6],
+                format=row[7],
+                created_at=row[8],
+                thumbnail=row[9],
+                quality=PictureQuality(**json.loads(row[10])) if row[10] else None,
             )
-            pic.id = row[0]
-            pic.quality = quality
             result.append(pic)
         return result
