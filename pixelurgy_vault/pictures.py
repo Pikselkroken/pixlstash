@@ -25,7 +25,8 @@ class Pictures:
             format=row[7],
             created_at=row[8],
             thumbnail=row[9],
-            quality=PictureQuality(**json.loads(row[10])) if row[10] else None,
+            score=row[10],
+            quality=PictureQuality(**json.loads(row[11])) if row[11] else None,
         )
         return pic
 
@@ -67,14 +68,15 @@ class Pictures:
                     getattr(picture, "format", None),
                     getattr(picture, "created_at", None),
                     getattr(picture, "thumbnail_array", None),
+                    getattr(picture, "score", None),
                     quality_json,
                 )
             )
         cursor.executemany(
             """
             INSERT INTO pictures (
-                id, file_path, character_id, description, tags, width, height, format, created_at, thumbnail, quality
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, file_path, character_id, description, tags, width, height, format, created_at, thumbnail, score, quality
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -115,7 +117,8 @@ class Pictures:
                 format=row[7],
                 created_at=row[8],
                 thumbnail=row[9],
-                quality=PictureQuality(**json.loads(row[10])) if row[10] else None,
+                score=row[10],
+                quality=PictureQuality(**json.loads(row[11])) if row[11] else None,
             )
             result.append(pic)
         return result
