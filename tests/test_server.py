@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 import pytest
 from fastapi.testclient import TestClient
-from pixelurgy_vault.server import Server
+from pixelurgy_vault.server import Server, Picture
 import random
 from io import BytesIO
 
@@ -74,7 +74,6 @@ def test_benchmark_add_images_by_path():
             json_data = {
                 "file_path": img_path,
                 "character_id": "bench",
-                "title": f"benchmark image {i}",
                 "description": f"benchmark image {i}",
                 "tags": [],
             }
@@ -179,7 +178,7 @@ def test_benchmark_add_images_by_binary_upload():
             assert resp.get("file_paths")
         end = time.time()
         print(
-            f"Path Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
+            f"Upload Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
         )
 
         # Read back and check a few images
@@ -221,7 +220,6 @@ def test_benchmark_add_images_by_path():
             json_data = {
                 "file_path": img_path,
                 "character_id": "bench",
-                "title": f"benchmark image {i}",
                 "description": f"benchmark image {i}",
                 "tags": [],
             }
@@ -234,7 +232,7 @@ def test_benchmark_add_images_by_path():
             assert resp.get("file_paths")
         end = time.time()
         print(
-            f"Path Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
+            f"Single Image Path Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
         )
 
         # Read back and check a few images
@@ -293,17 +291,14 @@ def test_benchmark_add_images_by_directory():
         # Read back and check a few images
         random_indices = random.sample(range(TEST_SIZE), 3)
         for check_idx in random_indices:
-            title = f"image_{check_idx:04d}"
-            # Query metadata to get id
-            resp = client.get(f"/pictures?title={title}")
-            assert resp.status_code == 200
-            results = resp.json()
-            assert len(results) > 0
-            pic_id = results[0]["id"]
+            file_name = f"image_{check_idx:04d}.png"
+            id = Picture.calculate_sha256_from_file_path(
+                os.path.join(image_path, file_name)
+            )
             # Fetch image by id
-            img_resp = client.get(f"/pictures/{pic_id}")
+            img_resp = client.get(f"/pictures/{id}")
             assert img_resp.status_code == 200
             # Compare first 1024 bytes for speed
-            with open(os.path.join(image_path, title + ".png"), "rb") as f:
+            with open(os.path.join(image_path, file_name), "rb") as f:
                 image = f.read()
             assert img_resp.content[:1024] == image[:1024]
