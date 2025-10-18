@@ -7,6 +7,14 @@ from fastapi.testclient import TestClient
 from pixelurgy_vault.server import Server
 import random
 from io import BytesIO
+import tomllib
+
+
+def get_project_version():
+    pyproject_path = os.path.join(os.path.dirname(__file__), "../pyproject.toml")
+    with open(pyproject_path, "rb") as f:
+        data = tomllib.load(f)
+    return data["project"]["version"]
 
 
 def test_esmeralda_vault_character_and_logo():
@@ -224,9 +232,10 @@ def test_read_root():
         client = TestClient(server.app)
         response = client.get("/")
         assert response.status_code == 200
+        expected_version = get_project_version()
         assert response.json() == {
             "message": "Pixelurgy Vault REST API",
-            "version": "0.2.0",
+            "version": expected_version,
         }
 
 
