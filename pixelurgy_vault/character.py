@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 class Character:
@@ -9,30 +9,32 @@ class Character:
 
     def __init__(
         self,
-        id: str,
-        trigger_word: str,
-        original_seed: int,
-        original_prompt: str,
-        lora_model_paths: List[Tuple[str, float]],
+        id: Optional[str] = None,
+        name: Optional[str] = None,
+        original_seed: Optional[int] = None,
+        original_prompt: Optional[str] = None,
+        lora_model: Optional[List[Tuple[str, float]]] = None,
+        description: Optional[str] = None,
     ):
         """
         :param id: Unique identifier for the character
-        :param trigger_word: Unique ID or keyword for the character
+        :param name: Unique name or keyword for the character
         :param original_seed: Seed used for original generation
         :param original_prompt: Prompt used for original generation
-        :param lora_model_paths: List of tuples (model_path, fractional_ranking)
+        :param lora_model_name: List of tuples (model_name, fractional_ranking)
         """
         self.id = id if id else uuid.uuid4().hex
-        self.trigger_word = trigger_word
+        self.name = name
         self.original_seed = original_seed
         self.original_prompt = original_prompt
-        self.lora_model_paths = lora_model_paths  # List of (path, ranking)
+        self.lora_model = lora_model  # List of (name, ranking)
+        self.description = description
 
-    def add_lora_model(self, model_path: str, ranking: float):
-        self.lora_model_paths.append((model_path, ranking))
+    def add_lora_model(self, model_name: str, ranking: float):
+        self.lora_model.append((model_name, ranking))
 
     def get_top_lora(self, n: int = 1) -> List[Tuple[str, float]]:
         """
         Returns the top n LoRA models by ranking.
         """
-        return sorted(self.lora_model_paths, key=lambda x: x[1], reverse=True)[:n]
+        return sorted(self.lora_model, key=lambda x: x[1], reverse=True)[:n]

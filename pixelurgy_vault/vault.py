@@ -4,8 +4,11 @@ import os
 import sqlite3
 import shutil
 
+from .characters import Characters
 from .pictures import Pictures
 from .picture_iterations import PictureIterations
+
+from .character import Character
 from .picture_iteration import PictureIteration
 from .picture import Picture
 
@@ -25,16 +28,22 @@ class Vault:
         self.db_path = db_path  # Path to SQLite database file
         self.connection: Optional[sqlite3.Connection] = None
         db_exists = os.path.exists(self.db_path)
+        print(f"DEBUG: Vault init, db_path={self.db_path}, db_exists={db_exists}")
         self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         if not db_exists:
+            print("DEBUG: Creating tables and importing default data...")
             self._create_tables()
-            self._import_default_data()
+        else:
+            print("DEBUG: Using existing database, skipping default import.")
         if image_root:
             self.set_metadata("image_root", image_root)
         if description:
             self.set_metadata("description", description)
         self.pictures = Pictures(self.connection)
         self.iterations = PictureIterations(self.connection)
+        self.characters = Characters(self.connection)
+        if not db_exists:
+            self._import_default_data()
 
     def __repr__(self):
         return f"Vault(db_path='{self.db_path}')"
@@ -60,6 +69,9 @@ class Vault:
             CREATE TABLE IF NOT EXISTS characters (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                original_seed INTEGER,
+                original_prompt TEXT,
+                lora_model TEXT,
                 description TEXT
             )
             """
@@ -71,7 +83,6 @@ class Vault:
             CREATE TABLE IF NOT EXISTS pictures (
                 id TEXT PRIMARY KEY,
                 character_id TEXT,
-                title TEXT,
                 description TEXT,
                 tags TEXT,
                 created_at TEXT,
@@ -141,22 +152,31 @@ class Vault:
 
         logo_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Logo.png")
         logo_dest_folder = self.get_image_root()
-        if logo_dest_folder:
-            os.makedirs(logo_dest_folder, exist_ok=True)
-            logo_dest = os.path.join(logo_dest_folder, "Logo.png")
-            if not os.path.exists(logo_dest):
-                shutil.copy2(logo_src, logo_dest)
+        print(f"DEBUG: logo_dest_folder in _import_default_data: {logo_dest_folder}")
+        if not logo_dest_folder:
+            # Fallback: use a default images directory next to the DB file
+            logo_dest_folder = os.path.join(os.path.dirname(self.db_path), "images")
+            print(f"DEBUG: Fallback logo_dest_folder: {logo_dest_folder}")
+        os.makedirs(logo_dest_folder, exist_ok=True)
+        logo_dest = os.path.join(logo_dest_folder, "Logo.png")
+        if not os.path.exists(logo_dest):
+            shutil.copy2(logo_src, logo_dest)
 
-            picture = Picture(
-                character_id="logo", description="Vault Logo", tags=["logo"]
-            )
-            # create_from_file returns (picture_id, PictureIteration)
-            _, iteration = PictureIteration.create_from_file(
-                picture_id=picture.id,
-                image_root_path=logo_dest_folder,
-                source_file_path=logo_dest,
-                is_master=True,
-            )
-            # Import iteration (will create master picture row if missing)
-            self.pictures.import_pictures([picture])
-            self.iterations.import_iterations([iteration])
+        character = Character(
+            name="EsmeraldaVault", description="Built-in vault character"
+        )
+        self.characters.add(character)
+
+        picture = Picture(
+            character_id=character.id, description="Vault Logo", tags=["logo"]
+        )
+        # create_from_file returns (picture_id, PictureIteration)
+        _, iteration = PictureIteration.create_from_file(
+            picture_id=picture.id,
+            image_root_path=logo_dest_folder,
+            source_file_path=logo_dest,
+            is_master=True,
+        )
+        # Import iteration (will create master picture row if missing)
+        self.pictures.import_pictures([picture])
+        self.iterations.import_iterations([iteration])

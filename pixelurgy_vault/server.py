@@ -48,9 +48,40 @@ class Server:
         return config
 
     def setup_routes(self):
+        @self.app.get("/characters")
+        def get_characters(name: str = Query(None)):
+            """List all characters or filter by name."""
+            chars = (
+                self.vault.characters.find(name=name)
+                if name
+                else self.vault.characters.list()
+            )
+            return [c.__dict__ for c in chars]
+
+        @self.app.post("/characters")
+        def create_character(
+            id: str = Body(...),
+            name: str = Body(...),
+            description: str = Body(None),
+        ):
+            from pixelurgy_vault.characters import Character
+
+            char = Character(id=id, name=name, description=description)
+            self.vault.characters.add(char)
+            return {"status": "success", "character": char.__dict__}
+
+        @self.app.get("/characters/{id}")
+        def get_character_by_id(id: str):
+            try:
+                char = self.vault.characters[id]
+            except KeyError:
+                return {"error": "Character not found"}
+            return char.__dict__
+
         @self.app.get("/iterations/{iteration_id}")
         async def get_iteration(iteration_id: str):
             import base64
+
             try:
                 it = self.vault.iterations[iteration_id]
             except KeyError:
@@ -76,7 +107,6 @@ class Server:
                 "score": it.score,
                 "pixel_sha": getattr(it, "pixel_sha", None),
             }
-
 
         @self.app.post("/iterations/")
         async def upload_iteration(

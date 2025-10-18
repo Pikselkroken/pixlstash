@@ -1,6 +1,84 @@
+def test_esmeralda_vault_character_and_logo():
+    """Test that EsmeraldaVault exists and her picture matches Logo.png exactly."""
+    import base64
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        vault_path = os.path.join(temp_dir, "vault.db")
+        image_root = os.path.join(temp_dir, "images")
+        os.makedirs(image_root, exist_ok=True)
+        # This triggers _import_default_data
+        server = Server(vault_db_path=vault_path, image_root=image_root)
+        client = TestClient(server.app)
+
+        # Find EsmeraldaVault character (by name)
+        resp = client.get("/characters")
+        assert resp.status_code == 200
+        chars = resp.json()
+        print("DEBUG: /characters returned:", chars)
+        esmeralda = None
+        for c in chars:
+            if c.get("name") == "EsmeraldaVault":
+                esmeralda = c
+                break
+        assert esmeralda is not None, "EsmeraldaVault character not found"
+        char_id = esmeralda["id"]
+
+        # Find picture for EsmeraldaVault
+        resp2 = client.get(f"/pictures?character_id={char_id}&info=true")
+        assert resp2.status_code == 200
+        pics = resp2.json()
+        assert pics, "No picture found for EsmeraldaVault"
+        pic_id = pics[0]["id"] if isinstance(pics[0], dict) else pics[0]["ids"][0]
+
+        # Fetch the master iteration image
+        img_resp = client.get(f"/pictures/{pic_id}")
+        assert img_resp.status_code == 200
+        logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
+        with open(logo_path, "rb") as f:
+            logo_bytes = f.read()
+        # Compare the full file
+        assert img_resp.content == logo_bytes, (
+            "EsmeraldaVault's picture does not match Logo.png"
+        )
+
+
+def test_create_and_get_default_character():
+    """Test creating and fetching the default character 'Esmeralda'."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        vault_path = os.path.join(temp_dir, "vault.db")
+        image_root = os.path.join(temp_dir, "images")
+        os.makedirs(image_root, exist_ok=True)
+        server = Server(vault_db_path=vault_path, image_root=image_root)
+        client = TestClient(server.app)
+
+        # Create Esmeralda
+        char_id = "esmeralda"
+        char_name = "Esmeralda"
+        char_desc = "Default vault character"
+        resp = client.post(
+            "/characters",
+            json={"id": char_id, "name": char_name, "description": char_desc},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["character"]["id"] == char_id
+        assert data["character"]["name"] == char_name
+        assert data["character"]["description"] == char_desc
+
+        # Fetch Esmeralda by id
+        resp2 = client.get(f"/characters/{char_id}")
+        assert resp2.status_code == 200
+        char = resp2.json()
+        assert char["id"] == char_id
+        assert char["name"] == char_name
+        assert char["description"] == char_desc
+
+
 def test_upload_iteration_to_existing_picture():
     """Test uploading additional iterations to an existing picture."""
     import uuid
+
     with tempfile.TemporaryDirectory() as temp_dir:
         vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
@@ -42,7 +120,7 @@ def test_upload_iteration_to_existing_picture():
         # Upload a third iteration with transform metadata
         img_bytes3 = random_images[2]
         files3 = {"file": ("iteration3.png", img_bytes3, "image/png")}
-        data3 = {"picture_id": picture_id, "transform_metadata": "{\"filter\":\"blur\"}"}
+        data3 = {"picture_id": picture_id, "transform_metadata": '{"filter":"blur"}'}
         r4 = client.post("/iterations/", files=files3, data=data3)
         assert r4.status_code == 200
         resp4 = r4.json()
@@ -52,7 +130,9 @@ def test_upload_iteration_to_existing_picture():
         assert r5.status_code == 200
         it3 = r5.json()
         assert it3["picture_id"] == picture_id
-        assert it3["transform_metadata"] == "{\"filter\":\"blur\"}"
+        assert it3["transform_metadata"] == '{"filter":"blur"}'
+
+
 import time
 import os
 import tempfile
