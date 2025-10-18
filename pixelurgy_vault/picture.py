@@ -36,6 +36,7 @@ class Picture:
         quality: Optional[PictureQuality] = None,
     ):
         if not os.path.exists(file_path):
+            logger.error(f"File path does not exist: {file_path}")
             raise ValueError(f"File path does not exist: {file_path}")
 
         self.id = id  # Unique ID (SHA-256 hash of file)
@@ -64,6 +65,7 @@ class Picture:
         """
         # Compute SHA256 from raw bytes (single pass)
         id = hashlib.sha256(image_bytes).hexdigest()
+        logger.info(f"Importing picture with ID: {id}, character_id: {character_id} and description: {description} from bytes")
 
         # Determine file extension/format by opening bytes once
         from io import BytesIO
@@ -110,6 +112,7 @@ class Picture:
             raise ValueError(f"Source file path does not exist: {file_path}")
 
         id = Picture.calculate_sha256_from_file_path(file_path)
+        logger.info(f"Importing picture with ID: {id}, character_id: {character_id} and description: {description} from local path: {file_path}")
 
         destination_path = os.path.join(
             image_root_path, id + os.path.splitext(file_path)[1]
