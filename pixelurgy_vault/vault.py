@@ -16,6 +16,7 @@ from .vault_upgrade import VaultUpgrade
 
 logger = get_logger(__name__)
 
+
 class Vault:
     """
     Represents a vault for storing images and metadata.
@@ -158,7 +159,9 @@ class Vault:
 
         logo_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Logo.png")
         logo_dest_folder = self.get_image_root()
-        self.logger.info(f"logo_dest_folder in _import_default_data: {logo_dest_folder}")
+        self.logger.info(
+            f"logo_dest_folder in _import_default_data: {logo_dest_folder}"
+        )
         if not logo_dest_folder:
             # Fallback: use a default images directory next to the DB file
             logo_dest_folder = os.path.join(os.path.dirname(self.db_path), "images")
