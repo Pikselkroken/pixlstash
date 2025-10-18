@@ -4,15 +4,12 @@ from fastapi.responses import FileResponse
 import uvicorn
 import os
 import json
+import uuid
+
 from platformdirs import user_config_dir
 from pixelurgy_vault.vault import Vault
 from pixelurgy_vault.picture import Picture
 from pixelurgy_vault.picture_iteration import PictureIteration
-import shutil
-from PIL import Image
-import numpy as np
-import io
-
 
 APP_NAME = "pixelurgy-vault"
 CONFIG_FILENAME = "config.json"
@@ -91,8 +88,6 @@ class Server:
             # Read image bytes
             img_bytes = await file.read()
             # Use PictureIteration.create_from_bytes if available, else minimal fields
-            from pixelurgy_vault.picture_iteration import PictureIteration
-            import os
 
             dest_folder = self.vault.get_image_root()
             os.makedirs(dest_folder, exist_ok=True)
@@ -100,9 +95,6 @@ class Server:
             file_path = os.path.join(dest_folder, file.filename)
             with open(file_path, "wb") as f:
                 f.write(img_bytes)
-            # Create PictureIteration instance
-            import uuid
-            import time
 
             iteration = PictureIteration(
                 id=str(uuid.uuid4()),
@@ -171,11 +163,6 @@ class Server:
             - image: bytes upload (single file)
             - file_path: path to file or directory (if directory, imports all images recursively if recursive=True)
             """
-            from pixelurgy_vault.picture import Picture
-            from pixelurgy_vault.picture_iteration import PictureIteration
-            import os
-            import uuid
-            import json
 
             dest_folder = self.vault.get_image_root()
             os.makedirs(dest_folder, exist_ok=True)
@@ -315,8 +302,6 @@ class Server:
                 return results
 
     def get_version(self):
-        import os
-
         try:
             import tomllib
         except ImportError:
