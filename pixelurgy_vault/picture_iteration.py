@@ -8,13 +8,10 @@ from .picture_quality import PictureQuality
 from dataclasses import dataclass
 from io import BytesIO
 from datetime import datetime, timezone
-import logging
+from .logging import get_logger
 
 # Configure logging for the module
-logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
+logger = get_logger(__name__)
 
 
 @dataclass

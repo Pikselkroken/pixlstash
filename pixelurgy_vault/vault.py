@@ -1,5 +1,6 @@
 from typing import Optional
 
+from .logging import get_logger
 import os
 import sqlite3
 import shutil
@@ -11,7 +12,9 @@ from .picture_iterations import PictureIterations
 from .character import Character
 from .picture_iteration import PictureIteration
 from .picture import Picture
+from .vault_upgrade import VaultUpgrade
 
+logger = get_logger(__name__)
 
 class Vault:
     """
@@ -25,16 +28,19 @@ class Vault:
         image_root: Optional[str] = None,
         description: Optional[str] = None,
     ):
+        self.logger = get_logger(__name__)
         self.db_path = db_path  # Path to SQLite database file
         self.connection: Optional[sqlite3.Connection] = None
         db_exists = os.path.exists(self.db_path)
-        print(f"DEBUG: Vault init, db_path={self.db_path}, db_exists={db_exists}")
+        self.logger.info(f"Vault init, db_path={self.db_path}, db_exists={db_exists}")
         self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         if not db_exists:
-            print("DEBUG: Creating tables and importing default data...")
+            self.logger.info("Creating tables and importing default data...")
             self._create_tables()
         else:
-            print("DEBUG: Using existing database, skipping default import.")
+            self.logger.info("Using existing database, skipping default import.")
+        self.upgrader = VaultUpgrade(self.connection)
+        self.upgrader.upgrade_if_necessary()
         if image_root:
             self.set_metadata("image_root", image_root)
         if description:
@@ -152,11 +158,11 @@ class Vault:
 
         logo_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Logo.png")
         logo_dest_folder = self.get_image_root()
-        print(f"DEBUG: logo_dest_folder in _import_default_data: {logo_dest_folder}")
+        self.logger.info(f"logo_dest_folder in _import_default_data: {logo_dest_folder}")
         if not logo_dest_folder:
             # Fallback: use a default images directory next to the DB file
             logo_dest_folder = os.path.join(os.path.dirname(self.db_path), "images")
-            print(f"DEBUG: Fallback logo_dest_folder: {logo_dest_folder}")
+            self.logger.info(f"Fallback logo_dest_folder: {logo_dest_folder}")
         os.makedirs(logo_dest_folder, exist_ok=True)
         logo_dest = os.path.join(logo_dest_folder, "Logo.png")
         if not os.path.exists(logo_dest):
