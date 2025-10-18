@@ -1,6 +1,7 @@
 from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query
 from fastapi.responses import FileResponse
 
+from .logging import get_logger
 import uvicorn
 import os
 import json
@@ -14,6 +15,9 @@ from pixelurgy_vault.picture_iteration import PictureIteration
 
 APP_NAME = "pixelurgy-vault"
 CONFIG_FILENAME = "config.json"
+
+
+logger = get_logger(__name__)
 
 
 class Server:
