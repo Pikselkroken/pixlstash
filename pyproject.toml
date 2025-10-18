@@ -5,7 +5,7 @@ description = "Pixelurgy Vault REST API server"
 authors = [
     { name = "Pixelurgy" }
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "uvicorn",
