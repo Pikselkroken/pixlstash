@@ -1,6 +1,11 @@
 [project]
 name = "pixelurgy-vault"
 version = "0.1.0"
+description = "Pixelurgy Vault REST API server"
+authors = [
+    { name = "Pixelurgy" }
+]
+requires-python = ">=3.7"
 dependencies = [
     "fastapi",
     "uvicorn",
