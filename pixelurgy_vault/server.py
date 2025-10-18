@@ -21,7 +21,24 @@ logger = get_logger(__name__)
 
 
 class Server:
+    """
+    Main server class for the Pixelurgy Vault FastAPI application.
+
+    Attributes:
+        config (dict): Server configuration dictionary.
+        vault (Vault): Vault instance for database operations.
+        app (FastAPI): FastAPI application instance.
+    """
+
     def __init__(self, vault_db_path=None, image_root=None, description=None):
+        """
+        Initialize the Server instance.
+
+        Args:
+            vault_db_path (str, optional): Path to the vault database file.
+            image_root (str, optional): Path to the image root directory.
+            description (str, optional): Vault description.
+        """
         self.config = self.init_config()
         self.config["db_path"] = vault_db_path or self.config.get("db_path")
         self.config["image_root"] = image_root or self.config.get("image_root")
@@ -35,6 +52,12 @@ class Server:
         self.setup_routes()
 
     def init_config(self):
+        """
+        Initialize and load the server configuration from file, creating defaults if necessary.
+
+        Returns:
+            dict: Configuration dictionary.
+        """
         config_dir = user_config_dir(APP_NAME)
         os.makedirs(config_dir, exist_ok=True)
         config_path = os.path.join(config_dir, CONFIG_FILENAME)
@@ -52,6 +75,10 @@ class Server:
         return config
 
     def setup_routes(self):
+        """
+        Set up all FastAPI routes for the application.
+        """
+
         @self.app.get("/characters")
         def get_characters(name: str = Query(None)):
             """List all characters or filter by name."""

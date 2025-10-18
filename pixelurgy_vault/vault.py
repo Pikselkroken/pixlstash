@@ -20,7 +20,16 @@ logger = get_logger(__name__)
 class Vault:
     """
     Represents a vault for storing images and metadata.
-    Specifies the path to a SQLite database and stores the image root and description in the metadata table.
+
+    The vault manages a SQLite database and stores the image root and description in the metadata table.
+
+    Attributes:
+        db_path (str): Path to the SQLite database file.
+        connection (Optional[sqlite3.Connection]): SQLite connection object.
+        pictures (Pictures): Pictures manager.
+        iterations (PictureIterations): PictureIterations manager.
+        characters (Characters): Characters manager.
+        upgrader (VaultUpgrade): VaultUpgrade instance for schema upgrades.
     """
 
     def __init__(
@@ -29,6 +38,14 @@ class Vault:
         image_root: Optional[str] = None,
         description: Optional[str] = None,
     ):
+        """
+        Initialize a Vault instance.
+
+        Args:
+            db_path (str): Path to the SQLite database file.
+            image_root (Optional[str]): Path to the image root directory.
+            description (Optional[str]): Description of the vault.
+        """
         self.logger = get_logger(__name__)
         self.db_path = db_path  # Path to SQLite database file
         self.connection: Optional[sqlite3.Connection] = None
@@ -53,6 +70,12 @@ class Vault:
             self._import_default_data()
 
     def __repr__(self):
+        """
+        Return a string representation of the Vault instance.
+
+        Returns:
+            str: String representation.
+        """
         return f"Vault(db_path='{self.db_path}')"
 
     def _create_tables(self):
