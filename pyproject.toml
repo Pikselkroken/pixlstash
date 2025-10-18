@@ -1,6 +1,28 @@
 [project]
 name = "pixelurgy-vault"
 version = "0.1.0"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "platformdirs",
+    "pillow",
+    "numpy",
+    "scipy",
+    "opencv-python",
+    "colorlog",
+    "tomli",
+    "httpx"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov"
+]
+dev = [
+    "ruff"
+]
+
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=42", "wheel", "twine"]
 build-backend = "setuptools.build_meta"
