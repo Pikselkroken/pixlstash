@@ -6,7 +6,6 @@ import uvicorn
 import os
 import json
 import uuid
-import time
 
 from platformdirs import user_config_dir
 from pixelurgy_vault.vault import Vault

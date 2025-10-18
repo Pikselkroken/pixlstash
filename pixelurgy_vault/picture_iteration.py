@@ -1,7 +1,5 @@
 import hashlib
-from typing import Optional, List, Tuple
-import uuid
-import numpy as np
+from typing import Optional, Tuple
 import os
 from PIL import Image
 from .picture_quality import PictureQuality
