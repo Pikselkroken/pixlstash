@@ -6,6 +6,7 @@ import uvicorn
 import os
 import json
 import uuid
+import argparse
 
 from platformdirs import user_config_dir
 from pixelurgy_vault.vault import Vault
@@ -13,7 +14,7 @@ from pixelurgy_vault.picture import Picture
 from pixelurgy_vault.picture_iteration import PictureIteration
 
 APP_NAME = "pixelurgy-vault"
-CONFIG_FILENAME = "config.json"
+CONFIG_PATH =  os.path.join(user_config_dir(APP_NAME), "config.json")
 
 
 logger = get_logger(__name__)
@@ -29,19 +30,14 @@ class Server:
         app (FastAPI): FastAPI application instance.
     """
 
-    def __init__(self, vault_db_path=None, image_root=None, description=None):
+    def __init__(self, config_path=CONFIG_PATH):
         """
         Initialize the Server instance.
 
         Args:
-            vault_db_path (str, optional): Path to the vault database file.
-            image_root (str, optional): Path to the image root directory.
-            description (str, optional): Vault description.
+            config_path (str, optional): Path to the config file.
         """
-        self.config = self.init_config()
-        self.config["db_path"] = vault_db_path or self.config.get("db_path")
-        self.config["image_root"] = image_root or self.config.get("image_root")
-        self.config["description"] = description or self.config.get("description")
+        self.config = self.init_config(config_path)
         self.vault = Vault(
             db_path=self.config["db_path"],
             image_root=self.config["image_root"],
@@ -50,16 +46,15 @@ class Server:
         self.app = FastAPI()
         self.setup_routes()
 
-    def init_config(self):
+    def init_config(self, config_path=CONFIG_PATH):
         """
         Initialize and load the server configuration from file, creating defaults if necessary.
 
         Returns:
             dict: Configuration dictionary.
         """
-        config_dir = user_config_dir(APP_NAME)
+        config_dir = os.path.dirname(config_path)
         os.makedirs(config_dir, exist_ok=True)
-        config_path = os.path.join(config_dir, CONFIG_FILENAME)
         if not os.path.exists(config_path):
             config = {
                 "db_path": os.path.join(config_dir, "vault.db"),
@@ -378,10 +373,22 @@ class Server:
             data = tomllib.load(f)
         return data.get("project", {}).get("version", "unknown")
 
+def main():
+    global CONFIG_PATH, APP_NAME
+    parser = argparse.ArgumentParser(description=f"Run the {APP_NAME}.")
+    parser.add_argument("--port", type=int, default=9537, help="Port to run the server on.")
+    parser.add_argument("--config", type=str, default=CONFIG_PATH, help="Path to server config file.")
+    args = parser.parse_args()
+
+    # If --config is provided, use it
+    config_path = args.config
+
+    server = Server(config_path=config_path)
+
+    uvicorn.run(server.app, host="0.0.0.0", port=args.port)
 
 if __name__ == "__main__":
-    server = Server()
-    uvicorn.run(server.app, host="127.0.0.1", port=8765)
+    main()
 
 # Expose FastAPI app for testing
 app = Server().app

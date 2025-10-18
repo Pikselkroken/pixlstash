@@ -29,6 +29,10 @@ dev = [
     "ruff"
 ]
 
+[project.scripts]
+install-pixelurgy-service = "pixelurgy_vault.scripts.install_systemd_service:main"
+pixelurgy-server = "pixelurgy_vault.server:main"
+
 [build-system]
 requires = ["setuptools>=42", "wheel", "twine"]
 build-backend = "setuptools.build_meta"
