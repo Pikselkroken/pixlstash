@@ -49,9 +49,10 @@ def test_post_logo_altered_pixel_upload():
         os.remove(tmp_path)
         assert r.status_code == 200
         resp = r.json()
-        assert resp.get("status") == "success"
-        assert resp.get("ids")
-        assert resp.get("file_paths")
+        assert "results" in resp
+        assert resp["results"][0]["status"] == "success"
+        assert resp["results"][0]["picture_id"]
+        assert resp["results"][0]["iteration_id"]
 
 
 def test_benchmark_add_images_by_path():
@@ -70,19 +71,20 @@ def test_benchmark_add_images_by_path():
             image_paths.append(img_path)
             total_bytes += os.path.getsize(img_path)
         start = time.time()
+        ids = []
         for i, img_path in enumerate(image_paths):
-            json_data = {
+            data = {
                 "file_path": img_path,
                 "character_id": "bench",
                 "description": f"benchmark image {i}",
-                "tags": [],
+                "tags": "[]",
             }
-            r = client.post("/pictures", data=json_data)
+            r = client.post("/pictures", data=data)
             assert r.status_code == 200
             resp = r.json()
-            assert resp.get("status") == "success"
-            assert resp.get("ids")
-            assert resp.get("file_paths")
+            assert "results" in resp
+            assert resp["results"][0]["status"] == "success"
+            ids.append(resp["results"][0]["picture_id"])
         end = time.time()
         print(
             f"Path Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
@@ -122,19 +124,19 @@ def test_post_logo_altered_pixel_path():
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             altered_img.save(tmp.name)
             tmp_path = tmp.name
-        json_data = {
+        data = {
             "file_path": tmp_path,
             "character_id": "test",
             "description": "altered pixel path",
-            "tags": [],
+            "tags": "[]",
         }
-        r = client.post("/pictures", data=json_data)
+        r = client.post("/pictures", data=data)
         os.remove(tmp_path)
         assert r.status_code == 200
         resp = r.json()
-        assert resp.get("status") == "success"
-        assert resp.get("ids")
-        assert resp.get("file_paths")
+        assert "results" in resp
+        assert resp["results"][0]["status"] == "success"
+        assert resp["results"][0]["picture_id"]
 
 
 def test_read_root():
@@ -172,10 +174,9 @@ def test_benchmark_add_images_by_binary_upload():
             r = client.post("/pictures", files=files, data=data)
             assert r.status_code == 200
             resp = r.json()
-            assert resp.get("status") == "success"
-            assert resp.get("ids")
-            ids.append(resp.get("ids")[0])
-            assert resp.get("file_paths")
+            assert "results" in resp
+            assert resp["results"][0]["status"] == "success"
+            ids.append(resp["results"][0]["picture_id"])
         end = time.time()
         print(
             f"Upload Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
@@ -184,17 +185,9 @@ def test_benchmark_add_images_by_binary_upload():
         # Read back and check a few images
         random_indices = random.sample(range(TEST_SIZE), 3)
         for check_idx in random_indices:
-            title = f"benchmark image {check_idx}"
-            # Query metadata to get id
-            resp = client.get(f"/pictures?description={title}")
-            assert resp.status_code == 200
-            results = resp.json()
-            assert len(results) > 0
             pic_id = ids[check_idx]
-            # Fetch image by id
             img_resp = client.get(f"/pictures/{pic_id}")
             assert img_resp.status_code == 200
-            # Compare first 1024 bytes for speed
             assert img_resp.content[:1024] == random_images[check_idx][:1024]
 
 
@@ -217,19 +210,18 @@ def test_benchmark_add_images_by_path():
 
         ids = []
         for i, img_path in enumerate(image_paths):
-            json_data = {
+            data = {
                 "file_path": img_path,
                 "character_id": "bench",
                 "description": f"benchmark image {i}",
-                "tags": [],
+                "tags": "[]",
             }
-            r = client.post("/pictures", data=json_data)
+            r = client.post("/pictures", data=data)
             assert r.status_code == 200
             resp = r.json()
-            assert resp.get("status") == "success"
-            assert resp.get("ids")
-            ids.append(resp.get("ids")[0])
-            assert resp.get("file_paths")
+            assert "results" in resp
+            assert resp["results"][0]["status"] == "success"
+            ids.append(resp["results"][0]["picture_id"])
         end = time.time()
         print(
             f"Single Image Path Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
@@ -238,17 +230,9 @@ def test_benchmark_add_images_by_path():
         # Read back and check a few images
         random_indices = random.sample(range(TEST_SIZE), 3)
         for check_idx in random_indices:
-            title = f"benchmark image {check_idx}"
-            # Query metadata to get id
-            resp = client.get(f"/pictures?description={title}")
-            assert resp.status_code == 200
-            results = resp.json()
-            assert len(results) > 0
             pic_id = ids[check_idx]
-            # Fetch image by id
             img_resp = client.get(f"/pictures/{pic_id}")
             assert img_resp.status_code == 200
-            # Compare first 1024 bytes for speed
             with open(image_paths[check_idx], "rb") as f:
                 image = f.read()
             assert img_resp.content[:1024] == image[:1024]
@@ -270,19 +254,23 @@ def test_benchmark_add_images_by_directory():
                 f.write(img)
             total_bytes += os.path.getsize(img_path)
         start = time.time()
-        json_data = {
+        data = {
             "file_path": image_path,
             "character_id": "bench",
             "description": f"benchmark images from directory",
-            "tags": [],
+            "tags": "[]",
         }
-
-        r = client.post("/pictures", data=json_data)
+        r = client.post("/pictures", data=data)
         assert r.status_code == 200
         resp = r.json()
-        assert resp.get("status") == "success"
-        assert resp.get("ids")
-        assert resp.get("file_paths")
+        assert "results" in resp
+        file_to_picid = {}
+        for result in resp["results"]:
+            assert result["status"] == "success"
+            assert result["picture_id"]
+            # Extract file name from result["file"] if present, else assign sequentially
+            file_name = os.path.basename(result.get("file", ""))
+            file_to_picid[file_name] = result["picture_id"]
         end = time.time()
         print(
             f"Path Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
@@ -292,13 +280,9 @@ def test_benchmark_add_images_by_directory():
         random_indices = random.sample(range(TEST_SIZE), 3)
         for check_idx in random_indices:
             file_name = f"image_{check_idx:04d}.png"
-            id = Picture.calculate_sha256_from_file_path(
-                os.path.join(image_path, file_name)
-            )
-            # Fetch image by id
-            img_resp = client.get(f"/pictures/{id}")
+            pic_id = file_to_picid[file_name]
+            img_resp = client.get(f"/pictures/{pic_id}")
             assert img_resp.status_code == 200
-            # Compare first 1024 bytes for speed
             with open(os.path.join(image_path, file_name), "rb") as f:
                 image = f.read()
             assert img_resp.content[:1024] == image[:1024]

@@ -7,6 +7,7 @@ import json
 from platformdirs import user_config_dir
 from pixelurgy_vault.vault import Vault
 from pixelurgy_vault.picture import Picture
+from pixelurgy_vault.picture_iteration import PictureIteration
 import shutil
 from PIL import Image
 import numpy as np
@@ -49,6 +50,80 @@ class Server:
         return config
 
     def setup_routes(self):
+        @self.app.get("/iterations/{iteration_id}")
+        async def get_iteration(iteration_id: str):
+            try:
+                it = self.vault.pictures.get_iteration(iteration_id)
+            except KeyError:
+                return {"error": "Iteration not found"}
+            # Return all fields as dict
+            return {
+                "id": it.id,
+                "picture_id": it.picture_id,
+                "file_path": it.file_path,
+                "format": it.format,
+                "width": it.width,
+                "height": it.height,
+                "size_bytes": it.size_bytes,
+                "created_at": it.created_at,
+                "is_master": it.is_master,
+                "derived_from": it.derived_from,
+                "transform_metadata": it.transform_metadata,
+                "thumbnail": it.thumbnail,
+                "quality": it.quality.__dict__ if it.quality else None,
+                "score": it.score,
+                "pixel_sha": getattr(it, "pixel_sha", None),
+            }
+
+        @self.app.post("/iterations/")
+        async def upload_iteration(
+            picture_id: str = Body(...),
+            file: UploadFile = File(...),
+            is_master: int = Body(0),
+            derived_from: str = Body(None),
+            transform_metadata: str = Body(None),
+        ):
+            # Check that picture_id exists
+            try:
+                _ = self.vault.pictures[picture_id]
+            except KeyError:
+                return {"error": "picture_id does not exist"}
+            # Read image bytes
+            img_bytes = await file.read()
+            # Use PictureIteration.create_from_bytes if available, else minimal fields
+            from pixelurgy_vault.picture_iteration import PictureIteration
+            import os
+
+            dest_folder = self.vault.get_image_root()
+            os.makedirs(dest_folder, exist_ok=True)
+            # Save file to disk
+            file_path = os.path.join(dest_folder, file.filename)
+            with open(file_path, "wb") as f:
+                f.write(img_bytes)
+            # Create PictureIteration instance
+            import uuid
+            import time
+
+            iteration = PictureIteration(
+                id=str(uuid.uuid4()),
+                picture_id=picture_id,
+                file_path=file_path,
+                format=os.path.splitext(file.filename)[-1].lstrip("."),
+                width=None,
+                height=None,
+                size_bytes=len(img_bytes),
+                created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                is_master=is_master,
+                derived_from=derived_from,
+                transform_metadata=transform_metadata,
+                thumbnail=None,
+                quality=None,
+                score=None,
+                pixel_sha=None,
+            )
+            self.vault.iterations.import_iterations([iteration])
+            return {"status": "success", "iteration_id": iteration.id}
+
         @self.app.get("/")
         def read_root():
             version = self.get_version()
@@ -64,19 +139,17 @@ class Server:
                 # Return metadata only
                 return {
                     "id": pic.id,
-                    "file_path": pic.file_path,
                     "character_id": pic.character_id,
-                    "title": pic.title,
                     "description": pic.description,
                     "tags": pic.tags,
-                    "width": pic.width,
-                    "height": pic.height,
-                    "format": pic.format,
                     "created_at": pic.created_at,
-                    "quality": pic.quality.__dict__ if pic.quality else None,
                 }
-            # Otherwise, deliver the image file
-            return FileResponse(pic.file_path)
+            # Otherwise, deliver the master iteration image file
+            master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
+            if not master_its:
+                return {"error": "Master iteration not found"}
+            it = master_its[0]
+            return FileResponse(it.file_path)
 
         @self.app.get("/favicon.ico")
         def favicon():
@@ -84,78 +157,111 @@ class Server:
             return FileResponse(favicon_path)
 
         @self.app.post("/pictures")
-        async def import_picture(
+        async def import_pictures(
             request: Request,
-            file_path: str = Body(None),
-            character_id: str = Body(None),
-            description: str = Body(None),
-            tags: list = Body(None),
+            character_id: str = Form(None),
+            description: str = Form(None),
+            tags: str = Form(None),
             image: UploadFile = File(None),
-            character_id_form: str = Form(None),
-            description_form: str = Form(None),
-            tags_form: str = Form(None),
+            file_path: str = Form(None),
+            recursive: bool = Form(False),
         ):
-            if character_id is None and character_id_form is None:
-                return {"error": "character_id is required"}
+            """
+            Import new pictures with master iterations. Accepts:
+            - image: bytes upload (single file)
+            - file_path: path to file or directory (if directory, imports all images recursively if recursive=True)
+            """
+            from pixelurgy_vault.picture import Picture
+            from pixelurgy_vault.picture_iteration import PictureIteration
+            import os
+            import uuid
+            import json
 
-            # Detect content type and dispatch
-            content_type = request.headers.get("content-type", "")
-
-            pictures = []
-
-            character_id = character_id_form if character_id is None else character_id
             dest_folder = self.vault.get_image_root()
-            description = description_form if description is None else description
-            tags = json.loads(tags_form) if tags_form else []
-
             os.makedirs(dest_folder, exist_ok=True)
-
-            if content_type.startswith("multipart/form-data") and image is not None:
+            tags_list = json.loads(tags) if tags else []
+            results = []
+            files_to_import = []
+            # Collect files to import
+            if image is not None:
                 img_bytes = await image.read()
-                pictures.append(
-                    Picture.create_picture_from_bytes(
-                        image_root_path=dest_folder,
-                        image_bytes=img_bytes,
-                        character_id=character_id,
-                        description=description,
-                        tags=tags,
-                    )
-                )
+                files_to_import.append((img_bytes, None))
             elif file_path:
-                # Handle local file path input
-                source_paths = []
                 if os.path.isdir(file_path):
-                    # Handle directory of images
-                    for entry in os.listdir(file_path):
-                        full_path = os.path.join(file_path, entry)
-                        source_paths.append(full_path)
+                    for root, _, files in os.walk(file_path):
+                        for fname in files:
+                            fpath = os.path.join(root, fname)
+                            with open(fpath, "rb") as f:
+                                files_to_import.append((f.read(), fpath))
+                        if not recursive:
+                            break
                 else:
-                    source_paths.append(file_path)
-
-                for file_path in source_paths:
-                    pictures.append(
-                        Picture.create_picture_from_file(
-                            image_root_path=dest_folder,
-                            file_path=file_path,
-                            character_id=character_id,
-                            description=description,
-                            tags=tags,
-                        )
-                    )
+                    with open(file_path, "rb") as f:
+                        files_to_import.append((f.read(), file_path))
             else:
                 return {"error": "No image or file_path provided"}
 
-            self.vault.pictures.import_pictures(pictures)
-            return {
-                "status": "success",
-                "ids": [pic.id for pic in pictures],
-                "file_paths": [pic.file_path for pic in pictures],
-            }
+            new_pictures = []
+            new_iterations = []
+            for img_bytes, src_path in files_to_import:
+                # Calculate SHA for deduplication
+                sha = (
+                    PictureIteration.calculate_sha256_from_file_path(src_path)
+                    if src_path
+                    else PictureIteration.create_from_bytes(
+                        dest_folder, img_bytes, "temp"
+                    )[1].id
+                )
+                # Check for existing iteration
+                try:
+                    _ = self.vault.iterations[sha]
+                    results.append(
+                        {
+                            "status": "error",
+                            "reason": "duplicate iteration",
+                            "sha": sha,
+                            "file": src_path,
+                        }
+                    )
+                    continue
+                except KeyError:
+                    pass
+                # Create new Picture and master iteration
+                pic_id = str(uuid.uuid4())
+                picture = Picture(
+                    id=pic_id,
+                    character_id=character_id,
+                    description=description,
+                    tags=tags_list,
+                )
+                _, iteration = PictureIteration.create_from_bytes(
+                    image_root_path=dest_folder,
+                    image_bytes=img_bytes,
+                    picture_id=pic_id,
+                    is_master=True,
+                )
+                new_pictures.append(picture)
+                new_iterations.append(iteration)
+                results.append(
+                    {
+                        "status": "success",
+                        "picture_id": pic_id,
+                        "iteration_id": iteration.id,
+                        "file": src_path,
+                    }
+                )
+            # Import all at once
+            if new_pictures:
+                self.vault.pictures.import_pictures(new_pictures)
+            if new_iterations:
+                self.vault.iterations.import_iterations(new_iterations)
+            return {"results": results}
 
         @self.app.get("/pictures")
-        async def list_pictures(request: Request):
-            # Collect query parameters for filtering
+        async def list_pictures(request: Request, info: bool = Query(False)):
             query_params = dict(request.query_params)
+            # Remove 'info' from query_params if present
+            query_params.pop("info", None)
             # Convert tags to list if present
             if "tags" in query_params and isinstance(query_params["tags"], str):
                 import json
@@ -165,21 +271,48 @@ class Server:
                 except Exception:
                     query_params["tags"] = [query_params["tags"]]
             pics = self.vault.pictures.find(**query_params)
-            return [
-                {
-                    "id": pic.id,
-                    "file_path": pic.file_path,
-                    "character_id": pic.character_id,
-                    "description": pic.description,
-                    "tags": pic.tags,
-                    "width": pic.width,
-                    "height": pic.height,
-                    "format": pic.format,
-                    "created_at": pic.created_at,
-                    "quality": pic.quality.__dict__ if pic.quality else None,
-                }
-                for pic in pics
-            ]
+            if info:
+                # Return only Picture info (metadata)
+                return [
+                    {
+                        "id": pic.id,
+                        "character_id": pic.character_id,
+                        "description": pic.description,
+                        "tags": pic.tags,
+                        "created_at": pic.created_at,
+                    }
+                    for pic in pics
+                ]
+            else:
+                # Return the master iteration for each picture (is_master=1)
+                results = []
+                for pic in pics:
+                    # Find master iteration for this picture
+                    master_its = self.vault.iterations.find(
+                        picture_id=pic.id, is_master=1
+                    )
+                    if master_its:
+                        it = master_its[0]
+                        results.append(
+                            {
+                                "id": it.id,
+                                "picture_id": it.picture_id,
+                                "file_path": it.file_path,
+                                "format": it.format,
+                                "width": it.width,
+                                "height": it.height,
+                                "size_bytes": it.size_bytes,
+                                "created_at": it.created_at,
+                                "is_master": it.is_master,
+                                "derived_from": it.derived_from,
+                                "transform_metadata": it.transform_metadata,
+                                "thumbnail": it.thumbnail,
+                                "quality": it.quality.__dict__ if it.quality else None,
+                                "score": it.score,
+                                "pixel_sha": getattr(it, "pixel_sha", None),
+                            }
+                        )
+                return results
 
     def get_version(self):
         import os

@@ -2,6 +2,9 @@ import json
 
 from pixelurgy_vault.picture_quality import PictureQuality
 from pixelurgy_vault.picture import Picture
+from typing import Optional, List
+import time
+import json
 
 
 class Pictures:
@@ -9,24 +12,27 @@ class Pictures:
         self.connection = connection
 
     def __getitem__(self, picture_id):
+        # Return master Picture by picture_uuid
         cursor = self.connection.cursor()
-        cursor.execute("SELECT * FROM pictures WHERE id = ?", (picture_id,))
+        cursor.execute(
+            "SELECT id, character_id, description, tags, created_at FROM pictures WHERE id = ?",
+            (picture_id,),
+        )
         row = cursor.fetchone()
         if not row:
             raise KeyError(f"Picture with id {picture_id} not found.")
+        tags = []
+        if row[3]:
+            try:
+                tags = json.loads(row[3])
+            except Exception:
+                tags = []
         pic = Picture(
             id=row[0],
-            file_path=row[1],
-            character_id=row[2],
-            description=row[3],
-            tags=json.loads(row[4]) if row[4] else [],
-            width=row[5],
-            height=row[6],
-            format=row[7],
-            created_at=row[8],
-            thumbnail=row[9],
-            score=row[10],
-            quality=PictureQuality(**json.loads(row[11])) if row[11] else None,
+            character_id=row[1],
+            description=row[2],
+            tags=tags,
+            created_at=row[4],
         )
         return pic
 
@@ -51,32 +57,20 @@ class Pictures:
         values = []
         for picture in pictures:
             tags_json = json.dumps(picture.tags) if hasattr(picture, "tags") else None
-            quality_json = (
-                json.dumps(picture.quality.__dict__)
-                if hasattr(picture, "quality") and picture.quality
-                else None
-            )
             values.append(
                 (
                     picture.id,
-                    picture.file_path,
                     getattr(picture, "character_id", None),
                     getattr(picture, "description", None),
                     tags_json,
-                    getattr(picture, "width", None),
-                    getattr(picture, "height", None),
-                    getattr(picture, "format", None),
                     getattr(picture, "created_at", None),
-                    getattr(picture, "thumbnail_array", None),
-                    getattr(picture, "score", None),
-                    quality_json,
                 )
             )
         cursor.executemany(
             """
             INSERT INTO pictures (
-                id, file_path, character_id, description, tags, width, height, format, created_at, thumbnail, score, quality
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, character_id, description, tags, created_at
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             values,
         )
@@ -93,7 +87,7 @@ class Pictures:
     def find(self, **kwargs):
         """
         Find and return a list of Picture objects matching all provided attribute=value pairs.
-        Example: pictures.find(character_id="hero", format="png")
+        Example: pictures.find(character_id="hero")
         """
         cursor = self.connection.cursor()
         if not kwargs:
@@ -106,19 +100,13 @@ class Pictures:
         rows = cursor.fetchall()
         result = []
         for row in rows:
+            # pictures table: id, character_id, description, tags, created_at
             pic = Picture(
                 id=row[0],
-                file_path=row[1],
-                character_id=row[2],
-                description=row[3],
-                tags=json.loads(row[4]) if row[4] else [],
-                width=row[5],
-                height=row[6],
-                format=row[7],
-                created_at=row[8],
-                thumbnail=row[9],
-                score=row[10],
-                quality=PictureQuality(**json.loads(row[11])) if row[11] else None,
+                character_id=row[1],
+                description=row[2],
+                tags=json.loads(row[3]) if row[3] else [],
+                created_at=row[4],
             )
             result.append(pic)
         return result
