@@ -1,7 +1,7 @@
 from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query
 from fastapi.responses import FileResponse
 
-from .logging import get_logger
+from .logging import get_logger, setup_logging
 import uvicorn
 import os
 import json
@@ -17,7 +17,9 @@ APP_NAME = "pixelurgy-vault"
 CONFIG_PATH =  os.path.join(user_config_dir(APP_NAME), "config.json")
 
 
-logger = get_logger(__name__)
+
+# Logging will be set up after config is loaded
+logger = None
 
 
 class Server:
@@ -30,7 +32,7 @@ class Server:
         app (FastAPI): FastAPI application instance.
     """
 
-    def __init__(self, config_path=CONFIG_PATH, vault_db_path=None, image_root=None, description=None):
+    def __init__(self, config_path=CONFIG_PATH, vault_db_path=None, image_root=None, description=None, log_file=None):
         """
         Initialize the Server instance.
 
@@ -38,11 +40,22 @@ class Server:
             vault_db_path (str, optional): Path to the vault database file.
             image_root (str, optional): Path to the image root directory.
             description (str, optional): Vault description.
+            log_file (str, optional): Path to the log file (or None for stdout).
         """
-        self.config = self.init_config(config_path)
-        self.config["db_path"] = vault_db_path or self.config.get("db_path")
-        self.config["image_root"] = image_root or self.config.get("image_root")
-        self.config["description"] = description or self.config.get("description")
+        print (f"Loading log file from {log_file}")
+        self.config = self.init_config(config_path, vault_db_path, image_root, description, log_file)
+        # Override config values with explicit arguments
+        if vault_db_path is not None:
+            self.config["db_path"] = vault_db_path
+        if image_root is not None:
+            self.config["image_root"] = image_root
+        if description is not None:
+            self.config["description"] = description
+        if log_file is not None:
+            self.config["log_file"] = log_file
+        global logger
+        setup_logging(self.config.get("log_file"))
+        logger = get_logger(__name__)
         self.vault = Vault(
             db_path=self.config["db_path"],
             image_root=self.config["image_root"],
@@ -51,7 +64,7 @@ class Server:
         self.app = FastAPI()
         self.setup_routes()
 
-    def init_config(self, config_path=CONFIG_PATH):
+    def init_config(self, config_path=CONFIG_PATH, vault_db_path=None, image_root=None, description="Pixelurgy Vault default configuration", log_file=None):
         """
         Initialize and load the server configuration from file, creating defaults if necessary.
 
@@ -62,15 +75,17 @@ class Server:
         os.makedirs(config_dir, exist_ok=True)
         if not os.path.exists(config_path):
             config = {
-                "db_path": os.path.join(config_dir, "vault.db"),
-                "image_root": os.path.join(config_dir, "images"),
-                "description": "Pixelurgy Vault default configuration",
-            }
+                "db_path": vault_db_path or os.path.join(config_dir, "vault.db"),
+                "image_root": image_root or os.path.join(config_dir, "images"),
+                "description": description,
+                "log_file": log_file,
+            }   
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=2)
         else:
             with open(config_path, "r") as f:
                 config = json.load(f)
+            # Do not override log_file here; let __init__ handle it
         return config
 
     def setup_routes(self):
@@ -383,17 +398,16 @@ def main():
     parser = argparse.ArgumentParser(description=f"Run the {APP_NAME}.")
     parser.add_argument("--port", type=int, default=9537, help="Port to run the server on.")
     parser.add_argument("--config", type=str, default=CONFIG_PATH, help="Path to server config file.")
+    parser.add_argument("--log-file", type=str, default=None, help="Path to server log file.")
     args = parser.parse_args()
+    print(args)
 
     # If --config is provided, use it
     config_path = args.config
 
-    server = Server(config_path=config_path)
+    server = Server(config_path=config_path, log_file=args.log_file)
 
     uvicorn.run(server.app, host="0.0.0.0", port=args.port)
 
 if __name__ == "__main__":
     main()
-
-# Expose FastAPI app for testing
-app = Server().app
