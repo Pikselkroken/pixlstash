@@ -1,10 +1,6 @@
 import json
 
-from pixelurgy_vault.picture_quality import PictureQuality
 from pixelurgy_vault.picture import Picture
-from typing import Optional, List
-import time
-import json
 
 
 class Pictures:

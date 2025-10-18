@@ -1,7 +1,7 @@
 import json
 from pixelurgy_vault.picture_iteration import PictureIteration
 from pixelurgy_vault.picture_quality import PictureQuality
-from typing import Optional, List
+from typing import List
 import time
 
 
