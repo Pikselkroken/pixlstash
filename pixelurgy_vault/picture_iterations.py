@@ -46,8 +46,8 @@ class PictureIterations:
                         it = self[it_id]
                         it.quality = quality
                         logger.info(f"Calculated quality for iteration {it.id}")
-                        self.import_iterations([it])
-                        logger.info(f"Re-imported iteration {it.id} with new quality")
+                        self.update_quality(it.id, quality)
+                        logger.info(f"Updated iteration {it.id} with new quality")
                     except Exception as e:
                         logger.error(f"Failed to calculate quality for {it_id}: {e}")
             except Exception as e:
@@ -136,6 +136,23 @@ class PictureIterations:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             vals,
+        )
+        self.connection.commit()
+
+    def update_quality(self, iteration_id, quality):
+        """
+        Update only the quality field for a given iteration.
+        """
+        cursor = self.connection.cursor()
+        quality_json = None
+        if quality:
+            try:
+                quality_json = json.dumps(quality.__dict__)
+            except Exception:
+                quality_json = None
+        cursor.execute(
+            "UPDATE picture_iterations SET quality = ? WHERE id = ?",
+            (quality_json, iteration_id)
         )
         self.connection.commit()
 
