@@ -23,6 +23,7 @@ dependencies = [
     "transformers",
     "torch",
     "torchvision",
+    "open_clip_torch",
 ]
 
 [project.optional-dependencies]

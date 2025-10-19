@@ -130,6 +130,7 @@ class Vault:
                 tags TEXT,
                 created_at TEXT,
                 is_reference INTEGER DEFAULT 0 CHECK(is_reference BETWEEN 0 AND 1),
+                embedding BLOB,
                 FOREIGN KEY(character_id) REFERENCES characters(id)
             )
             """

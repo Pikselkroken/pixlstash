@@ -1,3 +1,4 @@
+open_clip_torch
 fastapi
 uvicorn
 setuptools

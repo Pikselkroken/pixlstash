@@ -1,21 +1,23 @@
+from pixelurgy_vault.tag_natural_map import tag_natural_map
 #################################################################
 # Adapted from Kohya_ss https://github.com/kohya-ss/sd-scripts/ #
 # Under the Apache 2.0 License                                  #
 # https://github.com/kohya-ss/sd-scripts/blob/main/LICENSE.md   #
 #################################################################
+import open_clip
 import csv
-import os
-from pathlib import Path
-
 import cv2
+import glob
 import numpy as np
-import torch
 import onnxruntime as ort
+import os
+import torch
+
+from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
 
-import glob
 
 from .logging import get_logger
 
@@ -97,6 +99,11 @@ class PictureTagger:
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()
         self._load_and_preprocess_tags()
+        # Load CLIP model at construction for efficiency
+        self._clip_model, _, self._clip_preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained="laion2b_s34b_b79k")
+        self._clip_device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._clip_model = self._clip_model.to(self._clip_device)
+        self._clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
 
     def _init_onnx_session(self):
         onnx_path = f"{self.model_location}/model.onnx"
@@ -312,3 +319,65 @@ class PictureTagger:
                 logger.debug(f"{tag}: {freq}")
 
         return all_results
+
+
+    def generate_embedding(self, character=None, picture=None):
+        """
+        Generate a CLIP embedding from all text found in character and picture objects (recursively), avoiding cycles.
+        Uses tag_natural_map to convert tags to natural language.
+        """
+        def collect_text(obj, visited=None):
+            if visited is None:
+                visited = set()
+            texts = []
+            obj_id = id(obj)
+            if obj is None or obj_id in visited:
+                return texts
+            visited.add(obj_id)
+            if isinstance(obj, str):
+                if obj.strip():
+                    texts.append(obj.strip())
+            elif isinstance(obj, dict):
+                for k, v in obj.items():
+                    # If this is a tags field, map tags
+                    if k == "tags" and isinstance(v, (list, tuple, set)):
+                        mapped = [tag_natural_map.get(tag, tag) for tag in v]
+                        mapped = [m for m in mapped if m]
+                        texts.extend(mapped)
+                    else:
+                        texts.extend(collect_text(v, visited))
+            elif isinstance(obj, (list, tuple, set)):
+                for item in obj:
+                    texts.extend(collect_text(item, visited))
+            elif hasattr(obj, "__dict__"):
+                for attr, value in obj.__dict__.items():
+                    if attr.startswith("_"):
+                        continue
+                    if attr in ("parent", "self", "picture_iterations", "picture_tagger"):
+                        continue
+                    # If this is a tags field, map tags
+                    if attr == "tags" and isinstance(value, (list, tuple, set)):
+                        mapped = [tag_natural_map.get(tag, tag) for tag in value]
+                        mapped = [m for m in mapped if m]
+                        texts.extend(mapped)
+                    else:
+                        texts.extend(collect_text(value, visited))
+            return texts
+
+        logger.info(f"generate_embedding called with character={character}, picture={picture}")
+        texts = []
+        texts.extend(collect_text(character))
+        texts.extend(collect_text(picture))
+        # Remove duplicates and empty strings
+        texts = [t for t in texts if t]
+        logger.info(f"Embedding: texts used for embedding: {texts}")
+        if not texts:
+            logger.error("Embedding: No text data for embedding. character=%s, picture=%s", character, picture)
+            raise ValueError("No text data for embedding.")
+        full_text = ". ".join(texts)
+        logger.info(f"Embedding: full_text for CLIP: {full_text}")
+        with torch.no_grad():
+            text_tokens = self._clip_tokenizer([full_text]).to(self._clip_device)
+            embedding = self._clip_model.encode_text(text_tokens)
+            embedding = embedding.cpu().numpy()[0]
+        return embedding

@@ -98,6 +98,27 @@ class Server:
         return config
 
     def setup_routes(self):
+        @self.app.post("/pictures/search")
+        def search_pictures(body: dict = Body(...)):
+            """
+            Semantic search for pictures using CLIP embedding. Returns list of Pictures ordered by similarity.
+            Body: { "query": <text>, "top_n": <int, optional> }
+            """
+            query = body.get("query", "")
+            top_n = int(body.get("top_n", 5))
+            threshold = float(body.get("threshold", 0.5))
+            results = self.vault.pictures.find_by_text(query, top_n=top_n, include_scores=False, threshold=threshold)
+            # Convert Picture objects to dicts for JSON response
+            def pic_to_dict(pic):
+                return {
+                    "id": pic.id,
+                    "character_id": pic.character_id,
+                    "description": pic.description,
+                    "tags": pic.tags,
+                    "created_at": pic.created_at,
+                    "is_reference": getattr(pic, "is_reference", 0),
+                }
+            return [pic_to_dict(pic) for pic in results]
         @self.app.get("/characters/reference_pictures/{id}")
         def get_reference_pictures(id: str):
             """
@@ -262,20 +283,22 @@ class Server:
             return {"message": "Pixelurgy Vault REST API", "version": version}
 
         @self.app.get("/pictures/{id}")
-        def get_picture(id: str, info: bool = Query(False)):
+        def get_picture(id: str, info: bool = Query(False), embedding: bool = Query(False)):
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
                 return {"error": "Picture not found"}
             if info:
                 # Return metadata only
-                return {
+                result = {
                     "id": pic.id,
                     "character_id": pic.character_id,
                     "description": pic.description,
                     "tags": pic.tags,
                     "created_at": pic.created_at,
+                    "has_embedding": pic.has_embedding
                 }
+                return result
             # Otherwise, deliver the master iteration image file
             master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
             if not master_its:

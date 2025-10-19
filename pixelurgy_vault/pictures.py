@@ -17,7 +17,7 @@ class Pictures:
         # Return master Picture by picture_uuid
         cursor = self.connection.cursor()
         cursor.execute(
-            "SELECT id, character_id, description, tags, created_at FROM pictures WHERE id = ?",
+            "SELECT id, character_id, description, tags, created_at, embedding FROM pictures WHERE id = ?",
             (picture_id,),
         )
         row = cursor.fetchone()
@@ -29,12 +29,14 @@ class Pictures:
                 tags = json.loads(row['tags'])
             except Exception:
                 tags = []
+        has_embedding = bool(row['embedding']) if 'embedding' in row.keys() else False
         pic = Picture(
             id=row['id'],
             character_id=row['character_id'],
             description=row['description'],
             tags=tags,
             created_at=row['created_at'],
+            has_embedding=has_embedding,
         )
         return pic
 
@@ -105,12 +107,25 @@ class Pictures:
             # Tag images
             logger.info(f"Tagging {len(image_paths)} images")
             tag_results = self.picture_tagger.tag_images(image_paths)
-            # Assign tags to each Picture
+            # Assign tags and embeddings to each Picture
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
                 if pic is not None:
                     pic.tags = tags
                     self.update_picture_tags(pic.id, tags)
+                    # Generate and store embedding
+                    try:
+                        print("Generating embedding for picture", pic.id, " after tagging: " , tags)
+                        embedding = self.picture_tagger.generate_embedding(picture=pic)
+                        # Store as BLOB in DB
+                        with self.connection:
+                            cursor = self.connection.cursor()
+                            cursor.execute(
+                                "UPDATE pictures SET embedding = ? WHERE id = ?",
+                                (embedding.astype('float32').tobytes(), pic.id)
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to generate/store embedding for picture {pic.id}: {e}")
             self._tag_worker_stop.wait(interval)
 
     def import_pictures(self, pictures):
@@ -163,6 +178,7 @@ class Pictures:
         rows = cursor.fetchall()
         result = []
         for row in rows:
+            has_embedding = bool(row['embedding']) if 'embedding' in row.keys() else False
             pic = Picture(
                 id=row['id'],
                 character_id=row['character_id'],
@@ -170,6 +186,54 @@ class Pictures:
                 tags=json.loads(row['tags']) if row['tags'] else [],
                 created_at=row['created_at'],
                 is_reference=row['is_reference'] if 'is_reference' in row.keys() else 0,
+                has_embedding=has_embedding,
             )
             result.append(pic)
         return result
+
+    def find_by_text(self, text, top_n=5, include_scores=False, threshold=0.5):
+        """
+        Find the top N pictures whose embeddings best match the input text.
+        Returns a list of Picture objects (and optionally similarity scores).
+        If the input text is empty, returns an empty list.
+        Adds debug logging for diagnosis.
+        """
+        if not text or not str(text).strip():
+            logger.warning("find_by_text called with empty text; returning empty result.")
+            return []
+        # Generate query embedding
+        query_emb = self.picture_tagger.generate_embedding(picture={"description": text})
+        logger.info(f"Semantic search: query embedding shape: {getattr(query_emb, 'shape', None)}")
+        # Load all picture embeddings and ids
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT id, embedding FROM pictures WHERE embedding IS NOT NULL")
+        rows = cursor.fetchall()
+        logger.info(f"Semantic search: found {len(rows)} candidate images with embeddings.")
+        if not rows:
+            return []
+        # Compute similarities
+        import numpy as np
+        sims = []
+        for row in rows:
+            pic_id = row[0]
+            emb_blob = row[1]
+            if emb_blob is None:
+                continue
+            emb = np.frombuffer(emb_blob, dtype=np.float32)
+            sim = float(np.dot(query_emb, emb) / (np.linalg.norm(query_emb) * np.linalg.norm(emb) + 1e-8))
+            logger.info(f"Semantic search: similarity for {pic_id}: {sim}")
+            if sim >= threshold:
+                sims.append((pic_id, sim))
+        # Sort by similarity, descending
+        sims.sort(key=lambda x: x[1], reverse=True)
+        top = sims[:top_n]
+        logger.info(f"Semantic search: top {top_n} results above threshold {threshold}: {top}")
+        # Fetch Picture objects
+        results = []
+        for pic_id, sim in top:
+            pic = self[pic_id]
+            if include_scores:
+                results.append((pic, sim))
+            else:
+                results.append(pic)
+        return results
