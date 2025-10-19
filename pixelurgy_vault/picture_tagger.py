@@ -3,7 +3,6 @@
 # Under the Apache 2.0 License                                  #
 # https://github.com/kohya-ss/sd-scripts/blob/main/LICENSE.md   #
 #################################################################
-import argparse
 import csv
 import os
 from pathlib import Path
@@ -12,7 +11,6 @@ import cv2
 import numpy as np
 import torch
 import onnxruntime as ort
-from huggingface_hub import hf_hub_download
 from PIL import Image
 from tqdm import tqdm
 
@@ -33,7 +31,7 @@ SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
 MODEL_DIR = "wd14_tagger_model"
 BATCH_SIZE = 1
-MAX_CONCURRENT_IMAGES = 32
+MAX_CONCURRENT_IMAGES = 8
 GENERAL_THRESHOLD = 0.35
 CHARACTER_THRESHOLD = 0.35
 RECURSIVE = False

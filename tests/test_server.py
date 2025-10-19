@@ -9,13 +9,49 @@ import random
 from io import BytesIO
 import tomllib
 
-
 def get_project_version():
     pyproject_path = os.path.join(os.path.dirname(__file__), "../pyproject.toml")
     with open(pyproject_path, "rb") as f:
         data = tomllib.load(f)
     return data["project"]["version"]
 
+def test_tagger_worker_adds_tags():
+    """Test that uploading TaggerTest.png results in tags being added by the tag worker."""
+    import shutil
+    with tempfile.TemporaryDirectory() as temp_dir:
+        vault_path = os.path.join(temp_dir, "vault.db")
+        image_root = os.path.join(temp_dir, "images")
+        os.makedirs(image_root, exist_ok=True)
+        # Copy TaggerTest.png into temp dir
+        src_img = os.path.join(os.path.dirname(__file__), "../pictures/TaggerTest.png")
+        dest_img = os.path.join(image_root, "TaggerTest.png")
+        shutil.copyfile(src_img, dest_img)
+        server = Server(vault_db_path=vault_path, image_root=image_root)
+        client = TestClient(server.app)
+
+        # Upload TaggerTest.png as a new picture
+        with open(dest_img, "rb") as f:
+            files = {"image": ("TaggerTest.png", f.read(), "image/png")}
+            data = {"character_id": "testchar", "description": "tagger test", "tags": "[]"}
+            r = client.post("/pictures", files=files, data=data)
+        assert r.status_code == 200
+        resp = r.json()
+        assert resp["results"][0]["status"] == "success"
+        picture_id = resp["results"][0]["picture_id"]
+
+        # Wait for tag worker to process
+        found_tags = None
+        for _ in range(20):
+            time.sleep(0.5)
+            get_resp = client.get(f"/pictures/{picture_id}?info=true")
+            assert get_resp.status_code == 200
+            pic_info = get_resp.json()
+            found_tags = pic_info.get("tags", [])
+            if found_tags:
+                break
+        assert found_tags, "Tagger worker did not add tags to TaggerTest.png after waiting."
+        print(f"Tags for TaggerTest.png: {found_tags}")
+        server.vault.close()
 
 def test_esmeralda_vault_character_and_logo():
     """Test that EsmeraldaVault exists and her picture matches Logo.png exactly."""

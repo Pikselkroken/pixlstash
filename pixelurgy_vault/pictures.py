@@ -2,25 +2,12 @@ import json
 
 from pixelurgy_vault.logging import get_logger
 
-from pixelurgy_vault import picture_tagger
 from pixelurgy_vault.picture import Picture
-from pixelurgy_vault.picture_iterations import PictureIterations
 from pixelurgy_vault.picture_tagger import PictureTagger, MAX_CONCURRENT_IMAGES
 
 logger = get_logger(__name__)
 
 class Pictures:
-    def update_picture_tags(self, picture_id, tags):
-        """
-        Update the tags for a picture in the database.
-        """
-        cursor = self.connection.cursor()
-        tags_json = json.dumps(tags)
-        cursor.execute(
-            "UPDATE pictures SET tags = ? WHERE id = ?",
-            (tags_json, picture_id)
-        )
-        self.connection.commit()
     def __init__(self, connection, picture_iterations):
         self.connection = connection
         self.picture_iterations = picture_iterations
@@ -66,6 +53,19 @@ class Pictures:
         for row in cursor.fetchall():
             yield row['id']
 
+    def update_picture_tags(self, picture_id, tags):
+        """
+        Update the tags for a picture in the database.
+        Uses a context manager for atomic update to avoid thread transaction issues.
+        """
+        tags_json = json.dumps(tags)
+        with self.connection:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "UPDATE pictures SET tags = ? WHERE id = ?",
+                (tags_json, picture_id)
+            )
+
     def start_tag_worker(self, interval=0.01):
         import threading
         if hasattr(self, '_tag_worker') and self._tag_worker.is_alive():
@@ -81,7 +81,6 @@ class Pictures:
             self._tag_worker.join(timeout=5)
 
     def _tag_worker_loop(self, interval):
-        import time
         while not self._tag_worker_stop.is_set():
             # Find all Pictures with no tags
             untagged = [pic for pic in self.find() if not pic.tags]
