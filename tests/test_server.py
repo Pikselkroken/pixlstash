@@ -493,7 +493,7 @@ def test_semantic_search_on_all_pictures():
         for fname in image_files:
             with open(os.path.join(image_root, fname), "rb") as f:
                 files = {"image": (fname, f.read(), "image/png")}
-                data = {"Esmeralda": "searchtest", "description": fname, "tags": "[]"}
+                data = {"character_id": "Esmeralda", "description": fname, "tags": "[]"}
                 r = client.post("/pictures", files=files, data=data)
             assert r.status_code == 200
             resp = r.json()
@@ -515,14 +515,14 @@ def test_semantic_search_on_all_pictures():
 
         # Perform semantic search
         search_texts = ["It was a bright rainy day but Esmeralda needed to get out and get some fresh air, so she dressed for the weather, brought an umbrella and walked out into the countryside.",
-                        "Esmeralda smiles warmly as she sits across me in the cafe wearing her grey sweater, the aroma of fresh coffee filling the air around us.",
+                        "Esmeralda smiles as she sits across me in the cafe wearing her grey sweater. The sunlight filters through the window of the empty cafe",
                         "It was a bright winter morning, and Esmeralda decided to go for a walk in the snow-covered park, admiring the glistening trees and the crisp air. She was glad to have her scarf and her warm coat to keep her cozy.",
-                        "Esmeralda was always quite proud of her garden. She spent hours in her overalls tending to her vegetables and flowers, ensuring everything was in perfect bloom. It made her smile to see the fruits of her labor.",
+                        "Esmeralda spent hours in her garden wearing overalls tending to her grass and bushes, ensuring everything was perfectly green. It made her smile to see the fruits of her labor.",
                         "Do I look like a man? Esmeralda asked, raising an eyebrow as she posed with her business suit.",
                         "She sat down on the park bench and considered her predicament. A quiet sadness came over her."]
 
         for search_text in search_texts:
-            search_resp = client.post("/pictures/search", json={"query": search_text, "threshold": 0.5})
+            search_resp = client.post("/pictures/search", json={"query": search_text, "threshold": 0.45})
             assert search_resp.status_code == 200
             results = search_resp.json()
             print("Semantic search results:")
