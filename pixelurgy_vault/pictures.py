@@ -60,13 +60,14 @@ class Pictures:
                     getattr(picture, "description", None),
                     tags_json,
                     getattr(picture, "created_at", None),
+                    getattr(picture, "is_reference", 0),
                 )
             )
         cursor.executemany(
             """
             INSERT INTO pictures (
-                id, character_id, description, tags, created_at
-            ) VALUES (?, ?, ?, ?, ?)
+                id, character_id, description, tags, created_at, is_reference
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             values,
         )

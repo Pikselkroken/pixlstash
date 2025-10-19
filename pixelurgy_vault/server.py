@@ -98,6 +98,57 @@ class Server:
         return config
 
     def setup_routes(self):
+        @self.app.get("/characters/reference_pictures/{id}")
+        def get_reference_pictures(id: str):
+            """
+            Get all reference pictures for a character (is_reference=1, master iteration only).
+            """
+            pics = self.vault.pictures.find(character_id=id)
+            reference_pics = [pic for pic in pics if getattr(pic, "is_reference", 0) == 1]
+            results = []
+            for pic in reference_pics:
+                # Find master iteration for this picture
+                master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
+                if master_its:
+                    results.append({
+                        "picture_id": pic.id,
+                        "iteration_id": master_its[0].id,
+                        "description": pic.description,
+                        "tags": pic.tags,
+                        "created_at": pic.created_at,
+                    })
+            return {"reference_pictures": results}
+
+        @self.app.post("/characters/reference_pictures")
+        async def add_reference_picture(character_id: str = Form(...), description: str = Form(None), tags: str = Form(None), image: UploadFile = File(...)):
+            """
+            Add a reference picture for a character. Creates a new Picture with is_reference=1 and a master iteration.
+            """
+            tags_list = json.loads(tags) if tags else []
+            img_bytes = await image.read()
+            pic_id = str(uuid.uuid4())
+            picture = Picture(
+                id=pic_id,
+                character_id=character_id,
+                description=description,
+                tags=tags_list,
+                is_reference=1,
+            )
+            dest_folder = self.vault.get_image_root()
+            _, iteration = PictureIteration.create_from_bytes(
+                image_root_path=dest_folder,
+                image_bytes=img_bytes,
+                picture_id=pic_id,
+                is_master=True,
+            )
+            self.vault.pictures.import_pictures([picture])
+            self.vault.iterations.import_iterations([iteration])
+            return {
+                "picture_id": pic_id,
+                "iteration_id": iteration.id,
+                "description": description,
+                "tags": tags_list,
+            }
         """
         Set up all FastAPI routes for the application and register shutdown cleanup.
         """

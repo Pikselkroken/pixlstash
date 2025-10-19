@@ -125,6 +125,7 @@ class Vault:
                 description TEXT,
                 tags TEXT,
                 created_at TEXT,
+                is_reference INTEGER DEFAULT 0 CHECK(is_reference BETWEEN 0 AND 1),
                 FOREIGN KEY(character_id) REFERENCES characters(id)
             )
             """
@@ -136,20 +137,23 @@ class Vault:
             CREATE TABLE IF NOT EXISTS picture_iterations (
                 id TEXT PRIMARY KEY,
                 picture_id TEXT NOT NULL,
+                character_id TEXT,
                 file_path TEXT NOT NULL,
                 format TEXT,
                 width INTEGER,
                 height INTEGER,
                 size_bytes INTEGER,
                 created_at TEXT,
-                is_master INTEGER DEFAULT 0,
+                is_master INTEGER DEFAULT 0 CHECK(is_master BETWEEN 0 AND 1),
                 derived_from TEXT,
                 transform_metadata TEXT,
                 thumbnail BLOB,
                 quality TEXT,
                 score INTEGER CHECK(score BETWEEN 0 AND 5),
+                character_likeness FLOAT CHECK(character_likeness >= 0.0 AND character_likeness <= 1.0),
                 pixel_sha TEXT,
-                FOREIGN KEY(picture_id) REFERENCES pictures(id)
+                FOREIGN KEY(picture_id) REFERENCES pictures(id),
+                FOREIGN KEY(character_id) REFERENCES characters(id)
             )
             """
         )

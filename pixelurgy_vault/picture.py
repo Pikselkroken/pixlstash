@@ -17,6 +17,7 @@ class Picture:
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
         created_at: Optional[str] = None,
+        is_reference: int = 0,
     ):
         self.id = id if id else uuid.uuid4().hex
         self.character_id = character_id
@@ -25,3 +26,4 @@ class Picture:
         self.created_at = created_at or datetime.now(timezone.utc).isoformat().replace(
             "+00:00", "Z"
         )
+        self.is_reference = is_reference
