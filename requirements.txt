@@ -10,3 +10,8 @@ scipy
 platformdirs
 tomli
 colorlog
+onnxruntime
+requests
+transformers
+torch
+torchvision

@@ -1,7 +1,7 @@
 [project]
 name = "pixelurgy-vault"
 version = "0.2.0"
-description = "Pixelurgy Vault REST API server"
+description = "Pixelurgy Vault Picture Database"
 authors = [
     { name = "Pixelurgy" }
 ]
@@ -17,7 +17,12 @@ dependencies = [
     "colorlog",
     "tomli",
     "httpx",
-    "python-multipart"
+    "python-multipart",
+    "onnxruntime",
+    "requests",
+    "transformers",
+    "torch",
+    "torchvision",
 ]
 
 [project.optional-dependencies]
