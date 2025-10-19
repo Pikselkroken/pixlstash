@@ -103,6 +103,7 @@ class Pictures:
                 description=row['description'],
                 tags=json.loads(row['tags']) if row['tags'] else [],
                 created_at=row['created_at'],
+                is_reference=row['is_reference'] if 'is_reference' in row.keys() else 0,
             )
             result.append(pic)
         return result

@@ -381,3 +381,58 @@ def test_benchmark_add_images_by_directory():
                 image = f.read()
             assert img_resp.content[:1024] == image[:1024]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+
+
+def test_reference_picture_workflow():
+    """Test adding and retrieving reference images for a character."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        vault_path = os.path.join(temp_dir, "vault.db")
+        image_root = os.path.join(temp_dir, "images")
+        os.makedirs(image_root, exist_ok=True)
+        server = Server(vault_db_path=vault_path, image_root=image_root)
+        client = TestClient(server.app)
+
+        # Create a character
+        char_id = "testchar-123"
+        resp = client.post(
+            "/characters",
+            json={"id": char_id, "name": "Test Character", "description": "For reference image test"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["character"]["id"] == char_id
+
+        # Create a dummy image
+        img = Image.new("RGB", (32, 32), color=(123, 222, 111))
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        img_bytes = buf.read()
+
+        # Add reference picture
+        resp2 = client.post(
+            "/characters/reference_pictures",
+            data={
+                "character_id": char_id,
+                "description": "Reference image test",
+                "tags": '["ref", "test"]',
+            },
+            files={"image": ("ref.png", img_bytes, "image/png")},
+        )
+        assert resp2.status_code == 200
+        data = resp2.json()
+        assert "picture_id" in data
+        assert "iteration_id" in data
+        assert data["description"] == "Reference image test"
+        assert data["tags"] == ["ref", "test"]
+
+        # Retrieve reference pictures
+        resp3 = client.get(f"/characters/reference_pictures/{char_id}")
+        assert resp3.status_code == 200
+        ref_data = resp3.json()["reference_pictures"]
+        assert len(ref_data) == 1
+        ref_pic = ref_data[0]
+        assert ref_pic["picture_id"] == data["picture_id"]
+        assert ref_pic["iteration_id"] == data["iteration_id"]
+        assert ref_pic["description"] == "Reference image test"
+        assert ref_pic["tags"] == ["ref", "test"]
+        server.vault.close()
