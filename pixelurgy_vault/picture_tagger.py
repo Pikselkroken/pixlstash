@@ -1,3 +1,8 @@
+#################################################################
+# Adapted from Kohya_ss https://github.com/kohya-ss/sd-scripts/ #
+# Under the Apache 2.0 License                                  #
+# https://github.com/kohya-ss/sd-scripts/blob/main/LICENSE.md   #
+#################################################################
 import argparse
 import csv
 import os
@@ -91,9 +96,79 @@ class ImageLoadingPrepDataset(torch.utils.data.Dataset):
 class PictureTagger:
     def __init__(self, model_location=os.path.join(MODEL_DIR, DEFAULT_WD14_TAGGER_REPO.replace("/", "_")), force_download=False):
         self.model_location = model_location
-        self.ensure_model_files(force_download=force_download)
+        self._ensure_model_files(force_download=force_download)
+        self._init_onnx_session()
+        self._load_and_preprocess_tags()
 
-    def ensure_model_files(self, force_download):
+    def _init_onnx_session(self):
+        onnx_path = f"{self.model_location}/model.onnx"
+        logger.info("Running wd14 tagger with onnx")
+        logger.info(f"loading onnx model: {onnx_path}")
+        if not os.path.exists(onnx_path):
+            raise Exception(
+                f"onnx model not found: {onnx_path}, please redownload the model with --force_download"
+            )
+        if "OpenVINOExecutionProvider" in ort.get_available_providers():
+            self.ort_sess = ort.InferenceSession(
+                onnx_path,
+                providers=(['OpenVINOExecutionProvider']),
+                provider_options=[{'device_type' : "GPU", "precision": "FP32"}],
+            )
+        else:
+            self.ort_sess = ort.InferenceSession(
+                onnx_path,
+                providers=(
+                    ["CUDAExecutionProvider"] if "CUDAExecutionProvider" in ort.get_available_providers() else
+                    ["ROCMExecutionProvider"] if "ROCMExecutionProvider" in ort.get_available_providers() else
+                    ["CPUExecutionProvider"]
+                ),
+            )
+        self.input_name = self.ort_sess.get_inputs()[0].name
+
+    def _load_and_preprocess_tags(self):
+        with open(os.path.join(self.model_location, CSV_FILE), "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            line = [row for row in reader]
+            header = line[0]  # tag_id,name,category,count
+            rows = line[1:]
+        assert header[0] == "tag_id" and header[1] == "name" and header[2] == "category", f"unexpected csv format: {header}"
+
+        self.rating_tags = [row[1] for row in rows[0:] if row[2] == "9"]
+        self.general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
+        self.character_tags = [row[1] for row in rows[0:] if row[2] == "4"]
+
+        # preprocess tags in advance
+        if CHARACTER_TAG_EXPAND:
+            for i, tag in enumerate(self.character_tags):
+                if tag.endswith(")"):
+                    tags = tag.split("(")
+                    character_tag = "(".join(tags[:-1])
+                    if character_tag.endswith("_"):
+                        character_tag = character_tag[:-1]
+                    series_tag = tags[-1].replace(")", "")
+                    self.character_tags[i] = character_tag + CAPTION_SEPARATOR + series_tag
+
+        if REMOVE_UNDERSCORE:
+            self.rating_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in self.rating_tags]
+            self.general_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in self.general_tags]
+            self.character_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in self.character_tags]
+
+        if TAG_REPLACEMENT is not None:
+            escaped_tag_replacements = TAG_REPLACEMENT.replace("\\,", "@@@@").replace("\\;", "####")
+            tag_replacements = escaped_tag_replacements.split(";")
+            for tag_replacement in tag_replacements:
+                tags = tag_replacement.split(",")  # source, target
+                assert len(tags) == 2, f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
+                source, target = [tag.replace("@@@@", ",").replace("####", ";") for tag in tags]
+                logger.info(f"replacing tag: {source} -> {target}")
+                if source in self.general_tags:
+                    self.general_tags[self.general_tags.index(source)] = target
+                elif source in self.character_tags:
+                    self.character_tags[self.character_tags.index(source)] = target
+                elif source in self.rating_tags:
+                    self.rating_tags[self.rating_tags.index(source)] = target
+
+    def _ensure_model_files(self, force_download):
         # hf_hub_download
         # deprecated
         # https://github.com/toriato/stable-diffusion-webui-wd14-tagger/issues/22
@@ -110,7 +185,7 @@ class PictureTagger:
             logger.info(f"Downloading selected_tags.csv to {tags_csv_path}")
             hf_hub_download(repo_id=DEFAULT_WD14_TAGGER_REPO, filename="selected_tags.csv", local_dir=self.model_location, force_download=True)
 
-    def glob_images_pathlib(self, path, recursive):
+    def _glob_images_pathlib(self, path, recursive):
         pattern = '**/*' if recursive else '*'
         exts = ['png', 'jpg', 'jpeg', 'webp', 'bmp']
         files = []
@@ -120,7 +195,7 @@ class PictureTagger:
 
 
 
-    def collate_fn_remove_corrupted(self, batch):
+    def _collate_fn_remove_corrupted(self, batch):
         """Collate function that allows to remove corrupted examples in the
         dataloader. It expects that the dataloader returns 'None' when that occurs.
         The 'None's in the batch are removed.
@@ -130,83 +205,9 @@ class PictureTagger:
         return batch
 
     def tag_training_directory(self, train_data_dir="."):
-        onnx_path = f"{self.model_location}/model.onnx"
-        logger.info("Running wd14 tagger with onnx")
-        logger.info(f"loading onnx model: {onnx_path}")
-        if not os.path.exists(onnx_path):
-            raise Exception(
-                f"onnx model not found: {onnx_path}, please redownload the model with --force_download"
-            )
-        if "OpenVINOExecutionProvider" in ort.get_available_providers():
-            ort_sess = ort.InferenceSession(
-                onnx_path,
-                providers=(['OpenVINOExecutionProvider']),
-                provider_options=[{'device_type' : "GPU", "precision": "FP32"}],
-            )
-        else:
-            ort_sess = ort.InferenceSession(
-                onnx_path,
-                providers=(
-                    ["CUDAExecutionProvider"] if "CUDAExecutionProvider" in ort.get_available_providers() else
-                    ["ROCMExecutionProvider"] if "ROCMExecutionProvider" in ort.get_available_providers() else
-                    ["CPUExecutionProvider"]
-                ),
-            )
-        input_name = ort_sess.get_inputs()[0].name
-
-        # label_names = pd.read_csv("2022_0000_0899_6549/selected_tags.csv")
-        # ...existing code...
-
-        with open(os.path.join(self.model_location, CSV_FILE), "r", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            line = [row for row in reader]
-            header = line[0]  # tag_id,name,category,count
-            rows = line[1:]
-        assert header[0] == "tag_id" and header[1] == "name" and header[2] == "category", f"unexpected csv format: {header}"
-
-        rating_tags = [row[1] for row in rows[0:] if row[2] == "9"]
-        general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
-        character_tags = [row[1] for row in rows[0:] if row[2] == "4"]
-
-        # preprocess tags in advance
-        if CHARACTER_TAG_EXPAND:
-            for i, tag in enumerate(character_tags):
-                if tag.endswith(")"):
-                    # chara_name_(series) -> chara_name, series
-                    # chara_name_(costume)_(series) -> chara_name_(costume), series
-                    tags = tag.split("(")
-                    character_tag = "(".join(tags[:-1])
-                    if character_tag.endswith("_"):
-                        character_tag = character_tag[:-1]
-                    series_tag = tags[-1].replace(")", "")
-                    character_tags[i] = character_tag + CAPTION_SEPARATOR + series_tag
-
-        if REMOVE_UNDERSCORE:
-            rating_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in rating_tags]
-            general_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in general_tags]
-            character_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in character_tags]
-
-        if TAG_REPLACEMENT is not None:
-            # escape , and ; in tag_replacement: wd14 tag names may contain , and ;
-            escaped_tag_replacements = TAG_REPLACEMENT.replace("\\,", "@@@@").replace("\\;", "####")
-            tag_replacements = escaped_tag_replacements.split(";")
-            for tag_replacement in tag_replacements:
-                tags = tag_replacement.split(",")  # source, target
-                assert len(tags) == 2, f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
-
-                source, target = [tag.replace("@@@@", ",").replace("####", ";") for tag in tags]
-                logger.info(f"replacing tag: {source} -> {target}")
-
-                if source in general_tags:
-                    general_tags[general_tags.index(source)] = target
-                elif source in character_tags:
-                    character_tags[character_tags.index(source)] = target
-                elif source in rating_tags:
-                    rating_tags[rating_tags.index(source)] = target
-
         # ...existing code...
         train_data_dir_path = Path(train_data_dir)
-        image_paths = self.glob_images_pathlib(train_data_dir_path, RECURSIVE)
+        image_paths = self._glob_images_pathlib(train_data_dir_path, RECURSIVE)
         logger.info(f"found {len(image_paths)} images.")
 
         tag_freq = {}
@@ -223,7 +224,7 @@ class PictureTagger:
         def run_batch(path_imgs):
             imgs = np.array([im for _, im in path_imgs])
 
-            probs = ort_sess.run(None, {input_name: imgs})[0]  # onnx output numpy
+            probs = self.ort_sess.run(None, {self.input_name: imgs})[0]  # onnx output numpy
             probs = probs[: len(path_imgs)]
 
             for (image_path, _), prob in zip(path_imgs, probs):
@@ -232,7 +233,7 @@ class PictureTagger:
                 print("[WD14 DEBUG] ONNX output scores (first 20):", prob[:20])
                 print("[WD14 DEBUG] Max score:", np.max(prob), "Min score:", np.min(prob))
                 # Show only tags above threshold, ordered by probability
-                all_tags = list(zip(general_tags + character_tags, list(prob[4:4+len(general_tags)]) + list(prob[4+len(general_tags):])))
+                all_tags = list(zip(self.general_tags + self.character_tags, list(prob[4:4+len(self.general_tags)]) + list(prob[4+len(self.general_tags):])))
                 all_tags_above = [(tag, val) for tag, val in all_tags if val >= min(GENERAL_THRESHOLD, CHARACTER_THRESHOLD)]
                 all_tags_sorted = sorted(all_tags_above, key=lambda x: x[1], reverse=True)
                 print("[WD14 DEBUG] Tags above threshold (ordered):")
@@ -246,15 +247,15 @@ class PictureTagger:
                 # ...existing code...
                 # First 4 labels are ratings, the rest are tags: pick any where prediction confidence >= threshold
                 for i, p in enumerate(prob[4:]):
-                    if i < len(general_tags) and p >= GENERAL_THRESHOLD:
-                        tag_name = general_tags[i]
+                    if i < len(self.general_tags) and p >= GENERAL_THRESHOLD:
+                        tag_name = self.general_tags[i]
 
                         if tag_name not in undesired_tags:
                             tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
                             general_tag_text += caption_separator + tag_name
                             combined_tags.append(tag_name)
-                    elif i >= len(general_tags) and p >= CHARACTER_THRESHOLD:
-                        tag_name = character_tags[i - len(general_tags)]
+                    elif i >= len(self.general_tags) and p >= CHARACTER_THRESHOLD:
+                        tag_name = self.character_tags[i - len(self.general_tags)]
 
                         if tag_name not in undesired_tags:
                             tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
@@ -269,7 +270,7 @@ class PictureTagger:
                 if USE_RATING_TAGS or USE_RATING_TAGS_AS_LAST_TAG:
                     ratings_probs = prob[:4]
                     rating_index = ratings_probs.argmax()
-                    found_rating = rating_tags[rating_index]
+                    found_rating = self.rating_tags[rating_index]
 
                     if found_rating not in undesired_tags:
                         tag_freq[found_rating] = tag_freq.get(found_rating, 0) + 1
@@ -330,7 +331,7 @@ class PictureTagger:
                 batch_size=BATCH_SIZE,
                 shuffle=False,
                 num_workers=MAX_DATA_LOADER_N_WORKERS,
-                collate_fn=self.collate_fn_remove_corrupted,
+                collate_fn=self._collate_fn_remove_corrupted,
                 drop_last=False,
             )
         else:
