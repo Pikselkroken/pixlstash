@@ -283,6 +283,23 @@ class Server:
             it = master_its[0]
             return FileResponse(it.file_path)
 
+        @self.app.patch("/pictures/{id}")
+        async def update_picture(id: str, body: dict = Body(...)):
+            """
+            Update fields of a picture (e.g., is_reference, description, tags, etc.).
+            """
+            try:
+                pic = self.vault.pictures[id]
+            except KeyError:
+                return {"error": "Picture not found"}
+
+            # Update fields from body
+            for key, value in body.items():
+                if hasattr(pic, key):
+                    setattr(pic, key, value)
+            self.vault.pictures.import_pictures([pic])
+            return {"status": "success", "picture": pic.__dict__}
+
         @self.app.get("/favicon.ico")
         def favicon():
             favicon_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
