@@ -24,10 +24,27 @@ class PictureIterations:
     def _quality_worker_loop(self, interval):
         import numpy as np
         from PIL import Image
+        import sqlite3
         logger = get_logger(__name__)
+        # Create a new connection for this thread
+        db_path = None
+        if hasattr(self.connection, 'database'):
+            db_path = self.connection.database
+        elif hasattr(self.connection, 'db_path'):
+            db_path = self.connection.db_path
+        else:
+            try:
+                db_path = self.connection.execute('PRAGMA database_list').fetchone()[2]
+            except Exception:
+                db_path = None
+        if not db_path:
+            logger.error("Could not determine database path for quality worker thread.")
+            return
+        thread_conn = sqlite3.connect(db_path, check_same_thread=False)
+        thread_conn.row_factory = sqlite3.Row
         while not self._quality_worker_stop.is_set():
             try:
-                cursor = self.connection.cursor()
+                cursor = thread_conn.cursor()
                 cursor.execute("SELECT id, file_path FROM picture_iterations WHERE quality IS NULL")
                 rows = cursor.fetchall()
                 logger.info(f"Quality worker found {len(rows)} iterations needing quality calculation.")
@@ -43,11 +60,20 @@ class PictureIterations:
                             image_np = np.array(img.convert("RGB"))
                         logger.info(f"Calculating quality for iteration {it_id}")
                         quality = PictureQuality.calculate_metrics(image_np)
-                        it = self[it_id]
-                        it.quality = quality
-                        logger.info(f"Calculated quality for iteration {it.id}")
-                        self.update_quality(it.id, quality)
-                        logger.info(f"Updated iteration {it.id} with new quality")
+                        # Update quality in DB using thread_conn
+                        quality_json = None
+                        if quality:
+                            try:
+                                quality_json = json.dumps(quality.__dict__)
+                            except Exception:
+                                quality_json = None
+                        cursor.execute(
+                            "UPDATE picture_iterations SET quality = ? WHERE id = ?",
+                            (quality_json, it_id)
+                        )
+                        thread_conn.commit()
+                        logger.info(f"Calculated quality for iteration {it_id}")
+                        logger.info(f"Updated iteration {it_id} with new quality")
                     except Exception as e:
                         logger.error(f"Failed to calculate quality for {it_id}: {e}")
             except Exception as e:
@@ -103,6 +129,14 @@ class PictureIterations:
         cursor = self.connection.cursor()
         vals = []
         for it in iterations:
+            logger = get_logger(__name__)
+            logger.info(f"Importing picture {it.id}: file path {getattr(it, 'file_path', None)}")
+            if hasattr(it, 'file_path') and it.file_path:
+                import os
+                if os.path.exists(it.file_path):
+                    logger.info(f"File {it.file_path} exists at import time.")
+                else:
+                    logger.warning(f"File {it.file_path} does NOT exist at import time.")
             quality_json = None
             if it.quality:
                 try:
