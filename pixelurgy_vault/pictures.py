@@ -83,57 +83,96 @@ class Pictures:
             self._tag_worker.join(timeout=5)
 
     def _tag_worker_loop(self, interval):
+        import sqlite3
+        # Create a new connection for this thread
+        db_path = None
+        if hasattr(self.connection, 'database'):
+            db_path = self.connection.database
+        elif hasattr(self.connection, 'db_path'):
+            db_path = self.connection.db_path
+        else:
+            # Try to extract path from connection
+            try:
+                db_path = self.connection.execute('PRAGMA database_list').fetchone()[2]
+            except Exception:
+                db_path = None
+        if not db_path:
+            logger.error("Could not determine database path for tag worker thread.")
+            return
+        thread_conn = sqlite3.connect(db_path, check_same_thread=False)
+        thread_conn.row_factory = sqlite3.Row
         while not self._tag_worker_stop.is_set():
-            # Find all Pictures with no tags
-            untagged = [pic for pic in self.find() if not pic.tags]
-            if not untagged:
-                self._tag_worker_stop.wait(interval)
-                continue
-            # Select up to MAX_CONCURRENT_IMAGES
-            batch = untagged[:MAX_CONCURRENT_IMAGES]
-            # Get master iteration image paths using self.picture_iterations
-            image_paths = []
-            pic_by_path = {}
-            for pic in batch:
-                # Find master iteration for this picture
-                master_iters = [it for it in self.picture_iterations.find(picture_id=pic.id, is_master=1)]
-                if master_iters:
-                    master_iter = master_iters[0]
-                    image_paths.append(master_iter.file_path)
-                    pic_by_path[master_iter.file_path] = pic
-            if not image_paths:
-                self._tag_worker_stop.wait(interval)
-                continue
-            # Tag images
-            logger.info(f"Tagging {len(image_paths)} images")
-            tag_results = self.picture_tagger.tag_images(image_paths)
-            # Assign tags and embeddings to each Picture
-            for path, tags in tag_results.items():
-                pic = pic_by_path.get(path)
-                if pic is not None:
-                    pic.tags = tags
-                    self.update_picture_tags(pic.id, tags)
-                    # Generate and store embedding
+            # Find all Pictures missing tags or missing embeddings
+            missing_tags = [pic for pic in self.find() if not pic.tags]
+            missing_embeddings = [pic for pic in self.find() if not getattr(pic, 'has_embedding', False)]
+
+            # Tag untagged images
+            if missing_tags:
+                batch = missing_tags[:MAX_CONCURRENT_IMAGES]
+                image_paths = []
+                pic_by_path = {}
+                for pic in batch:
+                    master_iters = [it for it in self.picture_iterations.find(picture_id=pic.id, is_master=1)]
+                    if master_iters:
+                        master_iter = master_iters[0]
+                        image_paths.append(master_iter.file_path)
+                        pic_by_path[master_iter.file_path] = pic
+                if image_paths:
+                    logger.info(f"Tagging {len(image_paths)} images")
+                    tag_results = self.picture_tagger.tag_images(image_paths)
+                    for path, tags in tag_results.items():
+                        pic = pic_by_path.get(path)
+                        if pic is not None:
+                            pic.tags = tags
+                            # Use thread_conn for DB update
+                            tags_json = json.dumps(tags)
+                            with thread_conn:
+                                cursor = thread_conn.cursor()
+                                cursor.execute(
+                                    "UPDATE pictures SET tags = ? WHERE id = ?",
+                                    (tags_json, pic.id)
+                                )
+                            # After tagging, also add to missing_embeddings if not already embedded
+                            if not getattr(pic, 'has_embedding', False):
+                                missing_embeddings.append(pic)
+
+            # Generate embeddings for pictures missing them (even if already tagged)
+            if missing_embeddings:
+                batch = missing_embeddings[:MAX_CONCURRENT_IMAGES]
+                for pic in batch:
                     try:
-                        print("Generating embedding for picture", pic.id, " after tagging: " , tags)
+                        print("Generating embedding for picture", pic.id, " (tags: ", pic.tags, ")")
                         embedding = self.picture_tagger.generate_embedding(picture=pic)
-                        # Store as BLOB in DB
-                        with self.connection:
-                            cursor = self.connection.cursor()
+                        with thread_conn:
+                            cursor = thread_conn.cursor()
                             cursor.execute(
                                 "UPDATE pictures SET embedding = ? WHERE id = ?",
                                 (embedding.astype('float32').tobytes(), pic.id)
                             )
+                        pic.has_embedding = True
                     except Exception as e:
                         logger.error(f"Failed to generate/store embedding for picture {pic.id}: {e}")
-            self._tag_worker_stop.wait(interval)
+
+            if not missing_tags and not missing_embeddings:
+                self._tag_worker_stop.wait(interval)
+            else:
+                # Short wait before next batch
+                self._tag_worker_stop.wait(interval)
 
     def import_pictures(self, pictures):
         """Import a list of Picture instances into the database using executemany for efficiency."""
+        import os
         cursor = self.connection.cursor()
         values = []
         for picture in pictures:
             tags_json = json.dumps(picture.tags) if hasattr(picture, "tags") else None
+            logger.info(f"Preparing to insert Picture {picture.id} into database.")
+            file_path = getattr(picture, "file_path", None)
+            if file_path:
+                if os.path.exists(file_path):
+                    logger.info(f"File {file_path} for Picture {picture.id} exists before DB insert.")
+                else:
+                    logger.warning(f"File {file_path} for Picture {picture.id} does NOT exist before DB insert.")
             values.append(
                 (
                     picture.id,
@@ -153,6 +192,13 @@ class Pictures:
             values,
         )
         self.connection.commit()
+        for picture in pictures:
+            file_path = getattr(picture, "file_path", None)
+            if file_path:
+                if os.path.exists(file_path):
+                    logger.info(f"File {file_path} for Picture {picture.id} exists after DB insert.")
+                else:
+                    logger.warning(f"File {file_path} for Picture {picture.id} does NOT exist after DB insert.")
 
     def contains(self, picture):
         """

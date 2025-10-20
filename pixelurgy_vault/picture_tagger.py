@@ -1,4 +1,3 @@
-from pixelurgy_vault.tag_natural_map import tag_natural_map
 #################################################################
 # Adapted from Kohya_ss https://github.com/kohya-ss/sd-scripts/ #
 # Under the Apache 2.0 License                                  #
@@ -20,7 +19,7 @@ from tqdm import tqdm
 
 
 from .logging import get_logger
-
+from pixelurgy_vault.tag_naturaliser import TagNaturaliser
 
 logger = get_logger(__name__)
 
@@ -324,7 +323,7 @@ class PictureTagger:
     def generate_embedding(self, character=None, picture=None):
         """
         Generate a CLIP embedding from all text found in character and picture objects (recursively), avoiding cycles.
-        Uses tag_natural_map to convert tags to natural language.
+        Uses the TagNaturaliser to convert tags to natural language.
         """
         def collect_text(obj, visited=None):
             if visited is None:
@@ -341,7 +340,7 @@ class PictureTagger:
                 for k, v in obj.items():
                     # If this is a tags field, map tags
                     if k == "tags" and isinstance(v, (list, tuple, set)):
-                        mapped = [tag_natural_map.get(tag, tag) for tag in v]
+                        mapped = [TagNaturaliser.get_natural_tag(tag) for tag in v]
                         mapped = [m for m in mapped if m]
                         texts.extend(mapped)
                     else:
@@ -357,7 +356,7 @@ class PictureTagger:
                         continue
                     # If this is a tags field, map tags
                     if attr == "tags" and isinstance(value, (list, tuple, set)):
-                        mapped = [tag_natural_map.get(tag, tag) for tag in value]
+                        mapped = [TagNaturaliser.get_natural_tag(tag) for tag in value]
                         mapped = [m for m in mapped if m]
                         texts.extend(mapped)
                     else:
