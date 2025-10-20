@@ -33,7 +33,7 @@ SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
 MODEL_DIR = "wd14_tagger_model"
 BATCH_SIZE = 1
-MAX_CONCURRENT_IMAGES = 8
+MAX_CONCURRENT_IMAGES = 4
 GENERAL_THRESHOLD = 0.35
 CHARACTER_THRESHOLD = 0.35
 RECURSIVE = False
@@ -376,8 +376,21 @@ class PictureTagger:
             raise ValueError("No text data for embedding.")
         full_text = ". ".join(texts)
         logger.info(f"Embedding: full_text for CLIP: {full_text}")
-        with torch.no_grad():
-            text_tokens = self._clip_tokenizer([full_text]).to(self._clip_device)
-            embedding = self._clip_model.encode_text(text_tokens)
-            embedding = embedding.cpu().numpy()[0]
-        return embedding
+        try:
+            with torch.no_grad():
+                text_tokens = self._clip_tokenizer([full_text]).to(self._clip_device)
+                embedding = self._clip_model.encode_text(text_tokens)
+                embedding = embedding.cpu().numpy()[0]
+            return embedding
+        except RuntimeError as e:
+            if ("CUDA out of memory" in str(e)) or ("not compatible" in str(e)) or ("CUDA error" in str(e)):
+                logger.warning(f"CLIP embedding failed on CUDA: {e}. Falling back to CPU.")
+                self._clip_device = "cpu"
+                self._clip_model = self._clip_model.to(self._clip_device)
+                with torch.no_grad():
+                    text_tokens = self._clip_tokenizer([full_text]).to(self._clip_device)
+                    embedding = self._clip_model.encode_text(text_tokens)
+                    embedding = embedding.cpu().numpy()[0]
+                return embedding
+            else:
+                raise
