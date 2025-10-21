@@ -93,11 +93,10 @@ class Pictures:
         thread_conn = sqlite3.connect(self.db_path, check_same_thread=False)
         thread_conn.row_factory = sqlite3.Row
         while not self._tag_worker_stop.is_set():
-            # Find all Pictures missing tags or missing embeddings
+            # Find all Pictures missing tags
             missing_tags = [pic for pic in self.find() if not pic.tags]
-            missing_embeddings = [
-                pic for pic in self.find() if not getattr(pic, "has_embedding", False)
-            ]
+            # Only generate embeddings for pictures that have tags
+            missing_embeddings = [pic for pic in self.find() if not getattr(pic, 'has_embedding', False) and pic.tags]
 
             # Tag untagged images
             if missing_tags:
@@ -130,11 +129,8 @@ class Pictures:
                                     "UPDATE pictures SET tags = ? WHERE id = ?",
                                     (tags_json, pic.id),
                                 )
-                            # After tagging, also add to missing_embeddings if not already embedded
-                            if not getattr(pic, "has_embedding", False):
-                                missing_embeddings.append(pic)
 
-            # Generate embeddings for pictures missing them (even if already tagged)
+            # Generate embeddings for pictures missing them (only if they have tags)
             if missing_embeddings:
                 batch = missing_embeddings[:MAX_CONCURRENT_IMAGES]
                 for pic in batch:
