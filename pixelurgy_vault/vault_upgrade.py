@@ -36,8 +36,12 @@ class VaultUpgrade:
         columns = [row[1] for row in cursor.fetchall()]
         if "is_reference" not in columns:
             self.logger.info("Upgrading schema: adding is_reference to pictures table.")
-            cursor.execute("ALTER TABLE pictures ADD COLUMN is_reference INTEGER DEFAULT 0 CHECK(is_reference BETWEEN 0 AND 1)")
-            cursor.execute("UPDATE pictures SET is_reference = 0 WHERE is_reference IS NULL")
+            cursor.execute(
+                "ALTER TABLE pictures ADD COLUMN is_reference INTEGER DEFAULT 0 CHECK(is_reference BETWEEN 0 AND 1)"
+            )
+            cursor.execute(
+                "UPDATE pictures SET is_reference = 0 WHERE is_reference IS NULL"
+            )
             self.connection.commit()
             # Bump schema version
             new_version = self.schema_version.get_version() + 1
@@ -49,12 +53,20 @@ class VaultUpgrade:
         columns = [row[1] for row in cursor.fetchall()]
         upgraded = False
         if "character_likeness" not in columns:
-            self.logger.info("Upgrading schema: adding character_likeness to picture_iterations table.")
-            cursor.execute("ALTER TABLE picture_iterations ADD COLUMN character_likeness FLOAT CHECK(character_likeness >= 0.0 AND character_likeness <= 1.0)")
+            self.logger.info(
+                "Upgrading schema: adding character_likeness to picture_iterations table."
+            )
+            cursor.execute(
+                "ALTER TABLE picture_iterations ADD COLUMN character_likeness FLOAT CHECK(character_likeness >= 0.0 AND character_likeness <= 1.0)"
+            )
             upgraded = True
         if "character_id" not in columns:
-            self.logger.info("Upgrading schema: adding character_id to picture_iterations table.")
-            cursor.execute("ALTER TABLE picture_iterations ADD COLUMN character_id TEXT")
+            self.logger.info(
+                "Upgrading schema: adding character_id to picture_iterations table."
+            )
+            cursor.execute(
+                "ALTER TABLE picture_iterations ADD COLUMN character_id TEXT"
+            )
             upgraded = True
         if upgraded:
             self.connection.commit()
@@ -62,4 +74,6 @@ class VaultUpgrade:
             self.schema_version.set_version(new_version)
             self.logger.info(f"Schema upgraded to version {new_version}")
         else:
-            self.logger.info("Vault database is the latest version. No upgrade necessary")
+            self.logger.info(
+                "Vault database is the latest version. No upgrade necessary"
+            )

@@ -17,7 +17,6 @@ from PIL import Image
 from tqdm import tqdm
 
 
-
 from .logging import get_logger
 from pixelurgy_vault.tag_naturaliser import TagNaturaliser
 
@@ -50,6 +49,7 @@ CAPTION_SEPARATOR = ", "
 TAG_REPLACEMENT = None
 CHARACTER_TAG_EXPAND = False
 
+
 def preprocess_image(image):
     image = np.array(image)
     image = image[:, :, ::-1]  # RGB->BGR
@@ -60,12 +60,18 @@ def preprocess_image(image):
     pad_y = size - image.shape[0]
     pad_l = pad_x // 2
     pad_t = pad_y // 2
-    image = np.pad(image, ((pad_t, pad_y - pad_t), (pad_l, pad_x - pad_l), (0, 0)), mode="constant", constant_values=255)
+    image = np.pad(
+        image,
+        ((pad_t, pad_y - pad_t), (pad_l, pad_x - pad_l), (0, 0)),
+        mode="constant",
+        constant_values=255,
+    )
 
     image = resize_image(image, IMAGE_SIZE, IMAGE_SIZE)
 
     image = image.astype(np.float32)
     return image
+
 
 def resize_image(image, h_out, w_out):
     return cv2.resize(image, (w_out, h_out), interpolation=cv2.INTER_AREA)
@@ -86,20 +92,34 @@ class ImageLoadingPrepDataset(torch.utils.data.Dataset):
             image = preprocess_image(image)
             # ...existing code...
         except Exception as e:
-            logger.error(f"Could not load image path / 画像を読み込めません: {img_path}, error: {e}")
+            logger.error(
+                f"Could not load image path / 画像を読み込めません: {img_path}, error: {e}"
+            )
             return None
 
         return (image, img_path)
 
+
 class PictureTagger:
-    def __init__(self, model_location=os.path.join(MODEL_DIR, DEFAULT_WD14_TAGGER_REPO.replace("/", "_")), force_download=False, silent=True):
+    def __init__(
+        self,
+        model_location=os.path.join(
+            MODEL_DIR, DEFAULT_WD14_TAGGER_REPO.replace("/", "_")
+        ),
+        force_download=False,
+        silent=True,
+    ):
         self.model_location = model_location
         self.silent = silent
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()
         self._load_and_preprocess_tags()
         # Load CLIP model at construction for efficiency
-        self._clip_model, _, self._clip_preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained="laion2b_s34b_b79k")
+        self._clip_model, _, self._clip_preprocess = (
+            open_clip.create_model_and_transforms(
+                "ViT-B-32", pretrained="laion2b_s34b_b79k"
+            )
+        )
         self._clip_device = "cuda" if torch.cuda.is_available() else "cpu"
         self._clip_model = self._clip_model.to(self._clip_device)
         self._clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
@@ -115,27 +135,33 @@ class PictureTagger:
         if "OpenVINOExecutionProvider" in ort.get_available_providers():
             self.ort_sess = ort.InferenceSession(
                 onnx_path,
-                providers=(['OpenVINOExecutionProvider']),
-                provider_options=[{'device_type' : "GPU", "precision": "FP32"}],
+                providers=(["OpenVINOExecutionProvider"]),
+                provider_options=[{"device_type": "GPU", "precision": "FP32"}],
             )
         else:
             self.ort_sess = ort.InferenceSession(
                 onnx_path,
                 providers=(
-                    ["CUDAExecutionProvider"] if "CUDAExecutionProvider" in ort.get_available_providers() else
-                    ["ROCMExecutionProvider"] if "ROCMExecutionProvider" in ort.get_available_providers() else
-                    ["CPUExecutionProvider"]
+                    ["CUDAExecutionProvider"]
+                    if "CUDAExecutionProvider" in ort.get_available_providers()
+                    else ["ROCMExecutionProvider"]
+                    if "ROCMExecutionProvider" in ort.get_available_providers()
+                    else ["CPUExecutionProvider"]
                 ),
             )
         self.input_name = self.ort_sess.get_inputs()[0].name
 
     def _load_and_preprocess_tags(self):
-        with open(os.path.join(self.model_location, CSV_FILE), "r", encoding="utf-8") as f:
+        with open(
+            os.path.join(self.model_location, CSV_FILE), "r", encoding="utf-8"
+        ) as f:
             reader = csv.reader(f)
             line = [row for row in reader]
             header = line[0]  # tag_id,name,category,count
             rows = line[1:]
-        assert header[0] == "tag_id" and header[1] == "name" and header[2] == "category", f"unexpected csv format: {header}"
+        assert (
+            header[0] == "tag_id" and header[1] == "name" and header[2] == "category"
+        ), f"unexpected csv format: {header}"
 
         self.rating_tags = [row[1] for row in rows[0:] if row[2] == "9"]
         self.general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
@@ -150,20 +176,37 @@ class PictureTagger:
                     if character_tag.endswith("_"):
                         character_tag = character_tag[:-1]
                     series_tag = tags[-1].replace(")", "")
-                    self.character_tags[i] = character_tag + CAPTION_SEPARATOR + series_tag
+                    self.character_tags[i] = (
+                        character_tag + CAPTION_SEPARATOR + series_tag
+                    )
 
         if REMOVE_UNDERSCORE:
-            self.rating_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in self.rating_tags]
-            self.general_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in self.general_tags]
-            self.character_tags = [tag.replace("_", " ") if len(tag) > 3 else tag for tag in self.character_tags]
+            self.rating_tags = [
+                tag.replace("_", " ") if len(tag) > 3 else tag
+                for tag in self.rating_tags
+            ]
+            self.general_tags = [
+                tag.replace("_", " ") if len(tag) > 3 else tag
+                for tag in self.general_tags
+            ]
+            self.character_tags = [
+                tag.replace("_", " ") if len(tag) > 3 else tag
+                for tag in self.character_tags
+            ]
 
         if TAG_REPLACEMENT is not None:
-            escaped_tag_replacements = TAG_REPLACEMENT.replace("\\,", "@@@@").replace("\\;", "####")
+            escaped_tag_replacements = TAG_REPLACEMENT.replace("\\,", "@@@@").replace(
+                "\\;", "####"
+            )
             tag_replacements = escaped_tag_replacements.split(";")
             for tag_replacement in tag_replacements:
                 tags = tag_replacement.split(",")  # source, target
-                assert len(tags) == 2, f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
-                source, target = [tag.replace("@@@@", ",").replace("####", ";") for tag in tags]
+                assert len(tags) == 2, (
+                    f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
+                )
+                source, target = [
+                    tag.replace("@@@@", ",").replace("####", ";") for tag in tags
+                ]
                 logger.debug(f"replacing tag: {source} -> {target}")
                 if source in self.general_tags:
                     self.general_tags[self.general_tags.index(source)] = target
@@ -178,23 +221,40 @@ class PictureTagger:
         # https://github.com/toriato/stable-diffusion-webui-wd14-tagger/issues/22
         if not os.path.exists(self.model_location) or force_download:
             os.makedirs(self.model_location, exist_ok=True)
-            logger.debug(f"downloading wd14 tagger model from hf_hub. id: {DEFAULT_WD14_TAGGER_REPO}")
+            logger.debug(
+                f"downloading wd14 tagger model from hf_hub. id: {DEFAULT_WD14_TAGGER_REPO}"
+            )
             # Always download ONNX model and selected_tags.csv
             from huggingface_hub import hf_hub_download
+
             # Download ONNX model
             onnx_model_path = os.path.join(self.model_location, "model.onnx")
             tags_csv_path = os.path.join(self.model_location, "selected_tags.csv")
             logger.debug(f"Downloading ONNX model to {onnx_model_path}")
-            hf_hub_download(repo_id=DEFAULT_WD14_TAGGER_REPO, filename="model.onnx", local_dir=self.model_location, force_download=True)
+            hf_hub_download(
+                repo_id=DEFAULT_WD14_TAGGER_REPO,
+                filename="model.onnx",
+                local_dir=self.model_location,
+                force_download=True,
+            )
             logger.debug(f"Downloading selected_tags.csv to {tags_csv_path}")
-            hf_hub_download(repo_id=DEFAULT_WD14_TAGGER_REPO, filename="selected_tags.csv", local_dir=self.model_location, force_download=True)
+            hf_hub_download(
+                repo_id=DEFAULT_WD14_TAGGER_REPO,
+                filename="selected_tags.csv",
+                local_dir=self.model_location,
+                force_download=True,
+            )
 
     def _glob_images_pathlib(self, path, recursive):
-        pattern = '**/*' if recursive else '*'
-        exts = ['png', 'jpg', 'jpeg', 'webp', 'bmp']
+        pattern = "**/*" if recursive else "*"
+        exts = ["png", "jpg", "jpeg", "webp", "bmp"]
         files = []
         for ext in exts:
-            files.extend(glob.glob(os.path.join(str(path), f'{pattern}.{ext}'), recursive=recursive))
+            files.extend(
+                glob.glob(
+                    os.path.join(str(path), f"{pattern}.{ext}"), recursive=recursive
+                )
+            )
         return files
 
     def _collate_fn_remove_corrupted(self, batch):
@@ -206,7 +266,9 @@ class PictureTagger:
         batch = list(filter(lambda x: x is not None, batch))
         return batch
 
-    def _run_batch(self, path_imgs, tag_freq, caption_separator, undesired_tags, always_first_tags):
+    def _run_batch(
+        self, path_imgs, tag_freq, caption_separator, undesired_tags, always_first_tags
+    ):
         imgs = np.array([im for _, im in path_imgs])
         probs = self.ort_sess.run(None, {self.input_name: imgs})[0]  # onnx output numpy
         probs = probs[: len(path_imgs)]
@@ -223,13 +285,13 @@ class PictureTagger:
                     tag_probs.append((found_rating, ratings_probs[rating_index]))
                     tag_freq[found_rating] = tag_freq.get(found_rating, 0) + 1
             # General tags
-            for i, p in enumerate(prob[4:4+len(self.general_tags)]):
+            for i, p in enumerate(prob[4 : 4 + len(self.general_tags)]):
                 tag_name = self.general_tags[i]
                 if p >= GENERAL_THRESHOLD and tag_name not in undesired_tags:
                     tag_probs.append((tag_name, p))
                     tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
             # Character tags
-            for i, p in enumerate(prob[4+len(self.general_tags):]):
+            for i, p in enumerate(prob[4 + len(self.general_tags) :]):
                 tag_name = self.character_tags[i]
                 if p >= CHARACTER_THRESHOLD and tag_name not in undesired_tags:
                     tag_probs.append((tag_name, p))
@@ -261,11 +323,17 @@ class PictureTagger:
         caption_separator = CAPTION_SEPARATOR
         stripped_caption_separator = caption_separator.strip()
         undesired_tags = UNDESIRED_TAGS.split(stripped_caption_separator)
-        undesired_tags = set([tag.strip() for tag in undesired_tags if tag.strip() != ""])
+        undesired_tags = set(
+            [tag.strip() for tag in undesired_tags if tag.strip() != ""]
+        )
 
         always_first_tags = None
         if ALWAYS_FIRST_TAGS is not None:
-            always_first_tags = [tag for tag in ALWAYS_FIRST_TAGS.split(stripped_caption_separator) if tag.strip() != ""]
+            always_first_tags = [
+                tag
+                for tag in ALWAYS_FIRST_TAGS.split(stripped_caption_separator)
+                if tag.strip() != ""
+            ]
 
         # ...existing code...
         if MAX_CONCURRENT_IMAGES is not None:
@@ -296,19 +364,33 @@ class PictureTagger:
                             image = image.convert("RGB")
                         image = preprocess_image(image)
                     except Exception as e:
-                        logger.error(f"Could not load image path / 画像を読み込めません: {image_path}, error: {e}")
+                        logger.error(
+                            f"Could not load image path / 画像を読み込めません: {image_path}, error: {e}"
+                        )
                         continue
                 b_imgs.append((image_path, image))
 
                 if len(b_imgs) >= BATCH_SIZE:
-                    b_imgs = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
-                    batch_result = self._run_batch(b_imgs, tag_freq, caption_separator, undesired_tags, always_first_tags)
+                    b_imgs = [
+                        (str(image_path), image) for image_path, image in b_imgs
+                    ]  # Convert image_path to string
+                    batch_result = self._run_batch(
+                        b_imgs,
+                        tag_freq,
+                        caption_separator,
+                        undesired_tags,
+                        always_first_tags,
+                    )
                     all_results.update(batch_result)
                     b_imgs.clear()
 
         if len(b_imgs) > 0:
-            b_imgs = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
-            batch_result = self._run_batch(b_imgs, tag_freq, caption_separator, undesired_tags, always_first_tags)
+            b_imgs = [
+                (str(image_path), image) for image_path, image in b_imgs
+            ]  # Convert image_path to string
+            batch_result = self._run_batch(
+                b_imgs, tag_freq, caption_separator, undesired_tags, always_first_tags
+            )
             all_results.update(batch_result)
 
         if FREQUENCY_TAGS:
@@ -319,12 +401,12 @@ class PictureTagger:
 
         return all_results
 
-
     def generate_embedding(self, character=None, picture=None):
         """
         Generate a CLIP embedding from all text found in character and picture objects (recursively), avoiding cycles.
         Uses the TagNaturaliser to convert tags to natural language.
         """
+
         def collect_text(obj, visited=None):
             if visited is None:
                 visited = set()
@@ -352,7 +434,12 @@ class PictureTagger:
                 for attr, value in obj.__dict__.items():
                     if attr.startswith("_"):
                         continue
-                    if attr in ("parent", "self", "picture_iterations", "picture_tagger"):
+                    if attr in (
+                        "parent",
+                        "self",
+                        "picture_iterations",
+                        "picture_tagger",
+                    ):
                         continue
                     # If this is a tags field, map tags
                     if attr == "tags" and isinstance(value, (list, tuple, set)):
@@ -363,7 +450,9 @@ class PictureTagger:
                         texts.extend(collect_text(value, visited))
             return texts
 
-        logger.debug(f"generate_embedding called with character={character}, picture={picture}")
+        logger.debug(
+            f"generate_embedding called with character={character}, picture={picture}"
+        )
         texts = []
         texts.extend(collect_text(character))
         texts.extend(collect_text(picture))
@@ -371,7 +460,11 @@ class PictureTagger:
         texts = [t for t in texts if t]
         logger.debug(f"Embedding: texts used for embedding: {texts}")
         if not texts:
-            logger.error("Embedding: No text data for embedding. character=%s, picture=%s", character, picture)
+            logger.error(
+                "Embedding: No text data for embedding. character=%s, picture=%s",
+                character,
+                picture,
+            )
             raise ValueError("No text data for embedding.")
         full_text = ". ".join(texts)
         logger.debug(f"Embedding: full_text for CLIP: {full_text}")
@@ -382,12 +475,20 @@ class PictureTagger:
                 embedding = embedding.cpu().numpy()[0]
             return embedding
         except RuntimeError as e:
-            if ("CUDA out of memory" in str(e)) or ("not compatible" in str(e)) or ("CUDA error" in str(e)):
-                logger.warning(f"CLIP embedding failed on CUDA: {e}. Falling back to CPU.")
+            if (
+                ("CUDA out of memory" in str(e))
+                or ("not compatible" in str(e))
+                or ("CUDA error" in str(e))
+            ):
+                logger.warning(
+                    f"CLIP embedding failed on CUDA: {e}. Falling back to CPU."
+                )
                 self._clip_device = "cpu"
                 self._clip_model = self._clip_model.to(self._clip_device)
                 with torch.no_grad():
-                    text_tokens = self._clip_tokenizer([full_text]).to(self._clip_device)
+                    text_tokens = self._clip_tokenizer([full_text]).to(
+                        self._clip_device
+                    )
                     embedding = self._clip_model.encode_text(text_tokens)
                     embedding = embedding.cpu().numpy()[0]
                 return embedding
