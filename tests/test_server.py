@@ -6,6 +6,8 @@ import tempfile
 import time
 import tomllib
 
+import gc
+
 from PIL import Image
 from fastapi.testclient import TestClient
 from pixelurgy_vault.server import Server
@@ -73,6 +75,7 @@ def test_esmeralda_vault_character_and_logo():
             "EsmeraldaVault's picture does not match Logo.png"
         )
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_create_and_get_default_character():
@@ -107,6 +110,7 @@ def test_create_and_get_default_character():
         assert char["name"] == char_name
         assert char["description"] == char_desc
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_upload_iteration_to_existing_picture():
@@ -165,6 +169,7 @@ def test_upload_iteration_to_existing_picture():
         assert it3["picture_id"] == picture_id
         assert it3["transform_metadata"] == '{"filter":"blur"}'
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_post_logo_altered_pixel_upload():
@@ -198,6 +203,7 @@ def test_post_logo_altered_pixel_upload():
         assert resp["results"][0]["picture_id"]
         assert resp["results"][0]["iteration_id"]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_post_logo_altered_pixel_path():
@@ -229,6 +235,7 @@ def test_post_logo_altered_pixel_path():
         assert resp["results"][0]["status"] == "success"
         assert resp["results"][0]["picture_id"]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_read_root():
@@ -245,6 +252,7 @@ def test_read_root():
             "version": expected_version,
         }
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_benchmark_add_images_by_binary_upload():
@@ -283,6 +291,7 @@ def test_benchmark_add_images_by_binary_upload():
             assert img_resp.status_code == 200
             assert img_resp.content[:1024] == random_images[check_idx][:1024]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 def test_benchmark_add_images_by_path():
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -330,6 +339,7 @@ def test_benchmark_add_images_by_path():
                 image = f.read()
             assert img_resp.content[:1024] == image[:1024]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_benchmark_add_images_by_directory():
@@ -381,6 +391,7 @@ def test_benchmark_add_images_by_directory():
                 image = f.read()
             assert img_resp.content[:1024] == image[:1024]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_reference_picture_workflow():
@@ -440,6 +451,7 @@ def test_reference_picture_workflow():
         assert ref_pic["description"] == "Reference image test"
         assert ref_pic["tags"] == ["ref", "test"]
         server.vault.close()
+    gc.collect()
 
 
 def test_tagger_worker_adds_tags():
@@ -486,6 +498,7 @@ def test_tagger_worker_adds_tags():
         )
         print(f"Tags for TaggerTest.png: {found_tags}")
         server.vault.close()
+    gc.collect()
 
 
 def test_semantic_search_on_all_pictures():
@@ -558,3 +571,4 @@ def test_semantic_search_on_all_pictures():
                 f"Expected at least one results, got {len(results)} for the text '{search_text}'"
             )
         server.vault.close()
+    gc.collect()
