@@ -11,12 +11,7 @@ from fastapi.testclient import TestClient
 from pixelurgy_vault.server import Server
 from io import BytesIO
 
-skip_on_github = pytest.mark.skipif(
-    os.getenv("GITHUB_ACTIONS") == "true",
-    reason="Disabled on GitHub Actions"
-)
-
-TEST_SIZE = 50
+TEST_SIZE = 10 if os.getenv("GITHUB_ACTIONS") == "true" else 50
 random_images = []
 total_bytes = 0
 for i in range(TEST_SIZE):
@@ -253,7 +248,6 @@ def test_read_root():
 
 
 def test_benchmark_add_images_by_binary_upload():
-    TEST_SIZE = 50
     with tempfile.TemporaryDirectory() as temp_dir:
         vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
@@ -289,7 +283,6 @@ def test_benchmark_add_images_by_binary_upload():
             assert img_resp.status_code == 200
             assert img_resp.content[:1024] == random_images[check_idx][:1024]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
-
 
 def test_benchmark_add_images_by_path():
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -390,7 +383,6 @@ def test_benchmark_add_images_by_directory():
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
 
 
-@skip_on_github
 def test_reference_picture_workflow():
     """Test adding and retrieving reference images for a character."""
     with tempfile.TemporaryDirectory() as temp_dir:
