@@ -1,3 +1,4 @@
+open_clip_torch
 fastapi
 uvicorn
 setuptools
@@ -10,3 +11,8 @@ scipy
 platformdirs
 tomli
 colorlog
+onnxruntime
+requests
+transformers
+torch
+torchvision

@@ -18,14 +18,6 @@ logger = get_logger(__name__)
 
 
 class Vault:
-    def close(self):
-        """
-        Cleanly close the vault, including stopping background workers and closing DB connection.
-        """
-        if hasattr(self, 'iterations') and hasattr(self.iterations, 'stop_quality_worker'):
-            self.iterations.stop_quality_worker()
-        if hasattr(self, 'connection') and self.connection:
-            self.connection.close()
     """
     Represents a vault for storing images and metadata.
 
@@ -58,26 +50,27 @@ class Vault:
         self.db_path = db_path  # Path to SQLite database file
         self.connection: Optional[sqlite3.Connection] = None
         db_exists = os.path.exists(self.db_path)
-        self.logger.info(f"Vault init, db_path={self.db_path}, db_exists={db_exists}")
+        self.logger.debug(f"Vault init, db_path={self.db_path}, db_exists={db_exists}")
         self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         if not db_exists:
-            self.logger.info("Creating tables and importing default data...")
+            self.logger.debug("Creating tables and importing default data...")
             self._create_tables()
         else:
-            self.logger.info("Using existing database, skipping default import.")
+            self.logger.debug("Using existing database, skipping default import.")
         self.upgrader = VaultUpgrade(self.connection)
         self.upgrader.upgrade_if_necessary()
         if image_root:
             self.set_metadata("image_root", image_root)
         if description:
             self.set_metadata("description", description)
-        self.pictures = Pictures(self.connection)
-        self.iterations = PictureIterations(self.connection)
+        self.iterations = PictureIterations(self.connection, self.db_path)
+        self.pictures = Pictures(self.connection, self.iterations, self.db_path)
         self.characters = Characters(self.connection)
         if not db_exists:
             self._import_default_data()
         self.iterations.start_quality_worker()
+        self.pictures.start_tag_worker()
 
     def __repr__(self):
         """
@@ -87,6 +80,19 @@ class Vault:
             str: String representation.
         """
         return f"Vault(db_path='{self.db_path}')"
+
+    def close(self):
+        """
+        Cleanly close the vault, including stopping background workers and closing DB connection.
+        """
+        if hasattr(self, "iterations") and hasattr(
+            self.iterations, "stop_quality_worker"
+        ):
+            self.iterations.stop_quality_worker()
+        if hasattr(self, "pictures") and hasattr(self.pictures, "stop_tag_worker"):
+            self.pictures.stop_tag_worker()
+        if hasattr(self, "connection") and self.connection:
+            self.connection.close()
 
     def _create_tables(self):
         """
@@ -127,6 +133,7 @@ class Vault:
                 tags TEXT,
                 created_at TEXT,
                 is_reference INTEGER DEFAULT 0 CHECK(is_reference BETWEEN 0 AND 1),
+                embedding BLOB,
                 FOREIGN KEY(character_id) REFERENCES characters(id)
             )
             """
@@ -185,7 +192,7 @@ class Vault:
         cursor = self.connection.cursor()
         cursor.execute("SELECT value FROM metadata WHERE key = ?", (key,))
         row = cursor.fetchone()
-        return row['value'] if row else None
+        return row["value"] if row else None
 
     def _import_default_data(self):
         """
@@ -196,13 +203,13 @@ class Vault:
 
         logo_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Logo.png")
         logo_dest_folder = self.get_image_root()
-        self.logger.info(
+        self.logger.debug(
             f"logo_dest_folder in _import_default_data: {logo_dest_folder}"
         )
         if not logo_dest_folder:
             # Fallback: use a default images directory next to the DB file
             logo_dest_folder = os.path.join(os.path.dirname(self.db_path), "images")
-            self.logger.info(f"Fallback logo_dest_folder: {logo_dest_folder}")
+            self.logger.debug(f"Fallback logo_dest_folder: {logo_dest_folder}")
         os.makedirs(logo_dest_folder, exist_ok=True)
         logo_dest = os.path.join(logo_dest_folder, "Logo.png")
         if not os.path.exists(logo_dest):

@@ -1,13 +1,29 @@
-import time
-import os
-import tempfile
 import numpy as np
+import os
+import pytest
+import random
+import tempfile
+import time
+import tomllib
+
+import gc
+
 from PIL import Image
 from fastapi.testclient import TestClient
 from pixelurgy_vault.server import Server
-import random
 from io import BytesIO
-import tomllib
+
+TEST_SIZE = 10 if os.getenv("GITHUB_ACTIONS") == "true" else 50
+random_images = []
+total_bytes = 0
+for i in range(TEST_SIZE):
+    arr = np.random.randint(0, 256, (1024, 1024, 3), dtype=np.uint8)
+    img = Image.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+    random_images.append(img_bytes)
+    total_bytes += len(img_bytes)
 
 
 def get_project_version():
@@ -59,6 +75,7 @@ def test_esmeralda_vault_character_and_logo():
             "EsmeraldaVault's picture does not match Logo.png"
         )
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_create_and_get_default_character():
@@ -93,6 +110,7 @@ def test_create_and_get_default_character():
         assert char["name"] == char_name
         assert char["description"] == char_desc
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_upload_iteration_to_existing_picture():
@@ -151,18 +169,7 @@ def test_upload_iteration_to_existing_picture():
         assert it3["picture_id"] == picture_id
         assert it3["transform_metadata"] == '{"filter":"blur"}'
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
-
-TEST_SIZE = 50
-random_images = []
-total_bytes = 0
-for i in range(TEST_SIZE):
-    arr = np.random.randint(0, 256, (1024, 1024, 3), dtype=np.uint8)
-    img = Image.fromarray(arr)
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    img_bytes = buf.getvalue()
-    random_images.append(img_bytes)
-    total_bytes += len(img_bytes)
+    gc.collect()
 
 
 def test_post_logo_altered_pixel_upload():
@@ -196,6 +203,7 @@ def test_post_logo_altered_pixel_upload():
         assert resp["results"][0]["picture_id"]
         assert resp["results"][0]["iteration_id"]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_post_logo_altered_pixel_path():
@@ -227,6 +235,7 @@ def test_post_logo_altered_pixel_path():
         assert resp["results"][0]["status"] == "success"
         assert resp["results"][0]["picture_id"]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_read_root():
@@ -243,10 +252,10 @@ def test_read_root():
             "version": expected_version,
         }
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_benchmark_add_images_by_binary_upload():
-    TEST_SIZE = 50
     with tempfile.TemporaryDirectory() as temp_dir:
         vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
@@ -282,7 +291,7 @@ def test_benchmark_add_images_by_binary_upload():
             assert img_resp.status_code == 200
             assert img_resp.content[:1024] == random_images[check_idx][:1024]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
-
+    gc.collect()
 
 def test_benchmark_add_images_by_path():
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -330,6 +339,7 @@ def test_benchmark_add_images_by_path():
                 image = f.read()
             assert img_resp.content[:1024] == image[:1024]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_benchmark_add_images_by_directory():
@@ -381,6 +391,7 @@ def test_benchmark_add_images_by_directory():
                 image = f.read()
             assert img_resp.content[:1024] == image[:1024]
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+    gc.collect()
 
 
 def test_reference_picture_workflow():
@@ -396,7 +407,11 @@ def test_reference_picture_workflow():
         char_id = "testchar-123"
         resp = client.post(
             "/characters",
-            json={"id": char_id, "name": "Test Character", "description": "For reference image test"}
+            json={
+                "id": char_id,
+                "name": "Test Character",
+                "description": "For reference image test",
+            },
         )
         assert resp.status_code == 200
         assert resp.json()["character"]["id"] == char_id
@@ -436,3 +451,124 @@ def test_reference_picture_workflow():
         assert ref_pic["description"] == "Reference image test"
         assert ref_pic["tags"] == ["ref", "test"]
         server.vault.close()
+    gc.collect()
+
+
+def test_tagger_worker_adds_tags():
+    """Test that uploading TaggerTest.png results in tags being added by the tag worker."""
+    import shutil
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        vault_path = os.path.join(temp_dir, "vault.db")
+        image_root = os.path.join(temp_dir, "images")
+        os.makedirs(image_root, exist_ok=True)
+        # Copy TaggerTest.png into temp dir
+        src_img = os.path.join(os.path.dirname(__file__), "../pictures/TaggerTest.png")
+        dest_img = os.path.join(image_root, "TaggerTest.png")
+        shutil.copyfile(src_img, dest_img)
+        server = Server(vault_db_path=vault_path, image_root=image_root)
+        client = TestClient(server.app)
+
+        # Upload TaggerTest.png as a new picture
+        with open(dest_img, "rb") as f:
+            files = {"image": ("TaggerTest.png", f.read(), "image/png")}
+            data = {
+                "character_id": "testchar",
+                "description": "tagger test",
+                "tags": "[]",
+            }
+            r = client.post("/pictures", files=files, data=data)
+        assert r.status_code == 200
+        resp = r.json()
+        assert resp["results"][0]["status"] == "success"
+        picture_id = resp["results"][0]["picture_id"]
+
+        # Wait for tag worker to process
+        found_tags = None
+        for _ in range(20):
+            time.sleep(0.5)
+            get_resp = client.get(f"/pictures/{picture_id}?info=true")
+            assert get_resp.status_code == 200
+            pic_info = get_resp.json()
+            found_tags = pic_info.get("tags", [])
+            if found_tags:
+                break
+        assert found_tags, (
+            "Tagger worker did not add tags to TaggerTest.png after waiting."
+        )
+        print(f"Tags for TaggerTest.png: {found_tags}")
+        server.vault.close()
+    gc.collect()
+
+
+def test_semantic_search_on_all_pictures():
+    """Test: Add all images from pictures folder, wait for tagging, perform semantic search, print results, assert count."""
+    import shutil
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        vault_path = os.path.join(temp_dir, "vault.db")
+        image_root = os.path.join(temp_dir, "images")
+        os.makedirs(image_root, exist_ok=True)
+        # Copy all images from pictures folder
+        src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
+        image_files = [
+            f
+            for f in os.listdir(src_dir)
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        ]
+        for fname in image_files:
+            shutil.copyfile(
+                os.path.join(src_dir, fname), os.path.join(image_root, fname)
+            )
+        server = Server(vault_db_path=vault_path, image_root=image_root)
+        client = TestClient(server.app)
+
+        # Upload all images as new pictures
+        picture_ids = []
+        for fname in image_files:
+            with open(os.path.join(image_root, fname), "rb") as f:
+                files = {"image": (fname, f.read(), "image/png")}
+                data = {"character_id": "Esmeralda", "description": fname, "tags": "[]"}
+                r = client.post("/pictures", files=files, data=data)
+            assert r.status_code == 200
+            resp = r.json()
+            assert resp["results"][0]["status"] == "success"
+            picture_ids.append(resp["results"][0]["picture_id"])
+
+        # Wait for all pictures to be tagged (embeddings generated)
+        for pid in picture_ids:
+            for _ in range(30):
+                time.sleep(0.5)
+                get_resp = client.get(f"/pictures/{pid}?info=true")
+                assert get_resp.status_code == 200
+                pic_info = get_resp.json()
+                # Embedding is present if semantic search will work
+                if pic_info.get("has_embedding"):
+                    break
+            else:
+                assert False, f"Picture {pid} did not get embedding after waiting."
+
+        # Perform semantic search
+        search_texts = [
+            "It was a bright rainy day but Esmeralda needed to get out and get some fresh air, so she dressed for the weather, brought an umbrella and walked out into the countryside.",
+            "Esmeralda smiles as she sits across me in the cafe wearing her grey sweater. The sunlight filters through the window of the empty cafe",
+            "It was a bright winter morning, and Esmeralda decided to go for a walk in the snow-covered park, admiring the glistening trees and the crisp air. She was glad to have her scarf and her warm coat to keep her cozy.",
+            "Esmeralda spent hours in her garden wearing overalls tending to her grass and bushes. It made her smile.",
+            "Do I look like a man? Esmeralda asked, raising an eyebrow as she posed with her business suit.",
+            "She sat down on the park bench and considered her predicament. A quiet sadness came over her.",
+        ]
+
+        for search_text in search_texts:
+            search_resp = client.post(
+                "/pictures/search", json={"query": search_text, "threshold": 0.45}
+            )
+            assert search_resp.status_code == 200
+            results = search_resp.json()
+            print("Semantic search results:")
+            for pic in results:
+                print(pic)
+            assert 1 <= len(results), (
+                f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+            )
+        server.vault.close()
+    gc.collect()

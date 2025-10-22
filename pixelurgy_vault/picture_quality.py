@@ -29,27 +29,28 @@ class PictureQuality:
         Logs timing for each metric calculation.
         """
         import time
+
         timings = {}
 
         t0 = time.time()
         sharpness = PictureQuality._calculate_sharpness(image)
-        timings['sharpness'] = time.time() - t0
+        timings["sharpness"] = time.time() - t0
 
         t0 = time.time()
         edge_density = PictureQuality._calculate_edge_density(image)
-        timings['edge_density'] = time.time() - t0
+        timings["edge_density"] = time.time() - t0
 
         t0 = time.time()
         contrast = PictureQuality._calculate_contrast(image)
-        timings['contrast'] = time.time() - t0
+        timings["contrast"] = time.time() - t0
 
         t0 = time.time()
         brightness = PictureQuality._calculate_brightness(image)
-        timings['brightness'] = time.time() - t0
+        timings["brightness"] = time.time() - t0
 
         t0 = time.time()
         noise_level = PictureQuality._calculate_noise_level(image)
-        timings['noise_level'] = time.time() - t0
+        timings["noise_level"] = time.time() - t0
 
         print(f"PictureQuality.calculate_metrics timings: {timings}")
 

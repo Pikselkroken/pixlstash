@@ -18,6 +18,7 @@ class Picture:
         tags: Optional[List[str]] = None,
         created_at: Optional[str] = None,
         is_reference: int = 0,
+        has_embedding: bool = False,
     ):
         self.id = id if id else uuid.uuid4().hex
         self.character_id = character_id
@@ -27,3 +28,4 @@ class Picture:
             "+00:00", "Z"
         )
         self.is_reference = is_reference
+        self.has_embedding = has_embedding

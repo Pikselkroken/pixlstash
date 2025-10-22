@@ -15,8 +15,7 @@ from pixelurgy_vault.picture import Picture
 from pixelurgy_vault.picture_iteration import PictureIteration
 
 APP_NAME = "pixelurgy-vault"
-CONFIG_PATH =  os.path.join(user_config_dir(APP_NAME), "config.json")
-
+CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "config.json")
 
 
 # Logging will be set up after config is loaded
@@ -33,7 +32,14 @@ class Server:
         app (FastAPI): FastAPI application instance.
     """
 
-    def __init__(self, config_path=CONFIG_PATH, vault_db_path=None, image_root=None, description=None, log_file=None):
+    def __init__(
+        self,
+        config_path=CONFIG_PATH,
+        vault_db_path=None,
+        image_root=None,
+        description=None,
+        log_file=None,
+    ):
         """
         Initialize the Server instance.
 
@@ -43,7 +49,9 @@ class Server:
             description (str, optional): Vault description.
             log_file (str, optional): Path to the log file (or None for stdout).
         """
-        self.config = self.init_config(config_path, vault_db_path, image_root, description, log_file)
+        self.config = self.init_config(
+            config_path, vault_db_path, image_root, description, log_file
+        )
         # Override config values with explicit arguments
         if vault_db_path is not None:
             self.config["db_path"] = vault_db_path
@@ -72,7 +80,14 @@ class Server:
         if hasattr(self, "vault"):
             self.vault.close()
 
-    def init_config(self, config_path=CONFIG_PATH, vault_db_path=None, image_root=None, description="Pixelurgy Vault default configuration", log_file=None):
+    def init_config(
+        self,
+        config_path=CONFIG_PATH,
+        vault_db_path=None,
+        image_root=None,
+        description="Pixelurgy Vault default configuration",
+        log_file=None,
+    ):
         """
         Initialize and load the server configuration from file, creating defaults if necessary.
 
@@ -88,7 +103,7 @@ class Server:
                 "description": description,
                 "log_file": log_file,
                 "port": 9537,
-            }   
+            }
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=2)
         else:
@@ -98,29 +113,64 @@ class Server:
         return config
 
     def setup_routes(self):
+        @self.app.post("/pictures/search")
+        def search_pictures(body: dict = Body(...)):
+            """
+            Semantic search for pictures using CLIP embedding. Returns list of Pictures ordered by similarity.
+            Body: { "query": <text>, "top_n": <int, optional> }
+            """
+            query = body.get("query", "")
+            top_n = int(body.get("top_n", 5))
+            threshold = float(body.get("threshold", 0.5))
+            results = self.vault.pictures.find_by_text(
+                query, top_n=top_n, include_scores=False, threshold=threshold
+            )
+
+            # Convert Picture objects to dicts for JSON response
+            def pic_to_dict(pic):
+                return {
+                    "id": pic.id,
+                    "character_id": pic.character_id,
+                    "description": pic.description,
+                    "tags": pic.tags,
+                    "created_at": pic.created_at,
+                    "is_reference": getattr(pic, "is_reference", 0),
+                }
+
+            return [pic_to_dict(pic) for pic in results]
+
         @self.app.get("/characters/reference_pictures/{id}")
         def get_reference_pictures(id: str):
             """
             Get all reference pictures for a character (is_reference=1, master iteration only).
             """
             pics = self.vault.pictures.find(character_id=id)
-            reference_pics = [pic for pic in pics if getattr(pic, "is_reference", 0) == 1]
+            reference_pics = [
+                pic for pic in pics if getattr(pic, "is_reference", 0) == 1
+            ]
             results = []
             for pic in reference_pics:
                 # Find master iteration for this picture
                 master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
                 if master_its:
-                    results.append({
-                        "picture_id": pic.id,
-                        "iteration_id": master_its[0].id,
-                        "description": pic.description,
-                        "tags": pic.tags,
-                        "created_at": pic.created_at,
-                    })
+                    results.append(
+                        {
+                            "picture_id": pic.id,
+                            "iteration_id": master_its[0].id,
+                            "description": pic.description,
+                            "tags": pic.tags,
+                            "created_at": pic.created_at,
+                        }
+                    )
             return {"reference_pictures": results}
 
         @self.app.post("/characters/reference_pictures")
-        async def add_reference_picture(character_id: str = Form(...), description: str = Form(None), tags: str = Form(None), image: UploadFile = File(...)):
+        async def add_reference_picture(
+            character_id: str = Form(...),
+            description: str = Form(None),
+            tags: str = Form(None),
+            image: UploadFile = File(...),
+        ):
             """
             Add a reference picture for a character. Creates a new Picture with is_reference=1 and a master iteration.
             """
@@ -149,6 +199,7 @@ class Server:
                 "description": description,
                 "tags": tags_list,
             }
+
         """
         Set up all FastAPI routes for the application and register shutdown cleanup.
         """
@@ -262,20 +313,24 @@ class Server:
             return {"message": "Pixelurgy Vault REST API", "version": version}
 
         @self.app.get("/pictures/{id}")
-        def get_picture(id: str, info: bool = Query(False)):
+        def get_picture(
+            id: str, info: bool = Query(False), embedding: bool = Query(False)
+        ):
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
                 return {"error": "Picture not found"}
             if info:
                 # Return metadata only
-                return {
+                result = {
                     "id": pic.id,
                     "character_id": pic.character_id,
                     "description": pic.description,
                     "tags": pic.tags,
                     "created_at": pic.created_at,
+                    "has_embedding": pic.has_embedding,
                 }
+                return result
             # Otherwise, deliver the master iteration image file
             master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
             if not master_its:
@@ -470,12 +525,19 @@ class Server:
             data = tomllib.load(f)
         return data.get("project", {}).get("version", "unknown")
 
+
 def main():
     global CONFIG_PATH, APP_NAME
     parser = argparse.ArgumentParser(description=f"Run the {APP_NAME}.")
-    parser.add_argument("--port", type=int, default=9537, help="Port to run the server on.")
-    parser.add_argument("--config", type=str, default=CONFIG_PATH, help="Path to server config file.")
-    parser.add_argument("--log-file", type=str, default=None, help="Path to server log file.")
+    parser.add_argument(
+        "--port", type=int, default=9537, help="Port to run the server on."
+    )
+    parser.add_argument(
+        "--config", type=str, default=CONFIG_PATH, help="Path to server config file."
+    )
+    parser.add_argument(
+        "--log-file", type=str, default=None, help="Path to server log file."
+    )
     args = parser.parse_args()
     print(args)
 
@@ -485,6 +547,7 @@ def main():
     server = Server(config_path=config_path, log_file=args.log_file)
 
     uvicorn.run(server.app, host="0.0.0.0", port=args.port)
+
 
 if __name__ == "__main__":
     main()

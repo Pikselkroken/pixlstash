@@ -8,53 +8,77 @@ from typing import List
 
 
 class PictureIterations:
+    def __init__(self, connection, db_path):
+        self.connection = connection
+        self.db_path = db_path
+
     def start_quality_worker(self, interval=1):
-        if hasattr(self, '_quality_worker') and self._quality_worker.is_alive():
+        if hasattr(self, "_quality_worker") and self._quality_worker.is_alive():
             return
         self._quality_worker_stop = threading.Event()
-        self._quality_worker = threading.Thread(target=self._quality_worker_loop, args=(interval,), daemon=True)
+        self._quality_worker = threading.Thread(
+            target=self._quality_worker_loop, args=(interval,), daemon=True
+        )
         self._quality_worker.start()
 
     def stop_quality_worker(self):
-        if hasattr(self, '_quality_worker_stop'):
+        if hasattr(self, "_quality_worker_stop"):
             self._quality_worker_stop.set()
-        if hasattr(self, '_quality_worker'):
+        if hasattr(self, "_quality_worker"):
             self._quality_worker.join(timeout=5)  # Wait for thread to exit
 
     def _quality_worker_loop(self, interval):
         import numpy as np
         from PIL import Image
+        import sqlite3
+
         logger = get_logger(__name__)
+        # Create a new connection for this thread
+        thread_conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        thread_conn.row_factory = sqlite3.Row
         while not self._quality_worker_stop.is_set():
             try:
-                cursor = self.connection.cursor()
-                cursor.execute("SELECT id, file_path FROM picture_iterations WHERE quality IS NULL")
+                cursor = thread_conn.cursor()
+                cursor.execute(
+                    "SELECT id, file_path FROM picture_iterations WHERE quality IS NULL"
+                )
                 rows = cursor.fetchall()
-                logger.info(f"Quality worker found {len(rows)} iterations needing quality calculation.")
+                logger.debug(
+                    f"Quality worker found {len(rows)} iterations needing quality calculation."
+                )
                 for row in rows:
-                    logger.info(f"Doing row {row}")
+                    logger.debug(f"Doing row {row}")
                     if self._quality_worker_stop.is_set():
                         break
-                    logger.info("Checked stop event for iteration")
+                    logger.debug("Checked stop event for iteration")
                     it_id, file_path = row
                     try:
-                        logger.info(f"Opening file {file_path} for quality calculation")
+                        logger.debug(
+                            f"Opening file {file_path} for quality calculation"
+                        )
                         with Image.open(file_path) as img:
                             image_np = np.array(img.convert("RGB"))
-                        logger.info(f"Calculating quality for iteration {it_id}")
+                        logger.debug(f"Calculating quality for iteration {it_id}")
                         quality = PictureQuality.calculate_metrics(image_np)
-                        it = self[it_id]
-                        it.quality = quality
-                        logger.info(f"Calculated quality for iteration {it.id}")
-                        self.update_quality(it.id, quality)
-                        logger.info(f"Updated iteration {it.id} with new quality")
+                        # Update quality in DB using thread_conn
+                        quality_json = None
+                        if quality:
+                            try:
+                                quality_json = json.dumps(quality.__dict__)
+                            except Exception:
+                                quality_json = None
+                        cursor.execute(
+                            "UPDATE picture_iterations SET quality = ? WHERE id = ?",
+                            (quality_json, it_id),
+                        )
+                        thread_conn.commit()
+                        logger.debug(f"Calculated quality for iteration {it_id}")
+                        logger.debug(f"Updated iteration {it_id} with new quality")
                     except Exception as e:
                         logger.error(f"Failed to calculate quality for {it_id}: {e}")
             except Exception as e:
                 logger.error(f"Quality worker error: {e}")
             self._quality_worker_stop.wait(interval)
-    def __init__(self, connection):
-        self.connection = connection
 
     def __getitem__(self, iteration_id):
         cursor = self.connection.cursor()
@@ -68,28 +92,28 @@ class PictureIterations:
         if not row:
             raise KeyError(f"PictureIteration with id {iteration_id} not found.")
         quality = None
-        if row['quality']:
+        if row["quality"]:
             try:
-                quality = PictureQuality(**json.loads(row['quality']))
+                quality = PictureQuality(**json.loads(row["quality"]))
             except Exception:
                 quality = None
         it = PictureIteration(
-            id=row['id'],
-            picture_id=row['picture_id'],
-            file_path=row['file_path'],
-            format=row['format'],
-            width=row['width'],
-            height=row['height'],
-            size_bytes=row['size_bytes'],
-            created_at=row['created_at'],
-            is_master=row['is_master'],
-            derived_from=row['derived_from'],
-            transform_metadata=row['transform_metadata'],
-            thumbnail=row['thumbnail'],
+            id=row["id"],
+            picture_id=row["picture_id"],
+            file_path=row["file_path"],
+            format=row["format"],
+            width=row["width"],
+            height=row["height"],
+            size_bytes=row["size_bytes"],
+            created_at=row["created_at"],
+            is_master=row["is_master"],
+            derived_from=row["derived_from"],
+            transform_metadata=row["transform_metadata"],
+            thumbnail=row["thumbnail"],
             quality=quality,
-            score=row['score'],
-            pixel_sha=row['pixel_sha'],
-            character_id=row['character_id'] if 'character_id' in row.keys() else None,
+            score=row["score"],
+            pixel_sha=row["pixel_sha"],
+            character_id=row["character_id"] if "character_id" in row.keys() else None,
         )
         return it
 
@@ -97,12 +121,25 @@ class PictureIterations:
         cursor = self.connection.cursor()
         cursor.execute("SELECT id FROM picture_iterations")
         for row in cursor.fetchall():
-            yield row['id']
+            yield row["id"]
 
     def import_iterations(self, iterations: List[PictureIteration]):
         cursor = self.connection.cursor()
         vals = []
         for it in iterations:
+            logger = get_logger(__name__)
+            logger.debug(
+                f"Importing picture {it.id}: file path {getattr(it, 'file_path', None)}"
+            )
+            if hasattr(it, "file_path") and it.file_path:
+                import os
+
+                if os.path.exists(it.file_path):
+                    logger.debug(f"File {it.file_path} exists at import time.")
+                else:
+                    logger.warning(
+                        f"File {it.file_path} does NOT exist at import time."
+                    )
             quality_json = None
             if it.quality:
                 try:
@@ -152,7 +189,7 @@ class PictureIterations:
                 quality_json = None
         cursor.execute(
             "UPDATE picture_iterations SET quality = ? WHERE id = ?",
-            (quality_json, iteration_id)
+            (quality_json, iteration_id),
         )
         self.connection.commit()
 
@@ -169,24 +206,26 @@ class PictureIterations:
         rows = cursor.fetchall()
         result = []
         for row in rows:
-            quality = PictureQuality(**json.loads(row['quality'])) if row['quality'] else None
+            quality = (
+                PictureQuality(**json.loads(row["quality"])) if row["quality"] else None
+            )
             it = PictureIteration(
-                id=row['id'],
-                picture_id=row['picture_id'],
-                file_path=row['file_path'],
-                format=row['format'],
-                width=row['width'],
-                height=row['height'],
-                size_bytes=row['size_bytes'],
-                created_at=row['created_at'],
-                is_master=row['is_master'],
-                derived_from=row['derived_from'],
-                transform_metadata=row['transform_metadata'],
-                thumbnail=row['thumbnail'],
+                id=row["id"],
+                picture_id=row["picture_id"],
+                file_path=row["file_path"],
+                format=row["format"],
+                width=row["width"],
+                height=row["height"],
+                size_bytes=row["size_bytes"],
+                created_at=row["created_at"],
+                is_master=row["is_master"],
+                derived_from=row["derived_from"],
+                transform_metadata=row["transform_metadata"],
+                thumbnail=row["thumbnail"],
                 quality=quality,
-                score=row['score'],
-                pixel_sha=row['pixel_sha'],
-                character_id=row['character_id'],
+                score=row["score"],
+                pixel_sha=row["pixel_sha"],
+                character_id=row["character_id"],
             )
             result.append(it)
         return result
