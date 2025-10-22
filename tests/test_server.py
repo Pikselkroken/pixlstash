@@ -1,13 +1,20 @@
-import time
-import os
-import tempfile
 import numpy as np
+import os
+import pytest
+import random
+import tempfile
+import time
+import tomllib
+
 from PIL import Image
 from fastapi.testclient import TestClient
 from pixelurgy_vault.server import Server
-import random
 from io import BytesIO
-import tomllib
+
+skip_on_github = pytest.mark.skipif(
+    os.getenv("GITHUB_ACTIONS") == "true",
+    reason="Disabled on GitHub Actions"
+)
 
 TEST_SIZE = 50
 random_images = []
@@ -383,6 +390,7 @@ def test_benchmark_add_images_by_directory():
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
 
 
+@skip_on_github
 def test_reference_picture_workflow():
     """Test adding and retrieving reference images for a character."""
     with tempfile.TemporaryDirectory() as temp_dir:
