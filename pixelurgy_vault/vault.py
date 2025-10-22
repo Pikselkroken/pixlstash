@@ -85,11 +85,13 @@ class Vault:
         """
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
-        if hasattr(self, 'iterations') and hasattr(self.iterations, 'stop_quality_worker'):
+        if hasattr(self, "iterations") and hasattr(
+            self.iterations, "stop_quality_worker"
+        ):
             self.iterations.stop_quality_worker()
-        if hasattr(self, 'pictures') and hasattr(self.pictures, 'stop_tag_worker'):
+        if hasattr(self, "pictures") and hasattr(self.pictures, "stop_tag_worker"):
             self.pictures.stop_tag_worker()
-        if hasattr(self, 'connection') and self.connection:
+        if hasattr(self, "connection") and self.connection:
             self.connection.close()
 
     def _create_tables(self):
@@ -190,7 +192,7 @@ class Vault:
         cursor = self.connection.cursor()
         cursor.execute("SELECT value FROM metadata WHERE key = ?", (key,))
         row = cursor.fetchone()
-        return row['value'] if row else None
+        return row["value"] if row else None
 
     def _import_default_data(self):
         """
