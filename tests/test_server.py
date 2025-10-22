@@ -548,7 +548,7 @@ def test_semantic_search_on_all_pictures():
             "It was a bright rainy day but Esmeralda needed to get out and get some fresh air, so she dressed for the weather, brought an umbrella and walked out into the countryside.",
             "Esmeralda smiles as she sits across me in the cafe wearing her grey sweater. The sunlight filters through the window of the empty cafe",
             "It was a bright winter morning, and Esmeralda decided to go for a walk in the snow-covered park, admiring the glistening trees and the crisp air. She was glad to have her scarf and her warm coat to keep her cozy.",
-            "Esmeralda spent hours in her garden wearing overalls tending to her grass and bushes, ensuring everything was perfectly green. It made her smile to see the fruits of her labor.",
+            "Esmeralda spent hours in her garden wearing overalls tending to her grass and bushes. It made her smile.",
             "Do I look like a man? Esmeralda asked, raising an eyebrow as she posed with her business suit.",
             "She sat down on the park bench and considered her predicament. A quiet sadness came over her.",
         ]
