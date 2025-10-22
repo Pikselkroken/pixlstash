@@ -21,11 +21,13 @@ for i in range(TEST_SIZE):
     random_images.append(img_bytes)
     total_bytes += len(img_bytes)
 
+
 def get_project_version():
     pyproject_path = os.path.join(os.path.dirname(__file__), "../pyproject.toml")
     with open(pyproject_path, "rb") as f:
         data = tomllib.load(f)
     return data["project"]["version"]
+
 
 def test_esmeralda_vault_character_and_logo():
     """Test that EsmeraldaVault exists and her picture matches Logo.png exactly."""
@@ -161,6 +163,7 @@ def test_upload_iteration_to_existing_picture():
         assert it3["picture_id"] == picture_id
         assert it3["transform_metadata"] == '{"filter":"blur"}'
         server.vault.close()  # Ensure cleanup before temp_dir is deleted
+
 
 def test_post_logo_altered_pixel_upload():
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -393,7 +396,11 @@ def test_reference_picture_workflow():
         char_id = "testchar-123"
         resp = client.post(
             "/characters",
-            json={"id": char_id, "name": "Test Character", "description": "For reference image test"}
+            json={
+                "id": char_id,
+                "name": "Test Character",
+                "description": "For reference image test",
+            },
         )
         assert resp.status_code == 200
         assert resp.json()["character"]["id"] == char_id
@@ -434,9 +441,11 @@ def test_reference_picture_workflow():
         assert ref_pic["tags"] == ["ref", "test"]
         server.vault.close()
 
+
 def test_tagger_worker_adds_tags():
     """Test that uploading TaggerTest.png results in tags being added by the tag worker."""
     import shutil
+
     with tempfile.TemporaryDirectory() as temp_dir:
         vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
@@ -451,7 +460,11 @@ def test_tagger_worker_adds_tags():
         # Upload TaggerTest.png as a new picture
         with open(dest_img, "rb") as f:
             files = {"image": ("TaggerTest.png", f.read(), "image/png")}
-            data = {"character_id": "testchar", "description": "tagger test", "tags": "[]"}
+            data = {
+                "character_id": "testchar",
+                "description": "tagger test",
+                "tags": "[]",
+            }
             r = client.post("/pictures", files=files, data=data)
         assert r.status_code == 200
         resp = r.json()
@@ -468,7 +481,9 @@ def test_tagger_worker_adds_tags():
             found_tags = pic_info.get("tags", [])
             if found_tags:
                 break
-        assert found_tags, "Tagger worker did not add tags to TaggerTest.png after waiting."
+        assert found_tags, (
+            "Tagger worker did not add tags to TaggerTest.png after waiting."
+        )
         print(f"Tags for TaggerTest.png: {found_tags}")
         server.vault.close()
 
@@ -476,15 +491,22 @@ def test_tagger_worker_adds_tags():
 def test_semantic_search_on_all_pictures():
     """Test: Add all images from pictures folder, wait for tagging, perform semantic search, print results, assert count."""
     import shutil
+
     with tempfile.TemporaryDirectory() as temp_dir:
         vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
         # Copy all images from pictures folder
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
-        image_files = [f for f in os.listdir(src_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
+        image_files = [
+            f
+            for f in os.listdir(src_dir)
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        ]
         for fname in image_files:
-            shutil.copyfile(os.path.join(src_dir, fname), os.path.join(image_root, fname))
+            shutil.copyfile(
+                os.path.join(src_dir, fname), os.path.join(image_root, fname)
+            )
         server = Server(vault_db_path=vault_path, image_root=image_root)
         client = TestClient(server.app)
 
@@ -514,21 +536,25 @@ def test_semantic_search_on_all_pictures():
                 assert False, f"Picture {pid} did not get embedding after waiting."
 
         # Perform semantic search
-        search_texts = ["It was a bright rainy day but Esmeralda needed to get out and get some fresh air, so she dressed for the weather, brought an umbrella and walked out into the countryside.",
-                        "Esmeralda smiles as she sits across me in the cafe wearing her grey sweater. The sunlight filters through the window of the empty cafe",
-                        "It was a bright winter morning, and Esmeralda decided to go for a walk in the snow-covered park, admiring the glistening trees and the crisp air. She was glad to have her scarf and her warm coat to keep her cozy.",
-                        "Esmeralda spent hours in her garden wearing overalls tending to her grass and bushes, ensuring everything was perfectly green. It made her smile to see the fruits of her labor.",
-                        "Do I look like a man? Esmeralda asked, raising an eyebrow as she posed with her business suit.",
-                        "She sat down on the park bench and considered her predicament. A quiet sadness came over her."]
+        search_texts = [
+            "It was a bright rainy day but Esmeralda needed to get out and get some fresh air, so she dressed for the weather, brought an umbrella and walked out into the countryside.",
+            "Esmeralda smiles as she sits across me in the cafe wearing her grey sweater. The sunlight filters through the window of the empty cafe",
+            "It was a bright winter morning, and Esmeralda decided to go for a walk in the snow-covered park, admiring the glistening trees and the crisp air. She was glad to have her scarf and her warm coat to keep her cozy.",
+            "Esmeralda spent hours in her garden wearing overalls tending to her grass and bushes, ensuring everything was perfectly green. It made her smile to see the fruits of her labor.",
+            "Do I look like a man? Esmeralda asked, raising an eyebrow as she posed with her business suit.",
+            "She sat down on the park bench and considered her predicament. A quiet sadness came over her.",
+        ]
 
         for search_text in search_texts:
-            search_resp = client.post("/pictures/search", json={"query": search_text, "threshold": 0.45})
+            search_resp = client.post(
+                "/pictures/search", json={"query": search_text, "threshold": 0.45}
+            )
             assert search_resp.status_code == 200
             results = search_resp.json()
             print("Semantic search results:")
             for pic in results:
                 print(pic)
-            assert 1 <= len(results), f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+            assert 1 <= len(results), (
+                f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+            )
         server.vault.close()
-
-        

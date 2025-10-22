@@ -7,6 +7,7 @@ from pixelurgy_vault.picture_tagger import PictureTagger, MAX_CONCURRENT_IMAGES
 
 logger = get_logger(__name__)
 
+
 class Pictures:
     def __init__(self, connection, picture_iterations, db_path):
         self.connection = connection
@@ -25,18 +26,18 @@ class Pictures:
         if not row:
             raise KeyError(f"Picture with id {picture_id} not found.")
         tags = []
-        if row['tags']:
+        if row["tags"]:
             try:
-                tags = json.loads(row['tags'])
+                tags = json.loads(row["tags"])
             except Exception:
                 tags = []
-        has_embedding = bool(row['embedding']) if 'embedding' in row.keys() else False
+        has_embedding = bool(row["embedding"]) if "embedding" in row.keys() else False
         pic = Picture(
-            id=row['id'],
-            character_id=row['character_id'],
-            description=row['description'],
+            id=row["id"],
+            character_id=row["character_id"],
+            description=row["description"],
             tags=tags,
-            created_at=row['created_at'],
+            created_at=row["created_at"],
             has_embedding=has_embedding,
         )
         return pic
@@ -54,7 +55,7 @@ class Pictures:
         cursor = self.connection.cursor()
         cursor.execute("SELECT id FROM pictures")
         for row in cursor.fetchall():
-            yield row['id']
+            yield row["id"]
 
     def update_picture_tags(self, picture_id, tags):
         """
@@ -65,33 +66,38 @@ class Pictures:
         with self.connection:
             cursor = self.connection.cursor()
             cursor.execute(
-                "UPDATE pictures SET tags = ? WHERE id = ?",
-                (tags_json, picture_id)
+                "UPDATE pictures SET tags = ? WHERE id = ?", (tags_json, picture_id)
             )
 
     def start_tag_worker(self, interval=0.01):
         import threading
-        if hasattr(self, '_tag_worker') and self._tag_worker.is_alive():
+
+        if hasattr(self, "_tag_worker") and self._tag_worker.is_alive():
             return
         self._tag_worker_stop = threading.Event()
-        self._tag_worker = threading.Thread(target=self._tag_worker_loop, args=(interval,), daemon=True)
+        self._tag_worker = threading.Thread(
+            target=self._tag_worker_loop, args=(interval,), daemon=True
+        )
         self._tag_worker.start()
 
     def stop_tag_worker(self):
-        if hasattr(self, '_tag_worker_stop'):
+        if hasattr(self, "_tag_worker_stop"):
             self._tag_worker_stop.set()
-        if hasattr(self, '_tag_worker'):
+        if hasattr(self, "_tag_worker"):
             self._tag_worker.join(timeout=5)
 
     def _tag_worker_loop(self, interval):
         import sqlite3
+
         # Create a new connection for this thread
         thread_conn = sqlite3.connect(self.db_path, check_same_thread=False)
         thread_conn.row_factory = sqlite3.Row
         while not self._tag_worker_stop.is_set():
             # Find all Pictures missing tags or missing embeddings
             missing_tags = [pic for pic in self.find() if not pic.tags]
-            missing_embeddings = [pic for pic in self.find() if not getattr(pic, 'has_embedding', False)]
+            missing_embeddings = [
+                pic for pic in self.find() if not getattr(pic, "has_embedding", False)
+            ]
 
             # Tag untagged images
             if missing_tags:
@@ -99,7 +105,12 @@ class Pictures:
                 image_paths = []
                 pic_by_path = {}
                 for pic in batch:
-                    master_iters = [it for it in self.picture_iterations.find(picture_id=pic.id, is_master=1)]
+                    master_iters = [
+                        it
+                        for it in self.picture_iterations.find(
+                            picture_id=pic.id, is_master=1
+                        )
+                    ]
                     if master_iters:
                         master_iter = master_iters[0]
                         image_paths.append(master_iter.file_path)
@@ -117,10 +128,10 @@ class Pictures:
                                 cursor = thread_conn.cursor()
                                 cursor.execute(
                                     "UPDATE pictures SET tags = ? WHERE id = ?",
-                                    (tags_json, pic.id)
+                                    (tags_json, pic.id),
                                 )
                             # After tagging, also add to missing_embeddings if not already embedded
-                            if not getattr(pic, 'has_embedding', False):
+                            if not getattr(pic, "has_embedding", False):
                                 missing_embeddings.append(pic)
 
             # Generate embeddings for pictures missing them (even if already tagged)
@@ -128,17 +139,25 @@ class Pictures:
                 batch = missing_embeddings[:MAX_CONCURRENT_IMAGES]
                 for pic in batch:
                     try:
-                        print("Generating embedding for picture", pic.id, " (tags: ", pic.tags, ")")
+                        print(
+                            "Generating embedding for picture",
+                            pic.id,
+                            " (tags: ",
+                            pic.tags,
+                            ")",
+                        )
                         embedding = self.picture_tagger.generate_embedding(picture=pic)
                         with thread_conn:
                             cursor = thread_conn.cursor()
                             cursor.execute(
                                 "UPDATE pictures SET embedding = ? WHERE id = ?",
-                                (embedding.astype('float32').tobytes(), pic.id)
+                                (embedding.astype("float32").tobytes(), pic.id),
                             )
                         pic.has_embedding = True
                     except Exception as e:
-                        logger.error(f"Failed to generate/store embedding for picture {pic.id}: {e}")
+                        logger.error(
+                            f"Failed to generate/store embedding for picture {pic.id}: {e}"
+                        )
 
             if not missing_tags and not missing_embeddings:
                 self._tag_worker_stop.wait(interval)
@@ -149,6 +168,7 @@ class Pictures:
     def import_pictures(self, pictures):
         """Import a list of Picture instances into the database using executemany for efficiency."""
         import os
+
         cursor = self.connection.cursor()
         values = []
         for picture in pictures:
@@ -157,9 +177,13 @@ class Pictures:
             file_path = getattr(picture, "file_path", None)
             if file_path:
                 if os.path.exists(file_path):
-                    logger.debug(f"File {file_path} for Picture {picture.id} exists before DB insert.")
+                    logger.debug(
+                        f"File {file_path} for Picture {picture.id} exists before DB insert."
+                    )
                 else:
-                    logger.warning(f"File {file_path} for Picture {picture.id} does NOT exist before DB insert.")
+                    logger.warning(
+                        f"File {file_path} for Picture {picture.id} does NOT exist before DB insert."
+                    )
             values.append(
                 (
                     picture.id,
@@ -183,9 +207,13 @@ class Pictures:
             file_path = getattr(picture, "file_path", None)
             if file_path:
                 if os.path.exists(file_path):
-                    logger.debug(f"File {file_path} for Picture {picture.id} exists after DB insert.")
+                    logger.debug(
+                        f"File {file_path} for Picture {picture.id} exists after DB insert."
+                    )
                 else:
-                    logger.warning(f"File {file_path} for Picture {picture.id} does NOT exist after DB insert.")
+                    logger.warning(
+                        f"File {file_path} for Picture {picture.id} does NOT exist after DB insert."
+                    )
 
     def contains(self, picture):
         """
@@ -211,14 +239,16 @@ class Pictures:
         rows = cursor.fetchall()
         result = []
         for row in rows:
-            has_embedding = bool(row['embedding']) if 'embedding' in row.keys() else False
+            has_embedding = (
+                bool(row["embedding"]) if "embedding" in row.keys() else False
+            )
             pic = Picture(
-                id=row['id'],
-                character_id=row['character_id'],
-                description=row['description'],
-                tags=json.loads(row['tags']) if row['tags'] else [],
-                created_at=row['created_at'],
-                is_reference=row['is_reference'] if 'is_reference' in row.keys() else 0,
+                id=row["id"],
+                character_id=row["character_id"],
+                description=row["description"],
+                tags=json.loads(row["tags"]) if row["tags"] else [],
+                created_at=row["created_at"],
+                is_reference=row["is_reference"] if "is_reference" in row.keys() else 0,
                 has_embedding=has_embedding,
             )
             result.append(pic)
@@ -232,20 +262,29 @@ class Pictures:
         Adds debug logging for diagnosis.
         """
         if not text or not str(text).strip():
-            logger.warning("find_by_text called with empty text; returning empty result.")
+            logger.warning(
+                "find_by_text called with empty text; returning empty result."
+            )
             return []
         # Generate query embedding
-        query_emb = self.picture_tagger.generate_embedding(picture={"description": text})
-        logger.debug(f"Semantic search: query embedding shape: {getattr(query_emb, 'shape', None)}")
+        query_emb = self.picture_tagger.generate_embedding(
+            picture={"description": text}
+        )
+        logger.debug(
+            f"Semantic search: query embedding shape: {getattr(query_emb, 'shape', None)}"
+        )
         # Load all picture embeddings and ids
         cursor = self.connection.cursor()
         cursor.execute("SELECT id, embedding FROM pictures WHERE embedding IS NOT NULL")
         rows = cursor.fetchall()
-        logger.debug(f"Semantic search: found {len(rows)} candidate images with embeddings.")
+        logger.debug(
+            f"Semantic search: found {len(rows)} candidate images with embeddings."
+        )
         if not rows:
             return []
         # Compute similarities
         import numpy as np
+
         sims = []
         for row in rows:
             pic_id = row[0]
@@ -253,14 +292,19 @@ class Pictures:
             if emb_blob is None:
                 continue
             emb = np.frombuffer(emb_blob, dtype=np.float32)
-            sim = float(np.dot(query_emb, emb) / (np.linalg.norm(query_emb) * np.linalg.norm(emb) + 1e-8))
+            sim = float(
+                np.dot(query_emb, emb)
+                / (np.linalg.norm(query_emb) * np.linalg.norm(emb) + 1e-8)
+            )
             logger.debug(f"Semantic search: similarity for {pic_id}: {sim}")
             if sim >= threshold:
                 sims.append((pic_id, sim))
         # Sort by similarity, descending
         sims.sort(key=lambda x: x[1], reverse=True)
         top = sims[:top_n]
-        logger.debug(f"Semantic search: top {top_n} results above threshold {threshold}: {top}")
+        logger.debug(
+            f"Semantic search: top {top_n} results above threshold {threshold}: {top}"
+        )
         # Fetch Picture objects
         results = []
         for pic_id, sim in top:

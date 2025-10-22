@@ -8670,4 +8670,4 @@ class TagNaturaliser:
         if tag in tag_map:
             return tag_map[tag]
         # Sanitise: replace underscores, strip, collapse spaces, and lowercase
-        return ' '.join(tag.replace('_', ' ').strip().split()).lower()
+        return " ".join(tag.replace("_", " ").strip().split()).lower()

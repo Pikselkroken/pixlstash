@@ -1,6 +1,6 @@
-
 import os
 from pixelurgy_vault.picture_tagger import PictureTagger
+
 
 def test_picture_tagger_on_directory():
     """
