@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .logging import get_logger, setup_logging
@@ -69,7 +70,16 @@ class Server:
             image_root=self.config["image_root"],
             description=self.config["description"],
         )
+
         self.app = FastAPI(lifespan=self.lifespan)
+        # Enable CORS for frontend dev server
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # Or restrict to ["http://localhost:5173"]
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
         self.setup_routes()
 
     @asynccontextmanager
