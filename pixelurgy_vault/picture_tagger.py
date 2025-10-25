@@ -36,14 +36,12 @@ GENERAL_THRESHOLD = 0.35
 CHARACTER_THRESHOLD = 0.35
 RECURSIVE = False
 REMOVE_UNDERSCORE = False
-DEBUG = False
 UNDESIRED_TAGS = ""
 FREQUENCY_TAGS = False
 ONNX = True
 APPEND_TAGS = False
 USE_RATING_TAGS = True
 USE_RATING_TAGS_AS_LAST_TAG = False
-CHARACTER_TAGS_FIRST = False
 ALWAYS_FIRST_TAGS = None
 CAPTION_SEPARATOR = ", "
 TAG_REPLACEMENT = None
@@ -107,8 +105,8 @@ class PictureTagger:
         force_download=False,
         silent=True,
     ):
-        self.model_location = model_location
-        self.silent = silent
+        self._model_location = model_location
+        self._silent = silent
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()
         self._load_and_preprocess_tags()
@@ -123,7 +121,7 @@ class PictureTagger:
         self._clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
 
     def _init_onnx_session(self):
-        onnx_path = f"{self.model_location}/model.onnx"
+        onnx_path = f"{self._model_location}/model.onnx"
         logger.debug("Running wd14 tagger with onnx")
         logger.debug(f"loading onnx model: {onnx_path}")
         if not os.path.exists(onnx_path):
@@ -151,7 +149,7 @@ class PictureTagger:
 
     def _load_and_preprocess_tags(self):
         with open(
-            os.path.join(self.model_location, CSV_FILE), "r", encoding="utf-8"
+            os.path.join(self._model_location, CSV_FILE), "r", encoding="utf-8"
         ) as f:
             reader = csv.reader(f)
             line = [row for row in reader]
@@ -161,35 +159,35 @@ class PictureTagger:
             header[0] == "tag_id" and header[1] == "name" and header[2] == "category"
         ), f"unexpected csv format: {header}"
 
-        self.rating_tags = [row[1] for row in rows[0:] if row[2] == "9"]
-        self.general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
-        self.character_tags = [row[1] for row in rows[0:] if row[2] == "4"]
+        self._rating_tags = [row[1] for row in rows[0:] if row[2] == "9"]
+        self._general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
+        self._character_tags = [row[1] for row in rows[0:] if row[2] == "4"]
 
         # preprocess tags in advance
         if CHARACTER_TAG_EXPAND:
-            for i, tag in enumerate(self.character_tags):
+            for i, tag in enumerate(self._character_tags):
                 if tag.endswith(")"):
                     tags = tag.split("(")
                     character_tag = "(".join(tags[:-1])
                     if character_tag.endswith("_"):
                         character_tag = character_tag[:-1]
                     series_tag = tags[-1].replace(")", "")
-                    self.character_tags[i] = (
+                    self._character_tags[i] = (
                         character_tag + CAPTION_SEPARATOR + series_tag
                     )
 
         if REMOVE_UNDERSCORE:
-            self.rating_tags = [
+            self._rating_tags = [
                 tag.replace("_", " ") if len(tag) > 3 else tag
-                for tag in self.rating_tags
+                for tag in self._rating_tags
             ]
-            self.general_tags = [
+            self._general_tags = [
                 tag.replace("_", " ") if len(tag) > 3 else tag
-                for tag in self.general_tags
+                for tag in self._general_tags
             ]
-            self.character_tags = [
+            self._character_tags = [
                 tag.replace("_", " ") if len(tag) > 3 else tag
-                for tag in self.character_tags
+                for tag in self._character_tags
             ]
 
         if TAG_REPLACEMENT is not None:
@@ -206,19 +204,19 @@ class PictureTagger:
                     tag.replace("@@@@", ",").replace("####", ";") for tag in tags
                 ]
                 logger.debug(f"replacing tag: {source} -> {target}")
-                if source in self.general_tags:
-                    self.general_tags[self.general_tags.index(source)] = target
-                elif source in self.character_tags:
-                    self.character_tags[self.character_tags.index(source)] = target
-                elif source in self.rating_tags:
-                    self.rating_tags[self.rating_tags.index(source)] = target
+                if source in self._general_tags:
+                    self._general_tags[self._general_tags.index(source)] = target
+                elif source in self._character_tags:
+                    self._character_tags[self._character_tags.index(source)] = target
+                elif source in self._rating_tags:
+                    self._rating_tags[self._rating_tags.index(source)] = target
 
     def _ensure_model_files(self, force_download):
         # hf_hub_download
         # deprecated
         # https://github.com/toriato/stable-diffusion-webui-wd14-tagger/issues/22
-        if not os.path.exists(self.model_location) or force_download:
-            os.makedirs(self.model_location, exist_ok=True)
+        if not os.path.exists(self._model_location) or force_download:
+            os.makedirs(self._model_location, exist_ok=True)
             logger.debug(
                 f"downloading wd14 tagger model from hf_hub. id: {DEFAULT_WD14_TAGGER_REPO}"
             )
@@ -226,20 +224,20 @@ class PictureTagger:
             from huggingface_hub import hf_hub_download
 
             # Download ONNX model
-            onnx_model_path = os.path.join(self.model_location, "model.onnx")
-            tags_csv_path = os.path.join(self.model_location, "selected_tags.csv")
+            onnx_model_path = os.path.join(self._model_location, "model.onnx")
+            tags_csv_path = os.path.join(self._model_location, "selected_tags.csv")
             logger.debug(f"Downloading ONNX model to {onnx_model_path}")
             hf_hub_download(
                 repo_id=DEFAULT_WD14_TAGGER_REPO,
                 filename="model.onnx",
-                local_dir=self.model_location,
+                local_dir=self._model_location,
                 force_download=True,
             )
             logger.debug(f"Downloading selected_tags.csv to {tags_csv_path}")
             hf_hub_download(
                 repo_id=DEFAULT_WD14_TAGGER_REPO,
                 filename="selected_tags.csv",
-                local_dir=self.model_location,
+                local_dir=self._model_location,
                 force_download=True,
             )
 
@@ -278,19 +276,19 @@ class PictureTagger:
             if USE_RATING_TAGS or USE_RATING_TAGS_AS_LAST_TAG:
                 ratings_probs = prob[:4]
                 rating_index = ratings_probs.argmax()
-                found_rating = self.rating_tags[rating_index]
+                found_rating = self._rating_tags[rating_index]
                 if found_rating not in undesired_tags:
                     tag_probs.append((found_rating, ratings_probs[rating_index]))
                     tag_freq[found_rating] = tag_freq.get(found_rating, 0) + 1
             # General tags
-            for i, p in enumerate(prob[4 : 4 + len(self.general_tags)]):
-                tag_name = self.general_tags[i]
+            for i, p in enumerate(prob[4 : 4 + len(self._general_tags)]):
+                tag_name = self._general_tags[i]
                 if p >= GENERAL_THRESHOLD and tag_name not in undesired_tags:
                     tag_probs.append((tag_name, p))
                     tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
             # Character tags
-            for i, p in enumerate(prob[4 + len(self.general_tags) :]):
-                tag_name = self.character_tags[i]
+            for i, p in enumerate(prob[4 + len(self._general_tags) :]):
+                tag_name = self._character_tags[i]
                 if p >= CHARACTER_THRESHOLD and tag_name not in undesired_tags:
                     tag_probs.append((tag_name, p))
                     tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
@@ -349,7 +347,7 @@ class PictureTagger:
 
         b_imgs = []
         all_results = {}
-        for data_entry in tqdm(data, smoothing=0.0, disable=self.silent):
+        for data_entry in tqdm(data, smoothing=0.0, disable=self._silent):
             for data in data_entry:
                 if data is None:
                     continue
