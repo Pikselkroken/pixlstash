@@ -70,7 +70,7 @@ class Vault:
         if not db_exists:
             self._import_default_data()
         self.iterations.start_quality_worker()
-        self.pictures.start_tag_worker()
+        self.pictures.start_embeddings_worker()
 
     def __repr__(self):
         """
@@ -90,7 +90,7 @@ class Vault:
         ):
             self.iterations.stop_quality_worker()
         if hasattr(self, "pictures") and hasattr(self.pictures, "stop_tag_worker"):
-            self.pictures.stop_tag_worker()
+            self.pictures.stop_embeddings_worker()
         if hasattr(self, "connection") and self.connection:
             self.connection.close()
 
@@ -134,6 +134,7 @@ class Vault:
                 created_at TEXT,
                 is_reference INTEGER DEFAULT 0 CHECK(is_reference BETWEEN 0 AND 1),
                 embedding BLOB,
+                face_embedding TEXT,
                 FOREIGN KEY(character_id) REFERENCES characters(id)
             )
             """
@@ -157,6 +158,7 @@ class Vault:
                 transform_metadata TEXT,
                 thumbnail BLOB,
                 quality TEXT,
+                face_quality TEXT,
                 score INTEGER CHECK(score BETWEEN 0 AND 5),
                 character_likeness FLOAT CHECK(character_likeness >= 0.0 AND character_likeness <= 1.0),
                 pixel_sha TEXT,

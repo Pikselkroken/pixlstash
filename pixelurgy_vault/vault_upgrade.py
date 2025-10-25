@@ -32,8 +32,10 @@ class VaultUpgrade:
         """
         cursor = self.connection.cursor()
         # Check if is_reference column exists
+
         cursor.execute("PRAGMA table_info(pictures)")
         columns = [row[1] for row in cursor.fetchall()]
+        upgraded = False
         if "is_reference" not in columns:
             self.logger.info("Upgrading schema: adding is_reference to pictures table.")
             cursor.execute(
@@ -42,13 +44,24 @@ class VaultUpgrade:
             cursor.execute(
                 "UPDATE pictures SET is_reference = 0 WHERE is_reference IS NULL"
             )
+            upgraded = True
+        if "face_embedding" not in columns:
+            self.logger.info(
+                "Upgrading schema: adding face_embedding to pictures table."
+            )
+            cursor.execute("ALTER TABLE pictures ADD COLUMN face_embedding TEXT")
+            upgraded = True
+        if "face_bbox" not in columns:
+            self.logger.info("Upgrading schema: adding face_bbox to pictures table.")
+            cursor.execute("ALTER TABLE pictures ADD COLUMN face_bbox TEXT")
+            upgraded = True
+        if upgraded:
             self.connection.commit()
-            # Bump schema version
             new_version = self.schema_version.get_version() + 1
             self.schema_version.set_version(new_version)
             self.logger.info(f"Schema upgraded to version {new_version}")
 
-        # Upgrade picture_iterations table: add character_likeness and character_id if missing
+        # Upgrade picture_iterations table: add character_likeness, character_id, and face_quality if missing
         cursor.execute("PRAGMA table_info(picture_iterations)")
         columns = [row[1] for row in cursor.fetchall()]
         upgraded = False
@@ -66,6 +79,14 @@ class VaultUpgrade:
             )
             cursor.execute(
                 "ALTER TABLE picture_iterations ADD COLUMN character_id TEXT"
+            )
+            upgraded = True
+        if "face_quality" not in columns:
+            self.logger.info(
+                "Upgrading schema: adding face_quality to picture_iterations table."
+            )
+            cursor.execute(
+                "ALTER TABLE picture_iterations ADD COLUMN face_quality TEXT"
             )
             upgraded = True
         if upgraded:

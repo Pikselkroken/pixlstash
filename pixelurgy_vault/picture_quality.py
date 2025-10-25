@@ -23,7 +23,9 @@ class PictureQuality:
         self.noise_level = noise_level  # Estimated noise (0.0-1.0)
 
     @staticmethod
-    def calculate_metrics(image: np.ndarray) -> "PictureQuality":
+    def calculate_metrics(
+        image: np.ndarray, face_crop: Optional[np.ndarray] = None
+    ) -> "PictureQuality":
         """
         Calculate objective metrics from a NumPy image array.
         Logs timing for each metric calculation.
@@ -52,8 +54,6 @@ class PictureQuality:
         noise_level = PictureQuality._calculate_noise_level(image)
         timings["noise_level"] = time.time() - t0
 
-        print(f"PictureQuality.calculate_metrics timings: {timings}")
-
         return PictureQuality(
             sharpness=sharpness,
             edge_density=edge_density,
@@ -69,7 +69,7 @@ class PictureQuality:
 
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        return min(laplacian_var / 1000.0, 1.0)
+        return min(laplacian_var / 100.0, 1.0)
 
     @staticmethod
     def _calculate_edge_density(image: np.ndarray) -> float:

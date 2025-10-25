@@ -16,3 +16,4 @@ requests
 transformers
 torch
 torchvision
+insightface
