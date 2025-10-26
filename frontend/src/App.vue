@@ -78,6 +78,47 @@ function closeOverlay() {
   overlayOpen.value = false
   overlayImage.value = null
 }
+
+  import { onBeforeUnmount } from 'vue'
+
+  function handleOverlayKeydown(e) {
+    if (!overlayOpen.value) return
+    if (e.key === 'ArrowLeft') {
+      showPrevImage()
+      e.preventDefault()
+    } else if (e.key === 'ArrowRight') {
+      showNextImage()
+      e.preventDefault()
+    } else if (e.key === 'Escape') {
+      closeOverlay()
+      e.preventDefault()
+    }
+  }
+
+  onMounted(() => {
+    fetchCharacters()
+    window.addEventListener('resize', updateColumns)
+    watch(thumbnailSize, updateColumns)
+    setTimeout(updateColumns, 100) // Initial update after mount
+    window.addEventListener('keydown', handleOverlayKeydown)
+  })
+
+  onBeforeUnmount(() => {
+    window.removeEventListener('keydown', handleOverlayKeydown)
+  })
+function showPrevImage() {
+  if (!overlayImage.value || !images.value.length) return
+  const idx = images.value.findIndex(i => i.id === overlayImage.value.id)
+  const prevIdx = (idx - 1 + images.value.length) % images.value.length
+  overlayImage.value = images.value[prevIdx]
+}
+
+function showNextImage() {
+  if (!overlayImage.value || !images.value.length) return
+  const idx = images.value.findIndex(i => i.id === overlayImage.value.id)
+  const nextIdx = (idx + 1) % images.value.length
+  overlayImage.value = images.value[nextIdx]
+}
 </script>
 
 <template>
@@ -129,13 +170,19 @@ function closeOverlay() {
     <div v-if="overlayOpen" class="image-overlay" @click.self="closeOverlay">
       <div class="overlay-content">
         <button class="overlay-close" @click="closeOverlay" aria-label="Close">&times;</button>
-        <img
-          v-if="overlayImage"
-          :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
-          :alt="overlayImage.description || 'Full Image'"
-          class="overlay-img"
-        />
-        <div class="overlay-desc">{{ overlayImage?.description }}</div>
+        <div class="overlay-flex-row">
+          <button class="overlay-nav overlay-nav-left" @click.stop="showPrevImage" aria-label="Previous">&#8592;</button>
+          <div class="overlay-img-container">
+            <img
+              v-if="overlayImage"
+              :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+              :alt="overlayImage.description || 'Full Image'"
+              class="overlay-img"
+            />
+            <div class="overlay-desc">{{ overlayImage?.description }}</div>
+          </div>
+          <button class="overlay-nav overlay-nav-right" @click.stop="showNextImage" aria-label="Next">&#8594;</button>
+        </div>
       </div>
     </div>
             </div>
@@ -313,8 +360,8 @@ function closeOverlay() {
 }
 .overlay-content {
   position: relative;
-  max-width: 75vw;
-  max-height: 75vh;
+  width: 80vw;
+  height: 80vh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -323,6 +370,21 @@ function closeOverlay() {
   border-radius: 8px;
   box-shadow: 0 2px 16px rgba(0,0,0,0.5);
   padding: 24px 24px 16px 24px;
+}
+.overlay-flex-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.overlay-img-container {
+  height: 90%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 .overlay-img {
   max-width: 100%;
@@ -357,4 +419,36 @@ function closeOverlay() {
   word-break: break-word;
   font-size: 1.1rem;
 }
+/* Overlay navigation buttons */
+.overlay-nav {
+  position: absolute;
+  top: 50%;
+  font-size: 2.5rem;
+  color: #000;
+  background: #bbb;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.overlay-nav-left {
+  left: 12px;
+}
+
+.overlay-nav-right {
+  right: 12px;
+}
+
+.overlay-nav:hover {
+  background: #fff;
+  color: #000;
+}
+.overlay-nav {
+  z-index: 1200;
+}
+
 </style>
