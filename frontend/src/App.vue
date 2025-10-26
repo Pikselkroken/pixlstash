@@ -145,18 +145,70 @@ function closeOverlay() {
 
 
 
+
   function handleOverlayKeydown(e) {
-    if (!overlayOpen.value) return
-    if (e.key === 'ArrowLeft') {
-      showPrevImage()
-      e.preventDefault()
-    } else if (e.key === 'ArrowRight') {
-      showNextImage()
-      e.preventDefault()
-    } else if (e.key === 'Escape') {
-      closeOverlay()
-      e.preventDefault()
+    if (overlayOpen.value) {
+      if (e.key === 'ArrowLeft') {
+        showPrevImage()
+        e.preventDefault()
+        return
+      } else if (e.key === 'ArrowRight') {
+        showNextImage()
+        e.preventDefault()
+        return
+      } else if (e.key === 'Escape') {
+        closeOverlay()
+        e.preventDefault()
+        return
+      }
     }
+    // Grid navigation and selection
+    if (!images.value.length) return
+    const cols = columns.value
+    let idx = lastSelectedIndex
+    if (idx === null || idx < 0 || idx >= images.value.length) idx = 0
+    let nextIdx = idx
+    if (e.key === 'ArrowLeft') {
+      if (idx % cols > 0) nextIdx = idx - 1
+      else return
+    } else if (e.key === 'ArrowRight') {
+      if (idx % cols < cols - 1 && idx + 1 < images.value.length) nextIdx = idx + 1
+      else return
+    } else if (e.key === 'ArrowUp') {
+      if (idx - cols >= 0) nextIdx = idx - cols
+      else return
+    } else if (e.key === 'ArrowDown') {
+      if (idx + cols < images.value.length) nextIdx = idx + cols
+      else return
+    } else {
+      return
+    }
+    const isCtrl = e.ctrlKey || e.metaKey
+    const isShift = e.shiftKey
+    if (isShift && lastSelectedIndex !== null) {
+      // Range select
+      const start = Math.min(lastSelectedIndex, nextIdx)
+      const end = Math.max(lastSelectedIndex, nextIdx)
+      const rangeIds = images.value.slice(start, end + 1).map(i => i.id)
+      const newSelection = isCtrl
+        ? Array.from(new Set([...selectedImageIds.value, ...rangeIds]))
+        : rangeIds
+      selectedImageIds.value = newSelection
+    } else if (isCtrl) {
+      // Toggle selection of nextIdx
+      const id = images.value[nextIdx].id
+      if (selectedImageIds.value.includes(id)) {
+        selectedImageIds.value = selectedImageIds.value.filter(i => i !== id)
+      } else {
+        selectedImageIds.value = [...selectedImageIds.value, id]
+      }
+      lastSelectedIndex = nextIdx
+    } else {
+      // Single select
+      selectedImageIds.value = [images.value[nextIdx].id]
+      lastSelectedIndex = nextIdx
+    }
+    e.preventDefault()
   }
 
   onMounted(() => {
@@ -236,7 +288,13 @@ function showNextImage() {
                     :src="`${BACKEND_URL}/thumbnails/${img.id}`"
                     :height="thumbnailSize"
                     :width="thumbnailSize"
-                    @click.stop="(e) => { handleImageSelect(img, idx, e); if (!e.ctrlKey && !e.metaKey && !e.shiftKey) openOverlay(img) }"
+                    @click.stop="(e) => {
+                      if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                        handleImageSelect(img, idx, e)
+                      } else {
+                        openOverlay(img)
+                      }
+                    }"
                     style="cursor:pointer;"
                   />
                   <v-card-title>{{ img.description || 'Image' }}</v-card-title>
