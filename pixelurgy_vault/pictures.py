@@ -199,6 +199,10 @@ class Pictures:
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
                 if pic is not None:
+                    # Remove character tag from tags if present
+                    char_tag = getattr(pic, "character_id", None)
+                    if char_tag and char_tag in tags:
+                        tags = [t for t in tags if t != char_tag]
                     pic.tags = tags
                     tags_json = json.dumps(tags)
                     with thread_conn:
@@ -228,7 +232,9 @@ class Pictures:
                     pic.tags,
                     ")",
                 )
-                embedding = self._picture_tagger.generate_embedding(picture=pic)
+                embedding = self._picture_tagger.generate_embedding(
+                    picture=pic, character=pic.character_id
+                )
                 with thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
@@ -249,7 +255,14 @@ class Pictures:
         cursor = self._connection.cursor()
         values = []
         for picture in pictures:
-            tags_json = json.dumps(picture.tags) if hasattr(picture, "tags") else None
+            # Remove character tag from tags if present
+            tags = (
+                list(picture.tags) if hasattr(picture, "tags") and picture.tags else []
+            )
+            char_tag = getattr(picture, "character_id", None)
+            if char_tag and char_tag in tags:
+                tags = [t for t in tags if t != char_tag]
+            tags_json = json.dumps(tags)
             logger.debug(f"Preparing to insert Picture {picture.id} into database.")
             file_path = getattr(picture, "file_path", None)
             if file_path:

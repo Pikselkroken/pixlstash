@@ -123,6 +123,15 @@ class Server:
         return config
 
     def setup_routes(self):
+        @self.app.post("/log-frontend-event")
+        async def log_frontend_event(event: dict = Body(...)):
+            """
+            Log frontend-reported events such as failed image loads or missing descriptions.
+            Body: { "event_type": str, "picture_id": str, "character_id": str, ... }
+            """
+            logger.info(f"Frontend event: {json.dumps(event)}")
+            return {"status": "logged"}
+
         @self.app.post("/pictures/search")
         def search_pictures(body: dict = Body(...)):
             """
@@ -329,6 +338,7 @@ class Server:
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
+                logger.error(f"Picture not found for id={id}")
                 return {"error": "Picture not found"}
             if info:
                 # Return metadata only
@@ -344,24 +354,28 @@ class Server:
             # Otherwise, deliver the master iteration image file
             master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
             if not master_its:
+                logger.error(f"Master iteration not found for picture id={pic.id}")
                 return {"error": "Master iteration not found"}
             it = master_its[0]
             return FileResponse(it.file_path)
 
         @self.app.get("/thumbnails/{id}")
-        async def get_thumbnail(
-            id: str
-        ):
+        async def get_thumbnail(id: str):
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
+                logger.error(f"Picture not found for id={id} (thumbnail request)")
                 return {"error": "Picture not found"}
 
             master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
             if not master_its:
+                logger.error(
+                    f"Master iteration not found for picture id={pic.id} (thumbnail request)"
+                )
                 return {"error": "Master iteration not found"}
             thumbnail_bytes = master_its[0].thumbnail
             if not thumbnail_bytes:
+                logger.error(f"No thumbnail available for picture id={pic.id}")
                 return {"error": "No thumbnail available"}
             return Response(content=thumbnail_bytes, media_type="image/png")
 

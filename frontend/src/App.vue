@@ -73,7 +73,7 @@ watch(selectedCharacter, async (id) => {
             <div v-else class="image-grid">
               <div v-for="img in images" :key="img.id" class="image-card">
                 <v-card>
-                  <v-img :src="`${BACKEND_URL}/thumbnails/${img.id}`" height="120" />
+                  <v-img :src="`${BACKEND_URL}/thumbnails/${img.id}`" height="256" width="256" />
                   <v-card-title>{{ img.description || 'Image' }}</v-card-title>
                 </v-card>
               </div>
@@ -96,6 +96,8 @@ watch(selectedCharacter, async (id) => {
   gap: 16px;
   width: 100%;
   padding: 8px 0;
+  max-height: calc(100vh - 140px); /* Adjust as needed for header/sidebar */
+  overflow-y: auto;
 }
 .image-card {
   min-width: 0;
