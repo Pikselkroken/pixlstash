@@ -17,6 +17,16 @@ const thumbnailSizes = [128, 192, 256]
 const thumbnailLabels = ['Small', 'Medium', 'Large']
 const thumbnailSize = ref(256)
 
+// Responsive columns
+const columns = ref(5)
+const gridContainer = ref(null)
+
+function updateColumns() {
+  if (!gridContainer.value) return
+  const containerWidth = gridContainer.value.offsetWidth
+  columns.value = Math.max(1, Math.floor(containerWidth / (thumbnailSize.value + 32)))
+}
+
 async function fetchCharacters() {
   loading.value = true
   error.value = null
@@ -32,7 +42,12 @@ async function fetchCharacters() {
 }
 
 
-onMounted(fetchCharacters)
+onMounted(() => {
+  fetchCharacters()
+  window.addEventListener('resize', updateColumns)
+  watch(thumbnailSize, updateColumns)
+  setTimeout(updateColumns, 100) // Initial update after mount
+})
 
 watch(selectedCharacter, async (id) => {
   images.value = []
@@ -89,7 +104,7 @@ watch(selectedCharacter, async (id) => {
             <div v-if="imagesLoading" class="empty-state">Loading images...</div>
             <div v-else-if="imagesError" class="empty-state">{{ imagesError }}</div>
             <div v-else-if="images.length === 0" class="empty-state">No images found for this character.</div>
-            <div v-else class="image-grid">
+            <div v-else class="image-grid" :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }" ref="gridContainer">
               <div v-for="img in images" :key="img.id" class="image-card">
                 <v-card>
                   <v-img :src="`${BACKEND_URL}/thumbnails/${img.id}`" :height="thumbnailSize" :width="thumbnailSize" />
@@ -135,6 +150,12 @@ watch(selectedCharacter, async (id) => {
   padding: 4px 8px 0 8px;
 }
 .v-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  background: transparent;
   width: 100%;
   max-width: 256px;
   min-width: 128px;
@@ -144,8 +165,9 @@ watch(selectedCharacter, async (id) => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: center;
   width: 100%;
+  height: 100%;
 }
 /* Original simple file manager layout */
 .file-manager {
