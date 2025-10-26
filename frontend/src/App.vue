@@ -1,4 +1,3 @@
-
 <script setup>
 import { computed, ref, onMounted, watch, onBeforeUnmount } from 'vue'
 // Selection state for file manager
@@ -180,6 +179,12 @@ function closeOverlay() {
     } else if (e.key === 'ArrowDown') {
       if (idx + cols < images.value.length) nextIdx = idx + cols
       else return
+    } else if (e.key === 'Delete') {
+      if (selectedImageIds.value.length) {
+        deleteSelectedImages()
+        e.preventDefault()
+        return
+      }
     } else {
       return
     }
@@ -235,6 +240,24 @@ function showNextImage() {
   const nextIdx = (idx + 1) % images.value.length
   overlayImage.value = images.value[nextIdx]
 }
+
+// Delete functionality
+async function deleteSelectedImages() {
+  if (!selectedImageIds.value.length) return;
+  const confirmed = confirm(`Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`)
+  if (!confirmed) return;
+  for (const id of selectedImageIds.value) {
+    try {
+      const res = await fetch(`${BACKEND_URL}/pictures/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(`Failed to delete image ${id}`)
+    } catch (e) {
+      alert(e.message)
+    }
+  }
+  // Remove deleted images from UI
+  images.value = images.value.filter(img => !selectedImageIds.value.includes(img.id))
+  selectedImageIds.value = []
+}
 </script>
 
 <template>
@@ -254,23 +277,34 @@ function showNextImage() {
         </div>
       </aside>
       <main class="main-area">
+        <!-- Top toolbar with right-aligned slider and delete button -->
+        <div class="top-toolbar">
+          <div style="flex:1"></div>
+          <v-btn
+            icon
+            color="red darken-2"
+            :disabled="!selectedImageIds.length"
+            @click="deleteSelectedImages"
+            title="Delete selected images"
+            style="margin-right: 12px;"
+          >
+            <v-icon>mdi-trash-can-outline</v-icon>
+          </v-btn>
+          <v-icon small>mdi-image-size-select-small</v-icon>
+          <v-slider
+            v-model="thumbnailSize"
+            :min="128"
+            :max="256"
+            :step="64"
+            :ticks="true"
+            :tick-labels="thumbnailLabels"
+            class="slider"
+            hide-details
+            style="max-width: 220px; display: inline-block; vertical-align: middle; margin: 0 8px;"
+          />
+          <v-icon small>mdi-image-size-select-large</v-icon>
+        </div>
         <div class="main-content">
-          <!-- Thumbnail size slider -->
-          <div class="thumbnail-slider">
-            <v-icon small>mdi-image-size-select-small</v-icon>
-            <v-slider
-              v-model="thumbnailSize"
-              :min="128"
-              :max="256"
-              :step="64"
-              :ticks="true"
-              :tick-labels="thumbnailLabels"
-              class="slider"
-              hide-details
-              style="max-width: 220px; display: inline-block; vertical-align: middle; margin: 0 8px;"
-            />
-            <v-icon small>mdi-image-size-select-large</v-icon>
-          </div>
           <template v-if="selectedCharacter">
             <div v-if="imagesLoading" class="empty-state">Loading images...</div>
             <div v-else-if="imagesError" class="empty-state">{{ imagesError }}</div>
@@ -614,5 +648,15 @@ function showNextImage() {
 .overlay-nav {
   z-index: 1200;
 }
-
+.top-toolbar {
+  width: 100%;
+  background: #e0e0e0;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  border-bottom: 1px solid #ccc;
+  margin-bottom: 4px;
+  z-index: 2;
+}
 </style>
