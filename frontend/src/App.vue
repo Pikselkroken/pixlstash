@@ -64,6 +64,20 @@ watch(selectedCharacter, async (id) => {
     imagesLoading.value = false
   }
 })
+
+// Full image overlay state
+const overlayOpen = ref(false)
+const overlayImage = ref(null)
+
+function openOverlay(img) {
+  overlayImage.value = img
+  overlayOpen.value = true
+}
+
+function closeOverlay() {
+  overlayOpen.value = false
+  overlayImage.value = null
+}
 </script>
 
 <template>
@@ -106,11 +120,24 @@ watch(selectedCharacter, async (id) => {
             <div v-else-if="images.length === 0" class="empty-state">No images found for this character.</div>
             <div v-else class="image-grid" :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }" ref="gridContainer">
               <div v-for="img in images" :key="img.id" class="image-card">
-                <v-card>
+                <v-card @click="openOverlay(img)" style="cursor:pointer;">
                   <v-img :src="`${BACKEND_URL}/thumbnails/${img.id}`" :height="thumbnailSize" :width="thumbnailSize" />
                   <v-card-title>{{ img.description || 'Image' }}</v-card-title>
                 </v-card>
               </div>
+    <!-- Full image overlay -->
+    <div v-if="overlayOpen" class="image-overlay" @click.self="closeOverlay">
+      <div class="overlay-content">
+        <button class="overlay-close" @click="closeOverlay" aria-label="Close">&times;</button>
+        <img
+          v-if="overlayImage"
+          :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+          :alt="overlayImage.description || 'Full Image'"
+          class="overlay-img"
+        />
+        <div class="overlay-desc">{{ overlayImage?.description }}</div>
+      </div>
+    </div>
             </div>
           </template>
           <template v-else>
@@ -270,5 +297,64 @@ watch(selectedCharacter, async (id) => {
 .image-grid {
   gap: 0px;
   max-height: calc(100vh - 80px);
+}
+/* Overlay modal for full image view */
+.image-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0,0,0,0.85);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.overlay-content {
+  position: relative;
+  max-width: 75vw;
+  max-height: 75vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #222;
+  border-radius: 8px;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.5);
+  padding: 24px 24px 16px 24px;
+}
+.overlay-img {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #111;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.4);
+}
+.overlay-close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 2.2rem;
+  color: #fff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 10;
+  line-height: 1;
+  padding: 0 8px;
+  transition: color 0.2s;
+}
+.overlay-close:hover {
+  color: #ff5252;
+}
+.overlay-desc {
+  color: #eee;
+  margin-top: 12px;
+  text-align: center;
+  max-width: 70vw;
+  word-break: break-word;
+  font-size: 1.1rem;
 }
 </style>
