@@ -11,6 +11,7 @@ from PIL import Image
 from fastapi.testclient import TestClient
 from pixelurgy_vault.server import Server
 from io import BytesIO
+from urllib.parse import quote
 
 TEST_SIZE = 10 if os.getenv("GITHUB_ACTIONS") == "true" else 50
 random_images = []
@@ -559,8 +560,8 @@ def test_semantic_search_on_all_pictures():
         ]
 
         for search_text in search_texts:
-            search_resp = client.post(
-                "/pictures/search", json={"query": search_text, "threshold": 0.45}
+            search_resp = client.get(
+                f"pictures/search?query={quote(search_text)}&threshold=0.4"
             )
             assert search_resp.status_code == 200
             results = search_resp.json()

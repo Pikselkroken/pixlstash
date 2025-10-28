@@ -110,12 +110,7 @@ class Vault:
         """
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
-        if hasattr(self, "iterations") and hasattr(
-            self.iterations, "stop_quality_worker"
-        ):
-            self.iterations.stop_quality_worker()
-        if hasattr(self, "pictures") and hasattr(self.pictures, "stop_tag_worker"):
-            self.pictures.stop_embeddings_worker()
+        self.stop_background_workers()
         if hasattr(self, "connection") and self.connection:
             self.connection.close()
 

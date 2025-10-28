@@ -196,20 +196,16 @@ class Server:
             logger.info(f"Frontend event: {json.dumps(event)}")
             return {"status": "logged"}
 
-        @self.app.post("/pictures/search")
-        def search_pictures(body: dict = Body(...)):
+        @self.app.get("/pictures/search")
+        def search_pictures(
+            query: str = Query(""), top_n: int = Query(5), threshold: float = Query(0.3)
+        ):
             """
             Semantic search for pictures using CLIP embedding. Returns list of Pictures ordered by similarity.
-            Body: { "query": <text>, "top_n": <int, optional> }
+            Query params: ?query=...&top_n=...&threshold=...
             """
-            query = body.get("query", "")
-            top_n = int(body.get("top_n", 5))
-            threshold = float(body.get("threshold", 0.5))
-            results = self.vault.pictures.find_by_text(
-                query, top_n=top_n, include_scores=False, threshold=threshold
-            )
 
-            # Convert Picture objects to dicts for JSON response
+            # Hybrid search: for single-word queries, do tag/description search; for short queries, expand them
             def pic_to_dict(pic):
                 return {
                     "id": pic.id,
@@ -220,7 +216,28 @@ class Server:
                     "is_reference": getattr(pic, "is_reference", 0),
                 }
 
-            return [pic_to_dict(pic) for pic in results]
+            q = query.strip()
+            # If query is a single word (no spaces), do tag/description search
+            if len(q.split()) == 1:
+                results = self.vault.pictures.find_by_tag_or_description(q)
+                return [pic_to_dict(pic) for pic in results]
+            # If query is short (2-3 words), try to expand it
+            elif 1 < len(q.split()) <= 3:
+                expanded = f"A photo of {q}"
+                results = self.vault.pictures.find_by_text(
+                    expanded, top_n=top_n, include_scores=False, threshold=threshold
+                )
+                if not results:
+                    # fallback to original
+                    results = self.vault.pictures.find_by_text(
+                        q, top_n=top_n, include_scores=False, threshold=threshold
+                    )
+                return [pic_to_dict(pic) for pic in results]
+            else:
+                results = self.vault.pictures.find_by_text(
+                    q, top_n=top_n, include_scores=False, threshold=threshold
+                )
+                return [pic_to_dict(pic) for pic in results]
 
         @self.app.get("/characters/reference_pictures/{id}")
         def get_reference_pictures(id: str):

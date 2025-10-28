@@ -1,157 +1,191 @@
 <script setup>
-import { computed, ref, onMounted, watch, onBeforeUnmount } from 'vue'
-import unknownPerson from './assets/unknown-person.png' // Import for unknown character icon
+import { computed, ref, onMounted, watch, onBeforeUnmount } from "vue";
+import { VTextField } from "vuetify/components";
+import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
 // Selection state for file manager
-const selectedImageIds = ref([])
-let lastSelectedIndex = null
+const selectedImageIds = ref([]);
+let lastSelectedIndex = null;
 
 // Overlay state for full image view
-const overlayOpen = ref(false)
-const overlayImage = ref(null)
+const overlayOpen = ref(false);
+const overlayImage = ref(null);
 
 function openOverlay(img) {
-  overlayImage.value = img
-  overlayOpen.value = true
+  overlayImage.value = img;
+  overlayOpen.value = true;
 }
 
 function closeOverlay() {
-  overlayOpen.value = false
+  overlayOpen.value = false;
 }
 
-function handleImageSelect(img, idx, event) {
-  const id = img.id
-  const isSelected = selectedImageIds.value.includes(id)
-  const isCtrl = event.ctrlKey || event.metaKey
-  const isShift = event.shiftKey
-
-  if (isShift && lastSelectedIndex !== null) {
-    // Range select
-    const start = Math.min(lastSelectedIndex, idx)
-    const end = Math.max(lastSelectedIndex, idx)
-    const rangeIds = images.value.slice(start, end + 1).map(i => i.id)
-    const newSelection = isCtrl
-      ? Array.from(new Set([...selectedImageIds.value, ...rangeIds]))
-      : rangeIds
-    selectedImageIds.value = newSelection
-  } else if (isCtrl) {
-    // Toggle selection
-    if (isSelected) {
-      selectedImageIds.value = selectedImageIds.value.filter(i => i !== id)
-    } else {
-      selectedImageIds.value = [...selectedImageIds.value, id]
-    }
-    lastSelectedIndex = idx
-  } else {
-    // Single select
-    selectedImageIds.value = [id]
-    lastSelectedIndex = idx
+// Search bar state and logic
+const searchQuery = ref("");
+async function searchImages() {
+  const query = searchQuery.value.trim();
+  if (!query) return;
+  imagesLoading.value = true;
+  imagesError.value = null;
+  try {
+    const url = `${BACKEND_URL}/pictures/search?query=${encodeURIComponent(
+      query
+    )}&threshold=0.3&top_n=1000`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Search failed");
+    const baseImages = await res.json();
+    images.value = baseImages.map((img) => ({
+      ...img,
+      score: typeof img.score !== "undefined" ? img.score : null,
+    }));
+    setTimeout(updateColumns, 0);
+  } catch (e) {
+    imagesError.value = e.message;
+  } finally {
+    imagesLoading.value = false;
   }
 }
 
+function handleImageSelect(img, idx, event) {
+  const id = img.id;
+  const isSelected = selectedImageIds.value.includes(id);
+  const isCtrl = event.ctrlKey || event.metaKey;
+  const isShift = event.shiftKey;
+
+  if (isShift && lastSelectedIndex !== null) {
+    // Range select
+    const start = Math.min(lastSelectedIndex, idx);
+    const end = Math.max(lastSelectedIndex, idx);
+    const rangeIds = images.value.slice(start, end + 1).map((i) => i.id);
+    const newSelection = isCtrl
+      ? Array.from(new Set([...selectedImageIds.value, ...rangeIds]))
+      : rangeIds;
+    selectedImageIds.value = newSelection;
+  } else if (isCtrl) {
+    // Toggle selection
+    if (isSelected) {
+      selectedImageIds.value = selectedImageIds.value.filter((i) => i !== id);
+    } else {
+      selectedImageIds.value = [...selectedImageIds.value, id];
+    }
+    lastSelectedIndex = idx;
+  } else {
+    // Single select
+    selectedImageIds.value = [id];
+    lastSelectedIndex = idx;
+  }
+}
 
 // Fetch score for an image if missing (called on thumbnail load)
 
 // Fetch score for an image if missing (called on thumbnail load)
 async function fetchScoreIfMissing(img) {
-  if (typeof img.score === 'undefined' || img.score === null) {
+  if (typeof img.score === "undefined" || img.score === null) {
     try {
-      const res = await fetch(`${BACKEND_URL}/pictures/${img.id}`)
+      const res = await fetch(`${BACKEND_URL}/pictures/${img.id}`);
       if (res.ok) {
-        const data = await res.json()
-        if ('score' in data) {
+        const data = await res.json();
+        if ("score" in data) {
           // Ensure reactivity
-          Object.assign(img, { score: data.score })
+          Object.assign(img, { score: data.score });
         }
       }
     } catch (e) {}
   }
 }
 
-const isImageSelected = (id) => selectedImageIds.value.includes(id)
+const isImageSelected = (id) => selectedImageIds.value.includes(id);
 
 // Logic to determine if a selected image is on the outer edge of a selection group
 const getSelectionBorderClasses = (idx) => {
-  if (!isImageSelected(images.value[idx]?.id)) return ''
-  const cols = columns.value
-  const total = images.value.length
-  const row = Math.floor(idx / cols)
-  const col = idx % cols
-  let classes = []
+  if (!isImageSelected(images.value[idx]?.id)) return "";
+  const cols = columns.value;
+  const total = images.value.length;
+  const row = Math.floor(idx / cols);
+  const col = idx % cols;
+  let classes = [];
   // Check neighbors: top, right, bottom, left
   // Top
   if (row === 0 || !isImageSelected(images.value[(row - 1) * cols + col]?.id)) {
-    classes.push('selected-border-top')
+    classes.push("selected-border-top");
   }
   // Bottom
-  if (row === Math.floor((total - 1) / cols) || !isImageSelected(images.value[(row + 1) * cols + col]?.id)) {
-    classes.push('selected-border-bottom')
+  if (
+    row === Math.floor((total - 1) / cols) ||
+    !isImageSelected(images.value[(row + 1) * cols + col]?.id)
+  ) {
+    classes.push("selected-border-bottom");
   }
   // Left
   if (col === 0 || !isImageSelected(images.value[row * cols + (col - 1)]?.id)) {
-    classes.push('selected-border-left')
+    classes.push("selected-border-left");
   }
   // Right
-  if (col === cols - 1 || !isImageSelected(images.value[row * cols + (col + 1)]?.id)) {
-    classes.push('selected-border-right')
+  if (
+    col === cols - 1 ||
+    !isImageSelected(images.value[row * cols + (col + 1)]?.id)
+  ) {
+    classes.push("selected-border-right");
   }
-  return classes.join(' ')
-}
+  return classes.join(" ");
+};
 
-
-const ALL_PICTURES_ID = '__all__'
-const UNASSIGNED_PICTURES_ID = '__unassigned__'
-const characters = ref([])
+const ALL_PICTURES_ID = "__all__";
+const UNASSIGNED_PICTURES_ID = "__unassigned__";
+const characters = ref([]);
 // Computed: characters sorted alphabetically by name (case-insensitive)
 const sortedCharacters = computed(() => {
   return [...characters.value].sort((a, b) => {
     if (!a.name && !b.name) return 0;
     if (!a.name) return 1;
     if (!b.name) return -1;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
 });
-const characterThumbnails = ref({}) // { [characterId]: thumbnailUrl }
-const loading = ref(false)
-const error = ref(null)
+const characterThumbnails = ref({}); // { [characterId]: thumbnailUrl }
+const loading = ref(false);
+const error = ref(null);
 
-const selectedCharacter = ref(ALL_PICTURES_ID)
-const images = ref([])
-const imagesLoading = ref(false)
-const imagesError = ref(null)
+const selectedCharacter = ref(ALL_PICTURES_ID);
+const images = ref([]);
+const imagesLoading = ref(false);
+const imagesError = ref(null);
 
-const BACKEND_URL = 'http://localhost:9537'
+const BACKEND_URL = "http://localhost:9537";
 
 // Thumbnail size slider state
-const thumbnailSizes = [128, 192, 256]
-const thumbnailLabels = ['Small', 'Medium', 'Large']
-const thumbnailSize = ref(256)
+const thumbnailSizes = [128, 192, 256];
+const thumbnailLabels = ["Small", "Medium", "Large"];
+const thumbnailSize = ref(256);
 
 // Responsive columns
-const columns = ref(5)
-const gridContainer = ref(null)
+const columns = ref(5);
+const gridContainer = ref(null);
 
 function updateColumns() {
-  if (!gridContainer.value) return
-  const containerWidth = gridContainer.value.offsetWidth
-  columns.value = Math.max(1, Math.floor(containerWidth / (thumbnailSize.value + 32)))
+  if (!gridContainer.value) return;
+  const containerWidth = gridContainer.value.offsetWidth;
+  columns.value = Math.max(
+    1,
+    Math.floor(containerWidth / (thumbnailSize.value + 32))
+  );
 }
 
 async function fetchCharacters() {
-  loading.value = true
-  error.value = null
+  loading.value = true;
+  error.value = null;
   try {
-    const res = await fetch(`${BACKEND_URL}/characters`)
-    if (!res.ok) throw new Error('Failed to fetch characters')
-    const chars = await res.json()
-    characters.value = chars
+    const res = await fetch(`${BACKEND_URL}/characters`);
+    if (!res.ok) throw new Error("Failed to fetch characters");
+    const chars = await res.json();
+    characters.value = chars;
     // For each character, fetch their first image's thumbnail (if any)
     for (const char of chars) {
-      fetchCharacterThumbnail(char.id)
+      fetchCharacterThumbnail(char.id);
     }
   } catch (e) {
-    error.value = e.message
+    error.value = e.message;
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
@@ -162,7 +196,7 @@ async function fetchCharacterThumbnail(characterId) {
     const thumbUrl = `${BACKEND_URL}/face_thumbnail/${characterId}?cb=${cacheBuster}`;
     // Test if the endpoint returns an image (status 200 and content-type image/png)
     const res = await fetch(thumbUrl);
-    if (res.ok && res.headers.get('content-type')?.includes('image/png')) {
+    if (res.ok && res.headers.get("content-type")?.includes("image/png")) {
       characterThumbnails.value[characterId] = thumbUrl;
     } else {
       characterThumbnails.value[characterId] = null;
@@ -172,170 +206,181 @@ async function fetchCharacterThumbnail(characterId) {
   }
 }
 
-
 onMounted(() => {
-  fetchCharacters()
-  window.addEventListener('resize', updateColumns)
-  watch(thumbnailSize, updateColumns)
-  setTimeout(updateColumns, 100) // Initial update after mount
-})
+  fetchCharacters();
+  window.addEventListener("resize", updateColumns);
+  watch(thumbnailSize, updateColumns);
+  setTimeout(updateColumns, 100); // Initial update after mount
+});
 
 watch(selectedCharacter, async (id) => {
-  images.value = []
-  imagesError.value = null
-  selectedImageIds.value = [] // Clear selection on character change
-  if (!id) return
-  imagesLoading.value = true
+  images.value = [];
+  imagesError.value = null;
+  selectedImageIds.value = []; // Clear selection on character change
+  if (!id) return;
+  imagesLoading.value = true;
   try {
-    let url
+    let url;
     if (id === ALL_PICTURES_ID) {
-      url = `${BACKEND_URL}/pictures?info=true`
+      url = `${BACKEND_URL}/pictures?info=true`;
     } else if (id === UNASSIGNED_PICTURES_ID) {
-      url = `${BACKEND_URL}/pictures?character_id=&info=true`
+      url = `${BACKEND_URL}/pictures?character_id=&info=true`;
     } else {
-      url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(id)}&info=true`
+      url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
+        id
+      )}&info=true`;
     }
-    const res = await fetch(url)
-    if (!res.ok) throw new Error('Failed to fetch images')
-    const baseImages = await res.json()
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch images");
+    const baseImages = await res.json();
     // Only set up the images array with a score property (null if missing)
-    images.value = baseImages.map(img => ({ ...img, score: typeof img.score !== 'undefined' ? img.score : null }))
+    images.value = baseImages.map((img) => ({
+      ...img,
+      score: typeof img.score !== "undefined" ? img.score : null,
+    }));
     // Ensure columns are recalculated after images are loaded
-    setTimeout(updateColumns, 0)
+    setTimeout(updateColumns, 0);
   } catch (e) {
-    imagesError.value = e.message
+    imagesError.value = e.message;
   } finally {
-    imagesLoading.value = false
+    imagesLoading.value = false;
   }
-})
+});
 
 function handleOverlayKeydown(e) {
   // Ctrl+A: select all images in grid
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
     if (images.value.length) {
-      selectedImageIds.value = images.value.map(img => img.id)
-      e.preventDefault()
+      selectedImageIds.value = images.value.map((img) => img.id);
+      e.preventDefault();
     }
-    return
+    return;
   }
   if (overlayOpen.value) {
-    if (e.key === 'ArrowLeft') {
-      showPrevImage()
-      e.preventDefault()
-      return
-    } else if (e.key === 'ArrowRight') {
-      showNextImage()
-      e.preventDefault()
-      return
-    } else if (e.key === 'Escape') {
-      closeOverlay()
-      e.preventDefault()
-      return
+    if (e.key === "ArrowLeft") {
+      showPrevImage();
+      e.preventDefault();
+      return;
+    } else if (e.key === "ArrowRight") {
+      showNextImage();
+      e.preventDefault();
+      return;
+    } else if (e.key === "Escape") {
+      closeOverlay();
+      e.preventDefault();
+      return;
     }
   }
   // Grid navigation and selection
-  if (!images.value.length) return
-  const cols = columns.value
-  let idx = lastSelectedIndex
-  if (idx === null || idx < 0 || idx >= images.value.length) idx = 0
-  let nextIdx = idx
-  if (e.key === 'ArrowLeft') {
-    if (idx % cols > 0) nextIdx = idx - 1
-    else return
-  } else if (e.key === 'ArrowRight') {
-    if (idx % cols < cols - 1 && idx + 1 < images.value.length) nextIdx = idx + 1
-    else return
-  } else if (e.key === 'ArrowUp') {
-    if (idx - cols >= 0) nextIdx = idx - cols
-    else return
-  } else if (e.key === 'ArrowDown') {
-    if (idx + cols < images.value.length) nextIdx = idx + cols
-    else return
-  } else if (e.key === 'Delete') {
+  if (!images.value.length) return;
+  const cols = columns.value;
+  let idx = lastSelectedIndex;
+  if (idx === null || idx < 0 || idx >= images.value.length) idx = 0;
+  let nextIdx = idx;
+  if (e.key === "ArrowLeft") {
+    if (idx % cols > 0) nextIdx = idx - 1;
+    else return;
+  } else if (e.key === "ArrowRight") {
+    if (idx % cols < cols - 1 && idx + 1 < images.value.length)
+      nextIdx = idx + 1;
+    else return;
+  } else if (e.key === "ArrowUp") {
+    if (idx - cols >= 0) nextIdx = idx - cols;
+    else return;
+  } else if (e.key === "ArrowDown") {
+    if (idx + cols < images.value.length) nextIdx = idx + cols;
+    else return;
+  } else if (e.key === "Delete") {
     if (selectedImageIds.value.length) {
-      deleteSelectedImages()
-      e.preventDefault()
-      return
+      deleteSelectedImages();
+      e.preventDefault();
+      return;
     }
   }
   // Score shortcuts 1-5
   if (/^[1-5]$/.test(e.key) && selectedImageIds.value.length) {
-    showStars.value = true
-    patchScoreForSelection(Number(e.key))
-    e.preventDefault()
-    return
+    showStars.value = true;
+    patchScoreForSelection(Number(e.key));
+    e.preventDefault();
+    return;
   } else {
-    return
+    return;
   }
-  const isCtrl = e.ctrlKey || e.metaKey
-  const isShift = e.shiftKey
+  const isCtrl = e.ctrlKey || e.metaKey;
+  const isShift = e.shiftKey;
   if (isShift && lastSelectedIndex !== null) {
     // Range select
-    const start = Math.min(lastSelectedIndex, nextIdx)
-    const end = Math.max(lastSelectedIndex, nextIdx)
-    const rangeIds = images.value.slice(start, end + 1).map(i => i.id)
+    const start = Math.min(lastSelectedIndex, nextIdx);
+    const end = Math.max(lastSelectedIndex, nextIdx);
+    const rangeIds = images.value.slice(start, end + 1).map((i) => i.id);
     const newSelection = isCtrl
       ? Array.from(new Set([...selectedImageIds.value, ...rangeIds]))
-      : rangeIds
-    selectedImageIds.value = newSelection
+      : rangeIds;
+    selectedImageIds.value = newSelection;
   } else if (isCtrl) {
     // Toggle selection of nextIdx
-    const id = images.value[nextIdx].id
+    const id = images.value[nextIdx].id;
     if (selectedImageIds.value.includes(id)) {
-      selectedImageIds.value = selectedImageIds.value.filter(i => i !== id)
+      selectedImageIds.value = selectedImageIds.value.filter((i) => i !== id);
     } else {
-      selectedImageIds.value = [...selectedImageIds.value, id]
+      selectedImageIds.value = [...selectedImageIds.value, id];
     }
-    lastSelectedIndex = nextIdx
+    lastSelectedIndex = nextIdx;
   } else {
     // Single select
-    selectedImageIds.value = [images.value[nextIdx].id]
-    lastSelectedIndex = nextIdx
+    selectedImageIds.value = [images.value[nextIdx].id];
+    lastSelectedIndex = nextIdx;
   }
-  e.preventDefault()
-  }
+  e.preventDefault();
+}
 
-  onMounted(() => {
-    fetchCharacters()
-    window.addEventListener('resize', updateColumns)
-    watch(thumbnailSize, updateColumns)
-    setTimeout(updateColumns, 100) // Initial update after mount
-    window.addEventListener('keydown', handleOverlayKeydown)
-  })
+onMounted(() => {
+  fetchCharacters();
+  window.addEventListener("resize", updateColumns);
+  watch(thumbnailSize, updateColumns);
+  setTimeout(updateColumns, 100); // Initial update after mount
+  window.addEventListener("keydown", handleOverlayKeydown);
+});
 
-  onBeforeUnmount(() => {
-    window.removeEventListener('keydown', handleOverlayKeydown)
-  })
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleOverlayKeydown);
+});
 function showPrevImage() {
-  if (!overlayImage.value || !images.value.length) return
-  const idx = images.value.findIndex(i => i.id === overlayImage.value.id)
-  const prevIdx = (idx - 1 + images.value.length) % images.value.length
-  overlayImage.value = images.value[prevIdx]
+  if (!overlayImage.value || !images.value.length) return;
+  const idx = images.value.findIndex((i) => i.id === overlayImage.value.id);
+  const prevIdx = (idx - 1 + images.value.length) % images.value.length;
+  overlayImage.value = images.value[prevIdx];
 }
 
 function showNextImage() {
-  if (!overlayImage.value || !images.value.length) return
-  const idx = images.value.findIndex(i => i.id === overlayImage.value.id)
-  const nextIdx = (idx + 1) % images.value.length
-  overlayImage.value = images.value[nextIdx]
+  if (!overlayImage.value || !images.value.length) return;
+  const idx = images.value.findIndex((i) => i.id === overlayImage.value.id);
+  const nextIdx = (idx + 1) % images.value.length;
+  overlayImage.value = images.value[nextIdx];
 }
 
 // Delete functionality
 async function deleteSelectedImages() {
   if (!selectedImageIds.value.length) return;
-  const confirmed = confirm(`Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`)
+  const confirmed = confirm(
+    `Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`
+  );
   if (!confirmed) return;
   for (const id of selectedImageIds.value) {
     try {
-      const res = await fetch(`${BACKEND_URL}/pictures/${id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error(`Failed to delete image ${id}`)
+      const res = await fetch(`${BACKEND_URL}/pictures/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Failed to delete image ${id}`);
     } catch (e) {
-      alert(e.message)
+      alert(e.message);
     }
   }
   // Remove deleted images from UI
-  images.value = images.value.filter(img => !selectedImageIds.value.includes(img.id))
-  selectedImageIds.value = []
+  images.value = images.value.filter(
+    (img) => !selectedImageIds.value.includes(img.id)
+  );
+  selectedImageIds.value = [];
 }
 
 // Patch score for selected images
@@ -343,66 +388,83 @@ async function patchScoreForSelection(score) {
   if (!selectedImageIds.value.length) return;
   for (const id of selectedImageIds.value) {
     try {
-      const res = await fetch(`${BACKEND_URL}/pictures/${id}?score=${score}`, { method: 'PATCH' })
-      if (!res.ok) throw new Error(`Failed to set score for image ${id}`)
+      const res = await fetch(`${BACKEND_URL}/pictures/${id}?score=${score}`, {
+        method: "PATCH",
+      });
+      if (!res.ok) throw new Error(`Failed to set score for image ${id}`);
       // Update local image score
-      const result = await res.json()
-      const img = images.value.find(i => i.id === id)
-      if (img) img.score = score
+      const result = await res.json();
+      const img = images.value.find((i) => i.id === id);
+      if (img) img.score = score;
     } catch (e) {
-      alert(e.message)
+      alert(e.message);
     }
   }
 }
 
 // Set score for a single image (click on star)
 async function setImageScore(img, n) {
-  const newScore = (img.score || 0) === n ? 0 : n
+  const newScore = (img.score || 0) === n ? 0 : n;
   try {
-    const res = await fetch(`${BACKEND_URL}/pictures/${img.id}?score=${newScore}`, { method: 'PATCH' })
-    if (!res.ok) throw new Error(`Failed to set score for image ${img.id}`)
-    img.score = newScore
+    const res = await fetch(
+      `${BACKEND_URL}/pictures/${img.id}?score=${newScore}`,
+      { method: "PATCH" }
+    );
+    if (!res.ok) throw new Error(`Failed to set score for image ${img.id}`);
+    img.score = newScore;
   } catch (e) {
-    alert(e.message)
+    alert(e.message);
   }
 }
 
-const showStars = ref(true)
+const showStars = ref(true);
 
 // Drag and drop logic for assigning images to characters
-const dragOverCharacter = ref(null)
+const dragOverCharacter = ref(null);
 function onImageDragStart(img, idx, event) {
   // Only allow dragging if this image is selected
-  let ids = selectedImageIds.value.length && isImageSelected(img.id)
-    ? selectedImageIds.value
-    : [img.id]
-  event.dataTransfer.setData('application/json', JSON.stringify({ imageIds: ids }))
-  event.dataTransfer.effectAllowed = 'move'
+  let ids =
+    selectedImageIds.value.length && isImageSelected(img.id)
+      ? selectedImageIds.value
+      : [img.id];
+  event.dataTransfer.setData(
+    "application/json",
+    JSON.stringify({ imageIds: ids })
+  );
+  event.dataTransfer.effectAllowed = "move";
 }
 function onCharacterDragOver(charId) {
-  dragOverCharacter.value = charId
+  dragOverCharacter.value = charId;
 }
 function onCharacterDragLeave(charId) {
-  if (dragOverCharacter.value === charId) dragOverCharacter.value = null
+  if (dragOverCharacter.value === charId) dragOverCharacter.value = null;
 }
 async function onCharacterDrop(charId, event) {
-  dragOverCharacter.value = null
+  dragOverCharacter.value = null;
   try {
-    const data = JSON.parse(event.dataTransfer.getData('application/json'))
-    if (!data.imageIds || !Array.isArray(data.imageIds)) return
-    await assignImagesToCharacter(data.imageIds, charId)
+    const data = JSON.parse(event.dataTransfer.getData("application/json"));
+    if (!data.imageIds || !Array.isArray(data.imageIds)) return;
+    await assignImagesToCharacter(data.imageIds, charId);
   } catch (e) {}
 }
 
 // Assign images to a character by PATCHing their character_id
 async function assignImagesToCharacter(imageIds, characterId) {
   try {
-    await Promise.all(imageIds.map(async (id) => {
-      const res = await fetch(`${BACKEND_URL}/pictures/${id}?character_id=${encodeURIComponent(characterId)}`, { method: 'PATCH' })
-      if (!res.ok) throw new Error(`Failed to assign character for image ${id}`)
-    }))
+    await Promise.all(
+      imageIds.map(async (id) => {
+        const res = await fetch(
+          `${BACKEND_URL}/pictures/${id}?character_id=${encodeURIComponent(
+            characterId
+          )}`,
+          { method: "PATCH" }
+        );
+        if (!res.ok)
+          throw new Error(`Failed to assign character for image ${id}`);
+      })
+    );
     // Refresh images and character thumbnails after assignment
-    await fetchCharacters()
+    await fetchCharacters();
     // If the current view is the character we just assigned to, or All Pictures, or Unassigned Pictures, refresh images
     if (
       selectedCharacter.value === characterId ||
@@ -410,24 +472,29 @@ async function assignImagesToCharacter(imageIds, characterId) {
       selectedCharacter.value === UNASSIGNED_PICTURES_ID
     ) {
       // Re-fetch images for the current character, all, or unassigned
-      const id = selectedCharacter.value
-      let url
+      const id = selectedCharacter.value;
+      let url;
       if (id === ALL_PICTURES_ID) {
-        url = `${BACKEND_URL}/pictures?info=true`
+        url = `${BACKEND_URL}/pictures?info=true`;
       } else if (id === UNASSIGNED_PICTURES_ID) {
-        url = `${BACKEND_URL}/pictures?character_id=&info=true`
+        url = `${BACKEND_URL}/pictures?character_id=&info=true`;
       } else {
-        url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(id)}&info=true`
+        url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
+          id
+        )}&info=true`;
       }
-      const res = await fetch(url)
+      const res = await fetch(url);
       if (res.ok) {
-        const baseImages = await res.json()
-        images.value = baseImages.map(img => ({ ...img, score: typeof img.score !== 'undefined' ? img.score : null }))
-        setTimeout(updateColumns, 0)
+        const baseImages = await res.json();
+        images.value = baseImages.map((img) => ({
+          ...img,
+          score: typeof img.score !== "undefined" ? img.score : null,
+        }));
+        setTimeout(updateColumns, 0);
       }
     }
   } catch (e) {
-    alert('Failed to assign character: ' + (e.message || e))
+    alert("Failed to assign character: " + (e.message || e));
   }
 }
 </script>
@@ -438,57 +505,118 @@ async function assignImagesToCharacter(imageIds, characterId) {
       <aside class="sidebar">
         <div class="sidebar-title">Pictures</div>
         <div
-          :class="['sidebar-item', { active: selectedCharacter === ALL_PICTURES_ID }]"
+          :class="[
+            'sidebar-item',
+            { active: selectedCharacter === ALL_PICTURES_ID },
+          ]"
           @click="selectedCharacter = ALL_PICTURES_ID"
-          style="display: flex; align-items: center; min-height: 56px; padding-top: 6px; padding-bottom: 6px; font-weight: bold;"
+          style="
+            display: flex;
+            align-items: center;
+            min-height: 56px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            font-weight: bold;
+          "
         >
-          <span style="display: flex; align-items: center; margin-right: 12px;">
+          <span style="display: flex; align-items: center; margin-right: 12px">
             <v-icon size="44">mdi-image-multiple</v-icon>
           </span>
-          <span style="font-size:1.15em; line-height:1.2;">All Pictures</span>
+          <span style="font-size: 1.15em; line-height: 1.2">All Pictures</span>
         </div>
         <div
-          :class="['sidebar-item', { active: selectedCharacter === UNASSIGNED_PICTURES_ID }]"
+          :class="[
+            'sidebar-item',
+            { active: selectedCharacter === UNASSIGNED_PICTURES_ID },
+          ]"
           @click="selectedCharacter = UNASSIGNED_PICTURES_ID"
-          style="display: flex; align-items: center; min-height: 56px; padding-top: 6px; padding-bottom: 6px; font-weight: bold;"
+          style="
+            display: flex;
+            align-items: center;
+            min-height: 56px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            font-weight: bold;
+          "
         >
-          <span style="display: flex; align-items: center; margin-right: 12px;">
+          <span style="display: flex; align-items: center; margin-right: 12px">
             <v-icon size="44">mdi-help-circle-outline</v-icon>
           </span>
-          <span style="font-size:1.15em; line-height:1.2;">Unassigned Pictures</span>
+          <span style="font-size: 1.15em; line-height: 1.2"
+            >Unassigned Pictures</span
+          >
         </div>
         <div class="sidebar-title">Characters</div>
         <div v-if="error" class="sidebar-error">{{ error }}</div>
         <div
           v-for="char in sortedCharacters"
           :key="char.id"
-          :class="['sidebar-item', { active: selectedCharacter === char.id, 'droppable': dragOverCharacter === char.id }]"
+          :class="[
+            'sidebar-item',
+            {
+              active: selectedCharacter === char.id,
+              droppable: dragOverCharacter === char.id,
+            },
+          ]"
           @click="selectedCharacter = char.id"
           @dragover.prevent="onCharacterDragOver(char.id)"
           @dragleave="onCharacterDragLeave(char.id)"
           @drop="onCharacterDrop(char.id, $event)"
-          style="display: flex; align-items: center; min-height: 56px; padding-top: 6px; padding-bottom: 6px;"
+          style="
+            display: flex;
+            align-items: center;
+            min-height: 56px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+          "
         >
-          <span style="display: flex; align-items: center; margin-right: 12px;">
-            <img :src="characterThumbnails[char.id] ? characterThumbnails[char.id] : unknownPerson" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:6px;box-shadow:0 0px 0px #bbb;" />
+          <span style="display: flex; align-items: center; margin-right: 12px">
+            <img
+              :src="
+                characterThumbnails[char.id]
+                  ? characterThumbnails[char.id]
+                  : unknownPerson
+              "
+              alt=""
+              style="
+                width: 64px;
+                height: 64px;
+                object-fit: cover;
+                border-radius: 6px;
+                box-shadow: 0 0px 0px #bbb;
+              "
+            />
           </span>
-          <span style="font-size:1.15em; line-height:1.2;">{{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}</span>
+          <span style="font-size: 1.15em; line-height: 1.2">{{
+            char.name.charAt(0).toUpperCase() + char.name.slice(1)
+          }}</span>
         </div>
         <div v-if="loading" class="sidebar-loading">Loading...</div>
-
       </aside>
       <main class="main-area">
         <!-- Top toolbar with right-aligned slider and delete button -->
         <div class="top-toolbar">
-          <div style="flex:1"></div>
+          <v-text-field
+            v-model="searchQuery"
+            placeholder="Search images..."
+            hide-details
+            dense
+            solo
+            clearable
+            prepend-inner-icon="mdi-magnify"
+            style="max-width: 320px; margin-right: 16px"
+            @keydown.enter="searchImages"
+            @click:append-outer="searchImages"
+          />
+          <div style="flex: 1"></div>
           <v-btn
             icon
             :color="showStars ? 'amber darken-2' : 'grey'"
             @click="showStars = !showStars"
             title="Toggle star ratings"
-            style="margin-right: 12px;"
+            style="margin-right: 12px"
           >
-            <v-icon>{{ showStars ? 'mdi-star' : 'mdi-star-outline' }}</v-icon>
+            <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
           </v-btn>
           <v-btn
             icon
@@ -496,7 +624,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
             :disabled="!selectedImageIds.length"
             @click="deleteSelectedImages"
             title="Delete selected images"
-            style="margin-right: 12px;"
+            style="margin-right: 12px"
           >
             <v-icon>mdi-trash-can-outline</v-icon>
           </v-btn>
@@ -510,21 +638,40 @@ async function assignImagesToCharacter(imageIds, characterId) {
             :tick-labels="thumbnailLabels"
             class="slider"
             hide-details
-            style="max-width: 220px; display: inline-block; vertical-align: middle; margin: 0 8px;"
+            style="
+              max-width: 220px;
+              display: inline-block;
+              vertical-align: middle;
+              margin: 0 8px;
+            "
           />
           <v-icon small>mdi-image-size-select-large</v-icon>
         </div>
         <div class="main-content">
           <template v-if="selectedCharacter">
-            <div v-if="imagesLoading" class="empty-state">Loading images...</div>
-            <div v-else-if="imagesError" class="empty-state">{{ imagesError }}</div>
-            <div v-else-if="images.length === 0" class="empty-state">No images found for this character.</div>
-            <div v-else class="image-grid" :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }" ref="gridContainer">
+            <div v-if="imagesLoading" class="empty-state">
+              Loading images...
+            </div>
+            <div v-else-if="imagesError" class="empty-state">
+              {{ imagesError }}
+            </div>
+            <div v-else-if="images.length === 0" class="empty-state">
+              No images found for this character.
+            </div>
+            <div
+              v-else
+              class="image-grid"
+              :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
+              ref="gridContainer"
+            >
               <div
                 v-for="(img, idx) in images"
                 :key="img.id"
                 class="image-card"
-                :class="[isImageSelected(img.id) ? 'selected' : '', getSelectionBorderClasses(idx)]"
+                :class="[
+                  isImageSelected(img.id) ? 'selected' : '',
+                  getSelectionBorderClasses(idx),
+                ]"
                 @click="handleImageSelect(img, idx, $event)"
                 :draggable="isImageSelected(img.id)"
                 @dragstart="onImageDragStart(img, idx, $event)"
@@ -535,47 +682,76 @@ async function assignImagesToCharacter(imageIds, characterId) {
                       v-for="n in 5"
                       :key="n"
                       small
-                      :color="n <= (img.score || 0) ? 'amber' : 'grey lighten-1'"
-                      style="cursor:pointer;"
+                      :color="
+                        n <= (img.score || 0) ? 'amber' : 'grey lighten-1'
+                      "
+                      style="cursor: pointer"
                       @click.stop="setImageScore(img, n)"
-                    >mdi-star</v-icon>
+                      >mdi-star</v-icon
+                    >
                   </div>
                   <v-img
                     :src="`${BACKEND_URL}/thumbnails/${img.id}`"
                     :height="thumbnailSize"
                     :width="thumbnailSize"
-                    @click.stop="(e) => {
-                      if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                        handleImageSelect(img, idx, e)
-                      } else {
-                        openOverlay(img)
+                    @click.stop="
+                      (e) => {
+                        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                          handleImageSelect(img, idx, e);
+                        } else {
+                          openOverlay(img);
+                        }
                       }
-                    }"
+                    "
                     @load="fetchScoreIfMissing(img)"
-                    style="cursor:pointer;"
+                    style="cursor: pointer"
                   />
                   <!-- Removed image description from grid -->
                 </v-card>
               </div>
-    <!-- Full image overlay -->
-    <div v-if="overlayOpen" class="image-overlay" @click.self="closeOverlay">
-      <div class="overlay-content">
-        <button class="overlay-close" @click="closeOverlay" aria-label="Close">&times;</button>
-        <div class="overlay-flex-row">
-          <button class="overlay-nav overlay-nav-left" @click.stop="showPrevImage" aria-label="Previous">&#8592;</button>
-          <div class="overlay-img-container">
-            <img
-              v-if="overlayImage"
-              :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
-              :alt="overlayImage.description || 'Full Image'"
-              class="overlay-img"
-            />
-            <div class="overlay-desc">{{ overlayImage?.description }}</div>
-          </div>
-          <button class="overlay-nav overlay-nav-right" @click.stop="showNextImage" aria-label="Next">&#8594;</button>
-        </div>
-      </div>
-    </div>
+              <!-- Full image overlay -->
+              <div
+                v-if="overlayOpen"
+                class="image-overlay"
+                @click.self="closeOverlay"
+              >
+                <div class="overlay-content">
+                  <button
+                    class="overlay-close"
+                    @click="closeOverlay"
+                    aria-label="Close"
+                  >
+                    &times;
+                  </button>
+                  <div class="overlay-flex-row">
+                    <button
+                      class="overlay-nav overlay-nav-left"
+                      @click.stop="showPrevImage"
+                      aria-label="Previous"
+                    >
+                      &#8592;
+                    </button>
+                    <div class="overlay-img-container">
+                      <img
+                        v-if="overlayImage"
+                        :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+                        :alt="overlayImage.description || 'Full Image'"
+                        class="overlay-img"
+                      />
+                      <div class="overlay-desc">
+                        {{ overlayImage?.description }}
+                      </div>
+                    </div>
+                    <button
+                      class="overlay-nav overlay-nav-right"
+                      @click.stop="showNextImage"
+                      aria-label="Next"
+                    >
+                      &#8594;
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </template>
           <template v-else>
@@ -586,7 +762,6 @@ async function assignImagesToCharacter(imageIds, characterId) {
     </div>
   </v-app>
 </template>
-
 
 <style scoped>
 .image-grid {
@@ -630,7 +805,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
   border-right-color: #1976d2 !important;
 }
 .image-card.selected::after {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   background: rgba(25, 118, 210, 0.32);
@@ -707,14 +882,17 @@ async function assignImagesToCharacter(imageIds, characterId) {
   margin-bottom: 4px;
   transition: background 0.2s;
 }
-.sidebar-item.active, .sidebar-item:hover {
+.sidebar-item.active,
+.sidebar-item:hover {
   background: #f0f0f055;
 }
-.sidebar-loading, .sidebar-error {
+.sidebar-loading,
+.sidebar-error {
   padding: 8px 16px;
   color: #888;
 }
-.sidebar, .sidebar-item {
+.sidebar,
+.sidebar-item {
   color: #ffffffff;
 }
 .main-area {
@@ -776,7 +954,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(0,0,0,0.85);
+  background: rgba(0, 0, 0, 0.85);
   z-index: 1000;
   display: flex;
   align-items: center;
@@ -792,7 +970,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
   justify-content: center;
   background: #222;
   border-radius: 8px;
-  box-shadow: 0 2px 16px rgba(0,0,0,0.5);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
   padding: 24px 24px 16px 24px;
 }
 .overlay-flex-row {
@@ -816,7 +994,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
   object-fit: contain;
   border-radius: 4px;
   background: #111;
-  box-shadow: 0 1px 8px rgba(0,0,0,0.4);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
 }
 .overlay-close {
   position: absolute;
@@ -893,10 +1071,10 @@ async function assignImagesToCharacter(imageIds, characterId) {
   display: flex;
   flex-direction: row;
   z-index: 10;
-  background: rgba(255,255,255,0.85);
+  background: rgba(255, 255, 255, 0.85);
   border-radius: 6px;
   padding: 1px 4px 1px 2px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
   font-size: 0.85em;
 }
 .star-overlay .v-icon {

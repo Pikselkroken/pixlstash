@@ -404,6 +404,35 @@ class Pictures:
             result.append(pic)
         return result
 
+    def find_by_tag_or_description(self, query):
+        """
+        Find pictures where the query matches any tag or appears in the description (case-insensitive, partial match).
+        """
+        cursor = self._connection.cursor()
+        q = f"%{query.lower()}%"
+        # Search tags (as JSON string) and description
+        cursor.execute(
+            "SELECT * FROM pictures WHERE LOWER(description) LIKE ? OR LOWER(tags) LIKE ?",
+            (q, q),
+        )
+        rows = cursor.fetchall()
+        result = []
+        for row in rows:
+            has_embedding = (
+                bool(row["embedding"]) if "embedding" in row.keys() else False
+            )
+            pic = Picture(
+                id=row["id"],
+                character_id=row["character_id"],
+                description=row["description"],
+                tags=json.loads(row["tags"]) if row["tags"] else [],
+                created_at=row["created_at"],
+                is_reference=row["is_reference"] if "is_reference" in row.keys() else 0,
+                has_embedding=has_embedding,
+            )
+            result.append(pic)
+        return result
+
     def find_by_text(self, text, top_n=5, include_scores=False, threshold=0.5):
         """
         Find the top N pictures whose embeddings best match the input text.
