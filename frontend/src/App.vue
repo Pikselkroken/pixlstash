@@ -129,6 +129,16 @@ const getSelectionBorderClasses = (idx) => {
   return classes.join(" ");
 };
 
+// Handle drop on Reference Images child
+function onReferenceDrop(characterId, event) {
+  dragOverCharacter.value = null;
+  try {
+    const data = JSON.parse(event.dataTransfer.getData("application/json"));
+    if (!data.imageIds || !Array.isArray(data.imageIds)) return;
+    assignImagesAsReference(data.imageIds, characterId);
+  } catch (e) {}
+}
+
 const ALL_PICTURES_ID = "__all__";
 const UNASSIGNED_PICTURES_ID = "__unassigned__";
 const characters = ref([]);
@@ -146,6 +156,8 @@ const loading = ref(false);
 const error = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
+const selectedReferenceMode = ref(false); // true = show reference images for selected character
+const expandedCharacters = ref({}); // { [characterId]: true/false }
 const images = ref([]);
 const imagesLoading = ref(false);
 const imagesError = ref(null);
@@ -213,10 +225,10 @@ onMounted(() => {
   setTimeout(updateColumns, 100); // Initial update after mount
 });
 
-watch(selectedCharacter, async (id) => {
+watch([selectedCharacter, selectedReferenceMode], async ([id, refMode]) => {
   images.value = [];
   imagesError.value = null;
-  selectedImageIds.value = []; // Clear selection on character change
+  selectedImageIds.value = [];
   if (!id) return;
   imagesLoading.value = true;
   try {
@@ -225,6 +237,10 @@ watch(selectedCharacter, async (id) => {
       url = `${BACKEND_URL}/pictures?info=true`;
     } else if (id === UNASSIGNED_PICTURES_ID) {
       url = `${BACKEND_URL}/pictures?character_id=&info=true`;
+    } else if (refMode) {
+      url = `${BACKEND_URL}/characters/reference_pictures/${encodeURIComponent(
+        id
+      )}`;
     } else {
       url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
         id
@@ -232,13 +248,22 @@ watch(selectedCharacter, async (id) => {
     }
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch images");
-    const baseImages = await res.json();
-    // Only set up the images array with a score property (null if missing)
+    let baseImages = await res.json();
+    if (refMode && baseImages.reference_pictures) {
+      baseImages = baseImages.reference_pictures;
+      // Map picture_id to id for frontend compatibility
+      baseImages = baseImages.map((img) => ({ ...img, id: img.picture_id }));
+    }
+    // Filter for is_reference === true if in reference mode (legacy, not needed for new endpoint)
+    if (refMode && !baseImages[0]?.id) {
+      baseImages = baseImages.filter(
+        (img) => img.is_reference == true || img.is_reference == 1
+      );
+    }
     images.value = baseImages.map((img) => ({
       ...img,
       score: typeof img.score !== "undefined" ? img.score : null,
     }));
-    // Ensure columns are recalculated after images are loaded
     setTimeout(updateColumns, 0);
   } catch (e) {
     imagesError.value = e.message;
@@ -449,6 +474,8 @@ async function onCharacterDrop(charId, event) {
 }
 
 // Assign images to a character by PATCHing their character_id
+
+// Assign images to a character by PATCHing their character_id
 async function assignImagesToCharacter(imageIds, characterId) {
   try {
     await Promise.all(
@@ -463,15 +490,12 @@ async function assignImagesToCharacter(imageIds, characterId) {
           throw new Error(`Failed to assign character for image ${id}`);
       })
     );
-    // Refresh images and character thumbnails after assignment
     await fetchCharacters();
-    // If the current view is the character we just assigned to, or All Pictures, or Unassigned Pictures, refresh images
     if (
       selectedCharacter.value === characterId ||
       selectedCharacter.value === ALL_PICTURES_ID ||
       selectedCharacter.value === UNASSIGNED_PICTURES_ID
     ) {
-      // Re-fetch images for the current character, all, or unassigned
       const id = selectedCharacter.value;
       let url;
       if (id === ALL_PICTURES_ID) {
@@ -495,6 +519,62 @@ async function assignImagesToCharacter(imageIds, characterId) {
     }
   } catch (e) {
     alert("Failed to assign character: " + (e.message || e));
+  }
+}
+
+// Assign images as reference images for a character (set is_reference=true and character_id)
+async function assignImagesAsReference(imageIds, characterId) {
+  try {
+    await Promise.all(
+      imageIds.map(async (id) => {
+        // Fetch image to check if it already has the character
+        let needsChar = true;
+        try {
+          const res = await fetch(`${BACKEND_URL}/pictures/${id}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.character_id === characterId) needsChar = false;
+          }
+        } catch (e) {}
+        // Always set is_reference=true, and set character_id if needed
+        let url = `${BACKEND_URL}/pictures/${id}?is_reference=1`;
+        if (needsChar)
+          url += `&character_id=${encodeURIComponent(characterId)}`;
+        const res2 = await fetch(url, { method: "PATCH" });
+        if (!res2.ok)
+          throw new Error(`Failed to set reference for image ${id}`);
+      })
+    );
+    await fetchCharacters();
+    // Refresh images if needed
+    if (
+      selectedCharacter.value === characterId ||
+      selectedCharacter.value === ALL_PICTURES_ID ||
+      selectedCharacter.value === UNASSIGNED_PICTURES_ID
+    ) {
+      const id = selectedCharacter.value;
+      let url;
+      if (id === ALL_PICTURES_ID) {
+        url = `${BACKEND_URL}/pictures?info=true`;
+      } else if (id === UNASSIGNED_PICTURES_ID) {
+        url = `${BACKEND_URL}/pictures?character_id=&info=true`;
+      } else {
+        url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
+          id
+        )}&info=true`;
+      }
+      const res = await fetch(url);
+      if (res.ok) {
+        const baseImages = await res.json();
+        images.value = baseImages.map((img) => ({
+          ...img,
+          score: typeof img.score !== "undefined" ? img.score : null,
+        }));
+        setTimeout(updateColumns, 0);
+      }
+    }
+  } catch (e) {
+    alert("Failed to set reference: " + (e.message || e));
   }
 }
 </script>
@@ -551,45 +631,97 @@ async function assignImagesToCharacter(imageIds, characterId) {
         <div
           v-for="char in sortedCharacters"
           :key="char.id"
-          :class="[
-            'sidebar-item',
-            {
-              active: selectedCharacter === char.id,
-              droppable: dragOverCharacter === char.id,
-            },
-          ]"
-          @click="selectedCharacter = char.id"
-          @dragover.prevent="onCharacterDragOver(char.id)"
-          @dragleave="onCharacterDragLeave(char.id)"
-          @drop="onCharacterDrop(char.id, $event)"
-          style="
-            display: flex;
-            align-items: center;
-            min-height: 56px;
-            padding-top: 6px;
-            padding-bottom: 6px;
-          "
+          class="sidebar-character-group"
         >
-          <span style="display: flex; align-items: center; margin-right: 12px">
-            <img
-              :src="
-                characterThumbnails[char.id]
-                  ? characterThumbnails[char.id]
-                  : unknownPerson
+          <div
+            :class="[
+              'sidebar-item',
+              {
+                active: selectedCharacter === char.id && !selectedReferenceMode,
+                droppable: dragOverCharacter === char.id,
+              },
+            ]"
+            style="
+              display: flex;
+              align-items: center;
+              min-height: 56px;
+              padding-top: 6px;
+              padding-bottom: 6px;
+            "
+          >
+            <span
+              style="display: flex; align-items: center; margin-right: 12px"
+            >
+              <img
+                :src="
+                  characterThumbnails[char.id]
+                    ? characterThumbnails[char.id]
+                    : unknownPerson
+                "
+                alt=""
+                style="
+                  width: 64px;
+                  height: 64px;
+                  object-fit: cover;
+                  border-radius: 6px;
+                  box-shadow: 0 0px 0px #bbb;
+                "
+              />
+            </span>
+            <span
+              style="font-size: 1.15em; line-height: 1.2; cursor: pointer"
+              @click="
+                selectedCharacter = char.id;
+                selectedReferenceMode = false;
               "
-              alt=""
+            >
+              {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
+            </span>
+            <v-icon
+              size="20"
+              style="margin-left: 8px; cursor: pointer"
+              @click.stop="
+                expandedCharacters[char.id] = !expandedCharacters[char.id]
+              "
+              >{{
+                expandedCharacters[char.id]
+                  ? "mdi-chevron-down"
+                  : "mdi-chevron-right"
+              }}</v-icon
+            >
+          </div>
+          <div
+            v-if="expandedCharacters[char.id]"
+            class="sidebar-character-children"
+          >
+            <div
+              :class="[
+                'sidebar-item',
+                {
+                  active:
+                    selectedCharacter === char.id && selectedReferenceMode,
+                },
+              ]"
               style="
-                width: 64px;
-                height: 64px;
-                object-fit: cover;
-                border-radius: 6px;
-                box-shadow: 0 0px 0px #bbb;
+                display: flex;
+                align-items: center;
+                min-height: 40px;
+                padding-left: 48px;
+                font-size: 1em;
+                cursor: pointer;
               "
-            />
-          </span>
-          <span style="font-size: 1.15em; line-height: 1.2">{{
-            char.name.charAt(0).toUpperCase() + char.name.slice(1)
-          }}</span>
+              @click="
+                selectedCharacter = char.id;
+                selectedReferenceMode = true;
+              "
+              @dragover.prevent="onCharacterDragOver(char.id)"
+              @dragleave="onCharacterDragLeave(char.id)"
+              @drop="onReferenceDrop(char.id, $event)"
+            >
+              <v-icon size="18" style="margin-right: 8px">mdi-trophy</v-icon>
+              Reference Images
+            </div>
+          </div>
         </div>
         <div v-if="loading" class="sidebar-loading">Loading...</div>
       </aside>
@@ -604,7 +736,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
             solo
             clearable
             prepend-inner-icon="mdi-magnify"
-            style="max-width: 320px; margin-right: 16px"
+            style="max-width: 800px; margin-right: 16px"
             @keydown.enter="searchImages"
             @click:append-outer="searchImages"
           />
