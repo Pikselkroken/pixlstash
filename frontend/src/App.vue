@@ -10,6 +10,12 @@ let lastSelectedIndex = null;
 const overlayOpen = ref(false);
 const overlayImage = ref(null);
 
+// Trophy button color: dark blue when not selected, orange when selected
+const trophyButtonColor = (charId) =>
+  selectedCharacter.value === charId && selectedReferenceMode.value
+    ? 'orange'
+    : '#29405a'; // darker blue than sidebar
+
 function openOverlay(img) {
   overlayImage.value = img;
   overlayOpen.value = true;
@@ -219,7 +225,44 @@ async function fetchCharacterThumbnail(characterId) {
 }
 
 onMounted(() => {
-  fetchCharacters();
+  // Always select All Pictures at startup
+  selectedCharacter.value = ALL_PICTURES_ID;
+  selectedReferenceMode.value = false;
+  fetchCharacters().then(() => {
+    // After loading characters, ensure All Pictures is still selected
+    selectedCharacter.value = ALL_PICTURES_ID;
+    selectedReferenceMode.value = false;
+    // Explicitly trigger image loading if already on All Pictures
+    if (
+      selectedCharacter.value === ALL_PICTURES_ID &&
+      !selectedReferenceMode.value
+    ) {
+      // This mimics the watcher logic
+      images.value = [];
+      imagesError.value = null;
+      selectedImageIds.value = [];
+      imagesLoading.value = true;
+      let url = `${BACKEND_URL}/pictures?info=true`;
+      fetch(url)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to fetch images");
+          return res.json();
+        })
+        .then((baseImages) => {
+          images.value = baseImages.map((img) => ({
+            ...img,
+            score: typeof img.score !== "undefined" ? img.score : null,
+          }));
+          setTimeout(updateColumns, 0);
+        })
+        .catch((e) => {
+          imagesError.value = e.message;
+        })
+        .finally(() => {
+          imagesLoading.value = false;
+        });
+    }
+  });
   window.addEventListener("resize", updateColumns);
   watch(thumbnailSize, updateColumns);
   setTimeout(updateColumns, 100); // Initial update after mount
@@ -626,7 +669,7 @@ async function assignImagesAsReference(imageIds, characterId) {
             >Unassigned Pictures</span
           >
         </div>
-        <div class="sidebar-title">Characters</div>
+        <div class="sidebar-title">People</div>
         <div v-if="error" class="sidebar-error">{{ error }}</div>
         <div
           v-for="char in sortedCharacters"
@@ -648,78 +691,73 @@ async function assignImagesAsReference(imageIds, characterId) {
               padding-top: 6px;
               padding-bottom: 6px;
             "
-          >
-            <span
-              style="display: flex; align-items: center; margin-right: 12px"
-            >
-              <img
-                :src="
-                  characterThumbnails[char.id]
-                    ? characterThumbnails[char.id]
-                    : unknownPerson
-                "
-                alt=""
-                style="
-                  width: 64px;
-                  height: 64px;
-                  object-fit: cover;
-                  border-radius: 6px;
-                  box-shadow: 0 0px 0px #bbb;
-                "
-              />
-            </span>
-            <span
-              style="font-size: 1.15em; line-height: 1.2; cursor: pointer"
-              @click="
-                selectedCharacter = char.id;
-                selectedReferenceMode = false;
-              "
-            >
-              {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
-            </span>
-            <v-icon
-              size="20"
-              style="margin-left: 8px; cursor: pointer"
-              @click.stop="
-                expandedCharacters[char.id] = !expandedCharacters[char.id]
-              "
-              >{{
-                expandedCharacters[char.id]
-                  ? "mdi-chevron-down"
-                  : "mdi-chevron-right"
-              }}</v-icon
-            >
-          </div>
-          <div
-            v-if="expandedCharacters[char.id]"
-            class="sidebar-character-children"
+            @click="
+              selectedCharacter = char.id;
+              selectedReferenceMode = false;
+            "
           >
             <div
-              :class="[
-                'sidebar-item',
-                {
-                  active:
-                    selectedCharacter === char.id && selectedReferenceMode,
-                },
-              ]"
               style="
                 display: flex;
                 align-items: center;
-                min-height: 40px;
-                padding-left: 48px;
-                font-size: 1em;
-                cursor: pointer;
+                width: 100%;
               "
-              @click="
-                selectedCharacter = char.id;
-                selectedReferenceMode = true;
-              "
-              @dragover.prevent="onCharacterDragOver(char.id)"
-              @dragleave="onCharacterDragLeave(char.id)"
-              @drop="onReferenceDrop(char.id, $event)"
             >
-              <v-icon size="18" style="margin-right: 8px">mdi-trophy</v-icon>
-              Reference Images
+              <span
+                style="
+                  display: flex;
+                  align-items: center;
+                  margin-right: 12px;
+                  width: 64px;
+                "
+              >
+                <img
+                  :src="
+                    characterThumbnails[char.id]
+                      ? characterThumbnails[char.id]
+                      : unknownPerson
+                  "
+                  alt=""
+                  style="
+                    width: 64px;
+                    height: 64px;
+                    object-fit: cover;
+                    border-radius: 6px;
+                    box-shadow: 0 0px 0px #bbb;
+                  "
+                />
+              </span>
+              <span
+                style="
+                  font-size: 1.15em;
+                  line-height: 1.2;
+                  flex: 1;
+                  min-width: 0;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  text-align: left;
+                "
+              >
+                {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
+              </span>
+              <v-btn
+                icon
+                flat
+                :color="trophyButtonColor(char.id)"
+                style=""
+                @click.stop="
+                  if (selectedCharacter === char.id && selectedReferenceMode) {
+                    selectedReferenceMode = false;
+                  } else {
+                    selectedCharacter = char.id;
+                    selectedReferenceMode = true;
+                  }
+                "
+                title="Show Reference Images"
+              >
+                <v-icon color="white">mdi-trophy</v-icon>
+              </v-btn>
             </div>
           </div>
         </div>
@@ -998,7 +1036,7 @@ async function assignImagesAsReference(imageIds, characterId) {
   padding: 16px 0 16px 0;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   min-height: 100vh;
 }
 .sidebar-title {
@@ -1013,6 +1051,7 @@ async function assignImagesAsReference(imageIds, characterId) {
   border-radius: 4px;
   margin-bottom: 4px;
   transition: background 0.2s;
+  width: 100%;
 }
 .sidebar-item.active,
 .sidebar-item:hover {
