@@ -677,6 +677,31 @@ async function assignImagesAsReference(imageIds, characterId) {
     alert("Failed to set reference: " + (e.message || e));
   }
 }
+
+// Add a ref to track the next character number
+const nextCharacterNumber = ref(1);
+
+function addNewCharacter() {
+  // Find the next available number
+  let num = nextCharacterNumber.value;
+  let name;
+  const existingNames = new Set(characters.value.map(c => c.name));
+  do {
+    name = `Character ${num}`;
+    num++;
+  } while (existingNames.has(name));
+  nextCharacterNumber.value = num;
+  // Add to characters list (frontend only)
+  characters.value.push({
+    id: `new-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name,
+    description: '',
+    tags: [],
+    created_at: new Date().toISOString(),
+    is_reference: 0,
+    has_embedding: false,
+  });
+}
 </script>
 
 <template>
@@ -744,218 +769,219 @@ async function assignImagesAsReference(imageIds, characterId) {
       <v-icon small>mdi-image-size-select-large</v-icon>
       </div>
       <div class="file-manager">
-      <aside v-if="sidebarVisible" class="sidebar">
-  <div class="sidebar-section-header" @click="sidebarSections.pictures = !sidebarSections.pictures">
-          <v-icon small style="margin-right: 8px;">{{ sidebarSections.pictures ? 'mdi-chevron-down' : 'mdi-chevron-right' }}</v-icon>
-          Pictures
-        </div>
-        <transition name="fade">
-          <div v-show="sidebarSections.pictures">
-            <div
-              :class="[
-                'sidebar-list-item',
-                { active: selectedCharacter === ALL_PICTURES_ID },
-              ]"
-              @click="selectedCharacter = ALL_PICTURES_ID"
-            >
-              <span class="sidebar-list-icon">
-                <v-icon size="44">mdi-image-multiple</v-icon>
-              </span>
-              <span class="sidebar-list-label">All Pictures</span>
-            </div>
-            <div
-              :class="[
-                'sidebar-list-item',
-                { active: selectedCharacter === UNASSIGNED_PICTURES_ID },
-              ]"
-              @click="selectedCharacter = UNASSIGNED_PICTURES_ID"
-            >
-              <span class="sidebar-list-icon">
-                <v-icon size="44">mdi-help-circle-outline</v-icon>
-              </span>
-              <span class="sidebar-list-label">Unassigned Pictures</span>
-            </div>
+        <aside v-if="sidebarVisible" class="sidebar">
+          <div class="sidebar-section-header" @click="sidebarSections.pictures = !sidebarSections.pictures">
+            <v-icon small style="margin-right: 8px;">{{ sidebarSections.pictures ? 'mdi-chevron-down' : 'mdi-chevron-right' }}</v-icon>
+            Pictures
           </div>
-        </transition>
-  <div class="sidebar-section-header" @click="sidebarSections.people = !sidebarSections.people">
-          <v-icon small style="margin-right: 8px;">{{ sidebarSections.people ? 'mdi-chevron-down' : 'mdi-chevron-right' }}</v-icon>
-          People
-        </div>
-        <transition name="fade">
-          <div v-show="sidebarSections.people">
-            <div v-if="error" class="sidebar-error">{{ error }}</div>
-            <div
-              v-for="char in sortedCharacters"
-              :key="char.id"
-              class="sidebar-character-group"
-            >
+          <transition name="fade">
+            <div v-show="sidebarSections.pictures">
               <div
                 :class="[
                   'sidebar-list-item',
-                  {
-                    active: selectedCharacter === char.id && !selectedReferenceMode,
-                    droppable: dragOverCharacter === char.id,
-                  },
+                  { active: selectedCharacter === ALL_PICTURES_ID },
                 ]"
-                @click="
-                  selectedCharacter = char.id;
-                  selectedReferenceMode = false;
-                "
+                @click="selectedCharacter = ALL_PICTURES_ID"
               >
                 <span class="sidebar-list-icon">
-                  <img
-                    :src="characterThumbnails[char.id] ? characterThumbnails[char.id] : unknownPerson"
-                    alt=""
-                    class="sidebar-character-thumb"
-                  />
+                  <v-icon size="44">mdi-image-multiple</v-icon>
                 </span>
-                <span class="sidebar-list-label">
-                  {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
-                </span>
-                <v-btn
-                  icon
-                  flat
-                  :color="trophyButtonColor(char.id)"
-                  class="sidebar-trophy-btn"
-                  @click.stop="
-                    if (selectedCharacter === char.id && selectedReferenceMode) {
-                      selectedReferenceMode = false;
-                    } else {
-                      selectedCharacter = char.id;
-                      selectedReferenceMode = true;
-                    }
-                  "
-                  title="Show Reference Images"
-                >
-                  <v-icon color="white">mdi-trophy</v-icon>
-                </v-btn>
-              </div>
-            </div>
-            <div v-if="loading" class="sidebar-loading">Loading...</div>
-          </div>
-        </transition>
-      </aside>
-  <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
-  <div :class="['main-content', selectedCharacter ? 'accent-border' : '']">
-          <template v-if="selectedCharacter">
-            <div v-if="imagesLoading" class="empty-state">
-              Loading images...
-            </div>
-            <div v-else-if="imagesError" class="empty-state">
-              {{ imagesError }}
-            </div>
-            <div v-else-if="images.length === 0" class="empty-state">
-              No images found for this character.
-            </div>
-            <div
-              v-else
-              class="image-grid"
-              :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
-              ref="gridContainer"
-              style="position: relative;"
-              @dragenter.prevent="handleGridDragEnter"
-              @dragover.prevent="handleGridDragOver"
-              @dragleave.prevent="handleGridDragLeave"
-              @drop.prevent="handleGridDrop"
-            >
-              <div v-if="dragOverlayVisible" class="drag-overlay-grid">
-                <span>{{ dragOverlayMessage }}</span>
+                <span class="sidebar-list-label">All Pictures</span>
               </div>
               <div
-                v-for="(img, idx) in images"
-                :key="img.id"
-                class="image-card"
                 :class="[
-                  isImageSelected(img.id) ? 'selected' : '',
-                  getSelectionBorderClasses(idx),
+                  'sidebar-list-item',
+                  { active: selectedCharacter === UNASSIGNED_PICTURES_ID },
                 ]"
-                @click="handleImageSelect(img, idx, $event)"
-                :draggable="isImageSelected(img.id)"
-                @dragstart="onImageDragStart(img, idx, $event)"
+                @click="selectedCharacter = UNASSIGNED_PICTURES_ID"
               >
-                <v-card>
-                  <div class="star-overlay" v-if="showStars">
-                    <v-icon
-                      v-for="n in 5"
-                      :key="n"
-                      small
-                      :color="
-                        n <= (img.score || 0) ? 'amber' : 'grey lighten-1'
-                      "
-                      style="cursor: pointer"
-                      @click.stop="setImageScore(img, n)"
-                      >mdi-star</v-icon
-                    >
-                  </div>
-                  <v-img
-                    :src="`${BACKEND_URL}/thumbnails/${img.id}`"
-                    :height="thumbnailSize"
-                    :width="thumbnailSize"
+                <span class="sidebar-list-icon">
+                  <v-icon size="44">mdi-help-circle-outline</v-icon>
+                </span>
+                <span class="sidebar-list-label">Unassigned Pictures</span>
+              </div>
+            </div>
+          </transition>
+          <div class="sidebar-section-header" @click="sidebarSections.people = !sidebarSections.people">
+            <v-icon small style="margin-right: 8px;">{{ sidebarSections.people ? 'mdi-chevron-down' : 'mdi-chevron-right' }}</v-icon>
+            People
+            <v-icon class="add-character-inline" @click.stop="addNewCharacter" title="Add character">mdi-plus</v-icon>
+          </div>
+          <transition name="fade">
+            <div v-show="sidebarSections.people">
+              <div v-if="error" class="sidebar-error">{{ error }}</div>
+              <div
+                v-for="char in sortedCharacters"
+                :key="char.id"
+                class="sidebar-character-group"
+              >
+                <div
+                  :class="[
+                    'sidebar-list-item',
+                    {
+                      active: selectedCharacter === char.id && !selectedReferenceMode,
+                      droppable: dragOverCharacter === char.id,
+                    },
+                  ]"
+                  @click="
+                    selectedCharacter = char.id;
+                    selectedReferenceMode = false;
+                  "
+                >
+                  <span class="sidebar-list-icon">
+                    <img
+                      :src="characterThumbnails[char.id] ? characterThumbnails[char.id] : unknownPerson"
+                      alt=""
+                      class="sidebar-character-thumb"
+                    />
+                  </span>
+                  <span class="sidebar-list-label">
+                    {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
+                  </span>
+                  <v-btn
+                    icon
+                    flat
+                    :color="trophyButtonColor(char.id)"
+                    class="sidebar-trophy-btn"
                     @click.stop="
-                      (e) => {
-                        if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                          handleImageSelect(img, idx, e);
-                        } else {
-                          openOverlay(img);
-                        }
+                      if (selectedCharacter === char.id && selectedReferenceMode) {
+                        selectedReferenceMode = false;
+                      } else {
+                        selectedCharacter = char.id;
+                        selectedReferenceMode = true;
                       }
                     "
-                    @load="fetchScoreIfMissing(img)"
-                    style="cursor: pointer"
-                  />
-                  <!-- Removed image description from grid -->
-                </v-card>
-              </div>
-              <!-- Full image overlay -->
-              <div
-                v-if="overlayOpen"
-                class="image-overlay"
-                @click.self="closeOverlay"
-              >
-                <div class="overlay-content">
-                  <button
-                    class="overlay-close"
-                    @click="closeOverlay"
-                    aria-label="Close"
+                    title="Show Reference Images"
                   >
-                    &times;
-                  </button>
-                  <div class="overlay-flex-row">
-                    <button
-                      class="overlay-nav overlay-nav-left"
-                      @click.stop="showPrevImage"
-                      aria-label="Previous"
-                    >
-                      &#8592;
-                    </button>
-                    <div class="overlay-img-container">
-                      <img
-                        v-if="overlayImage"
-                        :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
-                        :alt="overlayImage.description || 'Full Image'"
-                        class="overlay-img"
-                      />
-                      <div class="overlay-desc">
-                        {{ overlayImage?.description }}
-                      </div>
+                    <v-icon color="white">mdi-trophy</v-icon>
+                  </v-btn>
+                </div>
+              </div>
+              <div v-if="loading" class="sidebar-loading">Loading...</div>
+            </div>
+          </transition>
+        </aside>
+        <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
+          <div :class="['main-content', selectedCharacter ? 'accent-border' : '']">
+            <template v-if="selectedCharacter">
+              <div v-if="imagesLoading" class="empty-state">
+                Loading images...
+              </div>
+              <div v-else-if="imagesError" class="empty-state">
+                {{ imagesError }}
+              </div>
+              <div v-else-if="images.length === 0" class="empty-state">
+                No images found for this character.
+              </div>
+              <div
+                v-else
+                class="image-grid"
+                :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
+                ref="gridContainer"
+                style="position: relative;"
+                @dragenter.prevent="handleGridDragEnter"
+                @dragover.prevent="handleGridDragOver"
+                @dragleave.prevent="handleGridDragLeave"
+                @drop.prevent="handleGridDrop"
+              >
+                <div v-if="dragOverlayVisible" class="drag-overlay-grid">
+                  <span>{{ dragOverlayMessage }}</span>
+                </div>
+                <div
+                  v-for="(img, idx) in images"
+                  :key="img.id"
+                  class="image-card"
+                  :class="[
+                    isImageSelected(img.id) ? 'selected' : '',
+                    getSelectionBorderClasses(idx),
+                  ]"
+                  @click="handleImageSelect(img, idx, $event)"
+                  :draggable="isImageSelected(img.id)"
+                  @dragstart="onImageDragStart(img, idx, $event)"
+                >
+                  <v-card>
+                    <div class="star-overlay" v-if="showStars">
+                      <v-icon
+                        v-for="n in 5"
+                        :key="n"
+                        small
+                        :color="
+                          n <= (img.score || 0) ? 'amber' : 'grey lighten-1'
+                        "
+                        style="cursor: pointer"
+                        @click.stop="setImageScore(img, n)"
+                        >mdi-star</v-icon
+                      >
                     </div>
+                    <v-img
+                      :src="`${BACKEND_URL}/thumbnails/${img.id}`"
+                      :height="thumbnailSize"
+                      :width="thumbnailSize"
+                      @click.stop="
+                        (e) => {
+                          if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                            handleImageSelect(img, idx, e);
+                          } else {
+                            openOverlay(img);
+                          }
+                        }
+                      "
+                      @load="fetchScoreIfMissing(img)"
+                      style="cursor: pointer"
+                    />
+                    <!-- Removed image description from grid -->
+                  </v-card>
+                </div>
+                <!-- Full image overlay -->
+                <div
+                  v-if="overlayOpen"
+                  class="image-overlay"
+                  @click.self="closeOverlay"
+                >
+                  <div class="overlay-content">
                     <button
-                      class="overlay-nav overlay-nav-right"
-                      @click.stop="showNextImage"
-                      aria-label="Next"
+                      class="overlay-close"
+                      @click="closeOverlay"
+                      aria-label="Close"
                     >
-                      &#8594;
+                      &times;
                     </button>
+                    <div class="overlay-flex-row">
+                      <button
+                        class="overlay-nav overlay-nav-left"
+                        @click.stop="showPrevImage"
+                        aria-label="Previous"
+                      >
+                        &#8592;
+                      </button>
+                      <div class="overlay-img-container">
+                        <img
+                          v-if="overlayImage"
+                          :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+                          :alt="overlayImage.description || 'Full Image'"
+                          class="overlay-img"
+                        />
+                        <div class="overlay-desc">
+                          {{ overlayImage?.description }}
+                        </div>
+                      </div>
+                      <button
+                        class="overlay-nav overlay-nav-right"
+                        @click.stop="showNextImage"
+                        aria-label="Next"
+                      >
+                        &#8594;
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          </template>
-          <template v-else>
-            <div class="empty-state">Select a character to view images.</div>
-          </template>
-        </div>
-      </main>
+            </template>
+            <template v-else>
+              <div class="empty-state">Select a character to view images.</div>
+            </template>
+          </div>
+        </main>
       </div>
     </div>
   </v-app>
@@ -964,7 +990,7 @@ async function assignImagesAsReference(imageIds, characterId) {
 <style scoped>
 
 .app-viewport {
-  position: relative;
+  position: fixed;
   inset: 0;
   width: 100vw;
   height: 100vh;
@@ -1109,6 +1135,7 @@ body {
   box-sizing: border-box;
 }
 .sidebar-section-header {
+  position: relative;
   font-size: 1.2rem;
   font-weight: 800;
   padding: 2px 2px 2px 2px;
@@ -1410,5 +1437,33 @@ body {
   display: block;
   position: relative;
   z-index: 1;
+}
+.add-character-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+}
+.add-character-inline {
+  color: #fff;
+  font-size: 1.3em;
+  cursor: pointer;
+  vertical-align: middle;
+  background: none !important;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 0;
+}
+.add-character-inline:hover {
+  color: #ffe082;
 }
 </style>
