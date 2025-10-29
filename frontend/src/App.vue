@@ -2,6 +2,56 @@
 import { computed, ref, onMounted, watch, onBeforeUnmount } from "vue";
 import { VTextField } from "vuetify/components";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
+
+// Drag-and-drop overlay state (for image grid only)
+const dragOverlayVisible = ref(false);
+const dragOverlayMessage = ref('');
+const gridContainer = ref(null); // already used for grid
+
+const PIL_IMAGE_EXTENSIONS = [
+  'jpg', 'jpeg', 'png', 'bmp', 'gif', 'tiff', 'tif', 'webp', 'ppm', 'pgm', 'pbm', 'pnm', 'ico', 'icns', 'svg', 'dds', 'msp', 'pcx', 'xbm', 'im', 'fli', 'flc', 'eps', 'psd', 'pdf', 'jp2', 'j2k', 'jpf', 'jpx', 'j2c', 'jpc', 'tga', 'ras', 'sgi', 'rgb', 'rgba', 'bw', 'exr', 'hdr', 'pic', 'pict', 'pct', 'cur', 'emf', 'wmf', 'heic', 'heif', 'avif'
+];
+function isSupportedImageFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  return PIL_IMAGE_EXTENSIONS.includes(ext);
+}
+function handleGridDragEnter(e) {
+  console.debug('handleGridDragEnter', e);
+  if (!e.dataTransfer || !e.dataTransfer.items) return;
+  // Accept any image/* MIME type for overlay
+  const hasImageType = Array.from(e.dataTransfer.items).some(item => {
+    return item.kind === 'file' && item.type.startsWith('image/');
+  });
+  console.debug('hasImageType', hasImageType);
+  if (hasImageType) {
+    dragOverlayVisible.value = true;
+    dragOverlayMessage.value = 'Drop files here to import';
+    e.preventDefault();
+    console.debug('Overlay shown');
+  } else {
+    dragOverlayVisible.value = false;
+    console.debug('Overlay hidden (unsupported)');
+  }
+}
+function handleGridDragOver(e) {
+  console.debug('handleGridDragOver', e, 'overlayVisible:', dragOverlayVisible.value);
+  if (dragOverlayVisible.value) e.preventDefault();
+}
+function handleGridDragLeave(e) {
+  console.debug('handleGridDragLeave', e);
+  // Only hide overlay if leaving the .image-grid entirely
+  if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+    dragOverlayVisible.value = false;
+    console.debug('Overlay hidden (left grid)');
+  } else {
+    console.debug('Drag still inside grid, overlay remains');
+  }
+}
+function handleGridDrop(e) {
+  console.debug('handleGridDrop', e);
+  dragOverlayVisible.value = false;
+}
+
 // Selection state for file manager
 const selectedImageIds = ref([]);
 let lastSelectedIndex = null;
@@ -185,7 +235,6 @@ const thumbnailSize = ref(256);
 
 // Responsive columns
 const columns = ref(5);
-const gridContainer = ref(null);
 
 function updateColumns() {
   if (!gridContainer.value) return;
@@ -651,7 +700,7 @@ async function assignImagesAsReference(imageIds, characterId) {
         solo
         clearable
         prepend-inner-icon="mdi-magnify"
-        style="min-width: 400px; max-width: 800px; margin-right: 16px"
+        style="min-width: 400px; max-width: 800px; margin-right: 16px; background-color: a;"
         @keydown.enter="searchImages"
         @click:append-outer="searchImages"
       />
@@ -803,7 +852,15 @@ async function assignImagesAsReference(imageIds, characterId) {
               class="image-grid"
               :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
               ref="gridContainer"
+              style="position: relative;"
+              @dragenter.prevent="handleGridDragEnter"
+              @dragover.prevent="handleGridDragOver"
+              @dragleave.prevent="handleGridDragLeave"
+              @drop.prevent="handleGridDrop"
             >
+              <div v-if="dragOverlayVisible" class="drag-overlay-grid">
+                <span>{{ dragOverlayMessage }}</span>
+              </div>
               <div
                 v-for="(img, idx) in images"
                 :key="img.id"
@@ -907,7 +964,7 @@ async function assignImagesAsReference(imageIds, characterId) {
 <style scoped>
 
 .app-viewport {
-  position: fixed;
+  position: relative;
   inset: 0;
   width: 100vw;
   height: 100vh;
@@ -915,6 +972,22 @@ async function assignImagesAsReference(imageIds, characterId) {
   z-index: 0;
 }
 
+.drag-overlay-grid {
+  position: absolute;
+  inset: 0;
+  background: rgba(32, 32, 32, 0.25);
+  color: #fff8e1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.2rem;
+  font-weight: 700;
+  z-index: 1000;
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 8px #000a;
+}
 
 body {
   margin: 0;
@@ -925,9 +998,14 @@ body {
   display: grid;
   gap: 0;
   width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 0%;
   padding: 4px 12px 4px 4px; /* Extra right padding for scrollbar */
-  max-height: calc(100vh - 140px);
   overflow-y: auto;
+  background: #eee;
+  align-content: start;
+  justify-content: start;
 }
 .image-card {
   min-width: 0;
@@ -1053,7 +1131,7 @@ body {
 .fade-enter-from, .fade-leave-to {
   opacity: 0;
 }
-.sidebar-list-item {
+.sidebar-list-item, .sidebar-list-item.active  {
   display: flex;
   align-items: center;
   min-height: 56px;
@@ -1072,20 +1150,20 @@ body {
   background: #f0f0f055;
   color: #fff;
   border-right: 0;
-  padding-left: 12px;
   position: relative;
 }
-    .sidebar-list-item.active::after {
-      content: "";
-      position: absolute;
-      top: 0;
-      right: 0;
-      width: 50px;
-      height: 100%;
-      background: linear-gradient(to right, rgba(255, 165, 0, 0) 0%, rgba(255, 165, 0, 1.0) 100%);
-      pointer-events: none;
-      z-index: 2;
-    }
+
+.sidebar-list-item.active::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 20px;
+  height: 100%;
+  background: linear-gradient(to right, rgba(255, 165, 0, 0) 0%, rgba(255, 165, 0, 1.0) 100%);
+  pointer-events: none;
+  z-index: 2;
+}
 
 .sidebar-list-item:hover {
   background: #6c7a8a;
@@ -1139,7 +1217,7 @@ body {
   margin-left: -8px;
 }
 .main-content {
-  flex: 1;
+  flex: 1 1 0%;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -1147,6 +1225,8 @@ body {
   padding: 0;
   border-left: 4px solid orange;
   transition: border-color 0.2s;
+  min-height: 0;
+  height: 100%;
 }
 
 .empty-state {
