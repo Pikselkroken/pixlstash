@@ -531,12 +531,19 @@ class Server:
             Update fields of a picture using query parameters, e.g., /pictures/{id}?score=5
             If 'score' is provided, update the master iteration's score.
             Otherwise, update fields on the picture.
+            Also supports JSON body for updating tags: {"tags": ["tag1", ...]}
             """
             params = dict(request.query_params)
-            if not params:
-                raise HTTPException(status_code=400, detail="No fields to update")
+            # If PATCH is called with a JSON body, use it for tags
+            content_type = request.headers.get("content-type", "")
+            json_body = None
+            if "application/json" in content_type:
+                try:
+                    json_body = await request.json()
+                except Exception:
+                    json_body = None
             # Handle score update for master iteration
-            if "score" in params:
+            if params.get("score") is not None:
                 try:
                     score_val = int(params["score"])
                 except Exception:
@@ -559,6 +566,15 @@ class Server:
                 pic = self.vault.pictures[id]
             except KeyError:
                 raise HTTPException(status_code=404, detail="Picture not found")
+            updated = False
+            # If tags are provided in JSON body, replace tags
+            if json_body and "tags" in json_body:
+                tags = json_body["tags"]
+                if not isinstance(tags, list):
+                    raise HTTPException(status_code=400, detail="tags must be a list")
+                pic.tags = tags
+                updated = True
+            # Otherwise, update fields from query params
             for key, value in params.items():
                 if key == "score":
                     continue
@@ -568,6 +584,7 @@ class Server:
                     cast_val = value
                 if hasattr(pic, key):
                     setattr(pic, key, cast_val)
+                    updated = True
                 # If updating character_id, also update all iterations
                 if key == "character_id":
                     cursor = self.vault.connection.cursor()
@@ -576,7 +593,8 @@ class Server:
                         (cast_val, id),
                     )
                     self.vault.connection.commit()
-            self.vault.pictures.update_pictures([pic])
+            if updated:
+                self.vault.pictures.update_pictures([pic])
             return {"status": "success", "picture": pic.__dict__}
 
         @self.app.get("/favicon.ico")
