@@ -715,6 +715,7 @@ class Server:
                             "tags": pic.tags,
                             "created_at": pic.created_at,
                             "score": score,
+                            "is_reference": getattr(pic, "is_reference", 0),
                         }
                     )
                 return result

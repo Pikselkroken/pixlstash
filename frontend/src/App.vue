@@ -104,31 +104,13 @@ async function refreshImages() {
     images.value = baseImages.map((img) => ({
       ...img,
       score: typeof img.score !== "undefined" ? img.score : null,
+      is_reference: Number(img.is_reference) || 0,
     }));
     setTimeout(updateColumns, 0);
   } catch (e) {
     imagesError.value = e.message;
   } finally {
     imagesLoading.value = false;
-  }
-}
-
-// Toggle reference status for a picture
-async function toggleReference(img) {
-  try {
-    const newVal = img.is_reference ? 0 : 1;
-    const res = await fetch(
-      `${BACKEND_URL}/pictures/${img.id}?is_reference=${newVal}`,
-      { method: "PATCH" }
-    );
-    if (!res.ok) throw new Error("Failed to update reference status");
-    img.is_reference = newVal;
-    // If in reference mode, reload images so the grid updates immediately
-    if (selectedReferenceMode.value && newVal === 0) {
-      images.value = images.value.filter((i) => i.id !== img.id);
-    }
-  } catch (e) {
-    alert("Failed to update reference status: " + (e.message || e));
   }
 }
 
@@ -219,6 +201,8 @@ const sidebarVisible = ref(true);
 const overlayOpen = ref(false);
 const overlayImage = ref(null);
 
+const selectedReferenceMode = ref(false);
+
 // Trophy button color: dark blue when not selected, orange when selected
 const trophyButtonColor = (charId) =>
   selectedCharacter.value === charId && selectedReferenceMode.value
@@ -251,8 +235,7 @@ async function searchImages() {
     images.value = baseImages.map((img) => ({
       ...img,
       score: typeof img.score !== "undefined" ? img.score : null,
-      is_reference:
-        typeof img.is_reference !== "undefined" ? img.is_reference : 0,
+      is_reference: Number(img.is_reference) || 0,
     }));
     setTimeout(updateColumns, 0);
   } catch (e) {
@@ -373,7 +356,14 @@ const loading = ref(false);
 const error = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
-const selectedReferenceMode = ref(false); // true = show reference images for selected character
+// Reference filter for toolbar (local only, no backend refresh)
+const referenceFilterMode = ref(false);
+const filteredImages = computed(() => {
+  if (referenceFilterMode.value) {
+    return images.value.filter((img) => Number(img.is_reference) === 1);
+  }
+  return images.value;
+});
 const expandedCharacters = ref({}); // { [characterId]: true/false }
 // Collapsible sidebar sections
 const sidebarSections = ref({
@@ -439,6 +429,25 @@ async function fetchCharacterThumbnail(characterId) {
   }
 }
 
+// Toggle reference status for a picture
+async function toggleReference(img) {
+  try {
+    const newVal = Number(img.is_reference) === 1 ? 0 : 1;
+    const res = await fetch(
+      `${BACKEND_URL}/pictures/${img.id}?is_reference=${newVal}`,
+      { method: "PATCH" }
+    );
+    if (!res.ok) throw new Error("Failed to update reference status");
+    img.is_reference = newVal;
+    // If in reference mode, reload images so the grid updates immediately
+    if (selectedReferenceMode.value && newVal === 0) {
+      images.value = images.value.filter((i) => i.id !== img.id);
+    }
+  } catch (e) {
+    alert("Failed to update reference status: " + (e.message || e));
+  }
+}
+
 onMounted(() => {
   // Always select All Pictures at startup
   selectedCharacter.value = ALL_PICTURES_ID;
@@ -467,8 +476,7 @@ onMounted(() => {
           images.value = baseImages.map((img) => ({
             ...img,
             score: typeof img.score !== "undefined" ? img.score : null,
-            is_reference:
-              typeof img.is_reference !== "undefined" ? img.is_reference : 0,
+            is_reference: Number(img.is_reference) || 0,
           }));
           setTimeout(updateColumns, 0);
         })
@@ -730,8 +738,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
         images.value = baseImages.map((img) => ({
           ...img,
           score: typeof img.score !== "undefined" ? img.score : null,
-          is_reference:
-            typeof img.is_reference !== "undefined" ? img.is_reference : 0,
+          is_reference: Number(img.is_reference) || 0,
         }));
         setTimeout(updateColumns, 0);
       }
@@ -788,8 +795,7 @@ async function assignImagesAsReference(imageIds, characterId) {
         images.value = baseImages.map((img) => ({
           ...img,
           score: typeof img.score !== "undefined" ? img.score : null,
-          is_reference:
-            typeof img.is_reference !== "undefined" ? img.is_reference : 0,
+          is_reference: Number(img.is_reference) || 0,
         }));
         setTimeout(updateColumns, 0);
       }
@@ -967,15 +973,32 @@ function confirmDeleteCharacter() {
               margin-right: 16px;
             "
           />
-          <v-icon style="display: flex; align-items: center; height: 100%"
+          <v-icon
+            style="
+              display: flex;
+              align-items: center;
+              height: 100%;
+              margin-right: 16px;
+            "
             >mdi-image-size-select-large</v-icon
           >
+          <v-btn
+            icon
+            :color="referenceFilterMode ? 'orange darken-2' : 'grey'"
+            @click="referenceFilterMode = !referenceFilterMode"
+            title="Show only reference images"
+            style="margin-right: 2px"
+          >
+            <v-icon>{{
+              referenceFilterMode ? "mdi-trophy" : "mdi-trophy-outline"
+            }}</v-icon>
+          </v-btn>
           <v-btn
             icon
             :color="showStars ? 'amber darken-2' : 'grey'"
             @click="showStars = !showStars"
             title="Toggle star ratings"
-            style="margin-left: 6px; margin-right: 2px"
+            style="margin-left: 2px; margin-right: 2px"
           >
             <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
           </v-btn>
@@ -1083,15 +1106,11 @@ function confirmDeleteCharacter() {
                   :class="[
                     'sidebar-list-item',
                     {
-                      active:
-                        selectedCharacter === char.id && !selectedReferenceMode,
+                      active: selectedCharacter === char.id,
                       droppable: dragOverCharacter === char.id,
                     },
                   ]"
-                  @click="
-                    selectedCharacter = char.id;
-                    selectedReferenceMode = false;
-                  "
+                  @click="selectedCharacter = char.id"
                 >
                   <span class="sidebar-list-icon">
                     <img
@@ -1133,26 +1152,6 @@ function confirmDeleteCharacter() {
                       </span>
                     </template>
                   </span>
-                  <v-btn
-                    icon
-                    flat
-                    :color="trophyButtonColor(char.id)"
-                    class="sidebar-trophy-btn"
-                    @click.stop="
-                      if (
-                        selectedCharacter === char.id &&
-                        selectedReferenceMode
-                      ) {
-                        selectedReferenceMode = false;
-                      } else {
-                        selectedCharacter = char.id;
-                        selectedReferenceMode = true;
-                      }
-                    "
-                    title="Show Reference Images"
-                  >
-                    <v-icon color="white">mdi-trophy</v-icon>
-                  </v-btn>
                 </div>
               </div>
               <div v-if="loading" class="sidebar-loading">Loading...</div>
@@ -1190,7 +1189,7 @@ function confirmDeleteCharacter() {
                   <span>{{ dragOverlayMessage }}</span>
                 </div>
                 <div
-                  v-for="(img, idx) in images"
+                  v-for="(img, idx) in filteredImages"
                   :key="img.id"
                   class="image-card"
                   :class="[
@@ -1808,5 +1807,12 @@ body {
   outline: none;
   width: 90%;
   margin-left: 0;
+}
+/* Make disabled buttons more faded */
+.v-btn.v-btn--disabled,
+button[disabled] {
+  opacity: 0.35 !important;
+  filter: grayscale(30%);
+  pointer-events: none;
 }
 </style>
