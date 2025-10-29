@@ -429,19 +429,34 @@ async function fetchCharacterThumbnail(characterId) {
   }
 }
 
-// Toggle reference status for a picture
+// Toggle reference status for a picture (multi-select aware)
 async function toggleReference(img) {
+  // If multiple images are selected and this image is among them, apply to all
+  const selectedIds = selectedImageIds.value;
+  const multi = selectedIds.length > 1 && selectedIds.includes(img.id);
+  const newVal = Number(img.is_reference) === 1 ? 0 : 1;
+  const targets = multi
+    ? images.value.filter((i) => selectedIds.includes(i.id))
+    : [img];
   try {
-    const newVal = Number(img.is_reference) === 1 ? 0 : 1;
-    const res = await fetch(
-      `${BACKEND_URL}/pictures/${img.id}?is_reference=${newVal}`,
-      { method: "PATCH" }
+    await Promise.all(
+      targets.map(async (target) => {
+        const res = await fetch(
+          `${BACKEND_URL}/pictures/${target.id}?is_reference=${newVal}`,
+          { method: "PATCH" }
+        );
+        if (!res.ok)
+          throw new Error(
+            `Failed to update reference status for image ${target.id}`
+          );
+        target.is_reference = newVal;
+      })
     );
-    if (!res.ok) throw new Error("Failed to update reference status");
-    img.is_reference = newVal;
     // If in reference mode, reload images so the grid updates immediately
     if (selectedReferenceMode.value && newVal === 0) {
-      images.value = images.value.filter((i) => i.id !== img.id);
+      images.value = images.value.filter(
+        (i) => !targets.some((t) => t.id === i.id)
+      );
     }
   } catch (e) {
     alert("Failed to update reference status: " + (e.message || e));
@@ -504,6 +519,22 @@ function handleOverlayKeydown(e) {
       selectedImageIds.value = images.value.map((img) => img.id);
       e.preventDefault();
     }
+    return;
+  }
+  // R: toggle reference for all selected images (or focused one)
+  if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (selectedImageIds.value.length) {
+      // Use the last selected image as the reference for toggle value
+      const lastImg = images.value.find(
+        (i) =>
+          i.id === selectedImageIds.value[selectedImageIds.value.length - 1]
+      );
+      if (lastImg) toggleReference(lastImg);
+    } else if (images.value.length) {
+      // If nothing selected, toggle the first image
+      toggleReference(images.value[0]);
+    }
+    e.preventDefault();
     return;
   }
   if (overlayOpen.value) {
@@ -1276,7 +1307,16 @@ const sortedImages = computed(() => {
                     >
                       <v-icon color="white">mdi-trophy</v-icon>
                     </v-btn>
-                    <!-- Removed image description from grid -->
+                    <!-- Show date under thumbnail if sorting by date -->
+                    <div
+                      v-if="
+                        selectedSort === 'date_desc' ||
+                        selectedSort === 'date_asc'
+                      "
+                      class="thumbnail-date"
+                    >
+                      {{ new Date(img.created_at).toLocaleString() }}
+                    </div>
                   </v-card>
                 </div>
                 <!-- Full image overlay -->
@@ -1849,5 +1889,13 @@ button[disabled] {
   opacity: 0.35 !important;
   filter: grayscale(30%);
   pointer-events: none;
+}
+
+.thumbnail-date {
+  font-size: 0.85em;
+  color: #666;
+  margin-top: 2px;
+  text-align: center;
+  word-break: break-all;
 }
 </style>
