@@ -918,6 +918,29 @@ function confirmDeleteCharacter() {
       });
   }
 }
+
+// Sorting logic
+const sortOptions = [
+  { label: "Date: Latest First", value: "date_desc" },
+  { label: "Date: Oldest First", value: "date_asc" },
+  { label: "Score: Highest First", value: "score_desc" },
+  { label: "Score: Lowest First", value: "score_asc" },
+];
+const selectedSort = ref("date_desc");
+
+const sortedImages = computed(() => {
+  let arr = [...filteredImages.value];
+  if (selectedSort.value === "date_desc") {
+    arr.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  } else if (selectedSort.value === "date_asc") {
+    arr.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  } else if (selectedSort.value === "score_desc") {
+    arr.sort((a, b) => (b.score || 0) - (a.score || 0));
+  } else if (selectedSort.value === "score_asc") {
+    arr.sort((a, b) => (a.score || 0) - (b.score || 0));
+  }
+  return arr;
+});
 </script>
 
 <template>
@@ -951,6 +974,18 @@ function confirmDeleteCharacter() {
           @click:append-outer="searchImages"
         />
         <div class="toolbar-actions">
+          <!-- Sorting dropdown -->
+          <v-select
+            v-model="selectedSort"
+            :items="sortOptions"
+            item-title="label"
+            item-value="value"
+            label="Sort by"
+            dense
+            hide-details
+            style="min-width: 200px; max-width: 300px; margin-right: 8px"
+          />
+
           <v-icon style="display: flex; align-items: center; height: 100%"
             >mdi-image-size-select-small</v-icon
           >
@@ -1189,7 +1224,7 @@ function confirmDeleteCharacter() {
                   <span>{{ dragOverlayMessage }}</span>
                 </div>
                 <div
-                  v-for="(img, idx) in filteredImages"
+                  v-for="(img, idx) in sortedImages"
                   :key="img.id"
                   class="image-card"
                   :class="[
