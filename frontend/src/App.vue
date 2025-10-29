@@ -998,17 +998,7 @@ function confirmDeleteCharacter() {
         <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
           <div :class="['main-content', selectedCharacter ? 'accent-border' : '']">
             <template v-if="selectedCharacter">
-              <div v-if="imagesLoading" class="empty-state">
-                Loading images...
-              </div>
-              <div v-else-if="imagesError" class="empty-state">
-                {{ imagesError }}
-              </div>
-              <div v-else-if="images.length === 0" class="empty-state">
-                No images found for this character.
-              </div>
               <div
-                v-else
                 class="image-grid"
                 :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
                 ref="gridContainer"
@@ -1018,6 +1008,11 @@ function confirmDeleteCharacter() {
                 @dragleave.prevent="handleGridDragLeave"
                 @drop.prevent="handleGridDrop"
               >
+                <div v-if="images.length === 0 && !imagesLoading && !imagesError" class="empty-state">
+                 No images found for this character.
+                </div>
+                <div v-if="imagesLoading" class="empty-state">Loading images...</div>
+                <div v-if="imagesError" class="empty-state">{{ imagesError }}</div>
                 <div v-if="dragOverlayVisible" class="drag-overlay-grid">
                   <span>{{ dragOverlayMessage }}</span>
                 </div>
