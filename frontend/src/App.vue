@@ -632,7 +632,8 @@ async function assignImagesAsReference(imageIds, characterId) {
 
 <template>
   <v-app>
-    <div class="top-toolbar">
+    <div class="app-viewport">
+      <div class="top-toolbar">
       <v-btn
         icon
         @click="sidebarVisible = !sidebarVisible"
@@ -692,8 +693,8 @@ async function assignImagesAsReference(imageIds, characterId) {
         "
       />
       <v-icon small>mdi-image-size-select-large</v-icon>
-    </div>
-    <div class="file-manager">
+      </div>
+      <div class="file-manager">
       <aside v-if="sidebarVisible" class="sidebar">
   <div class="sidebar-section-header" @click="sidebarSections.pictures = !sidebarSections.pictures">
           <v-icon small style="margin-right: 8px;">{{ sidebarSections.pictures ? 'mdi-chevron-down' : 'mdi-chevron-right' }}</v-icon>
@@ -898,11 +899,28 @@ async function assignImagesAsReference(imageIds, characterId) {
           </template>
         </div>
       </main>
+      </div>
     </div>
   </v-app>
 </template>
 
 <style scoped>
+
+.app-viewport {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  z-index: 0;
+}
+
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
 .image-grid {
   display: grid;
   gap: 0;
@@ -994,6 +1012,7 @@ async function assignImagesAsReference(imageIds, characterId) {
   width: 100vw;
   height: 100vh;
   min-height: 0;
+  inset: 0;
   min-width: 0;
   background: #ccc;
   box-sizing: border-box;
@@ -1270,7 +1289,7 @@ async function assignImagesAsReference(imageIds, characterId) {
   z-index: 1200;
 }
 .top-toolbar {
-  width: 100vw;
+  width: 100%;
   background: #cdcdcdff;
   min-height: 48px;
   display: flex;
