@@ -1,18 +1,72 @@
 <script setup>
-import { computed, ref, onMounted, watch, onBeforeUnmount, nextTick } from "vue";
+import {
+  computed,
+  ref,
+  onMounted,
+  watch,
+  onBeforeUnmount,
+  nextTick,
+} from "vue";
 import { VTextField } from "vuetify/components";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
 
 // Drag-and-drop overlay state (for image grid only)
 const dragOverlayVisible = ref(false);
-const dragOverlayMessage = ref('');
+const dragOverlayMessage = ref("");
 const gridContainer = ref(null); // already used for grid
 
 const PIL_IMAGE_EXTENSIONS = [
-  'jpg', 'jpeg', 'png', 'bmp', 'gif', 'tiff', 'tif', 'webp', 'ppm', 'pgm', 'pbm', 'pnm', 'ico', 'icns', 'svg', 'dds', 'msp', 'pcx', 'xbm', 'im', 'fli', 'flc', 'eps', 'psd', 'pdf', 'jp2', 'j2k', 'jpf', 'jpx', 'j2c', 'jpc', 'tga', 'ras', 'sgi', 'rgb', 'rgba', 'bw', 'exr', 'hdr', 'pic', 'pict', 'pct', 'cur', 'emf', 'wmf', 'heic', 'heif', 'avif'
+  "jpg",
+  "jpeg",
+  "png",
+  "bmp",
+  "gif",
+  "tiff",
+  "tif",
+  "webp",
+  "ppm",
+  "pgm",
+  "pbm",
+  "pnm",
+  "ico",
+  "icns",
+  "svg",
+  "dds",
+  "msp",
+  "pcx",
+  "xbm",
+  "im",
+  "fli",
+  "flc",
+  "eps",
+  "psd",
+  "pdf",
+  "jp2",
+  "j2k",
+  "jpf",
+  "jpx",
+  "j2c",
+  "jpc",
+  "tga",
+  "ras",
+  "sgi",
+  "rgb",
+  "rgba",
+  "bw",
+  "exr",
+  "hdr",
+  "pic",
+  "pict",
+  "pct",
+  "cur",
+  "emf",
+  "wmf",
+  "heic",
+  "heif",
+  "avif",
 ];
 function isSupportedImageFile(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
+  const ext = file.name.split(".").pop().toLowerCase();
   return PIL_IMAGE_EXTENSIONS.includes(ext);
 }
 
@@ -32,9 +86,13 @@ async function refreshImages() {
     } else if (id === UNASSIGNED_PICTURES_ID) {
       url = `${BACKEND_URL}/pictures?character_id=&info=true`;
     } else if (refMode) {
-      url = `${BACKEND_URL}/characters/reference_pictures/${encodeURIComponent(id)}`;
+      url = `${BACKEND_URL}/characters/reference_pictures/${encodeURIComponent(
+        id
+      )}`;
     } else {
-      url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(id)}&info=true`;
+      url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
+        id
+      )}&info=true`;
     }
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch images");
@@ -56,59 +114,68 @@ async function refreshImages() {
 }
 
 function handleGridDragEnter(e) {
-  console.debug('handleGridDragEnter', e);
+  console.debug("handleGridDragEnter", e);
   if (!e.dataTransfer || !e.dataTransfer.items) return;
   // Accept any image/* MIME type for overlay
-  const hasImageType = Array.from(e.dataTransfer.items).some(item => {
-    return item.kind === 'file' && item.type.startsWith('image/');
+  const hasImageType = Array.from(e.dataTransfer.items).some((item) => {
+    return item.kind === "file" && item.type.startsWith("image/");
   });
-  console.debug('hasImageType', hasImageType);
+  console.debug("hasImageType", hasImageType);
   if (hasImageType) {
     dragOverlayVisible.value = true;
-    dragOverlayMessage.value = 'Drop files here to import';
+    dragOverlayMessage.value = "Drop files here to import";
     e.preventDefault();
-    console.debug('Overlay shown');
+    console.debug("Overlay shown");
   } else {
     dragOverlayVisible.value = false;
-    console.debug('Overlay hidden (unsupported)');
+    console.debug("Overlay hidden (unsupported)");
   }
 }
 function handleGridDragOver(e) {
-  console.debug('handleGridDragOver', e, 'overlayVisible:', dragOverlayVisible.value);
+  console.debug(
+    "handleGridDragOver",
+    e,
+    "overlayVisible:",
+    dragOverlayVisible.value
+  );
   if (dragOverlayVisible.value) e.preventDefault();
 }
 function handleGridDragLeave(e) {
-  console.debug('handleGridDragLeave', e);
+  console.debug("handleGridDragLeave", e);
   // Only hide overlay if leaving the .image-grid entirely
   if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
     dragOverlayVisible.value = false;
-    console.debug('Overlay hidden (left grid)');
+    console.debug("Overlay hidden (left grid)");
   } else {
-    console.debug('Drag still inside grid, overlay remains');
+    console.debug("Drag still inside grid, overlay remains");
   }
 }
 function handleGridDrop(e) {
-  console.debug('handleGridDrop', e);
+  console.debug("handleGridDrop", e);
   dragOverlayVisible.value = false;
   if (!e.dataTransfer || !e.dataTransfer.files) return;
   const files = Array.from(e.dataTransfer.files).filter(isSupportedImageFile);
   if (!files.length) {
-    alert('No supported image files found.');
+    alert("No supported image files found.");
     return;
   }
   // Upload each file
-  const uploadPromises = files.map(file => {
+  const uploadPromises = files.map((file) => {
     const formData = new FormData();
-    formData.append('image', file); // Backend expects 'image'
+    formData.append("image", file); // Backend expects 'image'
     // Optionally, add character id if needed
-    if (selectedCharacter.value && selectedCharacter.value !== ALL_PICTURES_ID && selectedCharacter.value !== UNASSIGNED_PICTURES_ID) {
-      formData.append('character_id', selectedCharacter.value);
+    if (
+      selectedCharacter.value &&
+      selectedCharacter.value !== ALL_PICTURES_ID &&
+      selectedCharacter.value !== UNASSIGNED_PICTURES_ID
+    ) {
+      formData.append("character_id", selectedCharacter.value);
     }
     return fetch(`${BACKEND_URL}/pictures`, {
-      method: 'POST',
+      method: "POST",
       body: formData,
-    }).then(res => {
-      if (!res.ok) throw new Error('Upload failed');
+    }).then((res) => {
+      if (!res.ok) throw new Error("Upload failed");
       return res.json();
     });
   });
@@ -116,8 +183,8 @@ function handleGridDrop(e) {
     .then(() => {
       refreshImages();
     })
-    .catch(e => {
-      alert('One or more uploads failed: ' + (e.message || e));
+    .catch((e) => {
+      alert("One or more uploads failed: " + (e.message || e));
     });
 }
 
@@ -135,8 +202,8 @@ const overlayImage = ref(null);
 // Trophy button color: dark blue when not selected, orange when selected
 const trophyButtonColor = (charId) =>
   selectedCharacter.value === charId && selectedReferenceMode.value
-    ? 'orange'
-    : '#29405a'; // darker blue than sidebar
+    ? "orange"
+    : "#29405a"; // darker blue than sidebar
 
 function openOverlay(img) {
   overlayImage.value = img;
@@ -711,7 +778,7 @@ function addNewCharacter() {
   // Find the next available number
   let num = nextCharacterNumber.value;
   let name;
-  const existingNames = new Set(characters.value.map(c => c.name));
+  const existingNames = new Set(characters.value.map((c) => c.name));
   do {
     name = `Character ${num}`;
     num++;
@@ -719,12 +786,12 @@ function addNewCharacter() {
   nextCharacterNumber.value = num;
   // POST to backend
   fetch(`${BACKEND_URL}/characters`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, description: '' })
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description: "" }),
   })
-    .then(async res => {
-      if (!res.ok) throw new Error('Failed to create character');
+    .then(async (res) => {
+      if (!res.ok) throw new Error("Failed to create character");
       const data = await res.json();
       if (data && data.character && data.character.id) {
         // Add to local list
@@ -733,7 +800,7 @@ function addNewCharacter() {
         editingCharacterId.value = data.character.id;
         editingCharacterName.value = data.character.name;
         nextTick(() => {
-          const input = document.querySelector('.edit-character-input');
+          const input = document.querySelector(".edit-character-input");
           if (input) {
             input.focus();
             input.select();
@@ -743,8 +810,8 @@ function addNewCharacter() {
         fetchCharacterThumbnail(data.character.id);
       }
     })
-    .catch(e => {
-      alert('Failed to create character: ' + (e.message || e));
+    .catch((e) => {
+      alert("Failed to create character: " + (e.message || e));
     });
 }
 
@@ -756,7 +823,7 @@ function startEditingCharacter(char) {
   editingCharacterId.value = char.id;
   editingCharacterName.value = char.name;
   nextTick(() => {
-    const input = document.querySelector('.edit-character-input');
+    const input = document.querySelector(".edit-character-input");
     if (input) {
       input.focus();
       input.select();
@@ -768,19 +835,19 @@ function saveEditingCharacter(char) {
   if (newName && newName !== char.name) {
     // PATCH backend
     fetch(`${BACKEND_URL}/characters/${char.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newName })
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName }),
     })
-      .then(async res => {
-        if (!res.ok) throw new Error('Failed to update character');
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to update character");
         const data = await res.json();
         if (data && data.character) {
           char.name = data.character.name;
         }
       })
-      .catch(e => {
-        alert('Failed to update character: ' + (e.message || e));
+      .catch((e) => {
+        alert("Failed to update character: " + (e.message || e));
       });
   }
   editingCharacterId.value = null;
@@ -793,14 +860,18 @@ function cancelEditingCharacter() {
 
 // Confirm and delete character
 function confirmDeleteCharacter() {
-  const char = characters.value.find(c => c.id === selectedCharacter.value);
+  const char = characters.value.find((c) => c.id === selectedCharacter.value);
   if (!char) return;
-  if (window.confirm(`Delete character '${char.name}'? This will unassign all their images.`)) {
-    fetch(`${BACKEND_URL}/characters/${char.id}`, { method: 'DELETE' })
-      .then(async res => {
-        if (!res.ok) throw new Error('Failed to delete character');
+  if (
+    window.confirm(
+      `Delete character '${char.name}'? This will unassign all their images.`
+    )
+  ) {
+    fetch(`${BACKEND_URL}/characters/${char.id}`, { method: "DELETE" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to delete character");
         // Remove from local list
-        characters.value = characters.value.filter(c => c.id !== char.id);
+        characters.value = characters.value.filter((c) => c.id !== char.id);
         // Reset selection
         selectedCharacter.value = ALL_PICTURES_ID;
         selectedReferenceMode.value = false;
@@ -808,81 +879,92 @@ function confirmDeleteCharacter() {
         images.value = [];
         await fetchCharacters();
       })
-      .catch(e => {
-        alert('Failed to delete character: ' + (e.message || e));
+      .catch((e) => {
+        alert("Failed to delete character: " + (e.message || e));
       });
   }
 }
-
 </script>
 
 <template>
   <v-app>
     <div class="app-viewport">
       <div class="top-toolbar">
-      <v-btn
-        icon
-        @click="sidebarVisible = !sidebarVisible"
-        title="Toggle sidebar"
-        class="sidebar-toggle-btn"
-        style="margin-right: 16px;"
-      >
-        <v-icon>{{ sidebarVisible ? 'mdi-menu-open' : 'mdi-menu' }}</v-icon>
-      </v-btn>
-      <v-text-field
-        v-model="searchQuery"
-        placeholder="Search images..."
-        hide-details
-        dense
-        solo
-        clearable
-        prepend-inner-icon="mdi-magnify"
-        style="min-width: 400px; max-width: 800px; margin-right: 16px; background-color: a;"
-        @keydown.enter="searchImages"
-        @click:append-outer="searchImages"
-      />
-      <v-icon small>mdi-image-size-select-small</v-icon>
-      <v-slider
-        v-model="thumbnailSize"
-        :min="128"
-        :max="256"
-        :step="64"
-        :ticks="true"
-        :tick-labels="thumbnailLabels"
-        class="slider"
-        hide-details
-        style="
-          max-width: 220px;
-          display: inline-block;
-          vertical-align: middle;
-          margin: 0px 16px;
-        "
-      />
-      <v-icon small>mdi-image-size-select-large</v-icon>
-      <v-btn
-        icon
-        :color="showStars ? 'amber darken-2' : 'grey'"
-        @click="showStars = !showStars"
-        title="Toggle star ratings"
-        style="margin-left: 6px; margin-right: 6px"
-      >
-      <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
-      </v-btn>
-      <v-btn
-        icon
-        color="red darken-2"
-        :disabled="!selectedImageIds.length"
-        @click="deleteSelectedImages"
-        title="Delete selected images"
-        style="margin-left: 6px; margin-right: 2px"
-      >
-        <v-icon>mdi-trash-can-outline</v-icon>
-      </v-btn>
+        <v-btn
+          icon
+          @click="sidebarVisible = !sidebarVisible"
+          title="Toggle sidebar"
+          class="sidebar-toggle-btn"
+          style="margin-right: 16px"
+        >
+          <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
+        </v-btn>
+        <v-text-field
+          v-model="searchQuery"
+          placeholder="Search images..."
+          hide-details
+          dense
+          solo
+          clearable
+          prepend-inner-icon="mdi-magnify"
+          style="
+            min-width: 400px;
+            max-width: 800px;
+            margin-right: 16px;
+            background-color: a;
+          "
+          @keydown.enter="searchImages"
+          @click:append-outer="searchImages"
+        />
+        <v-icon small>mdi-image-size-select-small</v-icon>
+        <v-slider
+          v-model="thumbnailSize"
+          :min="128"
+          :max="256"
+          :step="64"
+          :ticks="true"
+          :tick-labels="thumbnailLabels"
+          class="slider"
+          hide-details
+          style="
+            max-width: 220px;
+            display: inline-block;
+            vertical-align: middle;
+            margin: 0px 16px;
+          "
+        />
+        <v-icon small>mdi-image-size-select-large</v-icon>
+        <v-btn
+          icon
+          :color="showStars ? 'amber darken-2' : 'grey'"
+          @click="showStars = !showStars"
+          title="Toggle star ratings"
+          style="margin-left: 6px; margin-right: 6px"
+        >
+          <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          color="red darken-2"
+          :disabled="!selectedImageIds.length"
+          @click="deleteSelectedImages"
+          title="Delete selected images"
+          style="margin-left: 6px; margin-right: 2px"
+        >
+          <v-icon>mdi-trash-can-outline</v-icon>
+        </v-btn>
       </div>
       <div class="file-manager">
         <aside v-if="sidebarVisible" class="sidebar">
-          <div class="sidebar-section-header" @click="sidebarSections.pictures = !sidebarSections.pictures">
-            <v-icon small style="margin-right: 8px;">{{ sidebarSections.pictures ? 'mdi-chevron-down' : 'mdi-chevron-right' }}</v-icon>
+          <div
+            class="sidebar-section-header"
+            @click="sidebarSections.pictures = !sidebarSections.pictures"
+          >
+            <v-icon small style="margin-right: 8px">{{
+              sidebarSections.pictures
+                ? "mdi-chevron-down"
+                : "mdi-chevron-right"
+            }}</v-icon>
             Pictures
           </div>
           <transition name="fade">
@@ -913,20 +995,44 @@ function confirmDeleteCharacter() {
               </div>
             </div>
           </transition>
-          <div class="sidebar-section-header" @click="sidebarSections.people = !sidebarSections.people">
-            <v-icon small style="margin-right: 8px;">{{ sidebarSections.people ? 'mdi-chevron-down' : 'mdi-chevron-right' }}</v-icon>
+          <div
+            class="sidebar-section-header"
+            @click="sidebarSections.people = !sidebarSections.people"
+          >
+            <v-icon small style="margin-right: 8px">{{
+              sidebarSections.people ? "mdi-chevron-down" : "mdi-chevron-right"
+            }}</v-icon>
             People
             <span style="flex: 1 1 auto"></span>
-            <span style="display: grid; grid-template-columns: 32px 32px; gap: 0px; align-items: center; min-width: 64px;">
+            <span
+              style="
+                display: grid;
+                grid-template-columns: 32px 32px;
+                gap: 0px;
+                align-items: center;
+                min-width: 64px;
+              "
+            >
               <v-icon
-                v-if="selectedCharacter && selectedCharacter !== ALL_PICTURES_ID && selectedCharacter !== UNASSIGNED_PICTURES_ID"
+                v-if="
+                  selectedCharacter &&
+                  selectedCharacter !== ALL_PICTURES_ID &&
+                  selectedCharacter !== UNASSIGNED_PICTURES_ID
+                "
                 class="delete-character-inline"
                 color="white"
-                style="cursor: pointer; justify-self: end;"
+                style="cursor: pointer; justify-self: end"
                 @click.stop="confirmDeleteCharacter"
-                title="Delete selected character">mdi-trash-can-outline
+                title="Delete selected character"
+                >mdi-trash-can-outline
               </v-icon>
-              <v-icon class="add-character-inline" @click.stop="addNewCharacter" title="Add character" style="justify-self: end;">mdi-plus</v-icon>
+              <v-icon
+                class="add-character-inline"
+                @click.stop="addNewCharacter"
+                title="Add character"
+                style="justify-self: end"
+                >mdi-plus</v-icon
+              >
             </span>
           </div>
           <transition name="fade">
@@ -941,15 +1047,23 @@ function confirmDeleteCharacter() {
                   :class="[
                     'sidebar-list-item',
                     {
-                      active: selectedCharacter === char.id && !selectedReferenceMode,
+                      active:
+                        selectedCharacter === char.id && !selectedReferenceMode,
                       droppable: dragOverCharacter === char.id,
                     },
                   ]"
-                  @click="selectedCharacter = char.id; selectedReferenceMode = false;"
+                  @click="
+                    selectedCharacter = char.id;
+                    selectedReferenceMode = false;
+                  "
                 >
                   <span class="sidebar-list-icon">
                     <img
-                      :src="characterThumbnails[char.id] ? characterThumbnails[char.id] : unknownPerson"
+                      :src="
+                        characterThumbnails[char.id]
+                          ? characterThumbnails[char.id]
+                          : unknownPerson
+                      "
                       alt=""
                       class="sidebar-character-thumb"
                     />
@@ -963,12 +1077,23 @@ function confirmDeleteCharacter() {
                         @keydown.esc="cancelEditingCharacter"
                         @blur="saveEditingCharacter(char)"
                         ref="editInput"
-                        style="width: 90%; font-size: 1em; background: #fff; color: #222; border-radius: 4px; border: 1px solid #bbb; padding: 2px 6px; outline: none;"
+                        style="
+                          width: 90%;
+                          font-size: 1em;
+                          background: #fff;
+                          color: #222;
+                          border-radius: 4px;
+                          border: 1px solid #bbb;
+                          padding: 2px 6px;
+                          outline: none;
+                        "
                       />
                     </template>
                     <template v-else>
                       <span @dblclick.stop="startEditingCharacter(char)">
-                        {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
+                        {{
+                          char.name.charAt(0).toUpperCase() + char.name.slice(1)
+                        }}
                       </span>
                     </template>
                   </span>
@@ -978,7 +1103,10 @@ function confirmDeleteCharacter() {
                     :color="trophyButtonColor(char.id)"
                     class="sidebar-trophy-btn"
                     @click.stop="
-                      if (selectedCharacter === char.id && selectedReferenceMode) {
+                      if (
+                        selectedCharacter === char.id &&
+                        selectedReferenceMode
+                      ) {
                         selectedReferenceMode = false;
                       } else {
                         selectedCharacter = char.id;
@@ -996,23 +1124,32 @@ function confirmDeleteCharacter() {
           </transition>
         </aside>
         <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
-          <div :class="['main-content', selectedCharacter ? 'accent-border' : '']">
+          <div
+            :class="['main-content', selectedCharacter ? 'accent-border' : '']"
+          >
             <template v-if="selectedCharacter">
               <div
                 class="image-grid"
                 :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
                 ref="gridContainer"
-                style="position: relative;"
+                style="position: relative"
                 @dragenter.prevent="handleGridDragEnter"
                 @dragover.prevent="handleGridDragOver"
                 @dragleave.prevent="handleGridDragLeave"
                 @drop.prevent="handleGridDrop"
               >
-                <div v-if="images.length === 0 && !imagesLoading && !imagesError" class="empty-state">
-                 No images found for this character.
+                <div
+                  v-if="images.length === 0 && !imagesLoading && !imagesError"
+                  class="empty-state"
+                >
+                  No images found for this character.
                 </div>
-                <div v-if="imagesLoading" class="empty-state">Loading images...</div>
-                <div v-if="imagesError" class="empty-state">{{ imagesError }}</div>
+                <div v-if="imagesLoading" class="empty-state">
+                  Loading images...
+                </div>
+                <div v-if="imagesError" class="empty-state">
+                  {{ imagesError }}
+                </div>
                 <div v-if="dragOverlayVisible" class="drag-overlay-grid">
                   <span>{{ dragOverlayMessage }}</span>
                 </div>
@@ -1117,7 +1254,6 @@ function confirmDeleteCharacter() {
 </template>
 
 <style scoped>
-
 .app-viewport {
   position: fixed;
   inset: 0;
@@ -1281,13 +1417,16 @@ body {
   transition: background 0.2s, color 0.2s;
 }
 /* Fade transition for collapsible sections */
-.fade-enter-active, .fade-leave-active {
+.fade-enter-active,
+.fade-leave-active {
   transition: opacity 0.2s;
 }
-.fade-enter-from, .fade-leave-to {
+.fade-enter-from,
+.fade-leave-to {
   opacity: 0;
 }
-.sidebar-list-item, .sidebar-list-item.active  {
+.sidebar-list-item,
+.sidebar-list-item.active {
   display: flex;
   align-items: center;
   min-height: 56px;
@@ -1316,7 +1455,11 @@ body {
   right: 0;
   width: 20px;
   height: 100%;
-  background: linear-gradient(to right, rgba(255, 165, 0, 0) 0%, rgba(255, 165, 0, 1.0) 100%);
+  background: linear-gradient(
+    to right,
+    rgba(255, 165, 0, 0) 0%,
+    rgba(255, 165, 0, 1) 100%
+  );
   pointer-events: none;
   z-index: 2;
 }
