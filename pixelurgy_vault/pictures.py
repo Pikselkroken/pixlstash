@@ -20,7 +20,7 @@ class Pictures:
             logger.error(
                 "InsightFace is not installed. Skipping face embedding extraction."
             )
-            return False
+            return False  # Without InsightFace, we cannot proceed
 
         # Initialize InsightFace only once
         if not hasattr(self, "_insightface_app"):
@@ -34,7 +34,7 @@ class Pictures:
         )
         pic_ids = [row[0] for row in cursor.fetchall()]
         if not pic_ids:
-            return False
+            return True  # Keep going even if if there's nothing to do
         batch = [pic_id for pic_id in pic_ids if pic_id not in self._skip_pictures][
             :MAX_CONCURRENT_IMAGES
         ]
@@ -59,12 +59,12 @@ class Pictures:
                     continue
                 faces = self._insightface_app.get(img)
                 if not faces:
-                    logger.info(
+                    logger.warning(
                         f"No face found in {master_iter.file_path} for picture {pic_id}."
                     )
                     continue
                 else:
-                    logger.info(
+                    logger.debug(
                         f"Found {len(faces)} face(s) in {master_iter.file_path} for picture {pic_id}."
                     )
                 # Use the largest face (by area)
@@ -83,7 +83,7 @@ class Pictures:
                 logger.error(
                     f"Failed to extract/store face embedding for picture {pic_id}: {e}"
                 )
-        return self._skip_pictures
+        return True
 
     def __init__(self, connection, picture_iterations, db_path):
         self._connection = connection
@@ -94,30 +94,53 @@ class Pictures:
 
     def __getitem__(self, picture_id):
         # Return master Picture by picture_uuid
-        cursor = self._connection.cursor()
-        cursor.execute(
-            "SELECT id, character_id, description, tags, created_at, embedding FROM pictures WHERE id = ?",
-            (picture_id,),
-        )
-        row = cursor.fetchone()
-        if not row:
-            raise KeyError(f"Picture with id {picture_id} not found.")
-        tags = []
-        if row["tags"]:
+        import sqlite3
+        import time
+
+        logger.debug(f"Fetching picture with id={picture_id} (type={type(picture_id)})")
+        retries = 5
+        delay = 0.2
+        for attempt in range(retries):
             try:
-                tags = json.loads(row["tags"])
-            except Exception:
+                conn = sqlite3.connect(self._db_path, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL;")
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, character_id, description, tags, created_at, embedding FROM pictures WHERE id = ?",
+                    (picture_id,),
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if not row:
+                    raise KeyError(f"Picture with id {picture_id} not found.")
                 tags = []
-        has_embedding = bool(row["embedding"]) if "embedding" in row.keys() else False
-        pic = Picture(
-            id=row["id"],
-            character_id=row["character_id"],
-            description=row["description"],
-            tags=tags,
-            created_at=row["created_at"],
-            has_embedding=has_embedding,
-        )
-        return pic
+                if row["tags"]:
+                    try:
+                        tags = json.loads(row["tags"])
+                    except Exception:
+                        tags = []
+                has_embedding = (
+                    bool(row["embedding"]) if "embedding" in row.keys() else False
+                )
+                pic = Picture(
+                    id=row["id"],
+                    character_id=row["character_id"],
+                    description=row["description"],
+                    tags=tags,
+                    created_at=row["created_at"],
+                    has_embedding=has_embedding,
+                )
+                return pic
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < retries - 1:
+                    logger.warning(
+                        f"Database is locked, retrying ({attempt + 1}/{retries})..."
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    raise
 
     def __setitem__(self, picture_id, picture):
         picture.id = picture_id
@@ -170,10 +193,13 @@ class Pictures:
         thread_conn = sqlite3.connect(self._db_path, check_same_thread=False)
         thread_conn.row_factory = sqlite3.Row
 
+        calculate_face_embeddings = True
+
         while not self._tag_worker_stop.is_set():
             self._tag_missing_pictures(thread_conn)
             self._embed_tagged_pictures(thread_conn)
-            self._extract_face_embeddings(thread_conn)
+            if calculate_face_embeddings:
+                calculate_face_embeddings = self._extract_face_embeddings(thread_conn)
             self._tag_worker_stop.wait(interval)
 
     def _tag_missing_pictures(self, thread_conn):
@@ -199,6 +225,10 @@ class Pictures:
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
                 if pic is not None:
+                    # Remove character tag from tags if present
+                    char_tag = getattr(pic, "character_id", None)
+                    if char_tag and char_tag in tags:
+                        tags = [t for t in tags if t != char_tag]
                     pic.tags = tags
                     tags_json = json.dumps(tags)
                     with thread_conn:
@@ -228,7 +258,9 @@ class Pictures:
                     pic.tags,
                     ")",
                 )
-                embedding = self._picture_tagger.generate_embedding(picture=pic)
+                embedding = self._picture_tagger.generate_embedding(
+                    picture=pic, character=pic.character_id
+                )
                 with thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
@@ -249,7 +281,14 @@ class Pictures:
         cursor = self._connection.cursor()
         values = []
         for picture in pictures:
-            tags_json = json.dumps(picture.tags) if hasattr(picture, "tags") else None
+            # Remove character tag from tags if present
+            tags = (
+                list(picture.tags) if hasattr(picture, "tags") and picture.tags else []
+            )
+            char_tag = getattr(picture, "character_id", None)
+            if char_tag and char_tag in tags:
+                tags = [t for t in tags if t != char_tag]
+            tags_json = json.dumps(tags)
             logger.debug(f"Preparing to insert Picture {picture.id} into database.")
             file_path = getattr(picture, "file_path", None)
             if file_path:
@@ -292,6 +331,36 @@ class Pictures:
                         f"File {file_path} for Picture {picture.id} does NOT exist after DB insert."
                     )
 
+    def update_pictures(self, pictures):
+        """Update a list of Picture instances in the database using executemany for efficiency."""
+        cursor = self._connection.cursor()
+        values = []
+        for picture in pictures:
+            tags = (
+                list(picture.tags) if hasattr(picture, "tags") and picture.tags else []
+            )
+            char_tag = getattr(picture, "character_id", None)
+            if char_tag and char_tag in tags:
+                tags = [t for t in tags if t != char_tag]
+            tags_json = json.dumps(tags)
+            values.append(
+                (
+                    getattr(picture, "character_id", None),
+                    getattr(picture, "description", None),
+                    tags_json,
+                    getattr(picture, "created_at", None),
+                    getattr(picture, "is_reference", 0),
+                    picture.id,
+                )
+            )
+        cursor.executemany(
+            """
+            UPDATE pictures SET character_id=?, description=?, tags=?, created_at=?, is_reference=? WHERE id=?
+            """,
+            values,
+        )
+        self._connection.commit()
+
     def contains(self, picture):
         """
         Check if a Picture with the same id exists in the database.
@@ -304,15 +373,51 @@ class Pictures:
         """
         Find and return a list of Picture objects matching all provided attribute=value pairs.
         Example: pictures.find(character_id="hero")
+        Special case: if a value is an empty string, search for IS NULL.
         """
         cursor = self._connection.cursor()
         if not kwargs:
             cursor.execute("SELECT * FROM pictures")
         else:
-            query = "SELECT * FROM pictures WHERE " + " AND ".join(
-                [f"{k}=?" for k in kwargs.keys()]
+            clauses = []
+            values = []
+            for k, v in kwargs.items():
+                if v == "":
+                    clauses.append(f"{k} IS NULL")
+                else:
+                    clauses.append(f"{k}=?")
+                    values.append(v)
+            query = "SELECT * FROM pictures WHERE " + " AND ".join(clauses)
+            cursor.execute(query, tuple(values))
+        rows = cursor.fetchall()
+        result = []
+        for row in rows:
+            has_embedding = (
+                bool(row["embedding"]) if "embedding" in row.keys() else False
             )
-            cursor.execute(query, tuple(kwargs.values()))
+            pic = Picture(
+                id=row["id"],
+                character_id=row["character_id"],
+                description=row["description"],
+                tags=json.loads(row["tags"]) if row["tags"] else [],
+                created_at=row["created_at"],
+                is_reference=row["is_reference"] if "is_reference" in row.keys() else 0,
+                has_embedding=has_embedding,
+            )
+            result.append(pic)
+        return result
+
+    def find_by_tag_or_description(self, query):
+        """
+        Find pictures where the query matches any tag or appears in the description (case-insensitive, partial match).
+        """
+        cursor = self._connection.cursor()
+        q = f"%{query.lower()}%"
+        # Search tags (as JSON string) and description
+        cursor.execute(
+            "SELECT * FROM pictures WHERE LOWER(description) LIKE ? OR LOWER(tags) LIKE ?",
+            (q, q),
+        )
         rows = cursor.fetchall()
         result = []
         for row in rows:

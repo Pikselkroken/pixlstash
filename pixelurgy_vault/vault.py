@@ -18,6 +18,13 @@ logger = get_logger(__name__)
 
 
 class Vault:
+    def __enter__(self):
+        # Allow use as a context manager for robust cleanup
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
     """
     Represents a vault for storing images and metadata.
 
@@ -53,6 +60,11 @@ class Vault:
         self.logger.debug(f"Vault init, db_path={self.db_path}, db_exists={db_exists}")
         self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrency
+        try:
+            self.connection.execute("PRAGMA journal_mode=WAL;")
+        except Exception as e:
+            self.logger.warning(f"Failed to set WAL mode: {e}")
         if not db_exists:
             self.logger.debug("Creating tables and importing default data...")
             self._create_tables()
@@ -60,9 +72,9 @@ class Vault:
             self.logger.debug("Using existing database, skipping default import.")
         self.upgrader = VaultUpgrade(self.connection)
         self.upgrader.upgrade_if_necessary()
-        if image_root:
+        if image_root is not None:
             self.set_metadata("image_root", image_root)
-        if description:
+        if description is not None:
             self.set_metadata("description", description)
         self.iterations = PictureIterations(self.connection, self.db_path)
         self.pictures = Pictures(self.connection, self.iterations, self.db_path)
@@ -71,6 +83,26 @@ class Vault:
             self._import_default_data()
         self.iterations.start_quality_worker()
         self.pictures.start_embeddings_worker()
+
+    def stop_background_workers(self):
+        if hasattr(self, "iterations") and hasattr(
+            self.iterations, "stop_quality_worker"
+        ):
+            self.iterations.stop_quality_worker()
+        if hasattr(self, "pictures") and hasattr(
+            self.pictures, "stop_embeddings_worker"
+        ):
+            self.pictures.stop_embeddings_worker()
+
+    def start_background_workers(self):
+        if hasattr(self, "iterations") and hasattr(
+            self.iterations, "start_quality_worker"
+        ):
+            self.iterations.start_quality_worker()
+        if hasattr(self, "pictures") and hasattr(
+            self.pictures, "start_embeddings_worker"
+        ):
+            self.pictures.start_embeddings_worker()
 
     def __repr__(self):
         """
@@ -85,12 +117,7 @@ class Vault:
         """
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
-        if hasattr(self, "iterations") and hasattr(
-            self.iterations, "stop_quality_worker"
-        ):
-            self.iterations.stop_quality_worker()
-        if hasattr(self, "pictures") and hasattr(self.pictures, "stop_tag_worker"):
-            self.pictures.stop_embeddings_worker()
+        self.stop_background_workers()
         if hasattr(self, "connection") and self.connection:
             self.connection.close()
 

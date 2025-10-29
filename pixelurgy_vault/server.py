@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
-from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query
-from fastapi.responses import FileResponse
+from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 
 from .logging import get_logger, setup_logging
 import uvicorn
@@ -23,6 +24,14 @@ logger = None
 
 
 class Server:
+    def __enter__(self):
+        # Allow use as a context manager for robust cleanup
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if hasattr(self, "vault"):
+            self.vault.close()
+
     """
     Main server class for the Pixelurgy Vault FastAPI application.
 
@@ -69,7 +78,16 @@ class Server:
             image_root=self.config["image_root"],
             description=self.config["description"],
         )
+
         self.app = FastAPI(lifespan=self.lifespan)
+        # Enable CORS for frontend dev server
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # Or restrict to ["http://localhost:5173"]
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
         self.setup_routes()
 
     @asynccontextmanager
@@ -113,20 +131,91 @@ class Server:
         return config
 
     def setup_routes(self):
-        @self.app.post("/pictures/search")
-        def search_pictures(body: dict = Body(...)):
+        @self.app.get("/face_thumbnail/{character_id}")
+        async def get_face_thumbnail(character_id: str):
+            """
+            Return a face-cropped thumbnail for the highest scored picture of the character.
+            If no scored picture, fallback to first image. If no face bbox, fallback to normal thumbnail.
+            """
+            import io
+            from PIL import Image
+
+            # Find all pictures for this character
+            pics = self.vault.pictures.find(character_id=character_id)
+            if not pics:
+                raise HTTPException(status_code=404, detail="No pictures for character")
+            # Find master iterations for these pictures
+            its = []
+            for pic in pics:
+                master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
+                if master_its:
+                    it = master_its[0]
+                    its.append((it, pic))
+            if not its:
+                raise HTTPException(
+                    status_code=404, detail="No master iterations for character"
+                )
+
+            # Sort by score descending, then by created_at
+            def score_key(tup):
+                it, pic = tup
+                return (it.score if it.score is not None else -1, pic.created_at)
+
+            its.sort(key=score_key, reverse=True)
+            it, pic = its[0]
+            # Try to get face_bbox from the picture
+            face_bbox = None
+            if hasattr(pic, "face_bbox") and pic.face_bbox:
+                try:
+                    face_bbox = (
+                        json.loads(pic.face_bbox)
+                        if isinstance(pic.face_bbox, str)
+                        else pic.face_bbox
+                    )
+                except Exception:
+                    face_bbox = None
+            # Load thumbnail image
+            if not it.thumbnail:
+                raise HTTPException(status_code=404, detail="No thumbnail available")
+            try:
+                thumb_img = Image.open(io.BytesIO(it.thumbnail))
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid thumbnail image")
+            # If face_bbox is available, crop to it
+            if face_bbox and len(face_bbox) == 4:
+                x1, y1, x2, y2 = [int(round(v)) for v in face_bbox]
+                w, h = thumb_img.size
+                x1 = max(0, min(w, x1))
+                x2 = max(0, min(w, x2))
+                y1 = max(0, min(h, y1))
+                y2 = max(0, min(h, y2))
+                if x2 > x1 and y2 > y1:
+                    thumb_img = thumb_img.crop((x1, y1, x2, y2))
+            # Resize to 96x96 for sidebar (twice the previous size)
+            thumb_img = thumb_img.resize((96, 96), Image.LANCZOS)
+            buf = io.BytesIO()
+            thumb_img.save(buf, format="PNG")
+            return Response(content=buf.getvalue(), media_type="image/png")
+
+        @self.app.post("/log-frontend-event")
+        async def log_frontend_event(event: dict = Body(...)):
+            """
+            Log frontend-reported events such as failed image loads or missing descriptions.
+            Body: { "event_type": str, "picture_id": str, "character_id": str, ... }
+            """
+            logger.info(f"Frontend event: {json.dumps(event)}")
+            return {"status": "logged"}
+
+        @self.app.get("/pictures/search")
+        def search_pictures(
+            query: str = Query(""), top_n: int = Query(5), threshold: float = Query(0.3)
+        ):
             """
             Semantic search for pictures using CLIP embedding. Returns list of Pictures ordered by similarity.
-            Body: { "query": <text>, "top_n": <int, optional> }
+            Query params: ?query=...&top_n=...&threshold=...
             """
-            query = body.get("query", "")
-            top_n = int(body.get("top_n", 5))
-            threshold = float(body.get("threshold", 0.5))
-            results = self.vault.pictures.find_by_text(
-                query, top_n=top_n, include_scores=False, threshold=threshold
-            )
 
-            # Convert Picture objects to dicts for JSON response
+            # Hybrid search: for single-word queries, do tag/description search; for short queries, expand them
             def pic_to_dict(pic):
                 return {
                     "id": pic.id,
@@ -137,7 +226,28 @@ class Server:
                     "is_reference": getattr(pic, "is_reference", 0),
                 }
 
-            return [pic_to_dict(pic) for pic in results]
+            q = query.strip()
+            # If query is a single word (no spaces), do tag/description search
+            if len(q.split()) == 1:
+                results = self.vault.pictures.find_by_tag_or_description(q)
+                return [pic_to_dict(pic) for pic in results]
+            # If query is short (2-3 words), try to expand it
+            elif 1 < len(q.split()) <= 3:
+                expanded = f"A photo of {q}"
+                results = self.vault.pictures.find_by_text(
+                    expanded, top_n=top_n, include_scores=False, threshold=threshold
+                )
+                if not results:
+                    # fallback to original
+                    results = self.vault.pictures.find_by_text(
+                        q, top_n=top_n, include_scores=False, threshold=threshold
+                    )
+                return [pic_to_dict(pic) for pic in results]
+            else:
+                results = self.vault.pictures.find_by_text(
+                    q, top_n=top_n, include_scores=False, threshold=threshold
+                )
+                return [pic_to_dict(pic) for pic in results]
 
         @self.app.get("/characters/reference_pictures/{id}")
         def get_reference_pictures(id: str):
@@ -231,7 +341,7 @@ class Server:
             try:
                 char = self.vault.characters[id]
             except KeyError:
-                return {"error": "Character not found"}
+                raise HTTPException(status_code=404, detail="Character not found")
             return char.__dict__
 
         @self.app.get("/iterations/{iteration_id}")
@@ -241,11 +351,12 @@ class Server:
             try:
                 it = self.vault.iterations[iteration_id]
             except KeyError:
-                return {"error": "Iteration not found"}
+                raise HTTPException(status_code=404, detail="Iteration not found")
             # Base64 encode thumbnail if present
             thumbnail_b64 = (
                 base64.b64encode(it.thumbnail).decode("ascii") if it.thumbnail else None
             )
+            logger.debug(f"Serving iteration {iteration_id} with score {it.score}")
             return {
                 "id": it.id,
                 "picture_id": it.picture_id,
@@ -277,7 +388,7 @@ class Server:
             try:
                 _ = self.vault.pictures[picture_id]
             except KeyError:
-                return {"error": "picture_id does not exist"}
+                raise HTTPException(status_code=404, detail="picture_id does not exist")
 
             dest_folder = self.vault.get_image_root()
             os.makedirs(dest_folder, exist_ok=True)
@@ -302,7 +413,9 @@ class Server:
                     is_master=bool(is_master),
                 )
             else:
-                return {"error": "No file upload or file_path provided"}
+                raise HTTPException(
+                    status_code=400, detail="No file upload or file_path provided"
+                )
 
             self.vault.iterations.import_iterations([iteration])
             return {"status": "success", "iteration_id": iteration.id}
@@ -316,10 +429,14 @@ class Server:
         def get_picture(
             id: str, info: bool = Query(False), embedding: bool = Query(False)
         ):
+            if not isinstance(id, str):
+                logger.error(f"Invalid id type: {type(id)} value: {id}")
+                raise HTTPException(status_code=404, detail="Invalid picture id")
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
-                return {"error": "Picture not found"}
+                logger.error(f"Picture not found for id={id}")
+                raise HTTPException(status_code=404, detail="Picture not found")
             if info:
                 # Return metadata only
                 result = {
@@ -332,27 +449,100 @@ class Server:
                 }
                 return result
             # Otherwise, deliver the master iteration image file
+            logger.debug(f"Fetching master iteration for picture id={pic.id}")
             master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
+            logger.debug(
+                f"Found a master iteration with score {master_its[0].score if master_its else 'N/A'}"
+            )
             if not master_its:
-                return {"error": "Master iteration not found"}
+                logger.error(f"Master iteration not found for picture id={pic.id}")
+                raise HTTPException(
+                    status_code=404, detail="Master iteration not found"
+                )
             it = master_its[0]
+            if not it.file_path or not os.path.isfile(it.file_path):
+                logger.error(
+                    f"File path missing or does not exist for iteration id={it.id}, file_path={it.file_path}"
+                )
+                raise HTTPException(
+                    status_code=404, detail=f"File not found for iteration id={it.id}"
+                )
             return FileResponse(it.file_path)
 
-        @self.app.patch("/pictures/{id}")
-        async def update_picture(id: str, body: dict = Body(...)):
-            """
-            Update fields of a picture (e.g., is_reference, description, tags, etc.).
-            """
+        @self.app.get("/thumbnails/{id}")
+        async def get_thumbnail(id: str):
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
-                return {"error": "Picture not found"}
+                logger.error(f"Picture not found for id={id} (thumbnail request)")
+                raise HTTPException(status_code=404, detail="Picture not found")
 
-            # Update fields from body
-            for key, value in body.items():
+            master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
+            if not master_its:
+                logger.error(
+                    f"Master iteration not found for picture id={pic.id} (thumbnail request)"
+                )
+                raise HTTPException(
+                    status_code=404, detail="Master iteration not found"
+                )
+            thumbnail_bytes = master_its[0].thumbnail
+            if not thumbnail_bytes:
+                logger.error(f"No thumbnail available for picture id={pic.id}")
+                raise HTTPException(status_code=404, detail="No thumbnail available")
+            return Response(content=thumbnail_bytes, media_type="image/png")
+
+        @self.app.patch("/pictures/{id}")
+        async def patch_picture(id: str, request: Request):
+            """
+            Update fields of a picture using query parameters, e.g., /pictures/{id}?score=5
+            If 'score' is provided, update the master iteration's score.
+            Otherwise, update fields on the picture.
+            """
+            params = dict(request.query_params)
+            if not params:
+                raise HTTPException(status_code=400, detail="No fields to update")
+            # Handle score update for master iteration
+            if "score" in params:
+                try:
+                    score_val = int(params["score"])
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid score value")
+                master_its = self.vault.iterations.find(picture_id=id, is_master=1)
+                if not master_its:
+                    raise HTTPException(
+                        status_code=404, detail="Master iteration not found"
+                    )
+                master_it = master_its[0]
+                master_it.score = score_val
+                self.vault.iterations.import_iterations([master_it])
+                return {
+                    "status": "success",
+                    "iteration_id": master_it.id,
+                    "score": score_val,
+                }
+            # Otherwise, update fields on the picture
+            try:
+                pic = self.vault.pictures[id]
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Picture not found")
+            for key, value in params.items():
+                if key == "score":
+                    continue
+                try:
+                    cast_val = int(value)
+                except Exception:
+                    cast_val = value
                 if hasattr(pic, key):
-                    setattr(pic, key, value)
-            self.vault.pictures.import_pictures([pic])
+                    setattr(pic, key, cast_val)
+                # If updating character_id, also update all iterations
+                if key == "character_id":
+                    cursor = self.vault.connection.cursor()
+                    cursor.execute(
+                        "UPDATE picture_iterations SET character_id = ? WHERE picture_id = ?",
+                        (cast_val, id),
+                    )
+                    self.vault.connection.commit()
+            self.vault.pictures.update_pictures([pic])
             return {"status": "success", "picture": pic.__dict__}
 
         @self.app.get("/favicon.ico")
@@ -398,7 +588,9 @@ class Server:
                     with open(file_path, "rb") as f:
                         files_to_import.append((f.read(), file_path))
             else:
-                return {"error": "No image or file_path provided"}
+                raise HTTPException(
+                    status_code=400, detail="No image or file_path provided"
+                )
 
             new_pictures = []
             new_iterations = []
@@ -471,17 +663,27 @@ class Server:
                     query_params["tags"] = [query_params["tags"]]
             pics = self.vault.pictures.find(**query_params)
             if info:
-                # Return only Picture info (metadata)
-                return [
-                    {
-                        "id": pic.id,
-                        "character_id": pic.character_id,
-                        "description": pic.description,
-                        "tags": pic.tags,
-                        "created_at": pic.created_at,
-                    }
-                    for pic in pics
-                ]
+                # Return only Picture info (metadata), but include score from master iteration
+                result = []
+                for pic in pics:
+                    # Find master iteration for this picture
+                    master_its = self.vault.iterations.find(
+                        picture_id=pic.id, is_master=1
+                    )
+                    score = None
+                    if master_its:
+                        score = master_its[0].score
+                    result.append(
+                        {
+                            "id": pic.id,
+                            "character_id": pic.character_id,
+                            "description": pic.description,
+                            "tags": pic.tags,
+                            "created_at": pic.created_at,
+                            "score": score,
+                        }
+                    )
+                return result
             else:
                 # Return the master iteration for each picture (is_master=1)
                 results = []
@@ -512,6 +714,49 @@ class Server:
                             }
                         )
                 return results
+
+        @self.app.delete("/pictures/{id}")
+        async def delete_picture(id: str):
+            """
+            Delete a picture by id, remove all its iterations, and delete all associated files from the file system and database.
+            """
+
+            # 1. Check if picture exists
+            try:
+                self.vault.pictures[id]
+            except KeyError:
+                logger.error(f"Picture not found for id={id} (delete request)")
+                raise HTTPException(status_code=404, detail="Picture not found")
+
+            # 2. Find all iterations for this picture
+            iterations = self.vault.iterations.find(picture_id=id)
+            # 3. Delete all files for each iteration
+            errors = []
+            for it in iterations:
+                # Delete image file
+                if it.file_path and os.path.exists(it.file_path):
+                    try:
+                        os.remove(it.file_path)
+                    except Exception as e:
+                        logger.error(f"Failed to delete file {it.file_path}: {e}")
+                        errors.append(f"Failed to delete file {it.file_path}: {e}")
+                # Delete thumbnail if stored as a separate file (not in DB)
+                # (Currently, thumbnail is stored in DB as bytes, so nothing to do)
+
+            # 4. Delete all iterations from DB
+            cursor = self.vault.iterations._connection.cursor()
+            cursor.execute("DELETE FROM picture_iterations WHERE picture_id = ?", (id,))
+            self.vault.iterations._connection.commit()
+
+            # 5. Delete the picture from DB
+            del self.vault.pictures[id]
+
+            return {
+                "status": "success",
+                "deleted_picture_id": id,
+                "deleted_iterations": [it.id for it in iterations],
+                "errors": errors,
+            }
 
     def get_version(self):
         try:
