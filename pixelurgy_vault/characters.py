@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Character:
-    id: str
+    id: Optional[int]
     name: str
     description: Optional[str] = None
 
@@ -14,7 +14,7 @@ class Characters:
     def __init__(self, connection: sqlite3.Connection):
         self.connection = connection
 
-    def __getitem__(self, character_id: str) -> Character:
+    def __getitem__(self, character_id: int) -> Character:
         cursor = self.connection.cursor()
         cursor.execute(
             "SELECT id, name, description FROM characters WHERE id = ?", (character_id,)
@@ -27,9 +27,10 @@ class Characters:
     def add(self, character: Character):
         cursor = self.connection.cursor()
         cursor.execute(
-            "INSERT INTO characters (id, name, description) VALUES (?, ?, ?)",
-            (character.id, character.name, character.description),
+            "INSERT INTO characters (name, description) VALUES (?, ?)",
+            (character.name, character.description),
         )
+        character.id = cursor.lastrowid
         self.connection.commit()
 
     def update(self, character: Character):
@@ -40,7 +41,7 @@ class Characters:
         )
         self.connection.commit()
 
-    def delete(self, character_id: str):
+    def delete(self, character_id: int):
         cursor = self.connection.cursor()
         cursor.execute(
             "DELETE FROM characters WHERE id = ?",

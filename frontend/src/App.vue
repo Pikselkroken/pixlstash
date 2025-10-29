@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, watch, onBeforeUnmount } from "vue";
+import { computed, ref, onMounted, watch, onBeforeUnmount, nextTick } from "vue";
 import { VTextField } from "vuetify/components";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
 
@@ -701,6 +701,34 @@ function addNewCharacter() {
     is_reference: 0,
     has_embedding: false,
   });
+  // Do NOT set editingCharacterId here
+}
+
+// Inline edit state for character names
+const editingCharacterId = ref(null);
+const editingCharacterName = ref("");
+
+function startEditingCharacter(char) {
+  editingCharacterId.value = char.id;
+  editingCharacterName.value = char.name;
+  nextTick(() => {
+    const input = document.querySelector('.edit-character-input');
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  });
+}
+function saveEditingCharacter(char) {
+  if (editingCharacterName.value.trim()) {
+    char.name = editingCharacterName.value.trim();
+  }
+  editingCharacterId.value = null;
+  editingCharacterName.value = "";
+}
+function cancelEditingCharacter() {
+  editingCharacterId.value = null;
+  editingCharacterName.value = "";
 }
 </script>
 
@@ -729,26 +757,6 @@ function addNewCharacter() {
         @keydown.enter="searchImages"
         @click:append-outer="searchImages"
       />
-      <div style="flex: 1"></div>
-      <v-btn
-        icon
-        :color="showStars ? 'amber darken-2' : 'grey'"
-        @click="showStars = !showStars"
-        title="Toggle star ratings"
-        style="margin-right: 12px"
-      >
-        <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
-      </v-btn>
-      <v-btn
-        icon
-        color="red darken-2"
-        :disabled="!selectedImageIds.length"
-        @click="deleteSelectedImages"
-        title="Delete selected images"
-        style="margin-right: 12px"
-      >
-        <v-icon>mdi-trash-can-outline</v-icon>
-      </v-btn>
       <v-icon small>mdi-image-size-select-small</v-icon>
       <v-slider
         v-model="thumbnailSize"
@@ -763,10 +771,29 @@ function addNewCharacter() {
           max-width: 220px;
           display: inline-block;
           vertical-align: middle;
-          margin: 0 8px;
+          margin: 0px 16px;
         "
       />
       <v-icon small>mdi-image-size-select-large</v-icon>
+      <v-btn
+        icon
+        :color="showStars ? 'amber darken-2' : 'grey'"
+        @click="showStars = !showStars"
+        title="Toggle star ratings"
+        style="margin-left: 6px; margin-right: 6px"
+      >
+      <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
+      </v-btn>
+      <v-btn
+        icon
+        color="red darken-2"
+        :disabled="!selectedImageIds.length"
+        @click="deleteSelectedImages"
+        title="Delete selected images"
+        style="margin-left: 6px; margin-right: 2px"
+      >
+        <v-icon>mdi-trash-can-outline</v-icon>
+      </v-btn>
       </div>
       <div class="file-manager">
         <aside v-if="sidebarVisible" class="sidebar">
@@ -823,10 +850,7 @@ function addNewCharacter() {
                       droppable: dragOverCharacter === char.id,
                     },
                   ]"
-                  @click="
-                    selectedCharacter = char.id;
-                    selectedReferenceMode = false;
-                  "
+                  @click="selectedCharacter = char.id; selectedReferenceMode = false;"
                 >
                   <span class="sidebar-list-icon">
                     <img
@@ -836,7 +860,22 @@ function addNewCharacter() {
                     />
                   </span>
                   <span class="sidebar-list-label">
-                    {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
+                    <template v-if="editingCharacterId === char.id">
+                      <input
+                        v-model="editingCharacterName"
+                        class="edit-character-input"
+                        @keydown.enter="saveEditingCharacter(char)"
+                        @keydown.esc="cancelEditingCharacter"
+                        @blur="saveEditingCharacter(char)"
+                        ref="editInput"
+                        style="width: 90%; font-size: 1em; background: #fff; color: #222; border-radius: 4px; border: 1px solid #bbb; padding: 2px 6px; outline: none;"
+                      />
+                    </template>
+                    <template v-else>
+                      <span @dblclick.stop="startEditingCharacter(char)">
+                        {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
+                      </span>
+                    </template>
                   </span>
                   <v-btn
                     icon
@@ -1465,5 +1504,16 @@ body {
 }
 .add-character-inline:hover {
   color: #ffe082;
+}
+.edit-character-input {
+  font-size: 1em;
+  background: #fff;
+  color: #222;
+  border-radius: 4px;
+  border: 1px solid #bbb;
+  padding: 2px 6px;
+  outline: none;
+  width: 90%;
+  margin-left: 0;
 }
 </style>

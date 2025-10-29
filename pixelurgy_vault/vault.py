@@ -140,7 +140,7 @@ class Vault:
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS characters (
-                id TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 original_seed INTEGER,
                 original_prompt TEXT,
@@ -155,7 +155,7 @@ class Vault:
             """
             CREATE TABLE IF NOT EXISTS pictures (
                 id TEXT PRIMARY KEY,
-                character_id TEXT,
+                character_id INTEGER,
                 description TEXT,
                 tags TEXT,
                 created_at TEXT,
@@ -173,7 +173,7 @@ class Vault:
             CREATE TABLE IF NOT EXISTS picture_iterations (
                 id TEXT PRIMARY KEY,
                 picture_id TEXT NOT NULL,
-                character_id TEXT,
+                character_id INTEGER,
                 file_path TEXT NOT NULL,
                 format TEXT,
                 width INTEGER,

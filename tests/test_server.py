@@ -111,17 +111,16 @@ def test_create_and_get_default_character():
             client = TestClient(server.app)
 
             # Create Esmeralda
-            char_id = "esmeralda"
             char_name = "Esmeralda"
             char_desc = "Default vault character"
             resp = client.post(
                 "/characters",
-                json={"id": char_id, "name": char_name, "description": char_desc},
+                json={"name": char_name, "description": char_desc},
             )
             assert resp.status_code == 200
             data = resp.json()
             assert data["status"] == "success"
-            assert data["character"]["id"] == char_id
+            char_id = data["character"]["id"]
             assert data["character"]["name"] == char_name
             assert data["character"]["description"] == char_desc
 
@@ -425,17 +424,15 @@ def test_reference_picture_workflow():
             client = TestClient(server.app)
 
             # Create a character
-            char_id = "testchar-123"
             resp = client.post(
                 "/characters",
                 json={
-                    "id": char_id,
                     "name": "Test Character",
                     "description": "For reference image test",
                 },
             )
             assert resp.status_code == 200
-            assert resp.json()["character"]["id"] == char_id
+            char_id = resp.json()["character"]["id"]
 
             # Create a dummy image
             img = Image.new("RGB", (32, 32), color=(123, 222, 111))

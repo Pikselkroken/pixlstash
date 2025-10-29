@@ -326,18 +326,17 @@ class Server:
 
         @self.app.post("/characters")
         def create_character(
-            id: str = Body(...),
             name: str = Body(...),
             description: str = Body(None),
         ):
             from pixelurgy_vault.characters import Character
 
-            char = Character(id=id, name=name, description=description)
+            char = Character(id=None, name=name, description=description)
             self.vault.characters.add(char)
             return {"status": "success", "character": char.__dict__}
 
         @self.app.get("/characters/{id}")
-        def get_character_by_id(id: str):
+        def get_character_by_id(id: int):
             try:
                 char = self.vault.characters[id]
             except KeyError:

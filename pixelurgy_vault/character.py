@@ -7,7 +7,7 @@ class Character:
     Represents a character LoRA description.
 
     Attributes:
-        id (str): Unique identifier for the character.
+        id (int): Unique integer identifier for the character (autoincremented by DB).
         name (str): Unique name or keyword for the character.
         original_seed (int): Seed used for original generation.
         original_prompt (str): Prompt used for original generation.
@@ -17,7 +17,7 @@ class Character:
 
     def __init__(
         self,
-        id: Optional[str] = None,
+        id: Optional[int] = None,
         name: Optional[str] = None,
         original_seed: Optional[int] = None,
         original_prompt: Optional[str] = None,
@@ -28,14 +28,14 @@ class Character:
         Initialize a Character instance.
 
         Args:
-            id (Optional[str]): Unique identifier for the character. If None, a new UUID is generated.
+            id (Optional[int]): Unique integer identifier for the character (autoincremented by DB).
             name (Optional[str]): Unique name or keyword for the character.
             original_seed (Optional[int]): Seed used for original generation.
             original_prompt (Optional[str]): Prompt used for original generation.
             lora_model (Optional[List[Tuple[str, float]]]): List of tuples (model_name, fractional_ranking).
             description (Optional[str]): Description of the character.
         """
-        self.id = id if id else uuid.uuid4().hex
+        self.id = id
         self.name = name
         self.original_seed = original_seed
         self.original_prompt = original_prompt
