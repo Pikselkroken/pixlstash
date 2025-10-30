@@ -8,6 +8,7 @@ import {
   nextTick,
 } from "vue";
 import { VTextField } from "vuetify/components";
+import SearchBar from "./components/SearchBar.vue";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
 
 // Drag-and-drop overlay state (for image grid only)
@@ -288,15 +289,17 @@ function closeOverlay() {
 }
 
 // Search bar state and logic
-const searchQuery = ref("");
-async function searchImages() {
-  const query = searchQuery.value.trim();
-  if (!query) return;
+const searchQuery = ref(""); // Used for actual search
+async function searchImages(query) {
+  // Only update searchQuery and trigger search if input is non-empty
+  const q = (typeof query === "string" ? query : searchQuery.value).trim();
+  if (!q) return;
+  searchQuery.value = q;
   imagesLoading.value = true;
   imagesError.value = null;
   try {
     const url = `${BACKEND_URL}/pictures/search?query=${encodeURIComponent(
-      query
+      q
     )}&threshold=0.3&top_n=1000`;
     const res = await fetch(url);
     if (!res.ok) throw new Error("Search failed");
@@ -591,6 +594,13 @@ watch([selectedCharacter, selectedReferenceMode], async ([id, refMode]) => {
 });
 
 function handleOverlayKeydown(e) {
+  // Don't trigger shortcuts if focus is in a text field
+  const tag =
+    e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
+  const isEditable =
+    e.target &&
+    (e.target.isContentEditable || tag === "input" || tag === "textarea");
+  if (isEditable) return;
   // Ctrl+A: select all images in grid
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
     if (images.value.length) {
@@ -1085,22 +1095,11 @@ const sortedImages = computed(() => {
         >
           <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
         </v-btn>
-        <v-text-field
+        <SearchBar
           v-model="searchQuery"
           placeholder="Search images..."
-          hide-details
-          dense
-          solo
-          clearable
-          prepend-inner-icon="mdi-magnify"
-          style="
-            min-width: 400px;
-            max-width: 800px;
-            margin-right: 16px;
-            background-color: a;
-          "
-          @keydown.enter="searchImages"
-          @click:append-outer="searchImages"
+          style="min-width: 400px; max-width: 800px; margin-right: 16px"
+          @search="searchImages"
         />
         <div class="toolbar-actions">
           <!-- Sorting dropdown -->

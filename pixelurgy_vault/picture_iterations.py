@@ -328,16 +328,38 @@ class PictureIterations:
     def find(self, **kwargs):
         # Use named columns for safety
         cursor = self._connection.cursor()
+        # Coerce is_master to int if present (avoid bool/numpy types)
+        if "is_master" in kwargs:
+            try:
+                kwargs["is_master"] = int(kwargs["is_master"])
+            except Exception as e:
+                logger.error(
+                    f"[PICTURE_ITERATIONS.FIND] Could not coerce is_master to int: {kwargs['is_master']} ({type(kwargs['is_master'])}): {e}"
+                )
+                raise
         if not kwargs:
             cursor.execute("SELECT * FROM picture_iterations")
         else:
             query = "SELECT * FROM picture_iterations WHERE " + " AND ".join(
                 [f"{k}=?" for k in kwargs.keys()]
             )
-            cursor.execute(query, tuple(kwargs.values()))
+            params = tuple(kwargs.values())
+            # Debug: log query and params
+            logger.debug(f"[PICTURE_ITERATIONS.FIND] SQL: {query} | PARAMS: {params}")
+            # Check for parameter mismatch
+            if query.count("?") != len(params):
+                logger.error(
+                    f"[PICTURE_ITERATIONS.FIND] Parameter count mismatch: {query.count('?')} placeholders, {len(params)} params"
+                )
+            try:
+                cursor.execute(query, params)
+            except Exception as e:
+                logger.error(
+                    f"[PICTURE_ITERATIONS.FIND] Exception: {e} | SQL: {query} | PARAMS: {params}"
+                )
+                raise
         rows = cursor.fetchall()
         result = []
-        import logging
 
         for row in rows:
             quality = None
@@ -347,11 +369,11 @@ class PictureIterations:
                     if isinstance(qdata, dict):
                         quality = PictureQuality(**qdata)
                     else:
-                        logging.warning(
+                        logger.warning(
                             f"Quality field for iteration {row['id']} is not a dict: {qdata}"
                         )
                 except Exception as e:
-                    logging.warning(
+                    logger.warning(
                         f"Failed to parse quality for iteration {row['id']}: {e}; value: {row['quality']}"
                     )
             it = PictureIteration(
