@@ -715,16 +715,22 @@ class Server:
                     query_params["tags"] = [query_params["tags"]]
             pics = self.vault.pictures.find(**query_params)
             if info:
-                # Return only Picture info (metadata), but include score from master iteration
+                # Batch fetch all master iteration scores for these pictures
+                pic_ids = [pic.id for pic in pics]
+                score_map = {}
+                if pic_ids:
+                    cursor = self.vault.connection.cursor()
+                    # Use tuple for IN clause, handle single element tuple
+                    qmarks = ",".join(["?"] * len(pic_ids))
+                    cursor.execute(
+                        f"SELECT picture_id, score FROM picture_iterations WHERE is_master=1 AND picture_id IN ({qmarks})",
+                        tuple(pic_ids),
+                    )
+                    for row in cursor.fetchall():
+                        score_map[row[0]] = row[1]
                 result = []
                 for pic in pics:
-                    # Find master iteration for this picture
-                    master_its = self.vault.iterations.find(
-                        picture_id=pic.id, is_master=1
-                    )
-                    score = None
-                    if master_its:
-                        score = master_its[0].score
+                    score = score_map.get(pic.id)
                     result.append(
                         {
                             "id": pic.id,
@@ -741,7 +747,6 @@ class Server:
                 # Return the master iteration for each picture (is_master=1)
                 results = []
                 for pic in pics:
-                    # Find master iteration for this picture
                     master_its = self.vault.iterations.find(
                         picture_id=pic.id, is_master=1
                     )
