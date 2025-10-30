@@ -15,6 +15,13 @@ logger = get_logger(__name__)
 
 
 class PictureIterations:
+    def __contains__(self, iteration_id):
+        cursor = self._connection.cursor()
+        cursor.execute(
+            "SELECT 1 FROM picture_iterations WHERE id = ? LIMIT 1", (iteration_id,)
+        )
+        return cursor.fetchone() is not None
+
     def __init__(self, connection, db_path):
         self._connection = connection
         self._db_path = db_path

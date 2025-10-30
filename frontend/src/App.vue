@@ -270,6 +270,8 @@ function handleGridDrop(e) {
   dragOverlayVisible.value = false;
   if (!e.dataTransfer || !e.dataTransfer.files) return;
   const files = Array.from(e.dataTransfer.files).filter(isSupportedImageFile);
+  console.debug('[IMPORT] Files dropped:', e.dataTransfer.files);
+  console.debug('[IMPORT] Supported files after filter:', files);
   if (!files.length) {
     alert("No supported image files found.");
     return;
@@ -284,37 +286,49 @@ function handleGridDrop(e) {
     importTotal.value = files.length;
     let hashProgress = 0;
     let fileHashes = [];
-    // Concurrency limit for hashing (e.g., 6 at a time)
     const CONCURRENCY = 6;
-    async function hashWorker(queue) {
-      while (queue.length) {
-        if (cancelImport.value) throw new Error('cancelled');
-        const { file, idx, resolve, reject } = queue.shift();
-        try {
+    // Helper to run promises with concurrency limit
+    async function mapWithConcurrencyLimit(items, fn, concurrency) {
+      const results = new Array(items.length);
+      let nextIndex = 0;
+      let active = 0;
+      return new Promise((resolve, reject) => {
+        function runNext() {
+          if (nextIndex >= items.length && active === 0) {
+            resolve(results);
+            return;
+          }
+          while (active < concurrency && nextIndex < items.length) {
+            const idx = nextIndex++;
+            active++;
+            fn(items[idx], idx)
+              .then((result) => {
+                results[idx] = result;
+                active--;
+                runNext();
+              })
+              .catch((err) => {
+                reject(err);
+              });
+          }
+        }
+        runNext();
+      });
+    }
+    try {
+      fileHashes = await mapWithConcurrencyLimit(
+        files,
+        async (file, idx) => {
+          if (cancelImport.value) throw new Error('cancelled');
           const hash = await hashFile(file);
           hashProgress++;
           importProgress.value = hashProgress;
           await nextTick();
-          resolve({ file, hash });
-        } catch (err) {
-          reject(err);
-        }
-      }
-    }
-    try {
-      // Prepare a queue of files to hash
-      const queue = files.map((file, idx) => {
-        let resolve, reject;
-        const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-        return { file, idx, resolve, reject, promise };
-      });
-      // Start CONCURRENCY workers
-      const workers = [];
-      for (let i = 0; i < CONCURRENCY; i++) {
-        workers.push(hashWorker(queue));
-      }
-      // Wait for all promises to resolve
-      fileHashes = await Promise.all(queue.map(q => q.promise));
+          return { file, hash };
+        },
+        CONCURRENCY
+      );
+      console.debug('[IMPORT] fileHashes after hashing:', fileHashes);
     } catch (err) {
       importInProgress.value = false;
       if (err.message === 'cancelled') {
@@ -331,13 +345,16 @@ function handleGridDrop(e) {
     importPhase.value = 'checking';
     let existing = [];
     try {
+      const hashesToSend = fileHashes.map(fh => fh.hash);
+      console.debug('[IMPORT] Sending hashes to /check_hashes:', hashesToSend);
       const res = await fetch(`${BACKEND_URL}/check_hashes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(fileHashes.map(fh => fh.hash)),
+        body: JSON.stringify(hashesToSend),
       });
       if (res.ok) {
         const data = await res.json();
+        console.debug('[IMPORT] /check_hashes response:', data);
         existing = data.existing || [];
       } else {
         throw new Error("Failed to check for duplicates");
