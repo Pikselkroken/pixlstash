@@ -218,11 +218,11 @@ class Server:
             query: str = Query(""), top_n: int = Query(5), threshold: float = Query(0.3)
         ):
             """
-            Semantic search for pictures using CLIP embedding. Returns list of Pictures ordered by similarity.
+            Combined hybrid search: fuzzy tag/description and embedding, weighted by query length.
             Query params: ?query=...&top_n=...&threshold=...
             """
+            from rapidfuzz import fuzz
 
-            # Hybrid search: for single-word queries, do tag/description search; for short queries, expand them
             def pic_to_dict(pic):
                 return {
                     "id": pic.id,
@@ -234,27 +234,75 @@ class Server:
                 }
 
             q = query.strip()
-            # If query is a single word (no spaces), do tag/description search
-            if len(q.split()) == 1:
-                results = self.vault.pictures.find_by_tag_or_description(q)
-                return [pic_to_dict(pic) for pic in results]
-            # If query is short (2-3 words), try to expand it
-            elif 1 < len(q.split()) <= 3:
-                expanded = f"A photo of {q}"
-                results = self.vault.pictures.find_by_text(
-                    expanded, top_n=top_n, include_scores=False, threshold=threshold
+            n_words = len(q.split())
+            if not q:
+                return []
+
+            # Fuzzy search (tag/description)
+            all_pics = self.vault.pictures.find()
+            fuzzy_scores = {}
+            for pic in all_pics:
+                best_tag_score = 0
+                for tag in pic.tags:
+                    score = fuzz.partial_ratio(q.lower(), str(tag).lower())
+                    if score > best_tag_score:
+                        best_tag_score = score
+                desc_score = fuzz.partial_ratio(
+                    q.lower(), (pic.description or "").lower()
                 )
-                if not results:
-                    # fallback to original
-                    results = self.vault.pictures.find_by_text(
-                        q, top_n=top_n, include_scores=False, threshold=threshold
+                max_score = max(best_tag_score, desc_score)
+                if max_score > 60:  # threshold for fuzzy match
+                    fuzzy_scores[pic.id] = max_score / 100.0  # normalize to 0-1
+
+            # Embedding search
+            # For 1-2 words, expand query for better semantic results
+            if n_words <= 3:
+                expanded = f"A photo of {q}" if n_words >= 1 else q
+                semantic_results = self.vault.pictures.find_by_text(
+                    expanded, top_n=top_n * 3, include_scores=True, threshold=threshold
+                )
+                if not semantic_results:
+                    semantic_results = self.vault.pictures.find_by_text(
+                        q, top_n=top_n * 3, include_scores=True, threshold=threshold
                     )
-                return [pic_to_dict(pic) for pic in results]
             else:
-                results = self.vault.pictures.find_by_text(
-                    q, top_n=top_n, include_scores=False, threshold=threshold
+                semantic_results = self.vault.pictures.find_by_text(
+                    q, top_n=top_n * 3, include_scores=True, threshold=threshold
                 )
-                return [pic_to_dict(pic) for pic in results]
+            semantic_scores = {pic.id: score for pic, score in semantic_results}
+
+            # Weighting: more words = more semantic weight
+            # 1 word: 90% fuzzy, 10% semantic
+            # 2 words: 70% fuzzy, 30% semantic
+            # 3 words: 50/50
+            # 4+ words: 30% fuzzy, 70% semantic (min 10% fuzzy, max 90% semantic)
+            if n_words <= 1:
+                fuzzy_w, sem_w = 0.9, 0.1
+            elif n_words == 2:
+                fuzzy_w, sem_w = 0.7, 0.3
+            elif n_words == 3:
+                fuzzy_w, sem_w = 0.5, 0.5
+            elif n_words == 4:
+                fuzzy_w, sem_w = 0.3, 0.7
+            else:
+                fuzzy_w, sem_w = 0.1, 0.9
+
+            # Merge scores
+            all_ids = set(fuzzy_scores.keys()) | set(semantic_scores.keys())
+            combined = []
+            for pic_id in all_ids:
+                fuzzy_score = fuzzy_scores.get(pic_id, 0)
+                sem_score = semantic_scores.get(pic_id, 0)
+                combined_score = fuzzy_w * fuzzy_score + sem_w * sem_score
+                pic = next((p for p in all_pics if p.id == pic_id), None)
+                if pic:
+                    combined.append((pic, combined_score, fuzzy_score, sem_score))
+
+            # Sort by combined score, then by created_at
+            combined.sort(key=lambda x: (-x[1], x[0].created_at or ""))
+            # Optionally, include fuzzy/semantic scores for debugging:
+            # return [{**pic_to_dict(pic), "score": score, "fuzzy": fuzzy, "semantic": sem} for pic, score, fuzzy, sem in combined[:top_n]]
+            return [pic_to_dict(pic) for pic, _, _, _ in combined[:top_n]]
 
         @self.app.get("/characters/reference_pictures/{id}")
         def get_reference_pictures(id: str):
