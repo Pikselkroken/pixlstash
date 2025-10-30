@@ -219,6 +219,7 @@ async function refreshImages(append = false) {
 watch([selectedSort, selectedCharacter, selectedReferenceMode], () => {
   pageOffset.value = 0;
   hasMoreImages.value = true;
+  lastSelectedIndex = null;
   refreshImages();
 });
 
@@ -1192,6 +1193,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
       images.value = images.value.filter(img => !imageIds.includes(img.id));
       // Also remove these IDs from selection
       selectedImageIds.value = selectedImageIds.value.filter(id => images.value.some(img => img.id === id));
+      lastSelectedIndex = null;
     } else {
       // For All Pictures or Unassigned, refresh the grid as before
       const id = selectedCharacter.value;
@@ -1216,6 +1218,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
         // Remove any selected IDs not in the new images
         const newIds = new Set(images.value.map(img => img.id));
         selectedImageIds.value = selectedImageIds.value.filter(id => newIds.has(id));
+        lastSelectedIndex = null;
         setTimeout(updateColumns, 0);
       }
     }
@@ -1277,6 +1280,7 @@ async function assignImagesAsReference(imageIds, characterId) {
         // Remove any selected IDs not in the new images
         const newIds = new Set(images.value.map(img => img.id));
         selectedImageIds.value = selectedImageIds.value.filter(id => newIds.has(id));
+        lastSelectedIndex = null;
         setTimeout(updateColumns, 0);
       }
     }
