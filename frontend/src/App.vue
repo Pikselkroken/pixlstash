@@ -71,29 +71,74 @@ function isSupportedImageFile(file) {
   return PIL_IMAGE_EXTENSIONS.includes(ext);
 }
 
-// Fetch images for the current character and mode
-async function refreshImages() {
-  images.value = [];
+// Sorting and pagination state
+const sortOptions = ref([]);
+const selectedSort = ref("");
+const pageSize = ref(100);
+const pageOffset = ref(0);
+const hasMoreImages = ref(true);
+
+// Fetch sort mechanisms from backend
+async function fetchSortOptions() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/pictures/sort_mechanisms`);
+    if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
+    const options = await res.json();
+    sortOptions.value = options.map((opt) => ({
+      label: opt.label,
+      value: opt.id,
+    }));
+    // Set default sort if not set
+    if (!selectedSort.value && options.length) {
+      selectedSort.value =
+        options.find((o) => o.id === "date_desc")?.id || options[0].id;
+    }
+  } catch (e) {
+    sortOptions.value = [
+      { label: "Date: Latest First", value: "date_desc" },
+      { label: "Date: Oldest First", value: "date_asc" },
+      { label: "Score: Highest First", value: "score_desc" },
+      { label: "Score: Lowest First", value: "score_asc" },
+    ];
+    if (!selectedSort.value) selectedSort.value = "date_desc";
+  }
+}
+
+const selectedCharacter = ref(ALL_PICTURES_ID);
+const selectedReferenceMode = ref(false);
+
+// Fetch images for the current character and mode, with pagination and sorting
+async function refreshImages(append = false) {
+  if (!append) {
+    images.value = [];
+    hasMoreImages.value = true;
+    selectedImageIds.value = [];
+  }
   imagesError.value = null;
-  selectedImageIds.value = [];
   const id = selectedCharacter.value;
   const refMode = selectedReferenceMode.value;
   if (!id) return;
   imagesLoading.value = true;
   try {
     let url;
+    const params = new URLSearchParams();
+    params.set("info", "true");
+    params.set("sort", selectedSort.value || "date_desc");
+    params.set("offset", String(pageOffset.value));
+    params.set("limit", String(pageSize.value));
     if (id === ALL_PICTURES_ID) {
-      url = `${BACKEND_URL}/pictures?info=true`;
+      url = `${BACKEND_URL}/pictures?${params.toString()}`;
     } else if (id === UNASSIGNED_PICTURES_ID) {
-      url = `${BACKEND_URL}/pictures?character_id=&info=true`;
+      url = `${BACKEND_URL}/pictures?character_id=&${params.toString()}`;
     } else if (refMode) {
+      // Reference mode: fallback to old endpoint for now (no paging)
       url = `${BACKEND_URL}/characters/reference_pictures/${encodeURIComponent(
         id
       )}`;
     } else {
       url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
         id
-      )}&info=true`;
+      )}&${params.toString()}`;
     }
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch images");
@@ -102,11 +147,17 @@ async function refreshImages() {
       baseImages = baseImages.reference_pictures;
       baseImages = baseImages.map((img) => ({ ...img, id: img.picture_id }));
     }
-    images.value = baseImages.map((img) => ({
+    const newImages = baseImages.map((img) => ({
       ...img,
       score: typeof img.score !== "undefined" ? img.score : null,
       is_reference: Number(img.is_reference) || 0,
     }));
+    if (append) {
+      images.value = [...images.value, ...newImages];
+    } else {
+      images.value = newImages;
+    }
+    hasMoreImages.value = newImages.length === pageSize.value;
     setTimeout(updateColumns, 0);
   } catch (e) {
     imagesError.value = e.message;
@@ -114,6 +165,13 @@ async function refreshImages() {
     imagesLoading.value = false;
   }
 }
+
+// Watch for sort or character changes
+watch([selectedSort, selectedCharacter, selectedReferenceMode], () => {
+  pageOffset.value = 0;
+  hasMoreImages.value = true;
+  refreshImages();
+});
 
 function handleGridDragEnter(e) {
   console.debug("handleGridDragEnter", e);
@@ -190,6 +248,20 @@ function handleGridDrop(e) {
       alert("One or more uploads failed: " + (e.message || e));
     });
 }
+
+// Infinite scroll: load more images as user scrolls near bottom
+function onGridScroll(e) {
+  const el = e.target;
+  if (!hasMoreImages.value || imagesLoading.value) return;
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+    // Near bottom
+    pageOffset.value += pageSize.value;
+    refreshImages(true);
+  }
+}
+
+// Use backend-driven images, no local sorting
+const pagedImages = computed(() => images.value);
 
 // Remove a tag from the overlay image and PATCH the backend
 async function removeTagFromOverlayImage(tag) {
@@ -271,8 +343,6 @@ const sidebarVisible = ref(true);
 const overlayOpen = ref(false);
 const overlayImage = ref(null);
 
-const selectedReferenceMode = ref(false);
-
 // Trophy button color: dark blue when not selected, orange when selected
 const trophyButtonColor = (charId) =>
   selectedCharacter.value === charId && selectedReferenceMode.value
@@ -318,8 +388,8 @@ async function searchImages(query) {
 }
 
 function handleImageSelect(img, idx, event) {
-  // Use sortedImages for all index-based selection
-  const sorted = sortedImages.value;
+  // Use pagedImages for all index-based selection
+  const sorted = pagedImages.value;
   const id = img.id;
   const isSelected = selectedImageIds.value.includes(id);
   const isCtrl = event.ctrlKey || event.metaKey;
@@ -327,7 +397,7 @@ function handleImageSelect(img, idx, event) {
 
   if (isShift) {
     if (lastSelectedIndex !== null) {
-      // Range select in sortedImages
+      // Range select in pagedImages
       const start = Math.min(lastSelectedIndex, idx);
       const end = Math.max(lastSelectedIndex, idx);
       const rangeIds = sorted.slice(start, end + 1).map((i) => i.id);
@@ -355,29 +425,11 @@ function handleImageSelect(img, idx, event) {
   }
 }
 
-// Fetch score for an image if missing (called on thumbnail load)
-
-// Fetch score for an image if missing (called on thumbnail load)
-async function fetchScoreIfMissing(img) {
-  if (typeof img.score === "undefined" || img.score === null) {
-    try {
-      const res = await fetch(`${BACKEND_URL}/pictures/${img.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        if ("score" in data) {
-          // Ensure reactivity
-          Object.assign(img, { score: data.score });
-        }
-      }
-    } catch (e) {}
-  }
-}
-
 const isImageSelected = (id) => selectedImageIds.value.includes(id);
 
-// Logic to determine if a selected image is on the outer edge of a selection group (use sortedImages)
+// Logic to determine if a selected image is on the outer edge of a selection group (use pagedImages)
 const getSelectionBorderClasses = (idx) => {
-  const sorted = sortedImages.value;
+  const sorted = pagedImages.value;
   if (!isImageSelected(sorted[idx]?.id)) return "";
   const cols = columns.value;
   const total = sorted.length;
@@ -436,7 +488,6 @@ const characterThumbnails = ref({}); // { [characterId]: thumbnailUrl }
 const loading = ref(false);
 const error = ref(null);
 
-const selectedCharacter = ref(ALL_PICTURES_ID);
 // Reference filter for toolbar (local only, no backend refresh)
 const referenceFilterMode = ref(false);
 const filteredImages = computed(() => {
@@ -548,6 +599,7 @@ onMounted(() => {
   // Always select All Pictures at startup
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedReferenceMode.value = false;
+  fetchSortOptions();
   fetchCharacters().then(() => {
     // After loading characters, ensure All Pictures is still selected
     selectedCharacter.value = ALL_PICTURES_ID;
@@ -721,7 +773,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleOverlayKeydown);
 });
 function showPrevImage() {
-  const sorted = sortedImages.value;
+  const sorted = pagedImages.value;
   if (!overlayImage.value || !sorted.length) return;
   const idx = sorted.findIndex((i) => i.id === overlayImage.value.id);
   if (idx === -1) return;
@@ -730,7 +782,7 @@ function showPrevImage() {
 }
 
 function showNextImage() {
-  const sorted = sortedImages.value;
+  const sorted = pagedImages.value;
   if (!overlayImage.value || !sorted.length) return;
   const idx = sorted.findIndex((i) => i.id === overlayImage.value.id);
   if (idx === -1) return;
@@ -790,7 +842,35 @@ async function setImageScore(img, n) {
       { method: "PATCH" }
     );
     if (!res.ok) throw new Error(`Failed to set score for image ${img.id}`);
-    img.score = newScore;
+    if (selectedSort.value === "score_desc" || selectedSort.value === "score_asc") {
+      // Remove image from current position
+      const idx = images.value.findIndex((i) => i.id === img.id);
+      if (idx === -1) return;
+      img.score = newScore;
+      images.value.splice(idx, 1);
+      // Find new index based on sort order
+      let insertIdx = 0;
+      if (selectedSort.value === "score_desc") {
+        insertIdx = images.value.findIndex((i) => (i.score || 0) < newScore);
+        if (insertIdx === -1) insertIdx = images.value.length;
+      } else {
+        insertIdx = images.value.findIndex((i) => (i.score || 0) > newScore);
+        if (insertIdx === -1) insertIdx = images.value.length;
+      }
+      images.value.splice(insertIdx, 0, img);
+      // Scroll to new position
+      nextTick(() => {
+        const grid = gridContainer.value;
+        if (!grid) return;
+        const card = grid.querySelectorAll('.image-card')[insertIdx];
+        if (card && card.scrollIntoView) {
+          card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    } else {
+      // Not sorting by score, just update the score in place
+      img.score = newScore;
+    }
   } catch (e) {
     alert(e.message);
   }
@@ -1057,29 +1137,6 @@ function confirmDeleteCharacter() {
       });
   }
 }
-
-// Sorting logic
-const sortOptions = [
-  { label: "Date: Latest First", value: "date_desc" },
-  { label: "Date: Oldest First", value: "date_asc" },
-  { label: "Score: Highest First", value: "score_desc" },
-  { label: "Score: Lowest First", value: "score_asc" },
-];
-const selectedSort = ref("date_desc");
-
-const sortedImages = computed(() => {
-  let arr = [...filteredImages.value];
-  if (selectedSort.value === "date_desc") {
-    arr.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  } else if (selectedSort.value === "date_asc") {
-    arr.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  } else if (selectedSort.value === "score_desc") {
-    arr.sort((a, b) => (b.score || 0) - (a.score || 0));
-  } else if (selectedSort.value === "score_asc") {
-    arr.sort((a, b) => (a.score || 0) - (b.score || 0));
-  }
-  return arr;
-});
 </script>
 
 <template>
@@ -1338,6 +1395,7 @@ const sortedImages = computed(() => {
                 @dragover.prevent="handleGridDragOver"
                 @dragleave.prevent="handleGridDragLeave"
                 @drop.prevent="handleGridDrop"
+                @scroll="onGridScroll"
               >
                 <div
                   v-if="images.length === 0 && !imagesLoading && !imagesError"
@@ -1355,7 +1413,7 @@ const sortedImages = computed(() => {
                   <span>{{ dragOverlayMessage }}</span>
                 </div>
                 <div
-                  v-for="(img, idx) in sortedImages"
+                  v-for="(img, idx) in pagedImages"
                   :key="img.id"
                   class="image-card"
                   :class="[
@@ -1743,6 +1801,7 @@ body {
   text-overflow: ellipsis;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   word-break: break-word;
   margin: 0 auto 2px auto;
