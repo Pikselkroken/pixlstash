@@ -280,11 +280,50 @@ class PictureIterations:
         )
         self._connection.commit()
 
+    def update_iteration(self, iteration):
+        """
+        Update a single PictureIteration instance in the database.
+        Serializes quality and face_quality fields to JSON if needed.
+        """
+        # Ensure quality and face_quality are JSON-serializable
+        if (
+            hasattr(iteration, "quality")
+            and iteration.quality
+            and not isinstance(iteration.quality, str)
+        ):
+            try:
+                iteration.quality = json.dumps(iteration.quality.__dict__)
+            except Exception:
+                iteration.quality = None
+        if (
+            hasattr(iteration, "face_quality")
+            and iteration.face_quality
+            and not isinstance(iteration.face_quality, str)
+        ):
+            try:
+                iteration.face_quality = json.dumps(iteration.face_quality.__dict__)
+            except Exception:
+                iteration.face_quality = None
+        self.update_iterations([iteration])
+
     def update_iterations(self, iterations):
         """Update a list of PictureIteration instances in the database using executemany for efficiency."""
         cursor = self._connection.cursor()
         values = []
         for it in iterations:
+            # Ensure quality and face_quality are JSON-serializable
+            quality = it.quality
+            if quality and not isinstance(quality, str):
+                try:
+                    quality = json.dumps(quality.__dict__)
+                except Exception:
+                    quality = None
+            face_quality = getattr(it, "face_quality", None)
+            if face_quality and not isinstance(face_quality, str):
+                try:
+                    face_quality = json.dumps(face_quality.__dict__)
+                except Exception:
+                    face_quality = None
             values.append(
                 (
                     getattr(it, "picture_id", None),
@@ -299,8 +338,8 @@ class PictureIterations:
                     getattr(it, "derived_from", None),
                     getattr(it, "transform_metadata", None),
                     getattr(it, "thumbnail", None),
-                    getattr(it, "quality", None),
-                    getattr(it, "face_quality", None),
+                    quality,
+                    face_quality,
                     getattr(it, "score", None),
                     getattr(it, "character_likeness", None),
                     getattr(it, "pixel_sha", None),

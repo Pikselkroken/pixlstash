@@ -79,8 +79,7 @@ class Vault:
         self.iterations = PictureIterations(self.connection, self.db_path)
         self.pictures = Pictures(self.connection, self.iterations, self.db_path)
         self.characters = Characters(self.connection)
-        if not db_exists:
-            self._import_default_data()
+
         self.iterations.start_quality_worker()
         self.pictures.start_embeddings_worker()
 

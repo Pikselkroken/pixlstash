@@ -35,17 +35,20 @@ class PictureIteration:
     def _generate_thumbnail_bytes(
         pil_img: Image.Image, size=(256, 256)
     ) -> Optional[bytes]:
+        """
+        Resize image so the longest edge is 256px, preserve aspect ratio, no padding.
+        """
         try:
             img = pil_img.copy()
-            img.thumbnail(size, resample=Image.LANCZOS)
-            # Create a new square background
-            thumb_bg = Image.new("RGBA", size, (255, 255, 255, 0))
-            # Center the resized image
-            offset_x = (size[0] - img.width) // 2
-            offset_y = (size[1] - img.height) // 2
-            thumb_bg.paste(img, (offset_x, offset_y))
+            # Calculate new size
+            max_edge = max(img.width, img.height)
+            if max_edge > size[0]:
+                scale = size[0] / max_edge
+                new_w = int(round(img.width * scale))
+                new_h = int(round(img.height * scale))
+                img = img.resize((new_w, new_h), resample=Image.LANCZOS)
             buf = BytesIO()
-            thumb_bg.save(buf, format="PNG")
+            img.save(buf, format="PNG")
             return buf.getvalue()
         except Exception as e:
             logger.error(f"Error generating thumbnail bytes: {e}")
