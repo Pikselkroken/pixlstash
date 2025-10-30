@@ -244,6 +244,7 @@ function handleGridDrop(e) {
   Promise.all(uploadPromises)
     .then(() => {
       refreshImages();
+      fetchSidebarCounts();
     })
     .catch((e) => {
       alert("One or more uploads failed: " + (e.message || e));
@@ -498,6 +499,44 @@ function onReferenceDrop(characterId, event) {
 const ALL_PICTURES_ID = "__all__";
 const UNASSIGNED_PICTURES_ID = "__unassigned__";
 const characters = ref([]);
+// Store image counts for each category (all, unassigned, characterId)
+const categoryCounts = ref({
+  [ALL_PICTURES_ID]: 0,
+  [UNASSIGNED_PICTURES_ID]: 0,
+  // characterId: count
+});
+
+// Fetch and update image counts for all sidebar categories
+async function fetchSidebarCounts() {
+  // All Pictures
+  try {
+    const resAll = await fetch(`${BACKEND_URL}/category/summary`);
+    if (resAll.ok) {
+      const data = await resAll.json();
+      categoryCounts.value[ALL_PICTURES_ID] = data.image_count;
+    }
+  } catch {}
+  // Unassigned Pictures
+  try {
+    const resUnassigned = await fetch(`${BACKEND_URL}/category/summary?character_id=null`);
+    if (resUnassigned.ok) {
+      const data = await resUnassigned.json();
+      categoryCounts.value[UNASSIGNED_PICTURES_ID] = data.image_count;
+    }
+  } catch {}
+  // Each character
+  await Promise.all(
+    characters.value.map(async (char) => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/category/summary?character_id=${encodeURIComponent(char.id)}`);
+        if (res.ok) {
+          const data = await res.json();
+          categoryCounts.value[char.id] = data.image_count;
+        }
+      } catch {}
+    })
+  );
+}
 // Computed: characters sorted alphabetically by name (case-insensitive)
 const sortedCharacters = computed(() => {
   return [...characters.value].sort((a, b) => {
@@ -560,6 +599,8 @@ async function fetchCharacters() {
     for (const char of chars) {
       fetchCharacterThumbnail(char.id);
     }
+    // After loading characters, fetch sidebar counts
+    await fetchSidebarCounts();
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -835,6 +876,7 @@ async function deleteSelectedImages() {
     (img) => !selectedImageIds.value.includes(img.id)
   );
   selectedImageIds.value = [];
+  fetchSidebarCounts();
 }
 
 // Patch score for selected images
@@ -941,6 +983,9 @@ async function onCharacterDrop(characterId, event) {
     alert("No images found in drag data.");
     return;
   }
+  // Log drop target and character id
+  const charObj = characters.value.find(c => c.id === characterId);
+  console.log("[DROP] Drop target characterId:", characterId, "name:", charObj ? charObj.name : "(not found)");
   // Always use the characterId from the drop target
   assignImagesToCharacter(imageIds, characterId);
 }
@@ -960,7 +1005,8 @@ async function assignImagesToCharacter(imageIds, characterId) {
           throw new Error(`Failed to assign character for image ${id}`);
       })
     );
-    await fetchCharacters();
+  await fetchCharacters();
+  fetchSidebarCounts();
     // Remove reassigned images from the current grid if not viewing All Pictures or Unassigned
     if (
       selectedCharacter.value !== ALL_PICTURES_ID &&
@@ -1020,7 +1066,8 @@ async function assignImagesAsReference(imageIds, characterId) {
           throw new Error(`Failed to set reference for image ${id}`);
       })
     );
-    await fetchCharacters();
+  await fetchCharacters();
+  fetchSidebarCounts();
     // Refresh images if needed
     if (
       selectedCharacter.value === characterId ||
@@ -1291,6 +1338,7 @@ function confirmDeleteCharacter() {
                   <v-icon size="44">mdi-image-multiple</v-icon>
                 </span>
                 <span class="sidebar-list-label">All Pictures</span>
+                <span class="sidebar-list-count">{{ categoryCounts[ALL_PICTURES_ID] ?? '' }}</span>
               </div>
               <div
                 :class="[
@@ -1303,6 +1351,7 @@ function confirmDeleteCharacter() {
                   <v-icon size="44">mdi-help-circle-outline</v-icon>
                 </span>
                 <span class="sidebar-list-label">Unassigned Pictures</span>
+                <span class="sidebar-list-count">{{ categoryCounts[UNASSIGNED_PICTURES_ID] ?? '' }}</span>
               </div>
             </div>
           </transition>
@@ -1406,6 +1455,7 @@ function confirmDeleteCharacter() {
                       </span>
                     </template>
                   </span>
+                  <span class="sidebar-list-count">{{ categoryCounts[char.id] ?? '' }}</span>
                 </div>
               </div>
               <div v-if="loading" class="sidebar-loading">Loading...</div>
@@ -2231,5 +2281,18 @@ button[disabled] {
   margin-top: 2px;
   text-align: center;
   word-break: break-all;
+}
+.sidebar-list-count {
+  font-size: 0.92em;
+  color: #b0b8c9;
+  min-width: 2.5em;
+  text-align: right;
+  margin-left: 8px;
+  margin-right: 8px;
+  font-weight: 400;
+  opacity: 0.85;
+  letter-spacing: 0.01em;
+  align-self: center;
+  display: inline-block;
 }
 </style>

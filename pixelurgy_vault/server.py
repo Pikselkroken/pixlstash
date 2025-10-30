@@ -604,6 +604,16 @@ class Server:
                     updated = True
                 # If updating character_id, also update all iterations
                 if key == "character_id":
+                    # Log character id and name
+                    char_name = None
+                    try:
+                        char_obj = self.vault.characters[cast_val]
+                        char_name = getattr(char_obj, "name", None)
+                    except Exception:
+                        char_name = None
+                    logger.info(
+                        f"[PATCH] Assigning picture {id} to character_id={cast_val}, name={char_name}"
+                    )
                     cursor = self.vault.connection.cursor()
                     cursor.execute(
                         "UPDATE picture_iterations SET character_id = ? WHERE picture_id = ?",
@@ -882,6 +892,53 @@ class Server:
                 "deleted_iterations": [it.id for it in iterations],
                 "errors": errors,
             }
+
+        @self.app.get("/category/summary")
+        def get_category_summary(character_id: str = Query(None)):
+            """
+            Return summary statistics for a single category:
+            - If character_id is omitted: all pictures
+            - If character_id is null/None/empty: unassigned pictures
+            - If character_id is set: that character's pictures
+            """
+
+            cursor = self.vault.connection.cursor()
+            # Determine which set to query
+            if character_id is None:
+                # All pictures
+                cursor.execute("SELECT * FROM pictures")
+                char_id = None
+            elif (
+                character_id == ""
+                or character_id.lower() == "none"
+                or character_id == "null"
+            ):
+                # Unassigned
+                cursor.execute("SELECT * FROM pictures WHERE character_id IS NULL")
+                char_id = None
+            else:
+                cursor.execute(
+                    "SELECT * FROM pictures WHERE character_id = ?", (character_id,)
+                )
+                char_id = character_id
+            pics = cursor.fetchall()
+            image_count = len(pics)
+            reference_image_count = sum(1 for p in pics if p["is_reference"] == 1)
+            last_updated = max(
+                (p["created_at"] for p in pics if p["created_at"]), default=None
+            )
+            # Thumbnail URL (reuse existing endpoint)
+            thumb_url = None
+            if char_id not in (None, "", "null"):
+                thumb_url = f"/face_thumbnail/{char_id}"
+            summary = {
+                "character_id": char_id,
+                "image_count": image_count,
+                "reference_image_count": reference_image_count,
+                "last_updated": last_updated,
+                "thumbnail_url": thumb_url,
+            }
+            return summary
 
     def get_version(self):
         try:
