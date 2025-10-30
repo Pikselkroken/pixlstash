@@ -61,6 +61,12 @@ class Server:
         self.config = self.init_config(
             config_path, vault_db_path, image_root, description, log_file
         )
+        # SSL config
+        self.require_ssl = self.config.get("require_ssl", False)
+        self.ssl_keyfile = self.config.get("ssl_keyfile", "ssl/key.pem")
+        self.ssl_certfile = self.config.get("ssl_certfile", "ssl/cert.pem")
+        if self.require_ssl:
+            self._ensure_ssl_certificates()
         # Override config values with explicit arguments
         if vault_db_path is not None:
             self.config["db_path"] = vault_db_path
@@ -121,6 +127,9 @@ class Server:
                 "description": description,
                 "log_file": log_file,
                 "port": 9537,
+                "require_ssl": False,
+                "ssl_keyfile": "ssl/key.pem",
+                "ssl_certfile": "ssl/cert.pem",
             }
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=2)
@@ -129,6 +138,40 @@ class Server:
                 config = json.load(f)
             # Do not override log_file here; let __init__ handle it
         return config
+
+    def _ensure_ssl_certificates(self):
+        import subprocess
+
+        keyfile = self.ssl_keyfile
+        certfile = self.ssl_certfile
+        # If either file is missing, generate self-signed cert
+        if not (os.path.exists(keyfile) and os.path.exists(certfile)):
+            os.makedirs(os.path.dirname(keyfile), exist_ok=True)
+            os.makedirs(os.path.dirname(certfile), exist_ok=True)
+            print(f"[SSL] Generating self-signed certificate: {certfile}, {keyfile}")
+            try:
+                subprocess.run(
+                    [
+                        "openssl",
+                        "req",
+                        "-x509",
+                        "-nodes",
+                        "-days",
+                        "365",
+                        "-newkey",
+                        "rsa:2048",
+                        "-keyout",
+                        keyfile,
+                        "-out",
+                        certfile,
+                        "-subj",
+                        "/CN=localhost",
+                    ],
+                    check=True,
+                )
+            except Exception as e:
+                print(f"[SSL] Failed to generate self-signed certificate: {e}")
+                raise
 
     def setup_routes(self):
         from pixelurgy_vault.pictures import get_sort_mechanisms
@@ -1026,7 +1069,17 @@ def main():
 
     server = Server(config_path=config_path, log_file=args.log_file)
 
-    uvicorn.run(server.app, host="0.0.0.0", port=args.port)
+    uvicorn_kwargs = dict(
+        host="0.0.0.0",
+        port=args.port,
+    )
+    if server.require_ssl:
+        uvicorn_kwargs["ssl_keyfile"] = server.ssl_keyfile
+        uvicorn_kwargs["ssl_certfile"] = server.ssl_certfile
+        print(
+            f"[SSL] Running with SSL: keyfile={server.ssl_keyfile}, certfile={server.ssl_certfile}"
+        )
+    uvicorn.run(server.app, **uvicorn_kwargs)
 
 
 if __name__ == "__main__":
