@@ -14,6 +14,8 @@ import unknownPerson from "./assets/unknown-person.png"; // Import for unknown c
 // Drag-and-drop overlay state (for image grid only)
 const dragOverlayVisible = ref(false);
 const dragOverlayMessage = ref("");
+// Track drag source for grid
+const dragSource = ref(null);
 
 // Import progress modal state
 const importInProgress = ref(false);
@@ -327,6 +329,11 @@ function handleCancelImport() {
 
 function handleGridDrop(e) {
   dragOverlayVisible.value = false;
+  // Prevent importing if this is an internal drag (from our own grid)
+  if (dragSource.value === "grid") {
+    dragSource.value = null;
+    return;
+  }
   if (!e.dataTransfer || !e.dataTransfer.files) return;
   const files = Array.from(e.dataTransfer.files).filter(isSupportedImageFile);
   console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
@@ -340,6 +347,7 @@ function handleGridDrop(e) {
   importProgress.value = 0;
   importError.value = null;
   importPhase.value = "hashing";
+  dragSource.value = null;
   (async () => {
     // Step 1: Compute hashes for all files in parallel (with concurrency limit)
     importTotal.value = files.length;
@@ -1179,6 +1187,7 @@ function onImageDragStart(img, idx, event) {
     JSON.stringify({ imageIds: ids })
   );
   event.dataTransfer.effectAllowed = "move";
+  dragSource.value = "grid";
 }
 function onCharacterDragOver(charId) {
   dragOverCharacter.value = charId;
@@ -1663,6 +1672,7 @@ function confirmDeleteCharacter() {
             <v-icon small style="margin-right: 8px">{{
               sidebarSections.people ? "mdi-chevron-down" : "mdi-chevron-right"
             }}</v-icon>
+            People
             <span style="flex: 1 1 auto"></span>
             <span
               style="
@@ -2599,9 +2609,9 @@ body {
   flex-direction: row;
   background: rgba(255, 255, 255, 0.7);
   border-radius: 4px;
-  padding: 2px 2px 2px 2px;
   box-shadow: none;
   font-size: 0.85em;
+  margin: 4px 4px 4px 4px;
 }
 .star-overlay:hover {
   background: rgba(255, 255, 255, 1);
