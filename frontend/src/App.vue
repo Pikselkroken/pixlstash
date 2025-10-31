@@ -899,37 +899,8 @@ onMounted(() => {
     // After loading characters, ensure All Pictures is still selected
     selectedCharacter.value = ALL_PICTURES_ID;
     selectedReferenceMode.value = false;
-    // Explicitly trigger image loading if already on All Pictures
-    if (
-      selectedCharacter.value === ALL_PICTURES_ID &&
-      !selectedReferenceMode.value
-    ) {
-      // This mimics the watcher logic
-      images.value = [];
-      imagesError.value = null;
-      selectedImageIds.value = [];
-      imagesLoading.value = true;
-      let url = `${BACKEND_URL}/pictures?info=true`;
-      fetch(url)
-        .then((res) => {
-          if (!res.ok) throw new Error("Failed to fetch images");
-          return res.json();
-        })
-        .then((baseImages) => {
-          images.value = baseImages.map((img) => ({
-            ...img,
-            score: typeof img.score !== "undefined" ? img.score : null,
-            is_reference: Number(img.is_reference) || 0,
-          }));
-          setTimeout(updateColumns, 0);
-        })
-        .catch((e) => {
-          imagesError.value = e.message;
-        })
-        .finally(() => {
-          imagesLoading.value = false;
-        });
-    }
+    // Always use refreshImages to honor sort order
+    refreshImages();
   });
   window.addEventListener("resize", updateColumns);
   watch(thumbnailSize, updateColumns);
@@ -941,23 +912,26 @@ watch([selectedCharacter, selectedReferenceMode], async ([id, refMode]) => {
 });
 
 function handleOverlayKeydown(e) {
-  // Don't trigger shortcuts if focus is in a text field
+  // Allow navigation keys in text fields, but block R and 1-5 shortcuts
   const tag =
     e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
   const isEditable =
     e.target &&
     (e.target.isContentEditable || tag === "input" || tag === "textarea");
-  if (isEditable) return;
-  // Ctrl+A: select all images in grid
+
+  // Ctrl+A: select all images in grid (block in text fields)
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+    if (isEditable) return;
     if (images.value.length) {
       selectedImageIds.value = images.value.map((img) => img.id);
       e.preventDefault();
     }
     return;
   }
-  // R: toggle reference for overlay image or selection
+
+  // R: toggle reference for overlay image or selection (block in text fields)
   if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (isEditable) return;
     if (overlayOpen.value && overlayImage.value) {
       toggleReference(overlayImage.value);
     } else if (selectedImageIds.value.length) {
@@ -970,6 +944,19 @@ function handleOverlayKeydown(e) {
     } else if (images.value.length) {
       // If nothing selected, toggle the first image
       toggleReference(images.value[0]);
+    }
+    e.preventDefault();
+    return;
+  }
+
+  // 1-5: set score (block in text fields)
+  if (/^[1-5]$/.test(e.key)) {
+    if (isEditable) return;
+    showStars.value = true;
+    if (overlayOpen.value && overlayImage.value) {
+      setImageScore(overlayImage.value, Number(e.key));
+    } else if (selectedImageIds.value.length) {
+      patchScoreForSelection(Number(e.key));
     }
     e.preventDefault();
     return;
@@ -1008,6 +995,56 @@ function handleOverlayKeydown(e) {
   } else if (e.key === "ArrowDown") {
     if (idx + cols < images.value.length) nextIdx = idx + cols;
     else return;
+  } else if (e.key === "Home") {
+    nextIdx = Math.floor(idx / cols) * cols;
+  } else if (e.key === "End") {
+    // Use the total count for the current view (categoryCounts)
+    let currentCategoryId = selectedCharacter.value;
+    let totalCount;
+    if (selectedReferenceMode.value) {
+      totalCount = images.value.length;
+    } else {
+      totalCount = categoryCounts.value[currentCategoryId] ?? images.value.length;
+    }
+    // Calculate how many images fit in the viewport
+    const cols = columns.value;
+    let rows = 1;
+    if (gridContainer.value) {
+      rows = Math.floor(gridContainer.value.clientHeight / (thumbnailSize.value + 32));
+      rows = Math.max(1, rows);
+    }
+    const imagesInViewport = cols * rows;
+    // The index of the first image in the last full viewport
+    let firstIdx = Math.max(0, totalCount - imagesInViewport);
+    // If not all images are loaded, keep paging until we have enough
+    const scrollToEnd = () => {
+      if (gridContainer.value) {
+        nextTick(() => {
+          gridContainer.value.scrollTop = gridContainer.value.scrollHeight;
+        });
+      }
+    };
+    if (images.value.length < totalCount && hasMoreImages.value) {
+      const loadAll = async () => {
+        while (
+          images.value.length < totalCount &&
+          hasMoreImages.value &&
+          !imagesLoading.value
+        ) {
+          pageOffset.value += pageSize.value;
+          await refreshImages(true);
+        }
+        scrollToEnd();
+      };
+      loadAll();
+      return;
+    } else {
+      scrollToEnd();
+    }
+  } else if (e.key === "PageUp") {
+    nextIdx = Math.max(0, idx - cols * 4);
+  } else if (e.key === "PageDown") {
+    nextIdx = Math.min(images.value.length - 1, idx + cols * 4);
   } else if (e.key === "Delete") {
     if (selectedImageIds.value.length) {
       deleteSelectedImages();
@@ -1025,35 +1062,7 @@ function handleOverlayKeydown(e) {
     }
     e.preventDefault();
     return;
-  } else {
-    return;
   }
-  const isCtrl = e.ctrlKey || e.metaKey;
-  const isShift = e.shiftKey;
-  if (isShift && lastSelectedIndex !== null) {
-    // Range select
-    const start = Math.min(lastSelectedIndex, nextIdx);
-    const end = Math.max(lastSelectedIndex, nextIdx);
-    const rangeIds = images.value.slice(start, end + 1).map((i) => i.id);
-    const newSelection = isCtrl
-      ? Array.from(new Set([...selectedImageIds.value, ...rangeIds]))
-      : rangeIds;
-    selectedImageIds.value = newSelection;
-  } else if (isCtrl) {
-    // Toggle selection of nextIdx
-    const id = images.value[nextIdx].id;
-    if (selectedImageIds.value.includes(id)) {
-      selectedImageIds.value = selectedImageIds.value.filter((i) => i !== id);
-    } else {
-      selectedImageIds.value = [...selectedImageIds.value, id];
-    }
-    lastSelectedIndex = nextIdx;
-  } else {
-    // Single select
-    selectedImageIds.value = [images.value[nextIdx].id];
-    lastSelectedIndex = nextIdx;
-  }
-  e.preventDefault();
 }
 
 onMounted(() => {
@@ -1773,7 +1782,6 @@ function confirmDeleteCharacter() {
                   }}</span>
                 </div>
               </div>
-              <div v-if="loading" class="sidebar-loading">Loading...</div>
             </div>
           </transition>
         </aside>
@@ -1799,80 +1807,89 @@ function confirmDeleteCharacter() {
                 >
                   No images found for this character.
                 </div>
-                <div v-if="imagesLoading" class="empty-state">
-                  Loading images...
-                </div>
                 <div v-if="imagesError" class="empty-state">
                   {{ imagesError }}
                 </div>
                 <div v-if="dragOverlayVisible" class="drag-overlay-grid">
                   <span>{{ dragOverlayMessage }}</span>
                 </div>
-                <div
-                  v-for="(img, idx) in pagedImages"
-                  :key="img.id"
-                  class="image-card"
-                  :class="[
-                    isImageSelected(img.id) ? 'selected' : '',
-                    getSelectionBorderClasses(idx),
-                  ]"
-                  @click="handleImageSelect(img, idx, $event)"
-                  :draggable="isImageSelected(img.id)"
-                  @dragstart="onImageDragStart(img, idx, $event)"
-                >
-                  <v-card>
-                    <div class="star-overlay" v-if="showStars">
-                      <v-icon
-                        v-for="n in 5"
-                        :key="n"
-                        small
-                        :color="
-                          n <= (img.score || 0) ? 'amber' : 'grey lighten-1'
-                        "
-                        style="cursor: pointer"
-                        @click.stop="setImageScore(img, n)"
-                        >mdi-star</v-icon
-                      >
-                    </div>
-                    <v-img
-                      :src="`${BACKEND_URL}/thumbnails/${img.id}`"
-                      :height="thumbnailSize"
-                      :width="thumbnailSize"
-                      @click.stop="
-                        (e) => {
-                          if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                            handleImageSelect(img, idx, e);
-                          } else {
-                            openOverlay(img);
+                <template v-for="(img, idx) in pagedImages">
+                  <div
+                    v-if="
+                      selectedSort ===
+                      (selectedSort && selectedSort.value
+                        ? selectedSort.value
+                        : selectedSort)
+                    "
+                    :key="img.id"
+                    class="image-card"
+                    :class="[
+                      isImageSelected(img.id) ? 'selected' : '',
+                      getSelectionBorderClasses(idx),
+                    ]"
+                    @click="handleImageSelect(img, idx, $event)"
+                    :draggable="isImageSelected(img.id)"
+                    @dragstart="onImageDragStart(img, idx, $event)"
+                  >
+                    <v-card>
+                      <div class="star-overlay" v-if="showStars">
+                        <v-icon
+                          v-for="n in 5"
+                          :key="n"
+                          small
+                          :color="
+                            n <= (img.score || 0) ? 'amber' : 'grey lighten-1'
+                          "
+                          style="cursor: pointer"
+                          @click.stop="setImageScore(img, n)"
+                          >mdi-star</v-icon
+                        >
+                      </div>
+                      <v-img
+                        :src="`${BACKEND_URL}/thumbnails/${img.id}`"
+                        :height="thumbnailSize"
+                        :width="thumbnailSize"
+                        @click.stop="
+                          (e) => {
+                            if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                              handleImageSelect(img, idx, e);
+                            } else {
+                              openOverlay(img);
+                            }
                           }
-                        }
-                      "
-                      @load="fetchScoreIfMissing(img)"
-                      style="cursor: pointer"
-                    />
-                    <!-- Trophy icon for reference toggle -->
-                    <v-btn
-                      icon
-                      size="small"
-                      class="reference-trophy-btn"
-                      :color="img.is_reference ? 'orange darken-2' : 'grey'"
-                      @click.stop="toggleReference(img)"
-                      title="Toggle reference picture"
+                        "
+                        @load="fetchScoreIfMissing(img)"
+                        style="cursor: pointer"
+                      />
+                      <!-- Trophy icon for reference toggle -->
+                      <v-btn
+                        icon
+                        size="small"
+                        class="reference-trophy-btn"
+                        :color="img.is_reference ? 'orange darken-2' : 'grey'"
+                        @click.stop="toggleReference(img)"
+                        title="Toggle reference picture"
+                      >
+                        <v-icon color="white">mdi-trophy</v-icon>
+                      </v-btn>
+                      <!-- Show date under thumbnail if sorting by date -->
+                      <div
+                        v-if="
+                          selectedSort === 'date_desc' ||
+                          selectedSort === 'date_asc'
+                        "
+                        class="thumbnail-date"
+                      >
+                        {{ new Date(img.created_at).toLocaleString() }}
+                      </div>
+                    </v-card>
+                  </div>
+                  <div v-else :key="'skip-' + img.id" style="display: none">
+                    <span style="display: none"
+                      >Sort mismatch, skipping render for {{ img.id }}</span
                     >
-                      <v-icon color="white">mdi-trophy</v-icon>
-                    </v-btn>
-                    <!-- Show date under thumbnail if sorting by date -->
-                    <div
-                      v-if="
-                        selectedSort === 'date_desc' ||
-                        selectedSort === 'date_asc'
-                      "
-                      class="thumbnail-date"
-                    >
-                      {{ new Date(img.created_at).toLocaleString() }}
-                    </div>
-                  </v-card>
-                </div>
+                  </div>
+                </template>
                 <!-- Full image overlay -->
                 <div
                   v-if="overlayOpen"
