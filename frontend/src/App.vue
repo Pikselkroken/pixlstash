@@ -1803,7 +1803,7 @@ function confirmDeleteCharacter() {
                       <div class="overlay-img-container">
                         <div
                           class="overlay-star-row"
-                          v-if="overlayImage"
+                            v-if="overlayImage"
                           style="
                             display: flex;
                             justify-content: center;
@@ -1811,20 +1811,20 @@ function confirmDeleteCharacter() {
                             margin-bottom: 12px;
                           "
                         >
-                          <v-icon
-                            v-for="n in 5"
-                            :key="n"
+                            <v-icon
+                              v-for="n in 5"
+                              :key="n"
                             large
-                            :color="
-                              n <= (overlayImage.score || 0)
-                                ? 'amber'
-                                : 'grey lighten-1'
-                            "
-                            style="cursor: pointer"
-                            @click.stop="setImageScore(overlayImage, n)"
+                              :color="
+                                n <= (overlayImage.score || 0)
+                                  ? 'amber'
+                                  : 'grey lighten-1'
+                              "
+                              style="cursor: pointer"
+                              @click.stop="setImageScore(overlayImage, n)"
                             >mdi-star</v-icon
                           >
-                        </div>
+                          </div>
                         <div style="position: relative; display: inline-block">
                           <img
                             v-if="overlayImage"
@@ -2361,6 +2361,7 @@ body {
 .overlay-img {
   max-width: 100%;
   max-height: 70vh;
+  min-height: 256px;
   object-fit: contain;
   border-radius: 4px;
   background: #111;
