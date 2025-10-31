@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .logging import get_logger, setup_logging
 import uvicorn
@@ -94,7 +94,8 @@ class Server:
             allow_methods=["*"],
             allow_headers=["*"],
         )
-        self.setup_routes()
+        self._add_cors_exception_handler()
+        self._setup_routes()
 
     @asynccontextmanager
     async def lifespan(self, app):
@@ -173,7 +174,16 @@ class Server:
                 print(f"[SSL] Failed to generate self-signed certificate: {e}")
                 raise
 
-    def setup_routes(self):
+    def _add_cors_exception_handler(self):
+        @self.app.exception_handler(HTTPException)
+        async def cors_exception_handler(request, exc):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+    def _setup_routes(self):
         from pixelurgy_vault.pictures import get_sort_mechanisms
 
         @self.app.get("/pictures/sort_mechanisms")
@@ -573,12 +583,12 @@ class Server:
         ):
             if not isinstance(id, str):
                 logger.error(f"Invalid id type: {type(id)} value: {id}")
-                raise HTTPException(status_code=404, detail="Invalid picture id")
+                return self._cors_error_response("Invalid picture id", 404)
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
                 logger.error(f"Picture not found for id={id}")
-                raise HTTPException(status_code=404, detail="Picture not found")
+                return self._cors_error_response("Picture not found", 404)
             if info:
                 # Return metadata only
                 result = {
@@ -598,18 +608,19 @@ class Server:
             )
             if not master_its:
                 logger.error(f"Master iteration not found for picture id={pic.id}")
-                raise HTTPException(
-                    status_code=404, detail="Master iteration not found"
-                )
+                return self._cors_error_response("Master iteration not found", 404)
             it = master_its[0]
             if not it.file_path or not os.path.isfile(it.file_path):
                 logger.error(
                     f"File path missing or does not exist for iteration id={it.id}, file_path={it.file_path}"
                 )
-                raise HTTPException(
-                    status_code=404, detail=f"File not found for iteration id={it.id}"
+                return self._cors_error_response(
+                    f"File not found for iteration id={it.id}", 404
                 )
-            return FileResponse(it.file_path)
+            # Return the image file with CORS headers
+            response = FileResponse(it.file_path)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
 
         @self.app.get("/thumbnails/{id}")
         async def get_thumbnail(id: str):
