@@ -1771,7 +1771,6 @@ function confirmDeleteCharacter() {
                   }}</span>
                 </div>
               </div>
-              <div v-if="loading" class="sidebar-loading">Loading...</div>
             </div>
           </transition>
         </aside>
@@ -1797,9 +1796,6 @@ function confirmDeleteCharacter() {
                   class="empty-state"
                 >
                   No images found for this character.
-                </div>
-                <div v-if="imagesLoading" class="empty-state">
-                  Loading images...
                 </div>
                 <div v-if="imagesError" class="empty-state">
                   {{ imagesError }}
