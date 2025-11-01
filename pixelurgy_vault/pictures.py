@@ -95,8 +95,13 @@ class Pictures:
                     logger.debug(
                         f"Found {len(faces)} face(s) in {master_iter.file_path} for picture {pic_id}."
                     )
-                # Use the largest face (by area)
-                face = max(faces, key=lambda f: f.bbox[2] * f.bbox[3])
+
+                # Always use the largest face (by area)
+                def face_area(f):
+                    x1, y1, x2, y2 = f.bbox
+                    return max(0, x2 - x1) * max(0, y2 - y1)
+
+                face = max(faces, key=face_area)
                 embedding = face.embedding
                 embedding_json = json.dumps(embedding.tolist())
                 bbox_json = json.dumps([float(v) for v in face.bbox])
@@ -107,6 +112,25 @@ class Pictures:
                         (embedding_json, bbox_json, pic_id),
                     )
                 logger.debug(f"Stored face embedding and bbox for picture {pic_id}.")
+                # Regenerate thumbnails for all iterations using face_bbox
+                try:
+                    from pixelurgy_vault.picture_iteration import PictureIteration
+
+                    bbox = [float(v) for v in face.bbox]
+                    iterations = list(self._picture_iterations.find(picture_id=pic_id))
+                    for it in iterations:
+                        cropped = PictureIteration.load_and_crop_face_bbox(
+                            it.file_path, bbox
+                        )
+                        if cropped is not None:
+                            thumb = PictureIteration._generate_thumbnail_bytes(cropped)
+                            self._picture_iterations.update_iteration(
+                                it.__class__(**{**it.__dict__, "thumbnail": thumb})
+                            )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to regenerate face-aware thumbnails for picture {pic_id}: {e}"
+                    )
             except Exception as e:
                 logger.error(
                     f"Failed to extract/store face embedding for picture {pic_id}: {e}"

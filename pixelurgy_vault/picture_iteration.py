@@ -15,6 +15,81 @@ logger = get_logger(__name__)
 
 @dataclass
 class PictureIteration:
+    @staticmethod
+    def load_and_crop_face_bbox(file_path, bbox):
+        """
+        Loads an image or video file, returns a square crop (as large as possible) that always includes the face bbox.
+        The crop is not tight to the face, but always contains it.
+        bbox: [x1, y1, x2, y2]
+        """
+        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+        img = None
+        # Try image first
+        try:
+            from PIL import Image
+
+            img = Image.open(file_path)
+        except Exception:
+            img = None
+        # If not an image, try as video (extract first frame)
+        if img is None:
+            try:
+                import cv2
+
+                cap = cv2.VideoCapture(file_path)
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame is not None:
+                    img = frame
+            except Exception:
+                img = None
+        if img is None:
+            return None
+        # PIL branch
+        if hasattr(img, "size") and callable(getattr(img, "crop", None)):
+            w, h = img.size
+            # Clamp bbox to image
+            x1c = max(0, min(w, x1))
+            x2c = max(0, min(w, x2))
+            y1c = max(0, min(h, y1))
+            y2c = max(0, min(h, y2))
+            # Find the minimal square that contains the bbox and is inside the image
+            face_cx = (x1c + x2c) // 2
+            face_cy = (y1c + y2c) // 2
+            face_w = x2c - x1c
+            face_h = y2c - y1c
+            min_side = max(face_w, face_h)
+            # Try to make the square as large as possible
+            max_side = min(w, h)
+            # The square must at least fit the face bbox
+            side = max(min_side, min(max_side, max(w, h)))
+            # Center the square on the face bbox center, but shift if needed to stay in bounds
+            left = max(0, min(w - side, face_cx - side // 2))
+            top = max(0, min(h - side, face_cy - side // 2))
+            square_img = img.crop((left, top, left + side, top + side))
+            return square_img
+        else:
+            # numpy array (OpenCV)
+            h, w = img.shape[:2]
+            x1c = max(0, min(w, x1))
+            x2c = max(0, min(w, x2))
+            y1c = max(0, min(h, y1))
+            y2c = max(0, min(h, y2))
+            face_cx = (x1c + x2c) // 2
+            face_cy = (y1c + y2c) // 2
+            face_w = x2c - x1c
+            face_h = y2c - y1c
+            min_side = max(face_w, face_h)
+            max_side = min(w, h)
+            side = max(min_side, min(max_side, max(w, h)))
+            left = max(0, min(w - side, face_cx - side // 2))
+            top = max(0, min(h - side, face_cy - side // 2))
+            left = int(left)
+            top = int(top)
+            side = int(side)
+            square_img = img[top : top + side, left : left + side]
+            return square_img
+
     id: str
     picture_id: str
     file_path: str
@@ -33,9 +108,7 @@ class PictureIteration:
     character_id: Optional[str] = None
 
     @staticmethod
-    def _generate_thumbnail_bytes(
-        img, size=(256, 256)
-    ) -> Optional[bytes]:
+    def _generate_thumbnail_bytes(img, size=(256, 256)) -> Optional[bytes]:
         """
         Resize image so the longest edge is 256px, preserve aspect ratio, no padding.
         Accepts either a PIL Image or a numpy array (OpenCV image).
@@ -92,6 +165,7 @@ class PictureIteration:
         if is_video:
             # Write bytes to temp file to read with cv2
             import tempfile
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
                 tmp.write(image_bytes)
                 tmp_path = tmp.name
