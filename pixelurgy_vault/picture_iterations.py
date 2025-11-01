@@ -4,7 +4,6 @@ import sqlite3
 import threading
 import time
 
-from PIL import Image
 from typing import List
 
 from pixelurgy_vault.logging import get_logger
@@ -89,8 +88,26 @@ class PictureIterations:
 
     def _load_image_for_quality(self, file_path):
         try:
-            with Image.open(file_path) as img:
-                return np.array(img.convert("RGB"))
+            # Try to open as image first
+            from PIL import Image
+
+            try:
+                with Image.open(file_path) as img:
+                    return np.array(img.convert("RGB"))
+            except Exception:
+                pass
+            # If not an image, try as video (extract first frame)
+            import cv2
+
+            cap = cv2.VideoCapture(file_path)
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                return frame_rgb
+            else:
+                raise ValueError("Could not read image or first frame from video.")
         except Exception as e:
             logger.error(f"Failed to load image at {file_path} for quality worker: {e}")
             return None
