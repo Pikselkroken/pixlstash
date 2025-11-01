@@ -7,23 +7,26 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "open_clip_torch",
     "fastapi",
     "uvicorn",
-    "platformdirs",
-    "pillow",
+    "setuptools",
+    "wheel",
+    "twine",
     "numpy",
-    "scipy",
+    "pillow",
     "opencv-python",
-    "colorlog",
+    "scipy",
+    "platformdirs",
     "tomli",
-    "httpx",
-    "python-multipart",
+    "colorlog",
     "onnxruntime",
     "requests",
     "transformers",
     "torch",
     "torchvision",
-    "open_clip_torch",
+    "insightface",
+    "rapidfuzz",
 ]
 
 [project.optional-dependencies]

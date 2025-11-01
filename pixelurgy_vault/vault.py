@@ -222,7 +222,7 @@ class Vault:
         row = cursor.fetchone()
         return row["value"] if row else None
 
-    def _import_default_data(self):
+    def import_default_data(self):
         """
         Import default data into the vault.
         Extend this method to add default pictures or metadata as needed.
