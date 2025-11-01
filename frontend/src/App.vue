@@ -827,12 +827,11 @@ async function fetchSidebarCounts() {
 }
 // Computed: characters sorted alphabetically by name (case-insensitive)
 const sortedCharacters = computed(() => {
-  return [...characters.value].sort((a, b) => {
-    if (!a.name && !b.name) return 0;
-    if (!a.name) return 1;
-    if (!b.name) return -1;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-  });
+  return [...characters.value]
+    .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
+    .sort((a, b) => {
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
 });
 const characterThumbnails = ref({}); // { [characterId]: thumbnailUrl }
 const loading = ref(false);
