@@ -2,6 +2,7 @@ import hashlib
 import os
 from typing import Optional, Tuple
 from PIL import Image
+import cv2
 from .picture_quality import PictureQuality
 from dataclasses import dataclass
 from io import BytesIO
@@ -33,22 +34,26 @@ class PictureIteration:
 
     @staticmethod
     def _generate_thumbnail_bytes(
-        pil_img: Image.Image, size=(256, 256)
+        img, size=(256, 256)
     ) -> Optional[bytes]:
         """
         Resize image so the longest edge is 256px, preserve aspect ratio, no padding.
+        Accepts either a PIL Image or a numpy array (OpenCV image).
         """
         try:
-            img = pil_img.copy()
-            # Calculate new size
-            max_edge = max(img.width, img.height)
+            if isinstance(img, Image.Image):
+                pil_img = img.copy()
+            else:
+                # Assume numpy array (OpenCV image, BGR)
+                pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            max_edge = max(pil_img.width, pil_img.height)
             if max_edge > size[0]:
                 scale = size[0] / max_edge
-                new_w = int(round(img.width * scale))
-                new_h = int(round(img.height * scale))
-                img = img.resize((new_w, new_h), resample=Image.LANCZOS)
+                new_w = int(round(pil_img.width * scale))
+                new_h = int(round(pil_img.height * scale))
+                pil_img = pil_img.resize((new_w, new_h), resample=Image.LANCZOS)
             buf = BytesIO()
-            img.save(buf, format="PNG")
+            pil_img.save(buf, format="PNG")
             return buf.getvalue()
         except Exception as e:
             logger.error(f"Error generating thumbnail bytes: {e}")
@@ -63,26 +68,51 @@ class PictureIteration:
         transform_metadata: Optional[str] = None,
         is_master: bool = False,
     ) -> Tuple[str, "PictureIteration"]:
-        """Create an iteration from raw bytes. Returns (picture_uuid, PictureIteration)."""
+        """Create an iteration from raw bytes. Returns (picture_uuid, PictureIteration). Supports both images and videos."""
         raw_sha = PictureIteration.calculate_hash_from_bytes(image_bytes)
         if not picture_id:
             raise ValueError(
                 "picture_uuid must be provided when creating a picture iteration."
             )
 
-        # Determine format and metadata
-        with Image.open(BytesIO(image_bytes)) as img:
-            img_format = img.format or "PNG"
-            width, height = img.size
-            thumbnail_bytes = PictureIteration._generate_thumbnail_bytes(img)
+        # Try to detect if this is a video or image
+        img_format = None
+        width = height = None
+        thumbnail_bytes = None
+        is_video = False
+        # Try image first
+        try:
+            with Image.open(BytesIO(image_bytes)) as img:
+                img_format = img.format or "PNG"
+                width, height = img.size
+                thumbnail_bytes = PictureIteration._generate_thumbnail_bytes(img)
+        except Exception:
+            # Not an image, try video
+            is_video = True
+        if is_video:
+            # Write bytes to temp file to read with cv2
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                tmp.write(image_bytes)
+                tmp_path = tmp.name
+            cap = cv2.VideoCapture(tmp_path)
+            ret, frame = cap.read()
+            if not ret:
+                logger.error("Could not read first frame from video for thumbnail.")
+                frame = None
+            else:
+                height, width = frame.shape[:2]
+                thumbnail_bytes = PictureIteration._generate_thumbnail_bytes(frame)
+            cap.release()
+            img_format = "MP4"  # Default, could be improved by sniffing
+            # Remove temp file
+            os.remove(tmp_path)
 
         ext = f".{img_format.lower()}" if not img_format.startswith(".") else img_format
         file_path = os.path.join(image_root_path, f"{raw_sha}{ext}")
         if os.path.exists(file_path):
-            # If file exists, we still return the iteration linked to the provided picture_uuid
             size_bytes = os.path.getsize(file_path)
         else:
-            # Save bytes to disk
             os.makedirs(image_root_path, exist_ok=True)
             with open(file_path, "wb") as f:
                 f.write(image_bytes)
