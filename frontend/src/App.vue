@@ -119,74 +119,6 @@ function isSupportedMediaFile(file) {
   return isSupportedImageFile(file) || isSupportedVideoFile(file);
 }
 
-// Cache for cropped thumbnail data URLs
-const croppedThumbnails = ref({}); // { [img.id]: dataUrl }
-
-// Crop an image to a square using canvas and return a data URL
-function cropImageToSquare(url, id) {
-  // For videos, just return the url (the backend already provides a thumbnail image)
-  if (typeof url === "object" && url.isVideo) {
-    return Promise.resolve(url.src);
-  }
-  return new Promise((resolve, reject) => {
-    const img = new window.Image();
-    img.crossOrigin = "Anonymous";
-    img.onload = function () {
-      const size = Math.min(img.width, img.height);
-      const sx = img.width > img.height ? (img.width - img.height) / 2 : 0;
-      const sy = img.height > img.width ? (img.height - img.width) / 2 : 0;
-      const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, sx, sy, size, size, 0, 0, size, size);
-      resolve(canvas.toDataURL("image/png"));
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
-}
-
-// Get the cropped thumbnail data URL for an image, or start cropping if not cached
-async function getCroppedThumbnail(img) {
-  if (!img || !img.id) return "";
-  if (croppedThumbnails.value[img.id]) return croppedThumbnails.value[img.id];
-  // If it's a video, just use the backend thumbnail as is
-  if (
-    img.format &&
-    [
-      "mp4",
-      "avi",
-      "mov",
-      "webm",
-      "mkv",
-      "flv",
-      "wmv",
-      "m4v",
-      "MP4",
-      "AVI",
-      "MOV",
-      "WEBM",
-      "MKV",
-      "FLV",
-      "WMV",
-      "M4V",
-    ].includes(img.format.toLowerCase())
-  ) {
-    const url = `${BACKEND_URL}/thumbnails/${img.id}`;
-    croppedThumbnails.value[img.id] = url;
-    return url;
-  }
-  const url = `${BACKEND_URL}/thumbnails/${img.id}`;
-  try {
-    const dataUrl = await cropImageToSquare(url, img.id);
-    croppedThumbnails.value[img.id] = dataUrl;
-    return dataUrl;
-  } catch {
-    return url; // fallback to original
-  }
-}
-
 async function hashFile(file) {
   // SHA-256 sampled hash: whole file if <=128KB, else 8 evenly spaced 8192-byte blocks
   const CHUNK_SIZE = 8192;
@@ -1883,10 +1815,7 @@ function confirmDeleteCharacter() {
                         v-if="img.format && isSupportedVideoFile(img.format)"
                       >
                         <img
-                          :src="
-                            croppedThumbnails[img.id] ||
-                            `${BACKEND_URL}/thumbnails/${img.id}`
-                          "
+                          :src="`${BACKEND_URL}/thumbnails/${img.id}`"
                           class="thumbnail-img video-thumb"
                           @click.stop="
                             (e) => {
@@ -1897,15 +1826,7 @@ function confirmDeleteCharacter() {
                               }
                             }
                           "
-                          @load="
-                            async (e) => {
-                              if (!croppedThumbnails[img.id]) {
-                                const dataUrl = await getCroppedThumbnail(img);
-                                croppedThumbnails[img.id] = dataUrl;
-                              }
-                              fetchScoreIfMissing(img);
-                            }
-                          "
+                          @load="fetchScoreIfMissing(img)"
                           style="cursor: pointer; border: 2px solid #2196f3"
                         />
                         <v-icon
@@ -1923,10 +1844,7 @@ function confirmDeleteCharacter() {
                       </template>
                       <template v-else>
                         <img
-                          :src="
-                            croppedThumbnails[img.id] ||
-                            `${BACKEND_URL}/thumbnails/${img.id}`
-                          "
+                          :src="`${BACKEND_URL}/thumbnails/${img.id}`"
                           class="thumbnail-img"
                           @click.stop="
                             (e) => {
@@ -1937,15 +1855,7 @@ function confirmDeleteCharacter() {
                               }
                             }
                           "
-                          @load="
-                            async (e) => {
-                              if (!croppedThumbnails[img.id]) {
-                                const dataUrl = await getCroppedThumbnail(img);
-                                croppedThumbnails[img.id] = dataUrl;
-                              }
-                              fetchScoreIfMissing(img);
-                            }
-                          "
+                          @load="fetchScoreIfMissing(img)"
                           style="cursor: pointer"
                         />
                       </template>
