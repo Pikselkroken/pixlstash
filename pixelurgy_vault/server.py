@@ -9,6 +9,7 @@ import os
 import json
 import uuid
 import argparse
+import mimetypes
 
 from platformdirs import user_config_dir
 from pixelurgy_vault.vault import Vault
@@ -186,7 +187,7 @@ class Server:
     def _setup_routes(self):
         from pixelurgy_vault.pictures import get_sort_mechanisms
 
-        @self.app.get("/pictures/sort_mechanisms")
+        @self.app.get("/sort_mechanisms")
         async def get_pictures_sort_mechanisms():
             """Return available sorting mechanisms for pictures."""
             return get_sort_mechanisms()
@@ -272,7 +273,7 @@ class Server:
             logger.info(f"Frontend event: {json.dumps(event)}")
             return {"status": "logged"}
 
-        @self.app.get("/pictures/search")
+        @self.app.get("/search")
         def search_pictures(
             query: str = Query(""), top_n: int = Query(5), threshold: float = Query(0.3)
         ):
@@ -408,9 +409,19 @@ class Server:
             """
             Add a reference picture for a character. Creates a new Picture with is_reference=1 and a master iteration.
             """
+            ext = None
+            if image.filename:
+                ext = os.path.splitext(image.filename)[1]
+            if not ext:
+                # Guess from content type
+                ext = mimetypes.guess_extension(image.content_type or "")
+
             tags_list = json.loads(tags) if tags else []
             img_bytes = await image.read()
-            pic_id = str(uuid.uuid4())
+            if not ext.startswith("."):
+                ext = "." + ext
+
+            pic_id = str(uuid.uuid4()) + ext
             picture = Picture(
                 id=pic_id,
                 character_id=character_id,
@@ -589,12 +600,12 @@ class Server:
         ):
             if not isinstance(id, str):
                 logger.error(f"Invalid id type: {type(id)} value: {id}")
-                return self._cors_error_response("Invalid picture id", 404)
+                raise HTTPException(status_code=400, detail="Invalid picture id type")
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
                 logger.error(f"Picture not found for id={id}")
-                return self._cors_error_response("Picture not found", 404)
+                raise HTTPException(status_code=404, detail="Picture not found")
             if info:
                 # Return metadata only
                 result = {
@@ -614,14 +625,16 @@ class Server:
             )
             if not master_its:
                 logger.error(f"Master iteration not found for picture id={pic.id}")
-                return self._cors_error_response("Master iteration not found", 404)
+                raise HTTPException(
+                    status_code=404, detail="Master iteration not found"
+                )
             it = master_its[0]
             if not it.file_path or not os.path.isfile(it.file_path):
                 logger.error(
                     f"File path missing or does not exist for iteration id={it.id}, file_path={it.file_path}"
                 )
-                return self._cors_error_response(
-                    f"File not found for iteration id={it.id}", 404
+                raise HTTPException(
+                    status_code=404, detail=f"File not found for iteration id={it.id}"
                 )
             # Return the image file with CORS headers
             response = FileResponse(it.file_path)
@@ -756,6 +769,7 @@ class Server:
             Import new pictures with master iterations. Accepts:
             - image: bytes upload (single file)
             - file_path: path to file or directory (if directory, imports all images recursively if recursive=True)
+            Detects media type and sets ID as uuid + extension.
             """
 
             dest_folder = self.vault.get_image_root()
@@ -766,19 +780,28 @@ class Server:
             # Collect files to import
             if image is not None:
                 img_bytes = await image.read()
-                files_to_import.append((img_bytes, None))
+                # Try to get extension from UploadFile filename
+                ext = None
+                if image.filename:
+                    ext = os.path.splitext(image.filename)[1]
+                if not ext:
+                    # Guess from content type
+                    ext = mimetypes.guess_extension(image.content_type or "")
+                files_to_import.append((img_bytes, None, ext))
             elif file_path:
                 if os.path.isdir(file_path):
                     for root, _, files in os.walk(file_path):
                         for fname in files:
                             fpath = os.path.join(root, fname)
                             with open(fpath, "rb") as f:
-                                files_to_import.append((f.read(), fpath))
+                                ext = os.path.splitext(fname)[1]
+                                files_to_import.append((f.read(), fpath, ext))
                         if not recursive:
                             break
                 else:
                     with open(file_path, "rb") as f:
-                        files_to_import.append((f.read(), file_path))
+                        ext = os.path.splitext(file_path)[1]
+                        files_to_import.append((f.read(), file_path, ext))
             else:
                 raise HTTPException(
                     status_code=400, detail="No image or file_path provided"
@@ -786,7 +809,8 @@ class Server:
 
             new_pictures = []
             new_iterations = []
-            for img_bytes, src_path in files_to_import:
+            for img_bytes, src_path, ext in files_to_import:
+                logger.info(f"Importing picture from {src_path} with ext={ext}")
                 # Calculate SHA for deduplication
                 sha = (
                     PictureIteration.calculate_hash_from_file_path(src_path)
@@ -809,8 +833,21 @@ class Server:
                     continue
                 except KeyError:
                     pass
+                # Detect extension if missing
+                if not ext or ext == "":
+                    # Try to guess from bytes (fallback to .png)
+                    import imghdr
+
+                    img_type = imghdr.what(None, h=img_bytes)
+                    if img_type:
+                        ext = f".{img_type}"
+                    else:
+                        ext = ".png"
+                # Ensure ext starts with .
+                if not ext.startswith("."):
+                    ext = "." + ext
                 # Create new Picture and master iteration
-                pic_id = str(uuid.uuid4())
+                pic_id = str(uuid.uuid4()) + ext
                 picture = Picture(
                     id=pic_id,
                     character_id=character_id,

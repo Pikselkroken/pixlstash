@@ -142,6 +142,7 @@ class PictureIteration:
         is_master: bool = False,
     ) -> Tuple[str, "PictureIteration"]:
         """Create an iteration from raw bytes. Returns (picture_uuid, PictureIteration). Supports both images and videos."""
+
         raw_sha = PictureIteration.calculate_hash_from_bytes(image_bytes)
         if not picture_id:
             raise ValueError(
@@ -183,7 +184,8 @@ class PictureIteration:
             os.remove(tmp_path)
 
         ext = f".{img_format.lower()}" if not img_format.startswith(".") else img_format
-        file_path = os.path.join(image_root_path, f"{raw_sha}{ext}")
+        id_with_ext = f"{raw_sha}{ext}"
+        file_path = os.path.join(image_root_path, id_with_ext)
         if os.path.exists(file_path):
             size_bytes = os.path.getsize(file_path)
         else:
@@ -195,7 +197,7 @@ class PictureIteration:
         created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         iteration = PictureIteration(
-            id=raw_sha,
+            id=id_with_ext,
             picture_id=picture_id,
             file_path=file_path,
             format=img_format,

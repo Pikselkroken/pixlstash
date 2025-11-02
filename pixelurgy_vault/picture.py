@@ -19,8 +19,18 @@ class Picture:
         created_at: Optional[str] = None,
         is_reference: int = 0,
         has_embedding: bool = False,
+        ext: Optional[str] = None,
     ):
-        self.id = id if id else uuid.uuid4().hex
+        # Always ensure the id has an extension (default to .png)
+        if id:
+            if "." not in id:
+                ext_val = ext if ext else "png"
+                self.id = f"{id}.{ext_val}"
+            else:
+                self.id = id
+        else:
+            ext_val = ext if ext else "png"
+            self.id = f"{uuid.uuid4().hex}.{ext_val}"
         self.character_id = character_id
         self.description = description
         self.tags = tags or []
