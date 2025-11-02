@@ -77,23 +77,48 @@ class Pictures:
                 continue
             master_iter = master_iters[0]
             try:
+                import os
                 import cv2
-
-                img = cv2.imread(master_iter.file_path)
-                if img is None:
-                    logger.warning(
-                        f"Could not read image {master_iter.file_path} for face embedding."
-                    )
-                    continue
-                faces = self._insightface_app.get(img)
+                from pixelurgy_vault.picture_iteration import PictureIteration
+                file_path = master_iter.file_path
+                ext = os.path.splitext(file_path)[1].lower()
+                faces = []
+                if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+                    img = cv2.imread(file_path)
+                    if img is not None:
+                        faces = self._insightface_app.get(img)
+                elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
+                    cap = cv2.VideoCapture(file_path)
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    if frame_count < 1:
+                        logger.warning(f"No frames found in video: {file_path}")
+                        cap.release()
+                    else:
+                        frame_indices = [0]
+                        if frame_count > 2:
+                            frame_indices.append(frame_count // 2)
+                        if frame_count > 1:
+                            frame_indices.append(frame_count - 1)
+                        for idx in frame_indices:
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                            ret, frame = cap.read()
+                            if not ret or frame is None:
+                                logger.warning(f"Could not read frame {idx} from video: {file_path}")
+                                continue
+                            frame_faces = self._insightface_app.get(frame)
+                            if frame_faces:
+                                faces.extend(frame_faces)
+                        cap.release()
+                else:
+                    logger.warning(f"Unsupported file extension for face embedding: {file_path}")
                 if not faces:
                     logger.warning(
-                        f"No face found in {master_iter.file_path} for picture {pic_id}."
+                        f"No face found in {file_path} for picture {pic_id}."
                     )
                     continue
                 else:
                     logger.debug(
-                        f"Found {len(faces)} face(s) in {master_iter.file_path} for picture {pic_id}."
+                        f"Found {len(faces)} face(s) in {file_path} for picture {pic_id}."
                     )
 
                 # Always use the largest face (by area)
@@ -114,8 +139,6 @@ class Pictures:
                 logger.debug(f"Stored face embedding and bbox for picture {pic_id}.")
                 # Regenerate thumbnails for all iterations using face_bbox
                 try:
-                    from pixelurgy_vault.picture_iteration import PictureIteration
-
                     bbox = [float(v) for v in face.bbox]
                     iterations = list(self._picture_iterations.find(picture_id=pic_id))
                     for it in iterations:

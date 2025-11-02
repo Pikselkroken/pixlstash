@@ -84,16 +84,56 @@ class ImageLoadingPrepDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img_path = str(self.images[idx])
-
-        try:
-            image = Image.open(img_path).convert("RGB")
-            image = preprocess_image(image)
-            # ...existing code...
-        except Exception as e:
-            logger.error(f"Could not load image path: {img_path}, error: {e}")
+        ext = os.path.splitext(img_path)[1].lower()
+        if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+            try:
+                image = Image.open(img_path).convert("RGB")
+                image = preprocess_image(image)
+            except Exception as e:
+                logger.error(f"Could not load image path: {img_path}, error: {e}")
+                return None
+            return (image, img_path)
+        elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
+            # Extract first, middle, last frames from video
+            try:
+                import cv2
+                cap = cv2.VideoCapture(img_path)
+                if not cap.isOpened():
+                    logger.error(f"Could not open video file: {img_path}")
+                    return None
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                if frame_count < 1:
+                    logger.error(f"No frames found in video: {img_path}")
+                    cap.release()
+                    return None
+                frame_indices = [0]
+                if frame_count > 2:
+                    frame_indices.append(frame_count // 2)
+                if frame_count > 1:
+                    frame_indices.append(frame_count - 1)
+                frames = []
+                for idx in frame_indices:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                    ret, frame = cap.read()
+                    if not ret:
+                        logger.error(f"Could not read frame {idx} from video: {img_path}")
+                        continue
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(frame_rgb)
+                    prepped = preprocess_image(pil_img)
+                    frames.append(prepped)
+                cap.release()
+                if not frames:
+                    logger.error(f"No frames extracted from video: {img_path}")
+                    return None
+                # Return a tuple of (frames, img_path) for downstream handling
+                return (frames, img_path)
+            except Exception as e:
+                logger.error(f"Could not process video file: {img_path}, error: {e}")
+                return None
+        else:
+            logger.error(f"Unsupported file extension for tagging: {img_path}")
             return None
-
-        return (image, img_path)
 
 
 class PictureTagger:
@@ -347,38 +387,45 @@ class PictureTagger:
 
         b_imgs = []
         all_results = {}
+
         for data_entry in tqdm(data, smoothing=0.0, disable=self._silent):
             for data in data_entry:
                 if data is None:
                     continue
 
-                image, image_path = data
-                if image is None:
-                    try:
-                        image = Image.open(image_path)
-                        if image.mode != "RGB":
-                            image = image.convert("RGB")
-                        image = preprocess_image(image)
-                    except Exception as e:
-                        logger.error(
-                            f"Could not load image path: {image_path}, error: {e}"
+                images, image_path = data
+                # If images is a list (video frames), tag each and combine tags
+                if isinstance(images, list):
+                    combined_tags = set()
+                    for frame in images:
+                        b_imgs = [(str(image_path), frame)]
+                        batch_result = self._run_batch(
+                            b_imgs,
+                            tag_freq,
+                            caption_separator,
+                            undesired_tags,
+                            always_first_tags,
                         )
-                        continue
-                b_imgs.append((image_path, image))
+                        # batch_result: {image_path: [tags]}
+                        tags = batch_result.get(str(image_path), [])
+                        combined_tags.update(tags)
+                    all_results[str(image_path)] = list(combined_tags)
+                else:
+                    b_imgs.append((image_path, images))
 
-                if len(b_imgs) >= BATCH_SIZE:
-                    b_imgs = [
-                        (str(image_path), image) for image_path, image in b_imgs
-                    ]  # Convert image_path to string
-                    batch_result = self._run_batch(
-                        b_imgs,
-                        tag_freq,
-                        caption_separator,
-                        undesired_tags,
-                        always_first_tags,
-                    )
-                    all_results.update(batch_result)
-                    b_imgs.clear()
+                    if len(b_imgs) >= BATCH_SIZE:
+                        b_imgs = [
+                            (str(image_path), image) for image_path, image in b_imgs
+                        ]  # Convert image_path to string
+                        batch_result = self._run_batch(
+                            b_imgs,
+                            tag_freq,
+                            caption_separator,
+                            undesired_tags,
+                            always_first_tags,
+                        )
+                        all_results.update(batch_result)
+                        b_imgs.clear()
 
         if len(b_imgs) > 0:
             b_imgs = [
