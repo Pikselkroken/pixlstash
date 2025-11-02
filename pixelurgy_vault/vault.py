@@ -41,8 +41,7 @@ class Vault:
 
     def __init__(
         self,
-        db_path: str,
-        image_root: Optional[str] = None,
+        image_root: str,
         description: Optional[str] = None,
     ):
         """
@@ -54,10 +53,14 @@ class Vault:
             description (Optional[str]): Description of the vault.
         """
         self.logger = get_logger(__name__)
-        self.db_path = db_path  # Path to SQLite database file
+
+        self.image_root = image_root
+        os.makedirs(self.image_root, exist_ok=True)
+        self.db_path = os.path.join(self.image_root, "vault.db")
+
         self.connection: Optional[sqlite3.Connection] = None
         db_exists = os.path.exists(self.db_path)
-        self.logger.debug(f"Vault init, db_path={self.db_path}, db_exists={db_exists}")
+        self.logger.info(f"Vault init, db_path={self.db_path}, db_exists={db_exists}")
         self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         # Enable WAL mode for better concurrency
@@ -72,8 +75,6 @@ class Vault:
             self.logger.debug("Using existing database, skipping default import.")
         self.upgrader = VaultUpgrade(self.connection)
         self.upgrader.upgrade_if_necessary()
-        if image_root is not None:
-            self.set_metadata("image_root", image_root)
         if description is not None:
             self.set_metadata("description", description)
         self.iterations = PictureIterations(self.connection, self.db_path)
