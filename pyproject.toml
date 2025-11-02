@@ -20,6 +20,8 @@ dependencies = [
     "platformdirs",
     "tomli",
     "colorlog",
+    "httpx",
+    "python-multipart",
     "onnxruntime",
     "requests",
     "transformers",

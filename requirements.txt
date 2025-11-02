@@ -1,3 +1,5 @@
+# For testing (used by test_server.py etc)
+httpx
 open_clip_torch
 fastapi
 uvicorn
