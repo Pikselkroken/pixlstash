@@ -656,7 +656,7 @@ async function searchImages(query) {
   imagesLoading.value = true;
   imagesError.value = null;
   try {
-    const url = `${BACKEND_URL}/pictures/search?query=${encodeURIComponent(
+    const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
       q
     )}&threshold=0.3&top_n=1000`;
     const res = await fetch(url);
@@ -951,7 +951,36 @@ const config = reactive({
   thumbnail: 256,
   show_stars: true,
   show_only_reference: false,
+  openai_host: "localhost",
+  openai_port: 8000,
+  openai_model: "",
 });
+
+const openaiModels = ref([]);
+const openaiModelFetchError = ref("");
+const openaiModelLoading = ref(false);
+
+async function fetchOpenAIModels() {
+  openaiModelLoading.value = true;
+  openaiModelFetchError.value = "";
+  openaiModels.value = [];
+  try {
+    const url = `http://${config.openai_host}:${config.openai_port}/v1/models`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch models");
+    const data = await res.json();
+    // OpenAI API returns { data: [ { id: ... }, ... ] }
+    if (Array.isArray(data.data)) {
+      openaiModels.value = data.data.map((m) => m.id);
+    } else {
+      openaiModelFetchError.value = "No models found.";
+    }
+  } catch (e) {
+    openaiModelFetchError.value = "Failed to fetch models: " + (e.message || e);
+  } finally {
+    openaiModelLoading.value = false;
+  }
+}
 
 async function fetchConfig() {
   try {
@@ -979,6 +1008,10 @@ async function fetchConfig() {
       typeof data.show_only_reference === "boolean"
         ? data.show_only_reference
         : referenceFilterMode.value;
+    // OpenAI settings
+    config.openai_host = data.openai_host || "localhost";
+    config.openai_port = data.openai_port || 8000;
+    config.openai_model = data.openai_model || "";
   } catch (e) {
     console.error("Error fetching /config:", e);
   }
@@ -1033,6 +1066,9 @@ async function patchConfigUIOptions(opts = {}) {
     thumbnail: thumbnailSize.value,
     show_stars: showStars.value,
     show_only_reference: referenceFilterMode.value,
+    openai_host: config.openai_host,
+    openai_port: config.openai_port,
+    openai_model: config.openai_model,
     ...opts,
   };
   Object.assign(config, patch);
@@ -1064,7 +1100,9 @@ async function saveConfig() {
 
 function openSettingsDialog() {
   console.debug("Opening settings dialog");
-  fetchConfig();
+  fetchConfig().then(() => {
+    fetchOpenAIModels();
+  });
   settingsDialog.value = true;
 }
 
@@ -1094,9 +1132,45 @@ watch(thumbnailSize, (val) => {
 watch(showStars, (val) => {
   patchConfigUIOptions({ show_stars: val });
 });
+
 watch(referenceFilterMode, (val) => {
   patchConfigUIOptions({ show_only_reference: val });
 });
+
+// Watch OpenAI config fields and PATCH when changed
+// Helper: refresh models after patching host/port
+async function patchHostAndRefresh(val, key) {
+  await patchConfigUIOptions({ [key]: val });
+  fetchOpenAIModels();
+}
+
+// Patch and refresh models when host/port change (on blur or enter)
+function onHostBlurOrEnter(e) {
+  patchHostAndRefresh(config.openai_host, "openai_host");
+}
+function onPortBlurOrEnter(e) {
+  patchHostAndRefresh(config.openai_port, "openai_port");
+}
+
+// Still patch on change for persistence
+watch(
+  () => config.openai_host,
+  (val) => {
+    patchConfigUIOptions({ openai_host: val });
+  }
+);
+watch(
+  () => config.openai_port,
+  (val) => {
+    patchConfigUIOptions({ openai_port: val });
+  }
+);
+watch(
+  () => config.openai_model,
+  (val) => {
+    patchConfigUIOptions({ openai_model: val });
+  }
+);
 
 watch([selectedCharacter, selectedReferenceMode], async ([id, refMode]) => {
   refreshImages();
@@ -1855,6 +1929,109 @@ function confirmDeleteCharacter() {
                     >
                       Add
                     </button>
+                  </div>
+                </div>
+                <div class="settings-section" style="margin-top: 32px">
+                  <strong>OpenAI Chat Service</strong>
+                  <div
+                    style="
+                      display: flex;
+                      gap: 12px;
+                      align-items: center;
+                      margin-top: 8px;
+                    "
+                  >
+                    <label style="min-width: 60px">Host:</label>
+                    <input
+                      v-model="config.openai_host"
+                      style="
+                        flex: 1;
+                        padding: 6px 10px;
+                        border-radius: 8px;
+                        border: 1px solid #bbb;
+                        font-size: 1em;
+                      "
+                      @change="patchConfigUIOptions()"
+                    />
+                    <label style="min-width: 50px; margin-left: 12px"
+                      >Port:</label
+                    >
+                    <input
+                      v-model.number="config.openai_port"
+                      type="number"
+                      min="1"
+                      max="65535"
+                      style="
+                        width: 90px;
+                        padding: 6px 10px;
+                        border-radius: 8px;
+                        border: 1px solid #bbb;
+                        font-size: 1em;
+                      "
+                      @change="patchConfigUIOptions()"
+                    />
+                  </div>
+                  <div
+                    style="
+                      display: flex;
+                      gap: 12px;
+                      align-items: center;
+                      margin-top: 12px;
+                    "
+                  >
+                    <label style="min-width: 60px">Model:</label>
+                    <select
+                      v-model="config.openai_model"
+                      style="
+                        flex: 1;
+                        padding: 6px 10px;
+                        border-radius: 8px;
+                        border: 1px solid #bbb;
+                        font-size: 1em;
+                      "
+                      @change="patchConfigUIOptions()"
+                    >
+                      <option v-if="openaiModelLoading" disabled>
+                        Loading models...
+                      </option>
+                      <option v-for="m in openaiModels" :key="m" :value="m">
+                        {{ m }}
+                      </option>
+                      <option
+                        v-if="
+                          !openaiModelLoading &&
+                          !openaiModels.length &&
+                          !openaiModelFetchError
+                        "
+                        disabled
+                      >
+                        No models found
+                      </option>
+                      <option v-if="openaiModelFetchError" disabled>
+                        {{ openaiModelFetchError }}
+                      </option>
+                    </select>
+                    <button
+                      @click="fetchOpenAIModels"
+                      style="
+                        margin-left: 8px;
+                        padding: 6px 12px;
+                        border-radius: 8px;
+                        background: #1976d2;
+                        color: #fff;
+                        border: none;
+                        font-weight: 600;
+                        cursor: pointer;
+                      "
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  <div
+                    v-if="openaiModelFetchError"
+                    style="color: #c00; margin-top: 6px"
+                  >
+                    {{ openaiModelFetchError }}
                   </div>
                 </div>
               </v-card-text>

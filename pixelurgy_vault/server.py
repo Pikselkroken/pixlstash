@@ -79,12 +79,22 @@ class Server:
             self.config["show_stars"] = True
         if "show_only_reference" not in self.config:
             self.config["show_only_reference"] = False
+
+        # OpenAI chat service config (user-editable)
+        if "openai_host" not in self.config:
+            self.config["openai_host"] = "localhost"
+        if "openai_port" not in self.config:
+            self.config["openai_port"] = 8000
+        if "openai_model" not in self.config:
+            self.config["openai_model"] = "gpt-3.5-turbo"
+
         # SSL config
         self.require_ssl = self.server_config.get("require_ssl", False)
         self.ssl_keyfile = self.server_config.get("ssl_keyfile", "ssl/key.pem")
         self.ssl_certfile = self.server_config.get("ssl_certfile", "ssl/cert.pem")
         if self.require_ssl:
             self._ensure_ssl_certificates()
+
         # Override config values with explicit arguments
         if selected_image_root is not None:
             self.config["selected_image_root"] = selected_image_root
@@ -1067,7 +1077,7 @@ class Server:
         @self.app.get("/config")
         async def get_config():
             """
-            Return the current image roots config (config.json).
+            Return the current image roots config (config.json) and OpenAI chat service config.
             """
             logger.info("About to transmit current config")
             logger.info(f"Transmitting current config {self.config}")
