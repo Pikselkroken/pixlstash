@@ -31,8 +31,9 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(["update:modelValue", "search"]);
+const emit = defineEmits(["update:modelValue", "search", "collapse"]);
 const input = ref(props.modelValue || "");
+const searchInput = ref(null); // Add this line
 
 watch(
   () => props.modelValue,
@@ -44,6 +45,10 @@ watch(
 function emitSearch() {
   emit("update:modelValue", input.value);
   emit("search", input.value);
+  emit("collapse");
+  // Focus the main image grid after search
+  const grid = document.querySelector(".image-grid");
+  if (grid) grid.focus();
 }
 
 function clearInput() {

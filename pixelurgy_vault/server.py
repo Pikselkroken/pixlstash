@@ -5,6 +5,7 @@ import json
 import uuid
 import argparse
 import mimetypes
+import re
 
 from contextlib import asynccontextmanager
 from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPException
@@ -22,7 +23,10 @@ from pixelurgy_vault.picture_iteration import PictureIteration
 APP_NAME = "pixelurgy-vault"
 CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "config.json")
 SERVER_CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "server-config.json")
-
+DEFAULT_LOG_PATH = os.path.join(user_config_dir(APP_NAME), "server.log")
+DEFAULT_SSL_KEY_PATH = os.path.join(user_config_dir(APP_NAME), "ssl", "key.pem")
+DEFAULT_SSL_CERT_PATH = os.path.join(user_config_dir(APP_NAME), "ssl", "cert.pem")
+DEFAULT_IMAGE_ROOT = os.path.join(user_config_dir(APP_NAME), "images")
 
 # Logging will be set up after config is loaded
 logger = None
@@ -64,50 +68,36 @@ class Server:
             description (str, optional): Vault description.
             log_file (str, optional): Path to the log file (or None for stdout).
         """
-        # Load server-only config
-        with open(server_config_path, "r") as f:
-            self.server_config = json.load(f)
-        # Load image roots config
-        with open(config_path, "r") as f:
-            self.config = json.load(f)
-        # Ensure new config options exist
-        if "sort" not in self.config:
-            self.config["sort"] = "date_desc"
-        if "thumbnail" not in self.config:
-            self.config["thumbnail"] = "default"
-        if "show_stars" not in self.config:
-            self.config["show_stars"] = True
-        if "show_only_reference" not in self.config:
-            self.config["show_only_reference"] = False
-
-        # OpenAI chat service config (user-editable)
-        if "openai_host" not in self.config:
-            self.config["openai_host"] = "localhost"
-        if "openai_port" not in self.config:
-            self.config["openai_port"] = 8000
-        if "openai_model" not in self.config:
-            self.config["openai_model"] = "gpt-3.5-turbo"
+        self._init_config(
+            config_path=config_path,
+            image_root=selected_image_root,
+            description=description,
+        )
+        self.__init_server_config(
+            server_config_path=server_config_path, log_file=log_file
+        )
 
         # SSL config
-        self.require_ssl = self.server_config.get("require_ssl", False)
-        self.ssl_keyfile = self.server_config.get("ssl_keyfile", "ssl/key.pem")
-        self.ssl_certfile = self.server_config.get("ssl_certfile", "ssl/cert.pem")
         if self.require_ssl:
             self._ensure_ssl_certificates()
 
         # Override config values with explicit arguments
         if selected_image_root is not None:
-            self.config["selected_image_root"] = selected_image_root
-        if description is not None:
-            self.config["description"] = description
+            self._config["selected_image_root"] = selected_image_root
         if log_file is not None:
-            self.server_config["log_file"] = log_file
+            self._server_config["log_file"] = log_file
+
         global logger
-        setup_logging(self.server_config.get("log_file"))
+        setup_logging(self._server_config.get("log_file"))
         logger = get_logger(__name__)
+
+        logger.info(
+            "Creating Vault instance with image root: "
+            + str(self._config["selected_image_root"])
+        )
         self.vault = Vault(
-            image_root=self.config["selected_image_root"],
-            description=self.config.get("description"),
+            image_root=self._config["selected_image_root"],
+            description=self._config.get("description"),
         )
 
         self.app = FastAPI(lifespan=self.lifespan)
@@ -122,6 +112,109 @@ class Server:
         self._add_cors_exception_handler()
         self._setup_routes()
 
+    def _init_config(
+        self,
+        config_path=CONFIG_PATH,
+        image_root=None,
+        description="Pixelurgy Vault default configuration",
+    ):
+        """
+        Initialize and load the server configuration from file, creating defaults if necessary.
+
+        Returns:
+            dict: Configuration dictionary.
+        """
+        self._config_path = config_path
+        config_dir = os.path.dirname(self._config_path)
+        os.makedirs(config_dir, exist_ok=True)
+
+        if not os.path.exists(self._config_path):
+            self._config = {
+                "image_roots": [image_root or os.path.join(config_dir, "images")],
+                "selected_image_root": image_root or os.path.join(config_dir, "images"),
+                "description": description,
+                "sort": "date_desc",
+                "thumbnail": "default",
+                "show_stars": True,
+                "show_only_reference": False,
+                "openai_host": "localhost",
+                "openai_port": 8000,
+                "openai_model": "gpt-3.5-turbo",
+            }
+            with open(self._config_path, "w") as f:
+                json.dump(self._config, f, indent=2)
+        else:
+            with open(self._config_path, "r") as f:
+                self._config = json.load(f)
+                # Ensure new config options exist
+
+                if "sort_order" not in self._config:
+                    self._config["sort_order"] = "date_desc"
+                if "thumbnail_size" not in self._config:
+                    self._config["thumbnail_size"] = "default"
+                if "show_stars" not in self._config:
+                    self._config["show_stars"] = True
+                if "show_only_reference" not in self._config:
+                    self._config["show_only_reference"] = False
+                if "openai_host" not in self._config:
+                    self._config["openai_host"] = "localhost"
+                if "openai_port" not in self._config:
+                    self._config["openai_port"] = 8000
+                if "openai_model" not in self._config:
+                    self._config["openai_model"] = "gpt-3.5-turbo"
+                if (
+                    "image_roots" not in self._config
+                    or len(self._config["image_roots"]) == 0
+                ):
+                    self._config["image_roots"] = [DEFAULT_IMAGE_ROOT]
+                if "selected_image_root" not in self._config:
+                    self._config["selected_image_root"] = self._config["image_roots"][0]
+
+    def __init_server_config(
+        self, server_config_path=SERVER_CONFIG_PATH, log_file=None
+    ):
+        config_dir = os.path.dirname(server_config_path)
+        os.makedirs(config_dir, exist_ok=True)
+        if not os.path.exists(server_config_path):
+            self._server_config = {
+                "host": "localhost",
+                "port": 8000,
+                "log_level": "info",
+                "log_file": log_file,
+                "require_ssl": False,
+                "ssl_keyfile": DEFAULT_SSL_KEY_PATH,
+                "ssl_certfile": DEFAULT_SSL_CERT_PATH,
+            }
+            with open(server_config_path, "w") as f:
+                json.dump(self._server_config, f, indent=2)
+        else:
+            with open(server_config_path, "r") as f:
+                self._server_config = json.load(f)
+
+                # Ensure server config options exist
+                if "host" not in self._server_config:
+                    self._server_config["host"] = "localhost"
+                if "port" not in self._server_config:
+                    self._server_config["port"] = 8000
+                if "log_level" not in self._server_config:
+                    self._server_config["log_level"] = "info"
+                if "log_file" not in self._server_config:
+                    self._server_config["log_file"] = DEFAULT_LOG_PATH
+                if "require_ssl" not in self._server_config:
+                    self._server_config["require_ssl"] = False
+                if "ssl_keyfile" not in self._server_config:
+                    self._server_config["ssl_keyfile"] = DEFAULT_SSL_KEY_PATH
+                if "ssl_certfile" not in self._server_config:
+                    self._server_config["ssl_certfile"] = DEFAULT_SSL_CERT_PATH
+
+    @property
+    def require_ssl(self):
+        return self._server_config.get("require_ssl", False)
+
+    @require_ssl.setter
+    def require_ssl(self, value: bool):
+        self._server_config["require_ssl"] = value
+
     @asynccontextmanager
     async def lifespan(self, app):
         # Startup logic (if needed)
@@ -130,13 +223,11 @@ class Server:
         if hasattr(self, "vault"):
             self.vault.close()
 
-    # Removed: init_config (now configs are loaded directly in __init__)
-
     def _ensure_ssl_certificates(self):
         import subprocess
 
-        keyfile = self.ssl_keyfile
-        certfile = self.ssl_certfile
+        keyfile = self._server_config.get("ssl_keyfile", DEFAULT_SSL_KEY_PATH)
+        certfile = self._server_config.get("ssl_certfile", DEFAULT_SSL_CERT_PATH)
         # If either file is missing, generate self-signed cert
         if not (os.path.exists(keyfile) and os.path.exists(certfile)):
             os.makedirs(os.path.dirname(keyfile), exist_ok=True)
@@ -272,8 +363,8 @@ class Server:
             """
             from rapidfuzz import fuzz
 
-            def pic_to_dict(pic):
-                return {
+            def pic_to_dict(pic, likeness_score=None):
+                d = {
                     "id": pic.id,
                     "character_id": pic.character_id,
                     "description": pic.description,
@@ -281,60 +372,97 @@ class Server:
                     "created_at": pic.created_at,
                     "is_reference": getattr(pic, "is_reference", 0),
                 }
+                if likeness_score is not None:
+                    d["likeness_score"] = likeness_score
+                return d
 
-            q = query.strip()
-            n_words = len(q.split())
+            q = query.strip().lower()
             if not q:
                 return []
 
-            # Fuzzy search (tag/description)
+            # Split on any whitespace or punctuation
+            q_split = re.split(r"[\s\W]+", q)
+            q_split = [w for w in q_split if w]
+            n_words = len(q_split)
+
+            # Fuzzy search (tag/description/character name)
             all_pics = self.vault.pictures.find()
             fuzzy_scores = {}
             for pic in all_pics:
-                best_tag_score = 0
-                for tag in pic.tags:
-                    score = fuzz.partial_ratio(q.lower(), str(tag).lower())
-                    if score > best_tag_score:
-                        best_tag_score = score
-                desc_score = fuzz.partial_ratio(
-                    q.lower(), (pic.description or "").lower()
+                tag_scores = []
+                # Add character name to tags for fuzzy search
+                tags_and_name = list(pic.tags)
+                char_name = None
+                char_id = getattr(pic, "character_id", None)
+                if char_id is not None:
+                    try:
+                        char_obj = self.vault.characters[int(char_id)]
+                        if getattr(char_obj, "name", None):
+                            char_name = char_obj.name
+                    except Exception:
+                        char_name = None
+                if char_name:
+                    names = char_name.split(" ")
+                    for name in names:
+                        tags_and_name.append(name)
+                for q_word in q_split:
+                    max_score = 0
+                    logger.info(f"Query word: {q_word}")
+                    for tag in tags_and_name:
+                        score = fuzz.ratio(q_word, str(tag).lower()) / 100
+                        score *= min(len(q_word), len(tag)) / max(
+                            len(q_word), len(tag), 1
+                        )
+                        if score > max_score:
+                            max_score = score
+                    tag_scores.append(max_score)
+                    desc_score = (
+                        fuzz.ratio(q_word, (pic.description or "").lower()) / 100.0
+                    )
+                logger.info(
+                    f"PicID={pic.id} Desc='{pic.description}' Desc score={desc_score}, Tag scores={tag_scores}"
                 )
-                max_score = max(best_tag_score, desc_score)
-                if max_score > 60:  # threshold for fuzzy match
-                    fuzzy_scores[pic.id] = max_score / 100.0  # normalize to 0-1
+                avg_score = sum(tag_scores) / len(tag_scores) if tag_scores else 0
+                max_score = max(tag_scores) if tag_scores else 0
+                total_score = max(0.4 * avg_score + 0.6 * max_score, desc_score)
+                logger.info(
+                    f"PicID={pic.id} Desc='{pic.description}' Desc score={desc_score}, Tag scores={tag_scores}, total score={total_score}"
+                )
+                fuzzy_scores[pic.id] = total_score
 
             # Embedding search
             # For 1-2 words, expand query for better semantic results
             if n_words <= 3:
                 expanded = f"A photo of {q}" if n_words >= 1 else q
                 semantic_results = self.vault.pictures.find_by_text(
-                    expanded, top_n=top_n * 3, include_scores=True, threshold=threshold
+                    expanded,
+                    top_n=top_n * 3,
+                    include_scores=True,
+                    threshold=threshold / 2,
                 )
                 if not semantic_results:
                     semantic_results = self.vault.pictures.find_by_text(
-                        q, top_n=top_n * 3, include_scores=True, threshold=threshold
+                        q, top_n=top_n * 3, include_scores=True, threshold=threshold / 2
                     )
             else:
                 semantic_results = self.vault.pictures.find_by_text(
-                    q, top_n=top_n * 3, include_scores=True, threshold=threshold
+                    q, top_n=top_n * 3, include_scores=True, threshold=threshold / 2
                 )
             semantic_scores = {pic.id: score for pic, score in semantic_results}
 
             # Weighting: more words = more semantic weight
-            # 1 word: 90% fuzzy, 10% semantic
-            # 2 words: 70% fuzzy, 30% semantic
+            # <=2 words: 80% fuzzy, 20% semantic
             # 3 words: 50/50
-            # 4+ words: 30% fuzzy, 70% semantic (min 10% fuzzy, max 90% semantic)
-            if n_words <= 1:
+            # 4 words: 30% fuzzy, 70% semantic
+            # 5+ 20% fuzzy, 80% semantic
+            if n_words <= 2:
                 fuzzy_w, sem_w = 0.9, 0.1
-            elif n_words == 2:
-                fuzzy_w, sem_w = 0.7, 0.3
             elif n_words == 3:
-                fuzzy_w, sem_w = 0.5, 0.5
+                fuzzy_w, sem_w = 0.6, 0.4
             elif n_words == 4:
                 fuzzy_w, sem_w = 0.3, 0.7
             else:
-                fuzzy_w, sem_w = 0.1, 0.9
+                fuzzy_w, sem_w = 0.2, 0.8
 
             # Merge scores
             all_ids = set(fuzzy_scores.keys()) | set(semantic_scores.keys())
@@ -343,15 +471,39 @@ class Server:
                 fuzzy_score = fuzzy_scores.get(pic_id, 0)
                 sem_score = semantic_scores.get(pic_id, 0)
                 combined_score = fuzzy_w * fuzzy_score + sem_w * sem_score
+                logger.info(
+                    f"Got combined score of {combined_score} for PicID={pic_id} (Fuzzy={fuzzy_score}, Semantic={sem_score})"
+                )
                 pic = next((p for p in all_pics if p.id == pic_id), None)
                 if pic:
+                    if combined_score < threshold:
+                        continue
+                    # Diagnostics: log why this picture matched
+                    tags_and_name = list(pic.tags)
+                    char_name = None
+                    char_id = getattr(pic, "character_id", None)
+                    if char_id is not None:
+                        try:
+                            char_obj = self.vault.characters[int(char_id)]
+                            if getattr(char_obj, "name", None):
+                                char_name = char_obj.name
+                        except Exception:
+                            char_name = None
+                    if char_name:
+                        tags_and_name.append(char_name)
+                    logger.debug(
+                        f"[SEARCH DIAG] Query='{q}' | PicID={pic.id} | Tags+Name={tags_and_name} | Desc='{pic.description}' | Fuzzy={fuzzy_score:.2f} | Embedding={sem_score:.2f} | Combined={combined_score:.2f}"
+                    )
                     combined.append((pic, combined_score, fuzzy_score, sem_score))
 
             # Sort by combined score, then by created_at
             combined.sort(key=lambda x: (-x[1], x[0].created_at or ""))
             # Optionally, include fuzzy/semantic scores for debugging:
             # return [{**pic_to_dict(pic), "score": score, "fuzzy": fuzzy, "semantic": sem} for pic, score, fuzzy, sem in combined[:top_n]]
-            return [pic_to_dict(pic) for pic, _, _, _ in combined[:top_n]]
+            return [
+                pic_to_dict(pic, likeness_score=score)
+                for pic, score, _, _ in combined[:top_n]
+            ]
 
         @self.app.get("/characters/reference_pictures/{id}")
         def get_reference_pictures(id: str):
@@ -418,7 +570,7 @@ class Server:
                 tags=tags_list,
                 is_reference=1,
             )
-            dest_folder = self.vault.get_image_root()
+            dest_folder = self.vault.image_root
             _, iteration = PictureIteration.create_from_bytes(
                 image_root_path=dest_folder,
                 image_bytes=img_bytes,
@@ -447,6 +599,10 @@ class Server:
             if name is not None and name != char.name:
                 char.name = name
                 updated = True
+                # Drop embeddings for all pictures with this character_id
+                pics = self.vault.pictures.find(character_id=id)
+                for pic in pics:
+                    self.vault.pictures.set_embedding_null(pic.id)
             if description is not None and description != char.description:
                 char.description = description
                 updated = True
@@ -548,7 +704,7 @@ class Server:
             except KeyError:
                 raise HTTPException(status_code=404, detail="picture_id does not exist")
 
-            dest_folder = self.vault.get_image_root()
+            dest_folder = self.vault.image_root
             os.makedirs(dest_folder, exist_ok=True)
 
             if file is not None:
@@ -694,13 +850,15 @@ class Server:
             except KeyError:
                 raise HTTPException(status_code=404, detail="Picture not found")
             updated = False
-            # If tags are provided in JSON body, replace tags
+            # If tags are provided in JSON body, replace tags and drop embedding
             if json_body and "tags" in json_body:
                 tags = json_body["tags"]
                 if not isinstance(tags, list):
                     raise HTTPException(status_code=400, detail="tags must be a list")
                 pic.tags = tags
                 updated = True
+                # Drop embedding if tags change
+                self.vault.pictures.set_embedding_null(id)
             # Otherwise, update fields from query params
             for key, value in params.items():
                 if key == "score":
@@ -710,8 +868,12 @@ class Server:
                 except Exception:
                     cast_val = value
                 if hasattr(pic, key):
+                    old_val = getattr(pic, key)
                     setattr(pic, key, cast_val)
                     updated = True
+                    # Drop embedding if character_id changes
+                    if key == "character_id" and old_val != cast_val:
+                        self.vault.pictures.set_embedding_null(id)
                 # If updating character_id, also update all iterations
                 if key == "character_id":
                     # Log character id and name
@@ -721,7 +883,7 @@ class Server:
                         char_name = getattr(char_obj, "name", None)
                     except Exception:
                         char_name = None
-                    logger.info(
+                    logger.debug(
                         f"[PATCH] Assigning picture {id} to character_id={cast_val}, name={char_name}"
                     )
                     cursor = self.vault.connection.cursor()
@@ -761,7 +923,8 @@ class Server:
             Detects media type and sets ID as uuid + extension.
             """
 
-            dest_folder = self.vault.get_image_root()
+            dest_folder = self.vault.image_root
+            logger.debug("Importing pictures to folder: " + str(dest_folder))
             os.makedirs(dest_folder, exist_ok=True)
             tags_list = json.loads(tags) if tags else []
             results = []
@@ -799,7 +962,7 @@ class Server:
             new_pictures = []
             new_iterations = []
             for img_bytes, src_path, ext in files_to_import:
-                logger.info(f"Importing picture from {src_path} with ext={ext}")
+                logger.debug(f"Importing picture from {src_path} with ext={ext}")
                 # Calculate SHA for deduplication
                 sha = (
                     PictureIteration.calculate_hash_from_file_path(src_path)
@@ -1042,14 +1205,13 @@ class Server:
             """
 
             # Determine which set to query
-            if (
-                character_id is None
-                or character_id == ""
-                or character_id.lower() == "none"
-                or character_id == "null"
-            ):
+            if character_id is None:
+                # All
+                pics = self.vault.pictures.find()
+                char_id = None
+            elif character_id == "null":
                 # Unassigned
-                pics = self.vault.pictures.find(character_id=None)
+                pics = self.vault.pictures.find(character_id="null")
                 char_id = None
             else:
                 pics = self.vault.pictures.find(character_id=character_id)
@@ -1079,9 +1241,8 @@ class Server:
             """
             Return the current image roots config (config.json) and OpenAI chat service config.
             """
-            logger.info("About to transmit current config")
-            logger.info(f"Transmitting current config {self.config}")
-            return self.config
+            logger.debug(f"Transmitting current config {self._config}")
+            return self._config
 
         @self.app.patch("/config")
         async def patch_config(request: Request):
@@ -1097,7 +1258,7 @@ class Server:
             updated = False
             image_root_changed = False
             for key, value in patch_data.items():
-                if key not in self.config:
+                if key not in self._config:
                     # Allow adding 'sort', 'thumbnail', 'show_stars', 'show_only_reference' keys if missing
                     if key in (
                         "sort",
@@ -1105,7 +1266,7 @@ class Server:
                         "show_stars",
                         "show_only_reference",
                     ):
-                        self.config[key] = value
+                        self._config[key] = value
                         updated = True
                         continue
                     raise HTTPException(
@@ -1118,36 +1279,36 @@ class Server:
                             os.makedirs(v, exist_ok=True)
                 if (
                     key == "selected_image_root"
-                    and self.config.get("selected_image_root") != value
+                    and self._config.get("selected_image_root") != value
                 ):
                     image_root_changed = True
-                if isinstance(self.config[key], list) and isinstance(value, list):
+                if isinstance(self._config[key], list) and isinstance(value, list):
                     # Append unique items
                     for v in value:
-                        if v not in self.config[key]:
-                            self.config[key].append(v)
+                        if v not in self._config[key]:
+                            self._config[key].append(v)
                             updated = True
                 else:
                     # Replace value
-                    if self.config[key] != value:
-                        self.config[key] = value
+                    if self._config[key] != value:
+                        self._config[key] = value
                         updated = True
             if updated:
                 # Save config
                 config_path = CONFIG_PATH
                 with open(config_path, "w") as f:
-                    json.dump(self.config, f, indent=2)
+                    json.dump(self._config, f, indent=2)
             # If selected_image_root changed, re-initialize vault with new root
             if image_root_changed:
-                new_root = self.config["selected_image_root"]
+                new_root = self._config["selected_image_root"]
                 if not os.path.exists(new_root):
                     os.makedirs(new_root, exist_ok=True)
                 # Re-initialize vault (and DB) with new root
                 self.vault = Vault(
                     image_root=new_root,
-                    description=self.config.get("description"),
+                    description=self._config.get("description"),
                 )
-            return {"status": "success", "updated": updated, "config": self.config}
+            return {"status": "success", "updated": updated, "config": self._config}
 
     def get_version(self):
         try:

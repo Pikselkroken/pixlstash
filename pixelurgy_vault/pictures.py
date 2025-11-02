@@ -1,7 +1,9 @@
 from enum import Enum
 
+import gc
 import numpy as np
 import json
+import time
 
 from pixelurgy_vault.logging import get_logger
 
@@ -36,10 +38,230 @@ def get_sort_mechanisms():
 
 
 class Pictures:
-    def _extract_face_embeddings(self, thread_conn):
-        """Extract face embeddings for pictures that have no face_embedding, using the master iteration image."""
+    INSIGHTFACE_CLEANUP_TIMEOUT = 5  # seconds
+
+    def __init__(self, connection, picture_iterations, db_path, characters=None):
+        self._connection = connection
+        self._picture_iterations = picture_iterations
+        self._db_path = db_path
+        self._skip_pictures = set()
+        self._last_time_insightface_was_needed = None
+        self._characters = characters  # Should be a Characters manager or None
+        self._picture_tagger = PictureTagger("cpu")
+
+    def __getitem__(self, picture_id):
+        # Return master Picture by picture_uuid
+        import sqlite3
+        import time
+
+        logger.debug(f"Fetching picture with id={picture_id} (type={type(picture_id)})")
+        retries = 5
+        delay = 0.2
+        for attempt in range(retries):
+            try:
+                conn = sqlite3.connect(self._db_path, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL;")
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, character_id, description, tags, created_at, embedding FROM pictures WHERE id = ?",
+                    (picture_id,),
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if not row:
+                    raise KeyError(f"Picture with id {picture_id} not found.")
+                tags = []
+                if row["tags"]:
+                    try:
+                        tags = json.loads(row["tags"])
+                    except Exception:
+                        tags = []
+                has_embedding = (
+                    bool(row["embedding"]) if "embedding" in row.keys() else False
+                )
+                pic = Picture(
+                    id=row["id"],
+                    character_id=row["character_id"],
+                    description=row["description"],
+                    tags=tags,
+                    created_at=row["created_at"],
+                    has_embedding=has_embedding,
+                )
+                return pic
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < retries - 1:
+                    logger.warning(
+                        f"Database is locked, retrying ({attempt + 1}/{retries})..."
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    raise
+            except Exception as e:
+                logger.error(f"Error fetching picture {picture_id}: {e}")
+                raise
+
+    def __setitem__(self, picture_id, picture):
+        picture.id = picture_id
+        self.import_picture(picture)
+
+    def __delitem__(self, picture_id):
+        cursor = self._connection.cursor()
+        cursor.execute("DELETE FROM pictures WHERE id = ?", (picture_id,))
+        self._connection.commit()
+
+    def __iter__(self):
+        cursor = self._connection.cursor()
+        cursor.execute("SELECT id FROM pictures")
+        for row in cursor.fetchall():
+            yield row["id"]
+
+    def update_picture_tags(self, picture_id, tags):
+        """
+        Update the tags for a picture in the database.
+        Uses a context manager for atomic update to avoid thread transaction issues.
+        """
+        tags_json = json.dumps(tags)
+        with self._connection:
+            cursor = self._connection.cursor()
+            cursor.execute(
+                "UPDATE pictures SET tags = ? WHERE id = ?", (tags_json, picture_id)
+            )
+
+    def start_embeddings_worker(self, interval=0.25):
+        import threading
+
+        if hasattr(self, "_tag_worker") and self._tag_worker.is_alive():
+            return
+        self._tag_worker_stop = threading.Event()
+        self._tag_worker = threading.Thread(
+            target=self._tag_embeddings_loop, args=(interval,), daemon=True
+        )
+        self._tag_worker.start()
+
+    def stop_embeddings_worker(self):
+        if hasattr(self, "_tag_worker_stop"):
+            self._tag_worker_stop.set()
+        if hasattr(self, "_tag_worker"):
+            self._tag_worker.join(timeout=5)
+
+    def set_embedding_null(self, picture_id):
+        """Set the embedding field to NULL for a given picture."""
+        with self._connection:
+            cursor = self._connection.cursor()
+            cursor.execute(
+                "UPDATE pictures SET embedding = NULL WHERE id = ?", (picture_id,)
+            )
+
+    def _tag_embeddings_loop(self, interval):
+        import sqlite3
+
+        # Create a new connection for this thread
+        thread_conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        thread_conn.row_factory = sqlite3.Row
+
+        calculate_face_embeddings = True
+
+        while not self._tag_worker_stop.is_set():
+            missing_tags = [pic for pic in self.find() if not pic.tags]
+            missing_embeddings = [
+                pic
+                for pic in self.find()
+                if not getattr(pic, "has_embedding", False) and pic.tags
+            ]
+
+            if missing_tags:
+                logger.info(f"Tagging {len(missing_tags)} pictures missing tags.")
+                self._tag_missing_pictures(
+                    thread_conn, self._picture_tagger, missing_tags
+                )
+
+            if missing_embeddings:
+                logger.info(
+                    f"Generating embeddings for {len(missing_embeddings)} pictures."
+                )
+                self._embed_tagged_pictures(
+                    thread_conn, self._picture_tagger, missing_embeddings
+                )
+
+            if calculate_face_embeddings:
+                faces_needing_embeddings = self._find_faces_needing_embeddings(
+                    thread_conn
+                )
+                calculate_face_embeddings = self._extract_face_embeddings(
+                    thread_conn, faces_needing_embeddings
+                )
+
+            self._tag_worker_stop.wait(interval)
+
+    def _tag_missing_pictures(self, thread_conn, picture_tagger, missing_tags):
+        """Tag all pictures missing tags."""
+        assert missing_tags is not None
+        batch = missing_tags[:MAX_CONCURRENT_IMAGES]
+        image_paths = []
+        pic_by_path = {}
+        for pic in batch:
+            master_iters = [
+                it
+                for it in self._picture_iterations.find(picture_id=pic.id, is_master=1)
+            ]
+            if master_iters:
+                master_iter = master_iters[0]
+                image_paths.append(master_iter.file_path)
+                pic_by_path[master_iter.file_path] = pic
+        if image_paths:
+            logger.debug(f"Tagging {len(image_paths)} images")
+            tag_results = picture_tagger.tag_images(image_paths)
+            for path, tags in tag_results.items():
+                pic = pic_by_path.get(path)
+                if pic is not None:
+                    # Remove character tag from tags if present
+                    char_tag = getattr(pic, "character_id", None)
+                    if char_tag and char_tag in tags:
+                        tags = [t for t in tags if t != char_tag]
+                    pic.tags = tags
+                    tags_json = json.dumps(tags)
+                    with thread_conn:
+                        cursor = thread_conn.cursor()
+                        cursor.execute(
+                            "UPDATE pictures SET tags = ? WHERE id = ?",
+                            (tags_json, pic.id),
+                        )
+        return True
+
+    def _find_faces_needing_embeddings(self, thread_conn):
+        """Find picture IDs that need face embeddings."""
         if not hasattr(self, "_skip_pictures"):
             self._skip_pictures = set()
+
+        cursor = thread_conn.cursor()
+        cursor.execute(
+            "SELECT id FROM pictures WHERE face_embedding IS NULL OR face_embedding = ''"
+        )
+        pic_ids = [row[0] for row in cursor.fetchall()]
+        batch = [pic_id for pic_id in pic_ids if pic_id not in self._skip_pictures][
+            :MAX_CONCURRENT_IMAGES
+        ]
+        return batch
+
+    def _extract_face_embeddings(self, thread_conn, faces_needing_embeddings):
+        """Extract face embeddings for pictures that have no face_embedding, using the master iteration image."""
+
+        if not faces_needing_embeddings:
+            if self._last_time_insightface_was_needed is not None:
+                elapsed = time.time() - self._last_time_insightface_was_needed
+                if elapsed > Pictures.INSIGHTFACE_CLEANUP_TIMEOUT:
+                    if hasattr(self, "_insightface_app"):
+                        del self._insightface_app
+                        gc.collect()
+                        logger.info("Unloaded InsightFace app due to inactivity.")
+                    self._last_time_insightface_was_needed = None
+            return True  # Keep going even if if there's nothing to do
+
+        logger.info(
+            f"Have {len(faces_needing_embeddings)} pictures needing face embeddings."
+        )
         try:
             from insightface.app import FaceAnalysis
         except ImportError:
@@ -53,18 +275,11 @@ class Pictures:
             self._insightface_app = FaceAnalysis()
             self._insightface_app.prepare(ctx_id=0)
 
+        self._last_time_insightface_was_needed = time.time()
+
         # Find pictures missing face_embedding
-        cursor = thread_conn.cursor()
-        cursor.execute(
-            "SELECT id FROM pictures WHERE face_embedding IS NULL OR face_embedding = ''"
-        )
-        pic_ids = [row[0] for row in cursor.fetchall()]
-        if not pic_ids:
-            return True  # Keep going even if if there's nothing to do
-        batch = [pic_id for pic_id in pic_ids if pic_id not in self._skip_pictures][
-            :MAX_CONCURRENT_IMAGES
-        ]
-        for pic_id in batch:
+        for pic_id in faces_needing_embeddings:
+            logger.info("Looking for faces in picture %s", pic_id)
             self._skip_pictures.add(pic_id)
             # Find master iteration for this picture
             master_iters = [
@@ -161,174 +376,12 @@ class Pictures:
                 logger.error(
                     f"Failed to extract/store face embedding for picture {pic_id}: {e}"
                 )
+        logger.info("Done extracting face embeddings for current batch.")
         return True
 
-    def __init__(self, connection, picture_iterations, db_path):
-        self._connection = connection
-        self._picture_iterations = picture_iterations
-        self._db_path = db_path
-        self._picture_tagger = PictureTagger()
-        self._skip_pictures = set()
-
-    def __getitem__(self, picture_id):
-        # Return master Picture by picture_uuid
-        import sqlite3
-        import time
-
-        logger.debug(f"Fetching picture with id={picture_id} (type={type(picture_id)})")
-        retries = 5
-        delay = 0.2
-        for attempt in range(retries):
-            try:
-                conn = sqlite3.connect(self._db_path, check_same_thread=False)
-                conn.row_factory = sqlite3.Row
-                conn.execute("PRAGMA journal_mode=WAL;")
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id, character_id, description, tags, created_at, embedding FROM pictures WHERE id = ?",
-                    (picture_id,),
-                )
-                row = cursor.fetchone()
-                conn.close()
-                if not row:
-                    raise KeyError(f"Picture with id {picture_id} not found.")
-                tags = []
-                if row["tags"]:
-                    try:
-                        tags = json.loads(row["tags"])
-                    except Exception:
-                        tags = []
-                has_embedding = (
-                    bool(row["embedding"]) if "embedding" in row.keys() else False
-                )
-                pic = Picture(
-                    id=row["id"],
-                    character_id=row["character_id"],
-                    description=row["description"],
-                    tags=tags,
-                    created_at=row["created_at"],
-                    has_embedding=has_embedding,
-                )
-                return pic
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e) and attempt < retries - 1:
-                    logger.warning(
-                        f"Database is locked, retrying ({attempt + 1}/{retries})..."
-                    )
-                    time.sleep(delay)
-                    continue
-                else:
-                    raise
-            except Exception as e:
-                logger.error(f"Error fetching picture {picture_id}: {e}")
-                raise
-
-    def __setitem__(self, picture_id, picture):
-        picture.id = picture_id
-        self.import_picture(picture)
-
-    def __delitem__(self, picture_id):
-        cursor = self._connection.cursor()
-        cursor.execute("DELETE FROM pictures WHERE id = ?", (picture_id,))
-        self._connection.commit()
-
-    def __iter__(self):
-        cursor = self._connection.cursor()
-        cursor.execute("SELECT id FROM pictures")
-        for row in cursor.fetchall():
-            yield row["id"]
-
-    def update_picture_tags(self, picture_id, tags):
-        """
-        Update the tags for a picture in the database.
-        Uses a context manager for atomic update to avoid thread transaction issues.
-        """
-        tags_json = json.dumps(tags)
-        with self._connection:
-            cursor = self._connection.cursor()
-            cursor.execute(
-                "UPDATE pictures SET tags = ? WHERE id = ?", (tags_json, picture_id)
-            )
-
-    def start_embeddings_worker(self, interval=0.01):
-        import threading
-
-        if hasattr(self, "_tag_worker") and self._tag_worker.is_alive():
-            return
-        self._tag_worker_stop = threading.Event()
-        self._tag_worker = threading.Thread(
-            target=self._tag_embeddings_loop, args=(interval,), daemon=True
-        )
-        self._tag_worker.start()
-
-    def stop_embeddings_worker(self):
-        if hasattr(self, "_tag_worker_stop"):
-            self._tag_worker_stop.set()
-        if hasattr(self, "_tag_worker"):
-            self._tag_worker.join(timeout=5)
-
-    def _tag_embeddings_loop(self, interval):
-        import sqlite3
-
-        # Create a new connection for this thread
-        thread_conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        thread_conn.row_factory = sqlite3.Row
-
-        calculate_face_embeddings = True
-
-        while not self._tag_worker_stop.is_set():
-            self._tag_missing_pictures(thread_conn)
-            self._embed_tagged_pictures(thread_conn)
-            if calculate_face_embeddings:
-                calculate_face_embeddings = self._extract_face_embeddings(thread_conn)
-            self._tag_worker_stop.wait(interval)
-
-    def _tag_missing_pictures(self, thread_conn):
-        """Tag all pictures missing tags."""
-        missing_tags = [pic for pic in self.find() if not pic.tags]
-        if not missing_tags:
-            return False
-        batch = missing_tags[:MAX_CONCURRENT_IMAGES]
-        image_paths = []
-        pic_by_path = {}
-        for pic in batch:
-            master_iters = [
-                it
-                for it in self._picture_iterations.find(picture_id=pic.id, is_master=1)
-            ]
-            if master_iters:
-                master_iter = master_iters[0]
-                image_paths.append(master_iter.file_path)
-                pic_by_path[master_iter.file_path] = pic
-        if image_paths:
-            logger.debug(f"Tagging {len(image_paths)} images")
-            tag_results = self._picture_tagger.tag_images(image_paths)
-            for path, tags in tag_results.items():
-                pic = pic_by_path.get(path)
-                if pic is not None:
-                    # Remove character tag from tags if present
-                    char_tag = getattr(pic, "character_id", None)
-                    if char_tag and char_tag in tags:
-                        tags = [t for t in tags if t != char_tag]
-                    pic.tags = tags
-                    tags_json = json.dumps(tags)
-                    with thread_conn:
-                        cursor = thread_conn.cursor()
-                        cursor.execute(
-                            "UPDATE pictures SET tags = ? WHERE id = ?",
-                            (tags_json, pic.id),
-                        )
-        return True
-
-    def _embed_tagged_pictures(self, thread_conn):
-        """Generate embeddings for pictures that have tags but no embedding."""
-        missing_embeddings = [
-            pic
-            for pic in self.find()
-            if not getattr(pic, "has_embedding", False) and pic.tags
-        ]
-        if not missing_embeddings:
-            return False
+    def _embed_tagged_pictures(self, thread_conn, picture_tagger, missing_embeddings):
+        """Generate embeddings for pictures that have tags but no embedding, including character name, description, and original_prompt if present."""
+        assert missing_embeddings is not None
         batch = missing_embeddings[:MAX_CONCURRENT_IMAGES]
         for pic in batch:
             try:
@@ -339,14 +392,22 @@ class Pictures:
                     pic.tags,
                     ")",
                 )
-                embedding = self._picture_tagger.generate_embedding(
-                    picture=pic, character=pic.character_id
+                # Look up full Character object if available
+                character_obj = None
+                char_id = getattr(pic, "character_id", None)
+                if char_id is not None and self._characters is not None:
+                    try:
+                        character_obj = self._characters[int(char_id)]
+                    except Exception:
+                        character_obj = None
+                embedding, full_text = picture_tagger.generate_embedding(
+                    picture=pic, character=character_obj
                 )
                 with thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
-                        "UPDATE pictures SET embedding = ? WHERE id = ?",
-                        (embedding.astype("float32").tobytes(), pic.id),
+                        "UPDATE pictures SET embedding = ?, description = ? WHERE id = ?",
+                        (embedding.astype("float32").tobytes(), full_text, pic.id),
                     )
                 pic.has_embedding = True
             except Exception as e:
@@ -469,7 +530,7 @@ class Pictures:
                 clauses = []
                 values = []
                 for k, v in kwargs.items():
-                    if v == "":
+                    if v == "" or v == "null":
                         clauses.append(f"{k} IS NULL")
                     else:
                         clauses.append(f"{k}=?")
@@ -540,7 +601,7 @@ class Pictures:
             )
             return []
         # Generate query embedding
-        query_emb = self._picture_tagger.generate_embedding(
+        query_emb, _ = self._picture_tagger.generate_embedding(
             picture={"description": text}
         )
         logger.debug(

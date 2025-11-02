@@ -52,34 +52,39 @@ class Vault:
             image_root (Optional[str]): Path to the image root directory.
             description (Optional[str]): Description of the vault.
         """
-        self.logger = get_logger(__name__)
-
         self.image_root = image_root
+        assert self.image_root is not None, "image_root cannot be None"
+        logger.info(f"Using image_root: {self.image_root}")
         os.makedirs(self.image_root, exist_ok=True)
-        self.db_path = os.path.join(self.image_root, "vault.db")
+
+        self._db_path = os.path.join(self.image_root, "vault.db")
 
         self.connection: Optional[sqlite3.Connection] = None
-        db_exists = os.path.exists(self.db_path)
-        self.logger.info(f"Vault init, db_path={self.db_path}, db_exists={db_exists}")
-        self.connection = sqlite3.connect(self.db_path, check_same_thread=False)
+        db_exists = os.path.exists(self._db_path)
+        logger.info(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
+        self.connection = sqlite3.connect(self._db_path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         # Enable WAL mode for better concurrency
         try:
             self.connection.execute("PRAGMA journal_mode=WAL;")
         except Exception as e:
-            self.logger.warning(f"Failed to set WAL mode: {e}")
+            logger.warning(f"Failed to set WAL mode: {e}")
         if not db_exists:
-            self.logger.debug("Creating tables and importing default data...")
+            logger.debug("Creating tables and importing default data...")
             self._create_tables()
         else:
-            self.logger.debug("Using existing database, skipping default import.")
-        self.upgrader = VaultUpgrade(self.connection)
-        self.upgrader.upgrade_if_necessary()
+            logger.debug("Using existing database, skipping default import.")
+        self._upgrader = VaultUpgrade(self.connection)
+        self._upgrader.upgrade_if_necessary()
+
         if description is not None:
             self.set_metadata("description", description)
-        self.iterations = PictureIterations(self.connection, self.db_path)
-        self.pictures = Pictures(self.connection, self.iterations, self.db_path)
+
+        self.iterations = PictureIterations(self.connection, self._db_path)
         self.characters = Characters(self.connection)
+        self.pictures = Pictures(
+            self.connection, self.iterations, self._db_path, self.characters
+        )
 
         self.iterations.start_quality_worker()
         self.pictures.start_embeddings_worker()
@@ -111,7 +116,7 @@ class Vault:
         Returns:
             str: String representation.
         """
-        return f"Vault(db_path='{self.db_path}')"
+        return f"Vault(db_path='{self._db_path}')"
 
     def close(self):
         """
@@ -211,9 +216,6 @@ class Vault:
         )
         self.connection.commit()
 
-    def get_image_root(self) -> Optional[str]:
-        return self.get_metadata("image_root")
-
     def get_description(self) -> Optional[str]:
         return self.get_metadata("description")
 
@@ -232,13 +234,11 @@ class Vault:
 
         logo_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Logo.png")
         logo_dest_folder = self.get_image_root()
-        self.logger.debug(
-            f"logo_dest_folder in _import_default_data: {logo_dest_folder}"
-        )
+        logger.debug(f"logo_dest_folder in _import_default_data: {logo_dest_folder}")
         if not logo_dest_folder:
             # Fallback: use a default images directory next to the DB file
-            logo_dest_folder = os.path.join(os.path.dirname(self.db_path), "images")
-            self.logger.debug(f"Fallback logo_dest_folder: {logo_dest_folder}")
+            logo_dest_folder = os.path.join(os.path.dirname(self._db_path), "images")
+            logger.debug(f"Fallback logo_dest_folder: {logo_dest_folder}")
         os.makedirs(logo_dest_folder, exist_ok=True)
         logo_dest = os.path.join(logo_dest_folder, "Logo.png")
         if not os.path.exists(logo_dest):

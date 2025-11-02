@@ -8,6 +8,7 @@ import {
   reactive,
   nextTick,
 } from "vue";
+import { marked } from "marked";
 import { VTextField } from "vuetify/components";
 import SearchBar from "./components/SearchBar.vue";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
@@ -113,6 +114,12 @@ function isSupportedImageFile(file) {
   return PIL_IMAGE_EXTENSIONS.includes(ext);
 }
 
+// Format likeness score as percentage with 2 decimals function
+function formatLikenessScore(score) {
+  if (typeof score !== "number") return "";
+  return `Likeness: ${(score * 100).toFixed(2)}%`;
+}
+
 // Extracts the format/extension for overlayImage robustly function
 function getOverlayFormat(overlayImage) {
   if (!overlayImage) return "";
@@ -210,9 +217,9 @@ async function fetchSortOptions() {
       { label: "Date: Oldest First", value: "date_asc" },
       { label: "Score: Highest First", value: "score_desc" },
       { label: "Score: Lowest First", value: "score_asc" },
-      { label: "Score: Lowest First", value: "search_likeness" },
+      { label: "Search Likeness", value: "search_likeness" },
     ];
-    if (!selectedSort.value) selectedSort.value = "unsorted";
+    if (!selectedSort.value) selectedSort.value = "date_desc";
   }
 }
 
@@ -637,6 +644,15 @@ function closeOverlay() {
   overlayOpen.value = false;
 }
 
+const chatOpen = ref(false);
+function openChatOverlay() {
+  chatOpen.value = true;
+}
+
+function closeChatOverlay() {
+  chatOpen.value = false;
+}
+
 // Search bar state and logic
 const searchQuery = ref(""); // Used for actual search
 async function searchImages(query) {
@@ -660,7 +676,7 @@ async function searchImages(query) {
   try {
     const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
       q
-    )}&threshold=0.3&top_n=1000`;
+    )}&threshold=0.5&top_n=1000`;
     const res = await fetch(url);
     if (!res.ok) throw new Error("Search failed");
     const baseImages = await res.json();
@@ -846,14 +862,14 @@ const expandedCharacters = ref({}); // { [characterId]: true/false }
 const sidebarSections = ref({
   pictures: true,
   people: true,
+  search: true,
 });
+
 const images = ref([]);
 const imagesLoading = ref(false);
 const imagesError = ref(null);
 
 // Thumbnail size slider state
-const thumbnailSizes = [128, 192, 256];
-const thumbnailLabels = ["Small", "Medium", "Large"];
 const thumbnailSize = ref(256);
 
 // Responsive columns
@@ -994,14 +1010,14 @@ async function fetchConfig() {
     config.image_roots = data.image_roots || [];
     config.selected_image_root = data.selected_image_root || "";
     // UI options
-    if (data.sort) selectedSort.value = data.sort;
-    if (data.thumbnail) thumbnailSize.value = data.thumbnail;
+    if (data.sort) selectedSort.value = data.sort_order;
+    if (data.thumbnail) thumbnailSize.value = data.thumbnail_size;
     if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
     if (typeof data.show_only_reference === "boolean")
       referenceFilterMode.value = data.show_only_reference;
     // Also update config for PATCHing
-    config.sort = data.sort || selectedSort.value;
-    config.thumbnail = data.thumbnail || thumbnailSize.value;
+    config.sort_order = data.sort || selectedSort.value;
+    config.thumbnail_size = data.thumbnail || thumbnailSize.value;
     config.show_stars =
       typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
     config.show_only_reference =
@@ -1683,6 +1699,61 @@ function confirmDeleteCharacter() {
       });
   }
 }
+
+// Chat state
+const chatMessages = ref([]); // {role: 'user'|'assistant', content: string}
+const chatInput = ref("");
+const chatLoading = ref(false);
+const chatMessagesContainer = ref(null);
+
+function renderMarkdown(text) {
+  return marked.parse(text || "");
+}
+
+async function sendChatMessage() {
+  const input = chatInput.value.trim();
+  if (!input || chatLoading.value) return;
+  chatMessages.value.push({ role: "user", content: input });
+  chatInput.value = "";
+  chatLoading.value = true;
+  await nextTick();
+  // Scroll to bottom
+  if (chatMessagesContainer.value) {
+    chatMessagesContainer.value.scrollTop =
+      chatMessagesContainer.value.scrollHeight;
+  }
+  try {
+    const url = `http://${config.openai_host}:${config.openai_port}/v1/chat/completions`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: config.openai_model || "gpt-3.5-turbo",
+        messages: chatMessages.value.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        stream: false,
+      }),
+    });
+    if (!res.ok) throw new Error("OpenAI server error");
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content || "(No response)";
+    chatMessages.value.push({ role: "assistant", content: reply });
+    await nextTick();
+    if (chatMessagesContainer.value) {
+      chatMessagesContainer.value.scrollTop =
+        chatMessagesContainer.value.scrollHeight;
+    }
+  } catch (e) {
+    chatMessages.value.push({
+      role: "assistant",
+      content: "Error: " + (e.message || e),
+    });
+  } finally {
+    chatLoading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -1751,20 +1822,7 @@ function confirmDeleteCharacter() {
         >
           <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
         </v-btn>
-        <!-- SearchBar moved to sidebar -->
         <div class="toolbar-actions">
-          <!-- Sorting dropdown -->
-          <v-select
-            v-model="selectedSort"
-            :items="sortOptions"
-            item-title="label"
-            item-value="value"
-            label="Sort by"
-            dense
-            hide-details
-            style="min-width: 200px; max-width: 300px; margin-right: 8px"
-          />
-
           <v-icon style="display: flex; align-items: center; height: 100%"
             >mdi-image-size-select-small</v-icon
           >
@@ -1773,12 +1831,10 @@ function confirmDeleteCharacter() {
             :min="128"
             :max="256"
             :step="32"
-            :tick-labels="thumbnailLabels"
             class="slider"
             hide-details
             style="
-              min-width: 256px;
-              max-width: 320px;
+              min-width: 100px;
               vertical-align: middle;
               margin-top: 4px;
               margin-bottom: 4px;
@@ -2116,6 +2172,15 @@ function confirmDeleteCharacter() {
             <div v-show="sidebarSections.people">
               <div v-if="error" class="sidebar-error">{{ error }}</div>
               <div
+                v-if="sortedCharacters.length === 0"
+                class="sidebar-character-group"
+              >
+                <div class="sidebar-list-item">
+                  No characters found. Click the + button to add one.
+                </div>
+              </div>
+              <div
+                v-if="sortedCharacters.length > 0"
                 v-for="char in sortedCharacters"
                 :key="char.id"
                 class="sidebar-character-group"
@@ -2182,6 +2247,43 @@ function confirmDeleteCharacter() {
           </transition>
 
           <div
+            class="sidebar-section-header"
+            @click="sidebarSections.search = !sidebarSections.search"
+          >
+            <v-icon small style="margin-right: 8px">{{
+              sidebarSections.search ? "mdi-chevron-down" : "mdi-chevron-right"
+            }}</v-icon>
+            Search & Sorting
+            <span style="flex: 1 1 auto"></span>
+          </div>
+          <transition name="fade">
+            <div class="search-and-sort" v-show="sidebarSections.search">
+              <div class="sidebar-searchbar-wrapper">
+                <SearchBar
+                  v-model="searchQuery"
+                  placeholder="Search images..."
+                  class="sidebar-searchbar"
+                  @search="searchImages"
+                />
+              </div>
+              <div class="sidebar-searchbar-wrapper">
+                <!-- Sorting dropdown -->
+                <v-select
+                  v-model="selectedSort"
+                  :items="sortOptions"
+                  class="sidebar-sort-select"
+                  item-title="label"
+                  item-value="value"
+                  label="Sort by"
+                  dense
+                  hide-details
+                />
+              </div>
+            </div>
+          </transition>
+
+          <!-- Chat and Settings buttons at the bottom left of the sidebar -->
+          <div
             style="
               position: absolute;
               left: 0;
@@ -2189,6 +2291,8 @@ function confirmDeleteCharacter() {
               width: 100%;
               padding: 16px 0 8px 0;
               display: flex;
+              flex-direction: row;
+              gap: 8px;
               justify-content: flex-start;
               align-items: flex-end;
               pointer-events: none;
@@ -2196,13 +2300,22 @@ function confirmDeleteCharacter() {
           >
             <v-btn
               icon
-              @click="openSettingsDialog"
+              class="sidebar-chat-btn"
+              @click="openChatOverlay"
               style="
                 margin-left: 12px;
                 pointer-events: auto;
                 background: #29405a;
                 color: #fff;
               "
+              title="OpenAI Chat"
+            >
+              <v-icon>mdi-chat</v-icon>
+            </v-btn>
+            <v-btn
+              icon
+              @click="openSettingsDialog"
+              style="pointer-events: auto; background: #29405a; color: #fff"
               title="Settings"
             >
               <v-icon>mdi-cog</v-icon>
@@ -2352,11 +2465,105 @@ function confirmDeleteCharacter() {
                         selectedSort === 'date_desc' ||
                         selectedSort === 'date_asc'
                       "
-                      class="thumbnail-date"
+                      class="thumbnail-info"
                     >
                       {{ new Date(img.created_at).toLocaleString() }}
                     </div>
+                    <!-- Show likeness score under thumbnail if sorting by likeness-->
+                    <div
+                      v-if="selectedSort === 'search_likeness'"
+                      class="thumbnail-info"
+                    >
+                      {{ formatLikenessScore(img.likeness_score) }}
+                    </div>
                   </v-card>
+                </div>
+                <div
+                  v-if="chatOpen"
+                  class="chat-overlay"
+                  @click.self="closeChatOverlay"
+                >
+                  <div class="overlay-content overlay-grid">
+                    <button
+                      class="overlay-close"
+                      @click="closeChatOverlay"
+                      aria-label="Close"
+                      style="
+                        position: absolute;
+                        top: 12px;
+                        right: 18px;
+                        z-index: 20;
+                      "
+                    >
+                      &times;
+                    </button>
+                    <div class="overlay-chat-main">
+                      <div class="overlay-chat-wrapper">
+                        <div class="chat-messages" ref="chatMessagesContainer">
+                          <div
+                            v-for="(msg, i) in chatMessages"
+                            :key="i"
+                            :class="['chat-message', msg.role]"
+                          >
+                            <div class="chat-bubble" :class="msg.role">
+                              <span
+                                v-if="msg.role === 'user'"
+                                class="chat-username"
+                                >You</span
+                              >
+                              <span
+                                v-if="msg.role === 'assistant'"
+                                class="chat-username"
+                                >AI</span
+                              >
+                              <span
+                                v-if="msg.role === 'user'"
+                                class="chat-text"
+                                >{{ msg.content }}</span
+                              >
+                              <span
+                                v-if="msg.role === 'assistant'"
+                                class="chat-text"
+                                ><span
+                                  v-html="renderMarkdown(msg.content)"
+                                ></span
+                              ></span>
+                            </div>
+                          </div>
+                          <div
+                            v-if="chatLoading"
+                            class="chat-message assistant"
+                          >
+                            <div class="chat-bubble assistant">
+                              <span class="chat-username">AI</span>
+                              <span class="chat-text">...</span>
+                            </div>
+                          </div>
+                        </div>
+                        <form
+                          class="chat-input-row"
+                          @submit.prevent="sendChatMessage"
+                        >
+                          <textarea
+                            v-model="chatInput"
+                            class="chat-input"
+                            placeholder="Type your message..."
+                            rows="2"
+                            :disabled="chatLoading"
+                            @keydown.enter.exact.prevent="sendChatMessage"
+                          ></textarea>
+                          <v-btn
+                            type="submit"
+                            :disabled="!chatInput.trim() || chatLoading"
+                            color="primary"
+                            class="chat-send-btn"
+                          >
+                            <v-icon>mdi-send</v-icon>
+                          </v-btn>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <!-- Full image overlay -->
                 <div
@@ -2598,6 +2805,67 @@ function confirmDeleteCharacter() {
 </template>
 
 <style scoped>
+/* Sidebar chat button styles */
+.sidebar-chat-btn-wrapper {
+  position: absolute;
+  left: 0;
+  bottom: 24px;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  z-index: 2;
+}
+.sidebar-chat-btn {
+  background: #29405a;
+  color: #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  transition: background 0.2s;
+}
+.sidebar-chat-btn:hover {
+  background: #ff9800;
+  color: #fff;
+}
+
+/* Chat overlay styles */
+.chat-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chat-overlay-content {
+  background: #fff;
+  width: 90vw;
+  height: 90vh;
+  border-radius: 18px;
+  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.chat-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.2em 1.5em 1.2em 1.5em;
+  background: #29405a;
+  color: #fff;
+  font-size: 1.3em;
+  font-weight: 600;
+}
+.chat-overlay-body {
+  flex: 1;
+  background: #f7f7fa;
+  overflow-y: auto;
+  padding: 2em;
+}
 .app-viewport {
   position: fixed;
   inset: 0;
@@ -2923,7 +3191,7 @@ body {
 .slider {
   flex: 1;
   margin: 0 8px;
-  min-width: 120px;
+  min-width: 100px;
   max-width: 220px;
 }
 .thumbnail-slider {
@@ -3177,7 +3445,7 @@ button[disabled] {
   pointer-events: none;
 }
 
-.thumbnail-date {
+.thumbnail-info {
   font-size: 0.85em;
   color: #666;
   margin-top: 2px;
@@ -3365,29 +3633,138 @@ button:focus:not(:focus-visible) {
   border: none;
   min-width: 90px;
 }
+.search-and-sort {
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-sort-select {
+  background: rgba(200, 200, 200, 0.6);
+}
+
 .sidebar-searchbar-wrapper {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 12px 8px 8px 8px;
+  position: relative;
+  width: 100%;
+  padding: 4px 4px 4px 4px;
 }
 .sidebar-searchbar {
   width: 100%;
-  max-width: 220px;
   min-width: 0;
+  position: relative;
   transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
     width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.sidebar-searchbar:focus-within,
-.sidebar-searchbar:focus {
-  max-width: none;
-  width: 80vw;
-  z-index: 10;
-  position: absolute;
-  left: 10vw;
-  right: 10vw;
-  background: white;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-  border-radius: 8px;
+/* Chat overlay chat UI */
+.overlay-chat-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+/* Modern chat overlay layout */
+.overlay-chat-main {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: stretch;
+}
+.overlay-chat-wrapper {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  padding: 0 0 12px 0;
+  background: none;
+}
+.chat-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 1.2em 1.5em 1em 1.5em;
+  background: #f7f7fa;
+  border-radius: 12px;
+  margin-bottom: 1em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7em;
+}
+.chat-message {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+}
+.chat-bubble {
+  max-width: 70%;
+  padding: 0.7em 1.1em;
+  border-radius: 18px;
+  font-size: 1.08em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  background: #fff;
+  color: #222;
+  word-break: break-word;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.chat-bubble.user {
+  background: #e3f2fd;
+  align-self: flex-end;
+  margin-left: auto;
+  color: #1976d2;
+}
+.chat-bubble.assistant {
+  background: #fffbe7;
+  align-self: flex-start;
+  margin-right: auto;
+  color: #b26a00;
+}
+.chat-username {
+  font-size: 0.92em;
+  font-weight: 600;
+  margin-bottom: 0.2em;
+  opacity: 0.7;
+}
+.chat-text {
+  white-space: pre-line;
+  word-break: break-word;
+}
+.chat-input-row {
+  display: flex;
+  gap: 0.5em;
+  align-items: flex-end;
+  padding: 0 1.5em 0 1.5em;
+}
+.chat-input {
+  flex: 1;
+  min-height: 2.5em;
+  max-height: 8em;
+  resize: vertical;
+  border-radius: 18px;
+  border: 1px solid #bbb;
+  padding: 0.9em 1.2em;
+  font-size: 1.1em;
+  outline: none;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+.chat-send-btn {
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 50%;
+  background: #1976d2;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: background 0.2s;
+}
+.chat-send-btn:disabled {
+  background: #bbb;
+  color: #fff;
+  cursor: not-allowed;
 }
 </style>
