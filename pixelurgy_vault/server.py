@@ -18,8 +18,10 @@ from pixelurgy_vault.vault import Vault
 from pixelurgy_vault.picture import Picture
 from pixelurgy_vault.picture_iteration import PictureIteration
 
+
 APP_NAME = "pixelurgy-vault"
 CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "config.json")
+SERVER_CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "server-config.json")
 
 
 # Logging will be set up after config is loaded
@@ -47,8 +49,8 @@ class Server:
     def __init__(
         self,
         config_path=CONFIG_PATH,
-        vault_db_path=None,
-        image_root=None,
+        server_config_path=SERVER_CONFIG_PATH,
+        selected_image_root=None,
         description=None,
         log_file=None,
     ):
@@ -56,36 +58,37 @@ class Server:
         Initialize the Server instance.
 
         Args:
-            vault_db_path (str, optional): Path to the vault database file.
-            image_root (str, optional): Path to the image root directory.
+            config_path (str): Path to the image roots config file.
+            server_config_path (str): Path to the server-only config file.
+            selected_image_root (str, optional): Path to the selected image root directory.
             description (str, optional): Vault description.
             log_file (str, optional): Path to the log file (or None for stdout).
         """
-        self.config = self.init_config(
-            config_path, vault_db_path, image_root, description, log_file
-        )
+        # Load server-only config
+        with open(server_config_path, "r") as f:
+            self.server_config = json.load(f)
+        # Load image roots config
+        with open(config_path, "r") as f:
+            self.config = json.load(f)
         # SSL config
-        self.require_ssl = self.config.get("require_ssl", False)
-        self.ssl_keyfile = self.config.get("ssl_keyfile", "ssl/key.pem")
-        self.ssl_certfile = self.config.get("ssl_certfile", "ssl/cert.pem")
+        self.require_ssl = self.server_config.get("require_ssl", False)
+        self.ssl_keyfile = self.server_config.get("ssl_keyfile", "ssl/key.pem")
+        self.ssl_certfile = self.server_config.get("ssl_certfile", "ssl/cert.pem")
         if self.require_ssl:
             self._ensure_ssl_certificates()
         # Override config values with explicit arguments
-        if vault_db_path is not None:
-            self.config["db_path"] = vault_db_path
-        if image_root is not None:
-            self.config["image_root"] = image_root
+        if selected_image_root is not None:
+            self.config["selected_image_root"] = selected_image_root
         if description is not None:
             self.config["description"] = description
         if log_file is not None:
-            self.config["log_file"] = log_file
+            self.server_config["log_file"] = log_file
         global logger
-        setup_logging(self.config.get("log_file"))
+        setup_logging(self.server_config.get("log_file"))
         logger = get_logger(__name__)
         self.vault = Vault(
-            db_path=self.config["db_path"],
-            image_root=self.config["image_root"],
-            description=self.config["description"],
+            image_root=self.config["selected_image_root"],
+            description=self.config.get("description"),
         )
 
         self.app = FastAPI(lifespan=self.lifespan)
@@ -108,40 +111,7 @@ class Server:
         if hasattr(self, "vault"):
             self.vault.close()
 
-    def init_config(
-        self,
-        config_path=CONFIG_PATH,
-        vault_db_path=None,
-        image_root=None,
-        description="Pixelurgy Vault default configuration",
-        log_file=None,
-    ):
-        """
-        Initialize and load the server configuration from file, creating defaults if necessary.
-
-        Returns:
-            dict: Configuration dictionary.
-        """
-        config_dir = os.path.dirname(config_path)
-        os.makedirs(config_dir, exist_ok=True)
-        if not os.path.exists(config_path):
-            config = {
-                "db_path": vault_db_path or os.path.join(config_dir, "vault.db"),
-                "image_root": image_root or os.path.join(config_dir, "images"),
-                "description": description,
-                "log_file": log_file,
-                "port": 9537,
-                "require_ssl": False,
-                "ssl_keyfile": "ssl/key.pem",
-                "ssl_certfile": "ssl/cert.pem",
-            }
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=2)
-        else:
-            with open(config_path, "r") as f:
-                config = json.load(f)
-            # Do not override log_file here; let __init__ handle it
-        return config
+    # Removed: init_config (now configs are loaded directly in __init__)
 
     def _ensure_ssl_certificates(self):
         import subprocess
