@@ -217,6 +217,10 @@ async function fetchSortOptions() {
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedReferenceMode = ref(false);
 
+// Track thumbnail load state globally by image ID
+import { reactive } from "vue";
+const thumbLoaded = reactive({});
+
 // Fetch images for the current character and mode, with pagination and sorting
 async function refreshImages(append = false) {
   if (!append) {
@@ -718,22 +722,6 @@ function handleImageSelect(img, idx, event) {
     // Single select
     selectedImageIds.value = [id];
     lastSelectedIndex = idx;
-  }
-}
-
-// Fetch score for an image if missing (called on thumbnail load)
-async function fetchScoreIfMissing(img) {
-  if (typeof img.score === "undefined" || img.score === null) {
-    try {
-      const res = await fetch(`${BACKEND_URL}/pictures/${img.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        if ("score" in data) {
-          // Ensure reactivity
-          Object.assign(img, { score: data.score });
-        }
-      }
-    } catch (e) {}
   }
 }
 
@@ -1281,6 +1269,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
           ...img,
           score: typeof img.score !== "undefined" ? img.score : null,
           is_reference: Number(img.is_reference) || 0,
+          _thumbLoaded: false,
         }));
         // Remove any selected IDs not in the new images
         const newIds = new Set(images.value.map((img) => img.id));
@@ -1345,6 +1334,7 @@ async function assignImagesAsReference(imageIds, characterId) {
           ...img,
           score: typeof img.score !== "undefined" ? img.score : null,
           is_reference: Number(img.is_reference) || 0,
+          _thumbLoaded: false,
         }));
         // Remove any selected IDs not in the new images
         const newIds = new Set(images.value.map((img) => img.id));
@@ -1822,7 +1812,10 @@ function confirmDeleteCharacter() {
                 >
                   <v-card class="thumbnail-card">
                     <div class="thumbnail-container">
-                      <div class="star-overlay" v-if="showStars">
+                      <div
+                        class="star-overlay"
+                        v-if="showStars && thumbLoaded[img.id]"
+                      >
                         <v-icon
                           v-for="n in 5"
                           :key="n"
@@ -1847,6 +1840,8 @@ function confirmDeleteCharacter() {
                         <img
                           :src="`${BACKEND_URL}/thumbnails/${img.id}`"
                           class="thumbnail-img video-thumb"
+                          @load="thumbLoaded[img.id] = true"
+                          @error="thumbLoaded[img.id] = true"
                           @click.stop="
                             (e) => {
                               if (e.ctrlKey || e.metaKey || e.shiftKey) {
@@ -1856,7 +1851,6 @@ function confirmDeleteCharacter() {
                               }
                             }
                           "
-                          @load="fetchScoreIfMissing(img)"
                           style="cursor: pointer; border: 2px solid #2196f3"
                         />
                         <v-icon
@@ -1876,6 +1870,8 @@ function confirmDeleteCharacter() {
                         <img
                           :src="`${BACKEND_URL}/thumbnails/${img.id}`"
                           class="thumbnail-img"
+                          @load="thumbLoaded[img.id] = true"
+                          @error="thumbLoaded[img.id] = true"
                           @click.stop="
                             (e) => {
                               if (e.ctrlKey || e.metaKey || e.shiftKey) {
@@ -1885,12 +1881,12 @@ function confirmDeleteCharacter() {
                               }
                             }
                           "
-                          @load="fetchScoreIfMissing(img)"
                           style="cursor: pointer"
                         />
                       </template>
                       <!-- Trophy icon for reference toggle -->
                       <v-btn
+                        v-if="thumbLoaded[img.id]"
                         icon
                         size="small"
                         class="reference-trophy-btn trophy-bg"
