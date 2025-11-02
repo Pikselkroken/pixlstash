@@ -12,6 +12,8 @@ import { VTextField } from "vuetify/components";
 import SearchBar from "./components/SearchBar.vue";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
 
+const BACKEND_URL = `http://${window.location.hostname}:9537`;
+
 // Drag-and-drop overlay state (for image grid only)
 const dragOverlayVisible = ref(false);
 const dragOverlayMessage = ref("");
@@ -848,8 +850,6 @@ const sidebarSections = ref({
 const images = ref([]);
 const imagesLoading = ref(false);
 const imagesError = ref(null);
-
-const BACKEND_URL = "http://localhost:9537";
 
 // Thumbnail size slider state
 const thumbnailSizes = [128, 192, 256];
@@ -1751,12 +1751,7 @@ function confirmDeleteCharacter() {
         >
           <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
         </v-btn>
-        <SearchBar
-          v-model="searchQuery"
-          placeholder="Search images..."
-          style="min-width: 400px; max-width: 800px; margin-right: 16px"
-          @search="searchImages"
-        />
+        <!-- SearchBar moved to sidebar -->
         <div class="toolbar-actions">
           <!-- Sorting dropdown -->
           <v-select
@@ -1819,15 +1814,6 @@ function confirmDeleteCharacter() {
             style="margin-left: 2px; margin-right: 2px"
           >
             <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
-          </v-btn>
-          <v-btn
-            icon
-            :color="settingsDialog ? 'primary' : 'grey'"
-            @click="openSettingsDialog"
-            title="Settings"
-            style="margin-left: 2px; margin-right: 2px"
-          >
-            <v-icon>mdi-cog</v-icon>
           </v-btn>
           <v-btn
             icon
@@ -2194,6 +2180,34 @@ function confirmDeleteCharacter() {
               </div>
             </div>
           </transition>
+
+          <div
+            style="
+              position: absolute;
+              left: 0;
+              bottom: 0;
+              width: 100%;
+              padding: 16px 0 8px 0;
+              display: flex;
+              justify-content: flex-start;
+              align-items: flex-end;
+              pointer-events: none;
+            "
+          >
+            <v-btn
+              icon
+              @click="openSettingsDialog"
+              style="
+                margin-left: 12px;
+                pointer-events: auto;
+                background: #29405a;
+                color: #fff;
+              "
+              title="Settings"
+            >
+              <v-icon>mdi-cog</v-icon>
+            </v-btn>
+          </div>
         </aside>
         <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
           <div
@@ -3350,5 +3364,30 @@ button:focus:not(:focus-visible) {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
   border: none;
   min-width: 90px;
+}
+.sidebar-searchbar-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 12px 8px 8px 8px;
+}
+.sidebar-searchbar {
+  width: 100%;
+  max-width: 220px;
+  min-width: 0;
+  transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sidebar-searchbar:focus-within,
+.sidebar-searchbar:focus {
+  max-width: none;
+  width: 80vw;
+  z-index: 10;
+  position: absolute;
+  left: 10vw;
+  right: 10vw;
+  background: white;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
 }
 </style>
