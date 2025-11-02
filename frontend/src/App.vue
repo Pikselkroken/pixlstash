@@ -1896,6 +1896,12 @@ function confirmDeleteCharacter() {
                         class="reference-trophy-btn trophy-bg"
                         @click.stop="toggleReference(img)"
                         title="Toggle reference picture"
+                        style="
+                          position: absolute;
+                          top: 8px;
+                          left: 8px;
+                          z-index: 2;
+                        "
                       >
                         <v-icon
                           :color="img.is_reference ? 'orange' : 'grey darken-2'"
@@ -1974,8 +1980,8 @@ function confirmDeleteCharacter() {
                               :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
                               class="overlay-video"
                               controls
-                              :poster="`${BACKEND_URL}/thumbnails/${overlayImage.id}`"
-                              preload="metadata"
+                              preload="auto"
+                              playsinline
                               style="background: #111"
                             ></video>
                             <img
@@ -2008,8 +2014,8 @@ function confirmDeleteCharacter() {
                             title="Toggle reference picture"
                             style="
                               position: absolute;
-                              right: 8px;
-                              bottom: 8px;
+                              top: 8px;
+                              left: 8px;
                               z-index: 2;
                             "
                           >
@@ -2573,7 +2579,7 @@ body {
   max-width: 100%;
   max-height: 70vh;
   min-height: 256px;
-  object-fit: contain;
+  object-fit: cover;
   border-radius: 8px;
   background: #111;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
