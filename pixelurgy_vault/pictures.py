@@ -193,6 +193,9 @@ class Pictures:
                     continue
                 else:
                     raise
+            except Exception as e:
+                logger.error(f"Error fetching picture {picture_id}: {e}")
+                raise
 
     def __setitem__(self, picture_id, picture):
         picture.id = picture_id
@@ -426,38 +429,48 @@ class Pictures:
         Find and return a list of Picture objects matching all provided attribute=value pairs.
         Example: pictures.find(character_id="hero")
         Special case: if a value is an empty string, search for IS NULL.
+        Uses a fresh SQLite connection per call for thread safety.
         """
-        cursor = self._connection.cursor()
-        if not kwargs:
-            cursor.execute("SELECT * FROM pictures")
-        else:
-            clauses = []
-            values = []
-            for k, v in kwargs.items():
-                if v == "":
-                    clauses.append(f"{k} IS NULL")
-                else:
-                    clauses.append(f"{k}=?")
-                    values.append(v)
-            query = "SELECT * FROM pictures WHERE " + " AND ".join(clauses)
-            cursor.execute(query, tuple(values))
-        rows = cursor.fetchall()
-        result = []
-        for row in rows:
-            has_embedding = (
-                bool(row["embedding"]) if "embedding" in row.keys() else False
-            )
-            pic = Picture(
-                id=row["id"],
-                character_id=row["character_id"],
-                description=row["description"],
-                tags=json.loads(row["tags"]) if row["tags"] else [],
-                created_at=row["created_at"],
-                is_reference=row["is_reference"] if "is_reference" in row.keys() else 0,
-                has_embedding=has_embedding,
-            )
-            result.append(pic)
-        return result
+        import sqlite3
+
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            if not kwargs:
+                cursor.execute("SELECT * FROM pictures")
+            else:
+                clauses = []
+                values = []
+                for k, v in kwargs.items():
+                    if v == "":
+                        clauses.append(f"{k} IS NULL")
+                    else:
+                        clauses.append(f"{k}=?")
+                        values.append(v)
+                query = "SELECT * FROM pictures WHERE " + " AND ".join(clauses)
+                cursor.execute(query, tuple(values))
+            rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                has_embedding = (
+                    bool(row["embedding"]) if "embedding" in row.keys() else False
+                )
+                pic = Picture(
+                    id=row["id"],
+                    character_id=row["character_id"],
+                    description=row["description"],
+                    tags=json.loads(row["tags"]) if row["tags"] else [],
+                    created_at=row["created_at"],
+                    is_reference=row["is_reference"]
+                    if "is_reference" in row.keys()
+                    else 0,
+                    has_embedding=has_embedding,
+                )
+                result.append(pic)
+            return result
+        finally:
+            conn.close()
 
     def find_by_tag_or_description(self, query):
         """

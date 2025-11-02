@@ -389,7 +389,6 @@ class PictureIterations:
         self._connection.commit()
 
     def find(self, **kwargs):
-        # Use named columns for safety
         cursor = self._connection.cursor()
         # Coerce is_master to int if present (avoid bool/numpy types)
         if "is_master" in kwargs:
@@ -400,33 +399,36 @@ class PictureIterations:
                     f"[PICTURE_ITERATIONS.FIND] Could not coerce is_master to int: {kwargs['is_master']} ({type(kwargs['is_master'])}): {e}"
                 )
                 raise
-        if not kwargs:
-            cursor.execute("SELECT * FROM picture_iterations")
-        else:
-            query = "SELECT * FROM picture_iterations WHERE " + " AND ".join(
-                [f"{k}=?" for k in kwargs.keys()]
-            )
-            params = tuple(kwargs.values())
-            # Debug: log query and params
-            logger.debug(f"[PICTURE_ITERATIONS.FIND] SQL: {query} | PARAMS: {params}")
-            # Check for parameter mismatch
-            if query.count("?") != len(params):
-                logger.error(
-                    f"[PICTURE_ITERATIONS.FIND] Parameter count mismatch: {query.count('?')} placeholders, {len(params)} params"
+        try:
+            if not kwargs:
+                logger.debug(
+                    "[PICTURE_ITERATIONS.FIND] SQL: SELECT * FROM picture_iterations | PARAMS: ()"
                 )
-            try:
+                cursor.execute("SELECT * FROM picture_iterations")
+            else:
+                query = "SELECT * FROM picture_iterations WHERE " + " AND ".join(
+                    [f"{k}=?" for k in kwargs.keys()]
+                )
+                params = tuple(kwargs.values())
+                logger.debug(
+                    f"[PICTURE_ITERATIONS.FIND] SQL: {query} | PARAMS: {params} | PARAM TYPES: {[type(p) for p in params]}"
+                )
+                if query.count("?") != len(params):
+                    logger.error(
+                        f"[PICTURE_ITERATIONS.FIND] Parameter count mismatch: {query.count('?')} placeholders, {len(params)} params"
+                    )
                 cursor.execute(query, params)
-            except Exception as e:
-                logger.error(
-                    f"[PICTURE_ITERATIONS.FIND] Exception: {e} | SQL: {query} | PARAMS: {params}"
-                )
-                raise
+        except Exception as e:
+            logger.error(
+                f"[PICTURE_ITERATIONS.FIND] Exception: {e} | SQL: {locals().get('query', 'N/A')} | PARAMS: {locals().get('params', 'N/A')} | PARAM TYPES: {locals().get('params', None) and [type(p) for p in locals()['params']]} | KWARGS: {kwargs}"
+            )
+            raise
         rows = cursor.fetchall()
         result = []
 
         for row in rows:
             quality = None
-            if row["quality"]:
+            if "quality" in row and row["quality"]:
                 try:
                     qdata = json.loads(row["quality"])
                     if isinstance(qdata, dict):

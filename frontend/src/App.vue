@@ -110,8 +110,32 @@ function isSupportedImageFile(file) {
   return PIL_IMAGE_EXTENSIONS.includes(ext);
 }
 
-function isSupportedVideoFile(file) {
-  const ext = file.name.split(".").pop().toLowerCase();
+// Extracts the format/extension for overlayImage robustly function
+function getOverlayFormat(overlayImage) {
+  if (!overlayImage) return "";
+  if (overlayImage.format) return overlayImage.format;
+  if (overlayImage.filename) {
+    return overlayImage.filename.split(".").pop().toLowerCase();
+  }
+  if (overlayImage.url) {
+    return overlayImage.url.split(".").pop().toLowerCase();
+  }
+  if (overlayImage.id) {
+    return overlayImage.id.split(".").pop().toLowerCase();
+  }
+  return "png";
+}
+
+// Accepts either a file object (with .name) or a string extension
+function isSupportedVideoFile(input) {
+  let ext = "";
+  if (typeof input === "string") {
+    ext = input.toLowerCase();
+  } else if (input && input.name) {
+    ext = input.name.split(".").pop().toLowerCase();
+  }
+  console.log("[VIDEO] Is it a valid video format:", input, "ext:", ext);
+
   return VIDEO_EXTENSIONS.includes(ext);
 }
 
@@ -165,7 +189,7 @@ const hasMoreImages = ref(true);
 // Fetch sort mechanisms from backend
 async function fetchSortOptions() {
   try {
-    const res = await fetch(`${BACKEND_URL}/pictures/sort_mechanisms`);
+    const res = await fetch(`${BACKEND_URL}/sort_mechanisms`);
     if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
     const options = await res.json();
     sortOptions.value = options.map((opt) => ({
@@ -1812,7 +1836,13 @@ function confirmDeleteCharacter() {
                         >
                       </div>
                       <template
-                        v-if="img.format && isSupportedVideoFile(img.format)"
+                        v-if="
+                          (img.format && isSupportedVideoFile(img.format)) ||
+                          (!img.format &&
+                            isSupportedVideoFile(
+                              (img.id || '').split('.').pop()
+                            ))
+                        "
                       >
                         <img
                           :src="`${BACKEND_URL}/thumbnails/${img.id}`"
@@ -1834,7 +1864,7 @@ function confirmDeleteCharacter() {
                           style="
                             position: absolute;
                             bottom: 8px;
-                            right: 8px;
+                            left: 8px;
                             color: #2196f3;
                             background: white;
                             border-radius: 50%;
@@ -1934,12 +1964,27 @@ function confirmDeleteCharacter() {
                       </div>
                       <div class="overlay-img-wrapper">
                         <div style="position: relative; display: inline-block">
-                          <img
-                            v-if="overlayImage"
-                            :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
-                            :alt="overlayImage.description || 'Full Image'"
-                            class="overlay-img"
-                          />
+                          <template v-if="overlayImage">
+                            <video
+                              v-if="
+                                isSupportedVideoFile(
+                                  getOverlayFormat(overlayImage)
+                                )
+                              "
+                              :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+                              class="overlay-video"
+                              controls
+                              :poster="`${BACKEND_URL}/thumbnails/${overlayImage.id}`"
+                              preload="metadata"
+                              style="background: #111"
+                            ></video>
+                            <img
+                              v-else
+                              :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+                              :alt="overlayImage.description || 'Full Image'"
+                              class="overlay-img"
+                            />
+                          </template>
                           <div class="star-overlay" v-if="overlayImage">
                             <v-icon
                               v-for="n in 5"
@@ -2448,7 +2493,6 @@ body {
   min-width: 80px;
   max-width: 180px;
 }
-/* Overlay modal for full image view */
 .image-overlay {
   position: fixed;
   top: 0;
@@ -2502,10 +2546,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  vertical-align: middle;
   width: 100%;
-  height: 100%;
+  height: 70vh;
   max-width: 100%;
+  min-height: 256px;
 }
 .overlay-img-container {
   height: 90%;
@@ -2514,6 +2558,7 @@ body {
   align-items: center;
   justify-content: center;
 }
+
 .overlay-img {
   max-width: 100%;
   max-height: 70vh;
@@ -2523,6 +2568,17 @@ body {
   background: #111;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
+
+.overlay-video {
+  max-width: 100%;
+  max-height: 70vh;
+  min-height: 256px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #111;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
 .overlay-close {
   position: absolute;
   top: 8px;
