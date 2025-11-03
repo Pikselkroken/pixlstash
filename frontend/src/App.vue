@@ -647,6 +647,9 @@ function closeOverlay() {
 const chatOpen = ref(false);
 function openChatOverlay() {
   chatOpen.value = true;
+  nextTick(() => {
+    if (chatInputField.value) chatInputField.value.focus();
+  });
 }
 
 function closeChatOverlay() {
@@ -1705,12 +1708,13 @@ const chatMessages = ref([]); // {role: 'user'|'assistant', content: string}
 const chatInput = ref("");
 const chatLoading = ref(false);
 const chatMessagesContainer = ref(null);
+const chatInputField = ref(null);
 
 function renderMarkdown(text) {
   return marked.parse(text || "");
 }
 
-async function sendChatMessage() {
+async function sendChatMessageAndFocus() {
   const input = chatInput.value.trim();
   if (!input || chatLoading.value) return;
   chatMessages.value.push({ role: "user", content: input });
@@ -1752,6 +1756,10 @@ async function sendChatMessage() {
     });
   } finally {
     chatLoading.value = false;
+    await nextTick();
+    if (chatInputField.value) {
+      chatInputField.value.focus();
+    }
   }
 }
 </script>
@@ -2483,85 +2491,80 @@ async function sendChatMessage() {
                   class="chat-overlay"
                   @click.self="closeChatOverlay"
                 >
-                  <div class="overlay-content overlay-grid">
-                    <button
-                      class="overlay-close"
-                      @click="closeChatOverlay"
-                      aria-label="Close"
-                      style="
-                        position: absolute;
-                        top: 12px;
-                        right: 18px;
-                        z-index: 20;
-                      "
+                  <div class="chat-overlay-content">
+                    <div class="chat-overlay-header">
+                      <span>AI Chat</span>
+                      <button
+                        class="overlay-close"
+                        @click="closeChatOverlay"
+                        aria-label="Close"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                    <div
+                      class="overlay-chat-main"
+                      style="flex: 1; display: flex; flex-direction: column"
                     >
-                      &times;
-                    </button>
-                    <div class="overlay-chat-main">
-                      <div class="overlay-chat-wrapper">
-                        <div class="chat-messages" ref="chatMessagesContainer">
-                          <div
-                            v-for="(msg, i) in chatMessages"
-                            :key="i"
-                            :class="['chat-message', msg.role]"
-                          >
-                            <div class="chat-bubble" :class="msg.role">
+                      <div
+                        class="chat-messages"
+                        ref="chatMessagesContainer"
+                        style="flex: 1; overflow-y: auto"
+                      >
+                        <div
+                          v-for="(msg, i) in chatMessages"
+                          :key="i"
+                          :class="
+                            msg.role === 'user'
+                              ? 'chat-message-user'
+                              : 'chat-message-assistant'
+                          "
+                        >
+                          <template v-if="msg.role === 'user'">
+                            <div class="chat-bubble user">
+                              <span class="chat-username">You</span>
+                              <span class="chat-text">{{ msg.content }}</span>
+                            </div>
+                          </template>
+                          <template v-else>
+                            <div class="chat-assistant-full">
+                              <span class="chat-username">AI</span>
                               <span
-                                v-if="msg.role === 'user'"
-                                class="chat-username"
-                                >You</span
-                              >
-                              <span
-                                v-if="msg.role === 'assistant'"
-                                class="chat-username"
-                                >AI</span
-                              >
-                              <span
-                                v-if="msg.role === 'user'"
                                 class="chat-text"
-                                >{{ msg.content }}</span
-                              >
-                              <span
-                                v-if="msg.role === 'assistant'"
-                                class="chat-text"
-                                ><span
-                                  v-html="renderMarkdown(msg.content)"
-                                ></span
+                                v-html="renderMarkdown(msg.content)"
                               ></span>
                             </div>
-                          </div>
-                          <div
-                            v-if="chatLoading"
-                            class="chat-message assistant"
-                          >
-                            <div class="chat-bubble assistant">
-                              <span class="chat-username">AI</span>
-                              <span class="chat-text">...</span>
-                            </div>
+                          </template>
+                        </div>
+                        <div v-if="chatLoading" class="chat-message-assistant">
+                          <div class="chat-assistant-full">
+                            <span class="chat-username">AI</span>
+                            <span class="chat-text">...</span>
                           </div>
                         </div>
-                        <form
-                          class="chat-input-row"
-                          @submit.prevent="sendChatMessage"
-                        >
-                          <textarea
-                            v-model="chatInput"
-                            class="chat-input"
-                            placeholder="Type your message..."
-                            rows="2"
-                            :disabled="chatLoading"
-                            @keydown.enter.exact.prevent="sendChatMessage"
-                          ></textarea>
-                          <v-btn
-                            type="submit"
-                            :disabled="!chatInput.trim() || chatLoading"
-                            color="primary"
-                            class="chat-send-btn"
-                          >
-                            <v-icon>mdi-send</v-icon>
-                          </v-btn>
-                        </form>
                       </div>
+                      <form
+                        class="chat-input-row"
+                        @submit.prevent="sendChatMessageAndFocus"
+                      >
+                        <textarea
+                          v-model="chatInput"
+                          class="chat-input"
+                          placeholder="Type your message..."
+                          rows="2"
+                          :disabled="chatLoading"
+                          ref="chatInputField"
+                          @keydown.enter.exact.prevent="sendChatMessageAndFocus"
+                        ></textarea>
+                        <v-btn
+                          type="submit"
+                          :disabled="!chatInput.trim() || chatLoading"
+                          color="primary"
+                          class="chat-send-btn"
+                        >
+                          <v-icon>mdi-send</v-icon>
+                        </v-btn>
+                      </form>
                     </div>
                   </div>
                 </div>
@@ -3700,7 +3703,7 @@ button:focus:not(:focus-visible) {
   justify-content: flex-start;
 }
 .chat-bubble {
-  max-width: 70%;
+  max-width: 0%;
   padding: 0.7em 1.1em;
   border-radius: 18px;
   font-size: 1.08em;
@@ -3712,17 +3715,36 @@ button:focus:not(:focus-visible) {
   flex-direction: column;
   align-items: flex-start;
 }
+.chat-message-user {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.7em;
+}
 .chat-bubble.user {
   background: #e3f2fd;
-  align-self: flex-end;
-  margin-left: auto;
   color: #1976d2;
+  border-radius: 18px;
+  padding: 0.7em 1.1em;
+  max-width: 90%;
+  align-self: flex-end;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
-.chat-bubble.assistant {
-  background: #fffbe7;
-  align-self: flex-start;
-  margin-right: auto;
-  color: #b26a00;
+.chat-message-assistant {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 0.7em;
+}
+.chat-assistant-full {
+  width: 100%;
+  background: none;
+  color: #222;
+  border-radius: 0;
+  padding: 0.2em 0 0.2em 0;
+  box-shadow: none;
+  font-size: 1.08em;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 .chat-username {
   font-size: 0.92em;
