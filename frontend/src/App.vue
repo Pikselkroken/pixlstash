@@ -1196,13 +1196,13 @@ watch([selectedCharacter, selectedReferenceMode], async ([id, refMode]) => {
 });
 
 function handleOverlayKeydown(e) {
-  // Don't trigger shortcuts if focus is in a text field
+  // Don't trigger most shortcuts if focus is in a text field, but allow Escape for chat overlay
   const tag =
     e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
   const isEditable =
     e.target &&
     (e.target.isContentEditable || tag === "input" || tag === "textarea");
-  if (isEditable) return;
+  if (isEditable && !(chatOpen.value && e.key === "Escape")) return;
   // Ctrl+A: select all images in grid
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
     if (images.value.length) {
@@ -1245,6 +1245,11 @@ function handleOverlayKeydown(e) {
       e.preventDefault();
       return;
     }
+  }
+  if (chatOpen.value && e.key === "Escape") {
+    closeChatOverlay();
+    e.preventDefault();
+    return;
   }
   // Grid navigation and selection
   if (!images.value.length) return;
@@ -2862,7 +2867,45 @@ async function sendChatMessageAndFocus() {
   color: #fff;
   font-size: 1.3em;
   font-weight: 600;
+  position: relative;
 }
+
+.chat-overlay-header .overlay-close {
+  position: absolute;
+  top: 0.7em;
+  right: 1.1em;
+  font-size: 2.1em;
+  color: #fff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 10;
+  line-height: 1;
+  padding: 0 8px;
+  transition: color 0.2s;
+}
+.chat-overlay-header .overlay-close:hover {
+  color: #ff5252;
+}
+
+.chat-overlay-header .overlay-close {
+  position: absolute;
+  top: 0.7em;
+  right: 1.1em;
+  font-size: 2.1em;
+  color: #fff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 10;
+  line-height: 1;
+  padding: 0 8px;
+  transition: color 0.2s;
+}
+.chat-overlay-header .overlay-close:hover {
+  color: #ff5252;
+}
+
 .chat-overlay-body {
   flex: 1;
   background: #f7f7fa;
@@ -3417,27 +3460,39 @@ body {
   border: none;
   box-shadow: none;
   padding: 0;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  padding: 0.9em 1.2em 0.9em 1.5em;
+  background: #29405a;
+  color: #fff;
+  font-size: 1.3em;
+  font-weight: 600;
+  position: relative;
+  min-height: 48px;
+}
+
+.chat-overlay-header span {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  font-size: 1.13em;
+  font-weight: 600;
+  padding-right: 0.5em;
+}
+.chat-overlay-header .overlay-close {
   position: absolute;
-  right: 2px;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-left: 0;
-}
-.add-character-inline:hover {
-  color: #ffe082;
-}
-.edit-character-input {
-  font-size: 1em;
-  background: #fff;
-  color: #222;
-  border-radius: 4px;
-  border: 1px solid #bbb;
-  padding: 2px 6px;
-  outline: none;
-  width: 90%;
+  top: 0.5em;
+  right: 0.7em;
+  font-size: 2em;
+  color: #fff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 10;
+  line-height: 1;
+  padding: 0 4px;
+  transition: color 0.2s;
   margin-left: 0;
 }
 /* Make disabled buttons more faded */
@@ -3761,6 +3816,7 @@ button:focus:not(:focus-visible) {
   gap: 0.5em;
   align-items: flex-end;
   padding: 0 1.5em 0 1.5em;
+  margin-bottom: 10px;
 }
 .chat-input {
   flex: 1;
