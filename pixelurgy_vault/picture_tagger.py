@@ -163,6 +163,23 @@ class PictureTagger:
         self._clip_model = self._clip_model.to(self._clip_device)
         self._clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
 
+    def __enter__(self):
+        logger.debug("PictureTagger.__enter__ called.")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Release ONNX/PyTorch resources here
+        # For ONNX: self.session = None
+        # For PyTorch: del self.model; torch.cuda.empty_cache()
+        import gc
+
+        del self._clip_model
+        self.ort_sess = None
+        torch.cuda.empty_cache()
+
+        gc.collect()
+        logger.debug("PictureTagger.exit called, resources released.")
+
     def _init_onnx_session(self):
         onnx_path = f"{self._model_location}/model.onnx"
         logger.debug("Running wd14 tagger with onnx")

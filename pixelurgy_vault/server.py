@@ -1049,7 +1049,7 @@ class Server:
                 or character_id == "null"
             ):
                 # Unassigned
-                pics = self.vault.pictures.find(character_id=None)
+                pics = self.vault.pictures.find()
                 char_id = None
             else:
                 pics = self.vault.pictures.find(character_id=character_id)
