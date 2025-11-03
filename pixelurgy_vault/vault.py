@@ -233,7 +233,7 @@ class Vault:
         # Add Logo.png to every vault
 
         logo_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Logo.png")
-        logo_dest_folder = self.get_image_root()
+        logo_dest_folder = self.image_root
         logger.debug(f"logo_dest_folder in _import_default_data: {logo_dest_folder}")
         if not logo_dest_folder:
             # Fallback: use a default images directory next to the DB file

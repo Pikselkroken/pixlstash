@@ -308,9 +308,9 @@ class PictureTagger:
             tag_replacements = escaped_tag_replacements.split(";")
             for tag_replacement in tag_replacements:
                 tags = tag_replacement.split(",")  # source, target
-                assert (
-                    len(tags) == 2
-                ), f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
+                assert len(tags) == 2, (
+                    f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
+                )
                 source, target = [
                     tag.replace("@@@@", ",").replace("####", ";") for tag in tags
                 ]

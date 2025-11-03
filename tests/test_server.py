@@ -61,11 +61,10 @@ def test_esmeralda_vault_character_and_logo():
     """Test that EsmeraldaVault exists and her picture matches Logo.png exactly."""
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
         # This triggers _import_default_data
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             server.vault.import_default_data()
             client = TestClient(server.app)
 
@@ -96,19 +95,18 @@ def test_esmeralda_vault_character_and_logo():
             with open(logo_path, "rb") as f:
                 logo_bytes = f.read()
             # Compare the full file
-            assert (
-                img_resp.content == logo_bytes
-            ), "EsmeraldaVault's picture does not match Logo.png"
+            assert img_resp.content == logo_bytes, (
+                "EsmeraldaVault's picture does not match Logo.png"
+            )
     gc.collect()
 
 
 def test_create_and_get_default_character():
     """Test creating and fetching the default character 'Esmeralda'."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
 
             # Create Esmeralda
@@ -139,10 +137,9 @@ def test_upload_iteration_to_existing_picture():
     """Test uploading additional iterations to an existing picture."""
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
 
             # Create a new picture with a master iteration
@@ -198,10 +195,9 @@ def test_upload_iteration_to_existing_picture():
 
 def test_post_logo_altered_pixel_upload():
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
             img = Image.open(logo_path).convert("RGBA")
@@ -231,10 +227,9 @@ def test_post_logo_altered_pixel_upload():
 
 def test_post_logo_altered_pixel_path():
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
             img = Image.open(logo_path).convert("RGBA")
@@ -262,9 +257,8 @@ def test_post_logo_altered_pixel_path():
 
 def test_read_root():
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
             response = client.get("/")
             assert response.status_code == 200
@@ -278,10 +272,9 @@ def test_read_root():
 
 def test_benchmark_add_images_by_binary_upload():
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
 
             start = time.time()
@@ -316,10 +309,9 @@ def test_benchmark_add_images_by_binary_upload():
 
 def test_benchmark_add_images_by_path():
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
             image_paths = []
             total_bytes = 0
@@ -366,10 +358,9 @@ def test_benchmark_add_images_by_path():
 
 def test_benchmark_add_images_by_directory():
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
             image_path = os.path.join(temp_dir, "image_dir")
             os.makedirs(image_path, exist_ok=True)
@@ -418,10 +409,9 @@ def test_benchmark_add_images_by_directory():
 def test_reference_picture_workflow():
     """Test adding and retrieving reference images for a character."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
 
             # Create a character
@@ -477,14 +467,13 @@ def test_tagger_worker_adds_tags():
     import shutil
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
         # Copy TaggerTest.png into temp dir
         src_img = os.path.join(os.path.dirname(__file__), "../pictures/TaggerTest.png")
         dest_img = os.path.join(image_root, "TaggerTest.png")
         shutil.copyfile(src_img, dest_img)
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             client = TestClient(server.app)
 
             # Upload TaggerTest.png as a new picture
@@ -511,9 +500,9 @@ def test_tagger_worker_adds_tags():
                 found_tags = pic_info.get("tags", [])
                 if found_tags:
                     break
-            assert (
-                found_tags
-            ), "Tagger worker did not add tags to TaggerTest.png after waiting."
+            assert found_tags, (
+                "Tagger worker did not add tags to TaggerTest.png after waiting."
+            )
             print(f"Tags for TaggerTest.png: {found_tags}")
     gc.collect()
 
@@ -523,7 +512,6 @@ def test_semantic_search_on_all_pictures():
     import shutil
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        vault_path = os.path.join(temp_dir, "vault.db")
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
         # Copy all images from pictures folder
@@ -537,7 +525,7 @@ def test_semantic_search_on_all_pictures():
             shutil.copyfile(
                 os.path.join(src_dir, fname), os.path.join(image_root, fname)
             )
-        with Server(vault_db_path=vault_path, image_root=image_root) as server:
+        with Server(image_root=image_root) as server:
             server.vault.import_default_data()
             client = TestClient(server.app)
 
@@ -589,7 +577,7 @@ def test_semantic_search_on_all_pictures():
                 print("Semantic search results:")
                 for pic in results:
                     print(pic)
-                assert (
-                    1 <= len(results)
-                ), f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+                assert 1 <= len(results), (
+                    f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+                )
     gc.collect()

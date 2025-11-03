@@ -54,7 +54,7 @@ class Server:
         self,
         config_path=CONFIG_PATH,
         server_config_path=SERVER_CONFIG_PATH,
-        selected_image_root=None,
+        image_root=None,
         description=None,
         log_file=None,
     ):
@@ -70,7 +70,7 @@ class Server:
         """
         self._init_config(
             config_path=config_path,
-            image_root=selected_image_root,
+            image_root=image_root,
             description=description,
         )
         self.__init_server_config(
@@ -82,8 +82,8 @@ class Server:
             self._ensure_ssl_certificates()
 
         # Override config values with explicit arguments
-        if selected_image_root is not None:
-            self._config["selected_image_root"] = selected_image_root
+        if image_root is not None:
+            self._config["selected_image_root"] = image_root
         if log_file is not None:
             self._server_config["log_file"] = log_file
 
