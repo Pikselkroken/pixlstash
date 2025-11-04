@@ -8693,7 +8693,7 @@ class TagNaturaliser:
             "Focus on the main subject, clothing, and setting if present. "
             "Do not just list tags. Tags: " + ", ".join(tags) + "."
         )
-        result = self._tag_to_sentence_pipeline(prompt, max_new_tokens=50)
+        result = self._tag_to_sentence_pipeline(prompt, max_new_tokens=40)
         generated = result[0]["generated_text"].strip()
 
         logger.info("LM output before deduplication: " + generated)
