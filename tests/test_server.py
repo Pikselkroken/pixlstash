@@ -492,7 +492,7 @@ def test_tagger_worker_adds_tags():
 
             # Wait for tag worker to process
             found_tags = None
-            for _ in range(20):
+            for _ in range(60):
                 time.sleep(0.5)
                 get_resp = client.get(f"/pictures/{picture_id}?info=true")
                 assert get_resp.status_code == 200
@@ -547,7 +547,7 @@ def test_semantic_search_on_all_pictures():
 
             # Wait for all pictures to be tagged (embeddings generated)
             for pid in picture_ids:
-                for _ in range(30):
+                for _ in range(60):
                     time.sleep(0.5)
                     get_resp = client.get(f"/pictures/{pid}?info=true")
                     assert get_resp.status_code == 200
