@@ -142,7 +142,7 @@ class ImageLoadingPrepDataset(torch.utils.data.Dataset):
                 return None
             return (image, img_path)
         elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
-            # Extract first, middle, last frames from video
+            # Extract first, middle, last frames from video and treat as separate images
             try:
                 import cv2
 
@@ -160,25 +160,25 @@ class ImageLoadingPrepDataset(torch.utils.data.Dataset):
                     frame_indices.append(frame_count // 2)
                 if frame_count > 1:
                     frame_indices.append(frame_count - 1)
-                frames = []
-                for idx in frame_indices:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                images = []
+                for idx_frame in frame_indices:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, idx_frame)
                     ret, frame = cap.read()
                     if not ret:
                         logger.error(
-                            f"Could not read frame {idx} from video: {img_path}"
+                            f"Could not read frame {idx_frame} from video: {img_path}"
                         )
                         continue
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_img = Image.fromarray(frame_rgb)
                     prepped = preprocess_image(pil_img)
-                    frames.append(prepped)
+                    images.append((prepped, f"{img_path}#frame{idx_frame}"))
                 cap.release()
-                if not frames:
+                if not images:
                     logger.error(f"No frames extracted from video: {img_path}")
                     return None
-                # Return a tuple of (frames, img_path) for downstream handling
-                return (frames, img_path)
+                # Return a list of (image, img_path#frameX) tuples, one for each frame
+                return images
             except Exception as e:
                 logger.error(f"Could not process video file: {img_path}, error: {e}")
                 return None
@@ -209,9 +209,9 @@ class PictureTagger:
             )
         )
         if device is not None:
-            self._clip_device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
             self._clip_device = device
+        else:
+            self._clip_device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self._clip_model = self._clip_model.to(self._clip_device)
         self._clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
@@ -310,9 +310,9 @@ class PictureTagger:
             tag_replacements = escaped_tag_replacements.split(";")
             for tag_replacement in tag_replacements:
                 tags = tag_replacement.split(",")  # source, target
-                assert len(tags) == 2, (
-                    f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
-                )
+                assert (
+                    len(tags) == 2
+                ), f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
                 source, target = [
                     tag.replace("@@@@", ",").replace("####", ";") for tag in tags
                 ]
@@ -379,7 +379,15 @@ class PictureTagger:
         self, path_imgs, tag_freq, caption_separator, undesired_tags, always_first_tags
     ):
         imgs = np.array([im for _, im in path_imgs])
-        probs = self.ort_sess.run(None, {self.input_name: imgs})[0]  # onnx output numpy
+        try:
+            probs = self.ort_sess.run(None, {self.input_name: imgs})[
+                0
+            ]  # onnx output numpy
+        except Exception as e:
+            logger.error(f"Error occurred while running ONNX model: {e}")
+            logger.error(f"Images causing error: {[p for p, _ in path_imgs]}")
+            return None
+
         probs = probs[: len(path_imgs)]
         result = {}
         for (image_path, _), prob in zip(path_imgs, probs):
@@ -462,51 +470,44 @@ class PictureTagger:
         b_imgs = []
         all_results = {}
 
+        tagging_failed = False
         for data_entry in tqdm(data, smoothing=0.0, disable=self._silent):
-            for data in data_entry:
+            if tagging_failed:
+                break
+            # Flatten any lists returned by the dataset (for videos)
+            flat_data = []
+            for item in data_entry:
+                if isinstance(item, list):
+                    flat_data.extend(item)
+                else:
+                    flat_data.append(item)
+            for data in flat_data:
                 if data is None:
                     continue
-
-                images, image_path = data
-                # If images is a list (video frames), tag each and combine tags
-                if isinstance(images, list):
-                    combined_tags = set()
-                    for frame in images:
-                        b_imgs = [(str(image_path), frame)]
-                        batch_result = self._run_batch(
-                            b_imgs,
-                            tag_freq,
-                            caption_separator,
-                            undesired_tags,
-                            always_first_tags,
+                image, image_path = data
+                b_imgs.append((image_path, image))
+                if len(b_imgs) >= BATCH_SIZE:
+                    b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
+                    batch_result = self._run_batch(
+                        b_imgs,
+                        tag_freq,
+                        caption_separator,
+                        undesired_tags,
+                        always_first_tags,
+                    )
+                    if batch_result is None:
+                        logger.error(
+                            f"Tagging failed for batch: {[p for p, _ in b_imgs]}"
                         )
-                        tags = batch_result.get(str(image_path), [])
-                        # Naturalize tags immediately
+                        tagging_failed = True
+                        break
+                    # Naturalize tags for each image
+                    for k, tags in batch_result.items():
                         tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
                         tags = [t for t in tags if t]
-                        combined_tags.update(tags)
-                    all_results[str(image_path)] = list(combined_tags)
-                else:
-                    b_imgs.append((image_path, images))
-
-                    if len(b_imgs) >= BATCH_SIZE:
-                        b_imgs = [
-                            (str(image_path), image) for image_path, image in b_imgs
-                        ]
-                        batch_result = self._run_batch(
-                            b_imgs,
-                            tag_freq,
-                            caption_separator,
-                            undesired_tags,
-                            always_first_tags,
-                        )
-                        # Naturalize tags for each image
-                        for k, tags in batch_result.items():
-                            tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
-                            tags = [t for t in tags if t]
-                            batch_result[k] = tags
-                        all_results.update(batch_result)
-                        b_imgs.clear()
+                        batch_result[k] = tags
+                    all_results.update(batch_result)
+                    b_imgs.clear()
 
         if len(b_imgs) > 0:
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
@@ -525,7 +526,19 @@ class PictureTagger:
             for tag, freq in sorted_tags:
                 logger.debug(f"{tag}: {freq}")
 
-        return all_results
+        # Merge tags for video frames (e.g., ...mp4#frame0, ...mp4#frameX) into ...mp4
+        merged_results = {}
+        for path, tags in all_results.items():
+            if "#frame" in path:
+                base_path = path.split("#frame")[0]
+                if base_path not in merged_results:
+                    merged_results[base_path] = set()
+                merged_results[base_path].update(tags)
+            else:
+                merged_results[path] = set(tags)
+        # Convert sets back to sorted lists
+        merged_results = {k: sorted(list(v)) for k, v in merged_results.items()}
+        return merged_results
 
     def generate_embedding(self, character=None, picture=None):
         """

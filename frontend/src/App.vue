@@ -12,8 +12,9 @@ import { marked } from "marked";
 import { VTextField } from "vuetify/components";
 import SearchBar from "./components/SearchBar.vue";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
+import nlp from "compromise";
 
-const BACKEND_URL = `http://${window.location.hostname}:9537`;
+const BACKEND_URL = `${window.location.protocol}//${window.location.hostname}${window.location.port ? `:${window.location.port}` : ""}`;
 
 // Drag-and-drop overlay state (for image grid only)
 const dragOverlayVisible = ref(false);
@@ -120,6 +121,16 @@ function formatLikenessScore(score) {
   return `Likeness: ${(score * 100).toFixed(2)}%`;
 }
 
+function extractKeywords(text) {
+  const doc = nlp(text);
+  // Get all noun and adjective phrases as keywords
+  const nouns = doc.nouns().out("array");
+  const adjectives = doc.adjectives().out("array");
+  // Combine and deduplicate
+  const keywords = Array.from(new Set([...nouns, ...adjectives]));
+  return keywords.join(" ");
+}
+
 // Extracts the format/extension for overlayImage robustly function
 function getOverlayFormat(overlayImage) {
   if (!overlayImage) return "";
@@ -144,7 +155,6 @@ function isSupportedVideoFile(input) {
   } else if (input && input.name) {
     ext = input.name.split(".").pop().toLowerCase();
   }
-  console.log("[VIDEO] Is it a valid video format:", input, "ext:", ext);
 
   return VIDEO_EXTENSIONS.includes(ext);
 }
@@ -1754,7 +1764,31 @@ const selectedCharacterObj = computed(() => {
 async function sendChatMessageAndFocus() {
   const input = chatInput.value.trim();
   if (!input || chatLoading.value) return;
-  chatMessages.value.push({ role: "user", content: input });
+
+  let system_message =
+    "Include a short summary sentence that describes the situation. Prefix it with the word 'summary'. You should always respond as the character you are playing. Stay in character and don't break it. Let me speak for myself. Remember to change the summary when the situation changes which should be almost every response. You especially want to describe the character and what the character is doing.";
+
+  if (chatMessages.value.length === 0) {
+    // First message, set character context
+    if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
+      system_message += ` You are now assuming the role of the character named '${selectedCharacterObj.value.name}'.`;
+      if (
+        selectedCharacterObj.value.description &&
+        selectedCharacterObj.value.description.trim().length > 0
+      ) {
+        system_message += ` Here is some information about you: ${selectedCharacterObj.value.description.trim()}`;
+      }
+    } else {
+      system_message +=
+        " You are now assuming the role of a generic character without a specific name or background.";
+    }
+    chatMessages.value.push(
+      { role: "user", content: input },
+      { role: "system", content: system_message }
+    );
+  } else {
+    chatMessages.value.push({ role: "user", content: input });
+  }
   chatInput.value = "";
   chatLoading.value = true;
   await nextTick();
@@ -1789,9 +1823,9 @@ async function sendChatMessageAndFocus() {
         break;
       }
     }
-    let searchQuery = reply;
+    let searchQuery = extractKeywords(reply);
     if (lastUser) {
-      searchQuery = lastUser + " " + reply;
+      searchQuery = lastUser + " " + searchQuery;
     }
     if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
       searchQuery = selectedCharacterObj.value.name + " " + searchQuery;
@@ -2825,7 +2859,7 @@ async function sendChatMessageAndFocus() {
                       </div>
                     </div>
                     <div class="overlay-desc">
-                      {{ overlayImage?.description || "DUMMY DESCRIPTION" }}
+                      {{ overlayImage?.description || "No description" }}
                     </div>
                     <div
                       v-if="
