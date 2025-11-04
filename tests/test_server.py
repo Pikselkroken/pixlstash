@@ -95,9 +95,9 @@ def test_esmeralda_vault_character_and_logo():
             with open(logo_path, "rb") as f:
                 logo_bytes = f.read()
             # Compare the full file
-            assert (
-                img_resp.content == logo_bytes
-            ), "EsmeraldaVault's picture does not match Logo.png"
+            assert img_resp.content == logo_bytes, (
+                "EsmeraldaVault's picture does not match Logo.png"
+            )
     gc.collect()
 
 
@@ -500,9 +500,9 @@ def test_tagger_worker_adds_tags():
                 found_tags = pic_info.get("tags", [])
                 if found_tags:
                     break
-            assert (
-                found_tags
-            ), "Tagger worker did not add tags to TaggerTest.png after waiting."
+            assert found_tags, (
+                "Tagger worker did not add tags to TaggerTest.png after waiting."
+            )
             print(f"Tags for TaggerTest.png: {found_tags}")
     gc.collect()
 
@@ -564,9 +564,9 @@ def test_semantic_search_on_all_pictures():
                 time.sleep(0.5)
 
             if picture_ids:
-                assert (
-                    False
-                ), f"Pictures {picture_ids} did not get embedding after waiting."
+                assert False, (
+                    f"Pictures {picture_ids} did not get embedding after waiting."
+                )
 
             # Perform semantic search
             search_texts = [
@@ -587,7 +587,7 @@ def test_semantic_search_on_all_pictures():
                 print("Semantic search results:")
                 for pic in results:
                     print(pic)
-                assert (
-                    1 <= len(results)
-                ), f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+                assert 1 <= len(results), (
+                    f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+                )
     gc.collect()
