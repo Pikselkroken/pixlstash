@@ -45,7 +45,7 @@ if __name__ == "__main__":
         description="Regenerate all thumbnails in the vault."
     )
     parser.add_argument(
-        "--db", type=str, default="vault.tb", help="Path to vault.db (optional)"
+        "--db", type=str, default="vault.db", help="Path to vault.db (optional)"
     )
     parser.add_argument(
         "--image-root", type=str, default=None, help="Path to image root (optional)"
