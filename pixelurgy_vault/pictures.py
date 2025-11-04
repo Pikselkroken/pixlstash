@@ -177,6 +177,9 @@ class Pictures:
                     thread_conn, self._picture_tagger, missing_tags
                 )
 
+            if self._tag_worker_stop.is_set():
+                break
+
             if missing_embeddings:
                 logger.info(
                     f"Generating embeddings for {len(missing_embeddings)} pictures."
@@ -184,6 +187,9 @@ class Pictures:
                 self._embed_tagged_pictures(
                     thread_conn, self._picture_tagger, missing_embeddings
                 )
+
+            if self._tag_worker_stop.is_set():
+                break
 
             if calculate_face_embeddings:
                 faces_needing_embeddings = self._find_faces_needing_embeddings(
@@ -282,12 +288,20 @@ class Pictures:
         # Find pictures missing face_embedding
         for pic_id in faces_needing_embeddings:
             logger.info("Looking for faces in picture %s", pic_id)
+            if self._tag_worker_stop.is_set():
+                break
+
             self._skip_pictures.add(pic_id)
             # Find master iteration for this picture
-            master_iters = [
-                it
-                for it in self._picture_iterations.find(picture_id=pic_id, is_master=1)
-            ]
+            master_iters = []
+            for it in self._picture_iterations.find(picture_id=pic_id, is_master=1):
+                master_iters.append(it)
+                if self._tag_worker_stop.is_set():
+                    break
+
+            if self._tag_worker_stop.is_set():
+                return False
+
             if not master_iters:
                 continue
             master_iter = master_iters[0]

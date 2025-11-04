@@ -546,17 +546,27 @@ def test_semantic_search_on_all_pictures():
                 picture_ids.append(resp["results"][0]["picture_id"])
 
             # Wait for all pictures to be tagged (embeddings generated)
-            for pid in picture_ids:
-                for _ in range(60):
-                    time.sleep(0.5)
+
+            for _ in range(80):
+                missing_embeddings = picture_ids.copy()
+                if not missing_embeddings:
+                    break
+
+                for pid in missing_embeddings:
                     get_resp = client.get(f"/pictures/{pid}?info=true")
-                    assert get_resp.status_code == 200
+                    if not get_resp.status_code == 200:
+                        continue
                     pic_info = get_resp.json()
                     # Embedding is present if semantic search will work
-                    if pic_info.get("has_embedding"):
-                        break
-                else:
-                    assert False, f"Picture {pid} did not get embedding after waiting."
+                    if not pic_info.get("has_embedding"):
+                        continue
+                    picture_ids.remove(pid)
+                time.sleep(0.5)
+
+            if picture_ids:
+                assert (
+                    False
+                ), f"Pictures {picture_ids} did not get embedding after waiting."
 
             # Perform semantic search
             search_texts = [
