@@ -125,7 +125,7 @@ class PictureIterations:
                         quality_json = json.dumps(quality.__dict__)
                     except Exception as e:
                         logger.error(f"Failed to serialize quality for {it_id}: {e}")
-                        quality_json = None
+
                     cursor = thread_conn.cursor()
                     logger.debug(f"Updating quality for iteration {it_id} in DB")
                     cursor.execute(
@@ -154,40 +154,15 @@ class PictureIterations:
                     pic_row = cursor.fetchone()
                     if pic_row and pic_row[0] and pic_row[1]:
                         try:
-                            bbox = (
+                            face_bbox = (
                                 json.loads(pic_row[1])
                                 if isinstance(pic_row[1], str)
                                 else pic_row[1]
                             )
-                            x1, y1, x2, y2 = [int(round(v)) for v in bbox]
-                            h, w = image_np.shape[:2]
-                            # Clamp bbox to image bounds
-                            x1_clamped = max(0, min(w, x1))
-                            x2_clamped = max(0, min(w, x2))
-                            y1_clamped = max(0, min(h, y1))
-                            y2_clamped = max(0, min(h, y2))
-                            if x2_clamped > x1_clamped and y2_clamped > y1_clamped:
-                                face_crop = image_np[
-                                    y1_clamped:y2_clamped, x1_clamped:x2_clamped
-                                ]
-                                if face_crop.size == 0:
-                                    logger.error(
-                                        f"Face crop is empty after clamping for {it_id}, bbox: {bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
-                                    )
-                                else:
-                                    face_quality = PictureQuality.calculate_metrics(
-                                        face_crop
-                                    )
-                                    face_quality_json = json.dumps(
-                                        face_quality.__dict__
-                                    )
-                                    logger.debug(
-                                        f"Calculated face quality for iteration {it_id}: {face_quality_json}"
-                                    )
-                            else:
-                                logger.error(
-                                    f"Invalid bbox after clamping for {it_id}: {bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
-                                )
+                            face_quality = PictureQuality.calculate_face_quality(
+                                image_np, face_bbox
+                            )
+                            face_quality_json = json.dumps(face_quality.__dict__)
                         except Exception as e:
                             logger.error(
                                 f"Failed to calculate face quality for {it_id} using stored bbox: {e}"

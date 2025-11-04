@@ -61,12 +61,13 @@ def test_esmeralda_vault_character_and_logo():
     """Test that EsmeraldaVault exists and her picture matches Logo.png exactly."""
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+
         # This triggers _import_default_data
-        with Server(image_root=image_root) as server:
+        with Server(config_path, server_config_path) as server:
             server.vault.import_default_data()
-            client = TestClient(server.app)
+            client = TestClient(server.api)
 
             # Find EsmeraldaVault character (by name)
             resp = client.get("/characters")
@@ -104,10 +105,12 @@ def test_esmeralda_vault_character_and_logo():
 def test_create_and_get_default_character():
     """Test creating and fetching the default character 'Esmeralda'."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
 
             # Create Esmeralda
             char_name = "Esmeralda"
@@ -137,10 +140,12 @@ def test_upload_iteration_to_existing_picture():
     """Test uploading additional iterations to an existing picture."""
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
 
             # Create a new picture with a master iteration
             img_bytes = random_images[0]
@@ -195,10 +200,12 @@ def test_upload_iteration_to_existing_picture():
 
 def test_post_logo_altered_pixel_upload():
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
             img = Image.open(logo_path).convert("RGBA")
             arr = np.array(img)
@@ -227,10 +234,12 @@ def test_post_logo_altered_pixel_upload():
 
 def test_post_logo_altered_pixel_path():
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
             img = Image.open(logo_path).convert("RGBA")
             arr = np.array(img)
@@ -257,9 +266,12 @@ def test_post_logo_altered_pixel_path():
 
 def test_read_root():
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
             response = client.get("/")
             assert response.status_code == 200
             expected_version = get_project_version()
@@ -272,10 +284,12 @@ def test_read_root():
 
 def test_benchmark_add_images_by_binary_upload():
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
 
             start = time.time()
             ids = []
@@ -309,10 +323,12 @@ def test_benchmark_add_images_by_binary_upload():
 
 def test_benchmark_add_images_by_path():
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
             image_paths = []
             total_bytes = 0
             for i, img in enumerate(random_images):
@@ -358,10 +374,12 @@ def test_benchmark_add_images_by_path():
 
 def test_benchmark_add_images_by_directory():
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
             image_path = os.path.join(temp_dir, "image_dir")
             os.makedirs(image_path, exist_ok=True)
             total_bytes = 0
@@ -409,10 +427,12 @@ def test_benchmark_add_images_by_directory():
 def test_reference_picture_workflow():
     """Test adding and retrieving reference images for a character."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
 
             # Create a character
             resp = client.post(
@@ -464,20 +484,19 @@ def test_reference_picture_workflow():
 
 def test_tagger_worker_adds_tags():
     """Test that uploading TaggerTest.png results in tags being added by the tag worker."""
-    import shutil
-
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+
         # Copy TaggerTest.png into temp dir
         src_img = os.path.join(os.path.dirname(__file__), "../pictures/TaggerTest.png")
-        dest_img = os.path.join(image_root, "TaggerTest.png")
-        shutil.copyfile(src_img, dest_img)
-        with Server(image_root=image_root) as server:
-            client = TestClient(server.app)
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            client = TestClient(server.api)
 
             # Upload TaggerTest.png as a new picture
-            with open(dest_img, "rb") as f:
+            with open(src_img, "rb") as f:
                 files = {"image": ("TaggerTest.png", f.read(), "image/png")}
                 data = {
                     "character_id": "testchar",
@@ -509,30 +528,27 @@ def test_tagger_worker_adds_tags():
 
 def test_semantic_search_on_all_pictures():
     """Test: Add all images from pictures folder, wait for tagging, perform semantic search, print results, assert count."""
-    import shutil
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        image_root = os.path.join(temp_dir, "images")
-        os.makedirs(image_root, exist_ok=True)
-        # Copy all images from pictures folder
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
         image_files = [
             f
             for f in os.listdir(src_dir)
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
-        for fname in image_files:
-            shutil.copyfile(
-                os.path.join(src_dir, fname), os.path.join(image_root, fname)
-            )
-        with Server(image_root=image_root) as server:
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
             server.vault.import_default_data()
-            client = TestClient(server.app)
+            client = TestClient(server.api)
 
             # Upload all images as new pictures
             picture_ids = []
             for fname in image_files:
-                with open(os.path.join(image_root, fname), "rb") as f:
+                with open(os.path.join(src_dir, fname), "rb") as f:
                     files = {"image": (fname, f.read(), "image/png")}
                     data = {
                         "character_id": "Esmeralda",

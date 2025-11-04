@@ -3,7 +3,6 @@ import io
 import os
 import json
 import uuid
-import argparse
 import mimetypes
 import re
 
@@ -12,21 +11,13 @@ from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPE
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from PIL import Image
-from platformdirs import user_config_dir
 
 from pixelurgy_vault.logging import get_logger, setup_logging
 from pixelurgy_vault.vault import Vault
 from pixelurgy_vault.picture import Picture
 from pixelurgy_vault.picture_iteration import PictureIteration
 
-
-APP_NAME = "pixelurgy-vault"
-CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "config.json")
-SERVER_CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "server-config.json")
-DEFAULT_LOG_PATH = os.path.join(user_config_dir(APP_NAME), "server.log")
-DEFAULT_SSL_KEY_PATH = os.path.join(user_config_dir(APP_NAME), "ssl", "key.pem")
-DEFAULT_SSL_CERT_PATH = os.path.join(user_config_dir(APP_NAME), "ssl", "cert.pem")
-DEFAULT_IMAGE_ROOT = os.path.join(user_config_dir(APP_NAME), "images")
+DEFAULT_DESCRIPTION = "Pixelurgy Vault default configuration"
 
 # Logging will be set up after config is loaded
 logger = None
@@ -45,18 +36,14 @@ class Server:
     Main server class for the Pixelurgy Vault FastAPI application.
 
     Attributes:
-        config (dict): Server configuration dictionary.
-        vault (Vault): Vault instance for database operations.
-        app (FastAPI): FastAPI application instance.
+        config_path(str): Remote accessible configuration file.
+        server_config_path(str): Server-side-only configuration file.
     """
 
     def __init__(
         self,
-        config_path=CONFIG_PATH,
-        server_config_path=SERVER_CONFIG_PATH,
-        image_root=None,
-        description=None,
-        log_file=None,
+        config_path,
+        server_config_path,
     ):
         """
         Initialize the Server instance.
@@ -64,45 +51,38 @@ class Server:
         Args:
             config_path (str): Path to the image roots config file.
             server_config_path (str): Path to the server-only config file.
-            selected_image_root (str, optional): Path to the selected image root directory.
-            description (str, optional): Vault description.
-            log_file (str, optional): Path to the log file (or None for stdout).
         """
-        self._init_config(
-            config_path=config_path,
-            image_root=image_root,
-            description=description,
-        )
-        self.__init_server_config(
-            server_config_path=server_config_path, log_file=log_file
-        )
+        self._config_path = config_path
 
-        # SSL config
-        if self.require_ssl:
-            self._ensure_ssl_certificates()
+        self._config = self.init_config(config_path)
+        with open(config_path, "w") as f:
+            json.dump(self._config, f, indent=2)
 
-        # Override config values with explicit arguments
-        if image_root is not None:
-            self._config["selected_image_root"] = image_root
-        if log_file is not None:
-            self._server_config["log_file"] = log_file
+        self._server_config = self.init_server_config(server_config_path)
+        with open(server_config_path, "w") as f:
+            json.dump(self._server_config, f, indent=2)
 
         global logger
         setup_logging(self._server_config.get("log_file"))
         logger = get_logger(__name__)
 
+        # SSL config
+        if self._server_config.get("require_ssl", False):
+            self._ensure_ssl_certificates()
+
         logger.info(
             "Creating Vault instance with image root: "
             + str(self._config["selected_image_root"])
         )
+
         self.vault = Vault(
             image_root=self._config["selected_image_root"],
             description=self._config.get("description"),
         )
 
-        self.app = FastAPI(lifespan=self.lifespan)
+        self.api = FastAPI(lifespan=self.lifespan)
         # Enable CORS for frontend dev server
-        self.app.add_middleware(
+        self.api.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],  # Or restrict to ["http://localhost:5173"]
             allow_credentials=True,
@@ -112,116 +92,18 @@ class Server:
         self._add_cors_exception_handler()
         self._setup_routes()
 
-    def _init_config(
-        self,
-        config_path=CONFIG_PATH,
-        image_root=None,
-        description="Pixelurgy Vault default configuration",
-    ):
-        """
-        Initialize and load the server configuration from file, creating defaults if necessary.
-
-        Returns:
-            dict: Configuration dictionary.
-        """
-        self._config_path = config_path
-        config_dir = os.path.dirname(self._config_path)
-        os.makedirs(config_dir, exist_ok=True)
-
-        if not os.path.exists(self._config_path):
-            self._config = {
-                "image_roots": [image_root or os.path.join(config_dir, "images")],
-                "selected_image_root": image_root or os.path.join(config_dir, "images"),
-                "description": description,
-                "sort": "date_desc",
-                "thumbnail": "default",
-                "show_stars": True,
-                "show_only_reference": False,
-                "openai_host": "localhost",
-                "openai_port": 8000,
-                "openai_model": "gpt-3.5-turbo",
-            }
-            with open(self._config_path, "w") as f:
-                json.dump(self._config, f, indent=2)
-        else:
-            with open(self._config_path, "r") as f:
-                self._config = json.load(f)
-                # Ensure new config options exist
-
-                if "sort_order" not in self._config:
-                    self._config["sort_order"] = "date_desc"
-                if "thumbnail_size" not in self._config:
-                    self._config["thumbnail_size"] = "default"
-                if "show_stars" not in self._config:
-                    self._config["show_stars"] = True
-                if "show_only_reference" not in self._config:
-                    self._config["show_only_reference"] = False
-                if "openai_host" not in self._config:
-                    self._config["openai_host"] = "localhost"
-                if "openai_port" not in self._config:
-                    self._config["openai_port"] = 8000
-                if "openai_model" not in self._config:
-                    self._config["openai_model"] = "gpt-3.5-turbo"
-                if (
-                    "image_roots" not in self._config
-                    or len(self._config["image_roots"]) == 0
-                ):
-                    self._config["image_roots"] = [DEFAULT_IMAGE_ROOT]
-                if "selected_image_root" not in self._config:
-                    self._config["selected_image_root"] = self._config["image_roots"][0]
-
-    def __init_server_config(
-        self, server_config_path=SERVER_CONFIG_PATH, log_file=None
-    ):
-        config_dir = os.path.dirname(server_config_path)
-        os.makedirs(config_dir, exist_ok=True)
-        if not os.path.exists(server_config_path):
-            self._server_config = {
-                "host": "localhost",
-                "port": 8000,
-                "log_level": "info",
-                "log_file": log_file,
-                "require_ssl": False,
-                "ssl_keyfile": DEFAULT_SSL_KEY_PATH,
-                "ssl_certfile": DEFAULT_SSL_CERT_PATH,
-            }
-            with open(server_config_path, "w") as f:
-                json.dump(self._server_config, f, indent=2)
-        else:
-            with open(server_config_path, "r") as f:
-                self._server_config = json.load(f)
-
-                # Ensure server config options exist
-                if "host" not in self._server_config:
-                    self._server_config["host"] = "localhost"
-                if "port" not in self._server_config:
-                    self._server_config["port"] = 8000
-                if "log_level" not in self._server_config:
-                    self._server_config["log_level"] = "info"
-                if "log_file" not in self._server_config:
-                    self._server_config["log_file"] = DEFAULT_LOG_PATH
-                if "require_ssl" not in self._server_config:
-                    self._server_config["require_ssl"] = False
-                if "ssl_keyfile" not in self._server_config:
-                    self._server_config["ssl_keyfile"] = DEFAULT_SSL_KEY_PATH
-                if "ssl_certfile" not in self._server_config:
-                    self._server_config["ssl_certfile"] = DEFAULT_SSL_CERT_PATH
-
-    @property
-    def require_ssl(self):
-        return self._server_config.get("require_ssl", False)
-
-    @require_ssl.setter
-    def require_ssl(self, value: bool):
-        self._server_config["require_ssl"] = value
-
-    @property
-    def ssl_keyfile(self):
-        return self._server_config.get("ssl_keyfile", DEFAULT_SSL_KEY_PATH)
-
-    @property
-    def ssl_certfile(self):
-        return self._server_config.get("ssl_certfile", DEFAULT_SSL_CERT_PATH)
+    def run(self):
+        uvicorn_kwargs = dict(
+            host="0.0.0.0",
+            port=self._server_config.get("port", 8000),
+        )
+        if self._server_config.get("require_ssl", False):
+            uvicorn_kwargs["ssl_keyfile"] = self._server_config.get("ssl_keyfile")
+            uvicorn_kwargs["ssl_certfile"] = self._server_config.get("ssl_certfile")
+            print(
+                f"[SSL] Running with SSL: keyfile={self._server_config.get('ssl_keyfile')}, certfile={self._server_config.get('ssl_certfile')}"
+            )
+        uvicorn.run(self.api, **uvicorn_kwargs)
 
     @asynccontextmanager
     async def lifespan(self, app):
@@ -231,11 +113,110 @@ class Server:
         if hasattr(self, "vault"):
             self.vault.close()
 
+    @staticmethod
+    def init_config(
+        config_path,
+    ):
+        """
+        Initialize and load the server configuration from file, creating defaults if necessary.
+
+        Returns:
+            dict: Configuration dictionary.
+        """
+        config_dir = os.path.dirname(config_path)
+        os.makedirs(config_dir, exist_ok=True)
+
+        default_image_root = os.path.join(config_dir, "images")
+
+        config = {}
+        if not os.path.exists(config_path):
+            config = {
+                "image_roots": [default_image_root],
+                "selected_image_root": default_image_root,
+                "description": DEFAULT_DESCRIPTION,
+                "sort": "date_desc",
+                "thumbnail": "default",
+                "show_stars": True,
+                "show_only_reference": False,
+                "openai_host": "localhost",
+                "openai_port": 8000,
+                "openai_model": "gpt-3.5-turbo",
+            }
+        else:
+            with open(config_path, "r") as f:
+                config = json.load(f)
+                # Ensure new config options exist
+
+                if "sort_order" not in config:
+                    config["sort_order"] = "date_desc"
+                if "thumbnail_size" not in config:
+                    config["thumbnail_size"] = "default"
+                if "show_stars" not in config:
+                    config["show_stars"] = True
+                if "show_only_reference" not in config:
+                    config["show_only_reference"] = False
+                if "openai_host" not in config:
+                    config["openai_host"] = "localhost"
+                if "openai_port" not in config:
+                    config["openai_port"] = 8000
+                if "openai_model" not in config:
+                    config["openai_model"] = "gpt-3.5-turbo"
+                if "image_roots" not in config or len(config["image_roots"]) == 0:
+                    config["image_roots"] = [default_image_root]
+                if "selected_image_root" not in config:
+                    config["selected_image_root"] = config["image_roots"][0]
+
+        return config
+
+    @staticmethod
+    def init_server_config(server_config_path):
+        config_dir = os.path.dirname(server_config_path)
+        os.makedirs(config_dir, exist_ok=True)
+
+        default_log_path = os.path.join(config_dir, "server.log")
+        default_ssl_cert_path = os.path.join(config_dir, "ssl", "cert.pem")
+        default_ssl_key_path = os.path.join(config_dir, "ssl", "key.pem")
+
+        server_config = {}
+        if not os.path.exists(server_config_path):
+            server_config = {
+                "host": "localhost",
+                "port": 8000,
+                "log_level": "info",
+                "log_file": default_log_path,
+                "require_ssl": False,
+                "ssl_keyfile": default_ssl_key_path,
+                "ssl_certfile": default_ssl_cert_path,
+            }
+            with open(server_config_path, "w") as f:
+                json.dump(server_config, f, indent=2)
+        else:
+            with open(server_config_path, "r") as f:
+                server_config = json.load(f)
+
+                # Ensure server config options exist
+                if "host" not in server_config:
+                    server_config["host"] = "localhost"
+                if "port" not in server_config:
+                    server_config["port"] = 8000
+                if "log_level" not in server_config:
+                    server_config["log_level"] = "info"
+                if "log_file" not in server_config:
+                    server_config["log_file"] = default_log_path
+                if "require_ssl" not in server_config:
+                    server_config["require_ssl"] = False
+                if "ssl_keyfile" not in server_config:
+                    server_config["ssl_keyfile"] = default_ssl_key_path
+                if "ssl_certfile" not in server_config:
+                    server_config["ssl_certfile"] = default_ssl_cert_path
+
+        return server_config
+
     def _ensure_ssl_certificates(self):
         import subprocess
 
-        keyfile = self._server_config.get("ssl_keyfile", DEFAULT_SSL_KEY_PATH)
-        certfile = self._server_config.get("ssl_certfile", DEFAULT_SSL_CERT_PATH)
+        keyfile = self._server_config.get("ssl_keyfile")
+        certfile = self._server_config.get("ssl_certfile")
         # If either file is missing, generate self-signed cert
         if not (os.path.exists(keyfile) and os.path.exists(certfile)):
             os.makedirs(os.path.dirname(keyfile), exist_ok=True)
@@ -266,7 +247,7 @@ class Server:
                 raise
 
     def _add_cors_exception_handler(self):
-        @self.app.exception_handler(HTTPException)
+        @self.api.exception_handler(HTTPException)
         async def cors_exception_handler(request, exc):
             return JSONResponse(
                 status_code=exc.status_code,
@@ -277,12 +258,12 @@ class Server:
     def _setup_routes(self):
         from pixelurgy_vault.pictures import get_sort_mechanisms
 
-        @self.app.get("/sort_mechanisms")
+        @self.api.get("/sort_mechanisms")
         async def get_pictures_sort_mechanisms():
             """Return available sorting mechanisms for pictures."""
             return get_sort_mechanisms()
 
-        @self.app.get("/face_thumbnail/{character_id}")
+        @self.api.get("/face_thumbnail/{character_id}")
         async def get_face_thumbnail(character_id: str):
             """
             Return a face-cropped thumbnail for the highest scored picture of the character.
@@ -352,7 +333,7 @@ class Server:
             thumb_img.save(buf, format="PNG")
             return Response(content=buf.getvalue(), media_type="image/png")
 
-        @self.app.post("/log-frontend-event")
+        @self.api.post("/log-frontend-event")
         async def log_frontend_event(event: dict = Body(...)):
             """
             Log frontend-reported events such as failed image loads or missing descriptions.
@@ -361,7 +342,7 @@ class Server:
             logger.info(f"Frontend event: {json.dumps(event)}")
             return {"status": "logged"}
 
-        @self.app.get("/search")
+        @self.api.get("/search")
         def search_pictures(
             query: str = Query(""), top_n: int = Query(5), threshold: float = Query(0.3)
         ):
@@ -513,7 +494,7 @@ class Server:
                 for pic, score, _, _ in combined[:top_n]
             ]
 
-        @self.app.get("/characters/reference_pictures/{id}")
+        @self.api.get("/characters/reference_pictures/{id}")
         def get_reference_pictures(id: str):
             """
             Get all reference pictures for a character (is_reference=1, master iteration only).
@@ -548,7 +529,7 @@ class Server:
                     )
             return {"reference_pictures": results}
 
-        @self.app.post("/characters/reference_pictures")
+        @self.api.post("/characters/reference_pictures")
         async def add_reference_picture(
             character_id: str = Form(...),
             description: str = Form(None),
@@ -594,7 +575,7 @@ class Server:
                 "tags": tags_list,
             }
 
-        @self.app.patch("/characters/{id}")
+        @self.api.patch("/characters/{id}")
         async def patch_character(id: int, request: Request):
             data = await request.json()
             name = data.get("name")
@@ -618,7 +599,7 @@ class Server:
                 self.vault.characters.update(char)
             return {"status": "success", "character": char.__dict__}
 
-        @self.app.delete("/characters/{id}")
+        @self.api.delete("/characters/{id}")
         def delete_character(id: int):
             # Remove character_id from all pictures and picture_iterations
             cursor = self.vault.connection.cursor()
@@ -637,7 +618,7 @@ class Server:
                 raise HTTPException(status_code=404, detail="Character not found")
             return {"status": "success", "deleted_id": id}
 
-        @self.app.get("/characters")
+        @self.api.get("/characters")
         def get_characters(name: str = Query(None)):
             """List all characters or filter by name."""
             chars = (
@@ -647,7 +628,7 @@ class Server:
             )
             return [c.__dict__ for c in chars]
 
-        @self.app.post("/characters")
+        @self.api.post("/characters")
         def create_character(
             name: str = Body(...),
             description: str = Body(None),
@@ -658,7 +639,7 @@ class Server:
             self.vault.characters.add(char)
             return {"status": "success", "character": char.__dict__}
 
-        @self.app.get("/characters/{id}")
+        @self.api.get("/characters/{id}")
         def get_character_by_id(id: int):
             try:
                 char = self.vault.characters[id]
@@ -666,7 +647,7 @@ class Server:
                 raise HTTPException(status_code=404, detail="Character not found")
             return char.__dict__
 
-        @self.app.get("/iterations/{iteration_id}")
+        @self.api.get("/iterations/{iteration_id}")
         async def get_iteration(iteration_id: str):
             import base64
 
@@ -697,7 +678,7 @@ class Server:
                 "pixel_sha": getattr(it, "pixel_sha", None),
             }
 
-        @self.app.post("/iterations/")
+        @self.api.post("/iterations/")
         async def upload_iteration(
             picture_id: str = Body(...),
             file: UploadFile = File(None),
@@ -742,12 +723,12 @@ class Server:
             self.vault.iterations.import_iterations([iteration])
             return {"status": "success", "iteration_id": iteration.id}
 
-        @self.app.get("/")
+        @self.api.get("/")
         def read_root():
             version = self.get_version()
             return {"message": "Pixelurgy Vault REST API", "version": version}
 
-        @self.app.get("/pictures/{id}")
+        @self.api.get("/pictures/{id}")
         def get_picture(
             id: str, info: bool = Query(False), embedding: bool = Query(False)
         ):
@@ -794,7 +775,7 @@ class Server:
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
 
-        @self.app.get("/thumbnails/{id}")
+        @self.api.get("/thumbnails/{id}")
         async def get_thumbnail(id: str):
             try:
                 pic = self.vault.pictures[id]
@@ -816,7 +797,7 @@ class Server:
                 raise HTTPException(status_code=404, detail="No thumbnail available")
             return Response(content=thumbnail_bytes, media_type="image/png")
 
-        @self.app.patch("/pictures/{id}")
+        @self.api.patch("/pictures/{id}")
         async def patch_picture(id: str, request: Request):
             """
             Update fields of a picture using query parameters, e.g., /pictures/{id}?score=5
@@ -904,17 +885,17 @@ class Server:
                 self.vault.pictures.update_pictures([pic])
             return {"status": "success", "picture": pic.__dict__}
 
-        @self.app.get("/favicon.ico")
+        @self.api.get("/favicon.ico")
         def favicon():
             favicon_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
             return FileResponse(favicon_path)
 
-        @self.app.post("/check_hashes")
+        @self.api.post("/check_hashes")
         async def check_hashes(hashes: list = Body(...)):
             existing = [h for h in hashes if h in self.vault.iterations]
             return {"existing": existing}
 
-        @self.app.post("/pictures")
+        @self.api.post("/pictures")
         async def import_pictures(
             request: Request,
             character_id: str = Form(None),
@@ -1037,7 +1018,7 @@ class Server:
                 self.vault.iterations.import_iterations(new_iterations)
             return {"results": results}
 
-        @self.app.get("/pictures")
+        @self.api.get("/pictures")
         async def list_pictures(
             request: Request,
             info: bool = Query(False),
@@ -1160,7 +1141,7 @@ class Server:
                         )
                 return results
 
-        @self.app.delete("/pictures/{id}")
+        @self.api.delete("/pictures/{id}")
         async def delete_picture(id: str):
             """
             Delete a picture by id, remove all its iterations, and delete all associated files from the file system and database.
@@ -1203,7 +1184,7 @@ class Server:
                 "errors": errors,
             }
 
-        @self.app.get("/category/summary")
+        @self.api.get("/category/summary")
         def get_category_summary(character_id: str = Query(None)):
             """
             Return summary statistics for a single category:
@@ -1244,7 +1225,7 @@ class Server:
             }
             return summary
 
-        @self.app.get("/config")
+        @self.api.get("/config")
         async def get_config():
             """
             Return the current image roots config (config.json) and OpenAI chat service config.
@@ -1252,7 +1233,7 @@ class Server:
             logger.debug(f"Transmitting current config {self._config}")
             return self._config
 
-        @self.app.patch("/config")
+        @self.api.patch("/config")
         async def patch_config(request: Request):
             """
             Update existing config values or append to existing lists. Does not allow adding new keys.
@@ -1303,7 +1284,7 @@ class Server:
                         updated = True
             if updated:
                 # Save config
-                config_path = CONFIG_PATH
+                config_path = self._config_path
                 with open(config_path, "w") as f:
                     json.dump(self._config, f, indent=2)
             # If selected_image_root changed, re-initialize vault with new root
@@ -1329,40 +1310,3 @@ class Server:
         with open(pyproject_path, "rb") as f:
             data = tomllib.load(f)
         return data.get("project", {}).get("version", "unknown")
-
-
-def main():
-    global CONFIG_PATH, APP_NAME
-    parser = argparse.ArgumentParser(description=f"Run the {APP_NAME}.")
-    parser.add_argument(
-        "--port", type=int, default=9537, help="Port to run the server on."
-    )
-    parser.add_argument(
-        "--config", type=str, default=CONFIG_PATH, help="Path to server config file."
-    )
-    parser.add_argument(
-        "--log-file", type=str, default=None, help="Path to server log file."
-    )
-    args = parser.parse_args()
-    print(args)
-
-    # If --config is provided, use it
-    config_path = args.config
-
-    server = Server(config_path=config_path, log_file=args.log_file)
-
-    uvicorn_kwargs = dict(
-        host="0.0.0.0",
-        port=args.port,
-    )
-    if server.require_ssl:
-        uvicorn_kwargs["ssl_keyfile"] = server.ssl_keyfile
-        uvicorn_kwargs["ssl_certfile"] = server.ssl_certfile
-        print(
-            f"[SSL] Running with SSL: keyfile={server.ssl_keyfile}, certfile={server.ssl_certfile}"
-        )
-    uvicorn.run(server.app, **uvicorn_kwargs)
-
-
-if __name__ == "__main__":
-    main()
