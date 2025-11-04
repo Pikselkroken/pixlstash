@@ -9,8 +9,8 @@ from pixelurgy_vault.vault import Vault
 from pixelurgy_vault.picture_iteration import PictureIteration
 
 
-def regenerate_thumbnails(db_path=None, image_root=None):
-    vault = Vault(db_path=db_path, image_root=image_root)
+def regenerate_thumbnails(image_root=None):
+    vault = Vault(image_root=image_root)
     vault.stop_background_workers()
     updated = 0
     for pic_id in tqdm(list(vault.pictures), desc="Pictures"):
@@ -45,10 +45,7 @@ if __name__ == "__main__":
         description="Regenerate all thumbnails in the vault."
     )
     parser.add_argument(
-        "--db", type=str, default="vault.db", help="Path to vault.db (optional)"
-    )
-    parser.add_argument(
         "--image-root", type=str, default=None, help="Path to image root (optional)"
     )
     args = parser.parse_args()
-    regenerate_thumbnails(db_path=args.db, image_root=args.image_root)
+    regenerate_thumbnails(image_root=args.image_root)
