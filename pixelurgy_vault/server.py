@@ -1,23 +1,32 @@
-from contextlib import asynccontextmanager
-from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
-
-from .logging import get_logger, setup_logging
 import uvicorn
+import io
 import os
 import json
 import uuid
 import argparse
+import mimetypes
+import re
 
+from contextlib import asynccontextmanager
+from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
+from PIL import Image
 from platformdirs import user_config_dir
+
+from pixelurgy_vault.logging import get_logger, setup_logging
 from pixelurgy_vault.vault import Vault
 from pixelurgy_vault.picture import Picture
 from pixelurgy_vault.picture_iteration import PictureIteration
 
+
 APP_NAME = "pixelurgy-vault"
 CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "config.json")
-
+SERVER_CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "server-config.json")
+DEFAULT_LOG_PATH = os.path.join(user_config_dir(APP_NAME), "server.log")
+DEFAULT_SSL_KEY_PATH = os.path.join(user_config_dir(APP_NAME), "ssl", "key.pem")
+DEFAULT_SSL_CERT_PATH = os.path.join(user_config_dir(APP_NAME), "ssl", "cert.pem")
+DEFAULT_IMAGE_ROOT = os.path.join(user_config_dir(APP_NAME), "images")
 
 # Logging will be set up after config is loaded
 logger = None
@@ -44,7 +53,7 @@ class Server:
     def __init__(
         self,
         config_path=CONFIG_PATH,
-        vault_db_path=None,
+        server_config_path=SERVER_CONFIG_PATH,
         image_root=None,
         description=None,
         log_file=None,
@@ -53,30 +62,42 @@ class Server:
         Initialize the Server instance.
 
         Args:
-            vault_db_path (str, optional): Path to the vault database file.
-            image_root (str, optional): Path to the image root directory.
+            config_path (str): Path to the image roots config file.
+            server_config_path (str): Path to the server-only config file.
+            selected_image_root (str, optional): Path to the selected image root directory.
             description (str, optional): Vault description.
             log_file (str, optional): Path to the log file (or None for stdout).
         """
-        self.config = self.init_config(
-            config_path, vault_db_path, image_root, description, log_file
+        self._init_config(
+            config_path=config_path,
+            image_root=image_root,
+            description=description,
         )
+        self.__init_server_config(
+            server_config_path=server_config_path, log_file=log_file
+        )
+
+        # SSL config
+        if self.require_ssl:
+            self._ensure_ssl_certificates()
+
         # Override config values with explicit arguments
-        if vault_db_path is not None:
-            self.config["db_path"] = vault_db_path
         if image_root is not None:
-            self.config["image_root"] = image_root
-        if description is not None:
-            self.config["description"] = description
+            self._config["selected_image_root"] = image_root
         if log_file is not None:
-            self.config["log_file"] = log_file
+            self._server_config["log_file"] = log_file
+
         global logger
-        setup_logging(self.config.get("log_file"))
+        setup_logging(self._server_config.get("log_file"))
         logger = get_logger(__name__)
+
+        logger.info(
+            "Creating Vault instance with image root: "
+            + str(self._config["selected_image_root"])
+        )
         self.vault = Vault(
-            db_path=self.config["db_path"],
-            image_root=self.config["image_root"],
-            description=self.config["description"],
+            image_root=self._config["selected_image_root"],
+            description=self._config.get("description"),
         )
 
         self.app = FastAPI(lifespan=self.lifespan)
@@ -88,7 +109,119 @@ class Server:
             allow_methods=["*"],
             allow_headers=["*"],
         )
-        self.setup_routes()
+        self._add_cors_exception_handler()
+        self._setup_routes()
+
+    def _init_config(
+        self,
+        config_path=CONFIG_PATH,
+        image_root=None,
+        description="Pixelurgy Vault default configuration",
+    ):
+        """
+        Initialize and load the server configuration from file, creating defaults if necessary.
+
+        Returns:
+            dict: Configuration dictionary.
+        """
+        self._config_path = config_path
+        config_dir = os.path.dirname(self._config_path)
+        os.makedirs(config_dir, exist_ok=True)
+
+        if not os.path.exists(self._config_path):
+            self._config = {
+                "image_roots": [image_root or os.path.join(config_dir, "images")],
+                "selected_image_root": image_root or os.path.join(config_dir, "images"),
+                "description": description,
+                "sort": "date_desc",
+                "thumbnail": "default",
+                "show_stars": True,
+                "show_only_reference": False,
+                "openai_host": "localhost",
+                "openai_port": 8000,
+                "openai_model": "gpt-3.5-turbo",
+            }
+            with open(self._config_path, "w") as f:
+                json.dump(self._config, f, indent=2)
+        else:
+            with open(self._config_path, "r") as f:
+                self._config = json.load(f)
+                # Ensure new config options exist
+
+                if "sort_order" not in self._config:
+                    self._config["sort_order"] = "date_desc"
+                if "thumbnail_size" not in self._config:
+                    self._config["thumbnail_size"] = "default"
+                if "show_stars" not in self._config:
+                    self._config["show_stars"] = True
+                if "show_only_reference" not in self._config:
+                    self._config["show_only_reference"] = False
+                if "openai_host" not in self._config:
+                    self._config["openai_host"] = "localhost"
+                if "openai_port" not in self._config:
+                    self._config["openai_port"] = 8000
+                if "openai_model" not in self._config:
+                    self._config["openai_model"] = "gpt-3.5-turbo"
+                if (
+                    "image_roots" not in self._config
+                    or len(self._config["image_roots"]) == 0
+                ):
+                    self._config["image_roots"] = [DEFAULT_IMAGE_ROOT]
+                if "selected_image_root" not in self._config:
+                    self._config["selected_image_root"] = self._config["image_roots"][0]
+
+    def __init_server_config(
+        self, server_config_path=SERVER_CONFIG_PATH, log_file=None
+    ):
+        config_dir = os.path.dirname(server_config_path)
+        os.makedirs(config_dir, exist_ok=True)
+        if not os.path.exists(server_config_path):
+            self._server_config = {
+                "host": "localhost",
+                "port": 8000,
+                "log_level": "info",
+                "log_file": log_file,
+                "require_ssl": False,
+                "ssl_keyfile": DEFAULT_SSL_KEY_PATH,
+                "ssl_certfile": DEFAULT_SSL_CERT_PATH,
+            }
+            with open(server_config_path, "w") as f:
+                json.dump(self._server_config, f, indent=2)
+        else:
+            with open(server_config_path, "r") as f:
+                self._server_config = json.load(f)
+
+                # Ensure server config options exist
+                if "host" not in self._server_config:
+                    self._server_config["host"] = "localhost"
+                if "port" not in self._server_config:
+                    self._server_config["port"] = 8000
+                if "log_level" not in self._server_config:
+                    self._server_config["log_level"] = "info"
+                if "log_file" not in self._server_config:
+                    self._server_config["log_file"] = DEFAULT_LOG_PATH
+                if "require_ssl" not in self._server_config:
+                    self._server_config["require_ssl"] = False
+                if "ssl_keyfile" not in self._server_config:
+                    self._server_config["ssl_keyfile"] = DEFAULT_SSL_KEY_PATH
+                if "ssl_certfile" not in self._server_config:
+                    self._server_config["ssl_certfile"] = DEFAULT_SSL_CERT_PATH
+
+    @property
+    def require_ssl(self):
+        return self._server_config.get("require_ssl", False)
+
+    @require_ssl.setter
+    def require_ssl(self, value: bool):
+        self._server_config["require_ssl"] = value
+
+    @property
+    def ssl_keyfile(self):
+        return self._server_config.get("ssl_keyfile", DEFAULT_SSL_KEY_PATH)
+
+    @property
+    def ssl_certfile(self):
+        return self._server_config.get("ssl_certfile", DEFAULT_SSL_CERT_PATH)
 
     @asynccontextmanager
     async def lifespan(self, app):
@@ -98,74 +231,86 @@ class Server:
         if hasattr(self, "vault"):
             self.vault.close()
 
-    def init_config(
-        self,
-        config_path=CONFIG_PATH,
-        vault_db_path=None,
-        image_root=None,
-        description="Pixelurgy Vault default configuration",
-        log_file=None,
-    ):
-        """
-        Initialize and load the server configuration from file, creating defaults if necessary.
+    def _ensure_ssl_certificates(self):
+        import subprocess
 
-        Returns:
-            dict: Configuration dictionary.
-        """
-        config_dir = os.path.dirname(config_path)
-        os.makedirs(config_dir, exist_ok=True)
-        if not os.path.exists(config_path):
-            config = {
-                "db_path": vault_db_path or os.path.join(config_dir, "vault.db"),
-                "image_root": image_root or os.path.join(config_dir, "images"),
-                "description": description,
-                "log_file": log_file,
-                "port": 9537,
-            }
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=2)
-        else:
-            with open(config_path, "r") as f:
-                config = json.load(f)
-            # Do not override log_file here; let __init__ handle it
-        return config
+        keyfile = self._server_config.get("ssl_keyfile", DEFAULT_SSL_KEY_PATH)
+        certfile = self._server_config.get("ssl_certfile", DEFAULT_SSL_CERT_PATH)
+        # If either file is missing, generate self-signed cert
+        if not (os.path.exists(keyfile) and os.path.exists(certfile)):
+            os.makedirs(os.path.dirname(keyfile), exist_ok=True)
+            os.makedirs(os.path.dirname(certfile), exist_ok=True)
+            print(f"[SSL] Generating self-signed certificate: {certfile}, {keyfile}")
+            try:
+                subprocess.run(
+                    [
+                        "openssl",
+                        "req",
+                        "-x509",
+                        "-nodes",
+                        "-days",
+                        "365",
+                        "-newkey",
+                        "rsa:2048",
+                        "-keyout",
+                        keyfile,
+                        "-out",
+                        certfile,
+                        "-subj",
+                        "/CN=localhost",
+                    ],
+                    check=True,
+                )
+            except Exception as e:
+                print(f"[SSL] Failed to generate self-signed certificate: {e}")
+                raise
 
-    def setup_routes(self):
+    def _add_cors_exception_handler(self):
+        @self.app.exception_handler(HTTPException)
+        async def cors_exception_handler(request, exc):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+    def _setup_routes(self):
+        from pixelurgy_vault.pictures import get_sort_mechanisms
+
+        @self.app.get("/sort_mechanisms")
+        async def get_pictures_sort_mechanisms():
+            """Return available sorting mechanisms for pictures."""
+            return get_sort_mechanisms()
+
         @self.app.get("/face_thumbnail/{character_id}")
         async def get_face_thumbnail(character_id: str):
             """
             Return a face-cropped thumbnail for the highest scored picture of the character.
             If no scored picture, fallback to first image. If no face bbox, fallback to normal thumbnail.
+            Cropped region is resized to fit within 96x96, preserving aspect ratio.
             """
-            import io
-            from PIL import Image
-
-            # Find all pictures for this character
-            pics = self.vault.pictures.find(character_id=character_id)
-            if not pics:
-                raise HTTPException(status_code=404, detail="No pictures for character")
-            # Find master iterations for these pictures
-            its = []
-            for pic in pics:
-                master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
-                if master_its:
-                    it = master_its[0]
-                    its.append((it, pic))
-            if not its:
-                raise HTTPException(
-                    status_code=404, detail="No master iterations for character"
-                )
+            logger.info(f"Generating face thumbnail for character_id: {character_id}")
+            its = self.vault.iterations.find(character_id=character_id, is_master=1)
+            logger.info(
+                f"Found {len(its)} master iterations for character_id: {character_id}"
+            )
 
             # Sort by score descending, then by created_at
-            def score_key(tup):
-                it, pic = tup
-                return (it.score if it.score is not None else -1, pic.created_at)
+            def score_key(picture_iteration):
+                return (
+                    picture_iteration.score
+                    if picture_iteration.score is not None
+                    else -1,
+                    picture_iteration.created_at,
+                )
 
             its.sort(key=score_key, reverse=True)
-            it, pic = its[0]
+            it = its[0]
             # Try to get face_bbox from the picture
+            pic = self.vault.pictures.find(id=it.picture_id)
+
             face_bbox = None
-            if hasattr(pic, "face_bbox") and pic.face_bbox:
+            if hasattr(it, "face_bbox") and it.face_bbox:
                 try:
                     face_bbox = (
                         json.loads(pic.face_bbox)
@@ -174,6 +319,10 @@ class Server:
                     )
                 except Exception:
                     face_bbox = None
+            else:
+                logger.info(
+                    f"No face_bbox attribute on picture for character_id: {character_id}"
+                )
             # Load thumbnail image
             if not it.thumbnail:
                 raise HTTPException(status_code=404, detail="No thumbnail available")
@@ -183,6 +332,7 @@ class Server:
                 raise HTTPException(status_code=400, detail="Invalid thumbnail image")
             # If face_bbox is available, crop to it
             if face_bbox and len(face_bbox) == 4:
+                logger.info(f"Cropping thumbnail to face bbox: {face_bbox}")
                 x1, y1, x2, y2 = [int(round(v)) for v in face_bbox]
                 w, h = thumb_img.size
                 x1 = max(0, min(w, x1))
@@ -191,8 +341,13 @@ class Server:
                 y2 = max(0, min(h, y2))
                 if x2 > x1 and y2 > y1:
                     thumb_img = thumb_img.crop((x1, y1, x2, y2))
-            # Resize to 96x96 for sidebar (twice the previous size)
-            thumb_img = thumb_img.resize((96, 96), Image.LANCZOS)
+            # Resize so height=96px, width scaled proportionally
+            target_height = 96
+            w, h = thumb_img.size
+            if h != target_height:
+                scale = target_height / h
+                new_w = int(round(w * scale))
+                thumb_img = thumb_img.resize((new_w, target_height), Image.LANCZOS)
             buf = io.BytesIO()
             thumb_img.save(buf, format="PNG")
             return Response(content=buf.getvalue(), media_type="image/png")
@@ -206,18 +361,18 @@ class Server:
             logger.info(f"Frontend event: {json.dumps(event)}")
             return {"status": "logged"}
 
-        @self.app.get("/pictures/search")
+        @self.app.get("/search")
         def search_pictures(
             query: str = Query(""), top_n: int = Query(5), threshold: float = Query(0.3)
         ):
             """
-            Semantic search for pictures using CLIP embedding. Returns list of Pictures ordered by similarity.
+            Combined hybrid search: fuzzy tag/description and embedding, weighted by query length.
             Query params: ?query=...&top_n=...&threshold=...
             """
+            from rapidfuzz import fuzz
 
-            # Hybrid search: for single-word queries, do tag/description search; for short queries, expand them
-            def pic_to_dict(pic):
-                return {
+            def pic_to_dict(pic, likeness_score=None):
+                d = {
                     "id": pic.id,
                     "character_id": pic.character_id,
                     "description": pic.description,
@@ -225,29 +380,138 @@ class Server:
                     "created_at": pic.created_at,
                     "is_reference": getattr(pic, "is_reference", 0),
                 }
+                if likeness_score is not None:
+                    d["likeness_score"] = likeness_score
+                return d
 
-            q = query.strip()
-            # If query is a single word (no spaces), do tag/description search
-            if len(q.split()) == 1:
-                results = self.vault.pictures.find_by_tag_or_description(q)
-                return [pic_to_dict(pic) for pic in results]
-            # If query is short (2-3 words), try to expand it
-            elif 1 < len(q.split()) <= 3:
-                expanded = f"A photo of {q}"
-                results = self.vault.pictures.find_by_text(
-                    expanded, top_n=top_n, include_scores=False, threshold=threshold
-                )
-                if not results:
-                    # fallback to original
-                    results = self.vault.pictures.find_by_text(
-                        q, top_n=top_n, include_scores=False, threshold=threshold
+            q = query.strip().lower()
+            if not q:
+                return []
+
+            # Split on any whitespace or punctuation
+            q_split = re.split(r"[\s\W]+", q)
+            q_split = [w for w in q_split if w]
+            n_words = len(q_split)
+
+            # Fuzzy search (tag/description/character name)
+            all_pics = self.vault.pictures.find()
+            fuzzy_scores = {}
+            for pic in all_pics:
+                tag_scores = []
+                # Add character name to tags for fuzzy search
+                tags_and_name = list(pic.tags)
+                char_name = None
+                char_id = getattr(pic, "character_id", None)
+                if char_id is not None:
+                    try:
+                        char_obj = self.vault.characters[int(char_id)]
+                        if getattr(char_obj, "name", None):
+                            char_name = char_obj.name
+                    except Exception:
+                        char_name = None
+                if char_name:
+                    names = char_name.split(" ")
+                    for name in names:
+                        tags_and_name.append(name)
+                for q_word in q_split:
+                    max_score = 0
+                    logger.info(f"Query word: {q_word}")
+                    for tag in tags_and_name:
+                        score = fuzz.ratio(q_word, str(tag).lower()) / 100
+                        score *= min(len(q_word), len(tag)) / max(
+                            len(q_word), len(tag), 1
+                        )
+                        if score > max_score:
+                            max_score = score
+                    tag_scores.append(max_score)
+                    desc_score = (
+                        fuzz.ratio(q_word, (pic.description or "").lower()) / 100.0
                     )
-                return [pic_to_dict(pic) for pic in results]
-            else:
-                results = self.vault.pictures.find_by_text(
-                    q, top_n=top_n, include_scores=False, threshold=threshold
+                logger.info(
+                    f"PicID={pic.id} Desc='{pic.description}' Desc score={desc_score}, Tag scores={tag_scores}"
                 )
-                return [pic_to_dict(pic) for pic in results]
+                avg_score = sum(tag_scores) / len(tag_scores) if tag_scores else 0
+                max_score = max(tag_scores) if tag_scores else 0
+                total_score = max(0.4 * avg_score + 0.6 * max_score, desc_score)
+                logger.info(
+                    f"PicID={pic.id} Desc='{pic.description}' Desc score={desc_score}, Tag scores={tag_scores}, total score={total_score}"
+                )
+                fuzzy_scores[pic.id] = total_score
+
+            # Embedding search
+            # For 1-2 words, expand query for better semantic results
+            if n_words <= 3:
+                expanded = f"A photo of {q}" if n_words >= 1 else q
+                semantic_results = self.vault.pictures.find_by_text(
+                    expanded,
+                    top_n=top_n * 3,
+                    include_scores=True,
+                    threshold=threshold / 2,
+                )
+                if not semantic_results:
+                    semantic_results = self.vault.pictures.find_by_text(
+                        q, top_n=top_n * 3, include_scores=True, threshold=threshold / 2
+                    )
+            else:
+                semantic_results = self.vault.pictures.find_by_text(
+                    q, top_n=top_n * 3, include_scores=True, threshold=threshold / 2
+                )
+            semantic_scores = {pic.id: score for pic, score in semantic_results}
+
+            # Weighting: more words = more semantic weight
+            # <=2 words: 80% fuzzy, 20% semantic
+            # 3 words: 50/50
+            # 4 words: 30% fuzzy, 70% semantic
+            # 5+ 20% fuzzy, 80% semantic
+            if n_words <= 2:
+                fuzzy_w, sem_w = 0.9, 0.1
+            elif n_words == 3:
+                fuzzy_w, sem_w = 0.6, 0.4
+            elif n_words == 4:
+                fuzzy_w, sem_w = 0.3, 0.7
+            else:
+                fuzzy_w, sem_w = 0.2, 0.8
+
+            # Merge scores
+            all_ids = set(fuzzy_scores.keys()) | set(semantic_scores.keys())
+            combined = []
+            for pic_id in all_ids:
+                fuzzy_score = fuzzy_scores.get(pic_id, 0)
+                sem_score = semantic_scores.get(pic_id, 0)
+                combined_score = fuzzy_w * fuzzy_score + sem_w * sem_score
+                logger.info(
+                    f"Got combined score of {combined_score} for PicID={pic_id} (Fuzzy={fuzzy_score}, Semantic={sem_score})"
+                )
+                pic = next((p for p in all_pics if p.id == pic_id), None)
+                if pic:
+                    if combined_score < threshold:
+                        continue
+                    # Diagnostics: log why this picture matched
+                    tags_and_name = list(pic.tags)
+                    char_name = None
+                    char_id = getattr(pic, "character_id", None)
+                    if char_id is not None:
+                        try:
+                            char_obj = self.vault.characters[int(char_id)]
+                            if getattr(char_obj, "name", None):
+                                char_name = char_obj.name
+                        except Exception:
+                            char_name = None
+                    if char_name:
+                        tags_and_name.append(char_name)
+                    logger.debug(
+                        f"[SEARCH DIAG] Query='{q}' | PicID={pic.id} | Tags+Name={tags_and_name} | Desc='{pic.description}' | Fuzzy={fuzzy_score:.2f} | Embedding={sem_score:.2f} | Combined={combined_score:.2f}"
+                    )
+                    combined.append((pic, combined_score, fuzzy_score, sem_score))
+
+            # Sort by combined score, then by created_at
+            combined.sort(key=lambda x: (-x[1], x[0].created_at or ""))
+            # Optionally, include fuzzy/semantic scores for debugging:
+            # return [{**pic_to_dict(pic), "score": score, "fuzzy": fuzzy, "semantic": sem} for pic, score, fuzzy, sem in combined[:top_n]]
+            return [
+                pic_to_dict(pic, likeness_score=score)
+                for pic, score, _, _ in combined[:top_n]
+            ]
 
         @self.app.get("/characters/reference_pictures/{id}")
         def get_reference_pictures(id: str):
@@ -258,15 +522,25 @@ class Server:
             reference_pics = [
                 pic for pic in pics if getattr(pic, "is_reference", 0) == 1
             ]
+            pic_ids = [pic.id for pic in reference_pics]
+            iter_map = {}
+            if pic_ids:
+                cursor = self.vault.connection.cursor()
+                qmarks = ",".join(["?"] * len(pic_ids))
+                cursor.execute(
+                    f"SELECT id, picture_id FROM picture_iterations WHERE is_master=1 AND picture_id IN ({qmarks})",
+                    tuple(pic_ids),
+                )
+                for row in cursor.fetchall():
+                    iter_map[row[1]] = row[0]
             results = []
             for pic in reference_pics:
-                # Find master iteration for this picture
-                master_its = self.vault.iterations.find(picture_id=pic.id, is_master=1)
-                if master_its:
+                iteration_id = iter_map.get(pic.id)
+                if iteration_id:
                     results.append(
                         {
                             "picture_id": pic.id,
-                            "iteration_id": master_its[0].id,
+                            "iteration_id": iteration_id,
                             "description": pic.description,
                             "tags": pic.tags,
                             "created_at": pic.created_at,
@@ -284,9 +558,19 @@ class Server:
             """
             Add a reference picture for a character. Creates a new Picture with is_reference=1 and a master iteration.
             """
+            ext = None
+            if image.filename:
+                ext = os.path.splitext(image.filename)[1]
+            if not ext:
+                # Guess from content type
+                ext = mimetypes.guess_extension(image.content_type or "")
+
             tags_list = json.loads(tags) if tags else []
             img_bytes = await image.read()
-            pic_id = str(uuid.uuid4())
+            if not ext.startswith("."):
+                ext = "." + ext
+
+            pic_id = str(uuid.uuid4()) + ext
             picture = Picture(
                 id=pic_id,
                 character_id=character_id,
@@ -294,7 +578,7 @@ class Server:
                 tags=tags_list,
                 is_reference=1,
             )
-            dest_folder = self.vault.get_image_root()
+            dest_folder = self.vault.image_root
             _, iteration = PictureIteration.create_from_bytes(
                 image_root_path=dest_folder,
                 image_bytes=img_bytes,
@@ -323,6 +607,10 @@ class Server:
             if name is not None and name != char.name:
                 char.name = name
                 updated = True
+                # Drop embeddings for all pictures with this character_id
+                pics = self.vault.pictures.find(character_id=id)
+                for pic in pics:
+                    self.vault.pictures.set_embedding_null(pic.id)
             if description is not None and description != char.description:
                 char.description = description
                 updated = True
@@ -424,7 +712,7 @@ class Server:
             except KeyError:
                 raise HTTPException(status_code=404, detail="picture_id does not exist")
 
-            dest_folder = self.vault.get_image_root()
+            dest_folder = self.vault.image_root
             os.makedirs(dest_folder, exist_ok=True)
 
             if file is not None:
@@ -465,7 +753,7 @@ class Server:
         ):
             if not isinstance(id, str):
                 logger.error(f"Invalid id type: {type(id)} value: {id}")
-                raise HTTPException(status_code=404, detail="Invalid picture id")
+                raise HTTPException(status_code=400, detail="Invalid picture id type")
             try:
                 pic = self.vault.pictures[id]
             except KeyError:
@@ -501,7 +789,10 @@ class Server:
                 raise HTTPException(
                     status_code=404, detail=f"File not found for iteration id={it.id}"
                 )
-            return FileResponse(it.file_path)
+            # Return the image file with CORS headers
+            response = FileResponse(it.file_path)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
 
         @self.app.get("/thumbnails/{id}")
         async def get_thumbnail(id: str):
@@ -567,13 +858,15 @@ class Server:
             except KeyError:
                 raise HTTPException(status_code=404, detail="Picture not found")
             updated = False
-            # If tags are provided in JSON body, replace tags
+            # If tags are provided in JSON body, replace tags and drop embedding
             if json_body and "tags" in json_body:
                 tags = json_body["tags"]
                 if not isinstance(tags, list):
                     raise HTTPException(status_code=400, detail="tags must be a list")
                 pic.tags = tags
                 updated = True
+                # Drop embedding if tags change
+                self.vault.pictures.set_embedding_null(id)
             # Otherwise, update fields from query params
             for key, value in params.items():
                 if key == "score":
@@ -583,10 +876,24 @@ class Server:
                 except Exception:
                     cast_val = value
                 if hasattr(pic, key):
+                    old_val = getattr(pic, key)
                     setattr(pic, key, cast_val)
                     updated = True
+                    # Drop embedding if character_id changes
+                    if key == "character_id" and old_val != cast_val:
+                        self.vault.pictures.set_embedding_null(id)
                 # If updating character_id, also update all iterations
                 if key == "character_id":
+                    # Log character id and name
+                    char_name = None
+                    try:
+                        char_obj = self.vault.characters[cast_val]
+                        char_name = getattr(char_obj, "name", None)
+                    except Exception:
+                        char_name = None
+                    logger.debug(
+                        f"[PATCH] Assigning picture {id} to character_id={cast_val}, name={char_name}"
+                    )
                     cursor = self.vault.connection.cursor()
                     cursor.execute(
                         "UPDATE picture_iterations SET character_id = ? WHERE picture_id = ?",
@@ -602,6 +909,11 @@ class Server:
             favicon_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
             return FileResponse(favicon_path)
 
+        @self.app.post("/check_hashes")
+        async def check_hashes(hashes: list = Body(...)):
+            existing = [h for h in hashes if h in self.vault.iterations]
+            return {"existing": existing}
+
         @self.app.post("/pictures")
         async def import_pictures(
             request: Request,
@@ -616,9 +928,11 @@ class Server:
             Import new pictures with master iterations. Accepts:
             - image: bytes upload (single file)
             - file_path: path to file or directory (if directory, imports all images recursively if recursive=True)
+            Detects media type and sets ID as uuid + extension.
             """
 
-            dest_folder = self.vault.get_image_root()
+            dest_folder = self.vault.image_root
+            logger.debug("Importing pictures to folder: " + str(dest_folder))
             os.makedirs(dest_folder, exist_ok=True)
             tags_list = json.loads(tags) if tags else []
             results = []
@@ -626,19 +940,28 @@ class Server:
             # Collect files to import
             if image is not None:
                 img_bytes = await image.read()
-                files_to_import.append((img_bytes, None))
+                # Try to get extension from UploadFile filename
+                ext = None
+                if image.filename:
+                    ext = os.path.splitext(image.filename)[1]
+                if not ext:
+                    # Guess from content type
+                    ext = mimetypes.guess_extension(image.content_type or "")
+                files_to_import.append((img_bytes, None, ext))
             elif file_path:
                 if os.path.isdir(file_path):
                     for root, _, files in os.walk(file_path):
                         for fname in files:
                             fpath = os.path.join(root, fname)
                             with open(fpath, "rb") as f:
-                                files_to_import.append((f.read(), fpath))
+                                ext = os.path.splitext(fname)[1]
+                                files_to_import.append((f.read(), fpath, ext))
                         if not recursive:
                             break
                 else:
                     with open(file_path, "rb") as f:
-                        files_to_import.append((f.read(), file_path))
+                        ext = os.path.splitext(file_path)[1]
+                        files_to_import.append((f.read(), file_path, ext))
             else:
                 raise HTTPException(
                     status_code=400, detail="No image or file_path provided"
@@ -646,10 +969,11 @@ class Server:
 
             new_pictures = []
             new_iterations = []
-            for img_bytes, src_path in files_to_import:
+            for img_bytes, src_path, ext in files_to_import:
+                logger.debug(f"Importing picture from {src_path} with ext={ext}")
                 # Calculate SHA for deduplication
                 sha = (
-                    PictureIteration.calculate_sha256_from_file_path(src_path)
+                    PictureIteration.calculate_hash_from_file_path(src_path)
                     if src_path
                     else PictureIteration.create_from_bytes(
                         dest_folder, img_bytes, "temp"
@@ -669,8 +993,21 @@ class Server:
                     continue
                 except KeyError:
                     pass
+                # Detect extension if missing
+                if not ext or ext == "":
+                    # Try to guess from bytes (fallback to .png)
+                    import imghdr
+
+                    img_type = imghdr.what(None, h=img_bytes)
+                    if img_type:
+                        ext = f".{img_type}"
+                    else:
+                        ext = ".png"
+                # Ensure ext starts with .
+                if not ext.startswith("."):
+                    ext = "." + ext
                 # Create new Picture and master iteration
-                pic_id = str(uuid.uuid4())
+                pic_id = str(uuid.uuid4()) + ext
                 picture = Picture(
                     id=pic_id,
                     character_id=character_id,
@@ -701,30 +1038,86 @@ class Server:
             return {"results": results}
 
         @self.app.get("/pictures")
-        async def list_pictures(request: Request, info: bool = Query(False)):
+        async def list_pictures(
+            request: Request,
+            info: bool = Query(False),
+            sort: str = Query("unsorted"),
+            offset: int = Query(0),
+            limit: int = Query(100),
+            query: str = Query(None),
+        ):
+            from pixelurgy_vault.pictures import SortMechanism
+
             query_params = dict(request.query_params)
-            # Remove 'info' from query_params if present
             query_params.pop("info", None)
+            query_params.pop("sort", None)
+            query_params.pop("offset", None)
+            query_params.pop("limit", None)
+            query_params.pop("query", None)
             # Convert tags to list if present
             if "tags" in query_params and isinstance(query_params["tags"], str):
-                import json
-
                 try:
                     query_params["tags"] = json.loads(query_params["tags"])
                 except Exception:
                     query_params["tags"] = [query_params["tags"]]
-            pics = self.vault.pictures.find(**query_params)
+
+            # Handle search likeness sort (semantic search)
+            if sort == SortMechanism.SEARCH_LIKENESS.value and query:
+                # Use semantic search, return top-N (limit) results
+                pics = self.vault.pictures.find_by_text(query, top_n=offset + limit)
+                pics = pics[offset : offset + limit]
+            else:
+                pics = self.vault.pictures.find(**query_params)
+                # Batch fetch all master iteration scores for sorting if needed
+                if sort in [
+                    SortMechanism.SCORE_DESC.value,
+                    SortMechanism.SCORE_ASC.value,
+                ]:
+                    pic_ids = [pic.id for pic in pics]
+                    score_map = {}
+                    if pic_ids:
+                        cursor = self.vault.connection.cursor()
+                        qmarks = ",".join(["?"] * len(pic_ids))
+                        cursor.execute(
+                            f"SELECT picture_id, score FROM picture_iterations WHERE is_master=1 AND picture_id IN ({qmarks})",
+                            tuple(pic_ids),
+                        )
+                        for row in cursor.fetchall():
+                            score_map[row[0]] = row[1]
+                    for pic in pics:
+                        setattr(pic, "_score", score_map.get(pic.id))
+                    reverse = sort == SortMechanism.SCORE_DESC.value
+                    pics.sort(
+                        key=lambda p: (
+                            p._score if p._score is not None else float("-inf")
+                        ),
+                        reverse=reverse,
+                    )
+                elif sort in [
+                    SortMechanism.DATE_DESC.value,
+                    SortMechanism.DATE_ASC.value,
+                ]:
+                    reverse = sort == SortMechanism.DATE_DESC.value
+                    pics.sort(key=lambda p: p.created_at or "", reverse=reverse)
+                # else: unsorted
+                pics = pics[offset : offset + limit]
+
             if info:
-                # Return only Picture info (metadata), but include score from master iteration
+                # Batch fetch all master iteration scores for these pictures
+                pic_ids = [pic.id for pic in pics]
+                score_map = {}
+                if pic_ids:
+                    cursor = self.vault.connection.cursor()
+                    qmarks = ",".join(["?"] * len(pic_ids))
+                    cursor.execute(
+                        f"SELECT picture_id, score FROM picture_iterations WHERE is_master=1 AND picture_id IN ({qmarks})",
+                        tuple(pic_ids),
+                    )
+                    for row in cursor.fetchall():
+                        score_map[row[0]] = row[1]
                 result = []
                 for pic in pics:
-                    # Find master iteration for this picture
-                    master_its = self.vault.iterations.find(
-                        picture_id=pic.id, is_master=1
-                    )
-                    score = None
-                    if master_its:
-                        score = master_its[0].score
+                    score = score_map.get(pic.id)
                     result.append(
                         {
                             "id": pic.id,
@@ -741,7 +1134,6 @@ class Server:
                 # Return the master iteration for each picture (is_master=1)
                 results = []
                 for pic in pics:
-                    # Find master iteration for this picture
                     master_its = self.vault.iterations.find(
                         picture_id=pic.id, is_master=1
                     )
@@ -811,6 +1203,121 @@ class Server:
                 "errors": errors,
             }
 
+        @self.app.get("/category/summary")
+        def get_category_summary(character_id: str = Query(None)):
+            """
+            Return summary statistics for a single category:
+            - If character_id is omitted: all pictures
+            - If character_id is null/None/empty: unassigned pictures
+            - If character_id is set: that character's pictures
+            """
+
+            # Determine which set to query
+            if character_id is None:
+                # All
+                pics = self.vault.pictures.find()
+                char_id = None
+            elif character_id == "null":
+                # Unassigned
+                pics = self.vault.pictures.find(character_id="null")
+                char_id = None
+            else:
+                pics = self.vault.pictures.find(character_id=character_id)
+                char_id = character_id
+
+            image_count = len(pics)
+
+            reference_image_count = sum(1 for p in pics if p.is_reference == 1)
+            last_updated = max(
+                (p.created_at for p in pics if p.created_at), default=None
+            )
+            # Thumbnail URL (reuse existing endpoint)
+            thumb_url = None
+            if char_id not in (None, "", "null"):
+                thumb_url = f"/face_thumbnail/{char_id}"
+            summary = {
+                "character_id": char_id,
+                "image_count": image_count,
+                "reference_image_count": reference_image_count,
+                "last_updated": last_updated,
+                "thumbnail_url": thumb_url,
+            }
+            return summary
+
+        @self.app.get("/config")
+        async def get_config():
+            """
+            Return the current image roots config (config.json) and OpenAI chat service config.
+            """
+            logger.debug(f"Transmitting current config {self._config}")
+            return self._config
+
+        @self.app.patch("/config")
+        async def patch_config(request: Request):
+            """
+            Update existing config values or append to existing lists. Does not allow adding new keys.
+            Body: { key: value, ... } (value replaces or is appended to existing key)
+            If the value is a list and the existing value is a list, appends items.
+            Ensures new image root directories and DBs are created as needed.
+            """
+            import os
+
+            patch_data = await request.json()
+            updated = False
+            image_root_changed = False
+            for key, value in patch_data.items():
+                if key not in self._config:
+                    # Allow adding 'sort', 'thumbnail', 'show_stars', 'show_only_reference' keys if missing
+                    if key in (
+                        "sort",
+                        "thumbnail",
+                        "show_stars",
+                        "show_only_reference",
+                    ):
+                        self._config[key] = value
+                        updated = True
+                        continue
+                    raise HTTPException(
+                        status_code=400, detail=f"Key '{key}' does not exist in config."
+                    )
+                if key == "image_roots" and isinstance(value, list):
+                    # Ensure all image root directories exist
+                    for v in value:
+                        if not os.path.exists(v):
+                            os.makedirs(v, exist_ok=True)
+                if (
+                    key == "selected_image_root"
+                    and self._config.get("selected_image_root") != value
+                ):
+                    image_root_changed = True
+                if isinstance(self._config[key], list) and isinstance(value, list):
+                    # Append unique items
+                    for v in value:
+                        if v not in self._config[key]:
+                            self._config[key].append(v)
+                            updated = True
+                else:
+                    # Replace value
+                    if self._config[key] != value:
+                        self._config[key] = value
+                        updated = True
+            if updated:
+                # Save config
+                config_path = CONFIG_PATH
+                with open(config_path, "w") as f:
+                    json.dump(self._config, f, indent=2)
+            # If selected_image_root changed, re-initialize vault with new root
+            if image_root_changed:
+                new_root = self._config["selected_image_root"]
+                if not os.path.exists(new_root):
+                    os.makedirs(new_root, exist_ok=True)
+                # Re-initialize vault (and DB) with new root
+                self.vault = Vault(
+                    image_root=new_root,
+                    description=self._config.get("description"),
+                )
+            return {"status": "success", "updated": updated, "config": self._config}
+
     def get_version(self):
         try:
             import tomllib
@@ -844,7 +1351,17 @@ def main():
 
     server = Server(config_path=config_path, log_file=args.log_file)
 
-    uvicorn.run(server.app, host="0.0.0.0", port=args.port)
+    uvicorn_kwargs = dict(
+        host="0.0.0.0",
+        port=args.port,
+    )
+    if server.require_ssl:
+        uvicorn_kwargs["ssl_keyfile"] = server.ssl_keyfile
+        uvicorn_kwargs["ssl_certfile"] = server.ssl_certfile
+        print(
+            f"[SSL] Running with SSL: keyfile={server.ssl_keyfile}, certfile={server.ssl_certfile}"
+        )
+    uvicorn.run(server.app, **uvicorn_kwargs)
 
 
 if __name__ == "__main__":

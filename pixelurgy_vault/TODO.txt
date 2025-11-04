@@ -1,8 +1,7 @@
 * Authentication
-* Import of pictures
-* Creation, edit and storage of characters
 * Picture similarity checks
 * Automatic assignment to characters
 * Export data sets for LoRA training
 * Monitoring of T2I output folders
 * Support for videos
+* Clean up code

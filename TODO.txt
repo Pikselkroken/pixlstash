@@ -1,0 +1,5 @@
+1. Fix overlay
+2. Chat
+3. Video support
+4. Monitoring a folder
+5. Settings (Vault, storage folder, HTTPS)

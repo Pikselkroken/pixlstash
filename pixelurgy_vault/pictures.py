@@ -1,5 +1,9 @@
+from enum import Enum
+
+import gc
 import numpy as np
 import json
+import time
 
 from pixelurgy_vault.logging import get_logger
 
@@ -9,88 +13,41 @@ from pixelurgy_vault.picture_tagger import PictureTagger, MAX_CONCURRENT_IMAGES
 logger = get_logger(__name__)
 
 
-class Pictures:
-    def _extract_face_embeddings(self, thread_conn):
-        """Extract face embeddings for pictures that have no face_embedding, using the master iteration image."""
-        if not hasattr(self, "_skip_pictures"):
-            self._skip_pictures = set()
-        try:
-            from insightface.app import FaceAnalysis
-        except ImportError:
-            logger.error(
-                "InsightFace is not installed. Skipping face embedding extraction."
-            )
-            return False  # Without InsightFace, we cannot proceed
+# Enum for sorting mechanisms
+class SortMechanism(str, Enum):
+    DATE_DESC = "date_desc"
+    DATE_ASC = "date_asc"
+    SCORE_DESC = "score_desc"
+    SCORE_ASC = "score_asc"
+    SEARCH_LIKENESS = "search_likeness"
 
-        # Initialize InsightFace only once
-        if not hasattr(self, "_insightface_app"):
-            self._insightface_app = FaceAnalysis()
-            self._insightface_app.prepare(ctx_id=0)
 
-        # Find pictures missing face_embedding
-        cursor = thread_conn.cursor()
-        cursor.execute(
-            "SELECT id FROM pictures WHERE face_embedding IS NULL OR face_embedding = ''"
-        )
-        pic_ids = [row[0] for row in cursor.fetchall()]
-        if not pic_ids:
-            return True  # Keep going even if if there's nothing to do
-        batch = [pic_id for pic_id in pic_ids if pic_id not in self._skip_pictures][
-            :MAX_CONCURRENT_IMAGES
+# List of available sorting mechanisms for API
+def get_sort_mechanisms():
+    """Return a list of available sort mechanisms as dicts for API consumption."""
+    return [
+        {"id": sm.value, "label": label}
+        for sm, label in [
+            (SortMechanism.DATE_DESC, "Date (latest first)"),
+            (SortMechanism.DATE_ASC, "Date (oldest first)"),
+            (SortMechanism.SCORE_DESC, "Score (highest first)"),
+            (SortMechanism.SCORE_ASC, "Score (lowest first)"),
+            (SortMechanism.SEARCH_LIKENESS, "Sort by search likeness"),
         ]
-        for pic_id in batch:
-            self._skip_pictures.add(pic_id)
-            # Find master iteration for this picture
-            master_iters = [
-                it
-                for it in self._picture_iterations.find(picture_id=pic_id, is_master=1)
-            ]
-            if not master_iters:
-                continue
-            master_iter = master_iters[0]
-            try:
-                import cv2
+    ]
 
-                img = cv2.imread(master_iter.file_path)
-                if img is None:
-                    logger.warning(
-                        f"Could not read image {master_iter.file_path} for face embedding."
-                    )
-                    continue
-                faces = self._insightface_app.get(img)
-                if not faces:
-                    logger.warning(
-                        f"No face found in {master_iter.file_path} for picture {pic_id}."
-                    )
-                    continue
-                else:
-                    logger.debug(
-                        f"Found {len(faces)} face(s) in {master_iter.file_path} for picture {pic_id}."
-                    )
-                # Use the largest face (by area)
-                face = max(faces, key=lambda f: f.bbox[2] * f.bbox[3])
-                embedding = face.embedding
-                embedding_json = json.dumps(embedding.tolist())
-                bbox_json = json.dumps([float(v) for v in face.bbox])
-                with thread_conn:
-                    cursor2 = thread_conn.cursor()
-                    cursor2.execute(
-                        "UPDATE pictures SET face_embedding = ?, face_bbox = ? WHERE id = ?",
-                        (embedding_json, bbox_json, pic_id),
-                    )
-                logger.debug(f"Stored face embedding and bbox for picture {pic_id}.")
-            except Exception as e:
-                logger.error(
-                    f"Failed to extract/store face embedding for picture {pic_id}: {e}"
-                )
-        return True
 
-    def __init__(self, connection, picture_iterations, db_path):
+class Pictures:
+    INSIGHTFACE_CLEANUP_TIMEOUT = 5  # seconds
+
+    def __init__(self, connection, picture_iterations, db_path, characters=None):
         self._connection = connection
         self._picture_iterations = picture_iterations
         self._db_path = db_path
-        self._picture_tagger = PictureTagger()
         self._skip_pictures = set()
+        self._last_time_insightface_was_needed = None
+        self._characters = characters  # Should be a Characters manager or None
+        self._picture_tagger = PictureTagger("cpu")
 
     def __getitem__(self, picture_id):
         # Return master Picture by picture_uuid
@@ -141,6 +98,9 @@ class Pictures:
                     continue
                 else:
                     raise
+            except Exception as e:
+                logger.error(f"Error fetching picture {picture_id}: {e}")
+                raise
 
     def __setitem__(self, picture_id, picture):
         picture.id = picture_id
@@ -169,7 +129,7 @@ class Pictures:
                 "UPDATE pictures SET tags = ? WHERE id = ?", (tags_json, picture_id)
             )
 
-    def start_embeddings_worker(self, interval=0.01):
+    def start_embeddings_worker(self, interval=0.1):
         import threading
 
         if hasattr(self, "_tag_worker") and self._tag_worker.is_alive():
@@ -184,7 +144,15 @@ class Pictures:
         if hasattr(self, "_tag_worker_stop"):
             self._tag_worker_stop.set()
         if hasattr(self, "_tag_worker"):
-            self._tag_worker.join(timeout=5)
+            self._tag_worker.join(timeout=10)
+
+    def set_embedding_null(self, picture_id):
+        """Set the embedding field to NULL for a given picture."""
+        with self._connection:
+            cursor = self._connection.cursor()
+            cursor.execute(
+                "UPDATE pictures SET embedding = NULL WHERE id = ?", (picture_id,)
+            )
 
     def _tag_embeddings_loop(self, interval):
         import sqlite3
@@ -196,17 +164,40 @@ class Pictures:
         calculate_face_embeddings = True
 
         while not self._tag_worker_stop.is_set():
-            self._tag_missing_pictures(thread_conn)
-            self._embed_tagged_pictures(thread_conn)
+            missing_tags = [pic for pic in self.find() if not pic.tags]
+            missing_embeddings = [
+                pic
+                for pic in self.find()
+                if not getattr(pic, "has_embedding", False) and pic.tags
+            ]
+
+            if missing_tags:
+                logger.info(f"Tagging {len(missing_tags)} pictures missing tags.")
+                self._tag_missing_pictures(
+                    thread_conn, self._picture_tagger, missing_tags
+                )
+
+            if missing_embeddings:
+                logger.info(
+                    f"Generating embeddings for {len(missing_embeddings)} pictures."
+                )
+                self._embed_tagged_pictures(
+                    thread_conn, self._picture_tagger, missing_embeddings
+                )
+
             if calculate_face_embeddings:
-                calculate_face_embeddings = self._extract_face_embeddings(thread_conn)
+                faces_needing_embeddings = self._find_faces_needing_embeddings(
+                    thread_conn
+                )
+                calculate_face_embeddings = self._extract_face_embeddings(
+                    thread_conn, faces_needing_embeddings
+                )
+
             self._tag_worker_stop.wait(interval)
 
-    def _tag_missing_pictures(self, thread_conn):
+    def _tag_missing_pictures(self, thread_conn, picture_tagger, missing_tags):
         """Tag all pictures missing tags."""
-        missing_tags = [pic for pic in self.find() if not pic.tags]
-        if not missing_tags:
-            return False
+        assert missing_tags is not None
         batch = missing_tags[:MAX_CONCURRENT_IMAGES]
         image_paths = []
         pic_by_path = {}
@@ -220,10 +211,12 @@ class Pictures:
                 image_paths.append(master_iter.file_path)
                 pic_by_path[master_iter.file_path] = pic
         if image_paths:
-            logger.debug(f"Tagging {len(image_paths)} images")
-            tag_results = self._picture_tagger.tag_images(image_paths)
+            logger.info(f"Tagging {len(image_paths)} images")
+            tag_results = picture_tagger.tag_images(image_paths)
+            logger.info(f"Got tag results for {len(tag_results)} images.")
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
+                logger.info(f"Processing tags for image at path: {path}")
                 if pic is not None:
                     # Remove character tag from tags if present
                     char_tag = getattr(pic, "character_id", None)
@@ -239,15 +232,158 @@ class Pictures:
                         )
         return True
 
-    def _embed_tagged_pictures(self, thread_conn):
-        """Generate embeddings for pictures that have tags but no embedding."""
-        missing_embeddings = [
-            pic
-            for pic in self.find()
-            if not getattr(pic, "has_embedding", False) and pic.tags
+    def _find_faces_needing_embeddings(self, thread_conn):
+        """Find picture IDs that need face embeddings."""
+        if not hasattr(self, "_skip_pictures"):
+            self._skip_pictures = set()
+
+        cursor = thread_conn.cursor()
+        cursor.execute(
+            "SELECT id FROM pictures WHERE face_embedding IS NULL OR face_embedding = ''"
+        )
+        pic_ids = [row[0] for row in cursor.fetchall()]
+        batch = [pic_id for pic_id in pic_ids if pic_id not in self._skip_pictures][
+            :MAX_CONCURRENT_IMAGES
         ]
-        if not missing_embeddings:
-            return False
+        return batch
+
+    def _extract_face_embeddings(self, thread_conn, faces_needing_embeddings):
+        """Extract face embeddings for pictures that have no face_embedding, using the master iteration image."""
+
+        if not faces_needing_embeddings:
+            if self._last_time_insightface_was_needed is not None:
+                elapsed = time.time() - self._last_time_insightface_was_needed
+                if elapsed > Pictures.INSIGHTFACE_CLEANUP_TIMEOUT:
+                    if hasattr(self, "_insightface_app"):
+                        del self._insightface_app
+                        gc.collect()
+                        logger.info("Unloaded InsightFace app due to inactivity.")
+                    self._last_time_insightface_was_needed = None
+            return True  # Keep going even if if there's nothing to do
+
+        logger.info(
+            f"Have {len(faces_needing_embeddings)} pictures needing face embeddings."
+        )
+        try:
+            from insightface.app import FaceAnalysis
+        except ImportError:
+            logger.error(
+                "InsightFace is not installed. Skipping face embedding extraction."
+            )
+            return False  # Without InsightFace, we cannot proceed
+
+        # Initialize InsightFace only once
+        if not hasattr(self, "_insightface_app"):
+            self._insightface_app = FaceAnalysis()
+            self._insightface_app.prepare(ctx_id=0)
+
+        self._last_time_insightface_was_needed = time.time()
+
+        # Find pictures missing face_embedding
+        for pic_id in faces_needing_embeddings:
+            logger.info("Looking for faces in picture %s", pic_id)
+            self._skip_pictures.add(pic_id)
+            # Find master iteration for this picture
+            master_iters = [
+                it
+                for it in self._picture_iterations.find(picture_id=pic_id, is_master=1)
+            ]
+            if not master_iters:
+                continue
+            master_iter = master_iters[0]
+            try:
+                import os
+                import cv2
+                from pixelurgy_vault.picture_iteration import PictureIteration
+
+                file_path = master_iter.file_path
+                ext = os.path.splitext(file_path)[1].lower()
+                faces = []
+                if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+                    img = cv2.imread(file_path)
+                    if img is not None:
+                        faces = self._insightface_app.get(img)
+                elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
+                    cap = cv2.VideoCapture(file_path)
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    if frame_count < 1:
+                        logger.warning(f"No frames found in video: {file_path}")
+                        cap.release()
+                    else:
+                        frame_indices = [0]
+                        if frame_count > 2:
+                            frame_indices.append(frame_count // 2)
+                        if frame_count > 1:
+                            frame_indices.append(frame_count - 1)
+                        for idx in frame_indices:
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                            ret, frame = cap.read()
+                            if not ret or frame is None:
+                                logger.warning(
+                                    f"Could not read frame {idx} from video: {file_path}"
+                                )
+                                continue
+                            frame_faces = self._insightface_app.get(frame)
+                            if frame_faces:
+                                faces.extend(frame_faces)
+                        cap.release()
+                else:
+                    logger.warning(
+                        f"Unsupported file extension for face embedding: {file_path}"
+                    )
+                if not faces:
+                    logger.warning(
+                        f"No face found in {file_path} for picture {pic_id}."
+                    )
+                    continue
+                else:
+                    logger.debug(
+                        f"Found {len(faces)} face(s) in {file_path} for picture {pic_id}."
+                    )
+
+                # Always use the largest face (by area)
+                def face_area(f):
+                    x1, y1, x2, y2 = f.bbox
+                    return max(0, x2 - x1) * max(0, y2 - y1)
+
+                face = max(faces, key=face_area)
+                embedding = face.embedding
+                embedding_json = json.dumps(embedding.tolist())
+                bbox_json = json.dumps([float(v) for v in face.bbox])
+                with thread_conn:
+                    cursor2 = thread_conn.cursor()
+                    cursor2.execute(
+                        "UPDATE pictures SET face_embedding = ?, face_bbox = ? WHERE id = ?",
+                        (embedding_json, bbox_json, pic_id),
+                    )
+                logger.debug(f"Stored face embedding and bbox for picture {pic_id}.")
+                # Regenerate thumbnails for all iterations using face_bbox
+                try:
+                    bbox = [float(v) for v in face.bbox]
+                    iterations = list(self._picture_iterations.find(picture_id=pic_id))
+                    for it in iterations:
+                        cropped = PictureIteration.load_and_crop_face_bbox(
+                            it.file_path, bbox
+                        )
+                        if cropped is not None:
+                            thumb = PictureIteration._generate_thumbnail_bytes(cropped)
+                            self._picture_iterations.update_iteration(
+                                it.__class__(**{**it.__dict__, "thumbnail": thumb})
+                            )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to regenerate face-aware thumbnails for picture {pic_id}: {e}"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Failed to extract/store face embedding for picture {pic_id}: {e}"
+                )
+        logger.info("Done extracting face embeddings for current batch.")
+        return True
+
+    def _embed_tagged_pictures(self, thread_conn, picture_tagger, missing_embeddings):
+        """Generate embeddings for pictures that have tags but no embedding, including character name, description, and original_prompt if present."""
+        assert missing_embeddings is not None
         batch = missing_embeddings[:MAX_CONCURRENT_IMAGES]
         for pic in batch:
             try:
@@ -258,14 +394,22 @@ class Pictures:
                     pic.tags,
                     ")",
                 )
-                embedding = self._picture_tagger.generate_embedding(
-                    picture=pic, character=pic.character_id
+                # Look up full Character object if available
+                character_obj = None
+                char_id = getattr(pic, "character_id", None)
+                if char_id is not None and self._characters is not None:
+                    try:
+                        character_obj = self._characters[int(char_id)]
+                    except Exception:
+                        character_obj = None
+                embedding, full_text = picture_tagger.generate_embedding(
+                    picture=pic, character=character_obj
                 )
                 with thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
-                        "UPDATE pictures SET embedding = ? WHERE id = ?",
-                        (embedding.astype("float32").tobytes(), pic.id),
+                        "UPDATE pictures SET embedding = ?, description = ? WHERE id = ?",
+                        (embedding.astype("float32").tobytes(), full_text, pic.id),
                     )
                 pic.has_embedding = True
             except Exception as e:
@@ -374,38 +518,48 @@ class Pictures:
         Find and return a list of Picture objects matching all provided attribute=value pairs.
         Example: pictures.find(character_id="hero")
         Special case: if a value is an empty string, search for IS NULL.
+        Uses a fresh SQLite connection per call for thread safety.
         """
-        cursor = self._connection.cursor()
-        if not kwargs:
-            cursor.execute("SELECT * FROM pictures")
-        else:
-            clauses = []
-            values = []
-            for k, v in kwargs.items():
-                if v == "":
-                    clauses.append(f"{k} IS NULL")
-                else:
-                    clauses.append(f"{k}=?")
-                    values.append(v)
-            query = "SELECT * FROM pictures WHERE " + " AND ".join(clauses)
-            cursor.execute(query, tuple(values))
-        rows = cursor.fetchall()
-        result = []
-        for row in rows:
-            has_embedding = (
-                bool(row["embedding"]) if "embedding" in row.keys() else False
-            )
-            pic = Picture(
-                id=row["id"],
-                character_id=row["character_id"],
-                description=row["description"],
-                tags=json.loads(row["tags"]) if row["tags"] else [],
-                created_at=row["created_at"],
-                is_reference=row["is_reference"] if "is_reference" in row.keys() else 0,
-                has_embedding=has_embedding,
-            )
-            result.append(pic)
-        return result
+        import sqlite3
+
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            if not kwargs:
+                cursor.execute("SELECT * FROM pictures")
+            else:
+                clauses = []
+                values = []
+                for k, v in kwargs.items():
+                    if v == "" or v == "null":
+                        clauses.append(f"{k} IS NULL")
+                    else:
+                        clauses.append(f"{k}=?")
+                        values.append(v)
+                query = "SELECT * FROM pictures WHERE " + " AND ".join(clauses)
+                cursor.execute(query, tuple(values))
+            rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                has_embedding = (
+                    bool(row["embedding"]) if "embedding" in row.keys() else False
+                )
+                pic = Picture(
+                    id=row["id"],
+                    character_id=row["character_id"],
+                    description=row["description"],
+                    tags=json.loads(row["tags"]) if row["tags"] else [],
+                    created_at=row["created_at"],
+                    is_reference=row["is_reference"]
+                    if "is_reference" in row.keys()
+                    else 0,
+                    has_embedding=has_embedding,
+                )
+                result.append(pic)
+            return result
+        finally:
+            conn.close()
 
     def find_by_tag_or_description(self, query):
         """
@@ -449,7 +603,7 @@ class Pictures:
             )
             return []
         # Generate query embedding
-        query_emb = self._picture_tagger.generate_embedding(
+        query_emb, _ = self._picture_tagger.generate_embedding(
             picture={"description": text}
         )
         logger.debug(

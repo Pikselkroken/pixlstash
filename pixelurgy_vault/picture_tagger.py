@@ -31,21 +31,69 @@ SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
 MODEL_DIR = "wd14_tagger_model"
 BATCH_SIZE = 1
-MAX_CONCURRENT_IMAGES = 8
-GENERAL_THRESHOLD = 0.35
-CHARACTER_THRESHOLD = 0.35
+MAX_CONCURRENT_IMAGES = 16
+GENERAL_THRESHOLD = 0.4
+CHARACTER_THRESHOLD = 0.45
 RECURSIVE = False
 REMOVE_UNDERSCORE = False
-UNDESIRED_TAGS = ""
+UNDESIRED_TAGS = "solo, general, male_focus, meme, blurry, sensitive, realistic"
 FREQUENCY_TAGS = False
 ONNX = True
-APPEND_TAGS = False
 USE_RATING_TAGS = True
 USE_RATING_TAGS_AS_LAST_TAG = False
 ALWAYS_FIRST_TAGS = None
 CAPTION_SEPARATOR = ", "
 TAG_REPLACEMENT = None
 CHARACTER_TAG_EXPAND = False
+
+try:
+    from transformers import pipeline
+
+    _tag_to_sentence_pipeline = pipeline(
+        "text2text-generation", model="google/flan-t5-base", device=-1
+    )
+
+except ImportError:
+    _tag_to_sentence_pipeline = None
+
+
+def tags_to_sentence_with_lm(tags):
+    """
+    Use a small language model to turn tags into a natural English sentence.
+    Requires transformers library. Returns a fallback if not available.
+    """
+    if _tag_to_sentence_pipeline is None:
+        logger.warning("No LM found, using simple join fallback.")
+        return ", ".join(tags)
+    prompt = (
+        "Write a short, natural English sentence describing a photo based on the provided tags. "
+        "Focus on the main subject, clothing, and setting if present. "
+        "Do not just list tags. Tags: " + ", ".join(tags) + "."
+    )
+    result = _tag_to_sentence_pipeline(prompt, max_new_tokens=50)
+    generated = result[0]["generated_text"].strip()
+
+    logger.info("LM output before deduplication: " + generated)
+
+    # Remove duplicate phrases/words (simple greedy approach)
+    def dedup_text(text):
+        import re
+
+        # Split on comma, 'and', or period
+        parts = re.split(r"[,.]| and ", text)
+        seen = set()
+        deduped = []
+        for part in parts:
+            cleaned = part.strip().lower()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                deduped.append(part.strip())
+        # Reconstruct sentence
+        return ", ".join(deduped).replace(" ,", ",").strip()
+
+    deduped = dedup_text(generated)
+    logger.info("LM output after deduplication: " + deduped)
+    return deduped
 
 
 def preprocess_image(image, image_size=IMAGE_SIZE):
@@ -84,16 +132,59 @@ class ImageLoadingPrepDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img_path = str(self.images[idx])
+        ext = os.path.splitext(img_path)[1].lower()
+        if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+            try:
+                image = Image.open(img_path).convert("RGB")
+                image = preprocess_image(image)
+            except Exception as e:
+                logger.error(f"Could not load image path: {img_path}, error: {e}")
+                return None
+            return (image, img_path)
+        elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
+            # Extract first, middle, last frames from video and treat as separate images
+            try:
+                import cv2
 
-        try:
-            image = Image.open(img_path).convert("RGB")
-            image = preprocess_image(image)
-            # ...existing code...
-        except Exception as e:
-            logger.error(f"Could not load image path: {img_path}, error: {e}")
+                cap = cv2.VideoCapture(img_path)
+                if not cap.isOpened():
+                    logger.error(f"Could not open video file: {img_path}")
+                    return None
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                if frame_count < 1:
+                    logger.error(f"No frames found in video: {img_path}")
+                    cap.release()
+                    return None
+                frame_indices = [0]
+                if frame_count > 2:
+                    frame_indices.append(frame_count // 2)
+                if frame_count > 1:
+                    frame_indices.append(frame_count - 1)
+                images = []
+                for idx_frame in frame_indices:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, idx_frame)
+                    ret, frame = cap.read()
+                    if not ret:
+                        logger.error(
+                            f"Could not read frame {idx_frame} from video: {img_path}"
+                        )
+                        continue
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(frame_rgb)
+                    prepped = preprocess_image(pil_img)
+                    images.append((prepped, f"{img_path}#frame{idx_frame}"))
+                cap.release()
+                if not images:
+                    logger.error(f"No frames extracted from video: {img_path}")
+                    return None
+                # Return a list of (image, img_path#frameX) tuples, one for each frame
+                return images
+            except Exception as e:
+                logger.error(f"Could not process video file: {img_path}, error: {e}")
+                return None
+        else:
+            logger.error(f"Unsupported file extension for tagging: {img_path}")
             return None
-
-        return (image, img_path)
 
 
 class PictureTagger:
@@ -104,6 +195,7 @@ class PictureTagger:
         ),
         force_download=False,
         silent=True,
+        device=None,
     ):
         self._model_location = model_location
         self._silent = silent
@@ -116,9 +208,30 @@ class PictureTagger:
                 "ViT-B-32", pretrained="laion2b_s34b_b79k"
             )
         )
-        self._clip_device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device is not None:
+            self._clip_device = device
+        else:
+            self._clip_device = "cuda" if torch.cuda.is_available() else "cpu"
+
         self._clip_model = self._clip_model.to(self._clip_device)
         self._clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
+
+    def __enter__(self):
+        logger.debug("PictureTagger.__enter__ called.")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Release ONNX/PyTorch resources here
+        # For ONNX: self.session = None
+        # For PyTorch: del self.model; torch.cuda.empty_cache()
+        import gc
+
+        del self._clip_model
+        self.ort_sess = None
+        torch.cuda.empty_cache()
+
+        gc.collect()
+        logger.debug("PictureTagger.exit called, resources released.")
 
     def _init_onnx_session(self):
         onnx_path = f"{self._model_location}/model.onnx"
@@ -197,9 +310,9 @@ class PictureTagger:
             tag_replacements = escaped_tag_replacements.split(";")
             for tag_replacement in tag_replacements:
                 tags = tag_replacement.split(",")  # source, target
-                assert len(tags) == 2, (
-                    f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
-                )
+                assert (
+                    len(tags) == 2
+                ), f"tag replacement must be in the format of `source,target`: {TAG_REPLACEMENT}"
                 source, target = [
                     tag.replace("@@@@", ",").replace("####", ";") for tag in tags
                 ]
@@ -266,7 +379,15 @@ class PictureTagger:
         self, path_imgs, tag_freq, caption_separator, undesired_tags, always_first_tags
     ):
         imgs = np.array([im for _, im in path_imgs])
-        probs = self.ort_sess.run(None, {self.input_name: imgs})[0]  # onnx output numpy
+        try:
+            probs = self.ort_sess.run(None, {self.input_name: imgs})[
+                0
+            ]  # onnx output numpy
+        except Exception as e:
+            logger.error(f"Error occurred while running ONNX model: {e}")
+            logger.error(f"Images causing error: {[p for p, _ in path_imgs]}")
+            return None
+
         probs = probs[: len(path_imgs)]
         result = {}
         for (image_path, _), prob in zip(path_imgs, probs):
@@ -322,6 +443,7 @@ class PictureTagger:
         undesired_tags = set(
             [tag.strip() for tag in undesired_tags if tag.strip() != ""]
         )
+        logger.info("Removing tags: " + ", ".join(undesired_tags))
 
         always_first_tags = None
         if ALWAYS_FIRST_TAGS is not None:
@@ -347,29 +469,25 @@ class PictureTagger:
 
         b_imgs = []
         all_results = {}
+
+        tagging_failed = False
         for data_entry in tqdm(data, smoothing=0.0, disable=self._silent):
-            for data in data_entry:
+            if tagging_failed:
+                break
+            # Flatten any lists returned by the dataset (for videos)
+            flat_data = []
+            for item in data_entry:
+                if isinstance(item, list):
+                    flat_data.extend(item)
+                else:
+                    flat_data.append(item)
+            for data in flat_data:
                 if data is None:
                     continue
-
                 image, image_path = data
-                if image is None:
-                    try:
-                        image = Image.open(image_path)
-                        if image.mode != "RGB":
-                            image = image.convert("RGB")
-                        image = preprocess_image(image)
-                    except Exception as e:
-                        logger.error(
-                            f"Could not load image path: {image_path}, error: {e}"
-                        )
-                        continue
                 b_imgs.append((image_path, image))
-
                 if len(b_imgs) >= BATCH_SIZE:
-                    b_imgs = [
-                        (str(image_path), image) for image_path, image in b_imgs
-                    ]  # Convert image_path to string
+                    b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
                     batch_result = self._run_batch(
                         b_imgs,
                         tag_freq,
@@ -377,16 +495,29 @@ class PictureTagger:
                         undesired_tags,
                         always_first_tags,
                     )
+                    if batch_result is None:
+                        logger.error(
+                            f"Tagging failed for batch: {[p for p, _ in b_imgs]}"
+                        )
+                        tagging_failed = True
+                        break
+                    # Naturalize tags for each image
+                    for k, tags in batch_result.items():
+                        tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
+                        tags = [t for t in tags if t]
+                        batch_result[k] = tags
                     all_results.update(batch_result)
                     b_imgs.clear()
 
         if len(b_imgs) > 0:
-            b_imgs = [
-                (str(image_path), image) for image_path, image in b_imgs
-            ]  # Convert image_path to string
+            b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
             batch_result = self._run_batch(
                 b_imgs, tag_freq, caption_separator, undesired_tags, always_first_tags
             )
+            for k, tags in batch_result.items():
+                tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
+                tags = [t for t in tags if t]
+                batch_result[k] = tags
             all_results.update(batch_result)
 
         if FREQUENCY_TAGS:
@@ -395,7 +526,19 @@ class PictureTagger:
             for tag, freq in sorted_tags:
                 logger.debug(f"{tag}: {freq}")
 
-        return all_results
+        # Merge tags for video frames (e.g., ...mp4#frame0, ...mp4#frameX) into ...mp4
+        merged_results = {}
+        for path, tags in all_results.items():
+            if "#frame" in path:
+                base_path = path.split("#frame")[0]
+                if base_path not in merged_results:
+                    merged_results[base_path] = set()
+                merged_results[base_path].update(tags)
+            else:
+                merged_results[path] = set(tags)
+        # Convert sets back to sorted lists
+        merged_results = {k: sorted(list(v)) for k, v in merged_results.items()}
+        return merged_results
 
     def generate_embedding(self, character=None, picture=None):
         """
@@ -416,11 +559,8 @@ class PictureTagger:
                     texts.append(obj.strip())
             elif isinstance(obj, dict):
                 for k, v in obj.items():
-                    # If this is a tags field, map tags
                     if k == "tags" and isinstance(v, (list, tuple, set)):
-                        mapped = [TagNaturaliser.get_natural_tag(tag) for tag in v]
-                        mapped = [m for m in mapped if m]
-                        texts.extend(mapped)
+                        texts.extend([t for t in v if t])
                     else:
                         texts.extend(collect_text(v, visited))
             elif isinstance(obj, (list, tuple, set)):
@@ -437,26 +577,22 @@ class PictureTagger:
                         "picture_tagger",
                     ):
                         continue
-                    # If this is a tags field, map tags
                     if attr == "tags" and isinstance(value, (list, tuple, set)):
-                        mapped = [TagNaturaliser.get_natural_tag(tag) for tag in value]
-                        mapped = [m for m in mapped if m]
-                        texts.extend(mapped)
+                        texts.extend([t for t in value if t])
                     else:
                         texts.extend(collect_text(value, visited))
             return texts
 
-        logger.debug(
+        logger.info(
             f"generate_embedding called with character={character}, picture={picture}"
         )
         import re
 
         texts = []
-        texts.extend(collect_text(character))
         texts.extend(collect_text(picture))
         # Remove duplicates, empty strings, UUIDs, and date strings
         uuid_regex = re.compile(
-            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
         )
         date_regex = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$")
         texts = [
@@ -472,14 +608,20 @@ class PictureTagger:
                 picture,
             )
             raise ValueError("No text data for embedding.")
-        full_text = ", ".join(texts)
-        logger.debug(f"Embedding: full_text for CLIP: {full_text}")
+
+        logger.info(f"Embedding: tags going into LM: {texts}")
+        full_text = tags_to_sentence_with_lm(texts)
+        full_text = (
+            character.name + ", " if character and character.name else ""
+        ) + full_text.lower()
+        logger.info(f"Embedding: full_text for CLIP: {full_text}")
+
         try:
             with torch.no_grad():
                 text_tokens = self._clip_tokenizer([full_text]).to(self._clip_device)
                 embedding = self._clip_model.encode_text(text_tokens)
                 embedding = embedding.cpu().numpy()[0]
-            return embedding
+            return embedding, full_text
         except RuntimeError as e:
             if (
                 ("CUDA out of memory" in str(e))
@@ -497,6 +639,6 @@ class PictureTagger:
                     )
                     embedding = self._clip_model.encode_text(text_tokens)
                     embedding = embedding.cpu().numpy()[0]
-                return embedding
+                return embedding, full_text
             else:
                 raise

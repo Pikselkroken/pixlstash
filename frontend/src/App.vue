@@ -5,14 +5,49 @@ import {
   onMounted,
   watch,
   onBeforeUnmount,
+  reactive,
   nextTick,
 } from "vue";
+import { marked } from "marked";
 import { VTextField } from "vuetify/components";
+import SearchBar from "./components/SearchBar.vue";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
+import nlp from "compromise";
+
+const BACKEND_URL = `${window.location.protocol}//${window.location.hostname}${window.location.port ? `:${window.location.port}` : ""}`;
 
 // Drag-and-drop overlay state (for image grid only)
 const dragOverlayVisible = ref(false);
 const dragOverlayMessage = ref("");
+// Track drag source for grid
+const dragSource = ref(null);
+
+// Import progress modal state
+const importInProgress = ref(false);
+const importProgress = ref(0);
+const importTotal = ref(0);
+const importError = ref(null);
+const importPhase = ref(""); // 'hashing', 'checking', 'uploading', 'done', 'error'
+const importPhaseMessage = computed(() => {
+  switch (importPhase.value) {
+    case "hashing":
+      return "Hashing files...";
+    case "checking":
+      return "Checking for duplicates...";
+    case "uploading":
+      return "Uploading images...";
+    case "done":
+      return "Import complete!";
+    case "duplicates":
+      return "All files are duplicates.";
+    case "cancelled":
+      return "Import cancelled.";
+    case "error":
+      return "Import failed.";
+    default:
+      return "";
+  }
+});
 const gridContainer = ref(null); // already used for grid
 
 const PIL_IMAGE_EXTENSIONS = [
@@ -65,34 +100,177 @@ const PIL_IMAGE_EXTENSIONS = [
   "heif",
   "avif",
 ];
+const VIDEO_EXTENSIONS = [
+  "mp4",
+  "avi",
+  "mov",
+  "webm",
+  "mkv",
+  "flv",
+  "wmv",
+  "m4v",
+];
 function isSupportedImageFile(file) {
   const ext = file.name.split(".").pop().toLowerCase();
   return PIL_IMAGE_EXTENSIONS.includes(ext);
 }
 
-// Fetch images for the current character and mode
-async function refreshImages() {
-  images.value = [];
+// Format likeness score as percentage with 2 decimals function
+function formatLikenessScore(score) {
+  if (typeof score !== "number") return "";
+  return `Likeness: ${(score * 100).toFixed(2)}%`;
+}
+
+function extractKeywords(text) {
+  const doc = nlp(text);
+  // Get all noun and adjective phrases as keywords
+  const nouns = doc.nouns().out("array");
+  const adjectives = doc.adjectives().out("array");
+  // Combine and deduplicate
+  const keywords = Array.from(new Set([...nouns, ...adjectives]));
+  return keywords.join(" ");
+}
+
+// Extracts the format/extension for overlayImage robustly function
+function getOverlayFormat(overlayImage) {
+  if (!overlayImage) return "";
+  if (overlayImage.format) return overlayImage.format;
+  if (overlayImage.filename) {
+    return overlayImage.filename.split(".").pop().toLowerCase();
+  }
+  if (overlayImage.url) {
+    return overlayImage.url.split(".").pop().toLowerCase();
+  }
+  if (overlayImage.id) {
+    return overlayImage.id.split(".").pop().toLowerCase();
+  }
+  return "png";
+}
+
+// Accepts either a file object (with .name) or a string extension
+function isSupportedVideoFile(input) {
+  let ext = "";
+  if (typeof input === "string") {
+    ext = input.toLowerCase();
+  } else if (input && input.name) {
+    ext = input.name.split(".").pop().toLowerCase();
+  }
+
+  return VIDEO_EXTENSIONS.includes(ext);
+}
+
+function isSupportedMediaFile(file) {
+  return isSupportedImageFile(file) || isSupportedVideoFile(file);
+}
+
+async function hashFile(file) {
+  // SHA-256 sampled hash: whole file if <=128KB, else 8 evenly spaced 8192-byte blocks
+  const CHUNK_SIZE = 8192;
+  const N = 8;
+  const WHOLE_FILE_THRESHOLD = 128 * 1024; // 128KB
+  if (file.size <= WHOLE_FILE_THRESHOLD) {
+    const buf = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest("SHA-256", buf);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  // For larger files, sample N evenly spaced blocks
+  const offsets = Array.from({ length: N }, (_, i) =>
+    Math.floor((i * (file.size - CHUNK_SIZE)) / (N - 1))
+  );
+  const chunks = [];
+  for (const offset of offsets) {
+    const blob = file.slice(offset, offset + CHUNK_SIZE);
+    const buf = await blob.arrayBuffer();
+    chunks.push(new Uint8Array(buf));
+  }
+  let totalLen = chunks.reduce((sum, arr) => sum + arr.length, 0);
+  let all = new Uint8Array(totalLen);
+  let pos = 0;
+  for (const arr of chunks) {
+    all.set(arr, pos);
+    pos += arr.length;
+  }
+  const hashBuffer = await crypto.subtle.digest("SHA-256", all);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// Sorting and pagination state
+const sortOptions = ref([]);
+const selectedSort = ref("");
+const previousSort = ref(""); // Track previous sort for search restore
+const pageSize = ref(100);
+const pageOffset = ref(0);
+const hasMoreImages = ref(true);
+
+// Fetch sort mechanisms from backend
+async function fetchSortOptions() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/sort_mechanisms`);
+    if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
+    const options = await res.json();
+    sortOptions.value = options.map((opt) => ({
+      label: opt.label,
+      value: opt.id,
+    }));
+    // Set default sort if not set
+    if (!selectedSort.value && options.length) {
+      selectedSort.value =
+        options.find((o) => o.id === "unsorted")?.id || options[0].id;
+    }
+  } catch (e) {
+    sortOptions.value = [
+      { label: "Date: Latest First", value: "date_desc" },
+      { label: "Date: Oldest First", value: "date_asc" },
+      { label: "Score: Highest First", value: "score_desc" },
+      { label: "Score: Lowest First", value: "score_asc" },
+      { label: "Search Likeness", value: "search_likeness" },
+    ];
+    if (!selectedSort.value) selectedSort.value = "date_desc";
+  }
+}
+
+const selectedCharacter = ref(ALL_PICTURES_ID);
+const selectedReferenceMode = ref(false);
+
+// Track thumbnail load state globally by image ID
+const thumbLoaded = reactive({});
+
+// Fetch images for the current character and mode, with pagination and sorting
+async function refreshImages(append = false) {
+  if (!append) {
+    images.value = [];
+    hasMoreImages.value = true;
+    selectedImageIds.value = [];
+  }
   imagesError.value = null;
-  selectedImageIds.value = [];
   const id = selectedCharacter.value;
   const refMode = selectedReferenceMode.value;
   if (!id) return;
   imagesLoading.value = true;
   try {
     let url;
+    const params = new URLSearchParams();
+    params.set("info", "true");
+    params.set("sort", selectedSort.value || "date_desc");
+    params.set("offset", String(pageOffset.value));
+    params.set("limit", String(pageSize.value));
     if (id === ALL_PICTURES_ID) {
-      url = `${BACKEND_URL}/pictures?info=true`;
+      url = `${BACKEND_URL}/pictures?${params.toString()}`;
     } else if (id === UNASSIGNED_PICTURES_ID) {
-      url = `${BACKEND_URL}/pictures?character_id=&info=true`;
+      url = `${BACKEND_URL}/pictures?character_id=&${params.toString()}`;
     } else if (refMode) {
+      // Reference mode: fallback to old endpoint for now (no paging)
       url = `${BACKEND_URL}/characters/reference_pictures/${encodeURIComponent(
         id
       )}`;
     } else {
       url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
         id
-      )}&info=true`;
+      )}&${params.toString()}`;
     }
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch images");
@@ -101,11 +279,17 @@ async function refreshImages() {
       baseImages = baseImages.reference_pictures;
       baseImages = baseImages.map((img) => ({ ...img, id: img.picture_id }));
     }
-    images.value = baseImages.map((img) => ({
+    const newImages = baseImages.map((img) => ({
       ...img,
       score: typeof img.score !== "undefined" ? img.score : null,
       is_reference: Number(img.is_reference) || 0,
     }));
+    if (append) {
+      images.value = [...images.value, ...newImages];
+    } else {
+      images.value = newImages;
+    }
+    hasMoreImages.value = newImages.length === pageSize.value;
     setTimeout(updateColumns, 0);
   } catch (e) {
     imagesError.value = e.message;
@@ -114,14 +298,35 @@ async function refreshImages() {
   }
 }
 
+// Watch for sort or character changes
+watch([selectedSort, selectedCharacter, selectedReferenceMode], () => {
+  pageOffset.value = 0;
+  hasMoreImages.value = true;
+  lastSelectedIndex = null;
+  refreshImages();
+});
+
 function handleGridDragEnter(e) {
-  console.debug("handleGridDragEnter", e);
+  // Only trigger if entering from outside the image-grid (not between children)
+  // If relatedTarget is inside the grid, ignore (moving within grid children).
+  if (
+    e.relatedTarget &&
+    gridContainer.value &&
+    gridContainer.value.contains(e.relatedTarget)
+  )
+    return;
   if (!e.dataTransfer || !e.dataTransfer.items) return;
-  // Accept any image/* MIME type for overlay
-  const hasImageType = Array.from(e.dataTransfer.items).some((item) => {
-    return item.kind === "file" && item.type.startsWith("image/");
-  });
-  console.debug("hasImageType", hasImageType);
+  // Only check the first 20 items for image type, break immediately if found
+  const items = Array.from(e.dataTransfer.items);
+  let hasImageType = false;
+  for (let i = 0; i < Math.min(items.length, 20); i++) {
+    const item = items[i];
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      hasImageType = true;
+      break;
+    }
+  }
+  // Timing end
   if (hasImageType) {
     dragOverlayVisible.value = true;
     dragOverlayMessage.value = "Drop files here to import";
@@ -129,66 +334,230 @@ function handleGridDragEnter(e) {
     console.debug("Overlay shown");
   } else {
     dragOverlayVisible.value = false;
-    console.debug("Overlay hidden (unsupported)");
   }
 }
 
 function handleGridDragOver(e) {
-  console.debug(
-    "handleGridDragOver",
-    e,
-    "overlayVisible:",
-    dragOverlayVisible.value
-  );
   if (dragOverlayVisible.value) e.preventDefault();
 }
 function handleGridDragLeave(e) {
-  console.debug("handleGridDragLeave", e);
   // Only hide overlay if leaving the .image-grid entirely
   if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
     dragOverlayVisible.value = false;
-    console.debug("Overlay hidden (left grid)");
   } else {
     console.debug("Drag still inside grid, overlay remains");
   }
 }
+
+const cancelImport = ref(false);
+function handleCancelImport() {
+  cancelImport.value = true;
+}
+
 function handleGridDrop(e) {
-  console.debug("handleGridDrop", e);
   dragOverlayVisible.value = false;
+  // Prevent importing if this is an internal drag (from our own grid)
+  if (dragSource.value === "grid") {
+    dragSource.value = null;
+    return;
+  }
   if (!e.dataTransfer || !e.dataTransfer.files) return;
-  const files = Array.from(e.dataTransfer.files).filter(isSupportedImageFile);
+  const files = Array.from(e.dataTransfer.files).filter(isSupportedMediaFile);
+  console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
+  console.debug("[IMPORT] Supported files after filter:", files);
   if (!files.length) {
     alert("No supported image files found.");
     return;
   }
-  // Upload each file
-  const uploadPromises = files.map((file) => {
-    const formData = new FormData();
-    formData.append("image", file); // Backend expects 'image'
-    // Optionally, add character id if needed
-    if (
-      selectedCharacter.value &&
-      selectedCharacter.value !== ALL_PICTURES_ID &&
-      selectedCharacter.value !== UNASSIGNED_PICTURES_ID
-    ) {
-      formData.append("character_id", selectedCharacter.value);
+  cancelImport.value = false;
+  importInProgress.value = true;
+  importProgress.value = 0;
+  importError.value = null;
+  importPhase.value = "hashing";
+  dragSource.value = null;
+  (async () => {
+    // Step 1: Compute hashes for all files in parallel (with concurrency limit)
+    importTotal.value = files.length;
+    let hashProgress = 0;
+    let fileHashes = [];
+    const CONCURRENCY = 6;
+    // Helper to run promises with concurrency limit
+    async function mapWithConcurrencyLimit(items, fn, concurrency) {
+      const results = new Array(items.length);
+      let nextIndex = 0;
+      let active = 0;
+      return new Promise((resolve, reject) => {
+        function runNext() {
+          if (nextIndex >= items.length && active === 0) {
+            resolve(results);
+            return;
+          }
+          while (active < concurrency && nextIndex < items.length) {
+            const idx = nextIndex++;
+            active++;
+            fn(items[idx], idx)
+              .then((result) => {
+                results[idx] = result;
+                active--;
+                runNext();
+              })
+              .catch((err) => {
+                reject(err);
+              });
+          }
+        }
+        runNext();
+      });
     }
-    return fetch(`${BACKEND_URL}/pictures`, {
-      method: "POST",
-      body: formData,
-    }).then((res) => {
-      if (!res.ok) throw new Error("Upload failed");
-      return res.json();
-    });
-  });
-  Promise.all(uploadPromises)
-    .then(() => {
+    try {
+      fileHashes = await mapWithConcurrencyLimit(
+        files,
+        async (file, idx) => {
+          if (cancelImport.value) throw new Error("cancelled");
+          const hash = await hashFile(file);
+          hashProgress++;
+          importProgress.value = hashProgress;
+          await nextTick();
+          return { file, hash };
+        },
+        CONCURRENCY
+      );
+      console.debug("[IMPORT] fileHashes after hashing:", fileHashes);
+    } catch (err) {
+      importInProgress.value = false;
+      if (err.message === "cancelled") {
+        importPhase.value = "cancelled";
+        importError.value = "Import cancelled.";
+      } else {
+        importPhase.value = "error";
+        importError.value = "Failed to hash files.";
+      }
+      setTimeout(() => {
+        importInProgress.value = false;
+      }, 1500);
+      return;
+    }
+    // Step 2: Batch check with backend for existing hashes
+    importPhase.value = "checking";
+    let existing = [];
+    try {
+      const hashesToSend = fileHashes.map((fh) => fh.hash);
+      console.debug("[IMPORT] Sending hashes to /check_hashes:", hashesToSend);
+      const res = await fetch(`${BACKEND_URL}/check_hashes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(hashesToSend),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        console.debug("[IMPORT] /check_hashes response:", data);
+        existing = data.existing || [];
+      } else {
+        throw new Error("Failed to check for duplicates");
+      }
+    } catch (err) {
+      importPhase.value = "error";
+      importInProgress.value = false;
+      importError.value = "Failed to check for duplicates.";
+      setTimeout(() => {
+        importInProgress.value = false;
+      }, 1500);
+      return;
+    }
+    // Step 3: Filter out duplicates
+    const newFiles = fileHashes
+      .filter((fh) => !existing.includes(fh.hash))
+      .map((fh) => fh.file)
+      .filter(isSupportedMediaFile);
+    importTotal.value = newFiles.length;
+    importProgress.value = 0;
+    if (newFiles.length === 0) {
+      importPhase.value = "duplicates";
+      importError.value = "All files are duplicates.";
+      setTimeout(() => {
+        importInProgress.value = false;
+      }, 2000);
+      return;
+    }
+    // Show found X new images
+    importPhase.value = "uploading";
+    importError.value = `Found ${newFiles.length} new image(s).`;
+    let completed = 0;
+    const uploadFile = async (file) => {
+      const formData = new FormData();
+      formData.append("image", file);
+      if (
+        selectedCharacter.value &&
+        selectedCharacter.value !== ALL_PICTURES_ID &&
+        selectedCharacter.value !== UNASSIGNED_PICTURES_ID
+      ) {
+        formData.append("character_id", selectedCharacter.value);
+      }
+      try {
+        const res = await fetch(`${BACKEND_URL}/pictures`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!res.ok) throw new Error("Upload failed");
+        await res.json();
+        completed++;
+        importProgress.value = completed;
+        await nextTick();
+      } catch (err) {
+        importPhase.value = "error";
+        importError.value = err.message || String(err);
+        throw err;
+      }
+    };
+    try {
+      for (const file of newFiles) {
+        if (cancelImport.value) {
+          importPhase.value = "cancelled";
+          importError.value = "Import cancelled by user.";
+          setTimeout(() => {
+            importInProgress.value = false;
+          }, 1500);
+          return;
+        }
+        await uploadFile(file);
+      }
+      importPhase.value = "done";
+      importError.value = `Imported ${newFiles.length} image(s).`;
+      setTimeout(() => {
+        importInProgress.value = false;
+      }, 1500);
       refreshImages();
-    })
-    .catch((e) => {
+      fetchSidebarCounts();
+    } catch (e) {
+      importPhase.value = "error";
+      importInProgress.value = false;
       alert("One or more uploads failed: " + (e.message || e));
-    });
+    }
+  })();
 }
+
+// Clear selection if clicking on empty space in the image grid
+function handleGridBackgroundClick(e) {
+  // If the click is NOT inside an image-card, clear selection
+  if (!e.target.closest(".thumbnail-card")) {
+    selectedImageIds.value = [];
+    lastSelectedIndex = null;
+  }
+}
+
+// Infinite scroll: load more images as user scrolls near bottom
+function onGridScroll(e) {
+  const el = e.target;
+  if (!hasMoreImages.value || imagesLoading.value) return;
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+    // Near bottom
+    pageOffset.value += pageSize.value;
+    refreshImages(true);
+  }
+}
+
+// Use backend-driven images, no local sorting
+const pagedImages = computed(() => images.value);
 
 // Remove a tag from the overlay image and PATCH the backend
 async function removeTagFromOverlayImage(tag) {
@@ -270,8 +639,6 @@ const sidebarVisible = ref(true);
 const overlayOpen = ref(false);
 const overlayImage = ref(null);
 
-const selectedReferenceMode = ref(false);
-
 // Trophy button color: dark blue when not selected, orange when selected
 const trophyButtonColor = (charId) =>
   selectedCharacter.value === charId && selectedReferenceMode.value
@@ -287,17 +654,52 @@ function closeOverlay() {
   overlayOpen.value = false;
 }
 
+const chatOpen = ref(false);
+function openChatOverlay() {
+  chatOpen.value = true;
+  nextTick(() => {
+    if (chatInputField.value) chatInputField.value.focus();
+  });
+}
+
+function closeChatOverlay() {
+  chatOpen.value = false;
+}
+
+// Scroll chat to bottom utility
+function scrollChatToBottom() {
+  nextTick(() => {
+    if (chatMessagesContainer.value) {
+      chatMessagesContainer.value.scrollTop =
+        chatMessagesContainer.value.scrollHeight;
+    }
+  });
+}
+
 // Search bar state and logic
-const searchQuery = ref("");
-async function searchImages() {
-  const query = searchQuery.value.trim();
-  if (!query) return;
+const searchQuery = ref(""); // Used for actual search
+async function searchImages(query) {
+  // Only update searchQuery and trigger search if input is non-empty
+  const q = (typeof query === "string" ? query : searchQuery.value).trim();
+  if (!q) return;
+  searchQuery.value = q;
+  // Save previous sort before switching to likeness sort
+  previousSort.value = selectedSort.value;
+  // Switch sorting to 'Sort by Search Likeness' if available
+  const likenessSort = sortOptions.value.find(
+    (opt) =>
+      (opt.value && opt.value.toLowerCase().includes("search")) ||
+      (opt.label && opt.label.toLowerCase().includes("search"))
+  );
+  if (likenessSort) {
+    selectedSort.value = likenessSort.value;
+  }
   imagesLoading.value = true;
   imagesError.value = null;
   try {
-    const url = `${BACKEND_URL}/pictures/search?query=${encodeURIComponent(
-      query
-    )}&threshold=0.3&top_n=1000`;
+    const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
+      q
+    )}&threshold=0.5&top_n=1000`;
     const res = await fetch(url);
     if (!res.ok) throw new Error("Search failed");
     const baseImages = await res.json();
@@ -312,11 +714,22 @@ async function searchImages() {
   } finally {
     imagesLoading.value = false;
   }
+  // Watch for clearing of searchQuery to restore previous sort and refresh view
+  watch(searchQuery, (newVal, oldVal) => {
+    if (!newVal && oldVal) {
+      // Restore previous sort if available
+      if (previousSort.value && previousSort.value !== selectedSort.value) {
+        selectedSort.value = previousSort.value;
+      }
+      // Refresh images for current character and sort
+      refreshImages();
+    }
+  });
 }
 
 function handleImageSelect(img, idx, event) {
-  // Use sortedImages for all index-based selection
-  const sorted = sortedImages.value;
+  // Use pagedImages for all index-based selection
+  const sorted = pagedImages.value;
   const id = img.id;
   const isSelected = selectedImageIds.value.includes(id);
   const isCtrl = event.ctrlKey || event.metaKey;
@@ -324,7 +737,7 @@ function handleImageSelect(img, idx, event) {
 
   if (isShift) {
     if (lastSelectedIndex !== null) {
-      // Range select in sortedImages
+      // Range select in pagedImages
       const start = Math.min(lastSelectedIndex, idx);
       const end = Math.max(lastSelectedIndex, idx);
       const rangeIds = sorted.slice(start, end + 1).map((i) => i.id);
@@ -352,29 +765,11 @@ function handleImageSelect(img, idx, event) {
   }
 }
 
-// Fetch score for an image if missing (called on thumbnail load)
-
-// Fetch score for an image if missing (called on thumbnail load)
-async function fetchScoreIfMissing(img) {
-  if (typeof img.score === "undefined" || img.score === null) {
-    try {
-      const res = await fetch(`${BACKEND_URL}/pictures/${img.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        if ("score" in data) {
-          // Ensure reactivity
-          Object.assign(img, { score: data.score });
-        }
-      }
-    } catch (e) {}
-  }
-}
-
 const isImageSelected = (id) => selectedImageIds.value.includes(id);
 
-// Logic to determine if a selected image is on the outer edge of a selection group (use sortedImages)
+// Logic to determine if a selected image is on the outer edge of a selection group (use pagedImages)
 const getSelectionBorderClasses = (idx) => {
-  const sorted = sortedImages.value;
+  const sorted = pagedImages.value;
   if (!isImageSelected(sorted[idx]?.id)) return "";
   const cols = columns.value;
   const total = sorted.length;
@@ -420,21 +815,64 @@ function onReferenceDrop(characterId, event) {
 const ALL_PICTURES_ID = "__all__";
 const UNASSIGNED_PICTURES_ID = "__unassigned__";
 const characters = ref([]);
+// Store image counts for each category (all, unassigned, characterId)
+const categoryCounts = ref({
+  [ALL_PICTURES_ID]: 0,
+  [UNASSIGNED_PICTURES_ID]: 0,
+  // characterId: count
+});
+
+// Fetch and update image counts for all sidebar categories
+async function fetchSidebarCounts() {
+  // All Pictures
+  try {
+    const resAll = await fetch(`${BACKEND_URL}/category/summary`);
+    if (resAll.ok) {
+      const data = await resAll.json();
+      categoryCounts.value[ALL_PICTURES_ID] = data.image_count;
+    }
+  } catch {}
+  // Unassigned Pictures
+  try {
+    const resUnassigned = await fetch(
+      `${BACKEND_URL}/category/summary?character_id=null`
+    );
+    if (resUnassigned.ok) {
+      const data = await resUnassigned.json();
+      categoryCounts.value[UNASSIGNED_PICTURES_ID] = data.image_count;
+    }
+  } catch {}
+  // Each character
+  await Promise.all(
+    characters.value.map(async (char) => {
+      try {
+        const res = await fetch(
+          `${BACKEND_URL}/category/summary?character_id=${encodeURIComponent(
+            char.id
+          )}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          categoryCounts.value[char.id] = data.image_count;
+        }
+      } catch {}
+    })
+  );
+}
 // Computed: characters sorted alphabetically by name (case-insensitive)
 const sortedCharacters = computed(() => {
-  return [...characters.value].sort((a, b) => {
-    if (!a.name && !b.name) return 0;
-    if (!a.name) return 1;
-    if (!b.name) return -1;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-  });
+  return [...characters.value]
+    .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
+    .sort((a, b) => {
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
 });
 const characterThumbnails = ref({}); // { [characterId]: thumbnailUrl }
 const loading = ref(false);
 const error = ref(null);
 
-const selectedCharacter = ref(ALL_PICTURES_ID);
 // Reference filter for toolbar (local only, no backend refresh)
+const showStars = ref(true);
 const referenceFilterMode = ref(false);
 const filteredImages = computed(() => {
   if (referenceFilterMode.value) {
@@ -447,16 +885,14 @@ const expandedCharacters = ref({}); // { [characterId]: true/false }
 const sidebarSections = ref({
   pictures: true,
   people: true,
+  search: true,
 });
+
 const images = ref([]);
 const imagesLoading = ref(false);
 const imagesError = ref(null);
 
-const BACKEND_URL = "http://localhost:9537";
-
 // Thumbnail size slider state
-const thumbnailSizes = [128, 192, 256];
-const thumbnailLabels = ["Small", "Medium", "Large"];
 const thumbnailSize = ref(256);
 
 // Responsive columns
@@ -483,6 +919,8 @@ async function fetchCharacters() {
     for (const char of chars) {
       fetchCharacterThumbnail(char.id);
     }
+    // After loading characters, fetch sidebar counts
+    await fetchSidebarCounts();
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -541,56 +979,250 @@ async function toggleReference(img) {
   }
 }
 
+const settingsDialog = ref(false);
+watch(settingsDialog, (val) => {
+  if (val) fetchConfig();
+});
+const config = reactive({
+  image_roots: [],
+  selected_image_root: "",
+  sort: "",
+  thumbnail: 256,
+  show_stars: true,
+  show_only_reference: false,
+  openai_host: "localhost",
+  openai_port: 8000,
+  openai_model: "",
+});
+
+const openaiModels = ref([]);
+const openaiModelFetchError = ref("");
+const openaiModelLoading = ref(false);
+
+async function fetchOpenAIModels() {
+  openaiModelLoading.value = true;
+  openaiModelFetchError.value = "";
+  openaiModels.value = [];
+  try {
+    const url = `http://${config.openai_host}:${config.openai_port}/v1/models`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch models");
+    const data = await res.json();
+    // OpenAI API returns { data: [ { id: ... }, ... ] }
+    if (Array.isArray(data.data)) {
+      openaiModels.value = data.data.map((m) => m.id);
+    } else {
+      openaiModelFetchError.value = "No models found.";
+    }
+  } catch (e) {
+    openaiModelFetchError.value = "Failed to fetch models: " + (e.message || e);
+  } finally {
+    openaiModelLoading.value = false;
+  }
+}
+
+async function fetchConfig() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/config`);
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("Failed to fetch /config:", res.status, text);
+      return;
+    }
+    const data = await res.json();
+    config.image_roots = data.image_roots || [];
+    config.selected_image_root = data.selected_image_root || "";
+    // UI options
+    if (data.sort) selectedSort.value = data.sort_order;
+    if (data.thumbnail) thumbnailSize.value = data.thumbnail_size;
+    if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
+    if (typeof data.show_only_reference === "boolean")
+      referenceFilterMode.value = data.show_only_reference;
+    // Also update config for PATCHing
+    config.sort_order = data.sort || selectedSort.value;
+    config.thumbnail_size = data.thumbnail || thumbnailSize.value;
+    config.show_stars =
+      typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
+    config.show_only_reference =
+      typeof data.show_only_reference === "boolean"
+        ? data.show_only_reference
+        : referenceFilterMode.value;
+    // OpenAI settings
+    config.openai_host = data.openai_host || "localhost";
+    config.openai_port = data.openai_port || 8000;
+    config.openai_model = data.openai_model || "";
+  } catch (e) {
+    console.error("Error fetching /config:", e);
+  }
+}
+
+// Settings dialog: image roots add/remove/select logic
+const newImageRoot = ref("");
+async function addImageRoot() {
+  const val = newImageRoot.value.trim();
+  if (!val || config.image_roots.includes(val)) return;
+  config.image_roots.push(val);
+  newImageRoot.value = "";
+  // PATCH only image_roots
+  await fetch(`${BACKEND_URL}/config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image_roots: config.image_roots }),
+  });
+}
+function removeImageRoot(root) {
+  if (config.image_roots.length <= 1) return;
+  const idx = config.image_roots.indexOf(root);
+  if (idx !== -1) {
+    config.image_roots.splice(idx, 1);
+    // If removed root was selected, pick first remaining
+    if (config.selected_image_root === root) {
+      config.selected_image_root = config.image_roots[0] || "";
+    }
+    saveConfig();
+  }
+}
+
+async function updateSelectedRoot() {
+  // PATCH only selected_image_root
+  await fetch(`${BACKEND_URL}/config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ selected_image_root: config.selected_image_root }),
+  });
+  // Refresh grid and sidebar after vault change
+  await fetchConfig();
+  await fetchCharacters();
+  await fetchSidebarCounts();
+  await refreshImages();
+}
+
+// --- UI option PATCH logic ---
+async function patchConfigUIOptions(opts = {}) {
+  // Merge with config
+  const patch = {
+    sort: selectedSort.value,
+    thumbnail: thumbnailSize.value,
+    show_stars: showStars.value,
+    show_only_reference: referenceFilterMode.value,
+    openai_host: config.openai_host,
+    openai_port: config.openai_port,
+    openai_model: config.openai_model,
+    ...opts,
+  };
+  Object.assign(config, patch);
+  await fetch(`${BACKEND_URL}/config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+function selectImageRoot(root) {
+  if (config.selected_image_root !== root) {
+    config.selected_image_root = root;
+    updateSelectedRoot();
+  }
+}
+
+async function saveConfig() {
+  // Save config to backend (POST /config)
+  await fetch(`/${BACKEND_URL}/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image_roots: config.image_roots,
+      selected_image_root: config.selected_image_root,
+    }),
+  });
+}
+
+function openSettingsDialog() {
+  console.debug("Opening settings dialog");
+  fetchConfig().then(() => {
+    fetchOpenAIModels();
+  });
+  settingsDialog.value = true;
+}
+
+// Fetch config and sync UI options on mount
+onMounted(() => {
+  fetchConfig();
+});
+
 onMounted(() => {
   // Always select All Pictures at startup
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedReferenceMode.value = false;
-  fetchCharacters().then(() => {
-    // After loading characters, ensure All Pictures is still selected
-    selectedCharacter.value = ALL_PICTURES_ID;
-    selectedReferenceMode.value = false;
-    // Explicitly trigger image loading if already on All Pictures
-    if (
-      selectedCharacter.value === ALL_PICTURES_ID &&
-      !selectedReferenceMode.value
-    ) {
-      // This mimics the watcher logic
-      images.value = [];
-      imagesError.value = null;
-      selectedImageIds.value = [];
-      imagesLoading.value = true;
-      let url = `${BACKEND_URL}/pictures?info=true`;
-      fetch(url)
-        .then((res) => {
-          if (!res.ok) throw new Error("Failed to fetch images");
-          return res.json();
-        })
-        .then((baseImages) => {
-          images.value = baseImages.map((img) => ({
-            ...img,
-            score: typeof img.score !== "undefined" ? img.score : null,
-            is_reference: Number(img.is_reference) || 0,
-          }));
-          setTimeout(updateColumns, 0);
-        })
-        .catch((e) => {
-          imagesError.value = e.message;
-        })
-        .finally(() => {
-          imagesLoading.value = false;
-        });
-    }
-  });
+  fetchSortOptions();
+  fetchCharacters();
   window.addEventListener("resize", updateColumns);
   watch(thumbnailSize, updateColumns);
   setTimeout(updateColumns, 100); // Initial update after mount
 });
+
+// Watch and PATCH UI config options when changed
+watch(selectedSort, (val) => {
+  patchConfigUIOptions({ sort: val });
+});
+watch(thumbnailSize, (val) => {
+  patchConfigUIOptions({ thumbnail: val });
+});
+watch(showStars, (val) => {
+  patchConfigUIOptions({ show_stars: val });
+});
+
+watch(referenceFilterMode, (val) => {
+  patchConfigUIOptions({ show_only_reference: val });
+});
+
+// Watch OpenAI config fields and PATCH when changed
+// Helper: refresh models after patching host/port
+async function patchHostAndRefresh(val, key) {
+  await patchConfigUIOptions({ [key]: val });
+  fetchOpenAIModels();
+}
+
+// Patch and refresh models when host/port change (on blur or enter)
+function onHostBlurOrEnter(e) {
+  patchHostAndRefresh(config.openai_host, "openai_host");
+}
+function onPortBlurOrEnter(e) {
+  patchHostAndRefresh(config.openai_port, "openai_port");
+}
+
+// Still patch on change for persistence
+watch(
+  () => config.openai_host,
+  (val) => {
+    patchConfigUIOptions({ openai_host: val });
+  }
+);
+watch(
+  () => config.openai_port,
+  (val) => {
+    patchConfigUIOptions({ openai_port: val });
+  }
+);
+watch(
+  () => config.openai_model,
+  (val) => {
+    patchConfigUIOptions({ openai_model: val });
+  }
+);
 
 watch([selectedCharacter, selectedReferenceMode], async ([id, refMode]) => {
   refreshImages();
 });
 
 function handleOverlayKeydown(e) {
+  // Don't trigger most shortcuts if focus is in a text field, but allow Escape for chat overlay
+  const tag =
+    e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
+  const isEditable =
+    e.target &&
+    (e.target.isContentEditable || tag === "input" || tag === "textarea");
+  if (isEditable && !(chatOpen.value && e.key === "Escape")) return;
   // Ctrl+A: select all images in grid
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
     if (images.value.length) {
@@ -603,19 +1235,21 @@ function handleOverlayKeydown(e) {
   if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (overlayOpen.value && overlayImage.value) {
       toggleReference(overlayImage.value);
+      e.preventDefault();
+      return;
     } else if (selectedImageIds.value.length) {
       // Use the last selected image as the reference for toggle value
       const lastImg = images.value.find(
         (i) =>
           i.id === selectedImageIds.value[selectedImageIds.value.length - 1]
       );
-      if (lastImg) toggleReference(lastImg);
-    } else if (images.value.length) {
-      // If nothing selected, toggle the first image
-      toggleReference(images.value[0]);
+      if (lastImg) {
+        toggleReference(lastImg);
+        e.preventDefault();
+        return;
+      }
     }
-    e.preventDefault();
-    return;
+    // Do nothing if nothing is selected and overlay is not open
   }
   if (overlayOpen.value) {
     if (e.key === "ArrowLeft") {
@@ -631,6 +1265,11 @@ function handleOverlayKeydown(e) {
       e.preventDefault();
       return;
     }
+  }
+  if (chatOpen.value && e.key === "Escape") {
+    closeChatOverlay();
+    e.preventDefault();
+    return;
   }
   // Grid navigation and selection
   if (!images.value.length) return;
@@ -668,35 +1307,8 @@ function handleOverlayKeydown(e) {
     }
     e.preventDefault();
     return;
-  } else {
-    return;
   }
-  const isCtrl = e.ctrlKey || e.metaKey;
-  const isShift = e.shiftKey;
-  if (isShift && lastSelectedIndex !== null) {
-    // Range select
-    const start = Math.min(lastSelectedIndex, nextIdx);
-    const end = Math.max(lastSelectedIndex, nextIdx);
-    const rangeIds = images.value.slice(start, end + 1).map((i) => i.id);
-    const newSelection = isCtrl
-      ? Array.from(new Set([...selectedImageIds.value, ...rangeIds]))
-      : rangeIds;
-    selectedImageIds.value = newSelection;
-  } else if (isCtrl) {
-    // Toggle selection of nextIdx
-    const id = images.value[nextIdx].id;
-    if (selectedImageIds.value.includes(id)) {
-      selectedImageIds.value = selectedImageIds.value.filter((i) => i !== id);
-    } else {
-      selectedImageIds.value = [...selectedImageIds.value, id];
-    }
-    lastSelectedIndex = nextIdx;
-  } else {
-    // Single select
-    selectedImageIds.value = [images.value[nextIdx].id];
-    lastSelectedIndex = nextIdx;
-  }
-  e.preventDefault();
+  return;
 }
 
 onMounted(() => {
@@ -711,7 +1323,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleOverlayKeydown);
 });
 function showPrevImage() {
-  const sorted = sortedImages.value;
+  const sorted = pagedImages.value;
   if (!overlayImage.value || !sorted.length) return;
   const idx = sorted.findIndex((i) => i.id === overlayImage.value.id);
   if (idx === -1) return;
@@ -720,7 +1332,7 @@ function showPrevImage() {
 }
 
 function showNextImage() {
-  const sorted = sortedImages.value;
+  const sorted = pagedImages.value;
   if (!overlayImage.value || !sorted.length) return;
   const idx = sorted.findIndex((i) => i.id === overlayImage.value.id);
   if (idx === -1) return;
@@ -750,6 +1362,7 @@ async function deleteSelectedImages() {
     (img) => !selectedImageIds.value.includes(img.id)
   );
   selectedImageIds.value = [];
+  fetchSidebarCounts();
 }
 
 // Patch score for selected images
@@ -780,13 +1393,42 @@ async function setImageScore(img, n) {
       { method: "PATCH" }
     );
     if (!res.ok) throw new Error(`Failed to set score for image ${img.id}`);
-    img.score = newScore;
+    if (
+      selectedSort.value === "score_desc" ||
+      selectedSort.value === "score_asc"
+    ) {
+      // Remove image from current position
+      const idx = images.value.findIndex((i) => i.id === img.id);
+      if (idx === -1) return;
+      img.score = newScore;
+      images.value.splice(idx, 1);
+      // Find new index based on sort order
+      let insertIdx = 0;
+      if (selectedSort.value === "score_desc") {
+        insertIdx = images.value.findIndex((i) => (i.score || 0) < newScore);
+        if (insertIdx === -1) insertIdx = images.value.length;
+      } else {
+        insertIdx = images.value.findIndex((i) => (i.score || 0) > newScore);
+        if (insertIdx === -1) insertIdx = images.value.length;
+      }
+      images.value.splice(insertIdx, 0, img);
+      // Scroll to new position
+      nextTick(() => {
+        const grid = gridContainer.value;
+        if (!grid) return;
+        const card = grid.querySelectorAll(".image-card")[insertIdx];
+        if (card && card.scrollIntoView) {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    } else {
+      // Not sorting by score, just update the score in place
+      img.score = newScore;
+    }
   } catch (e) {
     alert(e.message);
   }
 }
-
-const showStars = ref(true);
 
 // Drag and drop logic for assigning images to characters
 const dragOverCharacter = ref(null);
@@ -801,6 +1443,7 @@ function onImageDragStart(img, idx, event) {
     JSON.stringify({ imageIds: ids })
   );
   event.dataTransfer.effectAllowed = "move";
+  dragSource.value = "grid";
 }
 function onCharacterDragOver(charId) {
   dragOverCharacter.value = charId;
@@ -813,18 +1456,30 @@ function onCharacterDragLeave(charId) {
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
   let imageIds = [];
-  // If dragging from grid, use selectedImageIds
-  if (selectedImageIds.value.length) {
-    imageIds = [...selectedImageIds.value];
-  } else {
-    // Fallback: try to parse from dataTransfer (for future multi-drag support)
-    try {
-      const data = JSON.parse(event.dataTransfer.getData("application/json"));
-      if (data.imageIds && Array.isArray(data.imageIds))
-        imageIds = data.imageIds;
-    } catch (e) {}
+  // Always use drag event data for image IDs
+  try {
+    const data = JSON.parse(event.dataTransfer.getData("application/json"));
+    if (data.imageIds && Array.isArray(data.imageIds)) {
+      imageIds = data.imageIds;
+    }
+  } catch (e) {
+    // If drag data is missing or malformed, abort
+    alert("Could not determine which images to assign. Please try again.");
+    return;
   }
-  if (!imageIds.length) return;
+  if (!imageIds.length) {
+    alert("No images found in drag data.");
+    return;
+  }
+  // Log drop target and character id
+  const charObj = characters.value.find((c) => c.id === characterId);
+  console.log(
+    "[DROP] Drop target characterId:",
+    characterId,
+    "name:",
+    charObj ? charObj.name : "(not found)"
+  );
+  // Always use the characterId from the drop target
   assignImagesToCharacter(imageIds, characterId);
 }
 
@@ -844,11 +1499,21 @@ async function assignImagesToCharacter(imageIds, characterId) {
       })
     );
     await fetchCharacters();
+    fetchSidebarCounts();
+    // Remove reassigned images from the current grid if not viewing All Pictures or Unassigned
     if (
-      selectedCharacter.value === characterId ||
-      selectedCharacter.value === ALL_PICTURES_ID ||
-      selectedCharacter.value === UNASSIGNED_PICTURES_ID
+      selectedCharacter.value !== ALL_PICTURES_ID &&
+      selectedCharacter.value !== UNASSIGNED_PICTURES_ID &&
+      selectedCharacter.value !== characterId
     ) {
+      images.value = images.value.filter((img) => !imageIds.includes(img.id));
+      // Also remove these IDs from selection
+      selectedImageIds.value = selectedImageIds.value.filter((id) =>
+        images.value.some((img) => img.id === id)
+      );
+      lastSelectedIndex = null;
+    } else {
+      // For All Pictures or Unassigned, refresh the grid as before
       const id = selectedCharacter.value;
       let url;
       if (id === ALL_PICTURES_ID) {
@@ -867,7 +1532,14 @@ async function assignImagesToCharacter(imageIds, characterId) {
           ...img,
           score: typeof img.score !== "undefined" ? img.score : null,
           is_reference: Number(img.is_reference) || 0,
+          _thumbLoaded: false,
         }));
+        // Remove any selected IDs not in the new images
+        const newIds = new Set(images.value.map((img) => img.id));
+        selectedImageIds.value = selectedImageIds.value.filter((id) =>
+          newIds.has(id)
+        );
+        lastSelectedIndex = null;
         setTimeout(updateColumns, 0);
       }
     }
@@ -900,6 +1572,7 @@ async function assignImagesAsReference(imageIds, characterId) {
       })
     );
     await fetchCharacters();
+    fetchSidebarCounts();
     // Refresh images if needed
     if (
       selectedCharacter.value === characterId ||
@@ -924,7 +1597,14 @@ async function assignImagesAsReference(imageIds, characterId) {
           ...img,
           score: typeof img.score !== "undefined" ? img.score : null,
           is_reference: Number(img.is_reference) || 0,
+          _thumbLoaded: false,
         }));
+        // Remove any selected IDs not in the new images
+        const newIds = new Set(images.value.map((img) => img.id));
+        selectedImageIds.value = selectedImageIds.value.filter((id) =>
+          newIds.has(id)
+        );
+        lastSelectedIndex = null;
         setTimeout(updateColumns, 0);
       }
     }
@@ -1048,32 +1728,214 @@ function confirmDeleteCharacter() {
   }
 }
 
-// Sorting logic
-const sortOptions = [
-  { label: "Date: Latest First", value: "date_desc" },
-  { label: "Date: Oldest First", value: "date_asc" },
-  { label: "Score: Highest First", value: "score_desc" },
-  { label: "Score: Lowest First", value: "score_asc" },
-];
-const selectedSort = ref("date_desc");
+// Chat state
+// Add optional pictureUrl to assistant messages
+const chatMessages = ref([]); // {role: 'user'|'assistant', content: string, pictureUrl?: string}
+const chatInput = ref("");
+const chatLoading = ref(false);
+const chatMessagesContainer = ref(null);
+const chatInputField = ref(null);
 
-const sortedImages = computed(() => {
-  let arr = [...filteredImages.value];
-  if (selectedSort.value === "date_desc") {
-    arr.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  } else if (selectedSort.value === "date_asc") {
-    arr.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  } else if (selectedSort.value === "score_desc") {
-    arr.sort((a, b) => (b.score || 0) - (a.score || 0));
-  } else if (selectedSort.value === "score_asc") {
-    arr.sort((a, b) => (a.score || 0) - (b.score || 0));
+function renderMarkdown(text) {
+  return marked.parse(text || "");
+}
+
+// Computed: Get the selected character object (if any)
+const selectedCharacterObj = computed(() => {
+  if (
+    selectedCharacter.value &&
+    selectedCharacter.value !== ALL_PICTURES_ID &&
+    selectedCharacter.value !== UNASSIGNED_PICTURES_ID
+  ) {
+    const char =
+      characters.value.find((c) => c.id === selectedCharacter.value) || null;
+    if (char && typeof char.name === "string" && char.name.length > 0) {
+      // Capitalize first letter only
+      return {
+        ...char,
+        name: char.name.charAt(0).toUpperCase() + char.name.slice(1),
+      };
+    }
+    return char;
   }
-  return arr;
+  return null;
 });
+
+async function sendChatMessageAndFocus() {
+  const input = chatInput.value.trim();
+  if (!input || chatLoading.value) return;
+
+  let system_message =
+    "Include a short summary sentence that describes the situation. Prefix it with the word 'summary'. You should always respond as the character you are playing. Stay in character and don't break it. Let me speak for myself. Remember to change the summary when the situation changes which should be almost every response. You especially want to describe the character and what the character is doing.";
+
+  if (chatMessages.value.length === 0) {
+    // First message, set character context
+    if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
+      system_message += ` You are now assuming the role of the character named '${selectedCharacterObj.value.name}'.`;
+      if (
+        selectedCharacterObj.value.description &&
+        selectedCharacterObj.value.description.trim().length > 0
+      ) {
+        system_message += ` Here is some information about you: ${selectedCharacterObj.value.description.trim()}`;
+      }
+    } else {
+      system_message +=
+        " You are now assuming the role of a generic character without a specific name or background.";
+    }
+    chatMessages.value.push(
+      { role: "user", content: input },
+      { role: "system", content: system_message }
+    );
+  } else {
+    chatMessages.value.push({ role: "user", content: input });
+  }
+  chatInput.value = "";
+  chatLoading.value = true;
+  await nextTick();
+  scrollChatToBottom();
+  try {
+    const url = `http://${config.openai_host}:${config.openai_port}/v1/chat/completions`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: config.openai_model || "gpt-3.5-turbo",
+        messages: chatMessages.value.map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        stream: false,
+      }),
+    });
+    if (!res.ok) throw new Error("OpenAI server error");
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content || "(No response)";
+    // Add the AI response first
+    chatMessages.value.push({ role: "assistant", content: reply });
+    await nextTick();
+    scrollChatToBottom();
+
+    // After AI responds, trigger /search with character name + last user input + last AI response
+    let lastUser = null;
+    for (let i = chatMessages.value.length - 2; i >= 0; i--) {
+      if (chatMessages.value[i].role === "user") {
+        lastUser = chatMessages.value[i].content;
+        break;
+      }
+    }
+    let searchQuery = extractKeywords(reply);
+    if (lastUser) {
+      searchQuery = lastUser + " " + searchQuery;
+    }
+    if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
+      searchQuery = selectedCharacterObj.value.name + " " + searchQuery;
+    }
+    try {
+      const searchRes = await fetch(
+        `${BACKEND_URL}/search?query=${encodeURIComponent(searchQuery)}`
+      );
+      if (searchRes.ok) {
+        const searchData = await searchRes.json();
+        if (searchData && Array.isArray(searchData) && searchData.length > 0) {
+          // Weighted random selection by likeness_score
+          const totalScore = searchData.reduce(
+            (sum, pic) => sum + (pic.likeness_score || 0),
+            0
+          );
+          let r = Math.random() * totalScore;
+          let chosen = searchData[0];
+          for (const pic of searchData) {
+            r -= pic.likeness_score || 0;
+            if (r <= 0) {
+              chosen = pic;
+              break;
+            }
+          }
+          // Compose the image URL (assuming /pictures/:id)
+          const imageUrl = `${BACKEND_URL}/pictures/${chosen.id}`;
+          // Add the picture URL to the last assistant message
+          const lastMsg = chatMessages.value
+            .slice()
+            .reverse()
+            .find((m) => m.role === "assistant" && !m.pictureUrl);
+          if (lastMsg) {
+            lastMsg.pictureUrl = imageUrl;
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore search errors
+    }
+  } catch (e) {
+    chatMessages.value.push({
+      role: "assistant",
+      content: "Error: " + (e.message || e),
+    });
+  } finally {
+    chatLoading.value = false;
+    await nextTick();
+    if (chatInputField.value) {
+      chatInputField.value.focus();
+    }
+  }
+}
 </script>
 
 <template>
   <v-app>
+    <!-- Import Progress Modal (fixed, outside app-viewport) -->
+    <div v-if="importInProgress" class="import-progress-modal">
+      <div class="import-progress-content">
+        <div class="import-progress-title">{{ importPhaseMessage }}</div>
+        <div class="import-progress-bar-bg">
+          <div
+            class="import-progress-bar"
+            :style="{
+              width:
+                (importTotal ? importProgress / importTotal : 0) * 100 + '%',
+            }"
+          ></div>
+        </div>
+        <div class="import-progress-label">
+          <template v-if="importPhase === 'hashing'">
+            Hashing {{ importProgress }} / {{ importTotal }}
+          </template>
+          <template v-else-if="importPhase === 'checking'">
+            Checking for duplicates...
+          </template>
+          <template v-else-if="importPhase === 'uploading'">
+            Uploading {{ importProgress }} / {{ importTotal }}
+          </template>
+          <template v-else-if="importPhase === 'done'">
+            Import complete!
+          </template>
+          <template v-else-if="importPhase === 'duplicates'">
+            All files are duplicates.
+          </template>
+          <template v-else-if="importPhase === 'cancelled'">
+            Import cancelled.
+          </template>
+          <template v-else-if="importPhase === 'error'">
+            Import failed.
+          </template>
+          <span v-if="importError" class="import-progress-error">{{
+            importError
+          }}</span>
+        </div>
+        <button
+          class="cancel-button"
+          @click="handleCancelImport"
+          v-if="
+            importPhase !== 'done' &&
+            importPhase !== 'duplicates' &&
+            importPhase !== 'cancelled' &&
+            importPhase !== 'error'
+          "
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
     <div class="app-viewport">
       <div class="top-toolbar">
         <v-btn
@@ -1085,36 +1947,7 @@ const sortedImages = computed(() => {
         >
           <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
         </v-btn>
-        <v-text-field
-          v-model="searchQuery"
-          placeholder="Search images..."
-          hide-details
-          dense
-          solo
-          clearable
-          prepend-inner-icon="mdi-magnify"
-          style="
-            min-width: 400px;
-            max-width: 800px;
-            margin-right: 16px;
-            background-color: a;
-          "
-          @keydown.enter="searchImages"
-          @click:append-outer="searchImages"
-        />
         <div class="toolbar-actions">
-          <!-- Sorting dropdown -->
-          <v-select
-            v-model="selectedSort"
-            :items="sortOptions"
-            item-title="label"
-            item-value="value"
-            label="Sort by"
-            dense
-            hide-details
-            style="min-width: 200px; max-width: 300px; margin-right: 8px"
-          />
-
           <v-icon style="display: flex; align-items: center; height: 100%"
             >mdi-image-size-select-small</v-icon
           >
@@ -1123,13 +1956,10 @@ const sortedImages = computed(() => {
             :min="128"
             :max="256"
             :step="32"
-            :ticks="true"
-            :tick-labels="thumbnailLabels"
             class="slider"
             hide-details
             style="
-              min-width: 256px;
-              max-width: 320px;
+              min-width: 100px;
               vertical-align: middle;
               margin-top: 4px;
               margin-bottom: 4px;
@@ -1159,7 +1989,7 @@ const sortedImages = computed(() => {
           </v-btn>
           <v-btn
             icon
-            :color="showStars ? 'amber darken-2' : 'grey'"
+            :color="showStars ? 'orange' : 'grey'"
             @click="showStars = !showStars"
             title="Toggle star ratings"
             style="margin-left: 2px; margin-right: 2px"
@@ -1176,6 +2006,204 @@ const sortedImages = computed(() => {
           >
             <v-icon>mdi-trash-can-outline</v-icon>
           </v-btn>
+          <!-- Settings Dialog -->
+          <v-dialog v-model="settingsDialog" max-width="50vw">
+            <v-card class="settings-dialog-card">
+              <div class="settings-dialog-titlebar">
+                <div class="settings-dialog-title">Settings</div>
+                <button
+                  class="settings-dialog-close"
+                  @click="settingsDialog = false"
+                  aria-label="Close"
+                >
+                  &times;
+                </button>
+              </div>
+              <v-card-text>
+                <div class="settings-section">
+                  <strong>Image Roots</strong>
+                  <ul class="settings-image-roots">
+                    <li
+                      v-for="root in config.image_roots"
+                      :key="root"
+                      @click="selectImageRoot(root)"
+                      :class="[
+                        'settings-image-root',
+                        { selected: root === config.selected_image_root },
+                      ]"
+                      style="
+                        cursor: pointer;
+                        user-select: none;
+                        display: flex;
+                        align-items: center;
+                        padding: 8px 0 8px 8px;
+                        border-radius: 8px;
+                        margin-bottom: 2px;
+                      "
+                    >
+                      <span style="flex: 1">{{ root }}</span>
+                      <span
+                        v-if="root === config.selected_image_root"
+                        style="
+                          color: #1976d2;
+                          font-weight: bold;
+                          margin-left: 8px;
+                        "
+                        >(selected)</span
+                      >
+                      <button
+                        v-if="config.image_roots.length > 1"
+                        @click.stop="removeImageRoot(root)"
+                        title="Remove root"
+                        style="
+                          margin-left: 8px;
+                          background: none;
+                          border: none;
+                          color: #888;
+                          font-size: 1.2em;
+                          cursor: pointer;
+                        "
+                      >
+                        &times;
+                      </button>
+                    </li>
+                  </ul>
+                  <div style="display: flex; margin-top: 12px; gap: 8px">
+                    <input
+                      v-model="newImageRoot"
+                      @keydown.enter="addImageRoot"
+                      placeholder="Add new root"
+                      style="
+                        flex: 1;
+                        padding: 6px 10px;
+                        border-radius: 8px;
+                        border: 1px solid #bbb;
+                        font-size: 1em;
+                      "
+                    />
+                    <button
+                      @click="addImageRoot"
+                      :disabled="!newImageRoot.trim()"
+                      style="
+                        padding: 6px 16px;
+                        border-radius: 8px;
+                        background: #1976d2;
+                        color: #fff;
+                        border: none;
+                        font-weight: 600;
+                        cursor: pointer;
+                      "
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+                <div class="settings-section" style="margin-top: 32px">
+                  <strong>OpenAI Chat Service</strong>
+                  <div
+                    style="
+                      display: flex;
+                      gap: 12px;
+                      align-items: center;
+                      margin-top: 8px;
+                    "
+                  >
+                    <label style="min-width: 60px">Host:</label>
+                    <input
+                      v-model="config.openai_host"
+                      style="
+                        flex: 1;
+                        padding: 6px 10px;
+                        border-radius: 8px;
+                        border: 1px solid #bbb;
+                        font-size: 1em;
+                      "
+                      @change="patchConfigUIOptions()"
+                    />
+                    <label style="min-width: 50px; margin-left: 12px"
+                      >Port:</label
+                    >
+                    <input
+                      v-model.number="config.openai_port"
+                      type="number"
+                      min="1"
+                      max="65535"
+                      style="
+                        width: 90px;
+                        padding: 6px 10px;
+                        border-radius: 8px;
+                        border: 1px solid #bbb;
+                        font-size: 1em;
+                      "
+                      @change="patchConfigUIOptions()"
+                    />
+                  </div>
+                  <div
+                    style="
+                      display: flex;
+                      gap: 12px;
+                      align-items: center;
+                      margin-top: 12px;
+                    "
+                  >
+                    <label style="min-width: 60px">Model:</label>
+                    <select
+                      v-model="config.openai_model"
+                      style="
+                        flex: 1;
+                        padding: 6px 10px;
+                        border-radius: 8px;
+                        border: 1px solid #bbb;
+                        font-size: 1em;
+                      "
+                      @change="patchConfigUIOptions()"
+                    >
+                      <option v-if="openaiModelLoading" disabled>
+                        Loading models...
+                      </option>
+                      <option v-for="m in openaiModels" :key="m" :value="m">
+                        {{ m }}
+                      </option>
+                      <option
+                        v-if="
+                          !openaiModelLoading &&
+                          !openaiModels.length &&
+                          !openaiModelFetchError
+                        "
+                        disabled
+                      >
+                        No models found
+                      </option>
+                      <option v-if="openaiModelFetchError" disabled>
+                        {{ openaiModelFetchError }}
+                      </option>
+                    </select>
+                    <button
+                      @click="fetchOpenAIModels"
+                      style="
+                        margin-left: 8px;
+                        padding: 6px 12px;
+                        border-radius: 8px;
+                        background: #1976d2;
+                        color: #fff;
+                        border: none;
+                        font-weight: 600;
+                        cursor: pointer;
+                      "
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  <div
+                    v-if="openaiModelFetchError"
+                    style="color: #c00; margin-top: 6px"
+                  >
+                    {{ openaiModelFetchError }}
+                  </div>
+                </div>
+              </v-card-text>
+            </v-card>
+          </v-dialog>
         </div>
       </div>
       <div class="file-manager">
@@ -1204,6 +2232,9 @@ const sortedImages = computed(() => {
                   <v-icon size="44">mdi-image-multiple</v-icon>
                 </span>
                 <span class="sidebar-list-label">All Pictures</span>
+                <span class="sidebar-list-count">{{
+                  categoryCounts[ALL_PICTURES_ID] ?? ""
+                }}</span>
               </div>
               <div
                 :class="[
@@ -1216,6 +2247,9 @@ const sortedImages = computed(() => {
                   <v-icon size="44">mdi-help-circle-outline</v-icon>
                 </span>
                 <span class="sidebar-list-label">Unassigned Pictures</span>
+                <span class="sidebar-list-count">{{
+                  categoryCounts[UNASSIGNED_PICTURES_ID] ?? ""
+                }}</span>
               </div>
             </div>
           </transition>
@@ -1226,6 +2260,7 @@ const sortedImages = computed(() => {
             <v-icon small style="margin-right: 8px">{{
               sidebarSections.people ? "mdi-chevron-down" : "mdi-chevron-right"
             }}</v-icon>
+            People
             <span style="flex: 1 1 auto"></span>
             <span
               style="
@@ -1262,6 +2297,15 @@ const sortedImages = computed(() => {
             <div v-show="sidebarSections.people">
               <div v-if="error" class="sidebar-error">{{ error }}</div>
               <div
+                v-if="sortedCharacters.length === 0"
+                class="sidebar-character-group"
+              >
+                <div class="sidebar-list-item">
+                  No characters found. Click the + button to add one.
+                </div>
+              </div>
+              <div
+                v-if="sortedCharacters.length > 0"
                 v-for="char in sortedCharacters"
                 :key="char.id"
                 class="sidebar-character-group"
@@ -1319,11 +2363,89 @@ const sortedImages = computed(() => {
                       </span>
                     </template>
                   </span>
+                  <span class="sidebar-list-count">{{
+                    categoryCounts[char.id] ?? ""
+                  }}</span>
                 </div>
               </div>
-              <div v-if="loading" class="sidebar-loading">Loading...</div>
             </div>
           </transition>
+
+          <div
+            class="sidebar-section-header"
+            @click="sidebarSections.search = !sidebarSections.search"
+          >
+            <v-icon small style="margin-right: 8px">{{
+              sidebarSections.search ? "mdi-chevron-down" : "mdi-chevron-right"
+            }}</v-icon>
+            Search & Sorting
+            <span style="flex: 1 1 auto"></span>
+          </div>
+          <transition name="fade">
+            <div class="search-and-sort" v-show="sidebarSections.search">
+              <div class="sidebar-searchbar-wrapper">
+                <SearchBar
+                  v-model="searchQuery"
+                  placeholder="Search images..."
+                  class="sidebar-searchbar"
+                  @search="searchImages"
+                />
+              </div>
+              <div class="sidebar-searchbar-wrapper">
+                <!-- Sorting dropdown -->
+                <v-select
+                  v-model="selectedSort"
+                  :items="sortOptions"
+                  class="sidebar-sort-select"
+                  item-title="label"
+                  item-value="value"
+                  label="Sort by"
+                  dense
+                  hide-details
+                />
+              </div>
+            </div>
+          </transition>
+
+          <!-- Chat and Settings buttons at the bottom left of the sidebar -->
+          <div
+            style="
+              position: absolute;
+              left: 0;
+              bottom: 0;
+              width: 100%;
+              padding: 16px 0 8px 0;
+              display: flex;
+              flex-direction: row;
+              gap: 8px;
+              justify-content: flex-start;
+              align-items: flex-end;
+              pointer-events: none;
+            "
+          >
+            <v-btn
+              icon
+              class="sidebar-chat-btn"
+              @click="openChatOverlay"
+              style="
+                margin-left: 12px;
+                pointer-events: auto;
+                background: #29405a;
+                color: #fff;
+              "
+              title="OpenAI Chat"
+            >
+              <v-icon>mdi-chat</v-icon>
+            </v-btn>
+            <v-btn
+              icon
+              @click="openSettingsDialog"
+              style="pointer-events: auto; background: #29405a; color: #fff"
+              title="Settings"
+            >
+              <v-icon>mdi-cog</v-icon>
+            </v-btn>
+          </div>
         </aside>
         <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
           <div
@@ -1339,15 +2461,14 @@ const sortedImages = computed(() => {
                 @dragover.prevent="handleGridDragOver"
                 @dragleave.prevent="handleGridDragLeave"
                 @drop.prevent="handleGridDrop"
+                @scroll="onGridScroll"
+                @click="handleGridBackgroundClick"
               >
                 <div
                   v-if="images.length === 0 && !imagesLoading && !imagesError"
                   class="empty-state"
                 >
                   No images found for this character.
-                </div>
-                <div v-if="imagesLoading" class="empty-state">
-                  Loading images...
                 </div>
                 <div v-if="imagesError" class="empty-state">
                   {{ imagesError }}
@@ -1356,69 +2477,261 @@ const sortedImages = computed(() => {
                   <span>{{ dragOverlayMessage }}</span>
                 </div>
                 <div
-                  v-for="(img, idx) in sortedImages"
+                  v-for="(img, idx) in pagedImages"
                   :key="img.id"
                   class="image-card"
                   :class="[
                     isImageSelected(img.id) ? 'selected' : '',
                     getSelectionBorderClasses(idx),
                   ]"
-                  @click="handleImageSelect(img, idx, $event)"
                   :draggable="isImageSelected(img.id)"
                   @dragstart="onImageDragStart(img, idx, $event)"
+                  @click="handleGridBackgroundClick"
                 >
-                  <v-card>
-                    <div class="star-overlay" v-if="showStars">
-                      <v-icon
-                        v-for="n in 5"
-                        :key="n"
-                        small
-                        :color="
-                          n <= (img.score || 0) ? 'amber' : 'grey lighten-1'
-                        "
-                        style="cursor: pointer"
-                        @click.stop="setImageScore(img, n)"
-                        >mdi-star</v-icon
+                  <v-card class="thumbnail-card">
+                    <div class="thumbnail-container">
+                      <div
+                        class="star-overlay"
+                        v-if="showStars && thumbLoaded[img.id]"
                       >
+                        <v-icon
+                          v-for="n in 5"
+                          :key="n"
+                          small
+                          :color="
+                            n <= (img.score || 0) ? 'orange' : 'grey darken-2'
+                          "
+                          style="cursor: pointer"
+                          @click.stop="setImageScore(img, n)"
+                          >mdi-star</v-icon
+                        >
+                      </div>
+                      <template
+                        v-if="
+                          (img.format && isSupportedVideoFile(img.format)) ||
+                          (!img.format &&
+                            isSupportedVideoFile(
+                              (img.id || '').split('.').pop()
+                            ))
+                        "
+                      >
+                        <img
+                          :src="`${BACKEND_URL}/thumbnails/${img.id}`"
+                          class="thumbnail-img video-thumb"
+                          @load="thumbLoaded[img.id] = true"
+                          @error="thumbLoaded[img.id] = true"
+                          @click.stop="
+                            (e) => {
+                              if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                                handleImageSelect(img, idx, e);
+                              } else {
+                                openOverlay(img);
+                              }
+                            }
+                          "
+                          style="cursor: pointer; border: 2px solid #2196f3"
+                        />
+                        <v-icon
+                          class="video-icon-overlay"
+                          style="
+                            position: absolute;
+                            bottom: 8px;
+                            left: 8px;
+                            color: #2196f3;
+                            background: white;
+                            border-radius: 50%;
+                          "
+                          >mdi-play-circle</v-icon
+                        >
+                      </template>
+                      <template v-else>
+                        <img
+                          :src="`${BACKEND_URL}/thumbnails/${img.id}`"
+                          class="thumbnail-img"
+                          @load="thumbLoaded[img.id] = true"
+                          @error="thumbLoaded[img.id] = true"
+                          @click.stop="
+                            (e) => {
+                              if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                                handleImageSelect(img, idx, e);
+                              } else {
+                                openOverlay(img);
+                              }
+                            }
+                          "
+                          style="cursor: pointer"
+                        />
+                      </template>
+                      <!-- Trophy icon for reference toggle -->
+                      <v-btn
+                        v-if="thumbLoaded[img.id]"
+                        icon
+                        size="small"
+                        class="reference-trophy-btn trophy-bg"
+                        @click.stop="toggleReference(img)"
+                        title="Toggle reference picture"
+                        style="
+                          position: absolute;
+                          top: 8px;
+                          left: 8px;
+                          z-index: 2;
+                        "
+                      >
+                        <v-icon
+                          :color="img.is_reference ? 'orange' : 'grey darken-2'"
+                          size="24px"
+                          >mdi-trophy</v-icon
+                        >
+                      </v-btn>
                     </div>
-                    <v-img
-                      :src="`${BACKEND_URL}/thumbnails/${img.id}`"
-                      :height="thumbnailSize"
-                      :width="thumbnailSize"
-                      @click.stop="
-                        (e) => {
-                          if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                            handleImageSelect(img, idx, e);
-                          } else {
-                            openOverlay(img);
-                          }
-                        }
-                      "
-                      @load="fetchScoreIfMissing(img)"
-                      style="cursor: pointer"
-                    />
-                    <!-- Trophy icon for reference toggle -->
-                    <v-btn
-                      icon
-                      size="small"
-                      class="reference-trophy-btn"
-                      :color="img.is_reference ? 'orange darken-2' : 'grey'"
-                      @click.stop="toggleReference(img)"
-                      title="Toggle reference picture"
-                    >
-                      <v-icon color="white">mdi-trophy</v-icon>
-                    </v-btn>
                     <!-- Show date under thumbnail if sorting by date -->
                     <div
                       v-if="
                         selectedSort === 'date_desc' ||
                         selectedSort === 'date_asc'
                       "
-                      class="thumbnail-date"
+                      class="thumbnail-info"
                     >
                       {{ new Date(img.created_at).toLocaleString() }}
                     </div>
+                    <!-- Show likeness score under thumbnail if sorting by likeness-->
+                    <div
+                      v-if="selectedSort === 'search_likeness'"
+                      class="thumbnail-info"
+                    >
+                      {{ formatLikenessScore(img.likeness_score) }}
+                    </div>
                   </v-card>
+                </div>
+                <div
+                  v-if="chatOpen"
+                  class="chat-overlay"
+                  @click.self="closeChatOverlay"
+                >
+                  <div class="chat-overlay-content">
+                    <div class="chat-overlay-header">
+                      <span>
+                        <template v-if="selectedCharacterObj">
+                          Chat with {{ selectedCharacterObj.name }}
+                        </template>
+                        <template v-else> AI Chat </template>
+                      </span>
+                      <button
+                        class="overlay-close"
+                        @click="closeChatOverlay"
+                        aria-label="Close"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                    <div
+                      class="overlay-chat-main"
+                      style="
+                        flex: 1;
+                        display: flex;
+                        flex-direction: column;
+                        min-height: 0;
+                      "
+                    >
+                      <div
+                        class="chat-messages"
+                        ref="chatMessagesContainer"
+                        style="flex: 1 1 0; overflow-y: auto; min-height: 0"
+                      >
+                        <div
+                          v-for="(msg, i) in chatMessages"
+                          :key="i"
+                          :class="
+                            msg.role === 'user'
+                              ? 'chat-message-user'
+                              : 'chat-message-assistant'
+                          "
+                        >
+                          <template v-if="msg.role === 'user'">
+                            <div class="chat-bubble user">
+                              <span class="chat-username">You</span>
+                              <span class="chat-text">{{ msg.content }}</span>
+                            </div>
+                          </template>
+                          <template v-else>
+                            <div class="chat-assistant-full">
+                              <span class="chat-username">AI</span>
+                              <span
+                                class="chat-text"
+                                v-html="renderMarkdown(msg.content)"
+                              ></span>
+                              <div
+                                v-if="msg.pictureUrl"
+                                class="chat-picture-result"
+                                style="margin-top: 0.5em"
+                              >
+                                <img
+                                  :src="msg.pictureUrl"
+                                  alt="result"
+                                  style="
+                                    max-width: 50%;
+                                    height: auto;
+                                    display: block;
+                                    margin: 0 auto;
+                                    border-radius: 8px;
+                                    box-shadow: 0 2px 8px #0002;
+                                  "
+                                  @load="scrollChatToBottom"
+                                />
+                              </div>
+                            </div>
+                          </template>
+                        </div>
+                        <div v-if="chatLoading" class="chat-message-assistant">
+                          <div class="chat-assistant-full">
+                            <span class="chat-username">AI</span>
+                            <span class="chat-text">...</span>
+                          </div>
+                        </div>
+                      </div>
+                      <form
+                        class="chat-input-row"
+                        @submit.prevent="sendChatMessageAndFocus"
+                        style="
+                          flex-shrink: 0;
+                          background: #f8fafd;
+                          border-top: 1px solid #e0e0e0;
+                          padding: 0.5em 0.7em;
+                          display: flex;
+                          align-items: flex-end;
+                        "
+                      >
+                        <textarea
+                          v-model="chatInput"
+                          class="chat-input"
+                          placeholder="Type your message..."
+                          rows="2"
+                          :disabled="chatLoading"
+                          ref="chatInputField"
+                          @keydown.enter.exact.prevent="sendChatMessageAndFocus"
+                          style="
+                            flex: 1;
+                            resize: none;
+                            min-height: 2.2em;
+                            max-height: 7em;
+                            border-radius: 6px;
+                            border: 1px solid #d0d0d0;
+                            margin-right: 0.5em;
+                            background: #fff;
+                          "
+                        ></textarea>
+                        <v-btn
+                          type="submit"
+                          :disabled="!chatInput.trim() || chatLoading"
+                          color="primary"
+                          class="chat-send-btn"
+                          style="min-width: 40px; min-height: 40px"
+                        >
+                          <v-icon>mdi-send</v-icon>
+                        </v-btn>
+                      </form>
+                    </div>
+                  </div>
                 </div>
                 <!-- Full image overlay -->
                 <div
@@ -1426,184 +2739,224 @@ const sortedImages = computed(() => {
                   class="image-overlay"
                   @click.self="closeOverlay"
                 >
-                  <div class="overlay-content">
+                  <div class="overlay-content overlay-grid">
                     <button
                       class="overlay-close"
                       @click="closeOverlay"
                       aria-label="Close"
+                      style="
+                        position: absolute;
+                        top: 12px;
+                        right: 18px;
+                        z-index: 20;
+                      "
                     >
                       &times;
                     </button>
-                    <div class="overlay-flex-row">
-                      <button
-                        class="overlay-nav overlay-nav-left"
-                        @click.stop="showPrevImage"
-                        aria-label="Previous"
+                    <div
+                      class="overlay-grid-main"
+                      style="
+                        display: grid;
+                        grid-template-columns: 64px 1fr 64px;
+                        align-items: center;
+                        width: 100%;
+                        height: 100%;
+                      "
+                    >
+                      <div
+                        style="
+                          display: flex;
+                          justify-content: center;
+                          align-items: center;
+                          height: 100%;
+                        "
                       >
-                        &#8592;
-                      </button>
-                      <div class="overlay-img-container">
-                        <div
-                          class="overlay-star-row"
-                          v-if="overlayImage"
-                          style="
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            margin-bottom: 12px;
-                          "
+                        <button
+                          class="overlay-nav overlay-nav-left"
+                          @click.stop="showPrevImage"
+                          aria-label="Previous"
                         >
-                          <v-icon
-                            v-for="n in 5"
-                            :key="n"
-                            large
-                            :color="
-                              n <= (overlayImage.score || 0)
-                                ? 'amber'
-                                : 'grey lighten-1'
-                            "
-                            style="cursor: pointer"
-                            @click.stop="setImageScore(overlayImage, n)"
-                            >mdi-star</v-icon
-                          >
-                        </div>
+                          <v-icon>mdi-skip-previous</v-icon>
+                        </button>
+                      </div>
+                      <div class="overlay-img-wrapper">
                         <div style="position: relative; display: inline-block">
-                          <img
-                            v-if="overlayImage"
-                            :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
-                            :alt="overlayImage.description || 'Full Image'"
-                            class="overlay-img"
-                          />
+                          <template v-if="overlayImage">
+                            <video
+                              v-if="
+                                isSupportedVideoFile(
+                                  getOverlayFormat(overlayImage)
+                                )
+                              "
+                              :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+                              class="overlay-video"
+                              controls
+                              preload="auto"
+                              playsinline
+                              style="background: #111"
+                            ></video>
+                            <img
+                              v-else
+                              :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+                              :alt="overlayImage.description || 'Full Image'"
+                              class="overlay-img"
+                            />
+                          </template>
+                          <div class="star-overlay" v-if="overlayImage">
+                            <v-icon
+                              v-for="n in 5"
+                              :key="n"
+                              large
+                              :color="
+                                n <= (overlayImage.score || 0)
+                                  ? 'orange'
+                                  : 'grey darken-2'
+                              "
+                              style="cursor: pointer"
+                              @click.stop="setImageScore(overlayImage, n)"
+                              >mdi-star</v-icon
+                            >
+                          </div>
                           <v-btn
                             icon
                             size="small"
-                            class="reference-trophy-btn overlay-trophy-btn"
-                            :color="
-                              overlayImage.is_reference
-                                ? 'orange darken-2'
-                                : 'grey'
-                            "
+                            class="reference-trophy-btn trophy-bg"
                             @click.stop="toggleReference(overlayImage)"
                             title="Toggle reference picture"
                             style="
                               position: absolute;
-                              bottom: 8px;
-                              right: 8px;
-                              z-index: 10;
-                              background: rgba(0, 0, 0, 0.3);
+                              top: 8px;
+                              left: 8px;
+                              z-index: 2;
                             "
                           >
-                            <v-icon color="white">mdi-trophy</v-icon>
+                            <v-icon
+                              :color="
+                                overlayImage.is_reference
+                                  ? 'orange'
+                                  : 'grey darken-2'
+                              "
+                              >mdi-trophy</v-icon
+                            >
                           </v-btn>
-                          <div
-                            v-if="
-                              overlayImage &&
-                              overlayImage.tags &&
-                              overlayImage.tags.length
-                            "
-                            class="overlay-tags"
-                            style="
-                              margin-top: 8px;
-                              margin-bottom: 0;
-                              text-align: center;
-                            "
-                          >
-                            <span
-                              v-for="tag in overlayImage.tags"
-                              :key="tag"
-                              class="overlay-tag"
-                              style="
-                                display: inline-flex;
-                                align-items: center;
-                                background: #eee;
-                                color: #333;
-                                border-radius: 16px;
-                                padding: 4px 16px 4px 14px;
-                                margin: 2px 2px;
-                                font-size: 1.15em;
-                                position: relative;
-                                min-height: 32px;
-                              "
-                            >
-                              {{ tag }}
-                              <button
-                                class="tag-delete-btn"
-                                @click.stop="removeTagFromOverlayImage(tag)"
-                                title="Remove tag"
-                                style="
-                                  background: none;
-                                  border: none;
-                                  color: #888;
-                                  font-size: 1.25em;
-                                  margin-left: 10px;
-                                  cursor: pointer;
-                                  display: flex;
-                                  align-items: center;
-                                  justify-content: center;
-                                  height: 24px;
-                                  width: 24px;
-                                  padding: 0;
-                                "
-                              >
-                                ×
-                              </button>
-                            </span>
-                            <!-- Add + button at the end for adding tags -->
-                            <button
-                              class="tag-add-btn"
-                              @click.stop="startAddTagOverlay()"
-                              title="Add tag"
-                              style="
-                                display: inline-flex;
-                                align-items: center;
-                                justify-content: center;
-                                background: #e0e0e0;
-                                color: #333;
-                                border: none;
-                                border-radius: 16px;
-                                font-size: 1.3em;
-                                margin: 2px 2px;
-                                height: 32px;
-                                width: 32px;
-                                cursor: pointer;
-                                padding: 0;
-                                vertical-align: middle;
-                              "
-                            >
-                              +
-                            </button>
-                            <!-- Input for adding a tag, shown only when adding -->
-                            <input
-                              v-if="addingTagOverlay"
-                              v-model="newTagOverlay"
-                              @keydown.enter="confirmAddTagOverlay"
-                              @blur="cancelAddTagOverlay"
-                              class="tag-add-input"
-                              style="
-                                margin-left: 8px;
-                                font-size: 1.1em;
-                                border-radius: 8px;
-                                border: 1px solid #bbb;
-                                padding: 2px 8px;
-                                min-width: 80px;
-                                outline: none;
-                              "
-                              placeholder="New tag"
-                              autofocus
-                            />
-                          </div>
-                        </div>
-                        <div class="overlay-desc">
-                          {{ overlayImage?.description }}
                         </div>
                       </div>
-                      <button
-                        class="overlay-nav overlay-nav-right"
-                        @click.stop="showNextImage"
-                        aria-label="Next"
+                      <div
+                        style="
+                          display: flex;
+                          justify-content: center;
+                          align-items: center;
+                          height: 100%;
+                        "
                       >
-                        &#8594;
+                        <button
+                          class="overlay-nav overlay-nav-right"
+                          @click.stop="showNextImage"
+                          aria-label="Next"
+                        >
+                          <v-icon>mdi-skip-next</v-icon>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="overlay-desc">
+                      {{ overlayImage?.description || "No description" }}
+                    </div>
+                    <div
+                      v-if="
+                        overlayImage &&
+                        overlayImage.tags &&
+                        overlayImage.tags.length
+                      "
+                      class="overlay-tags"
+                      style="
+                        margin-top: 8px;
+                        margin-bottom: 0;
+                        text-align: center;
+                      "
+                    >
+                      <span
+                        v-for="tag in overlayImage.tags"
+                        :key="tag"
+                        class="overlay-tag"
+                        style="
+                          display: inline-flex;
+                          align-items: center;
+                          background: #eee;
+                          color: #333;
+                          border-radius: 16px;
+                          padding: 4px 16px 4px 14px;
+                          margin: 2px 2px;
+                          font-size: 1.15em;
+                          position: relative;
+                          min-height: 32px;
+                        "
+                      >
+                        {{ tag }}
+                        <button
+                          class="tag-delete-btn"
+                          @click.stop="removeTagFromOverlayImage(tag)"
+                          title="Remove tag"
+                          style="
+                            background: none;
+                            border: none;
+                            color: #888;
+                            font-size: 1.25em;
+                            margin-left: 10px;
+                            cursor: pointer;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            height: 24px;
+                            width: 24px;
+                            padding: 0;
+                          "
+                        >
+                          ×
+                        </button>
+                      </span>
+                      <!-- Add + button at the end for adding tags -->
+                      <button
+                        class="tag-add-btn"
+                        @click.stop="startAddTagOverlay()"
+                        title="Add tag"
+                        style="
+                          display: inline-flex;
+                          align-items: center;
+                          justify-content: center;
+                          background: #e0e0e0;
+                          color: #333;
+                          border: none;
+                          border-radius: 16px;
+                          font-size: 1.3em;
+                          margin: 2px 2px;
+                          height: 32px;
+                          width: 32px;
+                          cursor: pointer;
+                          padding: 0;
+                          vertical-align: middle;
+                        "
+                      >
+                        +
                       </button>
+                      <!-- Input for adding a tag, shown only when adding -->
+                      <input
+                        v-if="addingTagOverlay"
+                        v-model="newTagOverlay"
+                        @keydown.enter="confirmAddTagOverlay"
+                        @blur="cancelAddTagOverlay"
+                        class="tag-add-input"
+                        style="
+                          margin-left: 8px;
+                          font-size: 1.1em;
+                          border-radius: 8px;
+                          border: 1px solid #bbb;
+                          padding: 2px 8px;
+                          min-width: 80px;
+                          outline: none;
+                        "
+                        placeholder="New tag"
+                        autofocus
+                      />
                     </div>
                   </div>
                 </div>
@@ -1620,6 +2973,105 @@ const sortedImages = computed(() => {
 </template>
 
 <style scoped>
+/* Sidebar chat button styles */
+.sidebar-chat-btn-wrapper {
+  position: absolute;
+  left: 0;
+  bottom: 24px;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  z-index: 2;
+}
+.sidebar-chat-btn {
+  background: #29405a;
+  color: #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  transition: background 0.2s;
+}
+.sidebar-chat-btn:hover {
+  background: #ff9800;
+  color: #fff;
+}
+
+/* Chat overlay styles */
+.chat-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chat-overlay-content {
+  background: #fff;
+  width: 90vw;
+  height: 90vh;
+  border-radius: 18px;
+  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.chat-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.2em 1.5em 1.2em 1.5em;
+  background: #29405a;
+  color: #fff;
+  font-size: 1.3em;
+  font-weight: 600;
+  position: relative;
+}
+
+.chat-overlay-header .overlay-close {
+  position: absolute;
+  top: 0.7em;
+  right: 1.1em;
+  font-size: 2.1em;
+  color: #fff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 10;
+  line-height: 1;
+  padding: 0 8px;
+  transition: color 0.2s;
+}
+.chat-overlay-header .overlay-close:hover {
+  color: #ff5252;
+}
+
+.chat-overlay-header .overlay-close {
+  position: absolute;
+  top: 0.7em;
+  right: 1.1em;
+  font-size: 2.1em;
+  color: #fff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 10;
+  line-height: 1;
+  padding: 0 8px;
+  transition: color 0.2s;
+}
+.chat-overlay-header .overlay-close:hover {
+  color: #ff5252;
+}
+
+.chat-overlay-body {
+  flex: 1;
+  background: #f7f7fa;
+  overflow-y: auto;
+  padding: 2em;
+}
 .app-viewport {
   position: fixed;
   inset: 0;
@@ -1685,8 +3137,31 @@ body {
   right: 8px;
   bottom: 8px;
   z-index: 12;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   background: transparent;
+  padding: 0;
+}
+.trophy-bg {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-radius: 50%;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none !important;
+  outline: none !important;
+  border: 3px solid transparent;
+  transition: border 0.2s;
+}
+.trophy-bg:hover {
+  background: rgba(255, 255, 255, 1) !important;
+}
+.trophy-bg:focus,
+.trophy-bg:active {
+  border: 2px solid transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 .image-card.selected {
   z-index: 2;
@@ -1729,13 +3204,13 @@ body {
 }
 .v-img {
   display: block;
-  margin: 0 auto;
-  box-sizing: border-box;
-  padding: 0;
-}
-.v-card-title {
-  width: 100%;
-  max-width: 256px;
+  min-width: 400px;
+  max-width: 90vw;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 32px 32px 20px 32px;
+  position: relative;
   min-height: 2.5em;
   font-size: 1rem;
   text-align: center;
@@ -1744,6 +3219,7 @@ body {
   text-overflow: ellipsis;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   word-break: break-word;
   margin: 0 auto 2px auto;
@@ -1848,9 +3324,9 @@ body {
   display: flex;
   align-items: center;
   margin-right: 12px;
-  width: 44px;
-  min-width: 44px;
   justify-content: center;
+  width: 44px;
+  height: 44px;
 }
 .sidebar-list-label {
   flex: 1;
@@ -1861,9 +3337,9 @@ body {
   text-align: left;
 }
 .sidebar-character-thumb {
-  width: 44px;
-  height: 44px;
-  object-fit: cover;
+  max-width: 44px;
+  max-height: 44px;
+  object-fit: contain;
   border-radius: 6px;
   box-shadow: 0 0px 0px #bbb;
 }
@@ -1921,7 +3397,7 @@ body {
 .slider {
   flex: 1;
   margin: 0 8px;
-  min-width: 120px;
+  min-width: 100px;
   max-width: 220px;
 }
 .thumbnail-slider {
@@ -1933,14 +3409,13 @@ body {
   min-width: 80px;
   max-width: 180px;
 }
-/* Overlay modal for full image view */
 .image-overlay {
   position: fixed;
   top: 0;
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.2);
   z-index: 1000;
   display: flex;
   align-items: center;
@@ -1948,24 +3423,49 @@ body {
 }
 .overlay-content {
   position: relative;
-  width: 80vw;
-  height: 80vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: #222;
+  background: rgba(117, 117, 117, 0.9);
   border-radius: 8px;
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
   padding: 24px 24px 16px 24px;
 }
-.overlay-flex-row {
+/* Overlay grid: fixed width, dynamic height, max 90vh */
+.overlay-grid {
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  grid-template-columns: 1fr;
+  width: 90vw;
+  min-width: 320px;
+  max-width: 95vw;
+  max-height: 90vh;
+  border-radius: 8px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
+  padding: 24px 24px 16px 24px;
+  align-items: center;
+  justify-items: center;
+  position: relative;
+  overflow-y: auto;
+}
+.overlay-grid-main {
+  display: grid;
+  grid-template-columns: 56px 1fr 56px;
+  grid-template-rows: 1fr;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+}
+.overlay-img-wrapper {
+  position: relative;
   display: flex;
-  flex-direction: row;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 100%;
+  height: 70vh;
+  max-width: 100%;
+  min-height: 256px;
 }
 .overlay-img-container {
   height: 90%;
@@ -1974,14 +3474,27 @@ body {
   align-items: center;
   justify-content: center;
 }
+
 .overlay-img {
   max-width: 100%;
   max-height: 70vh;
+  min-height: 256px;
   object-fit: contain;
-  border-radius: 4px;
+  border-radius: 8px;
   background: #111;
-  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
+
+.overlay-video {
+  max-width: 100%;
+  max-height: 70vh;
+  min-height: 256px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #111;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
 .overlay-close {
   position: absolute;
   top: 8px;
@@ -2012,10 +3525,10 @@ body {
   position: absolute;
   top: 50%;
   font-size: 2.5rem;
-  color: #000;
-  background: #bbb;
-  width: 52px;
-  height: 52px;
+  color: #444;
+  background: rgba(255, 255, 255, 0.7);
+  max-width: 52px;
+  max-height: 52px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2033,7 +3546,7 @@ body {
 
 .overlay-nav:hover {
   background: #fff;
-  color: #000;
+  color: orange;
 }
 .overlay-nav {
   z-index: 1200;
@@ -2060,22 +3573,24 @@ body {
 }
 .star-overlay {
   position: absolute;
-  top: 5px;
-  right: 10px;
-  transform: translateX(-25%);
+  top: 8px;
+  right: 8px;
+  z-index: 12;
   display: flex;
   flex-direction: row;
-  z-index: 10;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 6px;
-  padding: 1px 4px 1px 2px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
+  box-shadow: none;
   font-size: 0.85em;
+  margin: 4px 4px 4px 4px;
+}
+.star-overlay:hover {
+  background: rgba(255, 255, 255, 1);
 }
 .star-overlay .v-icon {
-  font-size: 16px !important;
-  width: 16px;
-  height: 16px;
+  font-size: 20px !important;
+  width: 20px;
+  height: 20px;
 }
 .image-card {
   position: relative;
@@ -2105,27 +3620,39 @@ body {
   border: none;
   box-shadow: none;
   padding: 0;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  padding: 0.9em 1.2em 0.9em 1.5em;
+  background: #29405a;
+  color: #fff;
+  font-size: 1.3em;
+  font-weight: 600;
+  position: relative;
+  min-height: 48px;
+}
+
+.chat-overlay-header span {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  font-size: 1.13em;
+  font-weight: 600;
+  padding-right: 0.5em;
+}
+.chat-overlay-header .overlay-close {
   position: absolute;
-  right: 2px;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-left: 0;
-}
-.add-character-inline:hover {
-  color: #ffe082;
-}
-.edit-character-input {
-  font-size: 1em;
-  background: #fff;
-  color: #222;
-  border-radius: 4px;
-  border: 1px solid #bbb;
-  padding: 2px 6px;
-  outline: none;
-  width: 90%;
+  top: 0.5em;
+  right: 0.7em;
+  font-size: 2em;
+  color: #fff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 10;
+  line-height: 1;
+  padding: 0 4px;
+  transition: color 0.2s;
   margin-left: 0;
 }
 /* Make disabled buttons more faded */
@@ -2136,11 +3663,346 @@ button[disabled] {
   pointer-events: none;
 }
 
-.thumbnail-date {
+.thumbnail-info {
   font-size: 0.85em;
   color: #666;
   margin-top: 2px;
   text-align: center;
   word-break: break-all;
+}
+.sidebar-list-count {
+  font-size: 0.92em;
+  color: #b0b8c9;
+  min-width: 2.5em;
+  text-align: right;
+  margin-left: 8px;
+  margin-right: 8px;
+  font-weight: 400;
+  opacity: 0.85;
+  letter-spacing: 0.01em;
+  align-self: center;
+  display: inline-block;
+}
+
+/* Import Progress Modal Styles */
+.import-progress-modal {
+  position: fixed !important;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(32, 32, 32, 0.65) !important;
+  z-index: 99999 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: all;
+}
+.import-progress-content {
+  background: #222;
+  color: #fff8e1;
+  padding: 32px 48px;
+  border-radius: 16px;
+  box-shadow: 0 4px 32px #000a;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.import-progress-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 24px;
+}
+.import-progress-bar-bg {
+  width: 100%;
+  height: 18px;
+  background: #444;
+  border-radius: 9px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.import-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #ff9800 0%, #ffc107 100%);
+  border-radius: 9px 0 0 9px;
+  transition: width 0.2s;
+}
+.import-progress-label {
+  font-size: 1.1rem;
+  margin-top: 8px;
+}
+.import-progress-error {
+  color: #ff5252;
+  margin-left: 12px;
+}
+.thumbnail-container {
+  width: 100%;
+  position: relative;
+  display: block;
+}
+.thumbnail-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  border-radius: 8px;
+}
+.thumbnail-container:hover .thumbnail-img,
+.thumbnail-container:focus-within .thumbnail-img {
+  transform: scale(1.02);
+  box-shadow: 0 4px 24px 0 rgba(25, 118, 210, 0.2),
+    0 1.5px 6px 0 rgba(0, 0, 0, 0.3);
+  z-index: 2;
+  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
+}
+.thumbnail-img {
+  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
+}
+.thumbnail-card {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+.v-btn:focus:not(:focus-visible),
+button:focus:not(:focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.settings-dialog-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: #f5f5f7;
+  border-bottom: 1px solid #e0e0e0;
+  padding: 0.5em 1.5em 0.5em 1.5em;
+  box-sizing: border-box;
+  margin-bottom: 0;
+  border-radius: 0;
+}
+.settings-dialog-title {
+  font-size: 1.18em;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #333;
+  margin: 0;
+}
+.settings-dialog-close {
+  background: none;
+  border: none;
+  font-size: 1.5em;
+  color: #888;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 8px;
+  transition: color 0.2s;
+  margin-left: 12px;
+}
+.settings-dialog-close:hover {
+  color: #1976d2;
+}
+
+/* Settings dialog styled to match overlay dialog */
+.settings-dialog-card {
+  min-width: 400px;
+  max-width: 90vw;
+  border-radius: 18px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25), 0 1.5px 6px rgba(0, 0, 0, 0.08);
+  background: #fff;
+  padding: 0px 0px 0px 0px;
+  position: relative;
+}
+.settings-section {
+  margin-bottom: 24px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #eee;
+}
+.settings-image-roots {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.settings-image-root {
+  display: block;
+  padding: 8px 0 8px 8px;
+  font-size: 1.12em;
+  color: #333;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+.settings-image-root.selected {
+  font-weight: bold;
+  color: #1976d2;
+  background: #e3f2fd;
+}
+.settings-dialog-card .headline {
+  font-size: 1.35em;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.settings-dialog-card .v-card-actions {
+  margin-bottom: 24px;
+  padding: 24px 20px 16px 20px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
+  border: none;
+  min-width: 90px;
+}
+.search-and-sort {
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-sort-select {
+  background: rgba(200, 200, 200, 0.6);
+}
+
+.sidebar-searchbar-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  width: 100%;
+  padding: 4px 4px 4px 4px;
+}
+.sidebar-searchbar {
+  width: 100%;
+  min-width: 0;
+  position: relative;
+  transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* Chat overlay chat UI */
+.overlay-chat-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+/* Modern chat overlay layout */
+.overlay-chat-main {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: stretch;
+}
+.overlay-chat-wrapper {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  padding: 0 0 12px 0;
+  background: none;
+}
+.chat-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 1.2em 1.5em 1em 1.5em;
+  background: #f7f7fa;
+  border-radius: 12px;
+  margin-bottom: 1em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7em;
+}
+.chat-message {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+}
+.chat-bubble {
+  max-width: 0%;
+  padding: 0.7em 1.1em;
+  border-radius: 18px;
+  font-size: 1.08em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  background: #fff;
+  color: #222;
+  word-break: break-word;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.chat-message-user {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.7em;
+}
+.chat-bubble.user {
+  background: #e3f2fd;
+  color: #1976d2;
+  border-radius: 18px;
+  padding: 0.7em 1.1em;
+  max-width: 90%;
+  align-self: flex-end;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.chat-message-assistant {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 0.7em;
+}
+.chat-assistant-full {
+  width: 100%;
+  background: none;
+  color: #222;
+  border-radius: 0;
+  padding: 0.2em 0 0.2em 0;
+  box-shadow: none;
+  font-size: 1.08em;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.chat-username {
+  font-size: 0.92em;
+  font-weight: 600;
+  margin-bottom: 0.2em;
+  opacity: 0.7;
+}
+.chat-text {
+  white-space: pre-line;
+  word-break: break-word;
+}
+.chat-input-row {
+  display: flex;
+  gap: 0.5em;
+  align-items: flex-end;
+  padding: 0 1.5em 0 1.5em;
+  margin-bottom: 10px;
+}
+.chat-input {
+  flex: 1;
+  min-height: 2.5em;
+  max-height: 8em;
+  resize: vertical;
+  border-radius: 18px;
+  border: 1px solid #bbb;
+  padding: 0.9em 1.2em;
+  font-size: 1.1em;
+  outline: none;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+.chat-send-btn {
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 50%;
+  background: #1976d2;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: background 0.2s;
+}
+.chat-send-btn:disabled {
+  background: #bbb;
+  color: #fff;
+  cursor: not-allowed;
 }
 </style>

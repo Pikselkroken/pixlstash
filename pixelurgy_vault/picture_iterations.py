@@ -4,7 +4,6 @@ import sqlite3
 import threading
 import time
 
-from PIL import Image
 from typing import List
 
 from pixelurgy_vault.logging import get_logger
@@ -15,6 +14,13 @@ logger = get_logger(__name__)
 
 
 class PictureIterations:
+    def __contains__(self, iteration_id):
+        cursor = self._connection.cursor()
+        cursor.execute(
+            "SELECT 1 FROM picture_iterations WHERE id = ? LIMIT 1", (iteration_id,)
+        )
+        return cursor.fetchone() is not None
+
     def __init__(self, connection, db_path):
         self._connection = connection
         self._db_path = db_path
@@ -33,7 +39,7 @@ class PictureIterations:
         if hasattr(self, "_quality_worker_stop"):
             self._quality_worker_stop.set()
         if hasattr(self, "_quality_worker"):
-            self._quality_worker.join(timeout=5)  # Wait for thread to exit
+            self._quality_worker.join(timeout=10)  # Wait for thread to exit
             if self._quality_worker.is_alive():
                 logger.warning("Quality worker thread did not exit within timeout.")
 
@@ -82,8 +88,26 @@ class PictureIterations:
 
     def _load_image_for_quality(self, file_path):
         try:
-            with Image.open(file_path) as img:
-                return np.array(img.convert("RGB"))
+            # Try to open as image first
+            from PIL import Image
+
+            try:
+                with Image.open(file_path) as img:
+                    return np.array(img.convert("RGB"))
+            except Exception:
+                pass
+            # If not an image, try as video (extract first frame)
+            import cv2
+
+            cap = cv2.VideoCapture(file_path)
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                return frame_rgb
+            else:
+                raise ValueError("Could not read image or first frame from video.")
         except Exception as e:
             logger.error(f"Failed to load image at {file_path} for quality worker: {e}")
             return None
@@ -273,11 +297,50 @@ class PictureIterations:
         )
         self._connection.commit()
 
+    def update_iteration(self, iteration):
+        """
+        Update a single PictureIteration instance in the database.
+        Serializes quality and face_quality fields to JSON if needed.
+        """
+        # Ensure quality and face_quality are JSON-serializable
+        if (
+            hasattr(iteration, "quality")
+            and iteration.quality
+            and not isinstance(iteration.quality, str)
+        ):
+            try:
+                iteration.quality = json.dumps(iteration.quality.__dict__)
+            except Exception:
+                iteration.quality = None
+        if (
+            hasattr(iteration, "face_quality")
+            and iteration.face_quality
+            and not isinstance(iteration.face_quality, str)
+        ):
+            try:
+                iteration.face_quality = json.dumps(iteration.face_quality.__dict__)
+            except Exception:
+                iteration.face_quality = None
+        self.update_iterations([iteration])
+
     def update_iterations(self, iterations):
         """Update a list of PictureIteration instances in the database using executemany for efficiency."""
         cursor = self._connection.cursor()
         values = []
         for it in iterations:
+            # Ensure quality and face_quality are JSON-serializable
+            quality = it.quality
+            if quality and not isinstance(quality, str):
+                try:
+                    quality = json.dumps(quality.__dict__)
+                except Exception:
+                    quality = None
+            face_quality = getattr(it, "face_quality", None)
+            if face_quality and not isinstance(face_quality, str):
+                try:
+                    face_quality = json.dumps(face_quality.__dict__)
+                except Exception:
+                    face_quality = None
             values.append(
                 (
                     getattr(it, "picture_id", None),
@@ -292,8 +355,8 @@ class PictureIterations:
                     getattr(it, "derived_from", None),
                     getattr(it, "transform_metadata", None),
                     getattr(it, "thumbnail", None),
-                    getattr(it, "quality", None),
-                    getattr(it, "face_quality", None),
+                    quality,
+                    face_quality,
                     getattr(it, "score", None),
                     getattr(it, "character_likeness", None),
                     getattr(it, "pixel_sha", None),
@@ -326,32 +389,56 @@ class PictureIterations:
         self._connection.commit()
 
     def find(self, **kwargs):
-        # Use named columns for safety
         cursor = self._connection.cursor()
-        if not kwargs:
-            cursor.execute("SELECT * FROM picture_iterations")
-        else:
-            query = "SELECT * FROM picture_iterations WHERE " + " AND ".join(
-                [f"{k}=?" for k in kwargs.keys()]
+        # Coerce is_master to int if present (avoid bool/numpy types)
+        if "is_master" in kwargs:
+            try:
+                kwargs["is_master"] = int(kwargs["is_master"])
+            except Exception as e:
+                logger.error(
+                    f"[PICTURE_ITERATIONS.FIND] Could not coerce is_master to int: {kwargs['is_master']} ({type(kwargs['is_master'])}): {e}"
+                )
+                raise
+        try:
+            if not kwargs:
+                logger.debug(
+                    "[PICTURE_ITERATIONS.FIND] SQL: SELECT * FROM picture_iterations | PARAMS: ()"
+                )
+                cursor.execute("SELECT * FROM picture_iterations")
+            else:
+                query = "SELECT * FROM picture_iterations WHERE " + " AND ".join(
+                    [f"{k}=?" for k in kwargs.keys()]
+                )
+                params = tuple(kwargs.values())
+                logger.debug(
+                    f"[PICTURE_ITERATIONS.FIND] SQL: {query} | PARAMS: {params} | PARAM TYPES: {[type(p) for p in params]}"
+                )
+                if query.count("?") != len(params):
+                    logger.error(
+                        f"[PICTURE_ITERATIONS.FIND] Parameter count mismatch: {query.count('?')} placeholders, {len(params)} params"
+                    )
+                cursor.execute(query, params)
+        except Exception as e:
+            logger.error(
+                f"[PICTURE_ITERATIONS.FIND] Exception: {e} | SQL: {locals().get('query', 'N/A')} | PARAMS: {locals().get('params', 'N/A')} | PARAM TYPES: {locals().get('params', None) and [type(p) for p in locals()['params']]} | KWARGS: {kwargs}"
             )
-            cursor.execute(query, tuple(kwargs.values()))
+            raise
         rows = cursor.fetchall()
         result = []
-        import logging
 
         for row in rows:
             quality = None
-            if row["quality"]:
+            if "quality" in row and row["quality"]:
                 try:
                     qdata = json.loads(row["quality"])
                     if isinstance(qdata, dict):
                         quality = PictureQuality(**qdata)
                     else:
-                        logging.warning(
+                        logger.warning(
                             f"Quality field for iteration {row['id']} is not a dict: {qdata}"
                         )
                 except Exception as e:
-                    logging.warning(
+                    logger.warning(
                         f"Failed to parse quality for iteration {row['id']}: {e}; value: {row['quality']}"
                     )
             it = PictureIteration(
