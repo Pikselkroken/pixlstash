@@ -8,6 +8,7 @@ import csv
 import numpy as np
 import onnxruntime as ort
 import os
+import re
 import torch
 
 from tqdm import tqdm
@@ -199,28 +200,72 @@ class PictureTagger:
             logger.debug(f"\tTags: {combined_tags}")
         return result
 
+    @staticmethod
+    def _flatten_data_entry(data_entry):
+        flat_data = []
+        for item in data_entry:
+            if isinstance(item, list):
+                flat_data.extend(item)
+            else:
+                flat_data.append(item)
+        return flat_data
+
+    @staticmethod
+    def _naturalize_tags(batch_result):
+        # Naturalize tags for each image
+        for k, tags in batch_result.items():
+            tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
+            tags = [t for t in tags if t]
+            batch_result[k] = tags
+        return batch_result
+
+    @staticmethod
+    def _merge_video_frame_tags(frame_tags):
+        merged_results = {}
+        for path, tags in frame_tags.items():
+            if "#frame" in path:
+                base_path = path.split("#frame")[0]
+                if base_path not in merged_results:
+                    merged_results[base_path] = set()
+                merged_results[base_path].update(tags)
+            else:
+                merged_results[path] = set(tags)
+        # Convert sets back to sorted lists
+        merged_results = {k: sorted(list(v)) for k, v in merged_results.items()}
+        return merged_results
+
+    @staticmethod
+    def _filter_texts(texts):
+        # Remove duplicates, empty strings, UUIDs, and date strings
+        uuid_regex = re.compile(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+        )
+        date_regex = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$")
+        texts = [
+            t
+            for t in texts
+            if t and not uuid_regex.match(t) and not date_regex.match(t)
+        ]
+        return texts
+
     def tag_images(self, image_paths):
         undesired_tags = UNDESIRED_TAGS.split(CAPTION_SEPARATOR.strip())
         undesired_tags = set(
             [tag.strip() for tag in undesired_tags if tag.strip() != ""]
         )
-        logger.info("Removing tags: " + ", ".join(undesired_tags))
+        logger.debug("Removing tags: " + ", ".join(undesired_tags))
 
         always_first_tags = None
 
-        # ...existing code...
-        if MAX_CONCURRENT_IMAGES is not None:
-            dataset = ImageLoadingDatasetPrepper(image_paths)
-            data = torch.utils.data.DataLoader(
-                dataset,
-                batch_size=BATCH_SIZE,
-                shuffle=False,
-                num_workers=MAX_CONCURRENT_IMAGES,
-                collate_fn=self._collate_fn_remove_corrupted,
-                drop_last=False,
-            )
-        else:
-            data = [[(None, ip)] for ip in image_paths]
+        dataset = ImageLoadingDatasetPrepper(image_paths)
+        data = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=MAX_CONCURRENT_IMAGES,
+            collate_fn=self._collate_fn_remove_corrupted,
+            drop_last=False,
+        )
 
         b_imgs = []
         all_results = {}
@@ -229,13 +274,9 @@ class PictureTagger:
         for data_entry in tqdm(data, smoothing=0.0, disable=self._silent):
             if tagging_failed:
                 break
-            # Flatten any lists returned by the dataset (for videos)
-            flat_data = []
-            for item in data_entry:
-                if isinstance(item, list):
-                    flat_data.extend(item)
-                else:
-                    flat_data.append(item)
+
+            flat_data = self._flatten_data_entry(data_entry)
+
             for data in flat_data:
                 if data is None:
                     continue
@@ -254,12 +295,8 @@ class PictureTagger:
                         )
                         tagging_failed = True
                         break
-                    # Naturalize tags for each image
-                    for k, tags in batch_result.items():
-                        tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
-                        tags = [t for t in tags if t]
-                        batch_result[k] = tags
-                    all_results.update(batch_result)
+
+                    all_results.update(self._naturalize_tags(batch_result))
                     b_imgs.clear()
 
         if len(b_imgs) > 0:
@@ -271,19 +308,7 @@ class PictureTagger:
                 batch_result[k] = tags
             all_results.update(batch_result)
 
-        # Merge tags for video frames (e.g., ...mp4#frame0, ...mp4#frameX) into ...mp4
-        merged_results = {}
-        for path, tags in all_results.items():
-            if "#frame" in path:
-                base_path = path.split("#frame")[0]
-                if base_path not in merged_results:
-                    merged_results[base_path] = set()
-                merged_results[base_path].update(tags)
-            else:
-                merged_results[path] = set(tags)
-        # Convert sets back to sorted lists
-        merged_results = {k: sorted(list(v)) for k, v in merged_results.items()}
-        return merged_results
+        return self._merge_video_frame_tags(all_results)
 
     def generate_embedding(self, character=None, picture=None):
         """
@@ -331,7 +356,6 @@ class PictureTagger:
         logger.info(
             f"generate_embedding called with character={character}, picture={picture}"
         )
-        import re
 
         texts = []
         texts.extend(collect_text(picture))
