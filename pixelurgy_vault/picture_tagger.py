@@ -248,6 +248,44 @@ class PictureTagger:
         ]
         return texts
 
+    @classmethod
+    def collect_text(cls, obj, visited=None):
+        if visited is None:
+            visited = set()
+        texts = []
+        obj_id = id(obj)
+        if obj is None or obj_id in visited:
+            return texts
+        visited.add(obj_id)
+        if isinstance(obj, str):
+            if obj.strip():
+                texts.append(obj.strip())
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                if k == "tags" and isinstance(v, (list, tuple, set)):
+                    texts.extend([t for t in v if t])
+                else:
+                    texts.extend(cls.collect_text(v, visited))
+        elif isinstance(obj, (list, tuple, set)):
+            for item in obj:
+                texts.extend(cls.collect_text(item, visited))
+        elif hasattr(obj, "__dict__"):
+            for attr, value in obj.__dict__.items():
+                if attr.startswith("_"):
+                    continue
+                if attr in (
+                    "parent",
+                    "self",
+                    "picture_iterations",
+                    "picture_tagger",
+                ):
+                    continue
+                if attr == "tags" and isinstance(value, (list, tuple, set)):
+                    texts.extend([t for t in value if t])
+                else:
+                    texts.extend(cls.collect_text(value, visited))
+        return texts
+
     def tag_images(self, image_paths):
         undesired_tags = UNDESIRED_TAGS.split(CAPTION_SEPARATOR.strip())
         undesired_tags = set(
@@ -316,59 +354,12 @@ class PictureTagger:
         Uses the TagNaturaliser to convert tags to natural language.
         """
 
-        def collect_text(obj, visited=None):
-            if visited is None:
-                visited = set()
-            texts = []
-            obj_id = id(obj)
-            if obj is None or obj_id in visited:
-                return texts
-            visited.add(obj_id)
-            if isinstance(obj, str):
-                if obj.strip():
-                    texts.append(obj.strip())
-            elif isinstance(obj, dict):
-                for k, v in obj.items():
-                    if k == "tags" and isinstance(v, (list, tuple, set)):
-                        texts.extend([t for t in v if t])
-                    else:
-                        texts.extend(collect_text(v, visited))
-            elif isinstance(obj, (list, tuple, set)):
-                for item in obj:
-                    texts.extend(collect_text(item, visited))
-            elif hasattr(obj, "__dict__"):
-                for attr, value in obj.__dict__.items():
-                    if attr.startswith("_"):
-                        continue
-                    if attr in (
-                        "parent",
-                        "self",
-                        "picture_iterations",
-                        "picture_tagger",
-                    ):
-                        continue
-                    if attr == "tags" and isinstance(value, (list, tuple, set)):
-                        texts.extend([t for t in value if t])
-                    else:
-                        texts.extend(collect_text(value, visited))
-            return texts
-
         logger.info(
             f"generate_embedding called with character={character}, picture={picture}"
         )
 
-        texts = []
-        texts.extend(collect_text(picture))
-        # Remove duplicates, empty strings, UUIDs, and date strings
-        uuid_regex = re.compile(
-            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-        )
-        date_regex = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$")
-        texts = [
-            t
-            for t in texts
-            if t and not uuid_regex.match(t) and not date_regex.match(t)
-        ]
+        texts = self._collect_text(picture)
+        texts = self._filter_texts(texts)
         logger.debug(f"Embedding: texts used for embedding (filtered): {texts}")
         if not texts:
             logger.error(
