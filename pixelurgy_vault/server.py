@@ -215,6 +215,14 @@ class Server:
     def require_ssl(self, value: bool):
         self._server_config["require_ssl"] = value
 
+    @property
+    def ssl_keyfile(self):
+        return self._server_config.get("ssl_keyfile", DEFAULT_SSL_KEY_PATH)
+
+    @property
+    def ssl_certfile(self):
+        return self._server_config.get("ssl_certfile", DEFAULT_SSL_CERT_PATH)
+
     @asynccontextmanager
     async def lifespan(self, app):
         # Startup logic (if needed)
