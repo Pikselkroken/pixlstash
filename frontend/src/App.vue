@@ -1764,7 +1764,31 @@ const selectedCharacterObj = computed(() => {
 async function sendChatMessageAndFocus() {
   const input = chatInput.value.trim();
   if (!input || chatLoading.value) return;
-  chatMessages.value.push({ role: "user", content: input });
+
+  let system_message =
+    "Include a short summary sentence that describes the situation. Prefix it with the word 'summary'. You should always respond as the character you are playing. Stay in character and don't break it. Let me speak for myself. Remember to change the summary when the situation changes which should be almost every response. You especially want to describe the character and what the character is doing.";
+
+  if (chatMessages.value.length === 0) {
+    // First message, set character context
+    if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
+      system_message += ` You are now assuming the role of the character named '${selectedCharacterObj.value.name}'.`;
+      if (
+        selectedCharacterObj.value.description &&
+        selectedCharacterObj.value.description.trim().length > 0
+      ) {
+        system_message += ` Here is some information about you: ${selectedCharacterObj.value.description.trim()}`;
+      }
+    } else {
+      system_message +=
+        " You are now assuming the role of a generic character without a specific name or background.";
+    }
+    chatMessages.value.push(
+      { role: "user", content: input },
+      { role: "system", content: system_message }
+    );
+  } else {
+    chatMessages.value.push({ role: "user", content: input });
+  }
   chatInput.value = "";
   chatLoading.value = true;
   await nextTick();

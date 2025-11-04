@@ -39,7 +39,7 @@ class PictureIterations:
         if hasattr(self, "_quality_worker_stop"):
             self._quality_worker_stop.set()
         if hasattr(self, "_quality_worker"):
-            self._quality_worker.join(timeout=5)  # Wait for thread to exit
+            self._quality_worker.join(timeout=10)  # Wait for thread to exit
             if self._quality_worker.is_alive():
                 logger.warning("Quality worker thread did not exit within timeout.")
 

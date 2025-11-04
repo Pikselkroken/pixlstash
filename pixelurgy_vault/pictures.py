@@ -211,10 +211,12 @@ class Pictures:
                 image_paths.append(master_iter.file_path)
                 pic_by_path[master_iter.file_path] = pic
         if image_paths:
-            logger.debug(f"Tagging {len(image_paths)} images")
+            logger.info(f"Tagging {len(image_paths)} images")
             tag_results = picture_tagger.tag_images(image_paths)
+            logger.info(f"Got tag results for {len(tag_results)} images.")
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
+                logger.info(f"Processing tags for image at path: {path}")
                 if pic is not None:
                     # Remove character tag from tags if present
                     char_tag = getattr(pic, "character_id", None)
