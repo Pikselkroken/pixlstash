@@ -2859,7 +2859,7 @@ async function sendChatMessageAndFocus() {
                       </div>
                     </div>
                     <div class="overlay-desc">
-                      {{ overlayImage?.description || "DUMMY DESCRIPTION" }}
+                      {{ overlayImage?.description || "No description" }}
                     </div>
                     <div
                       v-if="
