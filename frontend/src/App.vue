@@ -14,7 +14,7 @@ import SearchBar from "./components/SearchBar.vue";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
 import nlp from "compromise";
 
-const BACKEND_URL = `http://${window.location.hostname}:9537`;
+const BACKEND_URL = `${window.location.protocol}//${window.location.hostname}${window.location.port ? `:${window.location.port}` : ""}`;
 
 // Drag-and-drop overlay state (for image grid only)
 const dragOverlayVisible = ref(false);
