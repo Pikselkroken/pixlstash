@@ -1,10 +1,12 @@
-from typing import Optional
-
-from .logging import get_logger
+import base64
+import json
 import os
 import sqlite3
 import shutil
 
+from typing import Optional
+
+from .logging import get_logger
 from .characters import Characters
 from .pictures import Pictures
 from .picture_iterations import PictureIterations
@@ -224,6 +226,114 @@ class Vault:
         cursor.execute("SELECT value FROM metadata WHERE key = ?", (key,))
         row = cursor.fetchone()
         return row["value"] if row else None
+
+    def reference_pictures(self, character_id) -> list[dict]:
+        """
+        Get the reference pictures for a given character ID.
+
+        Args:
+            character_id (str): The character ID.
+        Returns:
+            list[dict]: The reference PictureIterations or an empty list if not found.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(
+            "SELECT * FROM pictures WHERE character_id = ? AND is_reference = 1",
+            (character_id,),
+        )
+        reference_pics = cursor.fetchall()
+        pic_ids = [row["id"] for row in reference_pics]
+
+        iter_map = {}
+        if pic_ids:
+            qmarks = ",".join(["?"] * len(pic_ids))
+            cursor.execute(
+                f"SELECT id, picture_id, thumbnail, score FROM picture_iterations WHERE is_master=1 AND picture_id IN ({qmarks})",
+                tuple(pic_ids),
+            )
+            for row in cursor.fetchall():
+                iter_map[row["picture_id"]] = row
+
+        pictures = []
+        for pic in reference_pics:
+            iteration = iter_map.get(pic["id"], None)
+            if iteration:
+                thumbnail_b64 = (
+                    base64.b64encode(iteration["thumbnail"]).decode("ascii")
+                    if iteration and iteration["thumbnail"]
+                    else None
+                )
+
+                pictures.append(
+                    {
+                        "picture_id": pic["id"],
+                        "iteration_id": iteration["id"],
+                        "description": pic["description"],
+                        "tags": json.loads(pic["tags"]) if pic["tags"] else [],
+                        "score": iteration["score"],
+                        "thumbnail": thumbnail_b64,
+                        "created_at": pic["created_at"],
+                    }
+                )
+        return pictures
+
+    def list_pictures_info(self, pics) -> list[dict]:
+        """
+        Batch fetch all picture information with scores
+
+        Args:
+            pics (list[Picture]): List of Picture objects to fetch info for.
+        Returns:
+            list[dict]: List of picture info dictionaries.
+        """
+        pic_ids = [pic.id for pic in pics]
+        score_map = {}
+        if pic_ids:
+            cursor = self.connection.cursor()
+            qmarks = ",".join(["?"] * len(pic_ids))
+            cursor.execute(
+                f"SELECT picture_id, score FROM picture_iterations WHERE is_master=1 AND picture_id IN ({qmarks})",
+                tuple(pic_ids),
+            )
+            for row in cursor.fetchall():
+                score_map[row[0]] = row[1]
+        result = []
+        for pic in pics:
+            score = score_map.get(pic.id)
+            result.append(
+                {
+                    "id": pic.id,
+                    "character_id": pic.character_id,
+                    "description": pic.description,
+                    "tags": pic.tags,
+                    "created_at": pic.created_at,
+                    "score": score,
+                    "is_reference": getattr(pic, "is_reference", 0),
+                }
+            )
+        return result
+
+    def delete_character(self, character_id: int):
+        """
+        Delete a character by ID, and unset character_id in related pictures and iterations.
+
+        Args:
+            character_id (int): The ID of the character to delete.
+        """
+        cursor = self.connection.cursor()
+        cursor.execute(
+            "UPDATE pictures SET character_id = NULL WHERE character_id = ?",
+            (character_id,),
+        )
+        cursor.execute(
+            "UPDATE picture_iterations SET character_id = NULL WHERE character_id = ?",
+            (character_id,),
+        )
+        cursor.execute(
+            "DELETE FROM characters WHERE id = ?",
+            (character_id,),
+        )
+        self.connection.commit()
 
     def import_default_data(self):
         """

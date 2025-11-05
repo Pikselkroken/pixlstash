@@ -38,7 +38,7 @@ def get_sort_mechanisms():
 
 
 class Pictures:
-    INSIGHTFACE_CLEANUP_TIMEOUT = 5  # seconds
+    INSIGHTFACE_CLEANUP_TIMEOUT = 20  # seconds
 
     def __init__(self, connection, picture_iterations, db_path, characters=None):
         self._connection = connection

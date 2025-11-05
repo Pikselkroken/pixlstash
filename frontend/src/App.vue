@@ -14,7 +14,7 @@ import SearchBar from "./components/SearchBar.vue";
 import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
 import nlp from "compromise";
 
-const BACKEND_URL = `${window.location.protocol}//${window.location.hostname}${window.location.port ? `:${window.location.port}` : ""}`;
+const BACKEND_URL = "http://localhost:9537";
 
 // Drag-and-drop overlay state (for image grid only)
 const dragOverlayVisible = ref(false);
@@ -1023,34 +1023,39 @@ async function fetchOpenAIModels() {
 
 async function fetchConfig() {
   try {
-    const res = await fetch(`${BACKEND_URL}/config`);
+    const res = await fetch(`${BACKEND_URL}/config`)
+      .then((response) => response.json())
+      .then((data) => {
+        config.image_roots = data.image_roots || [];
+        config.selected_image_root = data.selected_image_root || "";
+        // UI options
+        if (data.sort) selectedSort.value = data.sort_order;
+        if (data.thumbnail) thumbnailSize.value = data.thumbnail_size;
+        if (typeof data.show_stars === "boolean")
+          showStars.value = data.show_stars;
+        if (typeof data.show_only_reference === "boolean")
+          referenceFilterMode.value = data.show_only_reference;
+        // Also update config for PATCHing
+        config.sort_order = data.sort || selectedSort.value;
+        config.thumbnail_size = data.thumbnail || thumbnailSize.value;
+        config.show_stars =
+          typeof data.show_stars === "boolean"
+            ? data.show_stars
+            : showStars.value;
+        config.show_only_reference =
+          typeof data.show_only_reference === "boolean"
+            ? data.show_only_reference
+            : referenceFilterMode.value;
+        // OpenAI settings
+        config.openai_host = data.openai_host || "localhost";
+        config.openai_port = data.openai_port || 8000;
+        config.openai_model = data.openai_model || "";
+      });
     if (!res.ok) {
       const text = await res.text();
       console.error("Failed to fetch /config:", res.status, text);
       return;
     }
-    const data = await res.json();
-    config.image_roots = data.image_roots || [];
-    config.selected_image_root = data.selected_image_root || "";
-    // UI options
-    if (data.sort) selectedSort.value = data.sort_order;
-    if (data.thumbnail) thumbnailSize.value = data.thumbnail_size;
-    if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
-    if (typeof data.show_only_reference === "boolean")
-      referenceFilterMode.value = data.show_only_reference;
-    // Also update config for PATCHing
-    config.sort_order = data.sort || selectedSort.value;
-    config.thumbnail_size = data.thumbnail || thumbnailSize.value;
-    config.show_stars =
-      typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
-    config.show_only_reference =
-      typeof data.show_only_reference === "boolean"
-        ? data.show_only_reference
-        : referenceFilterMode.value;
-    // OpenAI settings
-    config.openai_host = data.openai_host || "localhost";
-    config.openai_port = data.openai_port || 8000;
-    config.openai_model = data.openai_model || "";
   } catch (e) {
     console.error("Error fetching /config:", e);
   }
@@ -1766,7 +1771,7 @@ async function sendChatMessageAndFocus() {
   if (!input || chatLoading.value) return;
 
   let system_message =
-    "Include a short summary sentence that describes the situation. Prefix it with the word 'summary'. You should always respond as the character you are playing. Stay in character and don't break it. Let me speak for myself. Remember to change the summary when the situation changes which should be almost every response. You especially want to describe the character and what the character is doing.";
+    "You should always respond as the character you are playing. Stay in character and don't break it. Let me speak for myself. Do not repeat yourself.";
 
   if (chatMessages.value.length === 0) {
     // First message, set character context

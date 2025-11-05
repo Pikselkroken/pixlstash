@@ -1,3 +1,8 @@
+from .logging import get_logger
+
+logger = get_logger(__name__)
+
+
 class TagNaturaliser:
     TAG_MAP = {
         "doily": "doily",
@@ -8655,14 +8660,60 @@ class TagNaturaliser:
         "inkling": "inkling",
     }
 
+    def __init__(self):
+        try:
+            from transformers import pipeline
+
+            self._tag_to_sentence_pipeline = pipeline(
+                "text2text-generation", model="google/flan-t5-base", device=-1
+            )
+
+        except ImportError:
+            self._tag_to_sentence_pipeline = None
+
     @classmethod
     def get_natural_tag(cls, tag):
         """Return the natural name for a tag using TAG_MAP, or sanitise if not found."""
-        try:
-            tag_map = cls.TAG_MAP
-        except NameError:
-            raise RuntimeError("TAG_MAP must be defined in the module scope.")
-        if tag in tag_map:
-            return tag_map[tag]
+        if tag in cls.TAG_MAP:
+            return cls.TAG_MAP[tag]
+
         # Sanitise: replace underscores, strip, collapse spaces, and lowercase
         return " ".join(tag.replace("_", " ").strip().split()).lower()
+
+    def tags_to_sentence(self, tags):
+        """
+        Use a small language model to turn tags into a natural English sentence.
+        Requires transformers library. Returns a fallback if not available.
+        """
+        if self._tag_to_sentence_pipeline is None:
+            logger.warning("No LM found, using simple join fallback.")
+            return ", ".join(tags)
+        prompt = (
+            "Write a short, natural English sentence describing a photo based on the provided tags. "
+            "Focus on the main subject, clothing, and setting if present. "
+            "Do not just list tags. Tags: " + ", ".join(tags) + "."
+        )
+        result = self._tag_to_sentence_pipeline(prompt, max_new_tokens=40)
+        generated = result[0]["generated_text"].strip()
+
+        logger.info("LM output before deduplication: " + generated)
+
+        # Remove duplicate phrases/words (simple greedy approach)
+        def dedup_text(text):
+            import re
+
+            # Split on comma, 'and', or period
+            parts = re.split(r"[,.]| and ", text)
+            seen = set()
+            deduped = []
+            for part in parts:
+                cleaned = part.strip().lower()
+                if cleaned and cleaned not in seen:
+                    seen.add(cleaned)
+                    deduped.append(part.strip())
+            # Reconstruct sentence
+            return ", ".join(deduped).replace(" ,", ",").strip()
+
+        deduped = dedup_text(generated)
+        logger.info("LM output after deduplication: " + deduped)
+        return deduped
