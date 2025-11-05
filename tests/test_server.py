@@ -73,7 +73,6 @@ def test_esmeralda_vault_character_and_logo():
             resp = client.get("/characters")
             assert resp.status_code == 200
             chars = resp.json()
-            print("DEBUG: /characters returned:", chars)
             esmeralda = None
             for c in chars:
                 if c.get("name") == "EsmeraldaVault":
@@ -89,7 +88,7 @@ def test_esmeralda_vault_character_and_logo():
             assert pics, "No picture found for EsmeraldaVault"
             pic_id = pics[0]["id"] if isinstance(pics[0], dict) else pics[0]["ids"][0]
 
-            # Fetch the master iteration image
+            # Fetch the  picture form id
             img_resp = client.get(f"/pictures/{pic_id}")
             assert img_resp.status_code == 200
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
@@ -136,8 +135,8 @@ def test_create_and_get_default_character():
     gc.collect()
 
 
-def test_upload_iteration_to_existing_picture():
-    """Test uploading additional iterations to an existing picture."""
+def test_upload_existing_picture():
+    """Test uploading an existing picture."""
 
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
@@ -147,54 +146,85 @@ def test_upload_iteration_to_existing_picture():
         ) as server:
             client = TestClient(server.api)
 
-            # Create a new picture with a master iteration
+            # Create a new picture
             img_bytes = random_images[0]
-            files = {"image": ("master.png", img_bytes, "image/png")}
-            data = {
-                "character_id": "testchar",
-                "description": "original master",
-                "tags": "[]",
-            }
-            r = client.post("/pictures", files=files, data=data)
-            assert r.status_code == 200
+            images = [("file", ("master.png", img_bytes, "image/png"))]
+            r = client.post(
+                "/pictures", files=images, data={"character_id": "testchar"}
+            )
+
+            assert 200 == r.status_code, "Error: " + r.text
             resp = r.json()
             assert resp["results"][0]["status"] == "success"
-            picture_id = resp["results"][0]["picture_id"]
+            picture_id_1 = resp["results"][0]["picture_id"]
 
-            # Upload a new iteration to the same picture
+            # Fetch the picture and check it
+            fetch_r1 = client.get(f"/pictures/{picture_id_1}?info=true")
+            assert 200 == fetch_r1.status_code, "Error: " + fetch_r1.text
+            fetched_picture = fetch_r1.json()
+            assert fetched_picture["id"] == picture_id_1
+
+            # Upload a new file
             img_bytes2 = random_images[1]
-            files2 = {"file": ("iteration2.png", img_bytes2, "image/png")}
-            data2 = {"picture_id": picture_id}
-            r2 = client.post("/iterations/", files=files2, data=data2)
-            assert r2.status_code == 200
+            files2 = [("file", ("iteration2.png", img_bytes2, "image/png"))]
+            r2 = client.post(
+                "/pictures", files=files2, data={"character_id": "testchar"}
+            )
+            assert 200 == r2.status_code, "Error: " + r2.text
             resp2 = r2.json()
-            assert resp2["status"] == "success"
-            iteration_id = resp2["iteration_id"]
+            assert resp2["results"][0]["status"] == "success"
+            picture_id_2 = resp2["results"][0]["picture_id"]
 
-            # Fetch the new iteration and check association
-            r3 = client.get(f"/iterations/{iteration_id}")
-            assert r3.status_code == 200
-            it = r3.json()
-            assert it["picture_id"] == picture_id
-            assert it["id"] == iteration_id
+            # Fetch the new picture and check association
+            fetch_r2 = client.get(f"/pictures/{picture_id_2}?info=true")
+            assert 200 == fetch_r2.status_code, "Error: " + fetch_r2.text
+            fetched_picture_2 = fetch_r2.json()
+            assert fetched_picture_2["id"] == picture_id_2
 
-            # Upload a third iteration with transform metadata
-            img_bytes3 = random_images[2]
-            files3 = {"file": ("iteration3.png", img_bytes3, "image/png")}
-            data3 = {
-                "picture_id": picture_id,
-                "transform_metadata": '{"filter":"blur"}',
-            }
-            r4 = client.post("/iterations/", files=files3, data=data3)
-            assert r4.status_code == 200
-            resp4 = r4.json()
-            assert resp4["status"] == "success"
-            iteration_id3 = resp4["iteration_id"]
-            r5 = client.get(f"/iterations/{iteration_id3}")
-            assert r5.status_code == 200
-            it3 = r5.json()
-            assert it3["picture_id"] == picture_id
-            assert it3["transform_metadata"] == '{"filter":"blur"}'
+            # Upload the first picture again. Should get a 400
+            files3 = [("file", ("random_name.png", img_bytes, "image/png"))]
+            r3 = client.post(
+                "/pictures", files=files3, data={"character_id": "testchar"}
+            )
+            assert 400 == r3.status_code
+
+            image_bytes3 = random_images[2]
+            # Upload two pictures at once, one existing and one new
+            files4 = [
+                files2[0],
+                ("file", ("random_name2.png", image_bytes3, "image/png")),
+            ]
+            r4 = client.post(
+                "/pictures", files=files4, data={"character_id": "testchar"}
+            )
+            assert 200 == r4.status_code, "Error: " + r4.text
+            for i, result in enumerate(r4.json()["results"]):
+                if i == 0:
+                    assert result["status"] == "error"  # Existing picture
+                else:
+                    assert result["status"] == "success"  # New picture
+
+    gc.collect()
+
+
+def test_post_logo_identical_upload():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(
+            config_path=config_path, server_config_path=server_config_path
+        ) as server:
+            server.vault.import_default_data()
+            client = TestClient(server.api)
+            logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
+            with open(logo_path, "rb") as f:
+                img_bytes = f.read()
+                files = [("file", ("identical_logo.png", img_bytes, "image/png"))]
+                data = {
+                    "character_id": "test",
+                }
+                r = client.post("/pictures", files=files, data=data)
+            assert r.status_code == 400
     gc.collect()
 
 
@@ -215,11 +245,9 @@ def test_post_logo_altered_pixel_upload():
                 altered_img.save(tmp.name)
                 tmp_path = tmp.name
             with open(tmp_path, "rb") as f:
-                files = {"image": ("altered_logo.png", f, "image/png")}
+                files = [("file", ("altered_logo.png", f, "image/png"))]
                 data = {
                     "character_id": "test",
-                    "description": "altered pixel",
-                    "tags": "[]",
                 }
                 r = client.post("/pictures", files=files, data=data)
             os.remove(tmp_path)
@@ -228,7 +256,6 @@ def test_post_logo_altered_pixel_upload():
             assert "results" in resp
             assert resp["results"][0]["status"] == "success"
             assert resp["results"][0]["picture_id"]
-            assert resp["results"][0]["iteration_id"]
     gc.collect()
 
 
@@ -251,8 +278,6 @@ def test_post_logo_altered_pixel_path():
             data = {
                 "file_path": tmp_path,
                 "character_id": "test",
-                "description": "altered pixel path",
-                "tags": "[]",
             }
             r = client.post("/pictures", data=data)
             os.remove(tmp_path)
@@ -293,20 +318,25 @@ def test_benchmark_add_images_by_binary_upload():
 
             start = time.time()
             ids = []
+            files = []
             for i, img_bytes in enumerate(random_images):
-                files = {"image": (f"image_{i:04d}.png", img_bytes, "image/png")}
-                data = {
-                    "character_id": "bench",
-                    "description": f"benchmark image {i}",
-                    "tags": "[]",
-                }
-                r = client.post("/pictures", files=files, data=data)
-                assert r.status_code == 200
-                resp = r.json()
-                assert "results" in resp
-                assert resp["results"][0]["status"] == "success"
-                ids.append(resp["results"][0]["picture_id"])
+                file = ("file", (f"image_{i:04d}.png", img_bytes, "image/png"))
+                files.append(file)
+
+            data = {
+                "character_id": "bench",
+            }
+            r = client.post("/pictures", files=files, data=data)
+            assert r.status_code == 200
             end = time.time()
+
+            resp = r.json()
+            assert "results" in resp
+            assert len(resp["results"]) == TEST_SIZE
+            for result in resp["results"]:
+                assert result["status"] == "success"
+                ids.append(result["picture_id"])
+
             print(
                 f"Upload Benchmark: Added {TEST_SIZE} images in {end - start:.2f} seconds or {total_bytes / (end - start) / 1024 / 1024:.2f} MB/s"
             )
@@ -344,8 +374,6 @@ def test_benchmark_add_images_by_path():
                 data = {
                     "file_path": img_path,
                     "character_id": "bench",
-                    "description": f"benchmark image {i}",
-                    "tags": "[]",
                 }
                 r = client.post("/pictures", data=data)
                 assert r.status_code == 200
@@ -392,8 +420,6 @@ def test_benchmark_add_images_by_directory():
             data = {
                 "file_path": image_path,
                 "character_id": "bench",
-                "description": "benchmark images from directory",
-                "tags": "[]",
             }
             r = client.post("/pictures", data=data)
             assert r.status_code == 200
@@ -452,33 +478,33 @@ def test_reference_picture_workflow():
             buf.seek(0)
             img_bytes = buf.read()
 
-            # Add reference picture
+            # Post image
             resp2 = client.post(
-                "/characters/reference_pictures",
+                "/pictures",
                 data={
                     "character_id": char_id,
-                    "description": "Reference image test",
-                    "tags": '["ref", "test"]',
                 },
-                files={"image": ("ref.png", img_bytes, "image/png")},
+                files=[("file", ("ref.png", img_bytes, "image/png"))],
             )
             assert resp2.status_code == 200
             data = resp2.json()
-            assert "picture_id" in data
-            assert "iteration_id" in data
-            assert data["description"] == "Reference image test"
-            assert data["tags"] == ["ref", "test"]
+
+            upload_result = data["results"][0]
+            assert "picture_id" in upload_result
+
+            # Update the picture to be a reference picture
+            pic_id = upload_result["picture_id"]
+            resp3 = client.patch(f"/pictures/{pic_id}", params={"is_reference": "true"})
+            assert resp3.status_code == 200
+            assert resp3.json()["status"] == "success"
 
             # Retrieve reference pictures
-            resp3 = client.get(f"/characters/reference_pictures/{char_id}")
-            assert resp3.status_code == 200
-            ref_data = resp3.json()["reference_pictures"]
+            resp4 = client.get(f"/characters/reference_pictures/{char_id}")
+            assert resp4.status_code == 200
+            ref_data = resp4.json()["reference_pictures"]
             assert len(ref_data) == 1
             ref_pic = ref_data[0]
-            assert ref_pic["picture_id"] == data["picture_id"]
-            assert ref_pic["iteration_id"] == data["iteration_id"]
-            assert ref_pic["description"] == "Reference image test"
-            assert ref_pic["tags"] == ["ref", "test"]
+            assert ref_pic["id"] == upload_result["picture_id"]
     gc.collect()
 
 
@@ -497,11 +523,9 @@ def test_tagger_worker_adds_tags():
 
             # Upload TaggerTest.png as a new picture
             with open(src_img, "rb") as f:
-                files = {"image": ("TaggerTest.png", f.read(), "image/png")}
+                files = [("file", ("TaggerTest.png", f.read(), "image/png"))]
                 data = {
                     "character_id": "testchar",
-                    "description": "tagger test",
-                    "tags": "[]",
                 }
                 r = client.post("/pictures", files=files, data=data)
             assert r.status_code == 200
@@ -522,7 +546,6 @@ def test_tagger_worker_adds_tags():
             assert found_tags, (
                 "Tagger worker did not add tags to TaggerTest.png after waiting."
             )
-            print(f"Tags for TaggerTest.png: {found_tags}")
     gc.collect()
 
 
@@ -549,11 +572,9 @@ def test_semantic_search_on_all_pictures():
             picture_ids = []
             for fname in image_files:
                 with open(os.path.join(src_dir, fname), "rb") as f:
-                    files = {"image": (fname, f.read(), "image/png")}
+                    files = [("file", (fname, f.read(), "image/png"))]
                     data = {
                         "character_id": "Esmeralda",
-                        "description": fname,
-                        "tags": "[]",
                     }
                     r = client.post("/pictures", files=files, data=data)
                 assert r.status_code == 200
@@ -570,11 +591,12 @@ def test_semantic_search_on_all_pictures():
 
                 for pid in missing_embeddings:
                     get_resp = client.get(f"/pictures/{pid}?info=true")
+                    # print("RESP:", get_resp.json())
                     if not get_resp.status_code == 200:
                         continue
                     pic_info = get_resp.json()
                     # Embedding is present if semantic search will work
-                    if not pic_info.get("has_embedding"):
+                    if not pic_info.get("embedding"):
                         continue
                     picture_ids.remove(pid)
                 time.sleep(1)

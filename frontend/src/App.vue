@@ -22,32 +22,6 @@ const dragOverlayMessage = ref("");
 // Track drag source for grid
 const dragSource = ref(null);
 
-// Import progress modal state
-const importInProgress = ref(false);
-const importProgress = ref(0);
-const importTotal = ref(0);
-const importError = ref(null);
-const importPhase = ref(""); // 'hashing', 'checking', 'uploading', 'done', 'error'
-const importPhaseMessage = computed(() => {
-  switch (importPhase.value) {
-    case "hashing":
-      return "Hashing files...";
-    case "checking":
-      return "Checking for duplicates...";
-    case "uploading":
-      return "Uploading images...";
-    case "done":
-      return "Import complete!";
-    case "duplicates":
-      return "All files are duplicates.";
-    case "cancelled":
-      return "Import cancelled.";
-    case "error":
-      return "Import failed.";
-    default:
-      return "";
-  }
-});
 const gridContainer = ref(null); // already used for grid
 
 const PIL_IMAGE_EXTENSIONS = [
@@ -316,10 +290,10 @@ function handleGridDragEnter(e) {
   )
     return;
   if (!e.dataTransfer || !e.dataTransfer.items) return;
-  // Only check the first 20 items for image type, break immediately if found
+  // Only check the first 5 items for image type, break immediately if found
   const items = Array.from(e.dataTransfer.items);
   let hasImageType = false;
-  for (let i = 0; i < Math.min(items.length, 20); i++) {
+  for (let i = 0; i < Math.min(items.length, 5); i++) {
     const item = items[i];
     if (item.kind === "file" && item.type.startsWith("image/")) {
       hasImageType = true;
@@ -349,6 +323,29 @@ function handleGridDragLeave(e) {
   }
 }
 
+// Import progress modal state
+const importInProgress = ref(false);
+const importProgress = ref(0);
+const importTotal = ref(0);
+const importError = ref(null);
+const importPhase = ref(""); // 'hashing', 'checking', 'uploading', 'done', 'error'
+const importPhaseMessage = computed(() => {
+  switch (importPhase.value) {
+    case "uploading":
+      return "Uploading images...";
+    case "done":
+      return "Import complete!";
+    case "duplicates":
+      return "All files are duplicates.";
+    case "cancelled":
+      return "Import cancelled.";
+    case "error":
+      return "Import failed.";
+    default:
+      return "";
+  }
+});
+
 const cancelImport = ref(false);
 function handleCancelImport() {
   cancelImport.value = true;
@@ -373,156 +370,96 @@ function handleGridDrop(e) {
   importInProgress.value = true;
   importProgress.value = 0;
   importError.value = null;
-  importPhase.value = "hashing";
+  importPhase.value = "uploading";
   dragSource.value = null;
   (async () => {
-    // Step 1: Compute hashes for all files in parallel (with concurrency limit)
     importTotal.value = files.length;
-    let hashProgress = 0;
-    let fileHashes = [];
-    const CONCURRENCY = 6;
-    // Helper to run promises with concurrency limit
-    async function mapWithConcurrencyLimit(items, fn, concurrency) {
-      const results = new Array(items.length);
-      let nextIndex = 0;
-      let active = 0;
-      return new Promise((resolve, reject) => {
-        function runNext() {
-          if (nextIndex >= items.length && active === 0) {
-            resolve(results);
-            return;
+    importProgress.value = 0;
+    let completed = 0;
+    let importedCount = 0;
+    importError.value = null;
+    const BATCH_SIZE = 100;
+    const TIMEOUT_MS = 5000; // 5 seconds
+    const MAX_RETRIES = 3;
+    try {
+      for (let i = 0; i < files.length; i += BATCH_SIZE) {
+        const batch = files.slice(i, i + BATCH_SIZE);
+        const formData = new FormData();
+        batch.forEach((file) => {
+          formData.append("file", file);
+        });
+        if (
+          selectedCharacter.value &&
+          selectedCharacter.value !== ALL_PICTURES_ID &&
+          selectedCharacter.value !== UNASSIGNED_PICTURES_ID
+        ) {
+          formData.append("character_id", selectedCharacter.value);
+        }
+        let res = null;
+        let lastError = null;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+          try {
+            res = await fetch(`${BACKEND_URL}/pictures`, {
+              method: "POST",
+              body: formData,
+              signal: controller.signal,
+            });
+            clearTimeout(timeout);
+            if (res.ok) {
+              break;
+            } else {
+              lastError = new Error(`Upload failed with status ${res.status}`);
+            }
+          } catch (err) {
+            clearTimeout(timeout);
+            if (err.name === "AbortError") {
+              lastError = new Error("Upload timed out");
+              console.warn(
+                `[IMPORT] Batch ${
+                  i / BATCH_SIZE + 1
+                } timed out (attempt ${attempt})`
+              );
+            } else {
+              lastError = err;
+              console.warn(
+                `[IMPORT] Batch ${
+                  i / BATCH_SIZE + 1
+                } failed (attempt ${attempt}):`,
+                err
+              );
+            }
           }
-          while (active < concurrency && nextIndex < items.length) {
-            const idx = nextIndex++;
-            active++;
-            fn(items[idx], idx)
-              .then((result) => {
-                results[idx] = result;
-                active--;
-                runNext();
-              })
-              .catch((err) => {
-                reject(err);
-              });
+          if (attempt < MAX_RETRIES) {
+            await new Promise((resolve) => setTimeout(resolve, 1000)); // wait 1s before retry
           }
         }
-        runNext();
-      });
-    }
-    try {
-      fileHashes = await mapWithConcurrencyLimit(
-        files,
-        async (file, idx) => {
-          if (cancelImport.value) throw new Error("cancelled");
-          const hash = await hashFile(file);
-          hashProgress++;
-          importProgress.value = hashProgress;
-          await nextTick();
-          return { file, hash };
-        },
-        CONCURRENCY
-      );
-      console.debug("[IMPORT] fileHashes after hashing:", fileHashes);
-    } catch (err) {
-      importInProgress.value = false;
-      if (err.message === "cancelled") {
-        importPhase.value = "cancelled";
-        importError.value = "Import cancelled.";
-      } else {
-        importPhase.value = "error";
-        importError.value = "Failed to hash files.";
-      }
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 1500);
-      return;
-    }
-    // Step 2: Batch check with backend for existing hashes
-    importPhase.value = "checking";
-    let existing = [];
-    try {
-      const hashesToSend = fileHashes.map((fh) => fh.hash);
-      console.debug("[IMPORT] Sending hashes to /check_hashes:", hashesToSend);
-      const res = await fetch(`${BACKEND_URL}/check_hashes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(hashesToSend),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        console.debug("[IMPORT] /check_hashes response:", data);
-        existing = data.existing || [];
-      } else {
-        throw new Error("Failed to check for duplicates");
-      }
-    } catch (err) {
-      importPhase.value = "error";
-      importInProgress.value = false;
-      importError.value = "Failed to check for duplicates.";
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 1500);
-      return;
-    }
-    // Step 3: Filter out duplicates
-    const newFiles = fileHashes
-      .filter((fh) => !existing.includes(fh.hash))
-      .map((fh) => fh.file)
-      .filter(isSupportedMediaFile);
-    importTotal.value = newFiles.length;
-    importProgress.value = 0;
-    if (newFiles.length === 0) {
-      importPhase.value = "duplicates";
-      importError.value = "All files are duplicates.";
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 2000);
-      return;
-    }
-    // Show found X new images
-    importPhase.value = "uploading";
-    importError.value = `Found ${newFiles.length} new image(s).`;
-    let completed = 0;
-    const uploadFile = async (file) => {
-      const formData = new FormData();
-      formData.append("image", file);
-      if (
-        selectedCharacter.value &&
-        selectedCharacter.value !== ALL_PICTURES_ID &&
-        selectedCharacter.value !== UNASSIGNED_PICTURES_ID
-      ) {
-        formData.append("character_id", selectedCharacter.value);
-      }
-      try {
-        const res = await fetch(`${BACKEND_URL}/pictures`, {
-          method: "POST",
-          body: formData,
-        });
-        if (!res.ok) throw new Error("Upload failed");
-        await res.json();
-        completed++;
-        importProgress.value = completed;
-        await nextTick();
-      } catch (err) {
-        importPhase.value = "error";
-        importError.value = err.message || String(err);
-        throw err;
-      }
-    };
-    try {
-      for (const file of newFiles) {
-        if (cancelImport.value) {
-          importPhase.value = "cancelled";
-          importError.value = "Import cancelled by user.";
-          setTimeout(() => {
-            importInProgress.value = false;
-          }, 1500);
+        if (!res || !res.ok) {
+          importPhase.value = "error";
+          importError.value = lastError ? lastError.message : "Upload failed.";
+          importInProgress.value = false;
           return;
         }
-        await uploadFile(file);
+        const result = await res.json();
+        if (result && Array.isArray(result.results)) {
+          completed += result.results.length;
+          importProgress.value = completed;
+          importedCount += result.results.filter(
+            (r) => r.status === "success"
+          ).length;
+          await nextTick();
+        }
       }
-      importPhase.value = "done";
-      importError.value = `Imported ${newFiles.length} image(s).`;
+      if (importedCount === 0) {
+        importPhase.value = "duplicates";
+        importError.value = "All files are duplicates.";
+      } else {
+        importPhase.value = "done";
+        importError.value = `Imported ${importedCount} image${
+          importedCount !== 1 ? "s" : ""
+        }.`;
+      }
       setTimeout(() => {
         importInProgress.value = false;
       }, 1500);
@@ -531,7 +468,7 @@ function handleGridDrop(e) {
     } catch (e) {
       importPhase.value = "error";
       importInProgress.value = false;
-      alert("One or more uploads failed: " + (e.message || e));
+      alert("All uploads failed: " + (e.message || e));
     }
   })();
 }
@@ -765,7 +702,10 @@ function handleImageSelect(img, idx, event) {
   }
 }
 
-const isImageSelected = (id) => selectedImageIds.value.includes(id);
+// Only visually mark as selected if the image is both in selectedImageIds and visible in pagedImages
+const isImageSelected = (id) =>
+  selectedImageIds.value.includes(id) &&
+  pagedImages.value.some((img) => img.id === id);
 
 // Logic to determine if a selected image is on the outer edge of a selection group (use pagedImages)
 const getSelectionBorderClasses = (idx) => {
@@ -1023,34 +963,35 @@ async function fetchOpenAIModels() {
 
 async function fetchConfig() {
   try {
-    const res = await fetch(`${BACKEND_URL}/config`)
-      .then((response) => response.json())
-      .then((data) => {
-        config.image_roots = data.image_roots || [];
-        config.selected_image_root = data.selected_image_root || "";
-        // UI options
-        if (data.sort) selectedSort.value = data.sort_order;
-        if (data.thumbnail) thumbnailSize.value = data.thumbnail_size;
-        if (typeof data.show_stars === "boolean")
-          showStars.value = data.show_stars;
-        if (typeof data.show_only_reference === "boolean")
-          referenceFilterMode.value = data.show_only_reference;
-        // Also update config for PATCHing
-        config.sort_order = data.sort || selectedSort.value;
-        config.thumbnail_size = data.thumbnail || thumbnailSize.value;
-        config.show_stars =
-          typeof data.show_stars === "boolean"
-            ? data.show_stars
-            : showStars.value;
-        config.show_only_reference =
-          typeof data.show_only_reference === "boolean"
-            ? data.show_only_reference
-            : referenceFilterMode.value;
-        // OpenAI settings
-        config.openai_host = data.openai_host || "localhost";
-        config.openai_port = data.openai_port || 8000;
-        config.openai_model = data.openai_model || "";
-      });
+    const res = await fetch(`${BACKEND_URL}/config`);
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("Failed to fetch /config:", res.status, text);
+      return;
+    }
+    const data = await res.json();
+
+    config.image_roots = data.image_roots || [];
+    config.selected_image_root = data.selected_image_root || "";
+    // UI options
+    if (data.sort) selectedSort.value = data.sort_order;
+    if (data.thumbnail) thumbnailSize.value = data.thumbnail_size;
+    if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
+    if (typeof data.show_only_reference === "boolean")
+      referenceFilterMode.value = data.show_only_reference;
+    // Also update config for PATCHing
+    config.sort_order = data.sort || selectedSort.value;
+    config.thumbnail_size = data.thumbnail || thumbnailSize.value;
+    config.show_stars =
+      typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
+    config.show_only_reference =
+      typeof data.show_only_reference === "boolean"
+        ? data.show_only_reference
+        : referenceFilterMode.value;
+    // OpenAI settings
+    config.openai_host = data.openai_host || "localhost";
+    config.openai_port = data.openai_port || 8000;
+    config.openai_model = data.openai_model || "";
     if (!res.ok) {
       const text = await res.text();
       console.error("Failed to fetch /config:", res.status, text);
@@ -1228,7 +1169,7 @@ function handleOverlayKeydown(e) {
     e.target &&
     (e.target.isContentEditable || tag === "input" || tag === "textarea");
   if (isEditable && !(chatOpen.value && e.key === "Escape")) return;
-  // Ctrl+A: select all images in grid
+  // Ctrl+A: select all images in grid view (fetch all, not just paged)
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
     if (images.value.length) {
       selectedImageIds.value = images.value.map((img) => img.id);
@@ -2457,6 +2398,33 @@ async function sendChatMessageAndFocus() {
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
           >
             <template v-if="selectedCharacter">
+              <!-- Selection Info Bar -->
+              <div
+                v-if="selectedImageIds.length > 0"
+                class="selection-info-bar"
+                style="
+                  background: #fffbe7;
+                  color: #333;
+                  border-bottom: 1px solid #e0c97f;
+                  padding: 8px 16px;
+                  display: flex;
+                  align-items: center;
+                  gap: 16px;
+                  font-size: 1.08em;
+                "
+              >
+                <span>
+                  <strong>{{ selectedImageIds.length }}</strong>
+                  image{{ selectedImageIds.length === 1 ? "" : "s" }} selected
+                </span>
+                <v-btn
+                  small
+                  color="primary"
+                  @click="selectedImageIds = []"
+                  style="margin-left: 12px"
+                  >Clear selection</v-btn
+                >
+              </div>
               <div
                 class="image-grid"
                 :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"

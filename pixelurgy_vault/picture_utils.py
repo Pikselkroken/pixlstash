@@ -1,90 +1,18 @@
-import json
+import cv2
 import numpy as np
-import sqlite3
-import threading
-import time
+import os
+import hashlib
 
-from typing import List
+from io import BytesIO
+from typing import Optional
+from PIL import Image
 
 from pixelurgy_vault.logging import get_logger
-from pixelurgy_vault.picture_quality import PictureQuality
 
 logger = get_logger(__name__)
 
 
-class PictureIterations:
-    def __contains__(self, iteration_id):
-        cursor = self._connection.cursor()
-        cursor.execute(
-            "SELECT 1 FROM picture_iterations WHERE id = ? LIMIT 1", (iteration_id,)
-        )
-        return cursor.fetchone() is not None
-
-    def __init__(self, connection, db_path):
-        self._connection = connection
-        self._db_path = db_path
-
-    def start_quality_worker(self, interval=1):
-        if hasattr(self, "_quality_worker") and self._quality_worker.is_alive():
-            return
-        self._quality_worker_stop = threading.Event()
-        self._quality_worker = threading.Thread(
-            target=self._quality_worker_loop, args=(interval,), daemon=True
-        )
-        self._quality_worker.start()
-
-    def stop_quality_worker(self):
-        logger.debug("Stopping quality worker...")
-        if hasattr(self, "_quality_worker_stop"):
-            self._quality_worker_stop.set()
-        if hasattr(self, "_quality_worker"):
-            self._quality_worker.join(timeout=10)  # Wait for thread to exit
-            if self._quality_worker.is_alive():
-                logger.warning("Quality worker thread did not exit within timeout.")
-
-    def _quality_worker_loop(self, interval):
-        retries = 5
-        delay = 0.2
-        for attempt in range(retries):
-            try:
-                thread_conn = sqlite3.connect(self._db_path, check_same_thread=False)
-                thread_conn.row_factory = sqlite3.Row
-                thread_conn.execute("PRAGMA journal_mode=WAL;")
-                break
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e) and attempt < retries - 1:
-                    time.sleep(delay)
-                    continue
-                else:
-                    raise
-        while not self._quality_worker_stop.is_set():
-            try:
-                cursor = thread_conn.cursor()
-                cursor.execute(
-                    "SELECT id, file_path, quality, face_quality FROM picture_iterations WHERE quality IS NULL OR face_quality IS NULL"
-                )
-                rows = cursor.fetchall()
-                logger.debug(
-                    f"Quality worker found {len(rows)} iterations needing quality or face quality calculation."
-                )
-                for row in rows:
-                    logger.debug(f"Doing row {row}")
-                    if self._quality_worker_stop.is_set():
-                        break
-                    it_id, file_path, quality_val, face_quality_val = row
-                    logger.debug("Checked stop event for iteration")
-                    logger.debug(
-                        f"Opening file {file_path} for quality/face quality calculation"
-                    )
-                    image_np = self.load_image_or_video(file_path)
-                    if image_np is not None:
-                        self._calculate_and_store_quality(
-                            thread_conn, it_id, image_np, quality_val, face_quality_val
-                        )
-            except Exception as e:
-                logger.error(f"Quality worker error: {e}")
-            self._quality_worker_stop.wait(interval)
-
+class PictureUtils:
     @staticmethod
     def load_image_or_video(file_path):
         try:
@@ -112,327 +40,155 @@ class PictureIterations:
             logger.error(f"Failed to load image at {file_path} for quality worker: {e}")
             return None
 
-    def _calculate_and_store_quality(
-        self, thread_conn, it_id, image_np, quality_val=None, face_quality_val=None
-    ):
+    @staticmethod
+    def generate_thumbnail_bytes(img, size=(256, 256)) -> Optional[bytes]:
+        """
+        Resize image so the longest edge is 256px, preserve aspect ratio, no padding.
+        Accepts either a PIL Image or a numpy array (OpenCV image).
+        """
         try:
-            quality_json = None
-            # Only calculate and update quality if it is NULL
-            if quality_val is None:
-                quality = PictureQuality.calculate_metrics(image_np)
-                if quality:
-                    try:
-                        quality_json = json.dumps(quality.__dict__)
-                    except Exception as e:
-                        logger.error(f"Failed to serialize quality for {it_id}: {e}")
-
-                    cursor = thread_conn.cursor()
-                    logger.debug(f"Updating quality for iteration {it_id} in DB")
-                    cursor.execute(
-                        "UPDATE picture_iterations SET quality = ? WHERE id = ?",
-                        (quality_json, it_id),
-                    )
-                    thread_conn.commit()
-                    logger.debug(f"Calculated and stored quality for iteration {it_id}")
+            if isinstance(img, Image.Image):
+                pil_img = img.copy()
             else:
-                quality_json = quality_val
-
-            # Always attempt to calculate and update face_quality if it is NULL
-            face_quality_json = None
-            if face_quality_val is None:
-                cursor = thread_conn.cursor()
-                cursor.execute(
-                    "SELECT picture_id FROM picture_iterations WHERE id = ?", (it_id,)
-                )
-                row = cursor.fetchone()
-                if row and row[0]:
-                    picture_id = row[0]
-                    cursor.execute(
-                        "SELECT face_embedding, face_bbox FROM pictures WHERE id = ?",
-                        (picture_id,),
-                    )
-                    pic_row = cursor.fetchone()
-                    if pic_row and pic_row[0] and pic_row[1]:
-                        try:
-                            face_bbox = (
-                                json.loads(pic_row[1])
-                                if isinstance(pic_row[1], str)
-                                else pic_row[1]
-                            )
-                            face_quality = PictureQuality.calculate_face_quality(
-                                image_np, face_bbox
-                            )
-                            face_quality_json = json.dumps(face_quality.__dict__)
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to calculate face quality for {it_id} using stored bbox: {e}"
-                            )
-                if face_quality_json is not None:
-                    logger.debug(f"Updating face_quality for iteration {it_id} in DB")
-                    cursor.execute(
-                        "UPDATE picture_iterations SET face_quality = ? WHERE id = ?",
-                        (face_quality_json, it_id),
-                    )
-                    thread_conn.commit()
+                # Assume numpy array (OpenCV image, BGR)
+                pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            max_edge = max(pil_img.width, pil_img.height)
+            if max_edge > size[0]:
+                scale = size[0] / max_edge
+                new_w = int(round(pil_img.width * scale))
+                new_h = int(round(pil_img.height * scale))
+                pil_img = pil_img.resize((new_w, new_h), resample=Image.LANCZOS)
+            buf = BytesIO()
+            pil_img.save(buf, format="PNG")
+            return buf.getvalue()
         except Exception as e:
-            logger.error(f"Failed to calculate/store quality for {it_id}: {e}")
+            logger.error(f"Error generating thumbnail bytes: {e}")
+            return None
 
-    def __getitem__(self, iteration_id):
-        cursor = self._connection.cursor()
-        cursor.execute(
-            """
-            SELECT * FROM picture_iterations WHERE id = ?
-            """,
-            (iteration_id,),
-        )
-        row = cursor.fetchone()
-        if not row:
-            raise KeyError(f"PictureIteration with id {iteration_id} not found.")
-        quality = None
-        if row["quality"]:
-            try:
-                quality = PictureQuality(**json.loads(row["quality"]))
-            except Exception:
-                quality = None
-        it = PictureIteration(
-            id=row["id"],
-            picture_id=row["picture_id"],
-            file_path=row["file_path"],
-            format=row["format"],
-            width=row["width"],
-            height=row["height"],
-            size_bytes=row["size_bytes"],
-            created_at=row["created_at"],
-            is_master=row["is_master"],
-            derived_from=row["derived_from"],
-            transform_metadata=row["transform_metadata"],
-            thumbnail=row["thumbnail"],
-            quality=quality,
-            score=row["score"],
-            pixel_sha=row["pixel_sha"],
-            character_id=row["character_id"] if "character_id" in row.keys() else None,
-        )
-        return it
-
-    def __iter__(self):
-        cursor = self._connection.cursor()
-        cursor.execute("SELECT id FROM picture_iterations")
-        for row in cursor.fetchall():
-            yield row["id"]
-
-    def import_iterations(self, iterations: List[PictureIteration]):
-        cursor = self._connection.cursor()
-        vals = []
-        for it in iterations:
-            logger.debug(
-                f"Importing picture {it.id}: file path {getattr(it, 'file_path', None)}"
-            )
-            if hasattr(it, "file_path") and it.file_path:
-                import os
-
-                if os.path.exists(it.file_path):
-                    logger.debug(f"File {it.file_path} exists at import time.")
-                else:
-                    logger.warning(
-                        f"File {it.file_path} does NOT exist at import time."
-                    )
-            quality_json = None
-            if it.quality:
-                try:
-                    quality_json = json.dumps(it.quality.__dict__)
-                except Exception:
-                    quality_json = None
-            vals.append(
-                (
-                    it.id,
-                    it.picture_id,
-                    it.file_path,
-                    it.format,
-                    it.width,
-                    it.height,
-                    it.size_bytes,
-                    it.created_at or time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    it.is_master,
-                    it.derived_from,
-                    it.transform_metadata,
-                    it.thumbnail,
-                    quality_json,
-                    it.score,
-                    it.pixel_sha if hasattr(it, "pixel_sha") else None,
-                )
-            )
-        cursor.executemany(
-            """
-            INSERT OR REPLACE INTO picture_iterations (
-                id, picture_id, file_path, format, width, height, size_bytes, created_at, is_master,
-                derived_from, transform_metadata, thumbnail, quality, score, pixel_sha
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            vals,
-        )
-        self._connection.commit()
-
-    def update_iteration(self, iteration):
+    @staticmethod
+    def load_and_crop_face_bbox(file_path, bbox):
         """
-        Update a single PictureIteration instance in the database.
-        Serializes quality and face_quality fields to JSON if needed.
-        """
-        # Ensure quality and face_quality are JSON-serializable
-        if (
-            hasattr(iteration, "quality")
-            and iteration.quality
-            and not isinstance(iteration.quality, str)
-        ):
-            try:
-                iteration.quality = json.dumps(iteration.quality.__dict__)
-            except Exception:
-                iteration.quality = None
-        if (
-            hasattr(iteration, "face_quality")
-            and iteration.face_quality
-            and not isinstance(iteration.face_quality, str)
-        ):
-            try:
-                iteration.face_quality = json.dumps(iteration.face_quality.__dict__)
-            except Exception:
-                iteration.face_quality = None
-        self.update_iterations([iteration])
+        Loads an image or video file, returns a square crop (as large as possible) that always includes the face bbox.
+        The crop is not tight to the face, but always contains it.
 
-    def update_iterations(self, iterations):
-        """Update a list of PictureIteration instances in the database using executemany for efficiency."""
-        cursor = self._connection.cursor()
-        values = []
-        for it in iterations:
-            # Ensure quality and face_quality are JSON-serializable
-            quality = it.quality
-            if quality and not isinstance(quality, str):
-                try:
-                    quality = json.dumps(quality.__dict__)
-                except Exception:
-                    quality = None
-            face_quality = getattr(it, "face_quality", None)
-            if face_quality and not isinstance(face_quality, str):
-                try:
-                    face_quality = json.dumps(face_quality.__dict__)
-                except Exception:
-                    face_quality = None
-            values.append(
-                (
-                    getattr(it, "picture_id", None),
-                    getattr(it, "character_id", None),
-                    getattr(it, "file_path", None),
-                    getattr(it, "format", None),
-                    getattr(it, "width", None),
-                    getattr(it, "height", None),
-                    getattr(it, "size_bytes", None),
-                    getattr(it, "created_at", None),
-                    getattr(it, "is_master", 0),
-                    getattr(it, "derived_from", None),
-                    getattr(it, "transform_metadata", None),
-                    getattr(it, "thumbnail", None),
-                    quality,
-                    face_quality,
-                    getattr(it, "score", None),
-                    getattr(it, "character_likeness", None),
-                    getattr(it, "pixel_sha", None),
-                    it.id,
-                )
-            )
-        cursor.executemany(
-            """
-            UPDATE picture_iterations SET picture_id=?, character_id=?, file_path=?, format=?, width=?, height=?, size_bytes=?, created_at=?, is_master=?, derived_from=?, transform_metadata=?, thumbnail=?, quality=?, face_quality=?, score=?, character_likeness=?, pixel_sha=? WHERE id=?
-            """,
-            values,
-        )
-        self._connection.commit()
-
-    def update_quality(self, iteration_id, quality):
+        Args:
+            file_path: Path to image or video file.
+            bbox: [x1, y1, x2, y2]
         """
-        Update only the quality field for a given iteration.
-        """
-        cursor = self._connection.cursor()
-        quality_json = None
-        if quality:
-            try:
-                quality_json = json.dumps(quality.__dict__)
-            except Exception:
-                quality_json = None
-        cursor.execute(
-            "UPDATE picture_iterations SET quality = ? WHERE id = ?",
-            (quality_json, iteration_id),
-        )
-        self._connection.commit()
-
-    def find(self, **kwargs):
-        cursor = self._connection.cursor()
-        # Coerce is_master to int if present (avoid bool/numpy types)
-        if "is_master" in kwargs:
-            try:
-                kwargs["is_master"] = int(kwargs["is_master"])
-            except Exception as e:
-                logger.error(
-                    f"[PICTURE_ITERATIONS.FIND] Could not coerce is_master to int: {kwargs['is_master']} ({type(kwargs['is_master'])}): {e}"
-                )
-                raise
+        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+        img = None
+        # Try image first
         try:
-            if not kwargs:
-                logger.debug(
-                    "[PICTURE_ITERATIONS.FIND] SQL: SELECT * FROM picture_iterations | PARAMS: ()"
-                )
-                cursor.execute("SELECT * FROM picture_iterations")
-            else:
-                query = "SELECT * FROM picture_iterations WHERE " + " AND ".join(
-                    [f"{k}=?" for k in kwargs.keys()]
-                )
-                params = tuple(kwargs.values())
-                logger.debug(
-                    f"[PICTURE_ITERATIONS.FIND] SQL: {query} | PARAMS: {params} | PARAM TYPES: {[type(p) for p in params]}"
-                )
-                if query.count("?") != len(params):
-                    logger.error(
-                        f"[PICTURE_ITERATIONS.FIND] Parameter count mismatch: {query.count('?')} placeholders, {len(params)} params"
-                    )
-                cursor.execute(query, params)
-        except Exception as e:
-            logger.error(
-                f"[PICTURE_ITERATIONS.FIND] Exception: {e} | SQL: {locals().get('query', 'N/A')} | PARAMS: {locals().get('params', 'N/A')} | PARAM TYPES: {locals().get('params', None) and [type(p) for p in locals()['params']]} | KWARGS: {kwargs}"
-            )
-            raise
-        rows = cursor.fetchall()
-        result = []
+            from PIL import Image
 
-        for row in rows:
-            quality = None
-            if "quality" in row and row["quality"]:
-                try:
-                    qdata = json.loads(row["quality"])
-                    if isinstance(qdata, dict):
-                        quality = PictureQuality(**qdata)
-                    else:
-                        logger.warning(
-                            f"Quality field for iteration {row['id']} is not a dict: {qdata}"
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to parse quality for iteration {row['id']}: {e}; value: {row['quality']}"
-                    )
-            it = PictureIteration(
-                id=row["id"],
-                picture_id=row["picture_id"],
-                file_path=row["file_path"],
-                format=row["format"],
-                width=row["width"],
-                height=row["height"],
-                size_bytes=row["size_bytes"],
-                created_at=row["created_at"],
-                is_master=row["is_master"],
-                derived_from=row["derived_from"],
-                transform_metadata=row["transform_metadata"],
-                thumbnail=row["thumbnail"],
-                quality=quality,
-                score=row["score"],
-                pixel_sha=row["pixel_sha"],
-                character_id=row["character_id"],
-            )
-            result.append(it)
-        return result
+            img = Image.open(file_path)
+        except Exception:
+            img = None
+        # If not an image, try as video (extract first frame)
+        if img is None:
+            try:
+                import cv2
+
+                cap = cv2.VideoCapture(file_path)
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame is not None:
+                    img = frame
+            except Exception:
+                img = None
+        if img is None:
+            return None
+        # PIL branch
+        if hasattr(img, "size") and callable(getattr(img, "crop", None)):
+            w, h = img.size
+            # Clamp bbox to image
+            x1c = max(0, min(w, x1))
+            x2c = max(0, min(w, x2))
+            y1c = max(0, min(h, y1))
+            y2c = max(0, min(h, y2))
+            # Find the minimal square that contains the bbox and is inside the image
+            face_cx = (x1c + x2c) // 2
+            face_cy = (y1c + y2c) // 2
+            face_w = x2c - x1c
+            face_h = y2c - y1c
+            min_side = max(face_w, face_h)
+            # Try to make the square as large as possible
+            max_side = min(w, h)
+            # The square must at least fit the face bbox
+            side = max(min_side, min(max_side, max(w, h)))
+            # Center the square on the face bbox center, but shift if needed to stay in bounds
+            left = max(0, min(w - side, face_cx - side // 2))
+            top = max(0, min(h - side, face_cy - side // 2))
+            square_img = img.crop((left, top, left + side, top + side))
+            return square_img
+        else:
+            # numpy array (OpenCV)
+            h, w = img.shape[:2]
+            x1c = max(0, min(w, x1))
+            x2c = max(0, min(w, x2))
+            y1c = max(0, min(h, y1))
+            y2c = max(0, min(h, y2))
+            face_cx = (x1c + x2c) // 2
+            face_cy = (y1c + y2c) // 2
+            face_w = x2c - x1c
+            face_h = y2c - y1c
+            min_side = max(face_w, face_h)
+            max_side = min(w, h)
+            side = max(min_side, min(max_side, max(w, h)))
+            left = max(0, min(w - side, face_cx - side // 2))
+            top = max(0, min(h - side, face_cy - side // 2))
+            left = int(left)
+            top = int(top)
+            side = int(side)
+            square_img = img[top : top + side, left : left + side]
+            return square_img
+
+    @staticmethod
+    def calculate_hash_from_file_path(file_path: str) -> str:
+        CHUNK_SIZE = 8192
+        N = 8
+        WHOLE_FILE_THRESHOLD = 128 * 1024  # 128KB
+        file_size = os.path.getsize(file_path)
+        sha256 = hashlib.sha256()
+        if file_size <= WHOLE_FILE_THRESHOLD:
+            with open(file_path, "rb") as f:
+                while chunk := f.read(CHUNK_SIZE):
+                    sha256.update(chunk)
+            digest = sha256.hexdigest()
+            logger.debug(f"WHOLE: {file_path} size={file_size} hash={digest}")
+            return digest
+        # For larger files, sample N evenly spaced blocks
+        offsets = [int(i * (file_size - CHUNK_SIZE) / (N - 1)) for i in range(N)]
+        with open(file_path, "rb") as f:
+            for offset in offsets:
+                f.seek(offset)
+                chunk = f.read(CHUNK_SIZE)
+                if chunk:
+                    sha256.update(chunk)
+            digest = sha256.hexdigest()
+            logger.debug(f"SAMPLED: {file_path} size={file_size} hash={digest}")
+            return digest
+
+    @staticmethod
+    def calculate_hash_from_bytes(image_bytes: bytes) -> str:
+        CHUNK_SIZE = 8192
+        N = 8
+        WHOLE_FILE_THRESHOLD = 128 * 1024  # 128KB
+        file_size = len(image_bytes)
+        sha256 = hashlib.sha256()
+        if file_size <= WHOLE_FILE_THRESHOLD:
+            for i in range(0, file_size, CHUNK_SIZE):
+                chunk = image_bytes[i : i + CHUNK_SIZE]
+                sha256.update(chunk)
+            digest = sha256.hexdigest()
+            logger.debug(f"WHOLE: size={file_size} hash={digest}")
+            return digest
+        # For larger files, sample N evenly spaced blocks
+        offsets = [int(i * (file_size - CHUNK_SIZE) / (N - 1)) for i in range(N)]
+        for offset in offsets:
+            chunk = image_bytes[offset : offset + CHUNK_SIZE]
+            if chunk:
+                sha256.update(chunk)
+        digest = sha256.hexdigest()
+        logger.debug(f"SAMPLED: hash={digest}")
+        return digest
