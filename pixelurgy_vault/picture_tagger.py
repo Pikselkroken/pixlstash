@@ -305,11 +305,12 @@ class PictureTagger:
         always_first_tags = None
 
         dataset = ImageLoadingDatasetPrepper(image_paths)
+        worker_count = min(MAX_CONCURRENT_IMAGES, os.cpu_count() or 1, len(image_paths))
         data = torch.utils.data.DataLoader(
             dataset,
             batch_size=BATCH_SIZE,
             shuffle=False,
-            num_workers=MAX_CONCURRENT_IMAGES,
+            num_workers=worker_count,
             collate_fn=self._collate_fn_remove_corrupted,
             drop_last=False,
         )
