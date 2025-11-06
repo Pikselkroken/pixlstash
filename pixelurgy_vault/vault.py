@@ -84,6 +84,7 @@ class Vault:
         self.pictures.start_embeddings_worker()
 
     def stop_background_workers(self):
+        logger.info("Stopping background workers...")
         if hasattr(self, "pictures") and hasattr(self.pictures, "stop_quality_worker"):
             self.pictures.stop_quality_worker()
         if hasattr(self, "pictures") and hasattr(
@@ -92,6 +93,7 @@ class Vault:
             self.pictures.stop_embeddings_worker()
 
     def start_background_workers(self):
+        logger.info("Starting background workers...")
         if hasattr(self, "pictures") and hasattr(self.pictures, "start_quality_worker"):
             self.pictures.start_quality_worker()
         if hasattr(self, "pictures") and hasattr(

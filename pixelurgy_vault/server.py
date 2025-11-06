@@ -5,6 +5,7 @@ import json
 import uuid
 import mimetypes
 import re
+import concurrent.futures
 
 from contextlib import asynccontextmanager
 from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPException
@@ -94,6 +95,7 @@ class Server:
         )
         self._add_cors_exception_handler()
         self._setup_routes()
+        self._init_worker_pause()
 
     def run(self):
         uvicorn_kwargs = dict(
@@ -107,6 +109,26 @@ class Server:
                 f"[SSL] Running with SSL: keyfile={self._server_config.get('ssl_keyfile')}, certfile={self._server_config.get('ssl_certfile')}"
             )
         uvicorn.run(self.api, **uvicorn_kwargs)
+
+    def _init_worker_pause(self):
+        import threading
+
+        self._worker_resume_timer = None
+        self._worker_pause_lock = threading.Lock()
+
+    def _schedule_worker_resume(self, delay=5):
+        import threading
+
+        with self._worker_pause_lock:
+            if self._worker_resume_timer is not None:
+                self._worker_resume_timer.cancel()
+            self._worker_resume_timer = threading.Timer(delay, self._resume_workers)
+            self._worker_resume_timer.start()
+
+    def _resume_workers(self):
+        with self._worker_pause_lock:
+            self._worker_resume_timer = None
+        self.vault.start_background_workers()
 
     @asynccontextmanager
     async def lifespan(self, app):
@@ -345,9 +367,9 @@ class Server:
             If no scored picture, fallback to first image. If no face bbox, fallback to normal thumbnail.
             Cropped region is resized to fit within 96x96, preserving aspect ratio.
             """
-            logger.info(f"Generating face thumbnail for character_id: {character_id}")
+            logger.debug(f"Generating face thumbnail for character_id: {character_id}")
             pics = self.vault.pictures.find(character_id=character_id)
-            logger.info(f"Found {len(pics)} pictures for character_id: {character_id}")
+            logger.debug(f"Found {len(pics)} pictures for character_id: {character_id}")
             if not pics:
                 raise HTTPException(status_code=404, detail="No pictures for character")
 
@@ -364,11 +386,11 @@ class Server:
             if pic.thumbnail is None:
                 logger.info(f"No thumbnail available for picture_id: {pic.id}")
             else:
-                logger.info(f"Thumbnail available for picture_id: {pic.id}")
+                logger.debug(f"Thumbnail available for picture_id: {pic.id}")
 
             face_bbox = pic.face_bbox
             if not face_bbox:
-                logger.info(
+                logger.debug(
                     f"No face_bbox attribute on picture for character_id: {character_id}"
                 )
             # Load thumbnail image
@@ -380,7 +402,7 @@ class Server:
                 raise HTTPException(status_code=400, detail="Invalid thumbnail image")
             # If face_bbox is available, crop to it
             if face_bbox and len(face_bbox) == 4:
-                logger.info(f"Cropping thumbnail to face bbox: {face_bbox}")
+                logger.debug(f"Cropping thumbnail to face bbox: {face_bbox}")
                 x1, y1, x2, y2 = [int(round(v)) for v in face_bbox]
                 w, h = thumb_img.size
                 x1 = max(0, min(w, x1))
@@ -401,7 +423,7 @@ class Server:
             return Response(content=buf.getvalue(), media_type="image/png")
 
         @self.api.get("/search")
-        def search_pictures(
+        async def search_pictures(
             query: str = Query(""), top_n: int = Query(5), threshold: float = Query(0.3)
         ):
             """
@@ -453,7 +475,7 @@ class Server:
                         tags_and_name.append(name)
                 for q_word in q_split:
                     max_score = 0
-                    logger.info(f"Query word: {q_word}")
+                    logger.debug(f"Query word: {q_word}")
                     for tag in tags_and_name:
                         score = fuzz.ratio(q_word, str(tag).lower()) / 100
                         score *= min(len(q_word), len(tag)) / max(
@@ -552,7 +574,7 @@ class Server:
             ]
 
         @self.api.get("/characters/reference_pictures/{id}")
-        def get_reference_pictures(id: str):
+        async def get_reference_pictures(id: str):
             """
             Get all reference pictures for a character (is_reference=1).
             """
@@ -596,7 +618,7 @@ class Server:
             return {"status": "success", "character": char.__dict__}
 
         @self.api.delete("/characters/{id}")
-        def delete_character(id: int):
+        async def delete_character(id: int):
             # Delete the character
             try:
                 self.vault.delete_character(id)
@@ -605,7 +627,7 @@ class Server:
                 raise HTTPException(status_code=404, detail="Character not found")
 
         @self.api.get("/characters")
-        def get_characters(name: str = Query(None)):
+        async def get_characters(name: str = Query(None)):
             """List all characters or filter by name."""
             chars = (
                 self.vault.characters.find(name=name)
@@ -615,7 +637,7 @@ class Server:
             return [c.__dict__ for c in chars]
 
         @self.api.post("/characters")
-        def create_character(
+        async def create_character(
             name: str = Body(...),
             description: str = Body(None),
         ):
@@ -626,7 +648,7 @@ class Server:
             return {"status": "success", "character": char.__dict__}
 
         @self.api.get("/characters/{id}")
-        def get_character_by_id(id: int):
+        async def get_character_by_id(id: int):
             try:
                 char = self.vault.characters[id]
             except KeyError:
@@ -634,12 +656,12 @@ class Server:
             return char.__dict__
 
         @self.api.get("/")
-        def read_root():
+        async def read_root():
             version = self.get_version()
             return {"message": "Pixelurgy Vault REST API", "version": version}
 
         @self.api.get("/pictures/{id}")
-        def get_picture(
+        async def get_picture(
             id: str, info: bool = Query(False), embedding: bool = Query(False)
         ):
             if not isinstance(id, str):
@@ -763,7 +785,6 @@ class Server:
 
             dest_folder = self.vault.image_root
             logger.info("Importing pictures to folder: " + str(dest_folder))
-            print("Importing data ", file, character_id, recursive)
             os.makedirs(dest_folder, exist_ok=True)
             results = []
             uploaded_files = []
@@ -798,6 +819,10 @@ class Server:
             else:
                 raise HTTPException(status_code=400, detail="No image provided")
 
+            # Pause workers and schedule resume
+            self.vault.stop_background_workers()
+            self._schedule_worker_resume(delay=4)
+
             new_pictures, existing_pictures = self.create_picture_imports(
                 uploaded_files, dest_folder, character_id
             )
@@ -830,37 +855,8 @@ class Server:
             # Import all at once
             if new_pictures:
                 self.vault.insert_pictures(new_pictures)
-            return {"results": results}
-
-        @self.api.post("/check_file_sizes")
-        async def check_file_sizes(sizes: list = Body(...)):
-            """
-            Check which of the provided file sizes exist in the vault.
-            Body: [size1, size2, ...]
-            Returns: { "existing": [size1, size3, ...] }
-            """
-            existing = []
-            for s in sizes:
-                pics = self.vault.get_picture_info({"file_size": s})
-                if pics:
-                    existing.append(s)
-
-            return {"existing": existing}
-
-        @self.api.post("/check_hashes")
-        async def check_hashes(hashes: list = Body(...)):
-            """
-            Check which of the provided pixel_sha hashes exist in the vault.
-            Body: [hash1, hash2, ...]
-            Returns: { "existing": [hash1, hash3, ...] }
-            """
-            existing = []
-            for h in hashes:
-                pics = self.vault.get_picture_info({"pixel_sha": h})
-                if pics:
-                    existing.append(h)
-
-            return {"existing": existing}
+            full_results = {"results": results}
+            return full_results
 
         @self.api.get("/pictures")
         async def list_pictures(
@@ -936,7 +932,7 @@ class Server:
             }
 
         @self.api.get("/category/summary")
-        def get_category_summary(character_id: str = Query(None)):
+        async def get_category_summary(character_id: str = Query(None)):
             """
             Return summary statistics for a single category:
             - If character_id is omitted: all pictures
@@ -982,17 +978,14 @@ class Server:
         skipping duplicates based on pixel_sha hash.
         Returns (new_pictures, existing_pictures)
         """
-        shas = []
-        for img_bytes, ext in uploaded_files:
-            if not img_bytes or len(img_bytes) == 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No image data found in upload",
-                )
-            # Calculate SHA for deduplication
-            sha = PictureUtils.calculate_hash_from_bytes(img_bytes)
 
-            shas.append(sha)
+        def create_sha(img_bytes):
+            return PictureUtils.calculate_hash_from_bytes(img_bytes)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            shas = list(
+                executor.map(create_sha, (img_bytes for img_bytes, _ in uploaded_files))
+            )
 
         existing_pictures = self.vault.get_pictures_matching_shas(shas)
 
@@ -1017,21 +1010,21 @@ class Server:
 
         assert importable, "No new pictures to import after deduplication"
 
-        new_pictures = []
-        for file_entry, sha in importable:
+        def create_one_picture(args):
+            file_entry, sha = args
             img_bytes, ext = file_entry
-
-            # Create new Picture
             pic_id = str(uuid.uuid4()) + ext
             logger.info(f"Importing picture from uploaded bytes as id={pic_id}")
-            pic = Picture.create_from_bytes(
+            return Picture.create_from_bytes(
                 image_root_path=dest_folder,
                 image_bytes=img_bytes,
                 picture_id=pic_id,
                 character_id=character_id,
                 pixel_sha=sha,
             )
-            new_pictures.append(pic)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            new_pictures = list(executor.map(create_one_picture, importable))
         return new_pictures, existing_pictures
 
     def get_version(self):

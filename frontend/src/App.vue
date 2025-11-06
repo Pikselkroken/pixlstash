@@ -376,8 +376,11 @@ function handleGridDrop(e) {
     importTotal.value = files.length;
     importProgress.value = 0;
     let completed = 0;
+    let importedCount = 0;
     importError.value = null;
     const BATCH_SIZE = 100;
+    const TIMEOUT_MS = 5000; // 5 seconds
+    const MAX_RETRIES = 3;
     try {
       for (let i = 0; i < files.length; i += BATCH_SIZE) {
         const batch = files.slice(i, i + BATCH_SIZE);
@@ -392,31 +395,71 @@ function handleGridDrop(e) {
         ) {
           formData.append("character_id", selectedCharacter.value);
         }
-        const res = await fetch(`${BACKEND_URL}/pictures`, {
-          method: "POST",
-          body: formData,
-        });
-        if (!res.ok) {
+        let res = null;
+        let lastError = null;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+          try {
+            res = await fetch(`${BACKEND_URL}/pictures`, {
+              method: "POST",
+              body: formData,
+              signal: controller.signal,
+            });
+            clearTimeout(timeout);
+            if (res.ok) {
+              break;
+            } else {
+              lastError = new Error(`Upload failed with status ${res.status}`);
+            }
+          } catch (err) {
+            clearTimeout(timeout);
+            if (err.name === "AbortError") {
+              lastError = new Error("Upload timed out");
+              console.warn(
+                `[IMPORT] Batch ${
+                  i / BATCH_SIZE + 1
+                } timed out (attempt ${attempt})`
+              );
+            } else {
+              lastError = err;
+              console.warn(
+                `[IMPORT] Batch ${
+                  i / BATCH_SIZE + 1
+                } failed (attempt ${attempt}):`,
+                err
+              );
+            }
+          }
+          if (attempt < MAX_RETRIES) {
+            await new Promise((resolve) => setTimeout(resolve, 1000)); // wait 1s before retry
+          }
+        }
+        if (!res || !res.ok) {
           importPhase.value = "error";
-          importError.value = "Upload failed.";
+          importError.value = lastError ? lastError.message : "Upload failed.";
           importInProgress.value = false;
           return;
         }
         const result = await res.json();
-        console.log(
-          `[IMPORT] Server JSON response for batch ${i / BATCH_SIZE + 1}:`,
-          result
-        );
         if (result && Array.isArray(result.results)) {
           completed += result.results.length;
           importProgress.value = completed;
+          importedCount += result.results.filter(
+            (r) => r.status === "success"
+          ).length;
           await nextTick();
         }
       }
-      importPhase.value = "done";
-      importError.value = `Imported ${completed} image${
-        completed !== 1 ? "s" : ""
-      }.`;
+      if (importedCount === 0) {
+        importPhase.value = "duplicates";
+        importError.value = "All files are duplicates.";
+      } else {
+        importPhase.value = "done";
+        importError.value = `Imported ${importedCount} image${
+          importedCount !== 1 ? "s" : ""
+        }.`;
+      }
       setTimeout(() => {
         importInProgress.value = false;
       }, 1500);
