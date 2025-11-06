@@ -182,7 +182,13 @@ class Vault:
             )
             """
         )
-        
+
+        # Index for fast lookup by pixel_sha
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pictures_pixel_sha ON pictures(pixel_sha)
+            """
+        )
 
         self.connection.commit()
 
@@ -274,10 +280,19 @@ class Vault:
         cursor = self.connection.cursor()
         for picture in pictures:
             dict = picture.to_dict()
+            # Remove tags from dict if present
+            dict.pop("tags", None)
             columns = ", ".join(dict.keys())
             placeholders = ", ".join([f":{k}" for k in dict.keys()])
             sql = f"INSERT INTO pictures ({columns}) VALUES ({placeholders})"
             cursor.execute(sql, dict)
+            # Insert tags into picture_tags table
+            if hasattr(picture, "tags") and picture.tags:
+                tag_cursor = self.connection.cursor()
+                tag_cursor.executemany(
+                    "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+                    [(picture.id, tag) for tag in picture.tags],
+                )
         self.connection.commit()
 
     def update_pictures(self, pictures: list[Picture]):
@@ -290,10 +305,21 @@ class Vault:
         cursor = self.connection.cursor()
         for picture in pictures:
             dict = picture.to_dict()
+            dict.pop("tags", None)
             columns = ", ".join(dict.keys())
             placeholders = ", ".join([f":{k}" for k in dict.keys()])
             sql = f"UPDATE pictures SET ({columns}) = ({placeholders}) WHERE id = :id"
             cursor.execute(sql, dict)
+            # Update tags in picture_tags table
+            tag_cursor = self.connection.cursor()
+            tag_cursor.execute(
+                "DELETE FROM picture_tags WHERE picture_id = ?", (picture.id,)
+            )
+            if hasattr(picture, "tags") and picture.tags:
+                tag_cursor.executemany(
+                    "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+                    [(picture.id, tag) for tag in picture.tags],
+                )
         self.connection.commit()
 
     def delete_character(self, character_id: int):
@@ -357,6 +383,22 @@ class Vault:
         )
         row = cursor.fetchone()
         return Character.from_dict(row) if row else None
+
+    def get_pictures_matching_shas(self, shas: list[str]) -> list[Picture]:
+        """
+        Fetch all pictures whose pixel_sha is in the provided list of shas, using a single query.
+        Args:
+            shas (list[str]): List of SHA strings to match.
+        Returns:
+            list[Picture]: List of matching Picture objects.
+        """
+        if not shas:
+            return []
+        cursor = self.connection.cursor()
+        placeholders = ",".join(["?"] * len(shas))
+        sql = f"SELECT * FROM pictures WHERE pixel_sha IN ({placeholders})"
+        rows = cursor.execute(sql, shas)
+        return [Picture.from_dict(row) for row in rows] if rows else []
 
     def import_default_data(self):
         """

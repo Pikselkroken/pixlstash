@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from io import BytesIO
 from PIL import Image
-from typing import Optional, List, Self
+from typing import Optional, Self
 
 from pixelurgy_vault.picture_utils import PictureUtils
 
@@ -27,7 +27,7 @@ class Picture:
         character_id: Optional[str] = None,
         file_path: Optional[str] = None,
         description: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        tags: list[str] = [],
         format: Optional[str] = None,
         width: Optional[int] = None,
         height: Optional[int] = None,
@@ -54,7 +54,7 @@ class Picture:
         self.character_id = character_id
         self.file_path = file_path
         self.description = description
-        self.tags = tags or []
+        self.tags = tags
         self.width = width
         self.height = height
         self.size_bytes = size_bytes
@@ -80,8 +80,7 @@ class Picture:
         source_file_path: str,
         picture_id: Optional[str] = None,
         character_id: Optional[str] = None,
-        description: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        pixel_sha: Optional[str] = None,
     ) -> Self:
         """
         Create a Picture from a file path.
@@ -91,7 +90,6 @@ class Picture:
             picture_id (str): Stable UUID for the picture.
             character_id (Optional[str]): Associated character ID.
             description (Optional[str]): Description of the picture.
-            tags (Optional[List[str]]): Tags associated with the picture.
         Returns:
             Picture: The created Picture object.
         """
@@ -104,8 +102,7 @@ class Picture:
             image_bytes=image_bytes,
             picture_id=picture_id,
             character_id=character_id,
-            description=description,
-            tags=tags,
+            pixel_sha=pixel_sha,
         )
 
     @staticmethod
@@ -114,8 +111,7 @@ class Picture:
         image_bytes: bytes,
         picture_id: Optional[str] = None,
         character_id: Optional[str] = None,
-        description: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        pixel_sha: Optional[str] = None,
     ) -> Self:
         """
         Create a a Picture from raw bytes. Supports both images and videos.
@@ -124,13 +120,12 @@ class Picture:
             image_bytes (bytes): Raw bytes of the image or video.
             picture_id (str): Stable UUID for the picture.
             character_id (Optional[str]): Associated character ID.
-            description (Optional[str]): Description of the picture.
-            tags (Optional[List[str]]): Tags associated with the picture.
         Returns:
             Picture: The created Picture object.
         """
 
-        raw_sha = PictureUtils.calculate_hash_from_bytes(image_bytes)
+        if not pixel_sha:
+            pixel_sha = PictureUtils.calculate_hash_from_bytes(image_bytes)
 
         # Try to detect if this is a video or image
         img_format = None
@@ -189,9 +184,7 @@ class Picture:
             created_at=created_at,
             thumbnail=thumbnail_bytes,
             character_id=character_id,
-            description=description,
-            tags=tags,
-            pixel_sha=raw_sha,
+            pixel_sha=pixel_sha,
         )
         return pic
 
@@ -201,7 +194,7 @@ class Picture:
             "character_id": self.character_id,
             "file_path": self.file_path,
             "description": self.description,
-            "tags": json.dumps(self.tags),
+            "tags": self.tags,
             "format": self.format,
             "width": self.width,
             "height": self.height,
@@ -231,15 +224,12 @@ class Picture:
     @classmethod
     def from_dict(cls, row):
         assert isinstance(row, dict) or isinstance(row, sqlite3.Row)
-        tags = row["tags"] if "tags" in row.keys() else None
-        if tags and isinstance(tags, str):
-            tags = json.loads(tags)
         return cls(
             id=row["id"],
             character_id=row["character_id"] if "character_id" in row.keys() else None,
             file_path=row["file_path"] if "file_path" in row.keys() else None,
             description=row["description"] if "description" in row.keys() else None,
-            tags=tags,
+            tags=row["tags"] if "tags" in row.keys() else None,
             format=row["format"] if "format" in row.keys() else None,
             width=row["width"] if "width" in row.keys() else None,
             height=row["height"] if "height" in row.keys() else None,

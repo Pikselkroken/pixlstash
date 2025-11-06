@@ -163,7 +163,7 @@ class PictureTagger:
         batch = list(filter(lambda x: x is not None, batch))
         return batch
 
-    def _run_batch(self, path_imgs, undesired_tags, always_first_tags):
+    def _run_batch(self, path_imgs, undesired_tags):
         imgs = np.array([im for _, im in path_imgs])
         try:
             probs = self.ort_sess.run(None, {self.input_name: imgs})[
@@ -187,12 +187,6 @@ class PictureTagger:
             # Sort all tags by probability
             all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
             combined_tags = [tag for tag, _ in all_tags_sorted]
-            # Move always_first_tags to the front if present
-            if always_first_tags is not None:
-                for tag in reversed(always_first_tags):
-                    if tag in combined_tags:
-                        combined_tags.remove(tag)
-                        combined_tags.insert(0, tag)
             # Instead of writing to file, store tags in result dict
             result[image_path] = combined_tags
             logger.debug("")
@@ -300,12 +294,16 @@ class PictureTagger:
         undesired_tags = set(
             [tag.strip() for tag in undesired_tags if tag.strip() != ""]
         )
-        logger.debug("Removing tags: " + ", ".join(undesired_tags))
-
-        always_first_tags = None
+        logger.info("Removing tags: " + ", ".join(undesired_tags))
 
         dataset = ImageLoadingDatasetPrepper(image_paths)
         worker_count = min(MAX_CONCURRENT_IMAGES, os.cpu_count() or 1, len(image_paths))
+        logger.info(
+            "Starting tagger dataloader with worker count: "
+            + str(worker_count)
+            + " and dataset size: "
+            + str(len(dataset))
+        )
         data = torch.utils.data.DataLoader(
             dataset,
             batch_size=BATCH_SIZE,
@@ -315,6 +313,7 @@ class PictureTagger:
             drop_last=False,
         )
 
+        logger.info(f"Got some tags: {data}")
         b_imgs = []
         all_results = {}
 
@@ -335,7 +334,6 @@ class PictureTagger:
                     batch_result = self._run_batch(
                         b_imgs,
                         undesired_tags,
-                        always_first_tags,
                     )
                     if batch_result is None:
                         logger.error(
@@ -349,13 +347,14 @@ class PictureTagger:
 
         if len(b_imgs) > 0:
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
-            batch_result = self._run_batch(b_imgs, undesired_tags, always_first_tags)
+            batch_result = self._run_batch(b_imgs, undesired_tags)
             for k, tags in batch_result.items():
                 tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
                 tags = [t for t in tags if t]
                 batch_result[k] = tags
             all_results.update(batch_result)
 
+        logger.info(f"Completed tagging for {len(all_results)} images.")
         return self._merge_video_frame_tags(all_results)
 
     def generate_embedding(self, character=None, picture=None):

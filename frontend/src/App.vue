@@ -22,32 +22,6 @@ const dragOverlayMessage = ref("");
 // Track drag source for grid
 const dragSource = ref(null);
 
-// Import progress modal state
-const importInProgress = ref(false);
-const importProgress = ref(0);
-const importTotal = ref(0);
-const importError = ref(null);
-const importPhase = ref(""); // 'hashing', 'checking', 'uploading', 'done', 'error'
-const importPhaseMessage = computed(() => {
-  switch (importPhase.value) {
-    case "hashing":
-      return "Hashing files...";
-    case "checking":
-      return "Checking for duplicates...";
-    case "uploading":
-      return "Uploading images...";
-    case "done":
-      return "Import complete!";
-    case "duplicates":
-      return "All files are duplicates.";
-    case "cancelled":
-      return "Import cancelled.";
-    case "error":
-      return "Import failed.";
-    default:
-      return "";
-  }
-});
 const gridContainer = ref(null); // already used for grid
 
 const PIL_IMAGE_EXTENSIONS = [
@@ -349,6 +323,29 @@ function handleGridDragLeave(e) {
   }
 }
 
+// Import progress modal state
+const importInProgress = ref(false);
+const importProgress = ref(0);
+const importTotal = ref(0);
+const importError = ref(null);
+const importPhase = ref(""); // 'hashing', 'checking', 'uploading', 'done', 'error'
+const importPhaseMessage = computed(() => {
+  switch (importPhase.value) {
+    case "uploading":
+      return "Uploading images...";
+    case "done":
+      return "Import complete!";
+    case "duplicates":
+      return "All files are duplicates.";
+    case "cancelled":
+      return "Import cancelled.";
+    case "error":
+      return "Import failed.";
+    default:
+      return "";
+  }
+});
+
 const cancelImport = ref(false);
 function handleCancelImport() {
   cancelImport.value = true;
@@ -373,156 +370,53 @@ function handleGridDrop(e) {
   importInProgress.value = true;
   importProgress.value = 0;
   importError.value = null;
-  importPhase.value = "hashing";
+  importPhase.value = "uploading";
   dragSource.value = null;
   (async () => {
-    // Step 1: Compute hashes for all files in parallel (with concurrency limit)
     importTotal.value = files.length;
-    let hashProgress = 0;
-    let fileHashes = [];
-    const CONCURRENCY = 6;
-    // Helper to run promises with concurrency limit
-    async function mapWithConcurrencyLimit(items, fn, concurrency) {
-      const results = new Array(items.length);
-      let nextIndex = 0;
-      let active = 0;
-      return new Promise((resolve, reject) => {
-        function runNext() {
-          if (nextIndex >= items.length && active === 0) {
-            resolve(results);
-            return;
-          }
-          while (active < concurrency && nextIndex < items.length) {
-            const idx = nextIndex++;
-            active++;
-            fn(items[idx], idx)
-              .then((result) => {
-                results[idx] = result;
-                active--;
-                runNext();
-              })
-              .catch((err) => {
-                reject(err);
-              });
-          }
-        }
-        runNext();
-      });
-    }
-    try {
-      fileHashes = await mapWithConcurrencyLimit(
-        files,
-        async (file, idx) => {
-          if (cancelImport.value) throw new Error("cancelled");
-          const hash = await hashFile(file);
-          hashProgress++;
-          importProgress.value = hashProgress;
-          await nextTick();
-          return { file, hash };
-        },
-        CONCURRENCY
-      );
-      console.debug("[IMPORT] fileHashes after hashing:", fileHashes);
-    } catch (err) {
-      importInProgress.value = false;
-      if (err.message === "cancelled") {
-        importPhase.value = "cancelled";
-        importError.value = "Import cancelled.";
-      } else {
-        importPhase.value = "error";
-        importError.value = "Failed to hash files.";
-      }
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 1500);
-      return;
-    }
-    // Step 2: Batch check with backend for existing hashes
-    importPhase.value = "checking";
-    let existing = [];
-    try {
-      const hashesToSend = fileHashes.map((fh) => fh.hash);
-      console.debug("[IMPORT] Sending hashes to /check_hashes:", hashesToSend);
-      const res = await fetch(`${BACKEND_URL}/check_hashes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(hashesToSend),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        console.debug("[IMPORT] /check_hashes response:", data);
-        existing = data.existing || [];
-      } else {
-        throw new Error("Failed to check for duplicates");
-      }
-    } catch (err) {
-      importPhase.value = "error";
-      importInProgress.value = false;
-      importError.value = "Failed to check for duplicates.";
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 1500);
-      return;
-    }
-    // Step 3: Filter out duplicates
-    const newFiles = fileHashes
-      .filter((fh) => !existing.includes(fh.hash))
-      .map((fh) => fh.file)
-      .filter(isSupportedMediaFile);
-    importTotal.value = newFiles.length;
     importProgress.value = 0;
-    if (newFiles.length === 0) {
-      importPhase.value = "duplicates";
-      importError.value = "All files are duplicates.";
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 2000);
-      return;
-    }
-    // Show found X new images
-    importPhase.value = "uploading";
-    importError.value = `Found ${newFiles.length} new image(s).`;
     let completed = 0;
-    const uploadFile = async (file) => {
-      const formData = new FormData();
-      formData.append("file", file);
-      if (
-        selectedCharacter.value &&
-        selectedCharacter.value !== ALL_PICTURES_ID &&
-        selectedCharacter.value !== UNASSIGNED_PICTURES_ID
-      ) {
-        formData.append("character_id", selectedCharacter.value);
-      }
-      try {
+    importError.value = null;
+    const BATCH_SIZE = 100;
+    try {
+      for (let i = 0; i < files.length; i += BATCH_SIZE) {
+        const batch = files.slice(i, i + BATCH_SIZE);
+        const formData = new FormData();
+        batch.forEach((file) => {
+          formData.append("file", file);
+        });
+        if (
+          selectedCharacter.value &&
+          selectedCharacter.value !== ALL_PICTURES_ID &&
+          selectedCharacter.value !== UNASSIGNED_PICTURES_ID
+        ) {
+          formData.append("character_id", selectedCharacter.value);
+        }
         const res = await fetch(`${BACKEND_URL}/pictures`, {
           method: "POST",
           body: formData,
         });
-        if (!res.ok) throw new Error("Upload failed");
-        await res.json();
-        completed++;
-        importProgress.value = completed;
-        await nextTick();
-      } catch (err) {
-        importPhase.value = "error";
-        importError.value = err.message || String(err);
-        throw err;
-      }
-    };
-    try {
-      for (const file of newFiles) {
-        if (cancelImport.value) {
-          importPhase.value = "cancelled";
-          importError.value = "Import cancelled by user.";
-          setTimeout(() => {
-            importInProgress.value = false;
-          }, 1500);
+        if (!res.ok) {
+          importPhase.value = "error";
+          importError.value = "Upload failed.";
+          importInProgress.value = false;
           return;
         }
-        await uploadFile(file);
+        const result = await res.json();
+        console.log(
+          `[IMPORT] Server JSON response for batch ${i / BATCH_SIZE + 1}:`,
+          result
+        );
+        if (result && Array.isArray(result.results)) {
+          completed += result.results.length;
+          importProgress.value = completed;
+          await nextTick();
+        }
       }
       importPhase.value = "done";
-      importError.value = `Imported ${newFiles.length} image(s).`;
+      importError.value = `Imported ${completed} image${
+        completed !== 1 ? "s" : ""
+      }.`;
       setTimeout(() => {
         importInProgress.value = false;
       }, 1500);
@@ -531,7 +425,7 @@ function handleGridDrop(e) {
     } catch (e) {
       importPhase.value = "error";
       importInProgress.value = false;
-      alert("One or more uploads failed: " + (e.message || e));
+      alert("All uploads failed: " + (e.message || e));
     }
   })();
 }

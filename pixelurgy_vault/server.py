@@ -650,11 +650,9 @@ class Server:
             except KeyError:
                 logger.error(f"Picture not found for id={id}")
                 raise HTTPException(status_code=404, detail="Picture not found")
-            print("FETCHED PICTURE: ", pic.to_dict())
             if info:
                 # Return metadata only
                 result = pic.to_dict(exclude=["file_path", "thumbnail"])
-                print("RETURNING PICTURE INFO: ", result)
                 return result
             # Otherwise, deliver picture file as bytes
             if not pic.file_path or not os.path.isfile(pic.file_path):
@@ -755,130 +753,99 @@ class Server:
         async def import_pictures(
             file: List[UploadFile] = File(None),
             character_id: str = Form(None),
-            file_path: str = Form(None),
             recursive: bool = Form(False),
         ):
             """
             Import new pictures. Accepts:
             - image: bytes upload (single file)
-            - file_path: path to file or directory (if directory, imports all images recursively if recursive=True)
             Detects media type and sets ID as uuid + extension.
             """
 
             dest_folder = self.vault.image_root
             logger.info("Importing pictures to folder: " + str(dest_folder))
-            print("Importing data ", file, character_id, file_path, recursive)
+            print("Importing data ", file, character_id, recursive)
             os.makedirs(dest_folder, exist_ok=True)
             results = []
-            files_to_import = []
+            uploaded_files = []
             # Collect files to import
             if file is not None:
                 for image in file:
                     img_bytes = await image.read()
                     # Try to get extension from UploadFile filename
+
                     ext = None
                     if image.filename:
                         ext = os.path.splitext(image.filename)[1]
                     if not ext:
                         # Guess from content type
                         ext = mimetypes.guess_extension(image.content_type or "")
-                    files_to_import.append((img_bytes, None, ext))
-            elif file_path:
-                if os.path.isdir(file_path):
-                    for root, _, files in os.walk(file_path):
-                        for fname in files:
-                            fpath = os.path.join(root, fname)
-                            with open(fpath, "rb") as f:
-                                ext = os.path.splitext(fname)[1]
-                                files_to_import.append((f.read(), fpath, ext))
-                        if not recursive:
-                            break
-                else:
-                    with open(file_path, "rb") as f:
-                        ext = os.path.splitext(file_path)[1]
-                        files_to_import.append((f.read(), file_path, ext))
+
+                    # Detect extension if missing
+                    if not ext or ext == "":
+                        # Try to guess from bytes (fallback to .png)
+                        import imghdr
+
+                        img_type = imghdr.what(None, h=img_bytes)
+                        if img_type:
+                            ext = f".{img_type}"
+                        else:
+                            ext = ".png"
+                    # Ensure ext starts with .
+                    if not ext.startswith("."):
+                        ext = "." + ext
+
+                    uploaded_files.append((img_bytes, ext))
             else:
-                raise HTTPException(
-                    status_code=400, detail="No image or file_path provided"
-                )
+                raise HTTPException(status_code=400, detail="No image provided")
 
-            new_pictures = []
-            for img_bytes, src_path, ext in files_to_import:
-                logger.debug(
-                    f"Importing picture from {src_path} with ext={ext} and {len(img_bytes)} bytes of binary data"
-                )
-                if not img_bytes or len(img_bytes) == 0 and not src_path:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="No file path or image data found in upload",
-                    )
-                # Calculate SHA for deduplication
-                sha = (
-                    PictureUtils.calculate_hash_from_file_path(src_path)
-                    if src_path
-                    else PictureUtils.calculate_hash_from_bytes(img_bytes)
-                )
+            new_pictures, existing_pictures = self.create_picture_imports(
+                uploaded_files, dest_folder, character_id
+            )
 
-                # Check for existing picture with same SHA
-                pic = self.vault.get_picture_info({"pixel_sha": sha})
-                if pic:
-                    results.append(
-                        {
-                            "status": "error",
-                            "reason": "duplicate picture",
-                            "sha": sha,
-                            "file": src_path,
-                        }
-                    )
-                    continue
+            logger.info(
+                "Got "
+                + str(len(new_pictures))
+                + " new pictures to import and "
+                + str(len(existing_pictures))
+                + " duplicates."
+            )
 
-                # Detect extension if missing
-                if not ext or ext == "":
-                    # Try to guess from bytes (fallback to .png)
-                    import imghdr
-
-                    img_type = imghdr.what(None, h=img_bytes)
-                    if img_type:
-                        ext = f".{img_type}"
-                    else:
-                        ext = ".png"
-                # Ensure ext starts with .
-                if not ext.startswith("."):
-                    ext = "." + ext
-                # Create new Picture
-                pic_id = str(uuid.uuid4()) + ext
-                if src_path:
-                    logger.info(
-                        f"Importing picture from file: {src_path} as id={pic_id}"
-                    )
-                    pic = Picture.create_from_file(
-                        image_root_path=dest_folder,
-                        source_file_path=src_path,
-                        picture_id=pic_id,
-                        character_id=character_id,
-                    )
-                else:
-                    logger.info(f"Importing picture from uploaded bytes as id={pic_id}")
-                    pic = Picture.create_from_bytes(
-                        image_root_path=dest_folder,
-                        image_bytes=img_bytes,
-                        picture_id=pic_id,
-                        character_id=character_id,
-                    )
-                new_pictures.append(pic)
+            for new_pic in new_pictures:
                 results.append(
                     {
                         "status": "success",
-                        "picture_id": pic.id,
-                        "file": src_path,
+                        "picture_id": new_pic.id,
+                        "file": new_pic.file_path,
                     }
                 )
+            for existing_pic in existing_pictures:
+                results.append(
+                    {
+                        "status": "duplicate",
+                        "sha": existing_pic.pixel_sha,
+                        "file": existing_pic.file_path,
+                    }
+                )
+
             # Import all at once
             if new_pictures:
                 self.vault.insert_pictures(new_pictures)
-                return {"results": results}
-            else:
-                raise HTTPException(status_code=400, detail="No new pictures to import")
+            return {"results": results}
+
+        @self.api.post("/check_file_sizes")
+        async def check_file_sizes(sizes: list = Body(...)):
+            """
+            Check which of the provided file sizes exist in the vault.
+            Body: [size1, size2, ...]
+            Returns: { "existing": [size1, size3, ...] }
+            """
+            existing = []
+            for s in sizes:
+                pics = self.vault.get_picture_info({"file_size": s})
+                if pics:
+                    existing.append(s)
+
+            return {"existing": existing}
 
         @self.api.post("/check_hashes")
         async def check_hashes(hashes: list = Body(...)):
@@ -956,9 +923,9 @@ class Server:
             """
 
             # 1. Check if picture exists
-            #try:
+            # try:
             #    self.vault.pictures[id]
-            #except KeyError:
+            # except KeyError:
             #    logger.error(f"Picture not found for id={id} (delete request)")
             #    raise HTTPException(status_code=404, detail="Picture not found")
 
@@ -1008,6 +975,64 @@ class Server:
                 "thumbnail_url": thumb_url,
             }
             return summary
+
+    def create_picture_imports(self, uploaded_files, dest_folder, character_id):
+        """
+        Given a list of (img_bytes, src_path, ext), create Picture objects for new images,
+        skipping duplicates based on pixel_sha hash.
+        Returns (new_pictures, existing_pictures)
+        """
+        shas = []
+        for img_bytes, ext in uploaded_files:
+            if not img_bytes or len(img_bytes) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No image data found in upload",
+                )
+            # Calculate SHA for deduplication
+            sha = PictureUtils.calculate_hash_from_bytes(img_bytes)
+
+            shas.append(sha)
+
+        existing_pictures = self.vault.get_pictures_matching_shas(shas)
+
+        if len(existing_pictures) == len(uploaded_files):
+            # All duplicates
+            return [], existing_pictures
+
+        logger.info(
+            "Got "
+            + str(len(existing_pictures))
+            + " existing pictures to skip and importing {}".format(
+                len(uploaded_files) - len(existing_pictures)
+            )
+        )
+
+        existing_shas = set(pic.pixel_sha for pic in existing_pictures)
+        importable = [
+            (entry, sha)
+            for (entry, sha) in zip(uploaded_files, shas)
+            if sha not in existing_shas
+        ]
+
+        assert importable, "No new pictures to import after deduplication"
+
+        new_pictures = []
+        for file_entry, sha in importable:
+            img_bytes, ext = file_entry
+
+            # Create new Picture
+            pic_id = str(uuid.uuid4()) + ext
+            logger.info(f"Importing picture from uploaded bytes as id={pic_id}")
+            pic = Picture.create_from_bytes(
+                image_root_path=dest_folder,
+                image_bytes=img_bytes,
+                picture_id=pic_id,
+                character_id=character_id,
+                pixel_sha=sha,
+            )
+            new_pictures.append(pic)
+        return new_pictures, existing_pictures
 
     def get_version(self):
         try:

@@ -61,6 +61,22 @@ class Pictures:
         self._quality_worker = None
         self._quality_worker_stop = None
 
+    def _get_tags_for_picture(self, picture_id):
+        cursor = self._connection.cursor()
+        cursor.execute(
+            "SELECT tag FROM picture_tags WHERE picture_id = ?", (picture_id,)
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def _set_tags_for_picture(self, picture_id, tags):
+        cursor = self._connection.cursor()
+        cursor.execute("DELETE FROM picture_tags WHERE picture_id = ?", (picture_id,))
+        cursor.executemany(
+            "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+            [(picture_id, tag) for tag in tags],
+        )
+        self._connection.commit()
+
     def __getitem__(self, picture_id):
         # Return master Picture by picture_uuid
         import sqlite3
@@ -84,6 +100,8 @@ class Pictures:
                 if not row:
                     raise KeyError(f"Picture with id {picture_id} not found.")
                 pic = Picture.from_dict(row)
+                # Fetch tags from picture_tags table
+                pic.tags = self._get_tags_for_picture(picture_id)
                 return pic
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e) and attempt < retries - 1:
@@ -115,15 +133,9 @@ class Pictures:
 
     def update_picture_tags(self, picture_id, tags):
         """
-        Update the tags for a picture in the database.
-        Uses a context manager for atomic update to avoid thread transaction issues.
+        Update the tags for a picture in the database using the picture_tags table.
         """
-        tags_json = json.dumps(tags)
-        with self._connection:
-            cursor = self._connection.cursor()
-            cursor.execute(
-                "UPDATE pictures SET tags = ? WHERE id = ?", (tags_json, picture_id)
-            )
+        self._set_tags_for_picture(picture_id, tags)
 
     def start_embeddings_worker(self, interval=0.1):
         import threading
@@ -186,7 +198,9 @@ class Pictures:
                 break
 
             if calculate_face_bboxes:
-                logger.debug(f"Generating face bounding boxes for pictures needing them.")
+                logger.debug(
+                    "Generating face bounding boxes for pictures needing them."
+                )
                 pics_needing_face_bboxes = self._find_pics_needing_face_bbox(
                     thread_conn
                 )
@@ -235,9 +249,7 @@ class Pictures:
                 logger.error(f"Quality worker error: {e}")
             self._quality_worker_stop.wait(interval)
 
-    def _calculate_and_store_quality(
-        self, thread_conn, pic
-    ):
+    def _calculate_and_store_quality(self, thread_conn, pic):
         try:
             image_np = PictureUtils.load_image_or_video(pic.file_path)
             # Only calculate and update quality if it is NULL
@@ -286,9 +298,9 @@ class Pictures:
             pic_by_path[pic.file_path] = pic
 
         if image_paths:
-            logger.debug(f"Tagging {len(image_paths)} images")
+            logger.info(f"Tagging {len(image_paths)} images: {image_paths}")
             tag_results = picture_tagger.tag_images(image_paths)
-            logger.debug(f"Got tag results for {len(tag_results)} images.")
+            logger.info(f"Got tag results for {len(tag_results)} images.")
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
                 logger.info(f"Processing tags for image at path: {path}: {tags}")
@@ -298,14 +310,17 @@ class Pictures:
                     if char_tag and char_tag in tags:
                         tags = [t for t in tags if t != char_tag]
                     pic.tags = tags
-                    tags_json = json.dumps(tags)
-                    print(f"Updating tags for picture id {pic.id} to {tags_json}")
-                    with thread_conn:
-                        cursor = thread_conn.cursor()
-                        cursor.execute(
-                            "UPDATE pictures SET tags = ? WHERE id = ?",
-                            (tags_json, pic.id),
+                    # Replace all tags in picture_tags table
+                    cursor = thread_conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM picture_tags WHERE picture_id = ?", (pic.id,)
+                    )
+                    if tags:
+                        cursor.executemany(
+                            "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+                            [(pic.id, tag) for tag in tags],
                         )
+                    thread_conn.commit()
         return True
 
     def _find_pics_needing_face_bbox(self, thread_conn):
@@ -495,7 +510,7 @@ class Pictures:
                         picture.id,
                     )
                 )
-                #logger.info(f"Updating picture {picture.id} with face bbox and thumbnails: {row}")
+                # logger.info(f"Updating picture {picture.id} with face bbox and thumbnails: {row}")
             cursor.executemany(
                 """
                 UPDATE pictures SET thumbnail=?, embedding=?, face_bbox=? WHERE id=?
@@ -543,6 +558,10 @@ class Pictures:
             result = []
             for row in rows:
                 pic = Picture.from_dict(row)
+                query = "SELECT tag FROM picture_tags WHERE picture_id = ?"
+                cursor.execute(query, (pic.id,))
+                tags = cursor.fetchall()
+                pic.tags = [tag[0] for tag in tags]
                 result.append(pic)
             return result
         finally:
