@@ -1,3 +1,5 @@
+import json
+
 from typing import Optional, List
 
 from .character import CharacterModel
@@ -19,23 +21,10 @@ class Characters:
         ).fetchone()
         if not row:
             raise KeyError(f"Character {character_id} not found")
-        loras = row["loras"]
-        if loras is not None and isinstance(loras, str):
-            import json
 
-            loras = json.loads(loras)
-        return CharacterModel(
-            id=row["id"],
-            name=row["name"],
-            original_seed=row["original_seed"],
-            original_prompt=row["original_prompt"],
-            loras=loras if loras is not None else [],
-            description=row["description"],
-        )
+        return self._row_to_model(row)
 
     def add(self, character: CharacterModel):
-        import json
-
         sql = "INSERT INTO characters (name, original_seed, original_prompt, loras, description) VALUES (?, ?, ?, ?, ?)"
         params = (
             character.name,
@@ -55,8 +44,6 @@ class Characters:
         character.id = cur.lastrowid
 
     def update(self, character: CharacterModel):
-        import json
-
         self._db._execute(
             "UPDATE characters SET name = ?, original_seed = ?, original_prompt = ?, loras = ?, description = ? WHERE id = ?",
             (
@@ -79,29 +66,6 @@ class Characters:
             commit=True,
         )
 
-    def list(self) -> List[CharacterModel]:
-        rows = self._db._query(
-            "SELECT id, name, original_seed, original_prompt, loras, description FROM characters"
-        )
-        result = []
-        for row in rows:
-            loras = row["loras"]
-            if loras is not None and isinstance(loras, str):
-                import json
-
-                loras = json.loads(loras)
-            result.append(
-                CharacterModel(
-                    id=row["id"],
-                    name=row["name"],
-                    original_seed=row["original_seed"],
-                    original_prompt=row["original_prompt"],
-                    loras=loras if loras is not None else [],
-                    description=row["description"],
-                )
-            )
-        return result
-
     def find(self, name: Optional[str] = None) -> List[CharacterModel]:
         if name:
             rows = self._db._query(
@@ -114,34 +78,12 @@ class Characters:
             )
         result = []
         for row in rows:
-            loras = row["loras"]
-            if loras is not None and isinstance(loras, str):
-                import json
-
-                loras = json.loads(loras)
-            result.append(
-                CharacterModel(
-                    id=row["id"],
-                    name=row["name"],
-                    original_seed=row["original_seed"],
-                    original_prompt=row["original_prompt"],
-                    loras=loras if loras is not None else [],
-                    description=row["description"],
-                )
-            )
+            result.append(self._row_to_model(row))
         return result
 
-    def get_by_id(self, character_id: int) -> Optional[CharacterModel]:
-        row = self._db._execute(
-            "SELECT id, name, original_seed, original_prompt, loras, description FROM characters WHERE id = ?",
-            (character_id,),
-        ).fetchone()
-        if not row:
-            return None
+    def _row_to_model(self, row) -> CharacterModel:
         loras = row["loras"]
         if loras is not None and isinstance(loras, str):
-            import json
-
             loras = json.loads(loras)
         return CharacterModel(
             id=row["id"],
@@ -151,14 +93,3 @@ class Characters:
             loras=loras if loras is not None else [],
             description=row["description"],
         )
-
-    def create_from_dict(self, data: dict) -> CharacterModel:
-        character = CharacterModel(
-            name=data.get("name"),
-            original_seed=data.get("original_seed"),
-            original_prompt=data.get("original_prompt"),
-            loras=data.get("loras", []),
-            description=data.get("description"),
-        )
-        self.add(character)
-        return character

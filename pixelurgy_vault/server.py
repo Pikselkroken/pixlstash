@@ -16,6 +16,7 @@ from PIL import Image
 from rapidfuzz import fuzz
 from typing import List
 
+from pixelurgy_vault.character import CharacterModel
 from pixelurgy_vault.logging import get_logger
 from pixelurgy_vault.picture import Picture
 from pixelurgy_vault.picture_utils import PictureUtils
@@ -633,14 +634,16 @@ class Server:
             chars = (
                 self.vault.characters.find(name=name)
                 if name
-                else self.vault.characters.list()
+                else self.vault.characters.find()
             )
             return [c.__dict__ for c in chars]
 
         @self.api.post("/characters")
         async def create_character(payload: dict = Body(...)):
             try:
-                character = self.vault.characters.create_from_dict(payload)
+                character = CharacterModel(**payload)
+                self.vault.characters.add(character)
+
                 return {"status": "success", "character": asdict(character)}
             except Exception as e:
                 logger.error(f"Error creating character: {e}")

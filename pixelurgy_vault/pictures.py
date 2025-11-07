@@ -3,6 +3,7 @@ from enum import Enum
 import gc
 import numpy as np
 import json
+import sqlite3
 import time
 import os
 import cv2
@@ -131,64 +132,75 @@ class Pictures:
 
     def _tag_embeddings_loop(self, interval):
         # Create a new connection for this thread
-        with self._db.threaded_connection as thread_conn:
-            calculate_face_bboxes = True
+        calculate_face_bboxes = True
 
-            while not self._tag_worker_stop.is_set():
-                data_updated = False
+        while not self._tag_worker_stop.is_set():
+            try:
+                with self._db.threaded_connection as thread_conn:
+                    data_updated = False
 
-                missing_tags = [pic for pic in self.find() if not pic.tags]
-                missing_embeddings = [
-                    pic
-                    for pic in self.find()
-                    if not getattr(pic, "embedding", False) and pic.tags
-                ]
+                    missing_tags = [pic for pic in self.find() if not pic.tags]
+                    missing_embeddings = [
+                        pic
+                        for pic in self.find()
+                        if not getattr(pic, "embedding", False) and pic.tags
+                    ]
 
-                if missing_tags:
-                    logger.info(f"Tagging {len(missing_tags)} pictures missing tags.")
-                    tagged_pictures = self._tag_pictures(
-                        thread_conn, self._picture_tagger, missing_tags
-                    )
-                    data_updated |= tagged_pictures > 0
-
-                if self._tag_worker_stop.is_set():
-                    break
-
-                if missing_embeddings:
-                    logger.info(
-                        f"Generating embeddings for {len(missing_embeddings)} pictures."
-                    )
-                    data_updated = (
-                        self._embed_tagged_pictures(
-                            thread_conn, self._picture_tagger, missing_embeddings
+                    if missing_tags:
+                        logger.info(
+                            f"Tagging {len(missing_tags)} pictures missing tags."
                         )
-                        or data_updated
-                    )
+                        tagged_pictures = self._tag_pictures(
+                            thread_conn, self._picture_tagger, missing_tags
+                        )
+                        data_updated |= tagged_pictures > 0
 
-                if self._tag_worker_stop.is_set():
-                    break
+                    if self._tag_worker_stop.is_set():
+                        break
 
-                if calculate_face_bboxes:
-                    logger.debug(
-                        "Generating face bounding boxes for pictures needing them."
-                    )
-                    pics_needing_face_bboxes = self._find_pics_needing_face_bbox(
-                        thread_conn
-                    )
-                    calculate_face_bboxes, bboxes_updated = self._calculate_face_bboxes(
-                        thread_conn, pics_needing_face_bboxes
-                    )
-                    data_updated |= bboxes_updated
+                    if missing_embeddings:
+                        logger.info(
+                            f"Generating embeddings for {len(missing_embeddings)} pictures."
+                        )
+                        data_updated = (
+                            self._embed_tagged_pictures(
+                                thread_conn, self._picture_tagger, missing_embeddings
+                            )
+                            or data_updated
+                        )
 
-                if not data_updated:
-                    self._tag_worker_stop.wait(interval)
+                    if self._tag_worker_stop.is_set():
+                        break
+
+                    if calculate_face_bboxes:
+                        logger.debug(
+                            "Generating face bounding boxes for pictures needing them."
+                        )
+                        pics_needing_face_bboxes = self._find_pics_needing_face_bbox(
+                            thread_conn
+                        )
+                        calculate_face_bboxes, bboxes_updated = (
+                            self._calculate_face_bboxes(
+                                thread_conn, pics_needing_face_bboxes
+                            )
+                        )
+                        data_updated |= bboxes_updated
+
+                    if not data_updated:
+                        self._tag_worker_stop.wait(interval)
+            except (sqlite3.OperationalError, OSError) as e:
+                # Database file was deleted or connection lost during shutdown
+                logger.debug(
+                    f"Worker thread exiting due to DB error (likely shutdown): {e}"
+                )
+                break
 
     def _quality_worker_loop(self, interval):
         # Create a new connection for this thread
-        with self._db.threaded_connection as thread_conn:
-            while not self._quality_worker_stop.is_set():
-                quality_updates = 0
-                try:
+        while not self._quality_worker_stop.is_set():
+            quality_updates = 0
+            try:
+                with self._db.threaded_connection as thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
                         "SELECT * FROM pictures WHERE quality IS NULL OR face_quality IS NULL"
@@ -208,11 +220,17 @@ class Pictures:
                         )
                         self._calculate_and_store_quality(thread_conn, pic)
                         quality_updates += 1
-                except Exception as e:
-                    logger.error(f"Quality worker error: {e}")
+            except (sqlite3.OperationalError, OSError) as e:
+                # Database file was deleted or connection lost during shutdown
+                logger.debug(
+                    f"Quality worker exiting due to DB error (likely shutdown): {e}"
+                )
+                break
+            except Exception as e:
+                logger.error(f"Quality worker error: {e}")
 
-                if quality_updates == 0:
-                    self._quality_worker_stop.wait(interval)
+            if quality_updates == 0:
+                self._quality_worker_stop.wait(interval)
 
     def _calculate_and_store_quality(self, thread_conn, pic):
         try:
@@ -622,24 +640,6 @@ class Pictures:
             if self._quality_worker.is_alive():
                 logger.warning("Quality worker thread did not exit within timeout.")
 
-    def fetch_by_ids(self, picture_ids: list[str]) -> list[Picture]:
-        if not picture_ids:
-            return []
-        placeholders = ",".join(["?"] * len(picture_ids))
-        sql = f"SELECT * FROM pictures WHERE id IN ({placeholders})"
-        rows = self._db._query(sql, tuple(picture_ids))
-        return [Picture.from_dict(row) for row in rows] if rows else []
-
-    def fetch(self, filters: dict = None) -> list[Picture]:
-        if not filters:
-            rows = self._db._query("SELECT * FROM pictures")
-        else:
-            where_clause = " AND ".join([f"{k}=?" for k in filters.keys()])
-            sql = f"SELECT * FROM pictures WHERE {where_clause}"
-            params = tuple(filters.values())
-            rows = self._db._query(sql, params)
-        return [Picture.from_dict(row) for row in rows] if rows else []
-
     def delete(self, picture_ids: list[str]):
         self._db._executemany(
             "DELETE FROM pictures WHERE id = ?",
@@ -667,12 +667,11 @@ class Pictures:
         for picture in pictures:
             d = picture.to_dict()
             d.pop("tags", None)
-            columns = ", ".join(d.keys())
-            placeholders = ", ".join([f":{k}" for k in d.keys()])
-            sql = f"UPDATE pictures SET ({columns}) = ({placeholders}) WHERE id = :id"
+            set_clause = ", ".join([f"{k}=:{k}" for k in d.keys()])
+            sql = f"UPDATE pictures SET {set_clause} WHERE id = :id"
             self._db._execute(sql, d, commit=True)
             # Update tags in picture_tags table
-            if hasattr(picture, "tags") and picture.tags:
+            if hasattr(picture, "tags") and picture.tags is not None:
                 self._db._execute(
                     "DELETE FROM picture_tags WHERE picture_id = ?",
                     (picture.id,),
@@ -690,4 +689,16 @@ class Pictures:
         placeholders = ",".join(["?"] * len(shas))
         sql = f"SELECT * FROM pictures WHERE pixel_sha IN ({placeholders})"
         rows = self._db._query(sql, tuple(shas))
-        return [Picture.from_dict(row) for row in rows] if rows else []
+
+        result = []
+        for row in rows:
+            pic = Picture.from_dict(row)
+            tag_rows = self._db._query(
+                "SELECT tag FROM picture_tags WHERE picture_id = ?", (pic.id,)
+            )
+            pic.tags = [
+                tag_row["tag"] if isinstance(tag_row, dict) else tag_row[0]
+                for tag_row in tag_rows
+            ]
+            result.append(pic)
+        return result
