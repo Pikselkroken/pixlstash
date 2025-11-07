@@ -1,6 +1,5 @@
 <script setup>
 import nlp from "compromise";
-import { marked } from "marked";
 import {
   computed,
   nextTick,
@@ -12,6 +11,7 @@ import {
 } from "vue";
 
 import SideBar from "./components/SideBar.vue";
+import ChatWindow from "./components/ChatWindow.vue";
 
 const BACKEND_URL = "http://localhost:9537";
 
@@ -587,25 +587,16 @@ function closeOverlay() {
 }
 
 const chatOpen = ref(false);
+const chatWindowRef = ref(null);
 function openChatOverlay() {
   chatOpen.value = true;
   nextTick(() => {
-    if (chatInputField.value) chatInputField.value.focus();
+    if (chatWindowRef.value) chatWindowRef.value.focusInput();
   });
 }
 
 function closeChatOverlay() {
   chatOpen.value = false;
-}
-
-// Scroll chat to bottom utility
-function scrollChatToBottom() {
-  nextTick(() => {
-    if (chatMessagesContainer.value) {
-      chatMessagesContainer.value.scrollTop =
-        chatMessagesContainer.value.scrollHeight;
-    }
-  });
 }
 
 // Search bar state and logic
@@ -967,14 +958,27 @@ async function fetchConfig() {
     config.image_roots = data.image_roots || [];
     config.selected_image_root = data.selected_image_root || "";
     // UI options
-    if (data.sort) selectedSort.value = data.sort_order;
-    if (data.thumbnail) thumbnailSize.value = data.thumbnail_size;
+    const sortValue = data.sort_order ?? data.sort;
+    if (typeof sortValue === "string" && sortValue) {
+      selectedSort.value = sortValue;
+    }
+    const thumbnailValue =
+      typeof data.thumbnail_size === "number"
+        ? data.thumbnail_size
+        : typeof data.thumbnail === "number"
+        ? data.thumbnail
+        : null;
+    if (thumbnailValue !== null) {
+      thumbnailSize.value = thumbnailValue;
+      await nextTick();
+      updateColumns();
+    }
     if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
     if (typeof data.show_only_reference === "boolean")
       referenceFilterMode.value = data.show_only_reference;
     // Also update config for PATCHing
-    config.sort_order = data.sort || selectedSort.value;
-    config.thumbnail_size = data.thumbnail || thumbnailSize.value;
+    config.sort_order = sortValue || selectedSort.value;
+    config.thumbnail_size = thumbnailValue || thumbnailSize.value;
     config.show_stars =
       typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
     config.show_only_reference =
@@ -1612,18 +1616,6 @@ function confirmDeleteCharacter() {
   }
 }
 
-// Chat state
-// Add optional pictureUrl to assistant messages
-const chatMessages = ref([]); // {role: 'user'|'assistant', content: string, pictureUrl?: string}
-const chatInput = ref("");
-const chatLoading = ref(false);
-const chatMessagesContainer = ref(null);
-const chatInputField = ref(null);
-
-function renderMarkdown(text) {
-  return marked.parse(text || "");
-}
-
 // Computed: Get the selected character object (if any)
 const selectedCharacterObj = computed(() => {
   if (
@@ -1644,126 +1636,6 @@ const selectedCharacterObj = computed(() => {
   }
   return null;
 });
-
-async function sendChatMessageAndFocus() {
-  const input = chatInput.value.trim();
-  if (!input || chatLoading.value) return;
-
-  let system_message =
-    "You should always respond as the character you are playing. Stay in character and don't break it. Let me speak for myself. Do not repeat yourself.";
-
-  if (chatMessages.value.length === 0) {
-    // First message, set character context
-    if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
-      system_message += ` You are now assuming the role of the character named '${selectedCharacterObj.value.name}'.`;
-      if (
-        selectedCharacterObj.value.description &&
-        selectedCharacterObj.value.description.trim().length > 0
-      ) {
-        system_message += ` Here is some information about you: ${selectedCharacterObj.value.description.trim()}`;
-      }
-    } else {
-      system_message +=
-        " You are now assuming the role of a generic character without a specific name or background.";
-    }
-    chatMessages.value.push(
-      { role: "user", content: input },
-      { role: "system", content: system_message }
-    );
-  } else {
-    chatMessages.value.push({ role: "user", content: input });
-  }
-  chatInput.value = "";
-  chatLoading.value = true;
-  await nextTick();
-  scrollChatToBottom();
-  try {
-    const url = `http://${config.openai_host}:${config.openai_port}/v1/chat/completions`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: config.openai_model || "gpt-3.5-turbo",
-        messages: chatMessages.value.map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-        stream: false,
-      }),
-    });
-    if (!res.ok) throw new Error("OpenAI server error");
-    const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content || "(No response)";
-    // Add the AI response first
-    chatMessages.value.push({ role: "assistant", content: reply });
-    await nextTick();
-    scrollChatToBottom();
-
-    // After AI responds, trigger /search with character name + last user input
-    // + last AI response
-    let lastUser = null;
-    for (let i = chatMessages.value.length - 2; i >= 0; i--) {
-      if (chatMessages.value[i].role === "user") {
-        lastUser = chatMessages.value[i].content;
-        break;
-      }
-    }
-    let searchQuery = extractKeywords(reply);
-    if (lastUser) {
-      searchQuery = lastUser + " " + searchQuery;
-    }
-    if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
-      searchQuery = selectedCharacterObj.value.name + " " + searchQuery;
-    }
-    try {
-      const searchRes = await fetch(
-        `${BACKEND_URL}/search?query=${encodeURIComponent(searchQuery)}`
-      );
-      if (searchRes.ok) {
-        const searchData = await searchRes.json();
-        if (searchData && Array.isArray(searchData) && searchData.length > 0) {
-          // Weighted random selection by likeness_score
-          const totalScore = searchData.reduce(
-            (sum, pic) => sum + (pic.likeness_score || 0),
-            0
-          );
-          let r = Math.random() * totalScore;
-          let chosen = searchData[0];
-          for (const pic of searchData) {
-            r -= pic.likeness_score || 0;
-            if (r <= 0) {
-              chosen = pic;
-              break;
-            }
-          }
-          // Compose the image URL (assuming /pictures/:id)
-          const imageUrl = `${BACKEND_URL}/pictures/${chosen.id}`;
-          // Add the picture URL to the last assistant message
-          const lastMsg = chatMessages.value
-            .slice()
-            .reverse()
-            .find((m) => m.role === "assistant" && !m.pictureUrl);
-          if (lastMsg) {
-            lastMsg.pictureUrl = imageUrl;
-          }
-        }
-      }
-    } catch (e) {
-      // Ignore search errors
-    }
-  } catch (e) {
-    chatMessages.value.push({
-      role: "assistant",
-      content: "Error: " + (e.message || e),
-    });
-  } finally {
-    chatLoading.value = false;
-    await nextTick();
-    if (chatInputField.value) {
-      chatInputField.value.focus();
-    }
-  }
-}
 </script>
 <template src="./App.template.html"></template>
 <style scoped src="./App.css"></style>

@@ -246,7 +246,7 @@
                     font-size: 1em;
                     "
                     @change="patchConfigUIOptions()"
-                />
+            />
                 </div>
                 <div
                 style="
@@ -533,136 +533,17 @@
                 </div>
                 </v-card>
             </div>
-            <div
+            <ChatWindow
                 v-if="chatOpen"
-                class="chat-overlay"
-                @click.self="closeChatOverlay"
-            >
-                <div class="chat-overlay-content">
-                <div class="chat-overlay-header">
-                    <span>
-                    <template v-if="selectedCharacterObj">
-                        Chat with {{ selectedCharacterObj.name }}
-                    </template>
-                    <template v-else> AI Chat </template>
-                    </span>
-                    <button
-                    class="overlay-close"
-                    @click="closeChatOverlay"
-                    aria-label="Close"
-                    >
-                    &times;
-                    </button>
-                </div>
-                <div
-                    class="overlay-chat-main"
-                    style="
-                    flex: 1;
-                    display: flex;
-                    flex-direction: column;
-                    min-height: 0;
-                    "
-                >
-                    <div
-                    class="chat-messages"
-                    ref="chatMessagesContainer"
-                    style="flex: 1 1 0; overflow-y: auto; min-height: 0"
-                    >
-                    <div
-                        v-for="(msg, i) in chatMessages"
-                        :key="i"
-                        :class="
-                        msg.role === 'user'
-                            ? 'chat-message-user'
-                            : 'chat-message-assistant'
-                        "
-                    >
-                        <template v-if="msg.role === 'user'">
-                        <div class="chat-bubble user">
-                            <span class="chat-username">You</span>
-                            <span class="chat-text">{{ msg.content }}</span>
-                        </div>
-                        </template>
-                        <template v-else>
-                        <div class="chat-assistant-full">
-                            <span class="chat-username">AI</span>
-                            <span
-                            class="chat-text"
-                            v-html="renderMarkdown(msg.content)"
-                            ></span>
-                            <div
-                            v-if="msg.pictureUrl"
-                            class="chat-picture-result"
-                            style="margin-top: 0.5em"
-                            >
-                            <img
-                                :src="msg.pictureUrl"
-                                alt="result"
-                                style="
-                                max-width: 50%;
-                                height: auto;
-                                display: block;
-                                margin: 0 auto;
-                                border-radius: 8px;
-                                box-shadow: 0 2px 8px #0002;
-                                "
-                                @load="scrollChatToBottom"
-                            />
-                            </div>
-                        </div>
-                        </template>
-                    </div>
-                    <div v-if="chatLoading" class="chat-message-assistant">
-                        <div class="chat-assistant-full">
-                        <span class="chat-username">AI</span>
-                        <span class="chat-text">...</span>
-                        </div>
-                    </div>
-                    </div>
-                    <form
-                    class="chat-input-row"
-                    @submit.prevent="sendChatMessageAndFocus"
-                    style="
-                        flex-shrink: 0;
-                        background: #f8fafd;
-                        border-top: 1px solid #e0e0e0;
-                        padding: 0.5em 0.7em;
-                        display: flex;
-                        align-items: flex-end;
-                    "
-                    >
-                    <textarea
-                        v-model="chatInput"
-                        class="chat-input"
-                        placeholder="Type your message..."
-                        rows="2"
-                        :disabled="chatLoading"
-                        ref="chatInputField"
-                        @keydown.enter.exact.prevent="sendChatMessageAndFocus"
-                        style="
-                        flex: 1;
-                        resize: none;
-                        min-height: 2.2em;
-                        max-height: 7em;
-                        border-radius: 6px;
-                        border: 1px solid #d0d0d0;
-                        margin-right: 0.5em;
-                        background: #fff;
-                        "
-                    ></textarea>
-                    <v-btn
-                        type="submit"
-                        :disabled="!chatInput.trim() || chatLoading"
-                        color="primary"
-                        class="chat-send-btn"
-                        style="min-width: 40px; min-height: 40px"
-                    >
-                        <v-icon>mdi-send</v-icon>
-                    </v-btn>
-                    </form>
-                </div>
-                </div>
-            </div>
+                ref="chatWindowRef"
+                :open="chatOpen"
+                :title="selectedCharacterObj ? `Chat with ${selectedCharacterObj.name}` : 'AI Chat'"
+                :selected-character="selectedCharacterObj"
+                :config="config"
+                :extract-keywords="extractKeywords"
+                :backend-url="BACKEND_URL"
+                @close="closeChatOverlay"
+            />
             <!-- Full image overlay -->
             <div
                 v-if="overlayOpen"
