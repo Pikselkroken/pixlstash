@@ -268,6 +268,17 @@ class Picture:
     @classmethod
     def from_dict(cls, row):
         assert isinstance(row, dict) or isinstance(row, sqlite3.Row)
+
+        # Embedding and thumbnail are always stored as base64 strings in DB (from to_dict())
+        # Decode them to bytes for internal use
+        embedding = None
+        if "embedding" in row.keys() and row["embedding"]:
+            embedding = base64.b64decode(row["embedding"])
+
+        thumbnail = None
+        if "thumbnail" in row.keys() and row["thumbnail"]:
+            thumbnail = base64.b64decode(row["thumbnail"])
+
         return cls(
             id=row["id"],
             character_id=row["character_id"] if "character_id" in row.keys() else None,
@@ -282,15 +293,11 @@ class Picture:
             is_reference=row["is_reference"] == 1
             if "is_reference" in row.keys()
             else False,
-            embedding=base64.b64decode(row["embedding"])
-            if "embedding" in row.keys() and row["embedding"]
-            else None,
+            embedding=embedding,
             face_bbox=json.loads(row["face_bbox"])
             if "face_bbox" in row.keys() and row["face_bbox"]
             else None,
-            thumbnail=base64.b64decode(row["thumbnail"])
-            if "thumbnail" in row.keys() and row["thumbnail"]
-            else None,
+            thumbnail=thumbnail,
             quality=row["quality"] if "quality" in row.keys() else None,
             face_quality=row["face_quality"] if "face_quality" in row.keys() else None,
             score=row["score"] if "score" in row.keys() else None,

@@ -760,7 +760,7 @@ class Server:
                         pic.embedding = None
                     updated = True
             if updated:
-                self.vault.pictures.update([pic])
+                self.vault.pictures.update(pic)
             return {"status": "success", "picture": pic.to_dict()}
 
         @self.api.get("/favicon.ico")
@@ -829,7 +829,7 @@ class Server:
 
             # Import all at once
             if new_pictures:
-                self.vault.pictures.insert(new_pictures)
+                self.vault.pictures.add(new_pictures)
 
             if not new_pictures:
                 raise HTTPException(
@@ -897,7 +897,7 @@ class Server:
             """
             Delete a picture by id
             """
-            self.vault.pictures.delete([id])
+            self.vault.pictures.delete(id)
             return {
                 "status": "success",
             }

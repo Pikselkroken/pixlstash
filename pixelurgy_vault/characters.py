@@ -1,6 +1,6 @@
 import json
 
-from typing import Optional, List
+from typing import Optional, List, Union
 
 from .character import CharacterModel
 from .database import VaultDatabase
@@ -24,29 +24,41 @@ class Characters:
 
         return self._row_to_model(row)
 
-    def add(self, character: CharacterModel):
-        sql = "INSERT INTO characters (name, original_seed, original_prompt, loras, description) VALUES (?, ?, ?, ?, ?)"
-        params = (
-            character.name,
-            character.original_seed,
-            character.original_prompt,
-            json.dumps(character.loras)
-            if character.loras is not None
-            else json.dumps([]),
-            character.description,
-        )
-        logger.info(f"INSERT INTO characters SQL: {sql} | params: {params}")
-        cur = self._db._execute(
-            sql,
-            params,
-            commit=True,
-        )
-        character.id = cur.lastrowid
+    def add(self, characters: Union[CharacterModel, List[CharacterModel]]):
+        """Add one or more characters. Supports both single character and batch operations."""
+        if not isinstance(characters, list):
+            characters = [characters]
 
-    def update(self, character: CharacterModel):
-        self._db._execute(
-            "UPDATE characters SET name = ?, original_seed = ?, original_prompt = ?, loras = ?, description = ? WHERE id = ?",
-            (
+        sql = "INSERT INTO characters (name, original_seed, original_prompt, loras, description) VALUES (?, ?, ?, ?, ?)"
+        params_list = []
+        for character in characters:
+            params = (
+                character.name,
+                character.original_seed,
+                character.original_prompt,
+                json.dumps(character.loras)
+                if character.loras is not None
+                else json.dumps([]),
+                character.description,
+            )
+            params_list.append(params)
+
+        if len(params_list) == 1:
+            logger.info(f"INSERT INTO characters SQL: {sql} | params: {params_list[0]}")
+            cur = self._db._execute(sql, params_list[0], commit=True)
+            characters[0].id = cur.lastrowid
+        else:
+            self._db._executemany(sql, params_list, commit=True)
+
+    def update(self, characters: Union[CharacterModel, List[CharacterModel]]):
+        """Update one or more characters. Supports both single character and batch operations."""
+        if not isinstance(characters, list):
+            characters = [characters]
+
+        sql = "UPDATE characters SET name = ?, original_seed = ?, original_prompt = ?, loras = ?, description = ? WHERE id = ?"
+        params_list = []
+        for character in characters:
+            params = (
                 character.name,
                 character.original_seed,
                 character.original_prompt,
@@ -55,14 +67,22 @@ class Characters:
                 else json.dumps([]),
                 character.description,
                 character.id,
-            ),
-            commit=True,
-        )
+            )
+            params_list.append(params)
 
-    def delete(self, character_id: int):
-        self._db._execute(
+        if len(params_list) == 1:
+            self._db._execute(sql, params_list[0], commit=True)
+        else:
+            self._db._executemany(sql, params_list, commit=True)
+
+    def delete(self, character_ids: Union[int, List[int]]):
+        """Delete one or more characters. Supports both single ID and batch operations."""
+        if not isinstance(character_ids, list):
+            character_ids = [character_ids]
+
+        self._db._executemany(
             "DELETE FROM characters WHERE id = ?",
-            (character_id,),
+            [(cid,) for cid in character_ids],
             commit=True,
         )
 

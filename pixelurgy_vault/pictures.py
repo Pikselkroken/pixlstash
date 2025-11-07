@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Union, List
 
 import gc
 import numpy as np
@@ -598,7 +599,22 @@ class Pictures:
             emb_blob = row["embedding"] if isinstance(row, dict) else row[1]
             if emb_blob is None:
                 continue
-            emb = np.frombuffer(emb_blob, dtype=np.float32)
+
+            # Embedding is stored as base64 string in DB (from to_dict())
+            # Decode it to bytes for numpy
+            try:
+                import base64
+
+                if isinstance(emb_blob, str):
+                    emb_bytes = base64.b64decode(emb_blob)
+                else:
+                    # Already bytes (shouldn't happen with consistent to_dict usage)
+                    emb_bytes = emb_blob
+
+                emb = np.frombuffer(emb_bytes, dtype=np.float32)
+            except Exception as e:
+                logger.error(f"Failed to parse embedding for {pic_id}: {e}")
+                continue
             sim = float(
                 np.dot(query_emb, emb)
                 / (np.linalg.norm(query_emb) * np.linalg.norm(emb) + 1e-8)
@@ -640,14 +656,22 @@ class Pictures:
             if self._quality_worker.is_alive():
                 logger.warning("Quality worker thread did not exit within timeout.")
 
-    def delete(self, picture_ids: list[str]):
+    def delete(self, picture_ids: Union[str, List[str]]):
+        """Delete one or more pictures. Supports both single ID and batch operations."""
+        if not isinstance(picture_ids, list):
+            picture_ids = [picture_ids]
+
         self._db._executemany(
             "DELETE FROM pictures WHERE id = ?",
             [(pid,) for pid in picture_ids],
             commit=True,
         )
 
-    def insert(self, pictures: list[Picture]):
+    def add(self, pictures: Union[Picture, List[Picture]]):
+        """Add one or more pictures. Supports both single picture and batch operations."""
+        if not isinstance(pictures, list):
+            pictures = [pictures]
+
         for picture in pictures:
             d = picture.to_dict()
             d.pop("tags", None)
@@ -663,7 +687,11 @@ class Pictures:
                     commit=True,
                 )
 
-    def update(self, pictures: list[Picture]):
+    def update(self, pictures: Union[Picture, List[Picture]]):
+        """Update one or more pictures. Supports both single picture and batch operations."""
+        if not isinstance(pictures, list):
+            pictures = [pictures]
+
         for picture in pictures:
             d = picture.to_dict()
             d.pop("tags", None)

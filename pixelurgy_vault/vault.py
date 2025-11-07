@@ -125,5 +125,5 @@ class Vault:
             character_id=character.id,
         )
         assert picture.file_path
-        self.pictures.insert([picture])
+        self.pictures.add(picture)
         logger.info("Imported default data into the vault.")
