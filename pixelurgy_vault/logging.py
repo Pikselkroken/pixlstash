@@ -5,10 +5,12 @@ LOG_FORMAT = "%(asctime)s %(levelprefix)s %(name)s: %(message)s"
 LOG_LEVEL = logging.INFO
 
 
-def setup_logging(log_file=None):
-    """
-    Set up logging to a file if log_file is given, else to stdout with color.
-    Uses standard format for file logging to avoid 'levelprefix' KeyError.
+def setup_logging(log_file=None, log_level=LOG_LEVEL):
+    """Configure root logging handlers and level.
+
+    If *log_file* is provided, logs are written there with a standard formatter.
+    Otherwise logs are emitted to stdout with Uvicorn's colourised formatter.
+    *log_level* accepts either an int or name understood by logging._checkLevel.
     """
     root = logging.getLogger()
     root.handlers = []  # Remove any default handlers
@@ -23,7 +25,7 @@ def setup_logging(log_file=None):
         formatter = ColourizedFormatter(fmt=LOG_FORMAT, use_colors=True)
     handler.setFormatter(formatter)
     root.addHandler(handler)
-    root.setLevel(LOG_LEVEL)
+    root.setLevel(log_level)
 
 
 def get_logger(name=None):

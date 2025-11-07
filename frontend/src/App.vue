@@ -12,6 +12,7 @@ import {
 
 import SideBar from "./components/SideBar.vue";
 import ChatWindow from "./components/ChatWindow.vue";
+import ImageImporter from "./components/ImageImporter.vue";
 
 const BACKEND_URL = "http://localhost:9537";
 
@@ -22,6 +23,7 @@ const dragOverlayMessage = ref("");
 const dragSource = ref(null);
 
 const gridContainer = ref(null); // already used for grid
+const imageImporterRef = ref(null);
 
 const PIL_IMAGE_EXTENSIONS = [
   "jpg",
@@ -287,44 +289,7 @@ function handleGridDragLeave(e) {
   }
 }
 
-// Import progress modal state
-const importInProgress = ref(false);
-const importProgress = ref(0);
-const importTotal = ref(0);
-const importError = ref(null);
-const importPhase = ref(""); // 'uploading', 'done', 'error'
-const importPhaseMessage = computed(() => {
-  switch (importPhase.value) {
-    case "uploading":
-      return "Uploading images...";
-    case "done":
-      return "Import complete!";
-    case "duplicates":
-      return "All files are duplicates.";
-    case "cancelled":
-      return "Import cancelled.";
-    case "error":
-      return "Import failed.";
-    default:
-      return "";
-  }
-});
-
-const cancelImport = ref(false);
-const currentImportController = ref(null);
-function handleCancelImport() {
-  cancelImport.value = true;
-  if (currentImportController.value) {
-    try {
-      currentImportController.value.abort();
-    } catch (err) {
-      console.warn("Failed to abort current import", err);
-    } finally {
-      currentImportController.value = null;
-    }
-  }
-}
-
+// Image import handling is delegated to the ImageImporter component
 function handleGridDrop(e) {
   dragOverlayVisible.value = false;
   // Prevent importing if this is an internal drag (from our own grid)
@@ -333,6 +298,7 @@ function handleGridDrop(e) {
     return;
   }
   if (!e.dataTransfer || !e.dataTransfer.files) return;
+
   const files = Array.from(e.dataTransfer.files).filter(isSupportedMediaFile);
   console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
   console.debug("[IMPORT] Supported files after filter:", files);
@@ -340,138 +306,25 @@ function handleGridDrop(e) {
     alert("No supported image files found.");
     return;
   }
-  cancelImport.value = false;
-  importInProgress.value = true;
-  importProgress.value = 0;
-  importError.value = null;
-  importPhase.value = "uploading";
+
   dragSource.value = null;
-  (async () => {
-    importTotal.value = files.length;
-    importProgress.value = 0;
-    let completed = 0;
-    let importedCount = 0;
-    importError.value = null;
-    const BATCH_SIZE = 100;
-    const TIMEOUT_MS = 5000; // 5 seconds
-    const MAX_RETRIES = 3;
-    try {
-      for (let i = 0; i < files.length; i += BATCH_SIZE) {
-        if (cancelImport.value) {
-          importPhase.value = "cancelled";
-          importInProgress.value = false;
-          importError.value = null;
-          currentImportController.value = null;
-          return;
-        }
-        const batch = files.slice(i, i + BATCH_SIZE);
-        const formData = new FormData();
-        batch.forEach((file) => {
-          formData.append("file", file);
-        });
-        if (
-          selectedCharacter.value &&
-          selectedCharacter.value !== ALL_PICTURES_ID &&
-          selectedCharacter.value !== UNASSIGNED_PICTURES_ID
-        ) {
-          formData.append("character_id", selectedCharacter.value);
-        }
-        let res = null;
-        let lastError = null;
-        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-          if (cancelImport.value) {
-            importPhase.value = "cancelled";
-            importInProgress.value = false;
-            importError.value = null;
-            currentImportController.value = null;
-            return;
-          }
-          const controller = new AbortController();
-          currentImportController.value = controller;
-          const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-          try {
-            res = await fetch(`${BACKEND_URL}/pictures`, {
-              method: "POST",
-              body: formData,
-              signal: controller.signal,
-            });
-            clearTimeout(timeout);
-            if (controller === currentImportController.value) {
-              currentImportController.value = null;
-            }
-            if (res.ok) {
-              break;
-            } else {
-              lastError = new Error(`Upload failed with status ${res.status}`);
-            }
-          } catch (err) {
-            clearTimeout(timeout);
-            if (controller === currentImportController.value) {
-              currentImportController.value = null;
-            }
-            if (err.name === "AbortError") {
-              if (cancelImport.value) {
-                importPhase.value = "cancelled";
-                importInProgress.value = false;
-                importError.value = null;
-                return;
-              }
-              lastError = new Error("Upload timed out");
-              console.warn(
-                `[IMPORT] Batch ${
-                  i / BATCH_SIZE + 1
-                } timed out (attempt ${attempt})`
-              );
-            } else {
-              lastError = err;
-              console.warn(
-                `[IMPORT] Batch ${
-                  i / BATCH_SIZE + 1
-                } failed (attempt ${attempt}):`,
-                err
-              );
-            }
-          }
-          if (attempt < MAX_RETRIES) {
-            await new Promise((resolve) => setTimeout(resolve, 1000)); // wait 1s before retry
-          }
-        }
-        if (!res || !res.ok) {
-          importPhase.value = "error";
-          importError.value = lastError ? lastError.message : "Upload failed.";
-          importInProgress.value = false;
-          return;
-        }
-        const result = await res.json();
-        if (result && Array.isArray(result.results)) {
-          completed += result.results.length;
-          importProgress.value = completed;
-          importedCount += result.results.filter(
-            (r) => r.status === "success"
-          ).length;
-          await nextTick();
-        }
-      }
-      if (importedCount === 0) {
-        importPhase.value = "duplicates";
-        importError.value = "All files are duplicates.";
-      } else {
-        importPhase.value = "done";
-        importError.value = `Imported ${importedCount} image${
-          importedCount !== 1 ? "s" : ""
-        }.`;
-      }
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 1500);
-      refreshImages();
-      fetchSidebarCounts();
-    } catch (e) {
-      importPhase.value = "error";
-      importInProgress.value = false;
-      alert("All uploads failed: " + (e.message || e));
-    }
-  })();
+
+  if (
+    !imageImporterRef.value ||
+    typeof imageImporterRef.value.startImport !== "function"
+  ) {
+    console.warn("ImageImporter component is not ready to handle imports.");
+    return;
+  }
+
+  imageImporterRef.value.startImport(files, {
+    selectedCharacterId: selectedCharacter.value,
+  });
+}
+
+function handleImportFinished() {
+  refreshImages();
+  fetchSidebarCounts();
 }
 
 // Clear selection if clicking on empty space in the image grid

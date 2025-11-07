@@ -128,58 +128,55 @@ class Pictures:
 
         while not self._tag_worker_stop.is_set():
             try:
+                data_updated = False
+
+                missing_tags = []
+                missing_embeddings = []
                 with self._db.threaded_connection as thread_conn:
-                    data_updated = False
+                    missing_tags, missing_embeddings = (
+                        self._fetch_missing_tags_and_embeddings(thread_conn)
+                    )
 
-                    missing_tags = [pic for pic in self.find() if not pic.tags]
-                    missing_embeddings = [
-                        pic
-                        for pic in self.find()
-                        if getattr(pic, "embedding", None) is None and pic.tags
-                    ]
+                if self._tag_worker_stop.is_set():
+                    break
 
-                    if missing_tags:
-                        logger.info(
-                            f"Tagging {len(missing_tags)} pictures missing tags."
-                        )
-                        tagged_pictures = self._tag_pictures(
-                            thread_conn, self._picture_tagger, missing_tags
-                        )
-                        data_updated |= tagged_pictures > 0
+                if missing_tags:
+                    logger.info(f"Tagging {len(missing_tags)} pictures missing tags.")
+                    tagged_pictures = 0
+                    tagged_pictures = self._tag_pictures(
+                        self._picture_tagger, missing_tags
+                    )
+                    data_updated |= tagged_pictures > 0
 
-                    if self._tag_worker_stop.is_set():
-                        break
+                if self._tag_worker_stop.is_set():
+                    break
 
-                    if missing_embeddings:
-                        logger.info(
-                            f"Generating embeddings for {len(missing_embeddings)} pictures."
+                if missing_embeddings:
+                    logger.info(
+                        f"Generating embeddings for {len(missing_embeddings)} pictures."
+                    )
+                    data_updated = (
+                        self._embed_tagged_pictures(
+                            self._picture_tagger, missing_embeddings
                         )
-                        data_updated = (
-                            self._embed_tagged_pictures(
-                                thread_conn, self._picture_tagger, missing_embeddings
-                            )
-                            or data_updated
-                        )
+                        or data_updated
+                    )
 
-                    if self._tag_worker_stop.is_set():
-                        break
+                if self._tag_worker_stop.is_set():
+                    break
 
-                    if calculate_face_bboxes:
-                        logger.debug(
-                            "Generating face bounding boxes for pictures needing them."
-                        )
-                        pics_needing_face_bboxes = self._find_pics_needing_face_bbox(
-                            thread_conn
-                        )
-                        calculate_face_bboxes, bboxes_updated = (
-                            self._calculate_face_bboxes(
-                                thread_conn, pics_needing_face_bboxes
-                            )
-                        )
-                        data_updated |= bboxes_updated
+                if calculate_face_bboxes:
+                    logger.debug(
+                        "Generating face bounding boxes for pictures needing them."
+                    )
+                    pics_needing_face_bboxes = self._find_pics_needing_face_bbox()
+                    calculate_face_bboxes, bboxes_updated = self._calculate_face_bboxes(
+                        pics_needing_face_bboxes
+                    )
+                    data_updated |= bboxes_updated
 
-                    if not data_updated:
-                        self._tag_worker_stop.wait(interval)
+                if not data_updated:
+                    self._tag_worker_stop.wait(interval)
             except (sqlite3.OperationalError, OSError) as e:
                 # Database file was deleted or connection lost during shutdown
                 logger.debug(
@@ -187,11 +184,62 @@ class Pictures:
                 )
                 break
 
+    def _fetch_missing_tags_and_embeddings(self, thread_conn):
+        """Return PictureModels needing tags and embeddings using the provided connection."""
+        cursor = thread_conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT p.*
+            FROM pictures p
+            LEFT JOIN picture_tags pt ON pt.picture_id = p.id
+            GROUP BY p.id
+            HAVING COUNT(pt.tag) = 0
+            """
+        )
+        rows_missing_tags = cursor.fetchall()
+        missing_tags = []
+        if rows_missing_tags:
+            empty_tags = [[] for _ in rows_missing_tags]
+            missing_tags = self.from_batch_of_db_dicts(rows_missing_tags, empty_tags)
+
+        cursor.execute(
+            """
+            SELECT p.*
+            FROM pictures p
+            WHERE p.embedding IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM picture_tags pt WHERE pt.picture_id = p.id
+              )
+            """
+        )
+        rows_missing_embeddings = cursor.fetchall()
+        missing_embeddings = []
+        if rows_missing_embeddings:
+            pic_ids = [row["id"] for row in rows_missing_embeddings]
+            placeholders = ",".join(["?"] * len(pic_ids))
+            cursor.execute(
+                f"SELECT picture_id, tag FROM picture_tags WHERE picture_id IN ({placeholders})",
+                pic_ids,
+            )
+            tag_rows = cursor.fetchall()
+            tag_map = {pid: [] for pid in pic_ids}
+            for tag_row in tag_rows:
+                tag_map[tag_row["picture_id"]].append({"tag": tag_row["tag"]})
+
+            tag_dicts = [tag_map.get(row["id"], []) for row in rows_missing_embeddings]
+            missing_embeddings = self.from_batch_of_db_dicts(
+                rows_missing_embeddings, tag_dicts
+            )
+
+        return missing_tags, missing_embeddings
+
     def _quality_worker_loop(self, interval):
         # Create a new connection for this thread
         while not self._quality_worker_stop.is_set():
             quality_updates = 0
             try:
+                pics = []
                 with self._db.threaded_connection as thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
@@ -201,17 +249,21 @@ class Pictures:
                     logger.debug(
                         f"Quality worker found {len(rows)} pictures needing quality or face quality calculation."
                     )
-                    for row in rows:
-                        logger.debug(f"Doing row {row}")
-                        if self._quality_worker_stop.is_set():
-                            break
-                        pic = PictureModel.from_dict(row)
-                        logger.debug("Checked stop event for iteration")
-                        logger.debug(
-                            f"Opening file {pic.file_path} for quality/face quality calculation"
-                        )
-                        self._calculate_and_store_quality(thread_conn, pic)
-                        quality_updates += 1
+                    pics = self.from_batch_of_db_dicts(rows, [])
+
+                for pic in pics:
+                    logger.debug(f"Doing picture {pic.id}")
+                    if self._quality_worker_stop.is_set():
+                        break
+                    logger.debug("Checked stop event for iteration")
+                    logger.debug(
+                        f"Opening file {pic.file_path} for quality/face quality calculation"
+                    )
+                    self._calculate_quality(pic)
+                    quality_updates += 1
+                if pics:
+                    with self._db.threaded_connection as thread_conn:
+                        self._update_quality(thread_conn, pics)
             except (sqlite3.OperationalError, OSError) as e:
                 # Database file was deleted or connection lost during shutdown
                 logger.debug(
@@ -224,45 +276,38 @@ class Pictures:
             if quality_updates == 0:
                 self._quality_worker_stop.wait(interval)
 
-    def _calculate_and_store_quality(self, thread_conn, pic):
+    def _calculate_quality(self, pic):
         try:
             image_np = PictureUtils.load_image_or_video(pic.file_path)
             # Only calculate and update quality if it is NULL
             if pic.quality is None:
                 pic.quality = PictureQuality.calculate_metrics(image_np)
-                if pic.quality:
-                    try:
-                        quality_json = json.dumps(pic.quality.__dict__)
-                    except Exception as e:
-                        logger.error(f"Failed to serialize quality for {pic.id}: {e}")
-
-                    cursor = thread_conn.cursor()
-                    logger.debug(f"Updating quality for picture {pic.id} in DB")
-                    cursor.execute(
-                        "UPDATE pictures SET quality = ? WHERE id = ?",
-                        (quality_json, pic.id),
-                    )
-                    thread_conn.commit()
-                    logger.debug(f"Calculated and stored quality for picture {pic.id}")
 
             # Always attempt to calculate and update face_quality if it is NULL
             if pic.face_quality is None and pic.face_bbox is not None:
                 pic.face_quality = PictureQuality.calculate_face_quality(
                     image_np, pic.face_bbox
                 )
-                face_quality_json = json.dumps(pic.face_quality.__dict__)
-                if face_quality_json is not None:
-                    cursor = thread_conn.cursor()
-                    logger.debug(f"Updating face_quality for picture {pic.id} in DB")
-                    cursor.execute(
-                        "UPDATE pictures SET face_quality = ? WHERE id = ?",
-                        (face_quality_json, pic.id),
-                    )
-                    thread_conn.commit()
         except Exception as e:
-            logger.error(f"Failed to calculate/store quality for {pic.id}: {e}")
+            logger.error(f"Failed to calculate quality for {pic.id}: {e}")
 
-    def _tag_pictures(self, thread_conn, picture_tagger, missing_tags) -> int:
+    def _update_quality(self, thread_conn, pics):
+        cursor = thread_conn.cursor()
+        values = []
+        for pic in pics:
+            quality_json = json.dumps(pic.quality) if pic.quality is not None else None
+            face_quality_json = (
+                json.dumps(pic.face_quality) if pic.face_quality is not None else None
+            )
+            values.append((quality_json, face_quality_json, pic.id))
+
+        cursor.executemany(
+            "UPDATE pictures SET quality = ?, face_quality = ? WHERE id = ?",
+            values,
+        )
+        thread_conn.commit()
+
+    def _tag_pictures(self, picture_tagger, missing_tags) -> int:
         """Tag all pictures missing tags."""
         assert missing_tags is not None
         batch = missing_tags[:MAX_CONCURRENT_IMAGES]
@@ -288,34 +333,39 @@ class Pictures:
                     if tags:
                         pic.tags = tags
                         # Replace all tags in picture_tags table
-                        cursor = thread_conn.cursor()
-                        cursor.execute(
-                            "DELETE FROM picture_tags WHERE picture_id = ?", (pic.id,)
-                        )
-                        cursor.executemany(
-                            "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
-                            [(pic.id, tag) for tag in tags],
-                        )
+                        with self._db.threaded_connection as thread_conn:
+                            cursor = thread_conn.cursor()
+                            cursor.execute(
+                                "DELETE FROM picture_tags WHERE picture_id = ?",
+                                (pic.id,),
+                            )
+                            cursor.executemany(
+                                "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+                                [(pic.id, tag) for tag in tags],
+                            )
+                            thread_conn.commit()
                         tagged_pictures += 1
-                    thread_conn.commit()
+
         return tagged_pictures
 
-    def _find_pics_needing_face_bbox(self, thread_conn):
+    def _find_pics_needing_face_bbox(self):
         """Find pictures that need face bounding boxes."""
         if not hasattr(self, "_skip_pictures"):
             self._skip_pictures = set()
 
-        cursor = thread_conn.cursor()
-        cursor.execute(
-            "SELECT * FROM pictures WHERE face_bbox IS NULL OR face_bbox = ''"
-        )
-        pics = [PictureModel.from_dict(row) for row in cursor.fetchall()]
+        pics = []
+        with self._db.threaded_connection as thread_conn:
+            cursor = thread_conn.cursor()
+            cursor.execute(
+                "SELECT * FROM pictures WHERE face_bbox IS NULL OR face_bbox = ''"
+            )
+            pics = [PictureModel.from_dict(row) for row in cursor.fetchall()]
         batch = [pic for pic in pics if pic.id not in self._skip_pictures][
             :MAX_CONCURRENT_IMAGES
         ]
         return batch
 
-    def _calculate_face_bboxes(self, thread_conn, pics) -> int:
+    def _calculate_face_bboxes(self, pics) -> int:
         """Calculate face bounding box for pictures"""
 
         bboxes_updated = 0
@@ -433,13 +483,12 @@ class Pictures:
                 )
         logger.info("Done extracting face bboxes for current batch.")
 
-        self._update_thumbnails_and_embeddings(thread_conn, pics)
+        with self._db.threaded_connection as thread_conn:
+            self._update_thumbnails_and_embeddings(thread_conn, pics)
 
         return True, bboxes_updated
 
-    def _embed_tagged_pictures(
-        self, thread_conn, picture_tagger, missing_embeddings
-    ) -> int:
+    def _embed_tagged_pictures(self, picture_tagger, missing_embeddings) -> int:
         """Generate embeddings for pictures that have tags but no embedding, including character name, description, and original_prompt if present."""
         assert missing_embeddings is not None
         batch = missing_embeddings[:MAX_CONCURRENT_IMAGES]
@@ -468,7 +517,7 @@ class Pictures:
                 # Use to_dict to ensure base64 encoding
                 pic.embedding = embedding
                 row = pic.to_dict()
-                with thread_conn:
+                with self._db.threaded_connection as thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
                         "UPDATE pictures SET embedding = ?, description = ? WHERE id = ?",
@@ -719,7 +768,7 @@ class Pictures:
             tag_sql = f"SELECT picture_id, tag FROM picture_tags WHERE picture_id IN ({tag_placeholders})"
             tag_rows = self._db.query(tag_sql, tuple(pic_ids))
             for row in tag_rows:
-                tag_dicts_map[row.picture_id].append({"tag": row.tag})
+                tag_dicts_map[row["picture_id"]].append({"tag": row["tag"]})
 
         # Prepare tag_dicts as a list of lists of tag dicts, in the same order as pic_dicts
         tag_dicts = [tag_dicts_map.get(pic_row["id"], []) for pic_row in pic_dicts]

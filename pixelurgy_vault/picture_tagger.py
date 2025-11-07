@@ -297,7 +297,9 @@ class PictureTagger:
         logger.info("Removing tags: " + ", ".join(undesired_tags))
 
         dataset = ImageLoadingDatasetPrepper(image_paths)
-        worker_count = min(MAX_CONCURRENT_IMAGES, os.cpu_count() or 1, len(image_paths))
+        worker_count = min(
+            MAX_CONCURRENT_IMAGES, os.cpu_count() // 2 or 1, len(image_paths)
+        )
         logger.info(
             "Starting tagger dataloader with worker count: "
             + str(worker_count)

@@ -1,51 +1,12 @@
 <v-app>
-<!-- Import Progress Modal (fixed, outside app-viewport) -->
-<div v-if="importInProgress" class="import-progress-modal">
-    <div class="import-progress-content">
-    <div class="import-progress-title">{{ importPhaseMessage }}</div>
-    <div class="import-progress-bar-bg">
-        <div
-        class="import-progress-bar"
-        :style="{
-            width:
-            (importTotal ? importProgress / importTotal : 0) * 100 + '%',
-        }"
-        ></div>
-    </div>
-    <div class="import-progress-label">
-        <template v-if="importPhase === 'uploading'">
-        Uploading {{ importProgress }} / {{ importTotal }}
-        </template>
-        <template v-else-if="importPhase === 'done'">
-        Import complete!
-        </template>
-        <template v-else-if="importPhase === 'duplicates'">
-        All files are duplicates.
-        </template>
-        <template v-else-if="importPhase === 'cancelled'">
-        Import cancelled.
-        </template>
-        <template v-else-if="importPhase === 'error'">
-        Import failed.
-        </template>
-        <span v-if="importError" class="import-progress-error">{{
-        importError
-        }}</span>
-    </div>
-    <button
-        class="cancel-button"
-        @click="handleCancelImport"
-        v-if="
-        importPhase !== 'done' &&
-        importPhase !== 'duplicates' &&
-        importPhase !== 'cancelled' &&
-        importPhase !== 'error'
-        "
-    >
-        Cancel
-    </button>
-    </div>
-</div>
+    <ImageImporter
+        ref="imageImporterRef"
+        :backend-url="BACKEND_URL"
+        :selected-character-id="selectedCharacter"
+        :all-pictures-id="ALL_PICTURES_ID"
+        :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
+        @import-finished="handleImportFinished"
+    />
 <div class="app-viewport">
     <div class="top-toolbar">
     <v-btn

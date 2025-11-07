@@ -816,10 +816,6 @@ class Server:
                 logger.error("No files provided for import")
                 raise HTTPException(status_code=400, detail="No image provided")
 
-            # Pause workers and schedule resume
-            self.vault.stop_background_workers()
-            self._schedule_worker_resume(delay=4)
-
             import_results, new_pictures = self.create_picture_imports(
                 uploaded_files, dest_folder, character_id
             )
@@ -833,6 +829,7 @@ class Server:
                 self.vault.pictures.add(new_pictures)
 
             if not new_pictures:
+                logger.error("No new pictures to import; all are duplicates.")
                 raise HTTPException(
                     status_code=400, detail="All pictures are duplicates"
                 )
