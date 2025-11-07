@@ -1,6 +1,3 @@
-from enum import Enum
-from typing import Union, List
-
 import gc
 import numpy as np
 import json
@@ -10,9 +7,11 @@ import os
 import cv2
 import threading
 
+from enum import Enum
+from typing import Union, List, Tuple
 
 from pixelurgy_vault.logging import get_logger
-from pixelurgy_vault.picture import Picture
+from pixelurgy_vault.picture import PictureModel
 from pixelurgy_vault.picture_quality import PictureQuality
 from pixelurgy_vault.picture_tagger import PictureTagger, MAX_CONCURRENT_IMAGES
 from pixelurgy_vault.picture_utils import PictureUtils
@@ -61,17 +60,17 @@ class Pictures:
         self._quality_worker_stop = None
 
     def _get_tags_for_picture(self, picture_id):
-        rows = self._db._query(
+        rows = self._db.query(
             "SELECT tag FROM picture_tags WHERE picture_id = ?", (picture_id,)
         )
         return [row["tag"] if isinstance(row, dict) else row[0] for row in rows]
 
     def _set_tags_for_picture(self, picture_id, tags):
-        self._db._execute(
+        self._db.execute(
             "DELETE FROM picture_tags WHERE picture_id = ?", (picture_id,), commit=True
         )
         if tags:
-            self._db._executemany(
+            self._db.executemany(
                 "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
                 [(picture_id, tag) for tag in tags],
                 commit=True,
@@ -79,10 +78,10 @@ class Pictures:
 
     def __getitem__(self, picture_id):
         logger.debug(f"Fetching picture with id={picture_id} (type={type(picture_id)})")
-        rows = self._db._query("SELECT * FROM pictures WHERE id = ?", (picture_id,))
+        rows = self._db.query("SELECT * FROM pictures WHERE id = ?", (picture_id,))
         if not rows:
             raise KeyError(f"Picture with id {picture_id} not found.")
-        pic = Picture.from_dict(rows[0])
+        pic = PictureModel.from_dict(rows[0])
         pic.tags = self._get_tags_for_picture(picture_id)
         return pic
 
@@ -91,14 +90,14 @@ class Pictures:
         self.import_picture(picture)
 
     def __delitem__(self, picture_id):
-        self._db._execute(
+        self._db.execute(
             "DELETE FROM pictures WHERE id = ?", (picture_id,), commit=True
         )
 
     def __iter__(self):
-        rows = self._db._query("SELECT * FROM pictures")
+        rows = self._db.query("SELECT * FROM pictures")
         for row in rows:
-            yield Picture.from_dict(row)
+            yield PictureModel.from_dict(row)
 
     def update_picture_tags(self, picture_id, tags):
         """
@@ -123,14 +122,6 @@ class Pictures:
         if self._tag_worker:
             self._tag_worker.join(timeout=10)
 
-    def set_embedding_null(self, picture_id):
-        """Set the embedding field to NULL for a given picture."""
-        self._db._execute(
-            "UPDATE pictures SET embedding = NULL WHERE id = ?",
-            (picture_id,),
-            commit=True,
-        )
-
     def _tag_embeddings_loop(self, interval):
         # Create a new connection for this thread
         calculate_face_bboxes = True
@@ -144,7 +135,7 @@ class Pictures:
                     missing_embeddings = [
                         pic
                         for pic in self.find()
-                        if not getattr(pic, "embedding", False) and pic.tags
+                        if getattr(pic, "embedding", None) is None and pic.tags
                     ]
 
                     if missing_tags:
@@ -214,7 +205,7 @@ class Pictures:
                         logger.debug(f"Doing row {row}")
                         if self._quality_worker_stop.is_set():
                             break
-                        pic = Picture.from_dict(row)
+                        pic = PictureModel.from_dict(row)
                         logger.debug("Checked stop event for iteration")
                         logger.debug(
                             f"Opening file {pic.file_path} for quality/face quality calculation"
@@ -318,7 +309,7 @@ class Pictures:
         cursor.execute(
             "SELECT * FROM pictures WHERE face_bbox IS NULL OR face_bbox = ''"
         )
-        pics = [Picture.from_dict(row) for row in cursor.fetchall()]
+        pics = [PictureModel.from_dict(row) for row in cursor.fetchall()]
         batch = [pic for pic in pics if pic.id not in self._skip_pictures][
             :MAX_CONCURRENT_IMAGES
         ]
@@ -474,14 +465,16 @@ class Pictures:
                 embedding, full_text = picture_tagger.generate_embedding(
                     picture=pic, character=character_obj
                 )
+                # Use to_dict to ensure base64 encoding
+                pic.embedding = embedding
+                row = pic.to_dict()
                 with thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
                         "UPDATE pictures SET embedding = ?, description = ? WHERE id = ?",
-                        (embedding.astype("float32").tobytes(), full_text, pic.id),
+                        (row["embedding"], full_text, pic.id),
                     )
                     embedded_pictures += 1
-                pic.embedding = embedding
             except Exception as e:
                 logger.error(
                     f"Failed to generate/store embedding for picture {pic.id}: {e}"
@@ -512,13 +505,6 @@ class Pictures:
             )
             thread_conn.commit()
 
-    def contains(self, picture):
-        """
-        Check if a Picture with the same id exists in the database.
-        """
-        rows = self._db._query("SELECT 1 FROM pictures WHERE id = ?", (picture.id,))
-        return bool(rows)
-
     def find(self, **kwargs):
         """
         Find and return a list of Picture objects matching all provided attribute=value pairs.
@@ -527,7 +513,7 @@ class Pictures:
         Uses VaultDatabase for all DB access.
         """
         if not kwargs:
-            rows = self._db._query("SELECT * FROM pictures")
+            rows = self._db.query("SELECT * FROM pictures")
         else:
             clauses = []
             values = []
@@ -538,11 +524,11 @@ class Pictures:
                     clauses.append(f"{k}=?")
                     values.append(v)
             query = "SELECT * FROM pictures WHERE " + " AND ".join(clauses)
-            rows = self._db._query(query, tuple(values))
+            rows = self._db.query(query, tuple(values))
         result = []
         for row in rows:
-            pic = Picture.from_dict(row)
-            tag_rows = self._db._query(
+            pic = PictureModel.from_dict(row)
+            tag_rows = self._db.query(
                 "SELECT tag FROM picture_tags WHERE picture_id = ?", (pic.id,)
             )
             pic.tags = [
@@ -551,17 +537,6 @@ class Pictures:
             ]
             result.append(pic)
         return result
-
-    def find_by_tag_or_description(self, query):
-        """
-        Find pictures where the query matches any tag or appears in the description (case-insensitive, partial match).
-        """
-        q = f"%{query.lower()}%"
-        rows = self._db._query(
-            "SELECT * FROM pictures WHERE LOWER(description) LIKE ? OR LOWER(tags) LIKE ?",
-            (q, q),
-        )
-        return [Picture.from_dict(row) for row in rows]
 
     def find_by_text(self, text, top_n=5, include_scores=False, threshold=0.5):
         """
@@ -583,7 +558,7 @@ class Pictures:
             f"Semantic search: query embedding shape: {getattr(query_emb, 'shape', None)}"
         )
         # Load all picture embeddings and ids
-        rows = self._db._query(
+        rows = self._db.query(
             "SELECT id, embedding FROM pictures WHERE embedding IS NOT NULL"
         )
         logger.debug(
@@ -661,72 +636,150 @@ class Pictures:
         if not isinstance(picture_ids, list):
             picture_ids = [picture_ids]
 
-        self._db._executemany(
+        self._db.executemany(
             "DELETE FROM pictures WHERE id = ?",
+            [(pid,) for pid in picture_ids],
+            commit=False,
+        )
+        self._db.executemany(
+            "DELETE FROM picture_tags WHERE picture_id = ?",
             [(pid,) for pid in picture_ids],
             commit=True,
         )
 
-    def add(self, pictures: Union[Picture, List[Picture]]):
+    def add(self, pictures: Union[PictureModel, List[PictureModel]]):
         """Add one or more pictures. Supports both single picture and batch operations."""
         if not isinstance(pictures, list):
             pictures = [pictures]
 
-        for picture in pictures:
-            d = picture.to_dict()
-            d.pop("tags", None)
-            columns = ", ".join(d.keys())
-            placeholders = ", ".join([f":{k}" for k in d.keys()])
+        # Batch insert
+        picture_dicts, list_of_tag_dicts = self.to_batch_of_db_dicts(pictures)
+        if picture_dicts:
+            columns = ", ".join(picture_dicts[0].keys())
+            placeholders = ", ".join([f":{k}" for k in picture_dicts[0].keys()])
             sql = f"INSERT INTO pictures ({columns}) VALUES ({placeholders})"
-            self._db._execute(sql, d, commit=True)
-            # Insert tags into picture_tags table
-            if hasattr(picture, "tags") and picture.tags:
-                self._db._executemany(
-                    "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
-                    [(picture.id, tag) for tag in picture.tags],
-                    commit=True,
-                )
+            self._db.executemany(sql, picture_dicts, commit=True)
+        # Flatten tag dicts for batch insert
+        all_tag_dicts = [
+            tag_dict for tag_dicts in list_of_tag_dicts for tag_dict in tag_dicts
+        ]
+        if all_tag_dicts:
+            self._db.executemany(
+                "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+                [
+                    (tag_dict["picture_id"], tag_dict["tag"])
+                    for tag_dict in all_tag_dicts
+                ],
+                commit=True,
+            )
 
-    def update(self, pictures: Union[Picture, List[Picture]]):
+    def update(self, pictures: Union[PictureModel, List[PictureModel]]):
         """Update one or more pictures. Supports both single picture and batch operations."""
         if not isinstance(pictures, list):
             pictures = [pictures]
 
-        for picture in pictures:
-            d = picture.to_dict()
-            d.pop("tags", None)
-            set_clause = ", ".join([f"{k}=:{k}" for k in d.keys()])
+        picture_dicts, list_of_tag_dicts = self.to_batch_of_db_dicts(pictures)
+        for pic_dict, tag_dicts in zip(picture_dicts, list_of_tag_dicts):
+            set_clause = ", ".join([f"{k}=:{k}" for k in pic_dict.keys()])
             sql = f"UPDATE pictures SET {set_clause} WHERE id = :id"
-            self._db._execute(sql, d, commit=True)
-            # Update tags in picture_tags table
-            if hasattr(picture, "tags") and picture.tags is not None:
-                self._db._execute(
-                    "DELETE FROM picture_tags WHERE picture_id = ?",
-                    (picture.id,),
-                    commit=True,
-                )
-                self._db._executemany(
-                    "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
-                    [(picture.id, tag) for tag in picture.tags],
-                    commit=True,
-                )
+            self._db.execute(sql, pic_dict, commit=False)
 
-    def fetch_by_shas(self, shas: list[str]) -> list[Picture]:
+            # Update tags in picture_tags table
+            if tag_dicts:
+                self._db.execute(
+                    "DELETE FROM picture_tags WHERE picture_id = ?",
+                    (pic_dict["id"],),
+                    commit=False,
+                )
+                self._db.executemany(
+                    "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+                    [
+                        (tag_dict["picture_id"], tag_dict["tag"])
+                        for tag_dict in tag_dicts
+                    ],
+                    commit=False,
+                )
+        self._db.commit()
+
+    def fetch_by_shas(self, shas: list[str]) -> list[PictureModel]:
         if not shas:
             return []
         placeholders = ",".join(["?"] * len(shas))
         sql = f"SELECT * FROM pictures WHERE pixel_sha IN ({placeholders})"
-        rows = self._db._query(sql, tuple(shas))
+        pic_dicts = self._db.query(sql, tuple(shas))
 
-        result = []
-        for row in rows:
-            pic = Picture.from_dict(row)
-            tag_rows = self._db._query(
-                "SELECT tag FROM picture_tags WHERE picture_id = ?", (pic.id,)
-            )
-            pic.tags = [
-                tag_row["tag"] if isinstance(tag_row, dict) else tag_row[0]
-                for tag_row in tag_rows
-            ]
-            result.append(pic)
-        return result
+        if not pic_dicts:
+            return []
+
+        # Collect all picture IDs
+        pic_ids = [pic_row["id"] for pic_row in pic_dicts]
+        tag_dicts_map = {pid: [] for pid in pic_ids}
+        if pic_ids:
+            tag_placeholders = ",".join(["?"] * len(pic_ids))
+            tag_sql = f"SELECT picture_id, tag FROM picture_tags WHERE picture_id IN ({tag_placeholders})"
+            tag_rows = self._db.query(tag_sql, tuple(pic_ids))
+            for row in tag_rows:
+                tag_dicts_map[row.picture_id].append({"tag": row.tag})
+
+        # Prepare tag_dicts as a list of lists of tag dicts, in the same order as pic_dicts
+        tag_dicts = [tag_dicts_map.get(pic_row["id"], []) for pic_row in pic_dicts]
+        pic_models = Pictures.from_batch_of_db_dicts(pic_dicts, tag_dicts)
+        return pic_models
+
+    @staticmethod
+    def from_db_dicts(
+        picture_dicts: Union[dict, list[dict]],
+        tag_dicts: Union[list[dict], list[list[dict]]],
+    ):
+        """
+        Convert dicts from DB rows to a PictureModel object
+        """
+        pic = PictureModel.from_dict(picture_dicts)
+        pic.tags = [tag_dict["tag"] for tag_dict in tag_dicts]
+
+        return pic
+
+    @staticmethod
+    def from_batch_of_db_dicts(
+        picture_dicts: Union[dict, list[dict]],
+        tag_dicts: Union[list[dict], list[list[dict]]],
+    ):
+        """
+        Convert list of dicts from DB rows to a list of PictureModel objects
+        """
+        return [Pictures.from_db_dicts(p, t) for p, t in zip(picture_dicts, tag_dicts)]
+
+    @staticmethod
+    def to_db_dicts(pic: PictureModel) -> Tuple[dict, list[dict]]:
+        """
+        Convert PictureModel to dicts suitable for DB insertion.
+        Supports single model.
+        Returns tuple of (picture_dict, list[tag_dict]).
+        """
+        pic = pic
+        tags = pic.tags if hasattr(pic, "tags") and pic.tags is not None else []
+        tag_dicts = [{"picture_id": pic.id, "tag": tag} for tag in tags]
+        picture_dict = {}
+        for key, value in pic.to_dict().items():
+            if key == "tags":
+                continue
+            picture_dict[key] = value
+        return picture_dict, tag_dicts
+
+    @staticmethod
+    def to_batch_of_db_dicts(
+        pics: list[PictureModel],
+    ) -> Tuple[list[dict], list[list[dict]]]:
+        """
+        Convert PictureModels to dicts suitable for DB insertion.
+        Supports a list of models.
+        Returns tuple of (list[picture_dict], list[list[tag_dict]]).
+        """
+        if isinstance(pics, list):
+            picture_dicts = []
+            list_of_tag_dicts = []
+            for pic in pics:
+                pic_dict, tag_dicts = Pictures.to_db_dicts(pic)
+                picture_dicts.append(pic_dict)
+                list_of_tag_dicts.append(tag_dicts)
+            return picture_dicts, list_of_tag_dicts

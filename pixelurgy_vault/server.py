@@ -18,7 +18,6 @@ from typing import List
 
 from pixelurgy_vault.character import CharacterModel
 from pixelurgy_vault.logging import get_logger
-from pixelurgy_vault.picture import Picture
 from pixelurgy_vault.picture_utils import PictureUtils
 from pixelurgy_vault.pictures import get_sort_mechanisms
 from pixelurgy_vault.vault import Vault
@@ -611,7 +610,9 @@ class Server:
                 # Drop embeddings for all pictures with this character_id
                 pics = self.vault.pictures.find(character_id=id)
                 for pic in pics:
-                    self.vault.pictures.set_embedding_null(pic.id)
+                    pic.embedding = None
+
+                self.vault.pictures.update(pics)
             if description is not None and description != char.description:
                 char.description = description
                 updated = True
@@ -982,7 +983,7 @@ class Server:
                 img_bytes, ext = file_entry
                 pic_id = str(uuid.uuid4()) + ext
                 logger.info(f"Importing picture from uploaded bytes as id={pic_id}")
-                return Picture.create_from_bytes(
+                return PictureUtils.create_picture_from_bytes(
                     image_root_path=dest_folder,
                     image_bytes=img_bytes,
                     picture_id=pic_id,

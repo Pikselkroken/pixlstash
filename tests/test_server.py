@@ -96,9 +96,9 @@ def test_esmeralda_vault_character_and_logo():
             with open(logo_path, "rb") as f:
                 logo_bytes = f.read()
             # Compare the full file
-            assert img_resp.content == logo_bytes, (
-                "EsmeraldaVault's picture does not match Logo.png"
-            )
+            assert (
+                img_resp.content == logo_bytes
+            ), "EsmeraldaVault's picture does not match Logo.png"
     gc.collect()
 
 
@@ -417,9 +417,9 @@ def test_tagger_worker_adds_tags():
                 found_tags = pic_info.get("tags", [])
                 if found_tags:
                     break
-            assert found_tags, (
-                "Tagger worker did not add tags to TaggerTest.png after waiting."
-            )
+            assert (
+                found_tags
+            ), "Tagger worker did not add tags to TaggerTest.png after waiting."
     gc.collect()
 
 
@@ -465,20 +465,35 @@ def test_semantic_search_on_all_pictures():
 
                 for pid in missing_embeddings:
                     get_resp = client.get(f"/pictures/{pid}?info=true")
-                    # print("RESP:", get_resp.json())
                     if not get_resp.status_code == 200:
                         continue
                     pic_info = get_resp.json()
-                    # Embedding is present if semantic search will work
-                    if not pic_info.get("embedding"):
+                    embedding_b64 = pic_info.get("embedding")
+                    if not embedding_b64:
                         continue
+                    import base64
+                    import numpy as np
+
+                    try:
+                        emb_bytes = base64.b64decode(embedding_b64)
+                        emb = np.frombuffer(emb_bytes, dtype=np.float32)
+                        # Check for non-empty and not all zeros
+                        if emb.size == 0 or np.allclose(emb, 0):
+                            print(f"Picture {pid} has empty or zero embedding: {emb}")
+                            continue
+                    except Exception as e:
+                        print(f"Error decoding embedding for {pid}: {e}")
+                        continue
+                    print(
+                        f"Picture {pid} has embedding of length {len(embedding_b64)} and norm {np.linalg.norm(emb):.4f}."
+                    )
                     picture_ids.remove(pid)
                 time.sleep(1)
 
             if picture_ids:
-                assert False, (
-                    f"Pictures {picture_ids} did not get embedding after waiting."
-                )
+                assert (
+                    False
+                ), f"Pictures {picture_ids} did not get valid embedding after waiting."
 
             # Perform semantic search
             search_texts = [
@@ -499,7 +514,7 @@ def test_semantic_search_on_all_pictures():
                 print("Semantic search results:")
                 for pic in results:
                     print(pic)
-                assert 1 <= len(results), (
-                    f"Expected at least one results, got {len(results)} for the text '{search_text}'"
-                )
+                assert (
+                    1 <= len(results)
+                ), f"Expected at least one results, got {len(results)} for the text '{search_text}'"
     gc.collect()

@@ -2,12 +2,15 @@ import cv2
 import numpy as np
 import os
 import hashlib
+import uuid
 
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Optional
 from PIL import Image
 
 from pixelurgy_vault.logging import get_logger
+from pixelurgy_vault.picture import PictureModel
 
 logger = get_logger(__name__)
 
@@ -192,3 +195,117 @@ class PictureUtils:
         digest = sha256.hexdigest()
         logger.debug(f"SAMPLED: hash={digest}")
         return digest
+
+    @staticmethod
+    def create_picture_from_file(
+        image_root_path: str,
+        source_file_path: str,
+        picture_id: Optional[str] = None,
+        character_id: Optional[str] = None,
+        pixel_sha: Optional[str] = None,
+    ) -> PictureModel:
+        """
+        Create a Picture from a file path.
+        Args:
+            image_root_path (str): Root directory to store images.
+            source_file_path (str): Path to the source image file.
+            picture_id (str): Stable UUID for the picture.
+            character_id (Optional[str]): Associated character ID.
+            description (Optional[str]): Description of the picture.
+        Returns:
+            Picture: The created Picture object.
+        """
+        if not os.path.exists(source_file_path):
+            raise ValueError(f"Source file path does not exist: {source_file_path}")
+        with open(source_file_path, "rb") as f:
+            image_bytes = f.read()
+        return PictureUtils.create_picture_from_bytes(
+            image_root_path=image_root_path,
+            image_bytes=image_bytes,
+            picture_id=picture_id,
+            character_id=character_id,
+            pixel_sha=pixel_sha,
+        )
+
+    @staticmethod
+    def create_picture_from_bytes(
+        image_root_path: str,
+        image_bytes: bytes,
+        picture_id: Optional[str] = None,
+        character_id: Optional[str] = None,
+        pixel_sha: Optional[str] = None,
+    ) -> PictureModel:
+        """
+        Create a a Picture from raw bytes. Supports both images and videos.
+        Args:
+            image_root_path (str): Root directory to store images.
+            image_bytes (bytes): Raw bytes of the image or video.
+            picture_id (str): Stable UUID for the picture.
+            character_id (Optional[str]): Associated character ID.
+        Returns:
+            Picture: The created Picture object.
+        """
+
+        if not pixel_sha:
+            pixel_sha = PictureUtils.calculate_hash_from_bytes(image_bytes)
+
+        # Try to detect if this is a video or image
+        img_format = None
+        width = height = None
+        thumbnail_bytes = None
+        is_video = False
+        # Try image first
+        try:
+            with Image.open(BytesIO(image_bytes)) as img:
+                img_format = img.format or "PNG"
+                width, height = img.size
+                thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(img)
+        except Exception:
+            # Not an image, try video
+            is_video = True
+        if is_video:
+            # Write bytes to temp file to read with cv2
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                tmp.write(image_bytes)
+                tmp_path = tmp.name
+            cap = cv2.VideoCapture(tmp_path)
+            ret, frame = cap.read()
+            if not ret:
+                logger.error("Could not read first frame from video for thumbnail.")
+            else:
+                height, width = frame.shape[:2]
+                thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(frame)
+            cap.release()
+            img_format = "MP4"  # Default, could be improved by sniffing
+            # Remove temp file
+            os.remove(tmp_path)
+
+        if not picture_id:
+            picture_id = str(uuid.uuid4()) + f".{img_format.lower()}"
+
+        file_path = os.path.join(image_root_path, picture_id)
+        if os.path.exists(file_path):
+            size_bytes = os.path.getsize(file_path)
+        else:
+            os.makedirs(image_root_path, exist_ok=True)
+            with open(file_path, "wb") as f:
+                f.write(image_bytes)
+            size_bytes = len(image_bytes)
+
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        pic = PictureModel(
+            id=picture_id,
+            file_path=file_path,
+            format=img_format,
+            width=width,
+            height=height,
+            size_bytes=size_bytes,
+            created_at=created_at,
+            thumbnail=thumbnail_bytes,
+            character_id=character_id,
+            pixel_sha=pixel_sha,
+        )
+        return pic

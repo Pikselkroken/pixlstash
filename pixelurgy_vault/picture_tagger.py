@@ -370,10 +370,6 @@ class PictureTagger:
             tuple: A tuple containing the embedding (numpy array) and the full text (str).
         """
 
-        logger.info(
-            f"generate_embedding called with character={character}, picture={picture}"
-        )
-
         texts = self._collect_text(picture)
         texts = self._filter_texts(texts)
         logger.debug(f"Embedding: texts used for embedding (filtered): {texts}")

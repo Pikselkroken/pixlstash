@@ -14,6 +14,26 @@ from .vault_upgrade import VaultUpgrade
 logger = get_logger(__name__)
 
 
+def _assert_no_bytes(params):
+    if isinstance(params, dict):
+        for v in params.values():
+            assert not isinstance(
+                v, bytes
+            ), f"Attempted to insert raw bytes into DB: {v!r}"
+    elif isinstance(params, (list, tuple)):
+        for item in params:
+            if isinstance(item, (list, tuple, dict)):
+                _assert_no_bytes(item)
+            else:
+                assert not isinstance(
+                    item, bytes
+                ), f"Attempted to insert raw bytes into DB: {item!r}"
+    else:
+        assert not isinstance(
+            params, bytes
+        ), f"Attempted to insert raw bytes into DB: {params!r}"
+
+
 class VaultDatabase:
     """
     Centralized database access for Pixelurgy Vault.
@@ -87,6 +107,8 @@ class VaultDatabase:
             sql_type = cls.python_type_to_sql(f.type)
             col_def = f"{f.name} {sql_type}"
             meta = f.metadata if hasattr(f, "metadata") else {}
+            if meta.get("db_ignore", False):
+                continue
             if meta.get("primary_key"):
                 primary_keys.append(f.name)
             if meta.get("composite_key"):
@@ -157,7 +179,7 @@ class VaultDatabase:
         return _conn_ctx()
 
     def set_metadata(self, key: str, value: str):
-        self._execute(
+        self.execute(
             """
             INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)
             """,
@@ -166,7 +188,7 @@ class VaultDatabase:
         )
 
     def get_metadata(self, key: str) -> Optional[str]:
-        row = self._execute(
+        row = self.execute(
             "SELECT value FROM metadata WHERE key = ?", (key,)
         ).fetchone()
         return row["value"] if row else None
@@ -179,28 +201,36 @@ class VaultDatabase:
             self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
 
-    def _execute(
+    def execute(
         self, sql: str, params: tuple = (), commit: bool = False
     ) -> sqlite3.Cursor:
         with self._lock:
             self._ensure_connection()
+            _assert_no_bytes(params)
             curs = self._conn.execute(sql, params)
             if commit:
                 self._conn.commit()
             return curs
 
-    def _executemany(
+    def executemany(
         self, sql: str, seq_of_params: list, commit: bool = False
     ) -> sqlite3.Cursor:
         with self._lock:
             self._ensure_connection()
+            for params in seq_of_params:
+                _assert_no_bytes(params)
             curs = self._conn.executemany(sql, seq_of_params)
             if commit:
                 self._conn.commit()
             return curs
 
-    def _query(self, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
+    def query(self, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
         with self._lock:
             self._ensure_connection()
             curs = self._conn.execute(sql, params)
             return curs.fetchall()
+
+    def commit(self):
+        with self._lock:
+            if self._conn:
+                self._conn.commit()

@@ -1,17 +1,9 @@
 import base64
 import sqlite3
-import cv2
 import json
-import os
-import uuid
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from io import BytesIO
-from PIL import Image
-from typing import Optional, Self
-
-from pixelurgy_vault.picture_utils import PictureUtils
+from typing import Self, Union
 
 from .logging import get_logger
 
@@ -22,6 +14,21 @@ logger = get_logger(__name__)
 ###################################
 # Data models for database tables #
 ###################################
+
+
+@dataclass
+class PictureTagModel:
+    """
+    Database model for the picture_tags table.
+    """
+
+    __tablename__ = "picture_tags"
+    picture_id: str = field(
+        default=None, metadata={"foreign_key": "pictures(id)", "composite_key": True}
+    )
+    tag: str = field(default=None, metadata={"composite_key": True})
+
+
 @dataclass
 class PictureModel:
     """
@@ -47,192 +54,9 @@ class PictureModel:
     score: int = field(default=None)
     character_likeness: float = field(default=None)
     pixel_sha: str = field(default=None)
+    tags: list[str] = field(default_factory=list, metadata={"db_ignore": True})
 
-
-@dataclass
-class PictureTagModel:
-    """
-    Database model for the picture_tags table.
-    """
-
-    __tablename__ = "picture_tags"
-    picture_id: str = field(
-        default=None, metadata={"foreign_key": "pictures(id)", "composite_key": True}
-    )
-    tag: str = field(default=None, metadata={"composite_key": True})
-
-
-class Picture:
-    """Master asset representing a logical picture (stable UUID)."""
-
-    def __init__(
-        self,
-        id: Optional[str] = None,
-        character_id: Optional[str] = None,
-        file_path: Optional[str] = None,
-        description: Optional[str] = None,
-        tags: list[str] = [],
-        format: Optional[str] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-        size_bytes: Optional[int] = None,
-        created_at: Optional[str] = None,
-        is_reference: bool = False,
-        embedding: Optional[bytes] = None,
-        face_bbox: Optional[list[float]] = None,
-        thumbnail: Optional[bytes] = None,
-        quality: Optional[str] = None,
-        face_quality: Optional[str] = None,
-        score: Optional[int] = None,
-        character_likeness: Optional[float] = None,
-        pixel_sha: Optional[str] = None,
-    ):
-        self.format = (
-            format if format else file_path.split(".")[-1] if file_path else "png"
-        )
-        if id:
-            self.id = id
-        else:
-            self.id = f"{uuid.uuid4().hex}.{self.format}"
-
-        self.character_id = character_id
-        self.file_path = file_path
-        self.description = description
-        self.tags = tags
-        self.width = width
-        self.height = height
-        self.size_bytes = size_bytes
-
-        self.created_at = created_at or datetime.now(timezone.utc).isoformat().replace(
-            "+00:00", "Z"
-        )
-        self.is_reference = is_reference
-        self.embedding = embedding
-        self.face_bbox = face_bbox
-        self.thumbnail = thumbnail
-        self.quality = quality
-        self.face_quality = face_quality
-        self.score = score
-        self.character_likeness = character_likeness
-        self.pixel_sha = pixel_sha
-        if not self.pixel_sha and self.file_path and os.path.exists(self.file_path):
-            self.pixel_sha = PictureUtils.calculate_hash_from_file_path(self.file_path)
-
-    @staticmethod
-    def create_from_file(
-        image_root_path: str,
-        source_file_path: str,
-        picture_id: Optional[str] = None,
-        character_id: Optional[str] = None,
-        pixel_sha: Optional[str] = None,
-    ) -> Self:
-        """
-        Create a Picture from a file path.
-        Args:
-            image_root_path (str): Root directory to store images.
-            source_file_path (str): Path to the source image file.
-            picture_id (str): Stable UUID for the picture.
-            character_id (Optional[str]): Associated character ID.
-            description (Optional[str]): Description of the picture.
-        Returns:
-            Picture: The created Picture object.
-        """
-        if not os.path.exists(source_file_path):
-            raise ValueError(f"Source file path does not exist: {source_file_path}")
-        with open(source_file_path, "rb") as f:
-            image_bytes = f.read()
-        return Picture.create_from_bytes(
-            image_root_path=image_root_path,
-            image_bytes=image_bytes,
-            picture_id=picture_id,
-            character_id=character_id,
-            pixel_sha=pixel_sha,
-        )
-
-    @staticmethod
-    def create_from_bytes(
-        image_root_path: str,
-        image_bytes: bytes,
-        picture_id: Optional[str] = None,
-        character_id: Optional[str] = None,
-        pixel_sha: Optional[str] = None,
-    ) -> Self:
-        """
-        Create a a Picture from raw bytes. Supports both images and videos.
-        Args:
-            image_root_path (str): Root directory to store images.
-            image_bytes (bytes): Raw bytes of the image or video.
-            picture_id (str): Stable UUID for the picture.
-            character_id (Optional[str]): Associated character ID.
-        Returns:
-            Picture: The created Picture object.
-        """
-
-        if not pixel_sha:
-            pixel_sha = PictureUtils.calculate_hash_from_bytes(image_bytes)
-
-        # Try to detect if this is a video or image
-        img_format = None
-        width = height = None
-        thumbnail_bytes = None
-        is_video = False
-        # Try image first
-        try:
-            with Image.open(BytesIO(image_bytes)) as img:
-                img_format = img.format or "PNG"
-                width, height = img.size
-                thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(img)
-        except Exception:
-            # Not an image, try video
-            is_video = True
-        if is_video:
-            # Write bytes to temp file to read with cv2
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-                tmp.write(image_bytes)
-                tmp_path = tmp.name
-            cap = cv2.VideoCapture(tmp_path)
-            ret, frame = cap.read()
-            if not ret:
-                logger.error("Could not read first frame from video for thumbnail.")
-            else:
-                height, width = frame.shape[:2]
-                thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(frame)
-            cap.release()
-            img_format = "MP4"  # Default, could be improved by sniffing
-            # Remove temp file
-            os.remove(tmp_path)
-
-        if not picture_id:
-            picture_id = str(uuid.uuid4()) + f".{img_format.lower()}"
-
-        file_path = os.path.join(image_root_path, picture_id)
-        if os.path.exists(file_path):
-            size_bytes = os.path.getsize(file_path)
-        else:
-            os.makedirs(image_root_path, exist_ok=True)
-            with open(file_path, "wb") as f:
-                f.write(image_bytes)
-            size_bytes = len(image_bytes)
-
-        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-        pic = Picture(
-            id=picture_id,
-            file_path=file_path,
-            format=img_format,
-            width=width,
-            height=height,
-            size_bytes=size_bytes,
-            created_at=created_at,
-            thumbnail=thumbnail_bytes,
-            character_id=character_id,
-            pixel_sha=pixel_sha,
-        )
-        return pic
-
-    def to_dict(self, include=None, exclude=None):
+    def to_dict(self, include=None, exclude=None) -> dict:
         result = {
             "id": self.id,
             "character_id": self.character_id,
@@ -246,11 +70,11 @@ class Picture:
             "created_at": self.created_at,
             "is_reference": int(self.is_reference),
             "embedding": base64.b64encode(self.embedding).decode("ascii")
-            if self.embedding
+            if self.embedding is not None
             else None,
             "face_bbox": json.dumps(self.face_bbox) if self.face_bbox else None,
             "thumbnail": base64.b64encode(self.thumbnail).decode("ascii")
-            if self.thumbnail
+            if self.thumbnail is not None
             else None,
             "quality": self.quality,
             "face_quality": self.face_quality,
@@ -266,17 +90,19 @@ class Picture:
         return result
 
     @classmethod
-    def from_dict(cls, row):
+    def from_dict(cls, row: Union[dict, sqlite3.Row]) -> Self:
         assert isinstance(row, dict) or isinstance(row, sqlite3.Row)
+
+        assert "id" in row.keys(), "PictureModel.from_dict requires 'id' field in row"
 
         # Embedding and thumbnail are always stored as base64 strings in DB (from to_dict())
         # Decode them to bytes for internal use
         embedding = None
-        if "embedding" in row.keys() and row["embedding"]:
+        if "embedding" in row.keys() and row["embedding"] is not None:
             embedding = base64.b64decode(row["embedding"])
 
         thumbnail = None
-        if "thumbnail" in row.keys() and row["thumbnail"]:
+        if "thumbnail" in row.keys() and row["thumbnail"] is not None:
             thumbnail = base64.b64decode(row["thumbnail"])
 
         return cls(

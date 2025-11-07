@@ -5,8 +5,8 @@ from typing import Optional
 from .logging import get_logger
 from .characters import Characters
 from .pictures import Pictures
+from .picture_utils import PictureUtils
 from .character import Character
-from .picture import Picture
 from .database import VaultDatabase
 
 logger = get_logger(__name__)
@@ -44,9 +44,9 @@ class Vault:
         assert self.image_root is not None, "image_root cannot be None"
         logger.info(f"Using image_root: {self.image_root}")
         os.makedirs(self.image_root, exist_ok=True)
-        assert os.path.exists(self.image_root), (
-            f"Image root path does not exist: {self.image_root}"
-        )
+        assert os.path.exists(
+            self.image_root
+        ), f"Image root path does not exist: {self.image_root}"
 
         self._db_path = os.path.join(self.image_root, "vault.db")
         self.db = VaultDatabase(self._db_path, description=description)
@@ -119,7 +119,7 @@ class Vault:
         )
         self.characters.add(character)
 
-        picture = Picture.create_from_file(
+        picture = PictureUtils.create_picture_from_file(
             image_root_path=logo_dest_folder,
             source_file_path=logo_src,
             character_id=character.id,
