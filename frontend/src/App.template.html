@@ -1,0 +1,1115 @@
+<v-app>
+<!-- Import Progress Modal (fixed, outside app-viewport) -->
+<div v-if="importInProgress" class="import-progress-modal">
+    <div class="import-progress-content">
+    <div class="import-progress-title">{{ importPhaseMessage }}</div>
+    <div class="import-progress-bar-bg">
+        <div
+        class="import-progress-bar"
+        :style="{
+            width:
+            (importTotal ? importProgress / importTotal : 0) * 100 + '%',
+        }"
+        ></div>
+    </div>
+    <div class="import-progress-label">
+        <template v-if="importPhase === 'hashing'">
+        Hashing {{ importProgress }} / {{ importTotal }}
+        </template>
+        <template v-else-if="importPhase === 'checking'">
+        Checking for duplicates...
+        </template>
+        <template v-else-if="importPhase === 'uploading'">
+        Uploading {{ importProgress }} / {{ importTotal }}
+        </template>
+        <template v-else-if="importPhase === 'done'">
+        Import complete!
+        </template>
+        <template v-else-if="importPhase === 'duplicates'">
+        All files are duplicates.
+        </template>
+        <template v-else-if="importPhase === 'cancelled'">
+        Import cancelled.
+        </template>
+        <template v-else-if="importPhase === 'error'">
+        Import failed.
+        </template>
+        <span v-if="importError" class="import-progress-error">{{
+        importError
+        }}</span>
+    </div>
+    <button
+        class="cancel-button"
+        @click="handleCancelImport"
+        v-if="
+        importPhase !== 'done' &&
+        importPhase !== 'duplicates' &&
+        importPhase !== 'cancelled' &&
+        importPhase !== 'error'
+        "
+    >
+        Cancel
+    </button>
+    </div>
+</div>
+<div class="app-viewport">
+    <div class="top-toolbar">
+    <v-btn
+        icon
+        @click="sidebarVisible = !sidebarVisible"
+        title="Toggle sidebar"
+        class="sidebar-toggle-btn"
+        style="margin-right: 16px"
+    >
+        <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
+    </v-btn>
+    <div class="toolbar-actions">
+        <v-icon style="display: flex; align-items: center; height: 100%"
+        >mdi-image-size-select-small</v-icon
+        >
+        <v-slider
+        v-model="thumbnailSize"
+        :min="128"
+        :max="256"
+        :step="32"
+        class="slider"
+        hide-details
+        style="
+            min-width: 100px;
+            vertical-align: middle;
+            margin-top: 4px;
+            margin-bottom: 4px;
+            margin-left: 8px;
+            margin-right: 16px;
+        "
+        />
+        <v-icon
+        style="
+            display: flex;
+            align-items: center;
+            height: 100%;
+            margin-right: 16px;
+        "
+        >mdi-image-size-select-large</v-icon
+        >
+        <v-btn
+        icon
+        :color="referenceFilterMode ? 'orange darken-2' : 'grey'"
+        @click="referenceFilterMode = !referenceFilterMode"
+        title="Show only reference images"
+        style="margin-right: 2px"
+        >
+        <v-icon>{{
+            referenceFilterMode ? "mdi-trophy" : "mdi-trophy-outline"
+        }}</v-icon>
+        </v-btn>
+        <v-btn
+        icon
+        :color="showStars ? 'orange' : 'grey'"
+        @click="showStars = !showStars"
+        title="Toggle star ratings"
+        style="margin-left: 2px; margin-right: 2px"
+        >
+        <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
+        </v-btn>
+        <v-btn
+        icon
+        color="red darken-2"
+        :disabled="!selectedImageIds.length"
+        @click="deleteSelectedImages"
+        title="Delete selected images"
+        style="margin-left: 2px; margin-right: 2px"
+        >
+        <v-icon>mdi-trash-can-outline</v-icon>
+        </v-btn>
+        <!-- Settings Dialog -->
+        <v-dialog v-model="settingsDialog" max-width="50vw">
+        <v-card class="settings-dialog-card">
+            <div class="settings-dialog-titlebar">
+            <div class="settings-dialog-title">Settings</div>
+            <button
+                class="settings-dialog-close"
+                @click="settingsDialog = false"
+                aria-label="Close"
+            >
+                &times;
+            </button>
+            </div>
+            <v-card-text>
+            <div class="settings-section">
+                <strong>Image Roots</strong>
+                <ul class="settings-image-roots">
+                <li
+                    v-for="root in config.image_roots"
+                    :key="root"
+                    @click="selectImageRoot(root)"
+                    :class="[
+                    'settings-image-root',
+                    { selected: root === config.selected_image_root },
+                    ]"
+                    style="
+                    cursor: pointer;
+                    user-select: none;
+                    display: flex;
+                    align-items: center;
+                    padding: 8px 0 8px 8px;
+                    border-radius: 8px;
+                    margin-bottom: 2px;
+                    "
+                >
+                    <span style="flex: 1">{{ root }}</span>
+                    <span
+                    v-if="root === config.selected_image_root"
+                    style="
+                        color: #1976d2;
+                        font-weight: bold;
+                        margin-left: 8px;
+                    "
+                    >(selected)</span
+                    >
+                    <button
+                    v-if="config.image_roots.length > 1"
+                    @click.stop="removeImageRoot(root)"
+                    title="Remove root"
+                    style="
+                        margin-left: 8px;
+                        background: none;
+                        border: none;
+                        color: #888;
+                        font-size: 1.2em;
+                        cursor: pointer;
+                    "
+                    >
+                    &times;
+                    </button>
+                </li>
+                </ul>
+                <div style="display: flex; margin-top: 12px; gap: 8px">
+                <input
+                    v-model="newImageRoot"
+                    @keydown.enter="addImageRoot"
+                    placeholder="Add new root"
+                    style="
+                    flex: 1;
+                    padding: 6px 10px;
+                    border-radius: 8px;
+                    border: 1px solid #bbb;
+                    font-size: 1em;
+                    "
+                />
+                <button
+                    @click="addImageRoot"
+                    :disabled="!newImageRoot.trim()"
+                    style="
+                    padding: 6px 16px;
+                    border-radius: 8px;
+                    background: #1976d2;
+                    color: #fff;
+                    border: none;
+                    font-weight: 600;
+                    cursor: pointer;
+                    "
+                >
+                    Add
+                </button>
+                </div>
+            </div>
+            <div class="settings-section" style="margin-top: 32px">
+                <strong>OpenAI Chat Service</strong>
+                <div
+                style="
+                    display: flex;
+                    gap: 12px;
+                    align-items: center;
+                    margin-top: 8px;
+                "
+                >
+                <label style="min-width: 60px">Host:</label>
+                <input
+                    v-model="config.openai_host"
+                    style="
+                    flex: 1;
+                    padding: 6px 10px;
+                    border-radius: 8px;
+                    border: 1px solid #bbb;
+                    font-size: 1em;
+                    "
+                    @change="patchConfigUIOptions()"
+                />
+                <label style="min-width: 50px; margin-left: 12px"
+                    >Port:</label
+                >
+                <input
+                    v-model.number="config.openai_port"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    style="
+                    width: 90px;
+                    padding: 6px 10px;
+                    border-radius: 8px;
+                    border: 1px solid #bbb;
+                    font-size: 1em;
+                    "
+                    @change="patchConfigUIOptions()"
+                />
+                </div>
+                <div
+                style="
+                    display: flex;
+                    gap: 12px;
+                    align-items: center;
+                    margin-top: 12px;
+                "
+                >
+                <label style="min-width: 60px">Model:</label>
+                <select
+                    v-model="config.openai_model"
+                    style="
+                    flex: 1;
+                    padding: 6px 10px;
+                    border-radius: 8px;
+                    border: 1px solid #bbb;
+                    font-size: 1em;
+                    "
+                    @change="patchConfigUIOptions()"
+                >
+                    <option v-if="openaiModelLoading" disabled>
+                    Loading models...
+                    </option>
+                    <option v-for="m in openaiModels" :key="m" :value="m">
+                    {{ m }}
+                    </option>
+                    <option
+                    v-if="
+                        !openaiModelLoading &&
+                        !openaiModels.length &&
+                        !openaiModelFetchError
+                    "
+                    disabled
+                    >
+                    No models found
+                    </option>
+                    <option v-if="openaiModelFetchError" disabled>
+                    {{ openaiModelFetchError }}
+                    </option>
+                </select>
+                <button
+                    @click="fetchOpenAIModels"
+                    style="
+                    margin-left: 8px;
+                    padding: 6px 12px;
+                    border-radius: 8px;
+                    background: #1976d2;
+                    color: #fff;
+                    border: none;
+                    font-weight: 600;
+                    cursor: pointer;
+                    "
+                >
+                    Refresh
+                </button>
+                </div>
+                <div
+                v-if="openaiModelFetchError"
+                style="color: #c00; margin-top: 6px"
+                >
+                {{ openaiModelFetchError }}
+                </div>
+            </div>
+            </v-card-text>
+        </v-card>
+        </v-dialog>
+    </div>
+    </div>
+    <div class="file-manager">
+    <aside v-if="sidebarVisible" class="sidebar">
+        <div
+        class="sidebar-section-header"
+        @click="sidebarSections.pictures = !sidebarSections.pictures"
+        >
+        <v-icon small style="margin-right: 8px">{{
+            sidebarSections.pictures
+            ? "mdi-chevron-down"
+            : "mdi-chevron-right"
+        }}</v-icon>
+        Pictures
+        </div>
+        <transition name="fade">
+        <div v-show="sidebarSections.pictures">
+            <div
+            :class="[
+                'sidebar-list-item',
+                { active: selectedCharacter === ALL_PICTURES_ID },
+            ]"
+            @click="selectedCharacter = ALL_PICTURES_ID"
+            >
+            <span class="sidebar-list-icon">
+                <v-icon size="44">mdi-image-multiple</v-icon>
+            </span>
+            <span class="sidebar-list-label">All Pictures</span>
+            <span class="sidebar-list-count">{{
+                categoryCounts[ALL_PICTURES_ID] ?? ""
+            }}</span>
+            </div>
+            <div
+            :class="[
+                'sidebar-list-item',
+                { active: selectedCharacter === UNASSIGNED_PICTURES_ID },
+            ]"
+            @click="selectedCharacter = UNASSIGNED_PICTURES_ID"
+            >
+            <span class="sidebar-list-icon">
+                <v-icon size="44">mdi-help-circle-outline</v-icon>
+            </span>
+            <span class="sidebar-list-label">Unassigned Pictures</span>
+            <span class="sidebar-list-count">{{
+                categoryCounts[UNASSIGNED_PICTURES_ID] ?? ""
+            }}</span>
+            </div>
+        </div>
+        </transition>
+        <div
+        class="sidebar-section-header"
+        @click="sidebarSections.people = !sidebarSections.people"
+        >
+        <v-icon small style="margin-right: 8px">{{
+            sidebarSections.people ? "mdi-chevron-down" : "mdi-chevron-right"
+        }}</v-icon>
+        People
+        <span style="flex: 1 1 auto"></span>
+        <span
+            style="
+            display: grid;
+            grid-template-columns: 32px 32px;
+            gap: 0px;
+            align-items: center;
+            min-width: 64px;
+            "
+        >
+            <v-icon
+            v-if="
+                selectedCharacter &&
+                selectedCharacter !== ALL_PICTURES_ID &&
+                selectedCharacter !== UNASSIGNED_PICTURES_ID
+            "
+            class="delete-character-inline"
+            color="white"
+            style="cursor: pointer; justify-self: end"
+            @click.stop="confirmDeleteCharacter"
+            title="Delete selected character"
+            >mdi-trash-can-outline
+            </v-icon>
+            <v-icon
+            class="add-character-inline"
+            @click.stop="addNewCharacter"
+            title="Add character"
+            style="justify-self: end"
+            >mdi-plus</v-icon
+            >
+        </span>
+        </div>
+        <transition name="fade">
+        <div v-show="sidebarSections.people">
+            <div v-if="error" class="sidebar-error">{{ error }}</div>
+            <div
+            v-if="sortedCharacters.length === 0"
+            class="sidebar-character-group"
+            >
+            <div class="sidebar-list-item">
+                No characters found. Click the + button to add one.
+            </div>
+            </div>
+            <div
+            v-if="sortedCharacters.length > 0"
+            v-for="char in sortedCharacters"
+            :key="char.id"
+            class="sidebar-character-group"
+            >
+            <div
+                :class="[
+                'sidebar-list-item',
+                {
+                    active: selectedCharacter === char.id,
+                    droppable: dragOverCharacter === char.id,
+                },
+                ]"
+                @click="selectedCharacter = char.id"
+                @dragover.prevent="dragOverCharacter = char.id"
+                @dragleave="dragOverCharacter = null"
+                @drop.prevent="onCharacterDrop(char.id, $event)"
+            >
+                <span class="sidebar-list-icon">
+                <img
+                    :src="
+                    characterThumbnails[char.id]
+                        ? characterThumbnails[char.id]
+                        : unknownPerson
+                    "
+                    alt=""
+                    class="sidebar-character-thumb"
+                />
+                </span>
+                <span class="sidebar-list-label">
+                <template v-if="editingCharacterId === char.id">
+                    <input
+                    v-model="editingCharacterName"
+                    class="edit-character-input"
+                    @keydown.enter="saveEditingCharacter(char)"
+                    @keydown.esc="cancelEditingCharacter"
+                    @blur="saveEditingCharacter(char)"
+                    ref="editInput"
+                    style="
+                        width: 90%;
+                        font-size: 1em;
+                        background: #fff;
+                        color: #222;
+                        border-radius: 4px;
+                        border: 1px solid #bbb;
+                        padding: 2px 6px;
+                        outline: none;
+                    "
+                    />
+                </template>
+                <template v-else>
+                    <span @dblclick.stop="startEditingCharacter(char)">
+                    {{
+                        char.name.charAt(0).toUpperCase() + char.name.slice(1)
+                    }}
+                    </span>
+                </template>
+                </span>
+                <span class="sidebar-list-count">{{
+                categoryCounts[char.id] ?? ""
+                }}</span>
+            </div>
+            </div>
+        </div>
+        </transition>
+
+        <div
+        class="sidebar-section-header"
+        @click="sidebarSections.search = !sidebarSections.search"
+        >
+        <v-icon small style="margin-right: 8px">{{
+            sidebarSections.search ? "mdi-chevron-down" : "mdi-chevron-right"
+        }}</v-icon>
+        Search & Sorting
+        <span style="flex: 1 1 auto"></span>
+        </div>
+        <transition name="fade">
+        <div class="search-and-sort" v-show="sidebarSections.search">
+            <div class="sidebar-searchbar-wrapper">
+            <SearchBar
+                v-model="searchQuery"
+                placeholder="Search images..."
+                class="sidebar-searchbar"
+                @search="searchImages"
+            />
+            </div>
+            <div class="sidebar-searchbar-wrapper">
+            <!-- Sorting dropdown -->
+            <v-select
+                v-model="selectedSort"
+                :items="sortOptions"
+                class="sidebar-sort-select"
+                item-title="label"
+                item-value="value"
+                label="Sort by"
+                dense
+                hide-details
+            />
+            </div>
+        </div>
+        </transition>
+
+        <!-- Chat and Settings buttons at the bottom left of the sidebar -->
+        <div
+        style="
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            padding: 16px 0 8px 0;
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            justify-content: flex-start;
+            align-items: flex-end;
+            pointer-events: none;
+        "
+        >
+        <v-btn
+            icon
+            class="sidebar-chat-btn"
+            @click="openChatOverlay"
+            style="
+            margin-left: 12px;
+            pointer-events: auto;
+            background: #29405a;
+            color: #fff;
+            "
+            title="OpenAI Chat"
+        >
+            <v-icon>mdi-chat</v-icon>
+        </v-btn>
+        <v-btn
+            icon
+            @click="openSettingsDialog"
+            style="pointer-events: auto; background: #29405a; color: #fff"
+            title="Settings"
+        >
+            <v-icon>mdi-cog</v-icon>
+        </v-btn>
+        </div>
+    </aside>
+    <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
+        <div
+        :class="['main-content', selectedCharacter ? 'accent-border' : '']"
+        >
+        <template v-if="selectedCharacter">
+            <!-- Selection Info Bar -->
+            <div
+            v-if="selectedImageIds.length > 0"
+            class="selection-info-bar"
+            style="
+                background: #fffbe7;
+                color: #333;
+                border-bottom: 1px solid #e0c97f;
+                padding: 8px 16px;
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                font-size: 1.08em;
+            "
+            >
+            <span>
+                <strong>{{ selectedImageIds.length }}</strong>
+                image{{ selectedImageIds.length === 1 ? "" : "s" }} selected
+            </span>
+            <v-btn
+                small
+                color="primary"
+                @click="selectedImageIds = []"
+                style="margin-left: 12px"
+                >Clear selection</v-btn
+            >
+            </div>
+            <div
+            class="image-grid"
+            :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
+            ref="gridContainer"
+            style="position: relative"
+            @dragenter.prevent="handleGridDragEnter"
+            @dragover.prevent="handleGridDragOver"
+            @dragleave.prevent="handleGridDragLeave"
+            @drop.prevent="handleGridDrop"
+            @scroll="onGridScroll"
+            @click="handleGridBackgroundClick"
+            >
+            <div
+                v-if="images.length === 0 && !imagesLoading && !imagesError"
+                class="empty-state"
+            >
+                No images found for this character.
+            </div>
+            <div v-if="imagesError" class="empty-state">
+                {{ imagesError }}
+            </div>
+            <div v-if="dragOverlayVisible" class="drag-overlay-grid">
+                <span>{{ dragOverlayMessage }}</span>
+            </div>
+            <div
+                v-for="(img, idx) in pagedImages"
+                :key="img.id"
+                class="image-card"
+                :class="[
+                isImageSelected(img.id) ? 'selected' : '',
+                getSelectionBorderClasses(idx),
+                ]"
+                :draggable="isImageSelected(img.id)"
+                @dragstart="onImageDragStart(img, idx, $event)"
+                @click="handleGridBackgroundClick"
+            >
+                <v-card class="thumbnail-card">
+                <div class="thumbnail-container">
+                    <div
+                    class="star-overlay"
+                    v-if="showStars && thumbLoaded[img.id]"
+                    >
+                    <v-icon
+                        v-for="n in 5"
+                        :key="n"
+                        small
+                        :color="
+                        n <= (img.score || 0) ? 'orange' : 'grey darken-2'
+                        "
+                        style="cursor: pointer"
+                        @click.stop="setImageScore(img, n)"
+                        >mdi-star</v-icon
+                    >
+                    </div>
+                    <template
+                    v-if="
+                        (img.format && isSupportedVideoFile(img.format)) ||
+                        (!img.format &&
+                        isSupportedVideoFile(
+                            (img.id || '').split('.').pop()
+                        ))
+                    "
+                    >
+                    <img
+                        :src="`${BACKEND_URL}/thumbnails/${img.id}`"
+                        class="thumbnail-img video-thumb"
+                        @load="thumbLoaded[img.id] = true"
+                        @error="thumbLoaded[img.id] = true"
+                        @click.stop="
+                        (e) => {
+                            if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                            handleImageSelect(img, idx, e);
+                            } else {
+                            openOverlay(img);
+                            }
+                        }
+                        "
+                        style="cursor: pointer; border: 2px solid #2196f3"
+                    />
+                    <v-icon
+                        class="video-icon-overlay"
+                        style="
+                        position: absolute;
+                        bottom: 8px;
+                        left: 8px;
+                        color: #2196f3;
+                        background: white;
+                        border-radius: 50%;
+                        "
+                        >mdi-play-circle</v-icon
+                    >
+                    </template>
+                    <template v-else>
+                    <img
+                        :src="`${BACKEND_URL}/thumbnails/${img.id}`"
+                        class="thumbnail-img"
+                        @load="thumbLoaded[img.id] = true"
+                        @error="thumbLoaded[img.id] = true"
+                        @click.stop="
+                        (e) => {
+                            if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                            handleImageSelect(img, idx, e);
+                            } else {
+                            openOverlay(img);
+                            }
+                        }
+                        "
+                        style="cursor: pointer"
+                    />
+                    </template>
+                    <!-- Trophy icon for reference toggle -->
+                    <v-btn
+                    v-if="thumbLoaded[img.id]"
+                    icon
+                    size="small"
+                    class="reference-trophy-btn trophy-bg"
+                    @click.stop="toggleReference(img)"
+                    title="Toggle reference picture"
+                    style="
+                        position: absolute;
+                        top: 8px;
+                        left: 8px;
+                        z-index: 2;
+                    "
+                    >
+                    <v-icon
+                        :color="img.is_reference ? 'orange' : 'grey darken-2'"
+                        size="24px"
+                        >mdi-trophy</v-icon
+                    >
+                    </v-btn>
+                </div>
+                <!-- Show date under thumbnail if sorting by date -->
+                <div
+                    v-if="
+                    selectedSort === 'date_desc' ||
+                    selectedSort === 'date_asc'
+                    "
+                    class="thumbnail-info"
+                >
+                    {{ new Date(img.created_at).toLocaleString() }}
+                </div>
+                <!-- Show likeness score under thumbnail if sorting by likeness-->
+                <div
+                    v-if="selectedSort === 'search_likeness'"
+                    class="thumbnail-info"
+                >
+                    {{ formatLikenessScore(img.likeness_score) }}
+                </div>
+                </v-card>
+            </div>
+            <div
+                v-if="chatOpen"
+                class="chat-overlay"
+                @click.self="closeChatOverlay"
+            >
+                <div class="chat-overlay-content">
+                <div class="chat-overlay-header">
+                    <span>
+                    <template v-if="selectedCharacterObj">
+                        Chat with {{ selectedCharacterObj.name }}
+                    </template>
+                    <template v-else> AI Chat </template>
+                    </span>
+                    <button
+                    class="overlay-close"
+                    @click="closeChatOverlay"
+                    aria-label="Close"
+                    >
+                    &times;
+                    </button>
+                </div>
+                <div
+                    class="overlay-chat-main"
+                    style="
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    min-height: 0;
+                    "
+                >
+                    <div
+                    class="chat-messages"
+                    ref="chatMessagesContainer"
+                    style="flex: 1 1 0; overflow-y: auto; min-height: 0"
+                    >
+                    <div
+                        v-for="(msg, i) in chatMessages"
+                        :key="i"
+                        :class="
+                        msg.role === 'user'
+                            ? 'chat-message-user'
+                            : 'chat-message-assistant'
+                        "
+                    >
+                        <template v-if="msg.role === 'user'">
+                        <div class="chat-bubble user">
+                            <span class="chat-username">You</span>
+                            <span class="chat-text">{{ msg.content }}</span>
+                        </div>
+                        </template>
+                        <template v-else>
+                        <div class="chat-assistant-full">
+                            <span class="chat-username">AI</span>
+                            <span
+                            class="chat-text"
+                            v-html="renderMarkdown(msg.content)"
+                            ></span>
+                            <div
+                            v-if="msg.pictureUrl"
+                            class="chat-picture-result"
+                            style="margin-top: 0.5em"
+                            >
+                            <img
+                                :src="msg.pictureUrl"
+                                alt="result"
+                                style="
+                                max-width: 50%;
+                                height: auto;
+                                display: block;
+                                margin: 0 auto;
+                                border-radius: 8px;
+                                box-shadow: 0 2px 8px #0002;
+                                "
+                                @load="scrollChatToBottom"
+                            />
+                            </div>
+                        </div>
+                        </template>
+                    </div>
+                    <div v-if="chatLoading" class="chat-message-assistant">
+                        <div class="chat-assistant-full">
+                        <span class="chat-username">AI</span>
+                        <span class="chat-text">...</span>
+                        </div>
+                    </div>
+                    </div>
+                    <form
+                    class="chat-input-row"
+                    @submit.prevent="sendChatMessageAndFocus"
+                    style="
+                        flex-shrink: 0;
+                        background: #f8fafd;
+                        border-top: 1px solid #e0e0e0;
+                        padding: 0.5em 0.7em;
+                        display: flex;
+                        align-items: flex-end;
+                    "
+                    >
+                    <textarea
+                        v-model="chatInput"
+                        class="chat-input"
+                        placeholder="Type your message..."
+                        rows="2"
+                        :disabled="chatLoading"
+                        ref="chatInputField"
+                        @keydown.enter.exact.prevent="sendChatMessageAndFocus"
+                        style="
+                        flex: 1;
+                        resize: none;
+                        min-height: 2.2em;
+                        max-height: 7em;
+                        border-radius: 6px;
+                        border: 1px solid #d0d0d0;
+                        margin-right: 0.5em;
+                        background: #fff;
+                        "
+                    ></textarea>
+                    <v-btn
+                        type="submit"
+                        :disabled="!chatInput.trim() || chatLoading"
+                        color="primary"
+                        class="chat-send-btn"
+                        style="min-width: 40px; min-height: 40px"
+                    >
+                        <v-icon>mdi-send</v-icon>
+                    </v-btn>
+                    </form>
+                </div>
+                </div>
+            </div>
+            <!-- Full image overlay -->
+            <div
+                v-if="overlayOpen"
+                class="image-overlay"
+                @click.self="closeOverlay"
+            >
+                <div class="overlay-content overlay-grid">
+                <button
+                    class="overlay-close"
+                    @click="closeOverlay"
+                    aria-label="Close"
+                    style="
+                    position: absolute;
+                    top: 12px;
+                    right: 18px;
+                    z-index: 20;
+                    "
+                >
+                    &times;
+                </button>
+                <div
+                    class="overlay-grid-main"
+                    style="
+                    display: grid;
+                    grid-template-columns: 64px 1fr 64px;
+                    align-items: center;
+                    width: 100%;
+                    height: 100%;
+                    "
+                >
+                    <div
+                    style="
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        height: 100%;
+                    "
+                    >
+                    <button
+                        class="overlay-nav overlay-nav-left"
+                        @click.stop="showPrevImage"
+                        aria-label="Previous"
+                    >
+                        <v-icon>mdi-skip-previous</v-icon>
+                    </button>
+                    </div>
+                    <div class="overlay-img-wrapper">
+                    <div style="position: relative; display: inline-block">
+                        <template v-if="overlayImage">
+                        <video
+                            v-if="
+                            isSupportedVideoFile(
+                                getOverlayFormat(overlayImage)
+                            )
+                            "
+                            :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+                            class="overlay-video"
+                            controls
+                            preload="auto"
+                            playsinline
+                            style="background: #111"
+                        ></video>
+                        <img
+                            v-else
+                            :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
+                            :alt="overlayImage.description || 'Full Image'"
+                            class="overlay-img"
+                        />
+                        </template>
+                        <div class="star-overlay" v-if="overlayImage">
+                        <v-icon
+                            v-for="n in 5"
+                            :key="n"
+                            large
+                            :color="
+                            n <= (overlayImage.score || 0)
+                                ? 'orange'
+                                : 'grey darken-2'
+                            "
+                            style="cursor: pointer"
+                            @click.stop="setImageScore(overlayImage, n)"
+                            >mdi-star</v-icon
+                        >
+                        </div>
+                        <v-btn
+                        icon
+                        size="small"
+                        class="reference-trophy-btn trophy-bg"
+                        @click.stop="toggleReference(overlayImage)"
+                        title="Toggle reference picture"
+                        style="
+                            position: absolute;
+                            top: 8px;
+                            left: 8px;
+                            z-index: 2;
+                        "
+                        >
+                        <v-icon
+                            :color="
+                            overlayImage.is_reference
+                                ? 'orange'
+                                : 'grey darken-2'
+                            "
+                            >mdi-trophy</v-icon
+                        >
+                        </v-btn>
+                    </div>
+                    </div>
+                    <div
+                    style="
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        height: 100%;
+                    "
+                    >
+                    <button
+                        class="overlay-nav overlay-nav-right"
+                        @click.stop="showNextImage"
+                        aria-label="Next"
+                    >
+                        <v-icon>mdi-skip-next</v-icon>
+                    </button>
+                    </div>
+                </div>
+                <div class="overlay-desc">
+                    {{ overlayImage?.description || "No description" }}
+                </div>
+                <div
+                    v-if="
+                    overlayImage &&
+                    overlayImage.tags &&
+                    overlayImage.tags.length
+                    "
+                    class="overlay-tags"
+                    style="
+                    margin-top: 8px;
+                    margin-bottom: 0;
+                    text-align: center;
+                    "
+                >
+                    <span
+                    v-for="tag in overlayImage.tags"
+                    :key="tag"
+                    class="overlay-tag"
+                    style="
+                        display: inline-flex;
+                        align-items: center;
+                        background: #eee;
+                        color: #333;
+                        border-radius: 16px;
+                        padding: 4px 16px 4px 14px;
+                        margin: 2px 2px;
+                        font-size: 1.15em;
+                        position: relative;
+                        min-height: 32px;
+                    "
+                    >
+                    {{ tag }}
+                    <button
+                        class="tag-delete-btn"
+                        @click.stop="removeTagFromOverlayImage(tag)"
+                        title="Remove tag"
+                        style="
+                        background: none;
+                        border: none;
+                        color: #888;
+                        font-size: 1.25em;
+                        margin-left: 10px;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        height: 24px;
+                        width: 24px;
+                        padding: 0;
+                        "
+                    >
+                        ×
+                    </button>
+                    </span>
+                    <!-- Add + button at the end for adding tags -->
+                    <button
+                    class="tag-add-btn"
+                    @click.stop="startAddTagOverlay()"
+                    title="Add tag"
+                    style="
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                        background: #e0e0e0;
+                        color: #333;
+                        border: none;
+                        border-radius: 16px;
+                        font-size: 1.3em;
+                        margin: 2px 2px;
+                        height: 32px;
+                        width: 32px;
+                        cursor: pointer;
+                        padding: 0;
+                        vertical-align: middle;
+                    "
+                    >
+                    +
+                    </button>
+                    <!-- Input for adding a tag, shown only when adding -->
+                    <input
+                    v-if="addingTagOverlay"
+                    v-model="newTagOverlay"
+                    @keydown.enter="confirmAddTagOverlay"
+                    @blur="cancelAddTagOverlay"
+                    class="tag-add-input"
+                    style="
+                        margin-left: 8px;
+                        font-size: 1.1em;
+                        border-radius: 8px;
+                        border: 1px solid #bbb;
+                        padding: 2px 8px;
+                        min-width: 80px;
+                        outline: none;
+                    "
+                    placeholder="New tag"
+                    autofocus
+                    />
+                </div>
+                </div>
+            </div>
+            </div>
+        </template>
+        <template v-else>
+            <div class="empty-state">Select a character to view images.</div>
+        </template>
+        </div>
+    </main>
+    </div>
+</div>
+</v-app>
