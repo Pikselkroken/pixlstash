@@ -96,9 +96,9 @@ def test_esmeralda_vault_character_and_logo():
             with open(logo_path, "rb") as f:
                 logo_bytes = f.read()
             # Compare the full file
-            assert img_resp.content == logo_bytes, (
-                "Esmeralda Vault's picture does not match Logo.png"
-            )
+            assert (
+                img_resp.content == logo_bytes
+            ), "Esmeralda Vault's picture does not match Logo.png"
     gc.collect()
 
 
@@ -417,9 +417,9 @@ def test_tagger_worker_adds_tags():
                 found_tags = pic_info.get("tags", [])
                 if found_tags:
                     break
-            assert found_tags, (
-                "Tagger worker did not add tags to TaggerTest.png after waiting."
-            )
+            assert (
+                found_tags
+            ), "Tagger worker did not add tags to TaggerTest.png after waiting."
     gc.collect()
 
 
@@ -502,9 +502,9 @@ def test_semantic_search_on_all_pictures():
                 time.sleep(1)
 
             if picture_ids:
-                assert False, (
-                    f"Pictures {picture_ids} did not get valid embedding after waiting."
-                )
+                assert (
+                    False
+                ), f"Pictures {picture_ids} did not get valid embedding after waiting."
 
             # Perform semantic search
             search_texts = [
@@ -523,9 +523,9 @@ def test_semantic_search_on_all_pictures():
                 assert search_resp.status_code == 200
                 results = search_resp.json()
 
-                assert 1 <= len(results), (
-                    f"Expected at least one results, got {len(results)} for the text '{search_text}'"
-                )
+                assert (
+                    1 <= len(results)
+                ), f"Expected at least one results, got {len(results)} for the text '{search_text}'"
                 print("===== Semantic Search Result =====")
                 print(f"Search text:\n{search_text}\n\n")
                 print(f"Best match: {results[0]['description']}\n\n")

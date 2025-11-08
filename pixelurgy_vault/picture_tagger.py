@@ -75,6 +75,8 @@ class PictureTagger:
         self._florence_model = None
         self._florence_processor = None
         self._use_florence = False
+        self._florence_device = None
+        self._florence_model_name = "microsoft/Florence-2-base"
 
     def __enter__(self):
         logger.debug("PictureTagger.__enter__ called.")
@@ -104,58 +106,22 @@ class PictureTagger:
 
         try:
             logger.info("Loading Florence-2 model for captioning...")
-            from transformers import AutoProcessor, AutoModelForCausalLM
             import transformers
 
             # Check transformers version
             version = transformers.__version__
             logger.info(f"Transformers version: {version}")
 
-            model_name = (
-                "microsoft/Florence-2-base"  # Use base model for faster inference
-            )
-
-            # Try GPU first, fall back to CPU if needed
             if torch.cuda.is_available():
                 try:
                     logger.info("Attempting to load Florence-2 on GPU with FP16...")
-                    device = torch.device("cuda")
-                    dtype = torch.float16
-
-                    self._florence_processor = AutoProcessor.from_pretrained(
-                        model_name, trust_remote_code=True
-                    )
-                    self._florence_model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        trust_remote_code=True,
-                        dtype=dtype,
-                        attn_implementation="eager",
-                    ).to(device)
-                    self._florence_model.eval()
-                    self._florence_device = device
-
-                    self._use_florence = True
+                    self._load_florence_model(torch.device("cuda"), torch.float16)
                     logger.info("Florence-2 loaded successfully on GPU (~500MB VRAM)")
                 except Exception as gpu_error:
                     logger.warning(
                         f"GPU loading failed, falling back to CPU: {gpu_error}"
                     )
-                    device = torch.device("cpu")
-                    dtype = torch.float32
-
-                    self._florence_processor = AutoProcessor.from_pretrained(
-                        model_name, trust_remote_code=True
-                    )
-                    self._florence_model = AutoModelForCausalLM.from_pretrained(
-                        model_name,
-                        trust_remote_code=True,
-                        dtype=dtype,
-                        attn_implementation="eager",
-                    ).to(device)
-                    self._florence_model.eval()
-                    self._florence_device = device
-
-                    self._use_florence = True
+                    self._load_florence_model(torch.device("cpu"), torch.float32)
                     logger.info("Florence-2 loaded successfully on CPU")
             else:
                 # No GPU available, use CPU
@@ -165,21 +131,7 @@ class PictureTagger:
                     if isinstance(self._device, torch.device)
                     else torch.device(self._device)
                 )
-                dtype = torch.float32
-
-                self._florence_processor = AutoProcessor.from_pretrained(
-                    model_name, trust_remote_code=True
-                )
-                self._florence_model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    trust_remote_code=True,
-                    dtype=dtype,
-                    attn_implementation="eager",
-                ).to(device)
-                self._florence_model.eval()
-                self._florence_device = device
-
-                self._use_florence = True
+                self._load_florence_model(device, torch.float32)
                 logger.info("Florence-2 loaded successfully on CPU")
 
         except Exception as e:
@@ -188,7 +140,48 @@ class PictureTagger:
             logger.info("Try: pip install --upgrade transformers")
             self._use_florence = False
 
-    def _generate_florence_caption(self, image_path, character_name=None):
+    def _load_florence_model(self, device, dtype):
+        from transformers import AutoProcessor, AutoModelForCausalLM
+
+        if not isinstance(device, torch.device):
+            device = torch.device(device)
+
+        self._florence_processor = AutoProcessor.from_pretrained(
+            self._florence_model_name, trust_remote_code=True
+        )
+        self._florence_model = AutoModelForCausalLM.from_pretrained(
+            self._florence_model_name,
+            trust_remote_code=True,
+            dtype=dtype,
+            attn_implementation="eager",
+        ).to(device)
+        self._florence_model.eval()
+        self._florence_device = device
+        self._use_florence = True
+
+    def _reload_florence_on_cpu(self):
+        logger.warning(
+            "Florence-2 GPU inference failed; attempting to reload on CPU..."
+        )
+        try:
+            self._florence_model = None
+            self._florence_processor = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            self._load_florence_model(torch.device("cpu"), torch.float32)
+            logger.info("Florence-2 reloaded on CPU")
+            return True
+        except Exception as cpu_error:
+            logger.error(
+                f"Failed to reload Florence-2 on CPU: {cpu_error}", exc_info=True
+            )
+            self._use_florence = False
+            return False
+
+    def _generate_florence_caption(
+        self, image_path, character_name=None, tags=None, _retry_on_cpu=True
+    ):
         """
         Generate a natural language caption for an image using Florence-2.
 
@@ -207,17 +200,57 @@ class PictureTagger:
 
             image = Image.open(image_path).convert("RGB")
 
-            # Use detailed captioning task
-            # Note: Florence-2 requires the task token to be alone, we cannot add character context in the prompt
-            prompt = "<MORE_DETAILED_CAPTION>"
-
-            # Process inputs
-            logger.debug(f"Processing image with prompt: {prompt}")
-            logger.debug(f"Image size: {image.size}")
-            inputs = self._florence_processor(
-                text=prompt, images=image, return_tensors="pt"
+            # Florence expects task tokens alone, so build the natural-language prompt separately.
+            base_prompt = self._florence_processor.task_prompts_without_inputs.get(
+                "<MORE_DETAILED_CAPTION>",
+                "Describe with a paragraph what is shown in the image.",
             )
-            logger.debug(f"Processor output keys: {inputs.keys()}")
+
+            tag_hints = None
+            if tags:
+                cleaned_tags = []
+                for tag in tags:
+                    tag_str = str(tag).strip()
+                    if not tag_str:
+                        continue
+                    if len(tag_str) > 40:
+                        continue
+                    if tag_str in cleaned_tags:
+                        continue
+                    cleaned_tags.append(tag_str)
+                    if len(cleaned_tags) >= 8:
+                        break
+                if cleaned_tags:
+                    tag_hints = ", ".join(cleaned_tags)
+
+            if tag_hints:
+                prompt_text = f"{base_prompt} Consider these candidate tags only if they truly match the scene: {tag_hints}."
+            else:
+                prompt_text = base_prompt
+
+            logger.debug(f"Processing image with prompt text: {prompt_text}")
+            logger.debug(f"Image size: {image.size}")
+
+            inputs = self._florence_processor(
+                text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
+            )
+
+            # Replace the textual prompt with the tailored instruction while keeping the multimodal formatting.
+            num_image_tokens = getattr(self._florence_processor, "num_image_tokens", 0)
+            image_token = getattr(self._florence_processor, "image_token", "")
+            bos_token = self._florence_processor.tokenizer.bos_token or ""
+            eos_token = self._florence_processor.tokenizer.eos_token or ""
+            prompt_with_special = (
+                image_token * num_image_tokens + bos_token + prompt_text + eos_token
+            )
+            text_inputs = self._florence_processor.tokenizer(
+                [prompt_with_special],
+                add_special_tokens=False,
+                return_tensors="pt",
+            )
+            inputs["input_ids"] = text_inputs["input_ids"]
+            inputs["attention_mask"] = text_inputs["attention_mask"]
+            logger.debug(f"Processor output keys after prompt patch: {inputs.keys()}")
 
             # Move inputs to device (use Florence's device, not the general device)
             florence_device = getattr(self, "_florence_device", self._device)
@@ -261,8 +294,10 @@ class PictureTagger:
 
             # Florence-2 output format: "<s><MORE_DETAILED_CAPTION>caption text</s>"
             # Extract the caption between the prompt and end token, removing special tokens
-            if prompt in generated_text:
-                caption = generated_text.split(prompt)[1].replace("</s>", "").strip()
+            if prompt_text in generated_text:
+                caption = (
+                    generated_text.split(prompt_text)[1].replace("</s>", "").strip()
+                )
             else:
                 caption = generated_text.replace("</s>", "").strip()
 
@@ -292,6 +327,21 @@ class PictureTagger:
 
         except Exception as e:
             import traceback
+
+            is_cuda_issue = "cuda" in str(e).lower()
+            using_cuda = (
+                getattr(self, "_florence_device", None) is not None
+                and getattr(self._florence_device, "type", "") == "cuda"
+            )
+
+            if _retry_on_cpu and using_cuda and is_cuda_issue:
+                logger.warning(
+                    "Florence-2 captioning failed on GPU (%s); retrying on CPU.", e
+                )
+                if self._reload_florence_on_cpu():
+                    return self._generate_florence_caption(
+                        image_path, character_name, tags=tags, _retry_on_cpu=False
+                    )
 
             logger.error(f"Florence-2 captioning failed for {image_path}: {e}")
             logger.debug(traceback.format_exc())
@@ -598,13 +648,16 @@ class PictureTagger:
 
         # Try Florence-2 captioning first if enabled and picture has file_path
         full_text = None
-        if (
+        expect_florence_caption = (
             self._use_florence
             and picture
             and hasattr(picture, "file_path")
             and picture.file_path
-        ):
-            florence_caption = self._generate_florence_caption(picture.file_path)
+        )
+        if expect_florence_caption:
+            florence_caption = self._generate_florence_caption(
+                picture.file_path, tags=getattr(picture, "tags", None)
+            )
             if florence_caption:
                 # Integrate character name naturally if available
                 character_name_capitalized = None
@@ -638,6 +691,14 @@ class PictureTagger:
                 full_text = florence_caption
 
                 logger.info(f"Embedding: using Florence-2 caption: {full_text}")
+            else:
+                logger.error(
+                    "Florence captioning failed; refusing to fall back to tag-based description for %s",
+                    getattr(picture, "file_path", None),
+                )
+                raise RuntimeError(
+                    "Florence captioning failed and Florence-only captions are enabled."
+                )
 
         # Fall back to tag-based approach if Florence didn't work
         if full_text is None:

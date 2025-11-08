@@ -17,21 +17,21 @@ logger = get_logger(__name__)
 def _assert_no_bytes(params):
     if isinstance(params, dict):
         for v in params.values():
-            assert not isinstance(v, bytes), (
-                f"Attempted to insert raw bytes into DB: {v!r}"
-            )
+            assert not isinstance(
+                v, bytes
+            ), f"Attempted to insert raw bytes into DB: {v!r}"
     elif isinstance(params, (list, tuple)):
         for item in params:
             if isinstance(item, (list, tuple, dict)):
                 _assert_no_bytes(item)
             else:
-                assert not isinstance(item, bytes), (
-                    f"Attempted to insert raw bytes into DB: {item!r}"
-                )
+                assert not isinstance(
+                    item, bytes
+                ), f"Attempted to insert raw bytes into DB: {item!r}"
     else:
-        assert not isinstance(params, bytes), (
-            f"Attempted to insert raw bytes into DB: {params!r}"
-        )
+        assert not isinstance(
+            params, bytes
+        ), f"Attempted to insert raw bytes into DB: {params!r}"
 
 
 class VaultDatabase:
