@@ -185,26 +185,16 @@ async function sendChatMessageAndFocus() {
             // Always use the best result (highest likeness_score)
             const bestResult = searchData[0];
             
-            // Build debug info
-            let debugInfo = `**Search Debug Info:**\n`;
-            debugInfo += `Query: "${searchQuery}"\n`;
-            debugInfo += `Results found: ${searchData.length}\n\n`;
-            debugInfo += `**Top 3 matches:**\n`;
-            
+            // Build compact debug info with descriptions
+            let debugInfo = `🔍 ${searchData.length} results | Selected: #1\n\n`;
             for (let i = 0; i < Math.min(3, searchData.length); i++) {
               const pic = searchData[i];
-              debugInfo += `${i + 1}. Score: ${(pic.likeness_score * 100).toFixed(1)}%\n`;
-              debugInfo += `   Tags: ${pic.tags?.slice(0, 5).join(', ') || 'none'}${pic.tags?.length > 5 ? '...' : ''}\n`;
-              if (pic.description) {
-                const shortDesc = pic.description.length > 80 
-                  ? pic.description.substring(0, 80) + '...' 
-                  : pic.description;
-                debugInfo += `   Description: ${shortDesc}\n`;
-              }
-              debugInfo += `\n`;
+              const score = (pic.likeness_score * 100).toFixed(0);
+              const desc = pic.description 
+                ? (pic.description.length > 60 ? pic.description.substring(0, 60) + '...' : pic.description)
+                : 'No description';
+              debugInfo += `${i + 1}. ${score}% - ${desc}\n`;
             }
-            
-            debugInfo += `**Selected:** Best match (#1) with ${(bestResult.likeness_score * 100).toFixed(1)}% similarity\n`;
             
             // Add debug info as a system message
             chatMessages.value.push({
@@ -221,21 +211,29 @@ async function sendChatMessageAndFocus() {
                 break;
               }
             }
+            
+            // Scroll after adding debug and image
+            await nextTick();
+            scrollToBottom();
           } else {
             // No results found
             chatMessages.value.push({
               role: "system",
-              content: `**Search Debug Info:**\nQuery: "${searchQuery}"\nNo results found.`,
+              content: `🔍 No results found`,
               isDebug: true
             });
+            await nextTick();
+            scrollToBottom();
           }
         }
       } catch (error) {
         chatMessages.value.push({
           role: "system",
-          content: `**Search Error:** ${error.message || error}`,
+          content: `⚠️ Search error: ${error.message || error}`,
           isDebug: true
         });
+        await nextTick();
+        scrollToBottom();
       }
     }
   } catch (error) {
@@ -402,22 +400,18 @@ defineExpose({ focusInput, scrollToBottom });
 
 .overlay-chat-main {
   width: 100%;
-  height: 100%;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  justify-content: stretch;
+  overflow: hidden;
 }
 
 .chat-messages {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: 100%;
+  flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 1.2em 1.5em 1em 1.5em;
   background: #f7f7fa;
-  border-radius: 12px;
-  margin-bottom: 1em;
   display: flex;
   flex-direction: column;
   gap: 0.7em;
@@ -502,43 +496,41 @@ defineExpose({ focusInput, scrollToBottom });
 
 .chat-debug-message {
   width: 100%;
-  background: #fff3cd;
-  border-left: 4px solid #ffc107;
-  color: #856404;
-  border-radius: 8px;
-  padding: 0.7em 1.1em;
-  font-size: 0.95em;
+  background: #f0f0f0;
+  border-left: 3px solid #999;
+  color: #666;
+  border-radius: 4px;
+  padding: 0.4em 0.8em;
+  font-size: 0.85em;
   font-family: monospace;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.4em;
-  margin: 0.5em 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5em;
+  margin: 0.3em 0;
+  opacity: 0.8;
 }
 
 .chat-debug-message .chat-username {
-  font-size: 0.9em;
-  font-weight: 700;
-  color: #ff9800;
-  text-transform: uppercase;
+  display: none; /* Hide "Debug" label to save space */
 }
 
 .chat-debug-message .chat-text {
   white-space: pre-line;
   word-break: break-word;
-  font-size: 0.95em;
-  line-height: 1.5;
+  font-size: 0.9em;
+  line-height: 1.4;
+  max-width: 100%;
 }
 
 .chat-input-row {
   flex-shrink: 0;
   background: #f8fafd;
   border-top: 1px solid #e0e0e0;
-  padding: 0.5em 0.7em;
+  padding: 0.8em 1em;
   display: flex;
   align-items: flex-end;
   gap: 0.5em;
-  margin-bottom: 10px;
 }
 
 .chat-input {
