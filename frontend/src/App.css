@@ -519,3 +519,19 @@ button:focus:not(:focus-visible) {
   border: none;
   min-width: 90px;
 }
+.clear-selection-button {
+  margin-left: 8px;
+  color: white;
+  background-color: #4f6fdd;
+}
+.clear-selection-button:hover {
+  background-color: #6b8eeb;
+}
+.delete-button {
+  margin-left: 8px;
+  color: white;
+  background-color: #d32f2f;
+}
+.delete-button:hover {
+  background-color: #f75c5c;
+}

@@ -1,100 +1,92 @@
 <v-app>
-    <ImageImporter
-        ref="imageImporterRef"
-        :backend-url="BACKEND_URL"
-        :selected-character-id="selectedCharacter"
-        :all-pictures-id="ALL_PICTURES_ID"
-        :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
-        @import-finished="handleImportFinished"
-    />
-<div class="app-viewport">
+  <ImageImporter
+    ref="imageImporterRef"
+    :backend-url="BACKEND_URL"
+    :selected-character-id="selectedCharacter"
+    :all-pictures-id="ALL_PICTURES_ID"
+    :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
+    @import-finished="handleImportFinished"
+  />
+  <div class="app-viewport">
     <div class="top-toolbar">
-    <v-btn
+      <v-btn
         icon
         @click="sidebarVisible = !sidebarVisible"
         title="Toggle sidebar"
         class="sidebar-toggle-btn"
         style="margin-right: 16px"
-    >
+      >
         <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
-    </v-btn>
-    <div class="toolbar-actions">
+      </v-btn>
+      <div class="toolbar-actions">
         <v-icon style="display: flex; align-items: center; height: 100%"
-        >mdi-image-size-select-small</v-icon
+          >mdi-image-size-select-small</v-icon
         >
         <v-slider
-        v-model="thumbnailSize"
-        :min="128"
-        :max="256"
-        :step="32"
-        class="slider"
-        hide-details
-        style="
+          v-model="thumbnailSize"
+          :min="128"
+          :max="256"
+          :step="32"
+          class="slider"
+          hide-details
+          style="
             min-width: 100px;
             vertical-align: middle;
             margin-top: 4px;
             margin-bottom: 4px;
             margin-left: 8px;
             margin-right: 16px;
-        "
+          "
         />
         <v-icon
-        style="
+          style="
             display: flex;
             align-items: center;
             height: 100%;
             margin-right: 16px;
-        "
-        >mdi-image-size-select-large</v-icon
+          "
+          >mdi-image-size-select-large</v-icon
         >
         <v-btn
-        icon
-        :color="referenceFilterMode ? 'orange darken-2' : 'grey'"
-        @click="referenceFilterMode = !referenceFilterMode"
-        title="Show only reference images"
-        style="margin-right: 2px"
+          icon
+          :color="referenceFilterMode ? 'orange darken-2' : 'grey'"
+          @click="referenceFilterMode = !referenceFilterMode"
+          title="Show only reference images"
+          style="margin-right: 2px"
         >
-        <v-icon>{{
-            referenceFilterMode ? "mdi-trophy" : "mdi-trophy-outline"
-        }}</v-icon>
+          <v-icon
+            >{{ referenceFilterMode ? "mdi-trophy" : "mdi-trophy-outline"
+            }}</v-icon
+          >
         </v-btn>
         <v-btn
-        icon
-        :color="showStars ? 'orange' : 'grey'"
-        @click="showStars = !showStars"
-        title="Toggle star ratings"
-        style="margin-left: 2px; margin-right: 2px"
+          icon
+          :color="showStars ? 'orange' : 'grey'"
+          @click="showStars = !showStars"
+          title="Toggle star ratings"
+          style="margin-left: 2px; margin-right: 2px"
         >
-        <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
+          <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
         </v-btn>
-        <v-btn
-        icon
-        color="red darken-2"
-        :disabled="!selectedImageIds.length"
-        @click="deleteSelectedImages"
-        title="Delete selected images"
-        style="margin-left: 2px; margin-right: 2px"
-        >
-        <v-icon>mdi-trash-can-outline</v-icon>
-        </v-btn>
+
         <!-- Settings Dialog -->
         <v-dialog v-model="settingsDialog" max-width="50vw">
-        <v-card class="settings-dialog-card">
+          <v-card class="settings-dialog-card">
             <div class="settings-dialog-titlebar">
-            <div class="settings-dialog-title">Settings</div>
-            <button
+              <div class="settings-dialog-title">Settings</div>
+              <button
                 class="settings-dialog-close"
                 @click="settingsDialog = false"
                 aria-label="Close"
-            >
+              >
                 &times;
-            </button>
+              </button>
             </div>
             <v-card-text>
-            <div class="settings-section">
+              <div class="settings-section">
                 <strong>Image Roots</strong>
                 <ul class="settings-image-roots">
-                <li
+                  <li
                     v-for="root in config.image_roots"
                     :key="root"
                     @click="selectImageRoot(root)"
@@ -103,224 +95,224 @@
                     { selected: root === config.selected_image_root },
                     ]"
                     style="
-                    cursor: pointer;
-                    user-select: none;
-                    display: flex;
-                    align-items: center;
-                    padding: 8px 0 8px 8px;
-                    border-radius: 8px;
-                    margin-bottom: 2px;
+                      cursor: pointer;
+                      user-select: none;
+                      display: flex;
+                      align-items: center;
+                      padding: 8px 0 8px 8px;
+                      border-radius: 8px;
+                      margin-bottom: 2px;
                     "
-                >
+                  >
                     <span style="flex: 1">{{ root }}</span>
                     <span
-                    v-if="root === config.selected_image_root"
-                    style="
+                      v-if="root === config.selected_image_root"
+                      style="
                         color: #1976d2;
                         font-weight: bold;
                         margin-left: 8px;
-                    "
-                    >(selected)</span
+                      "
+                      >(selected)</span
                     >
                     <button
-                    v-if="config.image_roots.length > 1"
-                    @click.stop="removeImageRoot(root)"
-                    title="Remove root"
-                    style="
+                      v-if="config.image_roots.length > 1"
+                      @click.stop="removeImageRoot(root)"
+                      title="Remove root"
+                      style="
                         margin-left: 8px;
                         background: none;
                         border: none;
                         color: #888;
                         font-size: 1.2em;
                         cursor: pointer;
-                    "
+                      "
                     >
-                    &times;
+                      &times;
                     </button>
-                </li>
+                  </li>
                 </ul>
                 <div style="display: flex; margin-top: 12px; gap: 8px">
-                <input
+                  <input
                     v-model="newImageRoot"
                     @keydown.enter="addImageRoot"
                     placeholder="Add new root"
                     style="
-                    flex: 1;
-                    padding: 6px 10px;
-                    border-radius: 8px;
-                    border: 1px solid #bbb;
-                    font-size: 1em;
+                      flex: 1;
+                      padding: 6px 10px;
+                      border-radius: 8px;
+                      border: 1px solid #bbb;
+                      font-size: 1em;
                     "
-                />
-                <button
+                  />
+                  <button
                     @click="addImageRoot"
                     :disabled="!newImageRoot.trim()"
                     style="
-                    padding: 6px 16px;
-                    border-radius: 8px;
-                    background: #1976d2;
-                    color: #fff;
-                    border: none;
-                    font-weight: 600;
-                    cursor: pointer;
+                      padding: 6px 16px;
+                      border-radius: 8px;
+                      background: #1976d2;
+                      color: #fff;
+                      border: none;
+                      font-weight: 600;
+                      cursor: pointer;
                     "
-                >
+                  >
                     Add
-                </button>
+                  </button>
                 </div>
-            </div>
-            <div class="settings-section" style="margin-top: 32px">
+              </div>
+              <div class="settings-section" style="margin-top: 32px">
                 <strong>OpenAI Chat Service</strong>
                 <div
-                style="
+                  style="
                     display: flex;
                     gap: 12px;
                     align-items: center;
                     margin-top: 8px;
-                "
+                  "
                 >
-                <label style="min-width: 60px">Host:</label>
-                <input
+                  <label style="min-width: 60px">Host:</label>
+                  <input
                     v-model="config.openai_host"
                     style="
-                    flex: 1;
-                    padding: 6px 10px;
-                    border-radius: 8px;
-                    border: 1px solid #bbb;
-                    font-size: 1em;
+                      flex: 1;
+                      padding: 6px 10px;
+                      border-radius: 8px;
+                      border: 1px solid #bbb;
+                      font-size: 1em;
                     "
                     @change="patchConfigUIOptions()"
-                />
-                <label style="min-width: 50px; margin-left: 12px"
+                  />
+                  <label style="min-width: 50px; margin-left: 12px"
                     >Port:</label
-                >
-                <input
+                  >
+                  <input
                     v-model.number="config.openai_port"
                     type="number"
                     min="1"
                     max="65535"
                     style="
-                    width: 90px;
-                    padding: 6px 10px;
-                    border-radius: 8px;
-                    border: 1px solid #bbb;
-                    font-size: 1em;
+                      width: 90px;
+                      padding: 6px 10px;
+                      border-radius: 8px;
+                      border: 1px solid #bbb;
+                      font-size: 1em;
                     "
                     @change="patchConfigUIOptions()"
-            />
+                  />
                 </div>
                 <div
-                style="
+                  style="
                     display: flex;
                     gap: 12px;
                     align-items: center;
                     margin-top: 12px;
-                "
+                  "
                 >
-                <label style="min-width: 60px">Model:</label>
-                <select
+                  <label style="min-width: 60px">Model:</label>
+                  <select
                     v-model="config.openai_model"
                     style="
-                    flex: 1;
-                    padding: 6px 10px;
-                    border-radius: 8px;
-                    border: 1px solid #bbb;
-                    font-size: 1em;
+                      flex: 1;
+                      padding: 6px 10px;
+                      border-radius: 8px;
+                      border: 1px solid #bbb;
+                      font-size: 1em;
                     "
                     @change="patchConfigUIOptions()"
-                >
+                  >
                     <option v-if="openaiModelLoading" disabled>
-                    Loading models...
+                      Loading models...
                     </option>
                     <option v-for="m in openaiModels" :key="m" :value="m">
-                    {{ m }}
+                      {{ m }}
                     </option>
                     <option
-                    v-if="
+                      v-if="
                         !openaiModelLoading &&
                         !openaiModels.length &&
                         !openaiModelFetchError
                     "
-                    disabled
+                      disabled
                     >
-                    No models found
+                      No models found
                     </option>
                     <option v-if="openaiModelFetchError" disabled>
-                    {{ openaiModelFetchError }}
+                      {{ openaiModelFetchError }}
                     </option>
-                </select>
-                <button
+                  </select>
+                  <button
                     @click="fetchOpenAIModels"
                     style="
-                    margin-left: 8px;
-                    padding: 6px 12px;
-                    border-radius: 8px;
-                    background: #1976d2;
-                    color: #fff;
-                    border: none;
-                    font-weight: 600;
-                    cursor: pointer;
+                      margin-left: 8px;
+                      padding: 6px 12px;
+                      border-radius: 8px;
+                      background: #1976d2;
+                      color: #fff;
+                      border: none;
+                      font-weight: 600;
+                      cursor: pointer;
                     "
-                >
+                  >
                     Refresh
-                </button>
+                  </button>
                 </div>
                 <div
-                v-if="openaiModelFetchError"
-                style="color: #c00; margin-top: 6px"
+                  v-if="openaiModelFetchError"
+                  style="color: #c00; margin-top: 6px"
                 >
-                {{ openaiModelFetchError }}
+                  {{ openaiModelFetchError }}
                 </div>
-            </div>
+              </div>
             </v-card-text>
-        </v-card>
+          </v-card>
         </v-dialog>
-    </div>
+      </div>
     </div>
     <div class="file-manager">
-    <SideBar
-      v-if="sidebarVisible"
-      :sections="sidebarSections"
-      :selected-character="selectedCharacter"
-      :all-pictures-id="ALL_PICTURES_ID"
-      :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
-      :category-counts="categoryCounts"
-      :sorted-characters="sortedCharacters"
-      :error="error"
-      :drag-over-character="dragOverCharacter"
-      :character-thumbnails="characterThumbnails"
-      :editing-character-id="editingCharacterId"
-      :editing-character-name="editingCharacterName"
-      :search-query="searchQuery"
-      :sort-options="sortOptions"
-      :selected-sort="selectedSort"
-      @toggle-section="toggleSidebarSection"
-      @select-character="handleSelectCharacter"
-      @delete-character="confirmDeleteCharacter"
-      @create-character="addNewCharacter"
-      @start-editing-character="startEditingCharacter"
-      @save-editing-character="saveEditingCharacter"
-      @cancel-editing-character="cancelEditingCharacter"
-      @update:editing-character-name="updateEditingCharacterName"
-      @drag-over-character="handleDragOverCharacter"
-      @drag-leave-character="handleDragLeaveCharacter"
-      @drop-on-character="handleDropOnCharacter"
-      @open-chat="openChatOverlay"
-      @open-settings="openSettingsDialog"
-      @search-images="searchImages"
-      @update:selected-sort="handleUpdateSelectedSort"
-      @update:search-query="handleUpdateSearchQuery"
-    />
-    <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
+      <SideBar
+        v-if="sidebarVisible"
+        :sections="sidebarSections"
+        :selected-character="selectedCharacter"
+        :all-pictures-id="ALL_PICTURES_ID"
+        :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
+        :category-counts="categoryCounts"
+        :sorted-characters="sortedCharacters"
+        :error="error"
+        :drag-over-character="dragOverCharacter"
+        :character-thumbnails="characterThumbnails"
+        :editing-character-id="editingCharacterId"
+        :editing-character-name="editingCharacterName"
+        :search-query="searchQuery"
+        :sort-options="sortOptions"
+        :selected-sort="selectedSort"
+        @toggle-section="toggleSidebarSection"
+        @select-character="handleSelectCharacter"
+        @delete-character="confirmDeleteCharacter"
+        @create-character="addNewCharacter"
+        @start-editing-character="startEditingCharacter"
+        @save-editing-character="saveEditingCharacter"
+        @cancel-editing-character="cancelEditingCharacter"
+        @update:editing-character-name="updateEditingCharacterName"
+        @drag-over-character="handleDragOverCharacter"
+        @drag-leave-character="handleDragLeaveCharacter"
+        @drop-on-character="handleDropOnCharacter"
+        @open-chat="openChatOverlay"
+        @open-settings="openSettingsDialog"
+        @search-images="searchImages"
+        @update:selected-sort="handleUpdateSelectedSort"
+        @update:search-query="handleUpdateSearchQuery"
+      />
+      <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
         <div
-        :class="['main-content', selectedCharacter ? 'accent-border' : '']"
+          :class="['main-content', selectedCharacter ? 'accent-border' : '']"
         >
-        <template v-if="selectedCharacter">
+          <template v-if="selectedCharacter">
             <!-- Selection Info Bar -->
             <div
-            v-if="selectedImageIds.length > 0"
-            class="selection-info-bar"
-            style="
+              v-if="selectedImageIds.length > 0"
+              class="selection-info-bar"
+              style="
                 background: #fffbe7;
                 color: #333;
                 border-bottom: 1px solid #e0c97f;
@@ -329,45 +321,61 @@
                 align-items: center;
                 gap: 16px;
                 font-size: 1.08em;
-            "
+              "
             >
-            <span>
+              <span>
                 <strong>{{ selectedImageIds.length }}</strong>
                 image{{ selectedImageIds.length === 1 ? "" : "s" }} selected
-            </span>
-            <v-btn
-                small
-                color="primary"
-                @click="selectedImageIds = []"
-                style="margin-left: 12px"
-                >Clear selection</v-btn
-            >
+              </span>
+              <div
+                style="
+                  margin-left: auto;
+                  display: flex;
+                  align-items: center;
+                  gap: 12px;
+                "
+              >
+                <v-btn
+                  small
+                  class="clear-selection-button"
+                  variant="text"
+                  @click="selectedImageIds = []"
+                  >Clear selection</v-btn
+                >
+                <v-btn
+                  small
+                  class="delete-button"
+                  variant="text"
+                  @click="deleteSelectedImages"
+                  >Delete</v-btn
+                >
+              </div>
             </div>
             <div
-            class="image-grid"
-            :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
-            ref="gridContainer"
-            style="position: relative"
-            @dragenter.prevent="handleGridDragEnter"
-            @dragover.prevent="handleGridDragOver"
-            @dragleave.prevent="handleGridDragLeave"
-            @drop.prevent="handleGridDrop"
-            @scroll="onGridScroll"
-            @click="handleGridBackgroundClick"
+              class="image-grid"
+              :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
+              ref="gridContainer"
+              style="position: relative"
+              @dragenter.prevent="handleGridDragEnter"
+              @dragover.prevent="handleGridDragOver"
+              @dragleave.prevent="handleGridDragLeave"
+              @drop.prevent="handleGridDrop"
+              @scroll="onGridScroll"
+              @click="handleGridBackgroundClick"
             >
-            <div
+              <div
                 v-if="images.length === 0 && !imagesLoading && !imagesError"
                 class="empty-state"
-            >
+              >
                 No images found for this character.
-            </div>
-            <div v-if="imagesError" class="empty-state">
+              </div>
+              <div v-if="imagesError" class="empty-state">
                 {{ imagesError }}
-            </div>
-            <div v-if="dragOverlayVisible" class="drag-overlay-grid">
+              </div>
+              <div v-if="dragOverlayVisible" class="drag-overlay-grid">
                 <span>{{ dragOverlayMessage }}</span>
-            </div>
-            <div
+              </div>
+              <div
                 v-for="(img, idx) in pagedImages"
                 :key="img.id"
                 class="image-card"
@@ -378,14 +386,14 @@
                 :draggable="isImageSelected(img.id)"
                 @dragstart="onImageDragStart(img, idx, $event)"
                 @click="handleGridBackgroundClick"
-            >
+              >
                 <v-card class="thumbnail-card">
-                <div class="thumbnail-container">
+                  <div class="thumbnail-container">
                     <div
-                    class="star-overlay"
-                    v-if="showStars && thumbLoaded[img.id]"
+                      class="star-overlay"
+                      v-if="showStars && thumbLoaded[img.id]"
                     >
-                    <v-icon
+                      <v-icon
                         v-for="n in 5"
                         :key="n"
                         small
@@ -395,10 +403,10 @@
                         style="cursor: pointer"
                         @click.stop="setImageScore(img, n)"
                         >mdi-star</v-icon
-                    >
+                      >
                     </div>
                     <template
-                    v-if="
+                      v-if="
                         (img.format && isSupportedVideoFile(img.format)) ||
                         (!img.format &&
                         isSupportedVideoFile(
@@ -406,7 +414,7 @@
                         ))
                     "
                     >
-                    <img
+                      <img
                         :src="`${BACKEND_URL}/thumbnails/${img.id}`"
                         class="thumbnail-img video-thumb"
                         @load="thumbLoaded[img.id] = true"
@@ -421,22 +429,22 @@
                         }
                         "
                         style="cursor: pointer; border: 2px solid #2196f3"
-                    />
-                    <v-icon
+                      />
+                      <v-icon
                         class="video-icon-overlay"
                         style="
-                        position: absolute;
-                        bottom: 8px;
-                        left: 8px;
-                        color: #2196f3;
-                        background: white;
-                        border-radius: 50%;
+                          position: absolute;
+                          bottom: 8px;
+                          left: 8px;
+                          color: #2196f3;
+                          background: white;
+                          border-radius: 50%;
                         "
                         >mdi-play-circle</v-icon
-                    >
+                      >
                     </template>
                     <template v-else>
-                    <img
+                      <img
                         :src="`${BACKEND_URL}/thumbnails/${img.id}`"
                         class="thumbnail-img"
                         @load="thumbLoaded[img.id] = true"
@@ -451,50 +459,50 @@
                         }
                         "
                         style="cursor: pointer"
-                    />
+                      />
                     </template>
                     <!-- Trophy icon for reference toggle -->
                     <v-btn
-                    v-if="thumbLoaded[img.id]"
-                    icon
-                    size="small"
-                    class="reference-trophy-btn trophy-bg"
-                    @click.stop="toggleReference(img)"
-                    title="Toggle reference picture"
-                    style="
+                      v-if="thumbLoaded[img.id]"
+                      icon
+                      size="small"
+                      class="reference-trophy-btn trophy-bg"
+                      @click.stop="toggleReference(img)"
+                      title="Toggle reference picture"
+                      style="
                         position: absolute;
                         top: 8px;
                         left: 8px;
                         z-index: 2;
-                    "
+                      "
                     >
-                    <v-icon
+                      <v-icon
                         :color="img.is_reference ? 'orange' : 'grey darken-2'"
                         size="24px"
                         >mdi-trophy</v-icon
-                    >
+                      >
                     </v-btn>
-                </div>
-                <!-- Show date under thumbnail if sorting by date -->
-                <div
+                  </div>
+                  <!-- Show date under thumbnail if sorting by date -->
+                  <div
                     v-if="
                     selectedSort === 'date_desc' ||
                     selectedSort === 'date_asc'
                     "
                     class="thumbnail-info"
-                >
+                  >
                     {{ new Date(img.created_at).toLocaleString() }}
-                </div>
-                <!-- Show likeness score under thumbnail if sorting by likeness-->
-                <div
+                  </div>
+                  <!-- Show likeness score under thumbnail if sorting by likeness-->
+                  <div
                     v-if="selectedSort === 'search_likeness'"
                     class="thumbnail-info"
-                >
+                  >
                     {{ formatLikenessScore(img.likeness_score) }}
-                </div>
+                  </div>
                 </v-card>
-            </div>
-            <ChatWindow
+              </div>
+              <ChatWindow
                 v-if="chatOpen"
                 ref="chatWindowRef"
                 :open="chatOpen"
@@ -504,57 +512,57 @@
                 :extract-keywords="extractKeywords"
                 :backend-url="BACKEND_URL"
                 @close="closeChatOverlay"
-            />
-            <!-- Full image overlay -->
-            <div
+              />
+              <!-- Full image overlay -->
+              <div
                 v-if="overlayOpen"
                 class="image-overlay"
                 @click.self="closeOverlay"
-            >
+              >
                 <div class="overlay-content overlay-grid">
-                <button
+                  <button
                     class="overlay-close"
                     @click="closeOverlay"
                     aria-label="Close"
                     style="
-                    position: absolute;
-                    top: 12px;
-                    right: 18px;
-                    z-index: 20;
+                      position: absolute;
+                      top: 12px;
+                      right: 18px;
+                      z-index: 20;
                     "
-                >
+                  >
                     &times;
-                </button>
-                <div
+                  </button>
+                  <div
                     class="overlay-grid-main"
                     style="
-                    display: grid;
-                    grid-template-columns: 64px 1fr 64px;
-                    align-items: center;
-                    width: 100%;
-                    height: 100%;
+                      display: grid;
+                      grid-template-columns: 64px 1fr 64px;
+                      align-items: center;
+                      width: 100%;
+                      height: 100%;
                     "
-                >
+                  >
                     <div
-                    style="
+                      style="
                         display: flex;
                         justify-content: center;
                         align-items: center;
                         height: 100%;
-                    "
+                      "
                     >
-                    <button
+                      <button
                         class="overlay-nav overlay-nav-left"
                         @click.stop="showPrevImage"
                         aria-label="Previous"
-                    >
+                      >
                         <v-icon>mdi-skip-previous</v-icon>
-                    </button>
+                      </button>
                     </div>
                     <div class="overlay-img-wrapper">
-                    <div style="position: relative; display: inline-block">
+                      <div style="position: relative; display: inline-block">
                         <template v-if="overlayImage">
-                        <video
+                          <video
                             v-if="
                             isSupportedVideoFile(
                                 getOverlayFormat(overlayImage)
@@ -566,16 +574,16 @@
                             preload="auto"
                             playsinline
                             style="background: #111"
-                        ></video>
-                        <img
+                          ></video>
+                          <img
                             v-else
                             :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
                             :alt="overlayImage.description || 'Full Image'"
                             class="overlay-img"
-                        />
+                          />
                         </template>
                         <div class="star-overlay" v-if="overlayImage">
-                        <v-icon
+                          <v-icon
                             v-for="n in 5"
                             :key="n"
                             large
@@ -587,53 +595,53 @@
                             style="cursor: pointer"
                             @click.stop="setImageScore(overlayImage, n)"
                             >mdi-star</v-icon
-                        >
+                          >
                         </div>
                         <v-btn
-                        icon
-                        size="small"
-                        class="reference-trophy-btn trophy-bg"
-                        @click.stop="toggleReference(overlayImage)"
-                        title="Toggle reference picture"
-                        style="
+                          icon
+                          size="small"
+                          class="reference-trophy-btn trophy-bg"
+                          @click.stop="toggleReference(overlayImage)"
+                          title="Toggle reference picture"
+                          style="
                             position: absolute;
                             top: 8px;
                             left: 8px;
                             z-index: 2;
-                        "
+                          "
                         >
-                        <v-icon
+                          <v-icon
                             :color="
                             overlayImage.is_reference
                                 ? 'orange'
                                 : 'grey darken-2'
                             "
                             >mdi-trophy</v-icon
-                        >
+                          >
                         </v-btn>
-                    </div>
+                      </div>
                     </div>
                     <div
-                    style="
+                      style="
                         display: flex;
                         justify-content: center;
                         align-items: center;
                         height: 100%;
-                    "
+                      "
                     >
-                    <button
+                      <button
                         class="overlay-nav overlay-nav-right"
                         @click.stop="showNextImage"
                         aria-label="Next"
-                    >
+                      >
                         <v-icon>mdi-skip-next</v-icon>
-                    </button>
+                      </button>
                     </div>
-                </div>
-                <div class="overlay-desc">
+                  </div>
+                  <div class="overlay-desc">
                     {{ overlayImage?.description || "No description" }}
-                </div>
-                <div
+                  </div>
+                  <div
                     v-if="
                     overlayImage &&
                     overlayImage.tags &&
@@ -641,16 +649,16 @@
                     "
                     class="overlay-tags"
                     style="
-                    margin-top: 8px;
-                    margin-bottom: 0;
-                    text-align: center;
+                      margin-top: 8px;
+                      margin-bottom: 0;
+                      text-align: center;
                     "
-                >
+                  >
                     <span
-                    v-for="tag in overlayImage.tags"
-                    :key="tag"
-                    class="overlay-tag"
-                    style="
+                      v-for="tag in overlayImage.tags"
+                      :key="tag"
+                      class="overlay-tag"
+                      style="
                         display: inline-flex;
                         align-items: center;
                         background: #eee;
@@ -661,37 +669,37 @@
                         font-size: 1.15em;
                         position: relative;
                         min-height: 32px;
-                    "
+                      "
                     >
-                    {{ tag }}
-                    <button
+                      {{ tag }}
+                      <button
                         class="tag-delete-btn"
                         @click.stop="removeTagFromOverlayImage(tag)"
                         title="Remove tag"
                         style="
-                        background: none;
-                        border: none;
-                        color: #888;
-                        font-size: 1.25em;
-                        margin-left: 10px;
-                        cursor: pointer;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        height: 24px;
-                        width: 24px;
-                        padding: 0;
+                          background: none;
+                          border: none;
+                          color: #888;
+                          font-size: 1.25em;
+                          margin-left: 10px;
+                          cursor: pointer;
+                          display: flex;
+                          align-items: center;
+                          justify-content: center;
+                          height: 24px;
+                          width: 24px;
+                          padding: 0;
                         "
-                    >
+                      >
                         ×
-                    </button>
+                      </button>
                     </span>
                     <!-- Add + button at the end for adding tags -->
                     <button
-                    class="tag-add-btn"
-                    @click.stop="startAddTagOverlay()"
-                    title="Add tag"
-                    style="
+                      class="tag-add-btn"
+                      @click.stop="startAddTagOverlay()"
+                      title="Add tag"
+                      style="
                         display: inline-flex;
                         align-items: center;
                         justify-content: center;
@@ -706,18 +714,18 @@
                         cursor: pointer;
                         padding: 0;
                         vertical-align: middle;
-                    "
+                      "
                     >
-                    +
+                      +
                     </button>
                     <!-- Input for adding a tag, shown only when adding -->
                     <input
-                    v-if="addingTagOverlay"
-                    v-model="newTagOverlay"
-                    @keydown.enter="confirmAddTagOverlay"
-                    @blur="cancelAddTagOverlay"
-                    class="tag-add-input"
-                    style="
+                      v-if="addingTagOverlay"
+                      v-model="newTagOverlay"
+                      @keydown.enter="confirmAddTagOverlay"
+                      @blur="cancelAddTagOverlay"
+                      class="tag-add-input"
+                      style="
                         margin-left: 8px;
                         font-size: 1.1em;
                         border-radius: 8px;
@@ -725,20 +733,20 @@
                         padding: 2px 8px;
                         min-width: 80px;
                         outline: none;
-                    "
-                    placeholder="New tag"
-                    autofocus
+                      "
+                      placeholder="New tag"
+                      autofocus
                     />
+                  </div>
                 </div>
-                </div>
+              </div>
             </div>
-            </div>
-        </template>
-        <template v-else>
+          </template>
+          <template v-else>
             <div class="empty-state">Select a character to view images.</div>
-        </template>
+          </template>
         </div>
-    </main>
+      </main>
     </div>
-</div>
+  </div>
 </v-app>
