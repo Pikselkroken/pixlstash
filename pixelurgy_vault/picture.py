@@ -26,7 +26,9 @@ class PictureTagModel:
     picture_id: str = field(
         default=None, metadata={"foreign_key": "pictures(id)", "composite_key": True}
     )
-    tag: str = field(default=None, metadata={"composite_key": True})
+    tag: str = field(
+        default=None, metadata={"composite_key": True, "index": True}
+    )
 
 
 @dataclass
@@ -37,7 +39,10 @@ class PictureModel:
 
     __tablename__ = "pictures"
     id: str = field(default=None, metadata={"primary_key": True})
-    character_id: str = field(default=None, metadata={"foreign_key": "characters(id)"})
+    character_id: str = field(
+        default=None,
+        metadata={"foreign_key": "characters(id)", "index": True},
+    )
     file_path: str = field(default=None)
     description: str = field(default=None, metadata={"include_in_embedding": True})
     format: str = field(default=None)
@@ -45,7 +50,7 @@ class PictureModel:
     height: int = field(default=None)
     size_bytes: int = field(default=None)
     created_at: str = field(default=None)
-    is_reference: int = field(default=0)
+    is_reference: int = field(default=0, metadata={"index": True})
     embedding: bytes = field(default=None)
     face_bbox: str = field(default=None)
     thumbnail: bytes = field(default=None)
@@ -53,10 +58,20 @@ class PictureModel:
     face_quality: str = field(default=None)
     score: int = field(default=None)
     character_likeness: float = field(default=None)
-    pixel_sha: str = field(default=None)
+    pixel_sha: str = field(
+        default=None,
+        metadata={"index": True, "unique_index": True},
+    )
     tags: list[str] = field(
         default_factory=list, metadata={"db_ignore": True, "include_in_embedding": True}
     )
+
+    __indexes__ = [
+        {
+            "fields": ["character_id", "is_reference"],
+            "name": "idx_pictures_character_id_is_reference",
+        }
+    ]
 
     def to_dict(self, include=None, exclude=None) -> dict:
         result = {

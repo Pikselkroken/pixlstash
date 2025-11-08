@@ -7,7 +7,10 @@ from typing import List, Optional, Tuple, Self
 class CharacterModel:
     __tablename__ = "characters"
     id: int = field(default=None, metadata={"primary_key": True})
-    name: str = field(default=None, metadata={"include_in_embedding": True})
+    name: str = field(
+        default=None,
+        metadata={"include_in_embedding": True, "index": True},
+    )
     original_seed: int = field(default=None)
     original_prompt: str = field(default=None, metadata={"include_in_embedding": True})
     loras: list = field(default_factory=list)

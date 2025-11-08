@@ -49,6 +49,8 @@ class VaultDatabase:
         self._lock = threading.Lock()
         self._conn: Optional[sqlite3.Connection] = None
 
+        models = [CharacterModel, PictureModel, PictureTagModel]
+
         if not db_exists:
             logger.info("Creating tables and importing default data...")
             # Create tables from dataclasses
@@ -62,18 +64,21 @@ class VaultDatabase:
                 );
                 """
             )
-            for model in [CharacterModel, PictureModel, PictureTagModel]:
+            for model in models:
                 sql = self.create_table_sql(model)
                 logger.info(
                     f"CREATE TABLE SQL for {getattr(model, '__tablename__', model.__name__)}: {sql}"
                 )
                 self._conn.execute(sql)
+                self._create_indexes_for_model(model)
             self._conn.commit()
         else:
             logger.debug("Using existing database, skipping default import.")
             self._ensure_connection()
             upgrader = VaultUpgrade(self._conn)
             upgrader.upgrade_if_necessary()
+            for model in models:
+                self._create_indexes_for_model(model)
 
         if description is not None:
             self.set_metadata("description", description)
@@ -128,6 +133,68 @@ class VaultDatabase:
         all_defs = fields + constraints
         fields_sql = ", ".join(all_defs)
         return f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql});"
+
+    @classmethod
+    def get_index_definitions(cls, model_cls):
+        table_name = getattr(model_cls, "__tablename__", model_cls.__name__.lower())
+        indexes = []
+        for f in dataclasses.fields(model_cls):
+            meta = f.metadata if hasattr(f, "metadata") else {}
+            if not meta:
+                continue
+            index_spec = meta.get("index")
+            if index_spec:
+                if isinstance(index_spec, str):
+                    index_name = index_spec
+                else:
+                    index_name = f"idx_{table_name}_{f.name}"
+                unique = bool(meta.get("unique_index", False))
+                where_clause = meta.get("index_where")
+                indexes.append(
+                    {
+                        "name": index_name,
+                        "fields": [f.name],
+                        "unique": unique,
+                        "where": where_clause,
+                    }
+                )
+
+        composite_indexes = getattr(model_cls, "__indexes__", [])
+        for idx in composite_indexes:
+            if not idx:
+                continue
+            fields = idx.get("fields") or []
+            if not fields:
+                continue
+            name = idx.get("name") or f"idx_{table_name}_{'_'.join(fields)}"
+            unique = bool(idx.get("unique", False))
+            where_clause = idx.get("where")
+            indexes.append(
+                {
+                    "name": name,
+                    "fields": fields,
+                    "unique": unique,
+                    "where": where_clause,
+                }
+            )
+        return indexes
+
+    def _create_indexes_for_model(self, model_cls):
+        indexes = self.get_index_definitions(model_cls)
+        if not indexes:
+            return
+        table_name = getattr(model_cls, "__tablename__", model_cls.__name__.lower())
+        for idx in indexes:
+            fields_sql = ", ".join(idx["fields"])
+            unique = "UNIQUE " if idx.get("unique") else ""
+            sql = (
+                f"CREATE {unique}INDEX IF NOT EXISTS {idx['name']} ON {table_name} ({fields_sql})"
+            )
+            if idx.get("where"):
+                sql += f" WHERE {idx['where']}"
+            logger.debug(f"Ensuring index with SQL: {sql}")
+            self._conn.execute(sql)
+        self._conn.commit()
 
     def close(self):
         with self._lock:
