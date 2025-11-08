@@ -85,6 +85,38 @@ const VIDEO_EXTENSIONS = [
   "wmv",
   "m4v",
 ];
+
+function dataTransferHasSupportedMedia(dataTransfer) {
+  if (!dataTransfer) return false;
+
+  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+  for (let i = 0; i < Math.min(items.length, 10); i++) {
+    const item = items[i];
+    if (!item || item.kind !== "file") continue;
+
+    const mime = item.type || "";
+    if (mime.startsWith("image/") || mime.startsWith("video/")) {
+      return true;
+    }
+
+    if (!mime && typeof item.getAsFile === "function") {
+      const file = item.getAsFile();
+      if (file && isSupportedMediaFile(file)) {
+        return true;
+      }
+    }
+  }
+
+  // Some browsers only populate types
+  if (items.length === 0) {
+    const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+    if (types.includes("Files")) {
+      return true;
+    }
+  }
+
+  return false;
+}
 function isSupportedImageFile(file) {
   const ext = file.name.split(".").pop().toLowerCase();
   return PIL_IMAGE_EXTENSIONS.includes(ext);
@@ -259,19 +291,11 @@ function handleGridDragEnter(e) {
     gridContainer.value.contains(e.relatedTarget)
   )
     return;
-  if (!e.dataTransfer || !e.dataTransfer.items) return;
-  // Only check the first 5 items for image type, break immediately if found
-  const items = Array.from(e.dataTransfer.items);
-  let hasImageType = false;
-  for (let i = 0; i < Math.min(items.length, 5); i++) {
-    const item = items[i];
-    if (item.kind === "file" && item.type.startsWith("image/")) {
-      hasImageType = true;
-      break;
-    }
-  }
+  if (!e.dataTransfer) return;
+  const hasSupported = dataTransferHasSupportedMedia(e.dataTransfer);
+  if (!hasSupported) return;
   // Timing end
-  if (hasImageType) {
+  if (hasSupported) {
     dragOverlayVisible.value = true;
     dragOverlayMessage.value = "Drop files here to import";
     e.preventDefault();
@@ -282,7 +306,13 @@ function handleGridDragEnter(e) {
 }
 
 function handleGridDragOver(e) {
-  if (dragOverlayVisible.value) e.preventDefault();
+  if (dataTransferHasSupportedMedia(e.dataTransfer)) {
+    if (!dragOverlayVisible.value) {
+      dragOverlayVisible.value = true;
+      dragOverlayMessage.value = "Drop files here to import";
+    }
+    e.preventDefault();
+  }
 }
 function handleGridDragLeave(e) {
   // Only hide overlay if leaving the .image-grid entirely
@@ -1052,6 +1082,11 @@ function handleOverlayKeydown(e) {
   }
   if (chatOpen.value && e.key === "Escape") {
     closeChatOverlay();
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "Escape" && selectedImageIds.value.length) {
+    selectedImageIds.value = [];
     e.preventDefault();
     return;
   }
