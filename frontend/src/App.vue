@@ -14,17 +14,12 @@ import SideBar from "./components/SideBar.vue";
 import ChatWindow from "./components/ChatWindow.vue";
 import ImageImporter from "./components/ImageImporter.vue";
 
+// --- Backend Constants & Identifiers ---
 const BACKEND_URL = "http://localhost:9537";
+const ALL_PICTURES_ID = "__all__";
+const UNASSIGNED_PICTURES_ID = "__unassigned__";
 
-// Drag-and-drop overlay state (for image grid only)
-const dragOverlayVisible = ref(false);
-const dragOverlayMessage = ref("");
-// Track drag source for grid
-const dragSource = ref(null);
-
-const gridContainer = ref(null); // already used for grid
-const imageImporterRef = ref(null);
-
+// --- Supported Media Extensions ---
 const PIL_IMAGE_EXTENSIONS = [
   "jpg",
   "jpeg",
@@ -86,43 +81,163 @@ const VIDEO_EXTENSIONS = [
   "m4v",
 ];
 
-function dataTransferHasSupportedMedia(dataTransfer) {
-  if (!dataTransfer) return false;
+// --- Template & Component Refs ---
+const gridContainer = ref(null);
+const imageImporterRef = ref(null);
+const chatWindowRef = ref(null);
 
-  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
-  for (let i = 0; i < Math.min(items.length, 10); i++) {
-    const item = items[i];
-    if (!item || item.kind !== "file") continue;
+// --- Drag-and-Drop State ---
+const dragOverlayVisible = ref(false);
+const dragOverlayMessage = ref("");
+const dragSource = ref(null);
 
-    const mime = item.type || "";
-    if (mime.startsWith("image/") || mime.startsWith("video/")) {
-      return true;
-    }
+// --- Pagination & Sorting State ---
+const sortOptions = ref([]);
+const selectedSort = ref("");
+const previousSort = ref("");
+const pageSize = ref(100);
+const pageOffset = ref(0);
+const hasMoreImages = ref(true);
 
-    if (!mime && typeof item.getAsFile === "function") {
-      const file = item.getAsFile();
-      if (file && isSupportedMediaFile(file)) {
-        return true;
-      }
-    }
+// --- Character & Sidebar State ---
+const selectedCharacter = ref(ALL_PICTURES_ID);
+const selectedReferenceMode = ref(false);
+const characters = ref([]);
+const categoryCounts = ref({
+  [ALL_PICTURES_ID]: 0,
+  [UNASSIGNED_PICTURES_ID]: 0,
+});
+const characterThumbnails = ref({});
+const expandedCharacters = ref({});
+const sidebarSections = ref({
+  pictures: true,
+  people: true,
+  search: true,
+});
+const dragOverCharacter = ref(null);
+const nextCharacterNumber = ref(1);
+const editingCharacterId = ref(null);
+const editingCharacterName = ref("");
+
+// --- Image Grid State ---
+const images = ref([]);
+const imagesLoading = ref(false);
+const imagesError = ref(null);
+const thumbLoaded = reactive({});
+const thumbnailSize = ref(256);
+const columns = ref(5);
+const sidebarVisible = ref(true);
+const selectedImageIds = ref([]);
+let lastSelectedIndex = null;
+
+// --- Overlay & Tag State ---
+const overlayOpen = ref(false);
+const overlayImage = ref(null);
+const addingTagOverlay = ref(false);
+const newTagOverlay = ref("");
+
+// --- Chat Overlay State ---
+const chatOpen = ref(false);
+
+// --- Search & Filtering State ---
+const searchQuery = ref("");
+const showStars = ref(true);
+const referenceFilterMode = ref(false);
+
+// --- Config Dialog State ---
+const settingsDialog = ref(false);
+const config = reactive({
+  image_roots: [],
+  selected_image_root: "",
+  sort: "",
+  thumbnail: 256,
+  show_stars: true,
+  show_only_reference: false,
+  openai_host: "localhost",
+  openai_port: 8000,
+  openai_model: "",
+});
+const openaiModels = ref([]);
+const openaiModelFetchError = ref("");
+const openaiModelLoading = ref(false);
+const newImageRoot = ref("");
+
+// --- Miscellaneous Status Flags ---
+const loading = ref(false);
+const error = ref(null);
+
+// --- Computed Collections ---
+const filteredImages = computed(() => {
+  if (referenceFilterMode.value) {
+    return images.value.filter((img) => Number(img.is_reference) === 1);
   }
+  return images.value;
+});
 
-  // Some browsers only populate types
-  if (items.length === 0) {
-    const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-    if (types.includes("Files")) {
-      return true;
+const pagedImages = computed(() => filteredImages.value);
+
+const sortedCharacters = computed(() => {
+  return [...characters.value]
+    .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    );
+});
+
+const selectedCharacterObj = computed(() => {
+  if (
+    selectedCharacter.value &&
+    selectedCharacter.value !== ALL_PICTURES_ID &&
+    selectedCharacter.value !== UNASSIGNED_PICTURES_ID
+  ) {
+    const char =
+      characters.value.find((c) => c.id === selectedCharacter.value) || null;
+    if (char && typeof char.name === "string" && char.name.length > 0) {
+      return {
+        ...char,
+        name: char.name.charAt(0).toUpperCase() + char.name.slice(1),
+      };
     }
+    return char;
   }
+  return null;
+});
 
-  return false;
-}
-function isSupportedImageFile(file) {
-  const ext = file.name.split(".").pop().toLowerCase();
-  return PIL_IMAGE_EXTENSIONS.includes(ext);
-}
+// --- Selection Helpers ---
+const isImageSelected = (id) =>
+  selectedImageIds.value.includes(id) &&
+  pagedImages.value.some((img) => img.id === id);
 
-// Format likeness score as percentage with 2 decimals function
+const getSelectionBorderClasses = (idx) => {
+  const sorted = pagedImages.value;
+  if (!isImageSelected(sorted[idx]?.id)) return "";
+  const cols = columns.value;
+  const total = sorted.length;
+  const row = Math.floor(idx / cols);
+  const col = idx % cols;
+  const classes = [];
+  if (row === 0 || !isImageSelected(sorted[(row - 1) * cols + col]?.id)) {
+    classes.push("selected-border-top");
+  }
+  if (
+    row === Math.floor((total - 1) / cols) ||
+    !isImageSelected(sorted[(row + 1) * cols + col]?.id)
+  ) {
+    classes.push("selected-border-bottom");
+  }
+  if (col === 0 || !isImageSelected(sorted[row * cols + (col - 1)]?.id)) {
+    classes.push("selected-border-left");
+  }
+  if (
+    col === cols - 1 ||
+    !isImageSelected(sorted[row * cols + (col + 1)]?.id)
+  ) {
+    classes.push("selected-border-right");
+  }
+  return classes.join(" ");
+};
+
+// --- Text & Display Utilities ---
 function formatLikenessScore(score) {
   if (typeof score !== "number") return "";
   return `Likeness: ${(score * 100).toFixed(2)}%`;
@@ -130,15 +245,12 @@ function formatLikenessScore(score) {
 
 function extractKeywords(text) {
   const doc = nlp(text);
-  // Get all noun and adjective phrases as keywords
   const nouns = doc.nouns().out("array");
   const adjectives = doc.adjectives().out("array");
-  // Combine and deduplicate
   const keywords = Array.from(new Set([...nouns, ...adjectives]));
   return keywords.join(" ");
 }
 
-// Extracts the format/extension for overlayImage robustly function
 function getOverlayFormat(overlayImage) {
   if (!overlayImage) return "";
   if (overlayImage.format) return overlayImage.format;
@@ -154,7 +266,12 @@ function getOverlayFormat(overlayImage) {
   return "png";
 }
 
-// Accepts either a file object (with .name) or a string extension
+// --- Media Helpers ---
+function isSupportedImageFile(file) {
+  const ext = file.name.split(".").pop().toLowerCase();
+  return PIL_IMAGE_EXTENSIONS.includes(ext);
+}
+
 function isSupportedVideoFile(input) {
   let ext = "";
   if (typeof input === "string") {
@@ -162,7 +279,6 @@ function isSupportedVideoFile(input) {
   } else if (input && input.name) {
     ext = input.name.split(".").pop().toLowerCase();
   }
-
   return VIDEO_EXTENSIONS.includes(ext);
 }
 
@@ -170,15 +286,43 @@ function isSupportedMediaFile(file) {
   return isSupportedImageFile(file) || isSupportedVideoFile(file);
 }
 
-// Sorting and pagination state
-const sortOptions = ref([]);
-const selectedSort = ref("");
-const previousSort = ref(""); // Track previous sort for search restore
-const pageSize = ref(100);
-const pageOffset = ref(0);
-const hasMoreImages = ref(true);
+function dataTransferHasSupportedMedia(dataTransfer) {
+  if (!dataTransfer) return false;
+  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+  for (let i = 0; i < Math.min(items.length, 10); i++) {
+    const item = items[i];
+    if (!item || item.kind !== "file") continue;
+    const mime = item.type || "";
+    if (mime.startsWith("image/") || mime.startsWith("video/")) {
+      return true;
+    }
+    if (!mime && typeof item.getAsFile === "function") {
+      const file = item.getAsFile();
+      if (file && isSupportedMediaFile(file)) {
+        return true;
+      }
+    }
+  }
+  if (items.length === 0) {
+    const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+    if (types.includes("Files")) {
+      return true;
+    }
+  }
+  return false;
+}
 
-// Fetch sort mechanisms from backend
+// --- Grid Layout Helpers ---
+function updateColumns() {
+  if (!gridContainer.value) return;
+  const containerWidth = gridContainer.value.offsetWidth;
+  columns.value = Math.max(
+    1,
+    Math.floor(containerWidth / (thumbnailSize.value + 32))
+  );
+}
+
+// --- Sorting & Pagination ---
 async function fetchSortOptions() {
   try {
     const res = await fetch(`${BACKEND_URL}/sort_mechanisms`);
@@ -188,7 +332,6 @@ async function fetchSortOptions() {
       label: opt.label,
       value: opt.id,
     }));
-    // Set default sort if not set
     if (!selectedSort.value && options.length) {
       selectedSort.value =
         options.find((o) => o.id === "unsorted")?.id || options[0].id;
@@ -205,13 +348,6 @@ async function fetchSortOptions() {
   }
 }
 
-const selectedCharacter = ref(ALL_PICTURES_ID);
-const selectedReferenceMode = ref(false);
-
-// Track thumbnail load state globally by image ID
-const thumbLoaded = reactive({});
-
-// Fetch images for the current character and mode, with pagination and sorting
 async function refreshImages(append = false) {
   if (!append) {
     images.value = [];
@@ -235,7 +371,6 @@ async function refreshImages(append = false) {
     } else if (id === UNASSIGNED_PICTURES_ID) {
       url = `${BACKEND_URL}/pictures?character_id=&${params.toString()}`;
     } else if (refMode) {
-      // Reference mode: fallback to old endpoint for now (no paging)
       url = `${BACKEND_URL}/characters/reference_pictures/${encodeURIComponent(
         id
       )}`;
@@ -256,11 +391,7 @@ async function refreshImages(append = false) {
       score: typeof img.score !== "undefined" ? img.score : null,
       is_reference: Number(img.is_reference) || 0,
     }));
-    if (append) {
-      images.value = [...images.value, ...newImages];
-    } else {
-      images.value = newImages;
-    }
+    images.value = append ? [...images.value, ...newImages] : newImages;
     hasMoreImages.value = newImages.length === pageSize.value;
     setTimeout(updateColumns, 0);
   } catch (e) {
@@ -270,21 +401,230 @@ async function refreshImages(append = false) {
   }
 }
 
-// Watch for sort or character changes (but not during active search)
-watch([selectedSort, selectedCharacter, selectedReferenceMode], () => {
-  // Don't refresh if we have an active search query
-  if (searchQuery.value && searchQuery.value.trim()) {
-    return;
-  }
-  pageOffset.value = 0;
-  hasMoreImages.value = true;
-  lastSelectedIndex = null;
-  refreshImages();
-});
+// --- Sidebar & Character Data ---
+async function fetchSidebarCounts() {
+  try {
+    const resAll = await fetch(`${BACKEND_URL}/category/summary`);
+    if (resAll.ok) {
+      const data = await resAll.json();
+      categoryCounts.value[ALL_PICTURES_ID] = data.image_count;
+    }
+  } catch {}
+  try {
+    const resUnassigned = await fetch(
+      `${BACKEND_URL}/category/summary?character_id=null`
+    );
+    if (resUnassigned.ok) {
+      const data = await resUnassigned.json();
+      categoryCounts.value[UNASSIGNED_PICTURES_ID] = data.image_count;
+    }
+  } catch {}
+  await Promise.all(
+    characters.value.map(async (char) => {
+      try {
+        const res = await fetch(
+          `${BACKEND_URL}/category/summary?character_id=${encodeURIComponent(
+            char.id
+          )}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          categoryCounts.value[char.id] = data.image_count;
+        }
+      } catch {}
+    })
+  );
+}
 
+async function fetchCharacters() {
+  loading.value = true;
+  error.value = null;
+  try {
+    const res = await fetch(`${BACKEND_URL}/characters`);
+    if (!res.ok) throw new Error("Failed to fetch characters");
+    const chars = await res.json();
+    characters.value = chars;
+    for (const char of chars) {
+      fetchCharacterThumbnail(char.id);
+    }
+    await fetchSidebarCounts();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function fetchCharacterThumbnail(characterId) {
+  try {
+    const cacheBuster = Date.now();
+    const thumbUrl = `${BACKEND_URL}/face_thumbnail/${characterId}?cb=${cacheBuster}`;
+    const res = await fetch(thumbUrl);
+    if (res.ok && res.headers.get("content-type")?.includes("image/png")) {
+      characterThumbnails.value[characterId] = thumbUrl;
+    } else {
+      characterThumbnails.value[characterId] = null;
+    }
+  } catch (e) {
+    characterThumbnails.value[characterId] = null;
+  }
+}
+
+function toggleSidebarSection(section) {
+  if (!section || !(section in sidebarSections.value)) return;
+  sidebarSections.value[section] = !sidebarSections.value[section];
+}
+
+// --- Settings & Config ---
+async function fetchOpenAIModels() {
+  openaiModelLoading.value = true;
+  openaiModelFetchError.value = "";
+  openaiModels.value = [];
+  try {
+    const url = `http://${config.openai_host}:${config.openai_port}/v1/models`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch models");
+    const data = await res.json();
+    if (Array.isArray(data.data)) {
+      openaiModels.value = data.data.map((m) => m.id);
+    } else {
+      openaiModelFetchError.value = "No models found.";
+    }
+  } catch (e) {
+    openaiModelFetchError.value = "Failed to fetch models: " + (e.message || e);
+  } finally {
+    openaiModelLoading.value = false;
+  }
+}
+
+async function fetchConfig() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/config`);
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("Failed to fetch /config:", res.status, text);
+      return;
+    }
+    const data = await res.json();
+    config.image_roots = data.image_roots || [];
+    config.selected_image_root = data.selected_image_root || "";
+    const sortValue = data.sort_order ?? data.sort;
+    if (typeof sortValue === "string" && sortValue) {
+      selectedSort.value = sortValue;
+    }
+    const thumbnailValue =
+      typeof data.thumbnail_size === "number"
+        ? data.thumbnail_size
+        : typeof data.thumbnail === "number"
+        ? data.thumbnail
+        : null;
+    if (thumbnailValue !== null) {
+      thumbnailSize.value = thumbnailValue;
+      await nextTick();
+      updateColumns();
+    }
+    if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
+    if (typeof data.show_only_reference === "boolean")
+      referenceFilterMode.value = data.show_only_reference;
+    config.sort_order = sortValue || selectedSort.value;
+    config.thumbnail_size = thumbnailValue || thumbnailSize.value;
+    config.show_stars =
+      typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
+    config.show_only_reference =
+      typeof data.show_only_reference === "boolean"
+        ? data.show_only_reference
+        : referenceFilterMode.value;
+    config.openai_host = data.openai_host || "localhost";
+    config.openai_port = data.openai_port || 8000;
+    config.openai_model = data.openai_model || "";
+  } catch (e) {
+    console.error("Error fetching /config:", e);
+  }
+}
+
+async function addImageRoot() {
+  const val = newImageRoot.value.trim();
+  if (!val || config.image_roots.includes(val)) return;
+  config.image_roots.push(val);
+  newImageRoot.value = "";
+  await fetch(`${BACKEND_URL}/config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image_roots: config.image_roots }),
+  });
+}
+
+function removeImageRoot(root) {
+  if (config.image_roots.length <= 1) return;
+  const idx = config.image_roots.indexOf(root);
+  if (idx !== -1) {
+    config.image_roots.splice(idx, 1);
+    if (config.selected_image_root === root) {
+      config.selected_image_root = config.image_roots[0] || "";
+    }
+    saveConfig();
+  }
+}
+
+async function updateSelectedRoot() {
+  await fetch(`${BACKEND_URL}/config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ selected_image_root: config.selected_image_root }),
+  });
+  await fetchConfig();
+  await fetchCharacters();
+  await fetchSidebarCounts();
+  await refreshImages();
+}
+
+async function patchConfigUIOptions(opts = {}) {
+  const patch = {
+    sort: selectedSort.value,
+    thumbnail: thumbnailSize.value,
+    show_stars: showStars.value,
+    show_only_reference: referenceFilterMode.value,
+    openai_host: config.openai_host,
+    openai_port: config.openai_port,
+    openai_model: config.openai_model,
+    ...opts,
+  };
+  Object.assign(config, patch);
+  await fetch(`${BACKEND_URL}/config`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+function selectImageRoot(root) {
+  if (config.selected_image_root !== root) {
+    config.selected_image_root = root;
+    updateSelectedRoot();
+  }
+}
+
+async function saveConfig() {
+  await fetch(`/${BACKEND_URL}/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image_roots: config.image_roots,
+      selected_image_root: config.selected_image_root,
+    }),
+  });
+}
+
+function openSettingsDialog() {
+  console.debug("Opening settings dialog");
+  fetchConfig().then(() => {
+    fetchOpenAIModels();
+  });
+  settingsDialog.value = true;
+}
+
+// --- Image Import & Grid Interaction ---
 function handleGridDragEnter(e) {
-  // Only trigger if entering from outside the image-grid (not between children)
-  // If relatedTarget is inside the grid, ignore (moving within grid children).
   if (
     e.relatedTarget &&
     gridContainer.value &&
@@ -294,15 +634,10 @@ function handleGridDragEnter(e) {
   if (!e.dataTransfer) return;
   const hasSupported = dataTransferHasSupportedMedia(e.dataTransfer);
   if (!hasSupported) return;
-  // Timing end
-  if (hasSupported) {
-    dragOverlayVisible.value = true;
-    dragOverlayMessage.value = "Drop files here to import";
-    e.preventDefault();
-    console.debug("Overlay shown");
-  } else {
-    dragOverlayVisible.value = false;
-  }
+  dragOverlayVisible.value = true;
+  dragOverlayMessage.value = "Drop files here to import";
+  e.preventDefault();
+  console.debug("Overlay shown");
 }
 
 function handleGridDragOver(e) {
@@ -314,8 +649,8 @@ function handleGridDragOver(e) {
     e.preventDefault();
   }
 }
+
 function handleGridDragLeave(e) {
-  // Only hide overlay if leaving the .image-grid entirely
   if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
     dragOverlayVisible.value = false;
   } else {
@@ -323,16 +658,13 @@ function handleGridDragLeave(e) {
   }
 }
 
-// Image import handling is delegated to the ImageImporter component
 function handleGridDrop(e) {
   dragOverlayVisible.value = false;
-  // Prevent importing if this is an internal drag (from our own grid)
   if (dragSource.value === "grid") {
     dragSource.value = null;
     return;
   }
   if (!e.dataTransfer || !e.dataTransfer.files) return;
-
   const files = Array.from(e.dataTransfer.files).filter(isSupportedMediaFile);
   console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
   console.debug("[IMPORT] Supported files after filter:", files);
@@ -340,9 +672,7 @@ function handleGridDrop(e) {
     alert("No supported image files found.");
     return;
   }
-
   dragSource.value = null;
-
   if (
     !imageImporterRef.value ||
     typeof imageImporterRef.value.startImport !== "function"
@@ -350,7 +680,6 @@ function handleGridDrop(e) {
     console.warn("ImageImporter component is not ready to handle imports.");
     return;
   }
-
   imageImporterRef.value.startImport(files, {
     selectedCharacterId: selectedCharacter.value,
   });
@@ -361,33 +690,34 @@ function handleImportFinished() {
   fetchSidebarCounts();
 }
 
-// Clear selection if clicking on empty space in the image grid
 function handleGridBackgroundClick(e) {
-  // If the click is NOT inside an image-card, clear selection
   if (!e.target.closest(".thumbnail-card")) {
     selectedImageIds.value = [];
     lastSelectedIndex = null;
   }
 }
 
-// Infinite scroll: load more images as user scrolls near bottom
 function onGridScroll(e) {
   const el = e.target;
   if (!hasMoreImages.value || imagesLoading.value) return;
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
-    // Near bottom
     pageOffset.value += pageSize.value;
     refreshImages(true);
   }
 }
 
-// Use backend-driven images, no local sorting
-const pagedImages = computed(() => filteredImages.value);
+// --- Overlay & Tag Editing ---
+function openOverlay(img) {
+  overlayImage.value = img;
+  overlayOpen.value = true;
+}
 
-// Remove a tag from the overlay image and PATCH the backend
+function closeOverlay() {
+  overlayOpen.value = false;
+}
+
 async function removeTagFromOverlayImage(tag) {
   if (!overlayImage.value) return;
-
   const img = overlayImage.value;
   const newTags = img.tags.filter((t) => t !== tag);
   try {
@@ -396,18 +726,12 @@ async function removeTagFromOverlayImage(tag) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tags: newTags }),
     });
-
     if (!res.ok) throw new Error("Failed to remove tag");
-
     img.tags = newTags;
   } catch (e) {
     alert("Failed to remove tag: " + (e.message || e));
   }
 }
-
-// State for adding a tag in the overlay
-const addingTagOverlay = ref(false);
-const newTagOverlay = ref("");
 
 function startAddTagOverlay() {
   addingTagOverlay.value = true;
@@ -429,15 +753,13 @@ async function confirmAddTagOverlay() {
   if (!tag) {
     cancelAddTagOverlay();
     return;
-  } // Prevent duplicate tags
-
+  }
   if (overlayImage.value.tags.includes(tag)) {
     cancelAddTagOverlay();
     return;
   }
   const img = overlayImage.value;
   const newTags = [...img.tags, tag];
-
   try {
     const res = await fetch(`${BACKEND_URL}/pictures/${img.id}`, {
       method: "PATCH",
@@ -445,7 +767,6 @@ async function confirmAddTagOverlay() {
       body: JSON.stringify({ tags: newTags }),
     });
     if (!res.ok) throw new Error("Failed to add tag");
-
     img.tags = newTags;
   } catch (e) {
     alert("Failed to add tag: " + (e.message || e));
@@ -453,28 +774,7 @@ async function confirmAddTagOverlay() {
   cancelAddTagOverlay();
 }
 
-// Selection state for file manager
-const selectedImageIds = ref([]);
-let lastSelectedIndex = null;
-
-// Sidebar visibility state
-const sidebarVisible = ref(true);
-
-// Overlay state for full image view
-const overlayOpen = ref(false);
-const overlayImage = ref(null);
-
-function openOverlay(img) {
-  overlayImage.value = img;
-  overlayOpen.value = true;
-}
-
-function closeOverlay() {
-  overlayOpen.value = false;
-}
-
-const chatOpen = ref(false);
-const chatWindowRef = ref(null);
+// --- Chat Overlay ---
 function openChatOverlay() {
   chatOpen.value = true;
   nextTick(() => {
@@ -486,16 +786,12 @@ function closeChatOverlay() {
   chatOpen.value = false;
 }
 
-// Search bar state and logic
-const searchQuery = ref(""); // Used for actual search
+// --- Search ---
 async function searchImages(query) {
-  // Only update searchQuery and trigger search if input is non-empty
   const q = (typeof query === "string" ? query : searchQuery.value).trim();
   if (!q) return;
   searchQuery.value = q;
-  // Save previous sort before switching to likeness sort
   previousSort.value = selectedSort.value;
-  // Switch sorting to 'Sort by Search Likeness' if available
   const likenessSort = sortOptions.value.find(
     (opt) =>
       (opt.value && opt.value.toLowerCase().includes("search")) ||
@@ -524,30 +820,17 @@ async function searchImages(query) {
   } finally {
     imagesLoading.value = false;
   }
-  // Watch for clearing of searchQuery to restore previous sort and refresh view
-  watch(searchQuery, (newVal, oldVal) => {
-    if (!newVal && oldVal) {
-      // Restore previous sort if available
-      if (previousSort.value && previousSort.value !== selectedSort.value) {
-        selectedSort.value = previousSort.value;
-      }
-      // Refresh images for current character and sort
-      refreshImages();
-    }
-  });
 }
 
+// --- Selection & Keyboard Handling ---
 function handleImageSelect(img, idx, event) {
-  // Use pagedImages for all index-based selection
   const sorted = pagedImages.value;
   const id = img.id;
   const isSelected = selectedImageIds.value.includes(id);
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
-
   if (isShift) {
     if (lastSelectedIndex !== null) {
-      // Range select in pagedImages
       const start = Math.min(lastSelectedIndex, idx);
       const end = Math.max(lastSelectedIndex, idx);
       const rangeIds = sorted.slice(start, end + 1).map((i) => i.id);
@@ -556,12 +839,10 @@ function handleImageSelect(img, idx, event) {
         : rangeIds;
       selectedImageIds.value = newSelection;
     } else {
-      // No previous selection, just select the clicked image
       selectedImageIds.value = [id];
     }
     lastSelectedIndex = idx;
   } else if (isCtrl) {
-    // Toggle selection
     if (isSelected) {
       selectedImageIds.value = selectedImageIds.value.filter((i) => i !== id);
     } else {
@@ -569,490 +850,85 @@ function handleImageSelect(img, idx, event) {
     }
     lastSelectedIndex = idx;
   } else {
-    // Single select
     selectedImageIds.value = [id];
     lastSelectedIndex = idx;
   }
 }
 
-// Only visually mark as selected if the image is both in selectedImageIds and
-// visible in pagedImages
-const isImageSelected = (id) =>
-  selectedImageIds.value.includes(id) &&
-  pagedImages.value.some((img) => img.id === id);
-
-// Logic to determine if a selected image is on the outer edge of a selection
-// group (use pagedImages)
-const getSelectionBorderClasses = (idx) => {
-  const sorted = pagedImages.value;
-  if (!isImageSelected(sorted[idx]?.id)) return "";
-  const cols = columns.value;
-  const total = sorted.length;
-  const row = Math.floor(idx / cols);
-  const col = idx % cols;
-  let classes = [];
-  // Check neighbors: top, right, bottom, left
-  // Top
-  if (row === 0 || !isImageSelected(sorted[(row - 1) * cols + col]?.id)) {
-    classes.push("selected-border-top");
-  }
-  // Bottom
-  if (
-    row === Math.floor((total - 1) / cols) ||
-    !isImageSelected(sorted[(row + 1) * cols + col]?.id)
-  ) {
-    classes.push("selected-border-bottom");
-  }
-  // Left
-  if (col === 0 || !isImageSelected(sorted[row * cols + (col - 1)]?.id)) {
-    classes.push("selected-border-left");
-  }
-  // Right
-  if (
-    col === cols - 1 ||
-    !isImageSelected(sorted[row * cols + (col + 1)]?.id)
-  ) {
-    classes.push("selected-border-right");
-  }
-  return classes.join(" ");
-};
-
-const ALL_PICTURES_ID = "__all__";
-const UNASSIGNED_PICTURES_ID = "__unassigned__";
-const characters = ref([]);
-// Store image counts for each category (all, unassigned, characterId)
-const categoryCounts = ref({
-  [ALL_PICTURES_ID]: 0,
-  [UNASSIGNED_PICTURES_ID]: 0,
-  // characterId: count
-});
-
-// Fetch and update image counts for all sidebar categories
-async function fetchSidebarCounts() {
-  // All Pictures
+async function selectAllInCurrentView() {
   try {
-    const resAll = await fetch(`${BACKEND_URL}/category/summary`);
-    if (resAll.ok) {
-      const data = await resAll.json();
-      categoryCounts.value[ALL_PICTURES_ID] = data.image_count;
+    const id = selectedCharacter.value;
+    const refMode = selectedReferenceMode.value;
+    if (searchQuery.value && searchQuery.value.trim()) {
+      const q = searchQuery.value.trim();
+      const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
+        q
+      )}&threshold=0.5&top_n=10000`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch search results");
+      const results = await res.json();
+      selectedImageIds.value = results.map((img) => img.id);
+      return;
     }
-  } catch {}
-  // Unassigned Pictures
-  try {
-    const resUnassigned = await fetch(
-      `${BACKEND_URL}/category/summary?character_id=null`
-    );
-    if (resUnassigned.ok) {
-      const data = await resUnassigned.json();
-      categoryCounts.value[UNASSIGNED_PICTURES_ID] = data.image_count;
-    }
-  } catch {}
-  // Each character
-  await Promise.all(
-    characters.value.map(async (char) => {
-      try {
-        const res = await fetch(
-          `${BACKEND_URL}/category/summary?character_id=${encodeURIComponent(
-            char.id
-          )}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          categoryCounts.value[char.id] = data.image_count;
-        }
-      } catch {}
-    })
-  );
-}
-// Computed: characters sorted alphabetically by name (case-insensitive)
-const sortedCharacters = computed(() => {
-  return [...characters.value]
-    .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
-    .sort((a, b) => {
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-    });
-});
-const characterThumbnails = ref({}); // { [characterId]: thumbnailUrl }
-const loading = ref(false);
-const error = ref(null);
-
-// Reference filter for toolbar (local only, no backend refresh)
-const showStars = ref(true);
-const referenceFilterMode = ref(false);
-const filteredImages = computed(() => {
-  if (referenceFilterMode.value) {
-    return images.value.filter((img) => Number(img.is_reference) === 1);
-  }
-  return images.value;
-});
-const expandedCharacters = ref({}); // { [characterId]: true/false }
-// Collapsible sidebar sections
-const sidebarSections = ref({
-  pictures: true,
-  people: true,
-  search: true,
-});
-
-function toggleSidebarSection(section) {
-  if (!section || !(section in sidebarSections.value)) return;
-  sidebarSections.value[section] = !sidebarSections.value[section];
-}
-
-const images = ref([]);
-const imagesLoading = ref(false);
-const imagesError = ref(null);
-
-// Thumbnail size slider state
-const thumbnailSize = ref(256);
-
-// Responsive columns
-const columns = ref(5);
-
-function updateColumns() {
-  if (!gridContainer.value) return;
-  const containerWidth = gridContainer.value.offsetWidth;
-  columns.value = Math.max(
-    1,
-    Math.floor(containerWidth / (thumbnailSize.value + 32))
-  );
-}
-
-async function fetchCharacters() {
-  loading.value = true;
-  error.value = null;
-  try {
-    const res = await fetch(`${BACKEND_URL}/characters`);
-    if (!res.ok) throw new Error("Failed to fetch characters");
-    const chars = await res.json();
-    characters.value = chars;
-    // For each character, fetch their first image's thumbnail (if any)
-    for (const char of chars) {
-      fetchCharacterThumbnail(char.id);
-    }
-    // After loading characters, fetch sidebar counts
-    await fetchSidebarCounts();
-  } catch (e) {
-    error.value = e.message;
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function fetchCharacterThumbnail(characterId) {
-  try {
-    // Add cache-busting query param to ensure fresh thumbnail
-    const cacheBuster = Date.now();
-    const thumbUrl = `${BACKEND_URL}/face_thumbnail/${characterId}?cb=${cacheBuster}`;
-    // Test if the endpoint returns an image (status 200 and content-type
-    // image/png)
-    const res = await fetch(thumbUrl);
-    if (res.ok && res.headers.get("content-type")?.includes("image/png")) {
-      characterThumbnails.value[characterId] = thumbUrl;
+    let url;
+    const params = new URLSearchParams();
+    params.set("sort", selectedSort.value || "date_desc");
+    if (id === ALL_PICTURES_ID) {
+      url = `${BACKEND_URL}/picture_ids?${params.toString()}`;
+    } else if (id === UNASSIGNED_PICTURES_ID) {
+      url = `${BACKEND_URL}/picture_ids?character_id=&${params.toString()}`;
+    } else if (refMode) {
+      params.set("is_reference", "1");
+      url = `${BACKEND_URL}/picture_ids?character_id=${encodeURIComponent(
+        id
+      )}&${params.toString()}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch picture IDs");
+      selectedImageIds.value = await res.json();
+      return;
     } else {
-      characterThumbnails.value[characterId] = null;
+      url = `${BACKEND_URL}/picture_ids?character_id=${encodeURIComponent(
+        id
+      )}&${params.toString()}`;
     }
-  } catch (e) {
-    characterThumbnails.value[characterId] = null;
-  }
-}
-
-// Toggle reference status for a picture (multi-select aware)
-async function toggleReference(img) {
-  // If multiple images are selected and this image is among them, apply to all
-  const selectedIds = selectedImageIds.value;
-  const multi = selectedIds.length > 1 && selectedIds.includes(img.id);
-  const newVal = Number(img.is_reference) === 1 ? 0 : 1;
-  const targets = multi
-    ? images.value.filter((i) => selectedIds.includes(i.id))
-    : [img];
-  try {
-    await Promise.all(
-      targets.map(async (target) => {
-        const res = await fetch(
-          `${BACKEND_URL}/pictures/${target.id}?is_reference=${newVal}`,
-          { method: "PATCH" }
-        );
-        if (!res.ok)
-          throw new Error(
-            `Failed to update reference status for image ${target.id}`
-          );
-        target.is_reference = newVal;
-      })
-    );
-    // If in reference mode, reload images so the grid updates immediately
-    if (selectedReferenceMode.value && newVal === 0) {
-      images.value = images.value.filter(
-        (i) => !targets.some((t) => t.id === i.id)
-      );
-    }
-  } catch (e) {
-    alert("Failed to update reference status: " + (e.message || e));
-  }
-}
-
-const settingsDialog = ref(false);
-watch(settingsDialog, (val) => {
-  if (val) fetchConfig();
-});
-const config = reactive({
-  image_roots: [],
-  selected_image_root: "",
-  sort: "",
-  thumbnail: 256,
-  show_stars: true,
-  show_only_reference: false,
-  openai_host: "localhost",
-  openai_port: 8000,
-  openai_model: "",
-});
-
-const openaiModels = ref([]);
-const openaiModelFetchError = ref("");
-const openaiModelLoading = ref(false);
-
-async function fetchOpenAIModels() {
-  openaiModelLoading.value = true;
-  openaiModelFetchError.value = "";
-  openaiModels.value = [];
-  try {
-    const url = `http://${config.openai_host}:${config.openai_port}/v1/models`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error("Failed to fetch models");
-    const data = await res.json();
-    // OpenAI API returns { data: [ { id: ... }, ... ] }
-    if (Array.isArray(data.data)) {
-      openaiModels.value = data.data.map((m) => m.id);
+    if (!res.ok) throw new Error("Failed to fetch picture IDs");
+    const ids = await res.json();
+    if (referenceFilterMode.value) {
+      const fullUrl = `${BACKEND_URL}/pictures?${params.toString()}&is_reference=1${
+        id !== ALL_PICTURES_ID ? `&character_id=${encodeURIComponent(id)}` : ""
+      }`;
+      const fullRes = await fetch(fullUrl);
+      if (!fullRes.ok) throw new Error("Failed to fetch pictures");
+      const pics = await fullRes.json();
+      selectedImageIds.value = pics.map((pic) => pic.id);
     } else {
-      openaiModelFetchError.value = "No models found.";
+      selectedImageIds.value = ids;
     }
   } catch (e) {
-    openaiModelFetchError.value = "Failed to fetch models: " + (e.message || e);
-  } finally {
-    openaiModelLoading.value = false;
+    console.error("Failed to select all images:", e);
+    alert("Failed to select all images: " + (e.message || e));
   }
 }
-
-async function fetchConfig() {
-  try {
-    const res = await fetch(`${BACKEND_URL}/config`);
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("Failed to fetch /config:", res.status, text);
-      return;
-    }
-    const data = await res.json();
-
-    config.image_roots = data.image_roots || [];
-    config.selected_image_root = data.selected_image_root || "";
-    // UI options
-    const sortValue = data.sort_order ?? data.sort;
-    if (typeof sortValue === "string" && sortValue) {
-      selectedSort.value = sortValue;
-    }
-    const thumbnailValue =
-      typeof data.thumbnail_size === "number"
-        ? data.thumbnail_size
-        : typeof data.thumbnail === "number"
-        ? data.thumbnail
-        : null;
-    if (thumbnailValue !== null) {
-      thumbnailSize.value = thumbnailValue;
-      await nextTick();
-      updateColumns();
-    }
-    if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
-    if (typeof data.show_only_reference === "boolean")
-      referenceFilterMode.value = data.show_only_reference;
-    // Also update config for PATCHing
-    config.sort_order = sortValue || selectedSort.value;
-    config.thumbnail_size = thumbnailValue || thumbnailSize.value;
-    config.show_stars =
-      typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
-    config.show_only_reference =
-      typeof data.show_only_reference === "boolean"
-        ? data.show_only_reference
-        : referenceFilterMode.value;
-    // OpenAI settings
-    config.openai_host = data.openai_host || "localhost";
-    config.openai_port = data.openai_port || 8000;
-    config.openai_model = data.openai_model || "";
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("Failed to fetch /config:", res.status, text);
-      return;
-    }
-  } catch (e) {
-    console.error("Error fetching /config:", e);
-  }
-}
-
-// Settings dialog: image roots add/remove/select logic
-const newImageRoot = ref("");
-async function addImageRoot() {
-  const val = newImageRoot.value.trim();
-  if (!val || config.image_roots.includes(val)) return;
-  config.image_roots.push(val);
-  newImageRoot.value = "";
-  // PATCH only image_roots
-  await fetch(`${BACKEND_URL}/config`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image_roots: config.image_roots }),
-  });
-}
-function removeImageRoot(root) {
-  if (config.image_roots.length <= 1) return;
-  const idx = config.image_roots.indexOf(root);
-  if (idx !== -1) {
-    config.image_roots.splice(idx, 1);
-    // If removed root was selected, pick first remaining
-    if (config.selected_image_root === root) {
-      config.selected_image_root = config.image_roots[0] || "";
-    }
-    saveConfig();
-  }
-}
-
-async function updateSelectedRoot() {
-  // PATCH only selected_image_root
-  await fetch(`${BACKEND_URL}/config`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ selected_image_root: config.selected_image_root }),
-  });
-  // Refresh grid and sidebar after vault change
-  await fetchConfig();
-  await fetchCharacters();
-  await fetchSidebarCounts();
-  await refreshImages();
-}
-
-// --- UI option PATCH logic ---
-async function patchConfigUIOptions(opts = {}) {
-  // Merge with config
-  const patch = {
-    sort: selectedSort.value,
-    thumbnail: thumbnailSize.value,
-    show_stars: showStars.value,
-    show_only_reference: referenceFilterMode.value,
-    openai_host: config.openai_host,
-    openai_port: config.openai_port,
-    openai_model: config.openai_model,
-    ...opts,
-  };
-  Object.assign(config, patch);
-  await fetch(`${BACKEND_URL}/config`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-function selectImageRoot(root) {
-  if (config.selected_image_root !== root) {
-    config.selected_image_root = root;
-    updateSelectedRoot();
-  }
-}
-
-async function saveConfig() {
-  // Save config to backend (POST /config)
-  await fetch(`/${BACKEND_URL}/config`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image_roots: config.image_roots,
-      selected_image_root: config.selected_image_root,
-    }),
-  });
-}
-
-function openSettingsDialog() {
-  console.debug("Opening settings dialog");
-  fetchConfig().then(() => {
-    fetchOpenAIModels();
-  });
-  settingsDialog.value = true;
-}
-
-// Fetch config and sync UI options on mount
-onMounted(() => {
-  fetchConfig();
-});
-
-onMounted(() => {
-  // Always select All Pictures at startup
-  selectedCharacter.value = ALL_PICTURES_ID;
-  selectedReferenceMode.value = false;
-  fetchSortOptions();
-  fetchCharacters();
-  window.addEventListener("resize", updateColumns);
-  watch(thumbnailSize, updateColumns);
-  setTimeout(updateColumns, 100); // Initial update after mount
-});
-
-// Watch and PATCH UI config options when changed
-watch(selectedSort, (val) => {
-  patchConfigUIOptions({ sort: val });
-});
-watch(thumbnailSize, (val) => {
-  patchConfigUIOptions({ thumbnail: val });
-});
-watch(showStars, (val) => {
-  patchConfigUIOptions({ show_stars: val });
-});
-
-watch(referenceFilterMode, (val) => {
-  patchConfigUIOptions({ show_only_reference: val });
-});
-
-// Still patch on change for persistence
-watch(
-  () => config.openai_host,
-  (val) => {
-    patchConfigUIOptions({ openai_host: val });
-  }
-);
-watch(
-  () => config.openai_port,
-  (val) => {
-    patchConfigUIOptions({ openai_port: val });
-  }
-);
-watch(
-  () => config.openai_model,
-  (val) => {
-    patchConfigUIOptions({ openai_model: val });
-  }
-);
-
-watch([selectedCharacter, selectedReferenceMode], async ([id, refMode]) => {
-  refreshImages();
-});
 
 function handleOverlayKeydown(e) {
-  // Don't trigger most shortcuts if focus is in a text field, but allow Escape
-  // for chat overlay
   const tag =
     e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
   const isEditable =
     e.target &&
     (e.target.isContentEditable || tag === "input" || tag === "textarea");
   if (isEditable && !(chatOpen.value && e.key === "Escape")) return;
-  // Ctrl+A: select all images in current view (fetch all IDs regardless of pagination)
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
     e.preventDefault();
     selectAllInCurrentView();
     return;
   }
-  // R: toggle reference for overlay image or selection
   if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (overlayOpen.value && overlayImage.value) {
       toggleReference(overlayImage.value);
       e.preventDefault();
       return;
     } else if (selectedImageIds.value.length) {
-      // Use the last selected image as the reference for toggle value
       const lastImg = images.value.find(
         (i) =>
           i.id === selectedImageIds.value[selectedImageIds.value.length - 1]
@@ -1063,7 +939,6 @@ function handleOverlayKeydown(e) {
         return;
       }
     }
-    // Do nothing if nothing is selected and overlay is not open
   }
   if (overlayOpen.value) {
     if (e.key === "ArrowLeft") {
@@ -1090,7 +965,6 @@ function handleOverlayKeydown(e) {
     e.preventDefault();
     return;
   }
-  // Grid navigation and selection
   if (!images.value.length) return;
   const cols = columns.value;
   let idx = lastSelectedIndex;
@@ -1116,8 +990,6 @@ function handleOverlayKeydown(e) {
       return;
     }
   }
-  // Score shortcuts 1-5 (overlay: set score for overlayImage, grid: set for
-  // selection)
   if (/^[1-5]$/.test(e.key)) {
     showStars.value = true;
     if (overlayOpen.value && overlayImage.value) {
@@ -1131,85 +1003,6 @@ function handleOverlayKeydown(e) {
   return;
 }
 
-// Select all images in the current view (respecting filters, search, character)
-async function selectAllInCurrentView() {
-  try {
-    const id = selectedCharacter.value;
-    const refMode = selectedReferenceMode.value;
-
-    // If in search mode, use search query
-    if (searchQuery.value && searchQuery.value.trim()) {
-      const q = searchQuery.value.trim();
-      const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
-        q
-      )}&threshold=0.5&top_n=10000`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch search results");
-      const results = await res.json();
-      selectedImageIds.value = results.map((img) => img.id);
-      return;
-    }
-
-    // Use the specialized /pictures/ids endpoint (much faster - returns only IDs)
-    let url;
-    const params = new URLSearchParams();
-    params.set("sort", selectedSort.value || "date_desc");
-
-    if (id === ALL_PICTURES_ID) {
-      url = `${BACKEND_URL}/picture_ids?${params.toString()}`;
-    } else if (id === UNASSIGNED_PICTURES_ID) {
-      url = `${BACKEND_URL}/picture_ids?character_id=&${params.toString()}`;
-    } else if (refMode) {
-      // Reference mode: fetch all reference pictures for this character
-      params.set("is_reference", "1");
-      url = `${BACKEND_URL}/picture_ids?character_id=${encodeURIComponent(
-        id
-      )}&${params.toString()}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch picture IDs");
-      selectedImageIds.value = await res.json();
-      return;
-    } else {
-      url = `${BACKEND_URL}/picture_ids?character_id=${encodeURIComponent(
-        id
-      )}&${params.toString()}`;
-    }
-
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Failed to fetch picture IDs");
-    const ids = await res.json();
-
-    // Apply reference filter if active
-    if (referenceFilterMode.value) {
-      // Need to fetch full pictures to filter by is_reference
-      // But use the /pictures endpoint with limit to avoid loading everything
-      const fullUrl = `${BACKEND_URL}/pictures?${params.toString()}&is_reference=1${
-        id !== ALL_PICTURES_ID ? `&character_id=${encodeURIComponent(id)}` : ""
-      }`;
-      const fullRes = await fetch(fullUrl);
-      if (!fullRes.ok) throw new Error("Failed to fetch pictures");
-      const pics = await fullRes.json();
-      selectedImageIds.value = pics.map((pic) => pic.id);
-    } else {
-      selectedImageIds.value = ids;
-    }
-  } catch (e) {
-    console.error("Failed to select all images:", e);
-    alert("Failed to select all images: " + (e.message || e));
-  }
-}
-
-onMounted(() => {
-  fetchCharacters();
-  window.addEventListener("resize", updateColumns);
-  watch(thumbnailSize, updateColumns);
-  setTimeout(updateColumns, 100); // Initial update after mount
-  window.addEventListener("keydown", handleOverlayKeydown);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener("keydown", handleOverlayKeydown);
-});
 function showPrevImage() {
   const sorted = pagedImages.value;
   if (!overlayImage.value || !sorted.length) return;
@@ -1228,7 +1021,7 @@ function showNextImage() {
   overlayImage.value = sorted[nextIdx];
 }
 
-// Delete functionality
+// --- Image Mutations ---
 async function deleteSelectedImages() {
   if (!selectedImageIds.value.length) return;
   const confirmed = confirm(
@@ -1245,7 +1038,6 @@ async function deleteSelectedImages() {
       alert(e.message);
     }
   }
-  // Remove deleted images from UI
   images.value = images.value.filter(
     (img) => !selectedImageIds.value.includes(img.id)
   );
@@ -1253,7 +1045,6 @@ async function deleteSelectedImages() {
   fetchSidebarCounts();
 }
 
-// Patch score for selected images
 async function patchScoreForSelection(score) {
   if (!selectedImageIds.value.length) return;
   for (const id of selectedImageIds.value) {
@@ -1262,7 +1053,6 @@ async function patchScoreForSelection(score) {
         method: "PATCH",
       });
       if (!res.ok) throw new Error(`Failed to set score for image ${id}`);
-      // Update local image score
       const result = await res.json();
       const img = images.value.find((i) => i.id === id);
       if (img) img.score = score;
@@ -1272,7 +1062,6 @@ async function patchScoreForSelection(score) {
   }
 }
 
-// Set score for a single image (click on star)
 async function setImageScore(img, n) {
   const newScore = (img.score || 0) === n ? 0 : n;
   try {
@@ -1285,12 +1074,10 @@ async function setImageScore(img, n) {
       selectedSort.value === "score_desc" ||
       selectedSort.value === "score_asc"
     ) {
-      // Remove image from current position
       const idx = images.value.findIndex((i) => i.id === img.id);
       if (idx === -1) return;
       img.score = newScore;
       images.value.splice(idx, 1);
-      // Find new index based on sort order
       let insertIdx = 0;
       if (selectedSort.value === "score_desc") {
         insertIdx = images.value.findIndex((i) => (i.score || 0) < newScore);
@@ -1300,7 +1087,6 @@ async function setImageScore(img, n) {
         if (insertIdx === -1) insertIdx = images.value.length;
       }
       images.value.splice(insertIdx, 0, img);
-      // Scroll to new position
       nextTick(() => {
         const grid = gridContainer.value;
         if (!grid) return;
@@ -1310,7 +1096,6 @@ async function setImageScore(img, n) {
         }
       });
     } else {
-      // Not sorting by score, just update the score in place
       img.score = newScore;
     }
   } catch (e) {
@@ -1318,9 +1103,7 @@ async function setImageScore(img, n) {
   }
 }
 
-// Drag and drop logic for assigning images to characters
-const dragOverCharacter = ref(null);
-
+// --- Character Assignment ---
 function handleSelectCharacter(id) {
   selectedCharacter.value = id;
 }
@@ -1345,9 +1128,9 @@ function handleUpdateSearchQuery(value) {
 function handleUpdateSelectedSort(value) {
   selectedSort.value = value;
 }
+
 function onImageDragStart(img, idx, event) {
-  // Only allow dragging if this image is selected
-  let ids =
+  const ids =
     selectedImageIds.value.length && isImageSelected(img.id)
       ? selectedImageIds.value
       : [img.id];
@@ -1359,17 +1142,14 @@ function onImageDragStart(img, idx, event) {
   dragSource.value = "grid";
 }
 
-// Handle drop on character in sidebar to set character_id for selected images
 async function onCharacterDrop(characterId, event) {
   let imageIds = [];
-  // Always use drag event data for image IDs
   try {
     const data = JSON.parse(event.dataTransfer.getData("application/json"));
     if (data.imageIds && Array.isArray(data.imageIds)) {
       imageIds = data.imageIds;
     }
   } catch (e) {
-    // If drag data is missing or malformed, abort
     alert("Could not determine which images to assign. Please try again.");
     return;
   }
@@ -1377,7 +1157,6 @@ async function onCharacterDrop(characterId, event) {
     alert("No images found in drag data.");
     return;
   }
-  // Log drop target and character id
   const charObj = characters.value.find((c) => c.id === characterId);
   console.log(
     "[DROP] Drop target characterId:",
@@ -1385,11 +1164,9 @@ async function onCharacterDrop(characterId, event) {
     "name:",
     charObj ? charObj.name : "(not found)"
   );
-  // Always use the characterId from the drop target
   assignImagesToCharacter(imageIds, characterId);
 }
 
-// Assign images to a character by PATCHing their character_id
 async function assignImagesToCharacter(imageIds, characterId) {
   try {
     await Promise.all(
@@ -1406,21 +1183,17 @@ async function assignImagesToCharacter(imageIds, characterId) {
     );
     await fetchCharacters();
     fetchSidebarCounts();
-    // Remove reassigned images from the current grid if not viewing All
-    // Pictures or Unassigned
     if (
       selectedCharacter.value !== ALL_PICTURES_ID &&
       selectedCharacter.value !== UNASSIGNED_PICTURES_ID &&
       selectedCharacter.value !== characterId
     ) {
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
-      // Also remove these IDs from selection
       selectedImageIds.value = selectedImageIds.value.filter((id) =>
         images.value.some((img) => img.id === id)
       );
       lastSelectedIndex = null;
     } else {
-      // For All Pictures or Unassigned, refresh the grid as before
       const id = selectedCharacter.value;
       let url;
       if (id === ALL_PICTURES_ID) {
@@ -1441,7 +1214,6 @@ async function assignImagesToCharacter(imageIds, characterId) {
           is_reference: Number(img.is_reference) || 0,
           _thumbLoaded: false,
         }));
-        // Remove any selected IDs not in the new images
         const newIds = new Set(images.value.map((img) => img.id));
         selectedImageIds.value = selectedImageIds.value.filter((id) =>
           newIds.has(id)
@@ -1455,11 +1227,8 @@ async function assignImagesToCharacter(imageIds, characterId) {
   }
 }
 
-// Add a ref to track the next character number
-const nextCharacterNumber = ref(1);
-
+// --- Character Management ---
 function addNewCharacter() {
-  // Find the next available number
   let num = nextCharacterNumber.value;
   let name;
   const existingNames = new Set(characters.value.map((c) => c.name));
@@ -1468,7 +1237,6 @@ function addNewCharacter() {
     num++;
   } while (existingNames.has(name));
   nextCharacterNumber.value = num;
-  // POST to backend
   fetch(`${BACKEND_URL}/characters`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1478,9 +1246,7 @@ function addNewCharacter() {
       if (!res.ok) throw new Error("Failed to create character");
       const data = await res.json();
       if (data && data.character && data.character.id) {
-        // Add to local list
         characters.value.push(data.character);
-        // Optionally, start editing the new character name
         editingCharacterId.value = data.character.id;
         editingCharacterName.value = data.character.name;
         nextTick(() => {
@@ -1490,7 +1256,6 @@ function addNewCharacter() {
             input.select();
           }
         });
-        // Optionally, fetch thumbnail
         fetchCharacterThumbnail(data.character.id);
       }
     })
@@ -1498,10 +1263,6 @@ function addNewCharacter() {
       alert("Failed to create character: " + (e.message || e));
     });
 }
-
-// Inline edit state for character names
-const editingCharacterId = ref(null);
-const editingCharacterName = ref("");
 
 function updateEditingCharacterName(value) {
   editingCharacterName.value = typeof value === "string" ? value : "";
@@ -1522,7 +1283,6 @@ function startEditingCharacter(char) {
 function saveEditingCharacter(char) {
   const newName = editingCharacterName.value.trim();
   if (newName && newName !== char.name) {
-    // PATCH backend
     fetch(`${BACKEND_URL}/characters/${char.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1542,12 +1302,12 @@ function saveEditingCharacter(char) {
   editingCharacterId.value = null;
   editingCharacterName.value = "";
 }
+
 function cancelEditingCharacter() {
   editingCharacterId.value = null;
   editingCharacterName.value = "";
 }
 
-// Confirm and delete character
 function confirmDeleteCharacter() {
   const char = characters.value.find((c) => c.id === selectedCharacter.value);
   if (!char) return;
@@ -1559,12 +1319,9 @@ function confirmDeleteCharacter() {
     fetch(`${BACKEND_URL}/characters/${char.id}`, { method: "DELETE" })
       .then(async (res) => {
         if (!res.ok) throw new Error("Failed to delete character");
-        // Remove from local list
         characters.value = characters.value.filter((c) => c.id !== char.id);
-        // Reset selection
         selectedCharacter.value = ALL_PICTURES_ID;
         selectedReferenceMode.value = false;
-        // Optionally, refresh images
         images.value = [];
         await fetchCharacters();
       })
@@ -1574,25 +1331,115 @@ function confirmDeleteCharacter() {
   }
 }
 
-// Computed: Get the selected character object (if any)
-const selectedCharacterObj = computed(() => {
-  if (
-    selectedCharacter.value &&
-    selectedCharacter.value !== ALL_PICTURES_ID &&
-    selectedCharacter.value !== UNASSIGNED_PICTURES_ID
-  ) {
-    const char =
-      characters.value.find((c) => c.id === selectedCharacter.value) || null;
-    if (char && typeof char.name === "string" && char.name.length > 0) {
-      // Capitalize first letter only
-      return {
-        ...char,
-        name: char.name.charAt(0).toUpperCase() + char.name.slice(1),
-      };
+// --- Reference Toggles ---
+async function toggleReference(img) {
+  const selectedIds = selectedImageIds.value;
+  const multi = selectedIds.length > 1 && selectedIds.includes(img.id);
+  const newVal = Number(img.is_reference) === 1 ? 0 : 1;
+  const targets = multi
+    ? images.value.filter((i) => selectedIds.includes(i.id))
+    : [img];
+  try {
+    await Promise.all(
+      targets.map(async (target) => {
+        const res = await fetch(
+          `${BACKEND_URL}/pictures/${target.id}?is_reference=${newVal}`,
+          { method: "PATCH" }
+        );
+        if (!res.ok)
+          throw new Error(
+            `Failed to update reference status for image ${target.id}`
+          );
+        target.is_reference = newVal;
+      })
+    );
+    if (selectedReferenceMode.value && newVal === 0) {
+      images.value = images.value.filter(
+        (i) => !targets.some((t) => t.id === i.id)
+      );
     }
-    return char;
+  } catch (e) {
+    alert("Failed to update reference status: " + (e.message || e));
   }
-  return null;
+}
+
+// --- Watchers ---
+watch([selectedSort, selectedCharacter, selectedReferenceMode], () => {
+  if (searchQuery.value && searchQuery.value.trim()) {
+    return;
+  }
+  pageOffset.value = 0;
+  hasMoreImages.value = true;
+  lastSelectedIndex = null;
+  refreshImages();
+});
+
+watch([selectedCharacter, selectedReferenceMode], () => {
+  refreshImages();
+});
+
+watch(searchQuery, (newVal, oldVal) => {
+  if (!newVal && oldVal) {
+    if (previousSort.value && previousSort.value !== selectedSort.value) {
+      selectedSort.value = previousSort.value;
+    }
+    refreshImages();
+  }
+});
+
+watch(settingsDialog, (val) => {
+  if (val) fetchConfig();
+});
+
+watch(selectedSort, (val) => {
+  patchConfigUIOptions({ sort: val });
+});
+
+watch(thumbnailSize, (val) => {
+  patchConfigUIOptions({ thumbnail: val });
+  updateColumns();
+});
+
+watch(showStars, (val) => {
+  patchConfigUIOptions({ show_stars: val });
+});
+
+watch(referenceFilterMode, (val) => {
+  patchConfigUIOptions({ show_only_reference: val });
+});
+
+watch(
+  () => config.openai_host,
+  (val) => {
+    patchConfigUIOptions({ openai_host: val });
+  }
+);
+watch(
+  () => config.openai_port,
+  (val) => {
+    patchConfigUIOptions({ openai_port: val });
+  }
+);
+watch(
+  () => config.openai_model,
+  (val) => {
+    patchConfigUIOptions({ openai_model: val });
+  }
+);
+
+// --- Lifecycle ---
+onMounted(() => {
+  fetchConfig();
+  fetchSortOptions();
+  fetchCharacters();
+  window.addEventListener("resize", updateColumns);
+  window.addEventListener("keydown", handleOverlayKeydown);
+  setTimeout(updateColumns, 100);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleOverlayKeydown);
+  window.removeEventListener("resize", updateColumns);
 });
 </script>
 <template src="./App.template.html"></template>
