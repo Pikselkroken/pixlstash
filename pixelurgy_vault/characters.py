@@ -22,7 +22,10 @@ class Characters:
         if not row:
             raise KeyError(f"Character {character_id} not found")
 
-        return self._row_to_model(row)
+        logger.debug(f"Fetched character row for ID {character_id}: {row}")
+        model = self._row_to_model(row)
+        logger.debug(f"Converted to CharacterModel: id={model.id}, name={model.name}")
+        return model
 
     def add(self, characters: Union[CharacterModel, List[CharacterModel]]):
         """Add one or more characters. Supports both single character and batch operations."""

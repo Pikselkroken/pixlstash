@@ -26,6 +26,14 @@ class SortMechanism(str, Enum):
     SCORE_DESC = "score_desc"
     SCORE_ASC = "score_asc"
     SEARCH_LIKENESS = "search_likeness"
+    SHARPNESS_DESC = "sharpness_desc"
+    SHARPNESS_ASC = "sharpness_asc"
+    EDGE_DENSITY_DESC = "edge_density_desc"
+    EDGE_DENSITY_ASC = "edge_density_asc"
+    NOISE_LEVEL_DESC = "noise_level_desc"
+    NOISE_LEVEL_ASC = "noise_level_asc"
+    HAS_DESCRIPTION = "has_description"
+    NO_DESCRIPTION = "no_description"
 
 
 # List of available sorting mechanisms for API
@@ -39,6 +47,14 @@ def get_sort_mechanisms():
             (SortMechanism.SCORE_DESC, "Score (highest first)"),
             (SortMechanism.SCORE_ASC, "Score (lowest first)"),
             (SortMechanism.SEARCH_LIKENESS, "Sort by search likeness"),
+            (SortMechanism.SHARPNESS_DESC, "Sharpness (highest first)"),
+            (SortMechanism.SHARPNESS_ASC, "Sharpness (lowest first)"),
+            (SortMechanism.EDGE_DENSITY_DESC, "Edge Density (highest first)"),
+            (SortMechanism.EDGE_DENSITY_ASC, "Edge Density (lowest first)"),
+            (SortMechanism.NOISE_LEVEL_DESC, "Noise Level (highest first)"),
+            (SortMechanism.NOISE_LEVEL_ASC, "Noise Level (lowest first)"),
+            (SortMechanism.HAS_DESCRIPTION, "Has Description"),
+            (SortMechanism.NO_DESCRIPTION, "No Description"),
         ]
     ]
 
@@ -51,7 +67,14 @@ class Pictures:
         self._skip_pictures = set()
         self._last_time_insightface_was_needed = None
         self._characters = characters  # Should be a Characters manager or None
-        self._picture_tagger = PictureTagger("cpu")
+        # Let PictureTagger auto-detect device (will use GPU if available, CPU otherwise)
+        self._picture_tagger = PictureTagger()
+
+        # Enable Florence-2 for natural language descriptions
+        logger.info(
+            "Enabling Florence-2 captioning for natural language descriptions..."
+        )
+        self._picture_tagger.enable_florence_captioning()
 
         self._tag_worker = None
         self._tag_worker_stop = None
@@ -141,7 +164,7 @@ class Pictures:
                     break
 
                 if missing_tags:
-                    logger.info(f"Tagging {len(missing_tags)} pictures missing tags.")
+                    logger.debug(f"Tagging {len(missing_tags)} pictures missing tags.")
                     tagged_pictures = 0
                     tagged_pictures = self._tag_pictures(
                         self._picture_tagger, missing_tags
@@ -391,8 +414,9 @@ class Pictures:
 
         # Initialize InsightFace only once
         if not hasattr(self, "_insightface_app"):
+            logger.info("Initializing InsightFace with CPU only (ctx_id=-1)")
             self._insightface_app = FaceAnalysis()
-            self._insightface_app.prepare(ctx_id=0)
+            self._insightface_app.prepare(ctx_id=-1)  # -1 = CPU only
 
         self._last_time_insightface_was_needed = time.time()
 
@@ -506,11 +530,20 @@ class Pictures:
                 # Look up full Character object if available
                 character_obj = None
                 char_id = getattr(pic, "character_id", None)
+                assert self._characters is not None, "Characters manager is not set."
                 if char_id is not None and self._characters is not None:
                     try:
                         character_obj = self._characters[int(char_id)]
-                    except Exception:
+                        if hasattr(character_obj, "name"):
+                            logger.debug(f"Character name value: {character_obj.name}")
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to fetch character {char_id}: {e}", exc_info=True
+                        )
                         character_obj = None
+                logger.info(
+                    f"Generating embedding for picture {pic.id} with character {char_id} and character name {getattr(character_obj, 'name', None)}"
+                )
                 embedding, full_text = picture_tagger.generate_embedding(
                     picture=pic, character=character_obj
                 )
@@ -519,10 +552,14 @@ class Pictures:
                 row = pic.to_dict()
                 with self._db.threaded_connection as thread_conn:
                     cursor = thread_conn.cursor()
+                    logger.info(
+                        f"Updating database with description {full_text} for picture {pic.id}"
+                    )
                     cursor.execute(
                         "UPDATE pictures SET embedding = ?, description = ? WHERE id = ?",
                         (row["embedding"], full_text, pic.id),
                     )
+                    thread_conn.commit()
                     embedded_pictures += 1
             except Exception as e:
                 logger.error(

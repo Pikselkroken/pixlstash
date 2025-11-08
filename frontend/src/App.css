@@ -338,12 +338,12 @@ body {
 .top-toolbar {
   width: 100%;
   background: #cdcdcdff;
-  min-height: 48px;
+  min-height: 60px;
   display: flex;
   align-items: center;
   padding: 0 24px;
   border-bottom: 2px solid #888;
-  margin-bottom: 0;
+  margin-bottom: 2;
   z-index: 2;
   position: relative;
 }

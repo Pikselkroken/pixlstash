@@ -238,8 +238,12 @@ async function refreshImages(append = false) {
   }
 }
 
-// Watch for sort or character changes
+// Watch for sort or character changes (but not during active search)
 watch([selectedSort, selectedCharacter, selectedReferenceMode], () => {
+  // Don't refresh if we have an active search query
+  if (searchQuery.value && searchQuery.value.trim()) {
+    return;
+  }
   pageOffset.value = 0;
   hasMoreImages.value = true;
   lastSelectedIndex = null;
@@ -1005,12 +1009,10 @@ function handleOverlayKeydown(e) {
     e.target &&
     (e.target.isContentEditable || tag === "input" || tag === "textarea");
   if (isEditable && !(chatOpen.value && e.key === "Escape")) return;
-  // Ctrl+A: select all images in grid view (fetch all, not just paged)
+  // Ctrl+A: select all images in current view (fetch all IDs regardless of pagination)
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
-    if (images.value.length) {
-      selectedImageIds.value = images.value.map((img) => img.id);
-      e.preventDefault();
-    }
+    e.preventDefault();
+    selectAllInCurrentView();
     return;
   }
   // R: toggle reference for overlay image or selection
@@ -1092,6 +1094,74 @@ function handleOverlayKeydown(e) {
     return;
   }
   return;
+}
+
+// Select all images in the current view (respecting filters, search, character)
+async function selectAllInCurrentView() {
+  try {
+    const id = selectedCharacter.value;
+    const refMode = selectedReferenceMode.value;
+
+    // If in search mode, use search query
+    if (searchQuery.value && searchQuery.value.trim()) {
+      const q = searchQuery.value.trim();
+      const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
+        q
+      )}&threshold=0.5&top_n=10000`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch search results");
+      const results = await res.json();
+      selectedImageIds.value = results.map((img) => img.id);
+      return;
+    }
+
+    // Use the specialized /pictures/ids endpoint (much faster - returns only IDs)
+    let url;
+    const params = new URLSearchParams();
+    params.set("sort", selectedSort.value || "date_desc");
+
+    if (id === ALL_PICTURES_ID) {
+      url = `${BACKEND_URL}/picture_ids?${params.toString()}`;
+    } else if (id === UNASSIGNED_PICTURES_ID) {
+      url = `${BACKEND_URL}/picture_ids?character_id=&${params.toString()}`;
+    } else if (refMode) {
+      // Reference mode: fetch all reference pictures for this character
+      params.set("is_reference", "1");
+      url = `${BACKEND_URL}/picture_ids?character_id=${encodeURIComponent(
+        id
+      )}&${params.toString()}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch picture IDs");
+      selectedImageIds.value = await res.json();
+      return;
+    } else {
+      url = `${BACKEND_URL}/picture_ids?character_id=${encodeURIComponent(
+        id
+      )}&${params.toString()}`;
+    }
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch picture IDs");
+    const ids = await res.json();
+
+    // Apply reference filter if active
+    if (referenceFilterMode.value) {
+      // Need to fetch full pictures to filter by is_reference
+      // But use the /pictures endpoint with limit to avoid loading everything
+      const fullUrl = `${BACKEND_URL}/pictures?${params.toString()}&is_reference=1${
+        id !== ALL_PICTURES_ID ? `&character_id=${encodeURIComponent(id)}` : ""
+      }`;
+      const fullRes = await fetch(fullUrl);
+      if (!fullRes.ok) throw new Error("Failed to fetch pictures");
+      const pics = await fullRes.json();
+      selectedImageIds.value = pics.map((pic) => pic.id);
+    } else {
+      selectedImageIds.value = ids;
+    }
+  } catch (e) {
+    console.error("Failed to select all images:", e);
+    alert("Failed to select all images: " + (e.message || e));
+  }
 }
 
 onMounted(() => {

@@ -44,15 +44,15 @@ class Vault:
         assert self.image_root is not None, "image_root cannot be None"
         logger.info(f"Using image_root: {self.image_root}")
         os.makedirs(self.image_root, exist_ok=True)
-        assert os.path.exists(
-            self.image_root
-        ), f"Image root path does not exist: {self.image_root}"
+        assert os.path.exists(self.image_root), (
+            f"Image root path does not exist: {self.image_root}"
+        )
 
         self._db_path = os.path.join(self.image_root, "vault.db")
         self.db = VaultDatabase(self._db_path, description=description)
 
         self.characters = Characters(self.db)
-        self.pictures = Pictures(self.db)
+        self.pictures = Pictures(self.db, self.characters)
 
         self.start_background_workers()
 
