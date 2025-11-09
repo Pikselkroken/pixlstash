@@ -1631,6 +1631,18 @@ watch(
   }
 );
 
+// Watch for vault change and update view
+watch(
+  () => config.selected_image_root,
+  (val, oldVal) => {
+    if (val !== oldVal) {
+      fetchCharacters();
+      fetchSidebarCounts && fetchSidebarCounts();
+      refreshImages();
+    }
+  }
+);
+
 // --- Lifecycle ---
 onMounted(() => {
   fetchConfig();
