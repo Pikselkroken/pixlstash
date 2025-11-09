@@ -2,7 +2,7 @@
   <div v-if="open" class="character-editor-overlay" @click.self="emit('close')">
     <div class="editor-content">
       <div class="editor-header">
-        <h2>{{ character?.id ? 'Edit Character' : 'New Character' }}</h2>
+        <h2>{{ character?.id ? "Edit Character" : "New Character" }}</h2>
         <button class="close-btn" @click="emit('close')" aria-label="Close">
           &times;
         </button>
@@ -18,6 +18,7 @@
             placeholder="Character name"
             class="form-input"
             required
+            @keydown.enter="save"
           />
         </div>
 
@@ -104,27 +105,44 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, nextTick } from "vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   character: { type: Object, default: null },
 });
 
-const emit = defineEmits(['close', 'save']);
+const emit = defineEmits(["close", "save"]);
 
 const localCharacter = ref({
   id: null,
-  name: '',
-  description: '',
-  original_prompt: '',
+  name: "",
+  description: "",
+  original_prompt: "",
   original_seed: null,
   loras: [],
 });
 
 const isValid = computed(() => {
-  return localCharacter.value.name && localCharacter.value.name.trim().length > 0;
+  return (
+    localCharacter.value.name && localCharacter.value.name.trim().length > 0
+  );
 });
+
+// Focus and select the name field when dialog opens
+watch(
+  () => props.open,
+  async (isOpen) => {
+    if (isOpen) {
+      await nextTick();
+      const nameInput = document.getElementById("char-name");
+      if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+      }
+    }
+  }
+);
 
 watch(
   () => props.character,
@@ -132,18 +150,20 @@ watch(
     if (newChar) {
       localCharacter.value = {
         id: newChar.id,
-        name: newChar.name || '',
-        description: newChar.description || '',
-        original_prompt: newChar.original_prompt || '',
+        name: newChar.name || "",
+        description: newChar.description || "",
+        original_prompt: newChar.original_prompt || "",
         original_seed: newChar.original_seed,
-        loras: Array.isArray(newChar.loras) ? JSON.parse(JSON.stringify(newChar.loras)) : [],
+        loras: Array.isArray(newChar.loras)
+          ? JSON.parse(JSON.stringify(newChar.loras))
+          : [],
       };
     } else {
       localCharacter.value = {
         id: null,
-        name: '',
-        description: '',
-        original_prompt: '',
+        name: "",
+        description: "",
+        original_prompt: "",
         original_seed: null,
         loras: [],
       };
@@ -156,7 +176,7 @@ function addLora() {
   if (!Array.isArray(localCharacter.value.loras)) {
     localCharacter.value.loras = [];
   }
-  localCharacter.value.loras.push(['', 1.0]);
+  localCharacter.value.loras.push(["", 1.0]);
 }
 
 function removeLora(index) {
@@ -165,17 +185,40 @@ function removeLora(index) {
 
 function save() {
   if (!isValid.value) return;
-  
+
   // Clean up loras - remove empty entries
   const cleanedLoras = localCharacter.value.loras.filter(
     (lora) => lora[0] && lora[0].trim().length > 0
   );
-  
-  emit('save', {
+
+  emit("save", {
     ...localCharacter.value,
     loras: cleanedLoras,
   });
 }
+
+// Keyboard shortcuts
+function handleKeydown(event) {
+  if (event.key === "Escape") {
+    emit("close");
+  } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    // Ctrl+Enter or Cmd+Enter to save (avoid interfering with textarea)
+    event.preventDefault();
+    save();
+  }
+}
+
+// Add/remove keyboard listener when dialog opens/closes
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen) {
+      document.addEventListener("keydown", handleKeydown);
+    } else {
+      document.removeEventListener("keydown", handleKeydown);
+    }
+  }
+);
 </script>
 
 <style scoped>
@@ -269,7 +312,7 @@ function save() {
 
 .form-input:focus {
   outline: none;
-  border-color: #4CAF50;
+  border-color: #4caf50;
 }
 
 .form-textarea {
@@ -285,7 +328,7 @@ function save() {
 
 .form-textarea:focus {
   outline: none;
-  border-color: #4CAF50;
+  border-color: #4caf50;
 }
 
 .loras-list {
@@ -375,7 +418,7 @@ function save() {
 }
 
 .btn-save {
-  background: #4CAF50;
+  background: #4caf50;
   color: white;
 }
 
