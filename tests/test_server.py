@@ -83,7 +83,7 @@ def test_esmeralda_vault_character_and_logo():
             char_id = esmeralda["id"]
 
             # Find picture for Esmeralda Vault
-            resp2 = client.get(f"/pictures?character_id={char_id}&info=true")
+            resp2 = client.get(f"/pictures?primary_character_id={char_id}&info=true")
             assert resp2.status_code == 200
             pics = resp2.json()
             assert pics, "No picture found for Esmeralda Vault"
@@ -96,9 +96,9 @@ def test_esmeralda_vault_character_and_logo():
             with open(logo_path, "rb") as f:
                 logo_bytes = f.read()
             # Compare the full file
-            assert (
-                img_resp.content == logo_bytes
-            ), "Esmeralda Vault's picture does not match Logo.png"
+            assert img_resp.content == logo_bytes, (
+                "Esmeralda Vault's picture does not match Logo.png"
+            )
     gc.collect()
 
 
@@ -151,7 +151,7 @@ def test_upload_existing_picture():
             img_bytes = random_images[0]
             images = [("file", ("master.png", img_bytes, "image/png"))]
             r = client.post(
-                "/pictures", files=images, data={"character_id": "testchar"}
+                "/pictures", files=images, data={"primary_character_id": "testchar"}
             )
 
             assert 200 == r.status_code, "Error: " + r.text
@@ -169,7 +169,7 @@ def test_upload_existing_picture():
             img_bytes2 = random_images[1]
             files2 = [("file", ("iteration2.png", img_bytes2, "image/png"))]
             r2 = client.post(
-                "/pictures", files=files2, data={"character_id": "testchar"}
+                "/pictures", files=files2, data={"primary_character_id": "testchar"}
             )
             assert 200 == r2.status_code, "Error: " + r2.text
             resp2 = r2.json()
@@ -185,7 +185,7 @@ def test_upload_existing_picture():
             # Upload the first picture again. Should get a 400
             files3 = [("file", ("random_name.png", img_bytes, "image/png"))]
             r3 = client.post(
-                "/pictures", files=files3, data={"character_id": "testchar"}
+                "/pictures", files=files3, data={"primary_character_id": "testchar"}
             )
             assert 400 == r3.status_code
 
@@ -196,7 +196,7 @@ def test_upload_existing_picture():
                 ("file", ("random_name2.png", image_bytes3, "image/png")),
             ]
             r4 = client.post(
-                "/pictures", files=files4, data={"character_id": "testchar"}
+                "/pictures", files=files4, data={"primary_character_id": "testchar"}
             )
             assert 200 == r4.status_code, "Error: " + r4.text
             for i, result in enumerate(r4.json()["results"]):
@@ -222,7 +222,7 @@ def test_post_logo_identical_upload():
                 img_bytes = f.read()
                 files = [("file", ("identical_logo.png", img_bytes, "image/png"))]
                 data = {
-                    "character_id": "test",
+                    "primary_character_id": "test",
                 }
             r = client.post("/pictures", files=files, data=data)
             assert r.status_code == 400
@@ -250,7 +250,7 @@ def test_post_logo_altered_pixel_upload():
                 img_bytes = f.read()
             files = [("file", ("altered_logo.png", img_bytes, "image/png"))]
             data = {
-                "character_id": "test",
+                "primary_character_id": "test",
             }
             r = client.post("/pictures", files=files, data=data)
             assert r.status_code == 200
@@ -297,7 +297,7 @@ def test_benchmark_add_images_by_binary_upload():
                 files.append(file)
 
             data = {
-                "character_id": "bench",
+                "primary_character_id": "bench",
             }
             r = client.post("/pictures", files=files, data=data)
             assert r.status_code == 200
@@ -356,7 +356,7 @@ def test_reference_picture_workflow():
             resp2 = client.post(
                 "/pictures",
                 data={
-                    "character_id": char_id,
+                    "primary_character_id": char_id,
                 },
                 files=[("file", ("ref.png", img_bytes, "image/png"))],
             )
@@ -399,7 +399,7 @@ def test_tagger_worker_adds_tags():
             with open(src_img, "rb") as f:
                 files = [("file", ("TaggerTest.png", f.read(), "image/png"))]
                 data = {
-                    "character_id": "testchar",
+                    "primary_character_id": "testchar",
                 }
                 r = client.post("/pictures", files=files, data=data)
             assert r.status_code == 200
@@ -417,9 +417,9 @@ def test_tagger_worker_adds_tags():
                 found_tags = pic_info.get("tags", [])
                 if found_tags:
                     break
-            assert (
-                found_tags
-            ), "Tagger worker did not add tags to TaggerTest.png after waiting."
+            assert found_tags, (
+                "Tagger worker did not add tags to TaggerTest.png after waiting."
+            )
     gc.collect()
 
 
@@ -459,7 +459,7 @@ def test_semantic_search_on_all_pictures():
                 with open(os.path.join(src_dir, fname), "rb") as f:
                     files = [("file", (fname, f.read(), "image/png"))]
                     data = {
-                        "character_id": esmeralda_id,
+                        "primary_character_id": esmeralda_id,
                     }
                     r = client.post("/pictures", files=files, data=data)
                 assert r.status_code == 200
@@ -502,9 +502,9 @@ def test_semantic_search_on_all_pictures():
                 time.sleep(1)
 
             if picture_ids:
-                assert (
-                    False
-                ), f"Pictures {picture_ids} did not get valid embedding after waiting."
+                assert False, (
+                    f"Pictures {picture_ids} did not get valid embedding after waiting."
+                )
 
             # Perform semantic search
             search_texts = [
@@ -523,9 +523,9 @@ def test_semantic_search_on_all_pictures():
                 assert search_resp.status_code == 200
                 results = search_resp.json()
 
-                assert (
-                    1 <= len(results)
-                ), f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+                assert 1 <= len(results), (
+                    f"Expected at least one results, got {len(results)} for the text '{search_text}'"
+                )
                 print("===== Semantic Search Result =====")
                 print(f"Search text:\n{search_text}\n\n")
                 print(f"Best match: {results[0]['description']}\n\n")

@@ -362,16 +362,20 @@ class Server:
             """Return available sorting mechanisms for pictures."""
             return get_sort_mechanisms()
 
-        @self.api.get("/face_thumbnail/{character_id}")
-        async def get_face_thumbnail(character_id: str):
+        @self.api.get("/face_thumbnail/{primary_character_id}")
+        async def get_face_thumbnail(primary_character_id: str):
             """
             Return a face-cropped thumbnail for the highest scored picture of the character.
             If no scored picture, fallback to first image. If no face bbox, fallback to normal thumbnail.
             Cropped region is resized to fit within 96x96, preserving aspect ratio.
             """
-            logger.debug(f"Generating face thumbnail for character_id: {character_id}")
-            pics = self.vault.pictures.find(character_id=character_id)
-            logger.debug(f"Found {len(pics)} pictures for character_id: {character_id}")
+            logger.debug(
+                f"Generating face thumbnail for primary_character_id: {primary_character_id}"
+            )
+            pics = self.vault.pictures.find(primary_character_id=primary_character_id)
+            logger.debug(
+                f"Found {len(pics)} pictures for primary_character_id: {primary_character_id}"
+            )
             if not pics:
                 raise HTTPException(status_code=404, detail="No pictures for character")
 
@@ -393,7 +397,7 @@ class Server:
             face_bbox = pic.face_bbox
             if not face_bbox:
                 logger.debug(
-                    f"No face_bbox attribute on picture for character_id: {character_id}"
+                    f"No face_bbox attribute on picture for primary_character_id: {primary_character_id}"
                 )
             # Load thumbnail image
             if not pic.thumbnail:
@@ -436,7 +440,7 @@ class Server:
             def pic_to_dict(pic, likeness_score=None):
                 d = {
                     "id": pic.id,
-                    "character_id": pic.character_id,
+                    "primary_character_id": pic.primary_character_id,
                     "description": pic.description,
                     "tags": pic.tags,
                     "created_at": pic.created_at,
@@ -469,7 +473,7 @@ class Server:
                 # Add character name to tags for fuzzy search
                 tags_and_name = list(pic.tags)
                 char_name = None
-                char_id = getattr(pic, "character_id", None)
+                char_id = getattr(pic, "primary_character_id", None)
                 if char_id is not None:
                     try:
                         char_obj = self.vault.characters[int(char_id)]
@@ -615,7 +619,7 @@ class Server:
                     # Diagnostics: log why this picture matched
                     tags_and_name = list(pic.tags)
                     char_name = None
-                    char_id = getattr(pic, "character_id", None)
+                    char_id = getattr(pic, "primary_character_id", None)
                     if char_id is not None:
                         try:
                             char_obj = self.vault.characters[int(char_id)]
@@ -646,7 +650,7 @@ class Server:
             """
             try:
                 reference_pics = self.vault.pictures.find(
-                    is_reference=1, character_id=id
+                    is_reference=1, primary_character_id=id
                 )
                 logger.info(
                     f"Found {len(reference_pics)} reference pictures for character id={id}"
@@ -672,8 +676,8 @@ class Server:
             if name is not None and name != char.name:
                 char.name = name
                 updated = True
-                # Drop embeddings for all pictures with this character_id
-                pics = self.vault.pictures.find(character_id=id)
+                # Drop embeddings for all pictures with this primary_character_id
+                pics = self.vault.pictures.find(primary_character_id=id)
                 for pic in pics:
                     pic.embedding = None
 
@@ -821,8 +825,8 @@ class Server:
                     )
                     old_val = getattr(pic, key)
                     setattr(pic, key, cast_val)
-                    # Drop embedding if character_id changes
-                    if key == "character_id" and old_val != cast_val:
+                    # Drop embedding if primary_character_id changes
+                    if key == "primary_character_id" and old_val != cast_val:
                         pic.embedding = None
                     updated = True
             if updated:
@@ -837,7 +841,7 @@ class Server:
         @self.api.post("/pictures")
         async def import_pictures(
             file: List[UploadFile] = File(None),
-            character_id: str = Form(None),
+            primary_character_id: str = Form(None),
         ):
             """
             Import new pictures. Accepts:
@@ -882,7 +886,7 @@ class Server:
                 raise HTTPException(status_code=400, detail="No image provided")
 
             import_results, new_pictures = self.create_picture_imports(
-                uploaded_files, dest_folder, character_id
+                uploaded_files, dest_folder, primary_character_id
             )
 
             logger.info(
@@ -910,7 +914,7 @@ class Server:
             """
             Get only picture IDs for the current view (no thumbnails, embeddings, or other heavy data).
             Much faster than /pictures endpoint for selecting all images.
-            Respects all filter parameters (character_id, tags, is_reference, etc.) and search.
+            Respects all filter parameters (primary_character_id, tags, is_reference, etc.) and search.
             """
             from pixelurgy_vault.pictures import SortMechanism
 
@@ -1074,26 +1078,28 @@ class Server:
             }
 
         @self.api.get("/category/summary")
-        async def get_category_summary(character_id: str = Query(None)):
+        async def get_category_summary(primary_character_id: str = Query(None)):
             """
             Return summary statistics for a single category:
-            - If character_id is omitted: all pictures
-            - If character_id is null/None/empty: unassigned pictures
-            - If character_id is set: that character's pictures
+            - If primary_character_id is omitted: all pictures
+            - If primary_character_id is null/None/empty: unassigned pictures
+            - If primary_character_id is set: that character's pictures
             """
 
             # Determine which set to query
-            if character_id is None:
+            if primary_character_id is None:
                 # All
                 pics = self.vault.pictures.find()
                 char_id = None
-            elif character_id == "null":
+            elif primary_character_id == "null":
                 # Unassigned
-                pics = self.vault.pictures.find(character_id="null")
+                pics = self.vault.pictures.find(primary_character_id="null")
                 char_id = None
             else:
-                pics = self.vault.pictures.find(character_id=character_id)
-                char_id = character_id
+                pics = self.vault.pictures.find(
+                    primary_character_id=primary_character_id
+                )
+                char_id = primary_character_id
 
             image_count = len(pics)
 
@@ -1106,7 +1112,7 @@ class Server:
             if char_id not in (None, "", "null"):
                 thumb_url = f"/face_thumbnail/{char_id}"
             summary = {
-                "character_id": char_id,
+                "primary_character_id": char_id,
                 "image_count": image_count,
                 "reference_image_count": reference_image_count,
                 "last_updated": last_updated,
@@ -1114,7 +1120,7 @@ class Server:
             }
             return summary
 
-    def create_picture_imports(self, uploaded_files, dest_folder, character_id):
+    def create_picture_imports(self, uploaded_files, dest_folder, primary_character_id):
         """
         Given a list of (img_bytes, src_path, ext), create Picture objects for new images,
         skipping duplicates based on pixel_sha hash.
@@ -1157,7 +1163,7 @@ class Server:
                     image_root_path=dest_folder,
                     image_bytes=img_bytes,
                     picture_id=pic_id,
-                    character_id=character_id,
+                    character_id=primary_character_id,
                     pixel_sha=sha,
                 )
 

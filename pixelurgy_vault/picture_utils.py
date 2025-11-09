@@ -305,7 +305,7 @@ class PictureUtils:
             size_bytes=size_bytes,
             created_at=created_at,
             thumbnail=thumbnail_bytes,
-            character_id=character_id,
+            primary_character_id=character_id,
             pixel_sha=pixel_sha,
         )
         return pic

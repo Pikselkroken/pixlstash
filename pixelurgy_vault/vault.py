@@ -5,6 +5,7 @@ from typing import Optional
 from .logging import get_logger
 from .characters import Characters
 from .pictures import Pictures
+from .picture_characters import PictureCharacters
 from .picture_utils import PictureUtils
 from .character import Character
 from .database import VaultDatabase
@@ -44,14 +45,15 @@ class Vault:
         assert self.image_root is not None, "image_root cannot be None"
         logger.info(f"Using image_root: {self.image_root}")
         os.makedirs(self.image_root, exist_ok=True)
-        assert os.path.exists(
-            self.image_root
-        ), f"Image root path does not exist: {self.image_root}"
+        assert os.path.exists(self.image_root), (
+            f"Image root path does not exist: {self.image_root}"
+        )
 
         self._db_path = os.path.join(self.image_root, "vault.db")
         self.db = VaultDatabase(self._db_path, description=description)
 
         self.characters = Characters(self.db)
+        self.picture_characters = PictureCharacters(self.db)
         self.pictures = Pictures(self.db, self.characters)
 
         self.start_background_workers()

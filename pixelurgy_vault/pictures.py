@@ -354,7 +354,7 @@ class Pictures:
                 logger.info(f"Processing tags for image at path: {path}: {tags}")
                 if pic is not None:
                     # Remove character tag from tags if present
-                    char_tag = getattr(pic, "character_id", None)
+                    char_tag = getattr(pic, "primary_character_id", None)
                     if char_tag and char_tag in tags:
                         tags = [t for t in tags if t != char_tag]
                     if tags:
@@ -533,7 +533,7 @@ class Pictures:
                 )
                 # Look up full Character object if available
                 character_obj = None
-                char_id = getattr(pic, "character_id", None)
+                char_id = getattr(pic, "primary_character_id", None)
                 assert self._characters is not None, "Characters manager is not set."
                 if char_id is not None and self._characters is not None:
                     try:
@@ -598,7 +598,7 @@ class Pictures:
     def find(self, **kwargs):
         """
         Find and return a list of Picture objects matching all provided attribute=value pairs.
-        Example: pictures.find(character_id="hero")
+        Example: pictures.find(primary_character_id="hero")
         Special case: if a value is an empty string, search for IS NULL.
         Uses VaultDatabase for all DB access.
         """
@@ -851,7 +851,7 @@ class Pictures:
         tag_dicts = [{"picture_id": pic.id, "tag": tag} for tag in tags]
         picture_dict = {}
         for key, value in pic.to_dict().items():
-            if key == "tags":
+            if key in ("tags", "character_ids"):
                 continue
             picture_dict[key] = value
         return picture_dict, tag_dicts
