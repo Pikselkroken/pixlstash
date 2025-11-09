@@ -5,3 +5,9 @@ build/
 *.egg-info/
 .env
 .venv
+vault.db*
+wd14_tagger_model
+cpu
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json

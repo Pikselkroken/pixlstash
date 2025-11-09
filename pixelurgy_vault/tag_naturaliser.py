@@ -8682,38 +8682,220 @@ class TagNaturaliser:
 
     def tags_to_sentence(self, tags):
         """
-        Use a small language model to turn tags into a natural English sentence.
-        Requires transformers library. Returns a fallback if not available.
+        Convert tags to a simple, readable description.
+        Uses a basic template approach since LM generation is unreliable for this task.
         """
-        if self._tag_to_sentence_pipeline is None:
-            logger.warning("No LM found, using simple join fallback.")
+        if not tags:
+            return ""
+
+        # Simple fallback for very short tag lists
+        if len(tags) <= 3:
             return ", ".join(tags)
-        prompt = (
-            "Write a short, natural English sentence describing a photo based on the provided tags. "
-            "Focus on the main subject, clothing, and setting if present. "
-            "Do not just list tags. Tags: " + ", ".join(tags) + "."
-        )
-        result = self._tag_to_sentence_pipeline(prompt, max_new_tokens=40)
-        generated = result[0]["generated_text"].strip()
 
-        logger.info("LM output before deduplication: " + generated)
+        # Separate person names from descriptors (capitalized words likely to be names)
+        names = []
+        descriptors = []
+        for tag in tags:
+            # Check if tag looks like a name (capitalized, not a common descriptor)
+            if tag and len(tag) > 2 and tag[0].isupper() and " " not in tag:
+                # Skip common descriptors that are capitalized
+                if tag.lower() not in ["woman", "man", "girl", "boy", "person", "solo"]:
+                    names.append(tag)
+                    continue
+            descriptors.append(tag)
 
-        # Remove duplicate phrases/words (simple greedy approach)
-        def dedup_text(text):
-            import re
+        # Categorize descriptors
+        clothing = []
+        features = []
+        setting = []
+        actions = []
 
-            # Split on comma, 'and', or period
-            parts = re.split(r"[,.]| and ", text)
-            seen = set()
-            deduped = []
-            for part in parts:
-                cleaned = part.strip().lower()
-                if cleaned and cleaned not in seen:
-                    seen.add(cleaned)
-                    deduped.append(part.strip())
-            # Reconstruct sentence
-            return ", ".join(deduped).replace(" ,", ",").strip()
+        # Words that indicate clothing (must match exactly or be at word boundaries)
+        clothing_items = {
+            "dress",
+            "shirt",
+            "jacket",
+            "pants",
+            "skirt",
+            "bikini",
+            "swimsuit",
+            "coat",
+            "sweater",
+            "hoodie",
+            "uniform",
+            "kimono",
+            "suit",
+            "bra",
+            "panties",
+            "shorts",
+            "jeans",
+            "leotard",
+            "bodysuit",
+            "pajamas",
+            "lingerie",
+            "blouse",
+            "tank top",
+            "vest",
+            "cardigan",
+            "robe",
+            "nightgown",
+            "camisole",
+        }
+        setting_words = {
+            "beach",
+            "indoors",
+            "outdoors",
+            "bed",
+            "room",
+            "sky",
+            "water",
+            "forest",
+            "city",
+            "street",
+            "building",
+            "garden",
+            "park",
+            "mountain",
+            "tree",
+            "grass",
+            "ocean",
+            "lake",
+            "river",
+            "field",
+            "house",
+            "office",
+        }
+        action_words = {
+            "sitting",
+            "standing",
+            "walking",
+            "running",
+            "lying",
+            "looking at",
+            "smiling",
+            "laughing",
+            "eating",
+            "drinking",
+            "dancing",
+            "holding",
+            "waving",
+        }
 
-        deduped = dedup_text(generated)
-        logger.info("LM output after deduplication: " + deduped)
-        return deduped
+        # Skip common/generic descriptors that don't add much information
+        skip_words = {
+            "woman",
+            "man",
+            "girl",
+            "boy",
+            "person",
+            "solo",
+            "solo focus",
+            "upper body",
+            "breasts",
+            "medium breasts",
+            "large breasts",
+            "small breasts",
+            "cleavage",
+            "brown eyes",
+            "blue eyes",
+            "green eyes",
+            "brown hair",
+            "blonde hair",
+            "black hair",
+            "lips",
+            "nose",
+            "teeth",
+        }
+
+        for desc in descriptors[:20]:  # Limit to prevent overflow
+            desc_lower = desc.lower().strip()
+
+            # Skip generic descriptors
+            if desc_lower in skip_words:
+                continue
+
+            # Check if the descriptor is a clothing item (exact match or contains the word)
+            is_clothing = False
+            for item in clothing_items:
+                if (
+                    desc_lower == item
+                    or desc_lower.endswith(" " + item)
+                    or desc_lower.startswith(item + " ")
+                ):
+                    is_clothing = True
+                    break
+
+            if is_clothing:
+                clothing.append(desc)
+            elif desc_lower in setting_words or any(
+                desc_lower.endswith(" " + s) for s in setting_words
+            ):
+                setting.append(desc)
+            elif any(action in desc_lower for action in action_words):
+                actions.append(desc)
+            else:
+                features.append(desc)
+
+        # Build natural sentence
+        parts = []
+
+        # Start with name if present
+        if names:
+            parts.append(" and ".join(names))
+
+        # Add action - if "holding" is in actions and there's an object in features, combine them
+        if actions:
+            action = actions[0]
+            if "holding" in action.lower() and features:
+                # Find objects that might be held (not body parts or descriptions)
+                held_objects = [
+                    f
+                    for f in features
+                    if not any(skip in f.lower() for skip in ["hair", "eyes", "skin"])
+                ]
+                if held_objects:
+                    parts.append(f"holding {held_objects[0]}")
+                    features = [
+                        f for f in features if f != held_objects[0]
+                    ]  # Remove from features
+                else:
+                    parts.append(action)
+            else:
+                parts.append(action)
+
+        # Add clothing
+        if clothing:
+            clothing_desc = clothing[0]
+            # Don't add "wearing" if it's already there or if it's a compound descriptor
+            if not clothing_desc.lower().startswith(("wearing", "in a", "with")):
+                clothing_desc = "wearing " + clothing_desc
+            parts.append(clothing_desc)
+
+        # Add key features (limited to 1-2 most distinctive ones)
+        if features[:2]:
+            parts.append(", ".join(features[:2]))
+
+        # Add setting
+        if setting:
+            setting_desc = setting[0]
+            # Add preposition if needed
+            if not any(
+                setting_desc.lower().startswith(p)
+                for p in ["at", "in", "on", "near", "by"]
+            ):
+                if "indoors" in setting_desc or "outdoors" in setting_desc:
+                    setting_desc = setting_desc  # No preposition needed
+                else:
+                    setting_desc = "at " + setting_desc
+            parts.append(setting_desc)
+
+        # Combine parts with proper separators
+        if parts:
+            result = parts[0]  # Start with name/first part
+            if len(parts) > 1:
+                result += ", " + ", ".join(parts[1:])
+        else:
+            result = ", ".join(descriptors[:10])
+
+        logger.info("Generated description: " + result)
+        return result

@@ -29,6 +29,8 @@ dependencies = [
     "torchvision",
     "insightface",
     "rapidfuzz",
+    "tqdm",
+    "einops",
 ]
 
 [project.optional-dependencies]

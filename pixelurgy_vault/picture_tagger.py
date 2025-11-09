@@ -46,6 +46,15 @@ class PictureTagger:
     ):
         self._model_location = model_location
         self._silent = silent
+
+        # Store device for both CLIP and ONNX
+        if device is not None:
+            self._device = device
+        else:
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        logger.info(f"PictureTagger initialized with device: {self._device}")
+
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()
         self._load_and_preprocess_tags()
@@ -55,15 +64,22 @@ class PictureTagger:
                 "ViT-B-32", pretrained="laion2b_s34b_b79k"
             )
         )
-        if device is not None:
-            self._clip_device = device
-        else:
-            self._clip_device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        self._clip_device = self._device
         self._clip_model = self._clip_model.to(self._clip_device)
         self._clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
 
         self._tag_naturaliser = TagNaturaliser()
+
+        # Initialize Florence-2 for optional captioning
+        self._florence_model = None
+        self._florence_processor = None
+        self._use_florence = False
+        self._florence_device = None
+        self._florence_model_name = "microsoft/Florence-2-base"
+        self._florence_max_tokens = (
+            60  # Default, can be overridden for faster generation
+        )
 
     def __enter__(self):
         logger.debug("PictureTagger.__enter__ called.")
@@ -82,6 +98,334 @@ class PictureTagger:
         gc.collect()
         logger.debug("PictureTagger.exit called, resources released.")
 
+    def enable_florence_captioning(self):
+        """
+        Enable Florence-2 for natural language captioning instead of tag-based descriptions.
+        This will download the model on first use (~900MB).
+        """
+        if self._florence_model is not None:
+            logger.info("Florence-2 already loaded")
+            return
+
+        try:
+            logger.info("Loading Florence-2 model for captioning...")
+            import transformers
+
+            # Check transformers version
+            version = transformers.__version__
+            logger.info(f"Transformers version: {version}")
+
+            # Check if device was explicitly set to CPU
+            device_str = str(self._device)
+            force_cpu = device_str == "cpu"
+
+            if force_cpu:
+                # Device explicitly set to CPU - respect that
+                logger.info("Device set to CPU, loading Florence-2 on CPU with FP32...")
+                self._load_florence_model(torch.device("cpu"), torch.float32)
+                logger.info("Florence-2 loaded successfully on CPU")
+            elif torch.cuda.is_available():
+                try:
+                    logger.info("Attempting to load Florence-2 on GPU with FP16...")
+                    self._load_florence_model(torch.device("cuda"), torch.float16)
+                    logger.info("Florence-2 loaded successfully on GPU (~500MB VRAM)")
+                except Exception as gpu_error:
+                    logger.warning(
+                        f"GPU loading failed, falling back to CPU: {gpu_error}"
+                    )
+                    self._load_florence_model(torch.device("cpu"), torch.float32)
+                    logger.info("Florence-2 loaded successfully on CPU")
+            else:
+                # No GPU available, use CPU
+                logger.info("No GPU available, loading Florence-2 on CPU with FP32...")
+                device = (
+                    self._device
+                    if isinstance(self._device, torch.device)
+                    else torch.device(self._device)
+                )
+                self._load_florence_model(device, torch.float32)
+                logger.info("Florence-2 loaded successfully on CPU")
+
+        except Exception as e:
+            logger.error(f"Failed to load Florence-2: {e}")
+            logger.info("Falling back to tag-based captioning")
+            logger.info("Try: pip install --upgrade transformers")
+            self._use_florence = False
+
+    def _load_florence_model(self, device, dtype):
+        from transformers import AutoProcessor, AutoModelForCausalLM
+
+        if not isinstance(device, torch.device):
+            device = torch.device(device)
+
+        self._florence_processor = AutoProcessor.from_pretrained(
+            self._florence_model_name, trust_remote_code=True
+        )
+
+        # Try SDPA first, fall back to eager if not supported
+        attn_impl = "sdpa"
+        try:
+            self._florence_model = AutoModelForCausalLM.from_pretrained(
+                self._florence_model_name,
+                trust_remote_code=True,
+                dtype=dtype,
+                attn_implementation=attn_impl,
+            ).to(device)
+        except (TypeError, AttributeError) as e:
+            logger.warning(f"SDPA not supported, falling back to eager attention: {e}")
+            attn_impl = "eager"
+            self._florence_model = AutoModelForCausalLM.from_pretrained(
+                self._florence_model_name,
+                trust_remote_code=True,
+                dtype=dtype,
+                attn_implementation=attn_impl,
+            ).to(device)
+
+        self._florence_model.eval()
+        logger.info(f"Florence-2 loaded with {attn_impl} attention")
+
+        # Try to compile the model for better performance (PyTorch 2.0+)
+        try:
+            if hasattr(torch, "compile") and device.type == "cuda":
+                logger.info("Compiling Florence-2 model for better performance...")
+                self._florence_model = torch.compile(
+                    self._florence_model,
+                    mode="reduce-overhead",  # Balance compilation time and performance
+                )
+                logger.info("Model compilation successful")
+        except Exception as compile_error:
+            logger.warning(f"Model compilation failed (not critical): {compile_error}")
+
+        self._florence_device = device
+        self._use_florence = True
+
+    def _reload_florence_on_cpu(self):
+        logger.warning(
+            "Florence-2 GPU inference failed; attempting to reload on CPU..."
+        )
+        try:
+            self._florence_model = None
+            self._florence_processor = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            self._load_florence_model(torch.device("cpu"), torch.float32)
+            logger.info("Florence-2 reloaded on CPU")
+            return True
+        except Exception as cpu_error:
+            logger.error(
+                f"Failed to reload Florence-2 on CPU: {cpu_error}", exc_info=True
+            )
+            self._use_florence = False
+            return False
+
+    def _generate_florence_caption(
+        self, image_path, character_name=None, tags=None, _retry_on_cpu=True
+    ):
+        """
+        Generate a natural language caption for an image using Florence-2.
+
+        Args:
+            image_path (str): Path to the image file
+            character_name (str, optional): Name of the character to include as context
+
+        Returns:
+            str: Natural language caption
+        """
+        if not self._use_florence or self._florence_model is None:
+            return None
+
+        try:
+            from PIL import Image
+
+            image = Image.open(image_path).convert("RGB")
+
+            # Resize large images to speed up processing (Florence works well with smaller images)
+            # Florence-2 uses 768px internally, so going smaller helps a lot
+            MAX_DIM = 768
+            if max(image.size) > MAX_DIM:
+                aspect_ratio = image.width / image.height
+                if image.width > image.height:
+                    new_width = MAX_DIM
+                    new_height = int(MAX_DIM / aspect_ratio)
+                else:
+                    new_height = MAX_DIM
+                    new_width = int(MAX_DIM * aspect_ratio)
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                logger.debug(
+                    f"Resized image to {new_width}x{new_height} for faster processing"
+                )
+
+            # Florence expects task tokens alone, so build the natural-language prompt separately.
+            base_prompt = self._florence_processor.task_prompts_without_inputs.get(
+                "<MORE_DETAILED_CAPTION>",
+                "Describe with a paragraph what is shown in the image.",
+            )
+
+            tag_hints = None
+            if tags:
+                cleaned_tags = []
+                for tag in tags:
+                    tag_str = str(tag).strip()
+                    if not tag_str:
+                        continue
+                    if len(tag_str) > 40:
+                        continue
+                    if tag_str in cleaned_tags:
+                        continue
+                    cleaned_tags.append(tag_str)
+                    if len(cleaned_tags) >= 8:
+                        break
+                if cleaned_tags:
+                    tag_hints = ", ".join(cleaned_tags)
+
+            if tag_hints:
+                prompt_text = f"{base_prompt} Consider these candidate tags only if they truly match the scene: {tag_hints}."
+            else:
+                prompt_text = base_prompt
+
+            logger.debug(f"Processing image with prompt text: {prompt_text}")
+            logger.debug(f"Image size: {image.size}")
+
+            inputs = self._florence_processor(
+                text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
+            )
+
+            logger.debug(f"Processor output keys: {inputs.keys()}")
+            if "pixel_values" not in inputs or inputs["pixel_values"] is None:
+                logger.error(
+                    f"pixel_values missing or None in processor output: {inputs.keys()}"
+                )
+                return None
+
+            # Replace the textual prompt with the tailored instruction while keeping the multimodal formatting.
+            num_image_tokens = getattr(self._florence_processor, "num_image_tokens", 0)
+            image_token = getattr(self._florence_processor, "image_token", "")
+            bos_token = self._florence_processor.tokenizer.bos_token or ""
+            eos_token = self._florence_processor.tokenizer.eos_token or ""
+            prompt_with_special = (
+                image_token * num_image_tokens + bos_token + prompt_text + eos_token
+            )
+            text_inputs = self._florence_processor.tokenizer(
+                [prompt_with_special],
+                add_special_tokens=False,
+                return_tensors="pt",
+            )
+            inputs["input_ids"] = text_inputs["input_ids"]
+            inputs["attention_mask"] = text_inputs["attention_mask"]
+            logger.debug(f"Processor output keys after prompt patch: {inputs.keys()}")
+
+            # Move inputs to device (use Florence's device, not the general device)
+            florence_device = getattr(self, "_florence_device", self._device)
+            # Match the dtype of the model (FP16 on GPU, FP32 on CPU)
+            target_dtype = (
+                self._florence_model.dtype
+                if hasattr(self._florence_model, "dtype")
+                else None
+            )
+            if target_dtype and target_dtype == torch.float16:
+                inputs = {
+                    k: v.to(florence_device).half()
+                    if torch.is_tensor(v) and v.dtype == torch.float32
+                    else v.to(florence_device)
+                    if torch.is_tensor(v)
+                    else v
+                    for k, v in inputs.items()
+                }
+            else:
+                inputs = {
+                    k: v.to(florence_device) if torch.is_tensor(v) else v
+                    for k, v in inputs.items()
+                }
+            logger.debug(f"Inputs moved to {florence_device}")
+
+            # Use the Florence-2 specific generation method
+            # Use inference_mode for better performance than no_grad
+            with torch.inference_mode():
+                generated_ids = self._florence_model.generate(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    max_new_tokens=self._florence_max_tokens,  # Configurable for speed vs quality
+                    early_stopping=False,
+                    do_sample=False,
+                    num_beams=1,  # Use greedy decoding (fastest)
+                    use_cache=False,  # Disable cache - Florence-2 has issues with it
+                    pad_token_id=self._florence_processor.tokenizer.pad_token_id,
+                )
+
+            generated_text = self._florence_processor.batch_decode(
+                generated_ids, skip_special_tokens=False
+            )[0]
+
+            # Florence-2 output format: "<s><MORE_DETAILED_CAPTION>caption text</s>"
+            # Extract the caption between the prompt and end token, removing special tokens
+            if prompt_text in generated_text:
+                caption = (
+                    generated_text.split(prompt_text)[1].replace("</s>", "").strip()
+                )
+            else:
+                caption = generated_text.replace("</s>", "").strip()
+
+            # Remove any remaining special tokens like <s>
+            caption = caption.replace("<s>", "").strip()
+
+            # Ensure caption ends with complete sentence
+            # If it doesn't end with sentence-ending punctuation, find the last complete sentence
+            if caption and caption[-1] not in ".!?":
+                # Find the last sentence-ending punctuation
+                last_period = max(
+                    caption.rfind("."), caption.rfind("!"), caption.rfind("?")
+                )
+                if last_period > 0:
+                    # Truncate to last complete sentence
+                    caption = caption[: last_period + 1].strip()
+                # If no sentence-ending punctuation found, add a period
+                elif caption:
+                    caption = caption + "."
+
+            # Insert character name if provided
+            if character_name:
+                # Find first mention of person-related words and insert "named CHARACTER_NAME" after
+                # Pattern: words like "woman", "man", "person", "girl", "boy", etc.
+                person_pattern = r"\b(woman|man|person|girl|boy|lady|gentleman|individual|figure|character)\b"
+                match = re.search(person_pattern, caption, re.IGNORECASE)
+                if match:
+                    # Insert "named CHARACTER_NAME" right after the person mention
+                    insert_pos = match.end()
+                    caption = (
+                        caption[:insert_pos]
+                        + f" named {character_name}"
+                        + caption[insert_pos:]
+                    )
+                else:
+                    # Fallback: prepend character name if no person mention found
+                    caption = f"{character_name}: {caption}"
+
+            logger.info(f"Florence-2 caption: {caption}")
+            return caption
+
+        except Exception as e:
+            import traceback
+
+            is_cuda_issue = "cuda" in str(e).lower()
+            using_cuda = (
+                getattr(self, "_florence_device", None) is not None
+                and getattr(self._florence_device, "type", "") == "cuda"
+            )
+
+            if _retry_on_cpu and using_cuda and is_cuda_issue:
+                logger.warning(
+                    "Florence-2 captioning failed on GPU (%s); retrying on CPU.", e
+                )
+                if self._reload_florence_on_cpu():
+                    return self._generate_florence_caption(
+                        image_path, character_name, tags=tags, _retry_on_cpu=False
+                    )
+
+            logger.error(f"Florence-2 captioning failed for {image_path}: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+
     def _init_onnx_session(self):
         onnx_path = f"{self._model_location}/model.onnx"
         logger.debug("Running wd14 tagger with onnx")
@@ -90,23 +434,33 @@ class PictureTagger:
             raise Exception(
                 f"onnx model not found: {onnx_path}, please redownload the model with --force_download"
             )
-        if "OpenVINOExecutionProvider" in ort.get_available_providers():
+
+        # Use CPU-only when device is set to "cpu" to coexist with LLMs and diffusion models
+        if self._device == "cpu":
+            logger.info("Initializing WD14 tagger with CPUExecutionProvider")
             self.ort_sess = ort.InferenceSession(
-                onnx_path,
-                providers=(["OpenVINOExecutionProvider"]),
-                provider_options=[{"device_type": "GPU", "precision": "FP32"}],
+                onnx_path, providers=["CPUExecutionProvider"]
             )
         else:
-            self.ort_sess = ort.InferenceSession(
-                onnx_path,
-                providers=(
-                    ["CUDAExecutionProvider"]
-                    if "CUDAExecutionProvider" in ort.get_available_providers()
-                    else ["ROCMExecutionProvider"]
-                    if "ROCMExecutionProvider" in ort.get_available_providers()
-                    else ["CPUExecutionProvider"]
-                ),
-            )
+            # Allow GPU providers when not explicitly set to CPU
+            logger.info(f"Initializing WD14 tagger with device: {self._device}")
+            if "OpenVINOExecutionProvider" in ort.get_available_providers():
+                self.ort_sess = ort.InferenceSession(
+                    onnx_path,
+                    providers=["OpenVINOExecutionProvider"],
+                    provider_options=[{"device_type": "GPU", "precision": "FP32"}],
+                )
+            else:
+                self.ort_sess = ort.InferenceSession(
+                    onnx_path,
+                    providers=(
+                        ["CUDAExecutionProvider"]
+                        if "CUDAExecutionProvider" in ort.get_available_providers()
+                        else ["ROCMExecutionProvider"]
+                        if "ROCMExecutionProvider" in ort.get_available_providers()
+                        else ["CPUExecutionProvider"]
+                    ),
+                )
         self.input_name = self.ort_sess.get_inputs()[0].name
 
     def _load_and_preprocess_tags(self):
@@ -163,7 +517,7 @@ class PictureTagger:
         batch = list(filter(lambda x: x is not None, batch))
         return batch
 
-    def _run_batch(self, path_imgs, undesired_tags, always_first_tags):
+    def _run_batch(self, path_imgs, undesired_tags):
         imgs = np.array([im for _, im in path_imgs])
         try:
             probs = self.ort_sess.run(None, {self.input_name: imgs})[
@@ -187,12 +541,6 @@ class PictureTagger:
             # Sort all tags by probability
             all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
             combined_tags = [tag for tag, _ in all_tags_sorted]
-            # Move always_first_tags to the front if present
-            if always_first_tags is not None:
-                for tag in reversed(always_first_tags):
-                    if tag in combined_tags:
-                        combined_tags.remove(tag)
-                        combined_tags.insert(0, tag)
             # Instead of writing to file, store tags in result dict
             result[image_path] = combined_tags
             logger.debug("")
@@ -270,20 +618,19 @@ class PictureTagger:
             for item in obj:
                 texts.extend(cls._collect_text(item, visited))
         elif hasattr(obj, "__dict__"):
-            for attr, value in obj.__dict__.items():
-                if attr.startswith("_"):
-                    continue
-                if attr in (
-                    "parent",
-                    "self",
-                    "picture_iterations",
-                    "picture_tagger",
-                ):
-                    continue
-                if attr == "tags" and isinstance(value, (list, tuple, set)):
-                    texts.extend([t for t in value if t])
-                else:
-                    texts.extend(cls._collect_text(value, visited))
+            # Only process dataclasses with explicit include_in_embedding metadata
+            import dataclasses
+
+            if dataclasses.is_dataclass(obj):
+                for field in dataclasses.fields(obj):
+                    if field.metadata.get("include_in_embedding", False):
+                        value = getattr(obj, field.name)
+                        if field.name == "tags" and isinstance(
+                            value, (list, tuple, set)
+                        ):
+                            texts.extend([t for t in value if t])
+                        else:
+                            texts.extend(cls._collect_text(value, visited))
         return texts
 
     def tag_images(self, image_paths):
@@ -300,12 +647,18 @@ class PictureTagger:
         undesired_tags = set(
             [tag.strip() for tag in undesired_tags if tag.strip() != ""]
         )
-        logger.debug("Removing tags: " + ", ".join(undesired_tags))
-
-        always_first_tags = None
+        logger.info("Removing tags: " + ", ".join(undesired_tags))
 
         dataset = ImageLoadingDatasetPrepper(image_paths)
-        worker_count = min(MAX_CONCURRENT_IMAGES, os.cpu_count() or 1, len(image_paths))
+        worker_count = min(
+            MAX_CONCURRENT_IMAGES, os.cpu_count() // 2 or 1, len(image_paths)
+        )
+        logger.info(
+            "Starting tagger dataloader with worker count: "
+            + str(worker_count)
+            + " and dataset size: "
+            + str(len(dataset))
+        )
         data = torch.utils.data.DataLoader(
             dataset,
             batch_size=BATCH_SIZE,
@@ -315,6 +668,7 @@ class PictureTagger:
             drop_last=False,
         )
 
+        logger.info(f"Got some tags: {data}")
         b_imgs = []
         all_results = {}
 
@@ -335,7 +689,6 @@ class PictureTagger:
                     batch_result = self._run_batch(
                         b_imgs,
                         undesired_tags,
-                        always_first_tags,
                     )
                     if batch_result is None:
                         logger.error(
@@ -349,19 +702,20 @@ class PictureTagger:
 
         if len(b_imgs) > 0:
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
-            batch_result = self._run_batch(b_imgs, undesired_tags, always_first_tags)
+            batch_result = self._run_batch(b_imgs, undesired_tags)
             for k, tags in batch_result.items():
                 tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
                 tags = [t for t in tags if t]
                 batch_result[k] = tags
             all_results.update(batch_result)
 
+        logger.info(f"Completed tagging for {len(all_results)} images.")
         return self._merge_video_frame_tags(all_results)
 
     def generate_embedding(self, character=None, picture=None):
         """
         Generate a CLIP embedding from all text found in character and picture objects (recursively), avoiding cycles.
-        Uses the TagNaturaliser to convert tags to natural language.
+        Can use Florence-2 for natural language captioning or TagNaturaliser for tag-based descriptions.
 
         Args:
             character (Character, optional): Character object.
@@ -371,27 +725,83 @@ class PictureTagger:
             tuple: A tuple containing the embedding (numpy array) and the full text (str).
         """
 
-        logger.info(
-            f"generate_embedding called with character={character}, picture={picture}"
+        # Try Florence-2 captioning first if enabled and picture has file_path
+        full_text = None
+        expect_florence_caption = (
+            self._use_florence
+            and picture
+            and hasattr(picture, "file_path")
+            and picture.file_path
         )
-
-        texts = self._collect_text(picture)
-        texts = self._filter_texts(texts)
-        logger.debug(f"Embedding: texts used for embedding (filtered): {texts}")
-        if not texts:
-            logger.error(
-                "Embedding: No text data for embedding. character=%s, picture=%s",
-                character,
-                picture,
+        if expect_florence_caption:
+            florence_caption = self._generate_florence_caption(
+                picture.file_path, tags=getattr(picture, "tags", None)
             )
-            raise ValueError("No text data for embedding.")
+            if florence_caption:
+                # Integrate character name naturally if available
+                character_name_capitalized = None
+                if character and hasattr(character, "name") and character.name:
+                    # Capitalize character name (title case each word)
+                    character_name_capitalized = " ".join(
+                        word.capitalize() for word in character.name.split()
+                    )
 
-        logger.info(f"Embedding: tags going into LM: {texts}")
-        full_text = self._tag_naturaliser.tags_to_sentence(texts)
-        full_text = (
-            character.name + ", " if character and character.name else ""
-        ) + full_text.lower()
-        logger.info(f"Embedding: full_text for CLIP: {full_text}")
+                    # Add "named CHARACTER_NAME" after the first mention of a person
+                    import re
+
+                    # Pattern to find first mention of a person (case-insensitive)
+                    person_pattern = r"\b(a young woman|a woman|the woman|a young man|a man|the man|a person|the person)\b"
+                    match = re.search(person_pattern, florence_caption, re.IGNORECASE)
+                    if match:
+                        # Insert "named CHARACTER_NAME" right after the matched term
+                        insert_pos = match.end()
+                        florence_caption = (
+                            florence_caption[:insert_pos]
+                            + f" named {character_name_capitalized}"
+                            + florence_caption[insert_pos:]
+                        )
+                    else:
+                        # If no person term found, prepend character name
+                        florence_caption = (
+                            f"{character_name_capitalized}. {florence_caption}"
+                        )
+
+                # Keep the original capitalization - CLIP handles mixed case fine
+                full_text = florence_caption
+
+                logger.info(f"Embedding: using Florence-2 caption: {full_text}")
+            else:
+                logger.error(
+                    "Florence captioning failed; refusing to fall back to tag-based description for %s",
+                    getattr(picture, "file_path", None),
+                )
+                raise RuntimeError(
+                    "Florence captioning failed and Florence-only captions are enabled."
+                )
+
+        # Fall back to tag-based approach if Florence didn't work
+        if full_text is None:
+            # Collect text from both character and picture
+            texts = []
+            if character:
+                texts.extend(self._collect_text(character))
+            if picture:
+                texts.extend(self._collect_text(picture))
+
+            texts = self._filter_texts(texts)
+            logger.debug(f"Embedding: texts used for embedding (filtered): {texts}")
+            if not texts:
+                logger.error(
+                    "Embedding: No text data for embedding. character=%s, picture=%s",
+                    character,
+                    picture,
+                )
+                raise ValueError("No text data for embedding.")
+
+            logger.info(f"Embedding: tags going into description: {texts}")
+            full_text = self._tag_naturaliser.tags_to_sentence(texts)
+            full_text = full_text.lower()
+            logger.info(f"Embedding: full_text for CLIP: {full_text}")
 
         try:
             with torch.no_grad():

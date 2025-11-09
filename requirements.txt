@@ -20,3 +20,5 @@ torch
 torchvision
 insightface
 rapidfuzz
+tqdm
+einops

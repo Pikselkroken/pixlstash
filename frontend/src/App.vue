@@ -1,55 +1,28 @@
 <script setup>
+import nlp from "compromise";
 import {
   computed,
-  ref,
-  onMounted,
-  watch,
-  onBeforeUnmount,
-  reactive,
   nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch,
 } from "vue";
-import { marked } from "marked";
-import { VTextField } from "vuetify/components";
-import SearchBar from "./components/SearchBar.vue";
-import unknownPerson from "./assets/unknown-person.png"; // Import for unknown character icon
-import nlp from "compromise";
 
+import SideBar from "./components/SideBar.vue";
+import ChatWindow from "./components/ChatWindow.vue";
+import ImageImporter from "./components/ImageImporter.vue";
+import ImageOverlay from "./components/ImageOverlay.vue";
+import CharacterEditor from "./components/CharacterEditor.vue";
+import { useOverlayActions } from "./composables/useOverlayActions";
+
+// --- Backend Constants & Identifiers ---
 const BACKEND_URL = "http://localhost:9537";
+const ALL_PICTURES_ID = "__all__";
+const UNASSIGNED_PICTURES_ID = "__unassigned__";
 
-// Drag-and-drop overlay state (for image grid only)
-const dragOverlayVisible = ref(false);
-const dragOverlayMessage = ref("");
-// Track drag source for grid
-const dragSource = ref(null);
-
-// Import progress modal state
-const importInProgress = ref(false);
-const importProgress = ref(0);
-const importTotal = ref(0);
-const importError = ref(null);
-const importPhase = ref(""); // 'hashing', 'checking', 'uploading', 'done', 'error'
-const importPhaseMessage = computed(() => {
-  switch (importPhase.value) {
-    case "hashing":
-      return "Hashing files...";
-    case "checking":
-      return "Checking for duplicates...";
-    case "uploading":
-      return "Uploading images...";
-    case "done":
-      return "Import complete!";
-    case "duplicates":
-      return "All files are duplicates.";
-    case "cancelled":
-      return "Import cancelled.";
-    case "error":
-      return "Import failed.";
-    default:
-      return "";
-  }
-});
-const gridContainer = ref(null); // already used for grid
-
+// --- Supported Media Extensions ---
 const PIL_IMAGE_EXTENSIONS = [
   "jpg",
   "jpeg",
@@ -110,12 +83,160 @@ const VIDEO_EXTENSIONS = [
   "wmv",
   "m4v",
 ];
-function isSupportedImageFile(file) {
-  const ext = file.name.split(".").pop().toLowerCase();
-  return PIL_IMAGE_EXTENSIONS.includes(ext);
-}
 
-// Format likeness score as percentage with 2 decimals function
+// --- Template & Component Refs ---
+const gridContainer = ref(null);
+const imageImporterRef = ref(null);
+const chatWindowRef = ref(null);
+
+// --- Drag-and-Drop State ---
+const dragOverlayVisible = ref(false);
+const dragOverlayMessage = ref("");
+const dragSource = ref(null);
+
+// --- Pagination & Sorting State ---
+const sortOptions = ref([]);
+const selectedSort = ref("");
+const previousSort = ref("");
+const pageSize = ref(100);
+const pageOffset = ref(0);
+const hasMoreImages = ref(true);
+
+// --- Character & Sidebar State ---
+const selectedCharacter = ref(ALL_PICTURES_ID);
+const characters = ref([]);
+const categoryCounts = ref({
+  [ALL_PICTURES_ID]: 0,
+  [UNASSIGNED_PICTURES_ID]: 0,
+});
+const characterThumbnails = ref({});
+const expandedCharacters = ref({});
+const sidebarSections = ref({
+  pictures: true,
+  people: true,
+  search: true,
+});
+const dragOverCharacter = ref(null);
+const nextCharacterNumber = ref(1);
+const editingCharacterId = ref(null);
+const editingCharacterName = ref("");
+
+// --- Image Grid State ---
+const images = ref([]);
+const imagesLoading = ref(false);
+const imagesError = ref(null);
+const thumbLoaded = reactive({});
+const thumbnailSize = ref(256);
+const columns = ref(5);
+const sidebarVisible = ref(true);
+const selectedImageIds = ref([]);
+let lastSelectedIndex = null;
+
+// --- Overlay & Tag State ---
+const overlayOpen = ref(false);
+const overlayImage = ref(null);
+
+// --- Chat Overlay State ---
+const chatOpen = ref(false);
+
+// --- Character Editor State ---
+const characterEditorOpen = ref(false);
+const characterEditorCharacter = ref(null);
+
+// --- Search & Filtering State ---
+const searchQuery = ref("");
+const showStars = ref(true);
+
+// --- Config Dialog State ---
+const settingsDialog = ref(false);
+const config = reactive({
+  image_roots: [],
+  selected_image_root: "",
+  sort: "",
+  thumbnail: 256,
+  show_stars: true,
+  openai_host: "localhost",
+  openai_port: 8000,
+  openai_model: "",
+});
+const openaiModels = ref([]);
+const openaiModelFetchError = ref("");
+const openaiModelLoading = ref(false);
+const newImageRoot = ref("");
+
+// --- Miscellaneous Status Flags ---
+const loading = ref(false);
+const error = ref(null);
+
+// --- Computed Collections ---
+const filteredImages = computed(() => {
+  return images.value;
+});
+
+const pagedImages = computed(() => filteredImages.value);
+
+const sortedCharacters = computed(() => {
+  return [...characters.value]
+    .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    );
+});
+
+const selectedCharacterObj = computed(() => {
+  if (
+    selectedCharacter.value &&
+    selectedCharacter.value !== ALL_PICTURES_ID &&
+    selectedCharacter.value !== UNASSIGNED_PICTURES_ID
+  ) {
+    const char =
+      characters.value.find((c) => c.id === selectedCharacter.value) || null;
+    if (char && typeof char.name === "string" && char.name.length > 0) {
+      return {
+        ...char,
+        name: char.name.charAt(0).toUpperCase() + char.name.slice(1),
+      };
+    }
+    return char;
+  }
+  return null;
+});
+
+// --- Selection Helpers ---
+const isImageSelected = (id) =>
+  selectedImageIds.value.includes(id) &&
+  pagedImages.value.some((img) => img.id === id);
+
+const getSelectionBorderClasses = (idx) => {
+  const sorted = pagedImages.value;
+  if (!isImageSelected(sorted[idx]?.id)) return "";
+  const cols = columns.value;
+  const total = sorted.length;
+  const row = Math.floor(idx / cols);
+  const col = idx % cols;
+  const classes = [];
+  if (row === 0 || !isImageSelected(sorted[(row - 1) * cols + col]?.id)) {
+    classes.push("selected-border-top");
+  }
+  if (
+    row === Math.floor((total - 1) / cols) ||
+    !isImageSelected(sorted[(row + 1) * cols + col]?.id)
+  ) {
+    classes.push("selected-border-bottom");
+  }
+  if (col === 0 || !isImageSelected(sorted[row * cols + (col - 1)]?.id)) {
+    classes.push("selected-border-left");
+  }
+  if (
+    col === cols - 1 ||
+    !isImageSelected(sorted[row * cols + (col + 1)]?.id)
+  ) {
+    classes.push("selected-border-right");
+  }
+  return classes.join(" ");
+};
+
+// --- Text & Display Utilities ---
 function formatLikenessScore(score) {
   if (typeof score !== "number") return "";
   return `Likeness: ${(score * 100).toFixed(2)}%`;
@@ -123,15 +244,12 @@ function formatLikenessScore(score) {
 
 function extractKeywords(text) {
   const doc = nlp(text);
-  // Get all noun and adjective phrases as keywords
   const nouns = doc.nouns().out("array");
   const adjectives = doc.adjectives().out("array");
-  // Combine and deduplicate
   const keywords = Array.from(new Set([...nouns, ...adjectives]));
   return keywords.join(" ");
 }
 
-// Extracts the format/extension for overlayImage robustly function
 function getOverlayFormat(overlayImage) {
   if (!overlayImage) return "";
   if (overlayImage.format) return overlayImage.format;
@@ -147,7 +265,12 @@ function getOverlayFormat(overlayImage) {
   return "png";
 }
 
-// Accepts either a file object (with .name) or a string extension
+// --- Media Helpers ---
+function isSupportedImageFile(file) {
+  const ext = file.name.split(".").pop().toLowerCase();
+  return PIL_IMAGE_EXTENSIONS.includes(ext);
+}
+
 function isSupportedVideoFile(input) {
   let ext = "";
   if (typeof input === "string") {
@@ -155,7 +278,6 @@ function isSupportedVideoFile(input) {
   } else if (input && input.name) {
     ext = input.name.split(".").pop().toLowerCase();
   }
-
   return VIDEO_EXTENSIONS.includes(ext);
 }
 
@@ -163,50 +285,43 @@ function isSupportedMediaFile(file) {
   return isSupportedImageFile(file) || isSupportedVideoFile(file);
 }
 
-async function hashFile(file) {
-  // SHA-256 sampled hash: whole file if <=128KB, else 8 evenly spaced 8192-byte blocks
-  const CHUNK_SIZE = 8192;
-  const N = 8;
-  const WHOLE_FILE_THRESHOLD = 128 * 1024; // 128KB
-  if (file.size <= WHOLE_FILE_THRESHOLD) {
-    const buf = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest("SHA-256", buf);
-    return Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+function dataTransferHasSupportedMedia(dataTransfer) {
+  if (!dataTransfer) return false;
+  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+  for (let i = 0; i < Math.min(items.length, 10); i++) {
+    const item = items[i];
+    if (!item || item.kind !== "file") continue;
+    const mime = item.type || "";
+    if (mime.startsWith("image/") || mime.startsWith("video/")) {
+      return true;
+    }
+    if (!mime && typeof item.getAsFile === "function") {
+      const file = item.getAsFile();
+      if (file && isSupportedMediaFile(file)) {
+        return true;
+      }
+    }
   }
-  // For larger files, sample N evenly spaced blocks
-  const offsets = Array.from({ length: N }, (_, i) =>
-    Math.floor((i * (file.size - CHUNK_SIZE)) / (N - 1))
-  );
-  const chunks = [];
-  for (const offset of offsets) {
-    const blob = file.slice(offset, offset + CHUNK_SIZE);
-    const buf = await blob.arrayBuffer();
-    chunks.push(new Uint8Array(buf));
+  if (items.length === 0) {
+    const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+    if (types.includes("Files")) {
+      return true;
+    }
   }
-  let totalLen = chunks.reduce((sum, arr) => sum + arr.length, 0);
-  let all = new Uint8Array(totalLen);
-  let pos = 0;
-  for (const arr of chunks) {
-    all.set(arr, pos);
-    pos += arr.length;
-  }
-  const hashBuffer = await crypto.subtle.digest("SHA-256", all);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return false;
 }
 
-// Sorting and pagination state
-const sortOptions = ref([]);
-const selectedSort = ref("");
-const previousSort = ref(""); // Track previous sort for search restore
-const pageSize = ref(100);
-const pageOffset = ref(0);
-const hasMoreImages = ref(true);
+// --- Grid Layout Helpers ---
+function updateColumns() {
+  if (!gridContainer.value) return;
+  const containerWidth = gridContainer.value.offsetWidth;
+  columns.value = Math.max(
+    1,
+    Math.floor(containerWidth / (thumbnailSize.value + 32))
+  );
+}
 
-// Fetch sort mechanisms from backend
+// --- Sorting & Pagination ---
 async function fetchSortOptions() {
   try {
     const res = await fetch(`${BACKEND_URL}/sort_mechanisms`);
@@ -216,7 +331,6 @@ async function fetchSortOptions() {
       label: opt.label,
       value: opt.id,
     }));
-    // Set default sort if not set
     if (!selectedSort.value && options.length) {
       selectedSort.value =
         options.find((o) => o.id === "unsorted")?.id || options[0].id;
@@ -233,13 +347,6 @@ async function fetchSortOptions() {
   }
 }
 
-const selectedCharacter = ref(ALL_PICTURES_ID);
-const selectedReferenceMode = ref(false);
-
-// Track thumbnail load state globally by image ID
-const thumbLoaded = reactive({});
-
-// Fetch images for the current character and mode, with pagination and sorting
 async function refreshImages(append = false) {
   if (!append) {
     images.value = [];
@@ -248,7 +355,6 @@ async function refreshImages(append = false) {
   }
   imagesError.value = null;
   const id = selectedCharacter.value;
-  const refMode = selectedReferenceMode.value;
   if (!id) return;
   imagesLoading.value = true;
   try {
@@ -261,34 +367,20 @@ async function refreshImages(append = false) {
     if (id === ALL_PICTURES_ID) {
       url = `${BACKEND_URL}/pictures?${params.toString()}`;
     } else if (id === UNASSIGNED_PICTURES_ID) {
-      url = `${BACKEND_URL}/pictures?character_id=&${params.toString()}`;
-    } else if (refMode) {
-      // Reference mode: fallback to old endpoint for now (no paging)
-      url = `${BACKEND_URL}/characters/reference_pictures/${encodeURIComponent(
-        id
-      )}`;
+      url = `${BACKEND_URL}/pictures?primary_character_id=&${params.toString()}`;
     } else {
-      url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
+      url = `${BACKEND_URL}/pictures?primary_character_id=${encodeURIComponent(
         id
       )}&${params.toString()}`;
     }
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch images");
     let baseImages = await res.json();
-    if (refMode && baseImages.reference_pictures) {
-      baseImages = baseImages.reference_pictures;
-      baseImages = baseImages.map((img) => ({ ...img, id: img.picture_id }));
-    }
     const newImages = baseImages.map((img) => ({
       ...img,
       score: typeof img.score !== "undefined" ? img.score : null,
-      is_reference: Number(img.is_reference) || 0,
     }));
-    if (append) {
-      images.value = [...images.value, ...newImages];
-    } else {
-      images.value = newImages;
-    }
+    images.value = append ? [...images.value, ...newImages] : newImages;
     hasMoreImages.value = newImages.length === pageSize.value;
     setTimeout(updateColumns, 0);
   } catch (e) {
@@ -298,533 +390,8 @@ async function refreshImages(append = false) {
   }
 }
 
-// Watch for sort or character changes
-watch([selectedSort, selectedCharacter, selectedReferenceMode], () => {
-  pageOffset.value = 0;
-  hasMoreImages.value = true;
-  lastSelectedIndex = null;
-  refreshImages();
-});
-
-function handleGridDragEnter(e) {
-  // Only trigger if entering from outside the image-grid (not between children)
-  // If relatedTarget is inside the grid, ignore (moving within grid children).
-  if (
-    e.relatedTarget &&
-    gridContainer.value &&
-    gridContainer.value.contains(e.relatedTarget)
-  )
-    return;
-  if (!e.dataTransfer || !e.dataTransfer.items) return;
-  // Only check the first 20 items for image type, break immediately if found
-  const items = Array.from(e.dataTransfer.items);
-  let hasImageType = false;
-  for (let i = 0; i < Math.min(items.length, 20); i++) {
-    const item = items[i];
-    if (item.kind === "file" && item.type.startsWith("image/")) {
-      hasImageType = true;
-      break;
-    }
-  }
-  // Timing end
-  if (hasImageType) {
-    dragOverlayVisible.value = true;
-    dragOverlayMessage.value = "Drop files here to import";
-    e.preventDefault();
-    console.debug("Overlay shown");
-  } else {
-    dragOverlayVisible.value = false;
-  }
-}
-
-function handleGridDragOver(e) {
-  if (dragOverlayVisible.value) e.preventDefault();
-}
-function handleGridDragLeave(e) {
-  // Only hide overlay if leaving the .image-grid entirely
-  if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
-    dragOverlayVisible.value = false;
-  } else {
-    console.debug("Drag still inside grid, overlay remains");
-  }
-}
-
-const cancelImport = ref(false);
-function handleCancelImport() {
-  cancelImport.value = true;
-}
-
-function handleGridDrop(e) {
-  dragOverlayVisible.value = false;
-  // Prevent importing if this is an internal drag (from our own grid)
-  if (dragSource.value === "grid") {
-    dragSource.value = null;
-    return;
-  }
-  if (!e.dataTransfer || !e.dataTransfer.files) return;
-  const files = Array.from(e.dataTransfer.files).filter(isSupportedMediaFile);
-  console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
-  console.debug("[IMPORT] Supported files after filter:", files);
-  if (!files.length) {
-    alert("No supported image files found.");
-    return;
-  }
-  cancelImport.value = false;
-  importInProgress.value = true;
-  importProgress.value = 0;
-  importError.value = null;
-  importPhase.value = "hashing";
-  dragSource.value = null;
-  (async () => {
-    // Step 1: Compute hashes for all files in parallel (with concurrency limit)
-    importTotal.value = files.length;
-    let hashProgress = 0;
-    let fileHashes = [];
-    const CONCURRENCY = 6;
-    // Helper to run promises with concurrency limit
-    async function mapWithConcurrencyLimit(items, fn, concurrency) {
-      const results = new Array(items.length);
-      let nextIndex = 0;
-      let active = 0;
-      return new Promise((resolve, reject) => {
-        function runNext() {
-          if (nextIndex >= items.length && active === 0) {
-            resolve(results);
-            return;
-          }
-          while (active < concurrency && nextIndex < items.length) {
-            const idx = nextIndex++;
-            active++;
-            fn(items[idx], idx)
-              .then((result) => {
-                results[idx] = result;
-                active--;
-                runNext();
-              })
-              .catch((err) => {
-                reject(err);
-              });
-          }
-        }
-        runNext();
-      });
-    }
-    try {
-      fileHashes = await mapWithConcurrencyLimit(
-        files,
-        async (file, idx) => {
-          if (cancelImport.value) throw new Error("cancelled");
-          const hash = await hashFile(file);
-          hashProgress++;
-          importProgress.value = hashProgress;
-          await nextTick();
-          return { file, hash };
-        },
-        CONCURRENCY
-      );
-      console.debug("[IMPORT] fileHashes after hashing:", fileHashes);
-    } catch (err) {
-      importInProgress.value = false;
-      if (err.message === "cancelled") {
-        importPhase.value = "cancelled";
-        importError.value = "Import cancelled.";
-      } else {
-        importPhase.value = "error";
-        importError.value = "Failed to hash files.";
-      }
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 1500);
-      return;
-    }
-    // Step 2: Batch check with backend for existing hashes
-    importPhase.value = "checking";
-    let existing = [];
-    try {
-      const hashesToSend = fileHashes.map((fh) => fh.hash);
-      console.debug("[IMPORT] Sending hashes to /check_hashes:", hashesToSend);
-      const res = await fetch(`${BACKEND_URL}/check_hashes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(hashesToSend),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        console.debug("[IMPORT] /check_hashes response:", data);
-        existing = data.existing || [];
-      } else {
-        throw new Error("Failed to check for duplicates");
-      }
-    } catch (err) {
-      importPhase.value = "error";
-      importInProgress.value = false;
-      importError.value = "Failed to check for duplicates.";
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 1500);
-      return;
-    }
-    // Step 3: Filter out duplicates
-    const newFiles = fileHashes
-      .filter((fh) => !existing.includes(fh.hash))
-      .map((fh) => fh.file)
-      .filter(isSupportedMediaFile);
-    importTotal.value = newFiles.length;
-    importProgress.value = 0;
-    if (newFiles.length === 0) {
-      importPhase.value = "duplicates";
-      importError.value = "All files are duplicates.";
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 2000);
-      return;
-    }
-    // Show found X new images
-    importPhase.value = "uploading";
-    importError.value = `Found ${newFiles.length} new image(s).`;
-    let completed = 0;
-    const uploadFile = async (file) => {
-      const formData = new FormData();
-      formData.append("image", file);
-      if (
-        selectedCharacter.value &&
-        selectedCharacter.value !== ALL_PICTURES_ID &&
-        selectedCharacter.value !== UNASSIGNED_PICTURES_ID
-      ) {
-        formData.append("character_id", selectedCharacter.value);
-      }
-      try {
-        const res = await fetch(`${BACKEND_URL}/pictures`, {
-          method: "POST",
-          body: formData,
-        });
-        if (!res.ok) throw new Error("Upload failed");
-        await res.json();
-        completed++;
-        importProgress.value = completed;
-        await nextTick();
-      } catch (err) {
-        importPhase.value = "error";
-        importError.value = err.message || String(err);
-        throw err;
-      }
-    };
-    try {
-      for (const file of newFiles) {
-        if (cancelImport.value) {
-          importPhase.value = "cancelled";
-          importError.value = "Import cancelled by user.";
-          setTimeout(() => {
-            importInProgress.value = false;
-          }, 1500);
-          return;
-        }
-        await uploadFile(file);
-      }
-      importPhase.value = "done";
-      importError.value = `Imported ${newFiles.length} image(s).`;
-      setTimeout(() => {
-        importInProgress.value = false;
-      }, 1500);
-      refreshImages();
-      fetchSidebarCounts();
-    } catch (e) {
-      importPhase.value = "error";
-      importInProgress.value = false;
-      alert("One or more uploads failed: " + (e.message || e));
-    }
-  })();
-}
-
-// Clear selection if clicking on empty space in the image grid
-function handleGridBackgroundClick(e) {
-  // If the click is NOT inside an image-card, clear selection
-  if (!e.target.closest(".thumbnail-card")) {
-    selectedImageIds.value = [];
-    lastSelectedIndex = null;
-  }
-}
-
-// Infinite scroll: load more images as user scrolls near bottom
-function onGridScroll(e) {
-  const el = e.target;
-  if (!hasMoreImages.value || imagesLoading.value) return;
-  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
-    // Near bottom
-    pageOffset.value += pageSize.value;
-    refreshImages(true);
-  }
-}
-
-// Use backend-driven images, no local sorting
-const pagedImages = computed(() => images.value);
-
-// Remove a tag from the overlay image and PATCH the backend
-async function removeTagFromOverlayImage(tag) {
-  if (!overlayImage.value) return;
-
-  const img = overlayImage.value;
-  const newTags = img.tags.filter((t) => t !== tag);
-  try {
-    const res = await fetch(`${BACKEND_URL}/pictures/${img.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tags: newTags }),
-    });
-
-    if (!res.ok) throw new Error("Failed to remove tag");
-
-    img.tags = newTags;
-  } catch (e) {
-    alert("Failed to remove tag: " + (e.message || e));
-  }
-}
-
-// State for adding a tag in the overlay
-const addingTagOverlay = ref(false);
-const newTagOverlay = ref("");
-
-function startAddTagOverlay() {
-  addingTagOverlay.value = true;
-  newTagOverlay.value = "";
-  nextTick(() => {
-    const input = document.querySelector(".tag-add-input");
-    if (input) input.focus();
-  });
-}
-
-function cancelAddTagOverlay() {
-  addingTagOverlay.value = false;
-  newTagOverlay.value = "";
-}
-
-async function confirmAddTagOverlay() {
-  if (!overlayImage.value) return;
-  const tag = newTagOverlay.value.trim();
-  if (!tag) {
-    cancelAddTagOverlay();
-    return;
-  } // Prevent duplicate tags
-
-  if (overlayImage.value.tags.includes(tag)) {
-    cancelAddTagOverlay();
-    return;
-  }
-  const img = overlayImage.value;
-  const newTags = [...img.tags, tag];
-
-  try {
-    const res = await fetch(`${BACKEND_URL}/pictures/${img.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tags: newTags }),
-    });
-    if (!res.ok) throw new Error("Failed to add tag");
-
-    img.tags = newTags;
-  } catch (e) {
-    alert("Failed to add tag: " + (e.message || e));
-  }
-  cancelAddTagOverlay();
-}
-
-// Selection state for file manager
-const selectedImageIds = ref([]);
-let lastSelectedIndex = null;
-
-// Sidebar visibility state
-const sidebarVisible = ref(true);
-
-// Overlay state for full image view
-const overlayOpen = ref(false);
-const overlayImage = ref(null);
-
-// Trophy button color: dark blue when not selected, orange when selected
-const trophyButtonColor = (charId) =>
-  selectedCharacter.value === charId && selectedReferenceMode.value
-    ? "orange"
-    : "#29405a"; // darker blue than sidebar
-
-function openOverlay(img) {
-  overlayImage.value = img;
-  overlayOpen.value = true;
-}
-
-function closeOverlay() {
-  overlayOpen.value = false;
-}
-
-const chatOpen = ref(false);
-function openChatOverlay() {
-  chatOpen.value = true;
-  nextTick(() => {
-    if (chatInputField.value) chatInputField.value.focus();
-  });
-}
-
-function closeChatOverlay() {
-  chatOpen.value = false;
-}
-
-// Scroll chat to bottom utility
-function scrollChatToBottom() {
-  nextTick(() => {
-    if (chatMessagesContainer.value) {
-      chatMessagesContainer.value.scrollTop =
-        chatMessagesContainer.value.scrollHeight;
-    }
-  });
-}
-
-// Search bar state and logic
-const searchQuery = ref(""); // Used for actual search
-async function searchImages(query) {
-  // Only update searchQuery and trigger search if input is non-empty
-  const q = (typeof query === "string" ? query : searchQuery.value).trim();
-  if (!q) return;
-  searchQuery.value = q;
-  // Save previous sort before switching to likeness sort
-  previousSort.value = selectedSort.value;
-  // Switch sorting to 'Sort by Search Likeness' if available
-  const likenessSort = sortOptions.value.find(
-    (opt) =>
-      (opt.value && opt.value.toLowerCase().includes("search")) ||
-      (opt.label && opt.label.toLowerCase().includes("search"))
-  );
-  if (likenessSort) {
-    selectedSort.value = likenessSort.value;
-  }
-  imagesLoading.value = true;
-  imagesError.value = null;
-  try {
-    const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
-      q
-    )}&threshold=0.5&top_n=1000`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Search failed");
-    const baseImages = await res.json();
-    images.value = baseImages.map((img) => ({
-      ...img,
-      score: typeof img.score !== "undefined" ? img.score : null,
-      is_reference: Number(img.is_reference) || 0,
-    }));
-    setTimeout(updateColumns, 0);
-  } catch (e) {
-    imagesError.value = e.message;
-  } finally {
-    imagesLoading.value = false;
-  }
-  // Watch for clearing of searchQuery to restore previous sort and refresh view
-  watch(searchQuery, (newVal, oldVal) => {
-    if (!newVal && oldVal) {
-      // Restore previous sort if available
-      if (previousSort.value && previousSort.value !== selectedSort.value) {
-        selectedSort.value = previousSort.value;
-      }
-      // Refresh images for current character and sort
-      refreshImages();
-    }
-  });
-}
-
-function handleImageSelect(img, idx, event) {
-  // Use pagedImages for all index-based selection
-  const sorted = pagedImages.value;
-  const id = img.id;
-  const isSelected = selectedImageIds.value.includes(id);
-  const isCtrl = event.ctrlKey || event.metaKey;
-  const isShift = event.shiftKey;
-
-  if (isShift) {
-    if (lastSelectedIndex !== null) {
-      // Range select in pagedImages
-      const start = Math.min(lastSelectedIndex, idx);
-      const end = Math.max(lastSelectedIndex, idx);
-      const rangeIds = sorted.slice(start, end + 1).map((i) => i.id);
-      const newSelection = isCtrl
-        ? Array.from(new Set([...selectedImageIds.value, ...rangeIds]))
-        : rangeIds;
-      selectedImageIds.value = newSelection;
-    } else {
-      // No previous selection, just select the clicked image
-      selectedImageIds.value = [id];
-    }
-    lastSelectedIndex = idx;
-  } else if (isCtrl) {
-    // Toggle selection
-    if (isSelected) {
-      selectedImageIds.value = selectedImageIds.value.filter((i) => i !== id);
-    } else {
-      selectedImageIds.value = [...selectedImageIds.value, id];
-    }
-    lastSelectedIndex = idx;
-  } else {
-    // Single select
-    selectedImageIds.value = [id];
-    lastSelectedIndex = idx;
-  }
-}
-
-const isImageSelected = (id) => selectedImageIds.value.includes(id);
-
-// Logic to determine if a selected image is on the outer edge of a selection group (use pagedImages)
-const getSelectionBorderClasses = (idx) => {
-  const sorted = pagedImages.value;
-  if (!isImageSelected(sorted[idx]?.id)) return "";
-  const cols = columns.value;
-  const total = sorted.length;
-  const row = Math.floor(idx / cols);
-  const col = idx % cols;
-  let classes = [];
-  // Check neighbors: top, right, bottom, left
-  // Top
-  if (row === 0 || !isImageSelected(sorted[(row - 1) * cols + col]?.id)) {
-    classes.push("selected-border-top");
-  }
-  // Bottom
-  if (
-    row === Math.floor((total - 1) / cols) ||
-    !isImageSelected(sorted[(row + 1) * cols + col]?.id)
-  ) {
-    classes.push("selected-border-bottom");
-  }
-  // Left
-  if (col === 0 || !isImageSelected(sorted[row * cols + (col - 1)]?.id)) {
-    classes.push("selected-border-left");
-  }
-  // Right
-  if (
-    col === cols - 1 ||
-    !isImageSelected(sorted[row * cols + (col + 1)]?.id)
-  ) {
-    classes.push("selected-border-right");
-  }
-  return classes.join(" ");
-};
-
-// Handle drop on Reference Images child
-function onReferenceDrop(characterId, event) {
-  dragOverCharacter.value = null;
-  try {
-    const data = JSON.parse(event.dataTransfer.getData("application/json"));
-    if (!data.imageIds || !Array.isArray(data.imageIds)) return;
-    assignImagesAsReference(data.imageIds, characterId);
-  } catch (e) {}
-}
-
-const ALL_PICTURES_ID = "__all__";
-const UNASSIGNED_PICTURES_ID = "__unassigned__";
-const characters = ref([]);
-// Store image counts for each category (all, unassigned, characterId)
-const categoryCounts = ref({
-  [ALL_PICTURES_ID]: 0,
-  [UNASSIGNED_PICTURES_ID]: 0,
-  // characterId: count
-});
-
-// Fetch and update image counts for all sidebar categories
+// --- Sidebar & Character Data ---
 async function fetchSidebarCounts() {
-  // All Pictures
   try {
     const resAll = await fetch(`${BACKEND_URL}/category/summary`);
     if (resAll.ok) {
@@ -832,22 +399,20 @@ async function fetchSidebarCounts() {
       categoryCounts.value[ALL_PICTURES_ID] = data.image_count;
     }
   } catch {}
-  // Unassigned Pictures
   try {
     const resUnassigned = await fetch(
-      `${BACKEND_URL}/category/summary?character_id=null`
+      `${BACKEND_URL}/category/summary?primary_character_id=null`
     );
     if (resUnassigned.ok) {
       const data = await resUnassigned.json();
       categoryCounts.value[UNASSIGNED_PICTURES_ID] = data.image_count;
     }
   } catch {}
-  // Each character
   await Promise.all(
     characters.value.map(async (char) => {
       try {
         const res = await fetch(
-          `${BACKEND_URL}/category/summary?character_id=${encodeURIComponent(
+          `${BACKEND_URL}/category/summary?primary_character_id=${encodeURIComponent(
             char.id
           )}`
         );
@@ -859,53 +424,6 @@ async function fetchSidebarCounts() {
     })
   );
 }
-// Computed: characters sorted alphabetically by name (case-insensitive)
-const sortedCharacters = computed(() => {
-  return [...characters.value]
-    .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
-    .sort((a, b) => {
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-    });
-});
-const characterThumbnails = ref({}); // { [characterId]: thumbnailUrl }
-const loading = ref(false);
-const error = ref(null);
-
-// Reference filter for toolbar (local only, no backend refresh)
-const showStars = ref(true);
-const referenceFilterMode = ref(false);
-const filteredImages = computed(() => {
-  if (referenceFilterMode.value) {
-    return images.value.filter((img) => Number(img.is_reference) === 1);
-  }
-  return images.value;
-});
-const expandedCharacters = ref({}); // { [characterId]: true/false }
-// Collapsible sidebar sections
-const sidebarSections = ref({
-  pictures: true,
-  people: true,
-  search: true,
-});
-
-const images = ref([]);
-const imagesLoading = ref(false);
-const imagesError = ref(null);
-
-// Thumbnail size slider state
-const thumbnailSize = ref(256);
-
-// Responsive columns
-const columns = ref(5);
-
-function updateColumns() {
-  if (!gridContainer.value) return;
-  const containerWidth = gridContainer.value.offsetWidth;
-  columns.value = Math.max(
-    1,
-    Math.floor(containerWidth / (thumbnailSize.value + 32))
-  );
-}
 
 async function fetchCharacters() {
   loading.value = true;
@@ -915,11 +433,9 @@ async function fetchCharacters() {
     if (!res.ok) throw new Error("Failed to fetch characters");
     const chars = await res.json();
     characters.value = chars;
-    // For each character, fetch their first image's thumbnail (if any)
     for (const char of chars) {
       fetchCharacterThumbnail(char.id);
     }
-    // After loading characters, fetch sidebar counts
     await fetchSidebarCounts();
   } catch (e) {
     error.value = e.message;
@@ -930,10 +446,8 @@ async function fetchCharacters() {
 
 async function fetchCharacterThumbnail(characterId) {
   try {
-    // Add cache-busting query param to ensure fresh thumbnail
     const cacheBuster = Date.now();
     const thumbUrl = `${BACKEND_URL}/face_thumbnail/${characterId}?cb=${cacheBuster}`;
-    // Test if the endpoint returns an image (status 200 and content-type image/png)
     const res = await fetch(thumbUrl);
     if (res.ok && res.headers.get("content-type")?.includes("image/png")) {
       characterThumbnails.value[characterId] = thumbUrl;
@@ -945,60 +459,12 @@ async function fetchCharacterThumbnail(characterId) {
   }
 }
 
-// Toggle reference status for a picture (multi-select aware)
-async function toggleReference(img) {
-  // If multiple images are selected and this image is among them, apply to all
-  const selectedIds = selectedImageIds.value;
-  const multi = selectedIds.length > 1 && selectedIds.includes(img.id);
-  const newVal = Number(img.is_reference) === 1 ? 0 : 1;
-  const targets = multi
-    ? images.value.filter((i) => selectedIds.includes(i.id))
-    : [img];
-  try {
-    await Promise.all(
-      targets.map(async (target) => {
-        const res = await fetch(
-          `${BACKEND_URL}/pictures/${target.id}?is_reference=${newVal}`,
-          { method: "PATCH" }
-        );
-        if (!res.ok)
-          throw new Error(
-            `Failed to update reference status for image ${target.id}`
-          );
-        target.is_reference = newVal;
-      })
-    );
-    // If in reference mode, reload images so the grid updates immediately
-    if (selectedReferenceMode.value && newVal === 0) {
-      images.value = images.value.filter(
-        (i) => !targets.some((t) => t.id === i.id)
-      );
-    }
-  } catch (e) {
-    alert("Failed to update reference status: " + (e.message || e));
-  }
+function toggleSidebarSection(section) {
+  if (!section || !(section in sidebarSections.value)) return;
+  sidebarSections.value[section] = !sidebarSections.value[section];
 }
 
-const settingsDialog = ref(false);
-watch(settingsDialog, (val) => {
-  if (val) fetchConfig();
-});
-const config = reactive({
-  image_roots: [],
-  selected_image_root: "",
-  sort: "",
-  thumbnail: 256,
-  show_stars: true,
-  show_only_reference: false,
-  openai_host: "localhost",
-  openai_port: 8000,
-  openai_model: "",
-});
-
-const openaiModels = ref([]);
-const openaiModelFetchError = ref("");
-const openaiModelLoading = ref(false);
-
+// --- Settings & Config ---
 async function fetchOpenAIModels() {
   openaiModelLoading.value = true;
   openaiModelFetchError.value = "";
@@ -1008,7 +474,6 @@ async function fetchOpenAIModels() {
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch models");
     const data = await res.json();
-    // OpenAI API returns { data: [ { id: ... }, ... ] }
     if (Array.isArray(data.data)) {
       openaiModels.value = data.data.map((m) => m.id);
     } else {
@@ -1023,64 +488,60 @@ async function fetchOpenAIModels() {
 
 async function fetchConfig() {
   try {
-    const res = await fetch(`${BACKEND_URL}/config`)
-      .then((response) => response.json())
-      .then((data) => {
-        config.image_roots = data.image_roots || [];
-        config.selected_image_root = data.selected_image_root || "";
-        // UI options
-        if (data.sort) selectedSort.value = data.sort_order;
-        if (data.thumbnail) thumbnailSize.value = data.thumbnail_size;
-        if (typeof data.show_stars === "boolean")
-          showStars.value = data.show_stars;
-        if (typeof data.show_only_reference === "boolean")
-          referenceFilterMode.value = data.show_only_reference;
-        // Also update config for PATCHing
-        config.sort_order = data.sort || selectedSort.value;
-        config.thumbnail_size = data.thumbnail || thumbnailSize.value;
-        config.show_stars =
-          typeof data.show_stars === "boolean"
-            ? data.show_stars
-            : showStars.value;
-        config.show_only_reference =
-          typeof data.show_only_reference === "boolean"
-            ? data.show_only_reference
-            : referenceFilterMode.value;
-        // OpenAI settings
-        config.openai_host = data.openai_host || "localhost";
-        config.openai_port = data.openai_port || 8000;
-        config.openai_model = data.openai_model || "";
-      });
+    const res = await fetch(`${BACKEND_URL}/config`);
     if (!res.ok) {
       const text = await res.text();
       console.error("Failed to fetch /config:", res.status, text);
       return;
     }
+    const data = await res.json();
+    config.image_roots = data.image_roots || [];
+    config.selected_image_root = data.selected_image_root || "";
+    const sortValue = data.sort_order ?? data.sort;
+    if (typeof sortValue === "string" && sortValue) {
+      selectedSort.value = sortValue;
+    }
+    const thumbnailValue =
+      typeof data.thumbnail_size === "number"
+        ? data.thumbnail_size
+        : typeof data.thumbnail === "number"
+        ? data.thumbnail
+        : null;
+    if (thumbnailValue !== null) {
+      thumbnailSize.value = thumbnailValue;
+      await nextTick();
+      updateColumns();
+    }
+    if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
+    config.sort_order = sortValue || selectedSort.value;
+    config.thumbnail_size = thumbnailValue || thumbnailSize.value;
+    config.show_stars =
+      typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
+    config.openai_host = data.openai_host || "localhost";
+    config.openai_port = data.openai_port || 8000;
+    config.openai_model = data.openai_model || "";
   } catch (e) {
     console.error("Error fetching /config:", e);
   }
 }
 
-// Settings dialog: image roots add/remove/select logic
-const newImageRoot = ref("");
 async function addImageRoot() {
   const val = newImageRoot.value.trim();
   if (!val || config.image_roots.includes(val)) return;
   config.image_roots.push(val);
   newImageRoot.value = "";
-  // PATCH only image_roots
   await fetch(`${BACKEND_URL}/config`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ image_roots: config.image_roots }),
   });
 }
+
 function removeImageRoot(root) {
   if (config.image_roots.length <= 1) return;
   const idx = config.image_roots.indexOf(root);
   if (idx !== -1) {
     config.image_roots.splice(idx, 1);
-    // If removed root was selected, pick first remaining
     if (config.selected_image_root === root) {
       config.selected_image_root = config.image_roots[0] || "";
     }
@@ -1089,27 +550,22 @@ function removeImageRoot(root) {
 }
 
 async function updateSelectedRoot() {
-  // PATCH only selected_image_root
   await fetch(`${BACKEND_URL}/config`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ selected_image_root: config.selected_image_root }),
   });
-  // Refresh grid and sidebar after vault change
   await fetchConfig();
   await fetchCharacters();
   await fetchSidebarCounts();
   await refreshImages();
 }
 
-// --- UI option PATCH logic ---
 async function patchConfigUIOptions(opts = {}) {
-  // Merge with config
   const patch = {
     sort: selectedSort.value,
     thumbnail: thumbnailSize.value,
     show_stars: showStars.value,
-    show_only_reference: referenceFilterMode.value,
     openai_host: config.openai_host,
     openai_port: config.openai_port,
     openai_model: config.openai_model,
@@ -1131,7 +587,6 @@ function selectImageRoot(root) {
 }
 
 async function saveConfig() {
-  // Save config to backend (POST /config)
   await fetch(`/${BACKEND_URL}/config`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1150,111 +605,226 @@ function openSettingsDialog() {
   settingsDialog.value = true;
 }
 
-// Fetch config and sync UI options on mount
-onMounted(() => {
-  fetchConfig();
-});
-
-onMounted(() => {
-  // Always select All Pictures at startup
-  selectedCharacter.value = ALL_PICTURES_ID;
-  selectedReferenceMode.value = false;
-  fetchSortOptions();
-  fetchCharacters();
-  window.addEventListener("resize", updateColumns);
-  watch(thumbnailSize, updateColumns);
-  setTimeout(updateColumns, 100); // Initial update after mount
-});
-
-// Watch and PATCH UI config options when changed
-watch(selectedSort, (val) => {
-  patchConfigUIOptions({ sort: val });
-});
-watch(thumbnailSize, (val) => {
-  patchConfigUIOptions({ thumbnail: val });
-});
-watch(showStars, (val) => {
-  patchConfigUIOptions({ show_stars: val });
-});
-
-watch(referenceFilterMode, (val) => {
-  patchConfigUIOptions({ show_only_reference: val });
-});
-
-// Watch OpenAI config fields and PATCH when changed
-// Helper: refresh models after patching host/port
-async function patchHostAndRefresh(val, key) {
-  await patchConfigUIOptions({ [key]: val });
-  fetchOpenAIModels();
+// --- Image Import & Grid Interaction ---
+function handleGridDragEnter(e) {
+  if (
+    e.relatedTarget &&
+    gridContainer.value &&
+    gridContainer.value.contains(e.relatedTarget)
+  )
+    return;
+  if (!e.dataTransfer) return;
+  const hasSupported = dataTransferHasSupportedMedia(e.dataTransfer);
+  if (!hasSupported) return;
+  dragOverlayVisible.value = true;
+  dragOverlayMessage.value = "Drop files here to import";
+  e.preventDefault();
+  console.debug("Overlay shown");
 }
 
-// Patch and refresh models when host/port change (on blur or enter)
-function onHostBlurOrEnter(e) {
-  patchHostAndRefresh(config.openai_host, "openai_host");
-}
-function onPortBlurOrEnter(e) {
-  patchHostAndRefresh(config.openai_port, "openai_port");
+function handleGridDragOver(e) {
+  if (dataTransferHasSupportedMedia(e.dataTransfer)) {
+    if (!dragOverlayVisible.value) {
+      dragOverlayVisible.value = true;
+      dragOverlayMessage.value = "Drop files here to import";
+    }
+    e.preventDefault();
+  }
 }
 
-// Still patch on change for persistence
-watch(
-  () => config.openai_host,
-  (val) => {
-    patchConfigUIOptions({ openai_host: val });
+function handleGridDragLeave(e) {
+  if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+    dragOverlayVisible.value = false;
+  } else {
+    console.debug("Drag still inside grid, overlay remains");
   }
-);
-watch(
-  () => config.openai_port,
-  (val) => {
-    patchConfigUIOptions({ openai_port: val });
-  }
-);
-watch(
-  () => config.openai_model,
-  (val) => {
-    patchConfigUIOptions({ openai_model: val });
-  }
-);
+}
 
-watch([selectedCharacter, selectedReferenceMode], async ([id, refMode]) => {
+function handleGridDrop(e) {
+  dragOverlayVisible.value = false;
+  if (dragSource.value === "grid") {
+    dragSource.value = null;
+    return;
+  }
+  if (!e.dataTransfer || !e.dataTransfer.files) return;
+  const files = Array.from(e.dataTransfer.files).filter(isSupportedMediaFile);
+  console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
+  console.debug("[IMPORT] Supported files after filter:", files);
+  if (!files.length) {
+    alert("No supported image files found.");
+    return;
+  }
+  dragSource.value = null;
+  if (
+    !imageImporterRef.value ||
+    typeof imageImporterRef.value.startImport !== "function"
+  ) {
+    console.warn("ImageImporter component is not ready to handle imports.");
+    return;
+  }
+  imageImporterRef.value.startImport(files, {
+    selectedCharacterId: selectedCharacter.value,
+  });
+}
+
+function handleImportFinished() {
   refreshImages();
-});
+  fetchSidebarCounts();
+}
+
+function handleGridBackgroundClick(e) {
+  if (!e.target.closest(".thumbnail-card")) {
+    selectedImageIds.value = [];
+    lastSelectedIndex = null;
+  }
+}
+
+function onGridScroll(e) {
+  const el = e.target;
+  if (!hasMoreImages.value || imagesLoading.value) return;
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+    pageOffset.value += pageSize.value;
+    refreshImages(true);
+  }
+}
+
+// --- Overlay & Tag Editing ---
+function openOverlay(img) {
+  overlayImage.value = img;
+  overlayOpen.value = true;
+}
+
+function closeOverlay() {
+  overlayOpen.value = false;
+}
+
+// --- Chat Overlay ---
+function openChatOverlay() {
+  chatOpen.value = true;
+  nextTick(() => {
+    if (chatWindowRef.value) chatWindowRef.value.focusInput();
+  });
+}
+
+function closeChatOverlay() {
+  chatOpen.value = false;
+}
+
+// --- Search ---
+async function searchImages(query) {
+  const q = (typeof query === "string" ? query : searchQuery.value).trim();
+  if (!q) return;
+  searchQuery.value = q;
+  previousSort.value = selectedSort.value;
+  const likenessSort = sortOptions.value.find(
+    (opt) =>
+      (opt.value && opt.value.toLowerCase().includes("search")) ||
+      (opt.label && opt.label.toLowerCase().includes("search"))
+  );
+  if (likenessSort) {
+    selectedSort.value = likenessSort.value;
+  }
+  imagesLoading.value = true;
+  imagesError.value = null;
+  try {
+    const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
+      q
+    )}&threshold=0.5&top_n=1000`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Search failed");
+    const baseImages = await res.json();
+    images.value = baseImages.map((img) => ({
+      ...img,
+      score: typeof img.score !== "undefined" ? img.score : null,
+    }));
+    setTimeout(updateColumns, 0);
+  } catch (e) {
+    imagesError.value = e.message;
+  } finally {
+    imagesLoading.value = false;
+  }
+}
+
+// --- Selection & Keyboard Handling ---
+function handleImageSelect(img, idx, event) {
+  const sorted = pagedImages.value;
+  const id = img.id;
+  const isSelected = selectedImageIds.value.includes(id);
+  const isCtrl = event.ctrlKey || event.metaKey;
+  const isShift = event.shiftKey;
+  if (isShift) {
+    if (lastSelectedIndex !== null) {
+      const start = Math.min(lastSelectedIndex, idx);
+      const end = Math.max(lastSelectedIndex, idx);
+      const rangeIds = sorted.slice(start, end + 1).map((i) => i.id);
+      const newSelection = isCtrl
+        ? Array.from(new Set([...selectedImageIds.value, ...rangeIds]))
+        : rangeIds;
+      selectedImageIds.value = newSelection;
+    } else {
+      selectedImageIds.value = [id];
+    }
+    lastSelectedIndex = idx;
+  } else if (isCtrl) {
+    if (isSelected) {
+      selectedImageIds.value = selectedImageIds.value.filter((i) => i !== id);
+    } else {
+      selectedImageIds.value = [...selectedImageIds.value, id];
+    }
+    lastSelectedIndex = idx;
+  } else {
+    selectedImageIds.value = [id];
+    lastSelectedIndex = idx;
+  }
+}
+
+async function selectAllInCurrentView() {
+  try {
+    const id = selectedCharacter.value;
+    if (searchQuery.value && searchQuery.value.trim()) {
+      const q = searchQuery.value.trim();
+      const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
+        q
+      )}&threshold=0.5&top_n=10000`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch search results");
+      const results = await res.json();
+      selectedImageIds.value = results.map((img) => img.id);
+      return;
+    }
+    let url;
+    const params = new URLSearchParams();
+    params.set("sort", selectedSort.value || "date_desc");
+    if (id === ALL_PICTURES_ID) {
+      url = `${BACKEND_URL}/picture_ids?${params.toString()}`;
+    } else if (id === UNASSIGNED_PICTURES_ID) {
+      url = `${BACKEND_URL}/picture_ids?primary_character_id=&${params.toString()}`;
+    } else {
+      url = `${BACKEND_URL}/picture_ids?primary_character_id=${encodeURIComponent(
+        id
+      )}&${params.toString()}`;
+    }
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch picture IDs");
+    const ids = await res.json();
+    selectedImageIds.value = ids;
+  } catch (e) {
+    console.error("Failed to select all images:", e);
+    alert("Failed to select all images: " + (e.message || e));
+  }
+}
 
 function handleOverlayKeydown(e) {
-  // Don't trigger most shortcuts if focus is in a text field, but allow Escape for chat overlay
   const tag =
     e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
   const isEditable =
     e.target &&
     (e.target.isContentEditable || tag === "input" || tag === "textarea");
   if (isEditable && !(chatOpen.value && e.key === "Escape")) return;
-  // Ctrl+A: select all images in grid
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
-    if (images.value.length) {
-      selectedImageIds.value = images.value.map((img) => img.id);
-      e.preventDefault();
-    }
+    e.preventDefault();
+    selectAllInCurrentView();
     return;
-  }
-  // R: toggle reference for overlay image or selection
-  if (e.key.toLowerCase() === "r" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    if (overlayOpen.value && overlayImage.value) {
-      toggleReference(overlayImage.value);
-      e.preventDefault();
-      return;
-    } else if (selectedImageIds.value.length) {
-      // Use the last selected image as the reference for toggle value
-      const lastImg = images.value.find(
-        (i) =>
-          i.id === selectedImageIds.value[selectedImageIds.value.length - 1]
-      );
-      if (lastImg) {
-        toggleReference(lastImg);
-        e.preventDefault();
-        return;
-      }
-    }
-    // Do nothing if nothing is selected and overlay is not open
   }
   if (overlayOpen.value) {
     if (e.key === "ArrowLeft") {
@@ -1276,7 +846,11 @@ function handleOverlayKeydown(e) {
     e.preventDefault();
     return;
   }
-  // Grid navigation and selection
+  if (e.key === "Escape" && selectedImageIds.value.length) {
+    selectedImageIds.value = [];
+    e.preventDefault();
+    return;
+  }
   if (!images.value.length) return;
   const cols = columns.value;
   let idx = lastSelectedIndex;
@@ -1302,7 +876,6 @@ function handleOverlayKeydown(e) {
       return;
     }
   }
-  // Score shortcuts 1-5 (overlay: set score for overlayImage, grid: set for selection)
   if (/^[1-5]$/.test(e.key)) {
     showStars.value = true;
     if (overlayOpen.value && overlayImage.value) {
@@ -1316,17 +889,6 @@ function handleOverlayKeydown(e) {
   return;
 }
 
-onMounted(() => {
-  fetchCharacters();
-  window.addEventListener("resize", updateColumns);
-  watch(thumbnailSize, updateColumns);
-  setTimeout(updateColumns, 100); // Initial update after mount
-  window.addEventListener("keydown", handleOverlayKeydown);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener("keydown", handleOverlayKeydown);
-});
 function showPrevImage() {
   const sorted = pagedImages.value;
   if (!overlayImage.value || !sorted.length) return;
@@ -1345,7 +907,7 @@ function showNextImage() {
   overlayImage.value = sorted[nextIdx];
 }
 
-// Delete functionality
+// --- Image Mutations ---
 async function deleteSelectedImages() {
   if (!selectedImageIds.value.length) return;
   const confirmed = confirm(
@@ -1362,7 +924,6 @@ async function deleteSelectedImages() {
       alert(e.message);
     }
   }
-  // Remove deleted images from UI
   images.value = images.value.filter(
     (img) => !selectedImageIds.value.includes(img.id)
   );
@@ -1370,7 +931,6 @@ async function deleteSelectedImages() {
   fetchSidebarCounts();
 }
 
-// Patch score for selected images
 async function patchScoreForSelection(score) {
   if (!selectedImageIds.value.length) return;
   for (const id of selectedImageIds.value) {
@@ -1379,7 +939,6 @@ async function patchScoreForSelection(score) {
         method: "PATCH",
       });
       if (!res.ok) throw new Error(`Failed to set score for image ${id}`);
-      // Update local image score
       const result = await res.json();
       const img = images.value.find((i) => i.id === id);
       if (img) img.score = score;
@@ -1389,7 +948,6 @@ async function patchScoreForSelection(score) {
   }
 }
 
-// Set score for a single image (click on star)
 async function setImageScore(img, n) {
   const newScore = (img.score || 0) === n ? 0 : n;
   try {
@@ -1402,12 +960,10 @@ async function setImageScore(img, n) {
       selectedSort.value === "score_desc" ||
       selectedSort.value === "score_asc"
     ) {
-      // Remove image from current position
       const idx = images.value.findIndex((i) => i.id === img.id);
       if (idx === -1) return;
       img.score = newScore;
       images.value.splice(idx, 1);
-      // Find new index based on sort order
       let insertIdx = 0;
       if (selectedSort.value === "score_desc") {
         insertIdx = images.value.findIndex((i) => (i.score || 0) < newScore);
@@ -1417,7 +973,6 @@ async function setImageScore(img, n) {
         if (insertIdx === -1) insertIdx = images.value.length;
       }
       images.value.splice(insertIdx, 0, img);
-      // Scroll to new position
       nextTick(() => {
         const grid = gridContainer.value;
         if (!grid) return;
@@ -1427,7 +982,6 @@ async function setImageScore(img, n) {
         }
       });
     } else {
-      // Not sorting by score, just update the score in place
       img.score = newScore;
     }
   } catch (e) {
@@ -1435,11 +989,34 @@ async function setImageScore(img, n) {
   }
 }
 
-// Drag and drop logic for assigning images to characters
-const dragOverCharacter = ref(null);
+// --- Character Assignment ---
+function handleSelectCharacter(id) {
+  selectedCharacter.value = id;
+}
+
+function handleDragOverCharacter(id) {
+  dragOverCharacter.value = id;
+}
+
+function handleDragLeaveCharacter() {
+  dragOverCharacter.value = null;
+}
+
+function handleDropOnCharacter(payload) {
+  if (!payload || !payload.characterId) return;
+  onCharacterDrop(payload.characterId, payload.event);
+}
+
+function handleUpdateSearchQuery(value) {
+  searchQuery.value = value;
+}
+
+function handleUpdateSelectedSort(value) {
+  selectedSort.value = value;
+}
+
 function onImageDragStart(img, idx, event) {
-  // Only allow dragging if this image is selected
-  let ids =
+  const ids =
     selectedImageIds.value.length && isImageSelected(img.id)
       ? selectedImageIds.value
       : [img.id];
@@ -1450,25 +1027,15 @@ function onImageDragStart(img, idx, event) {
   event.dataTransfer.effectAllowed = "move";
   dragSource.value = "grid";
 }
-function onCharacterDragOver(charId) {
-  dragOverCharacter.value = charId;
-}
-function onCharacterDragLeave(charId) {
-  if (dragOverCharacter.value === charId) dragOverCharacter.value = null;
-}
 
-// Handle drop on character in sidebar to set character_id for selected images
 async function onCharacterDrop(characterId, event) {
-  dragOverCharacter.value = null;
   let imageIds = [];
-  // Always use drag event data for image IDs
   try {
     const data = JSON.parse(event.dataTransfer.getData("application/json"));
     if (data.imageIds && Array.isArray(data.imageIds)) {
       imageIds = data.imageIds;
     }
   } catch (e) {
-    // If drag data is missing or malformed, abort
     alert("Could not determine which images to assign. Please try again.");
     return;
   }
@@ -1476,7 +1043,6 @@ async function onCharacterDrop(characterId, event) {
     alert("No images found in drag data.");
     return;
   }
-  // Log drop target and character id
   const charObj = characters.value.find((c) => c.id === characterId);
   console.log(
     "[DROP] Drop target characterId:",
@@ -1484,17 +1050,15 @@ async function onCharacterDrop(characterId, event) {
     "name:",
     charObj ? charObj.name : "(not found)"
   );
-  // Always use the characterId from the drop target
   assignImagesToCharacter(imageIds, characterId);
 }
 
-// Assign images to a character by PATCHing their character_id
 async function assignImagesToCharacter(imageIds, characterId) {
   try {
     await Promise.all(
       imageIds.map(async (id) => {
         const res = await fetch(
-          `${BACKEND_URL}/pictures/${id}?character_id=${encodeURIComponent(
+          `${BACKEND_URL}/pictures/${id}?primary_character_id=${encodeURIComponent(
             characterId
           )}`,
           { method: "PATCH" }
@@ -1505,28 +1069,25 @@ async function assignImagesToCharacter(imageIds, characterId) {
     );
     await fetchCharacters();
     fetchSidebarCounts();
-    // Remove reassigned images from the current grid if not viewing All Pictures or Unassigned
     if (
       selectedCharacter.value !== ALL_PICTURES_ID &&
       selectedCharacter.value !== UNASSIGNED_PICTURES_ID &&
       selectedCharacter.value !== characterId
     ) {
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
-      // Also remove these IDs from selection
       selectedImageIds.value = selectedImageIds.value.filter((id) =>
         images.value.some((img) => img.id === id)
       );
       lastSelectedIndex = null;
     } else {
-      // For All Pictures or Unassigned, refresh the grid as before
       const id = selectedCharacter.value;
       let url;
       if (id === ALL_PICTURES_ID) {
         url = `${BACKEND_URL}/pictures?info=true`;
       } else if (id === UNASSIGNED_PICTURES_ID) {
-        url = `${BACKEND_URL}/pictures?character_id=&info=true`;
+        url = `${BACKEND_URL}/pictures?primary_character_id=&info=true`;
       } else {
-        url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
+        url = `${BACKEND_URL}/pictures?primary_character_id=${encodeURIComponent(
           id
         )}&info=true`;
       }
@@ -1536,10 +1097,8 @@ async function assignImagesToCharacter(imageIds, characterId) {
         images.value = baseImages.map((img) => ({
           ...img,
           score: typeof img.score !== "undefined" ? img.score : null,
-          is_reference: Number(img.is_reference) || 0,
           _thumbLoaded: false,
         }));
-        // Remove any selected IDs not in the new images
         const newIds = new Set(images.value.map((img) => img.id));
         selectedImageIds.value = selectedImageIds.value.filter((id) =>
           newIds.has(id)
@@ -1553,76 +1112,9 @@ async function assignImagesToCharacter(imageIds, characterId) {
   }
 }
 
-// Assign images as reference images for a character (set is_reference=true and character_id)
-async function assignImagesAsReference(imageIds, characterId) {
-  try {
-    await Promise.all(
-      imageIds.map(async (id) => {
-        // Fetch image to check if it already has the character
-        let needsChar = true;
-        try {
-          const res = await fetch(`${BACKEND_URL}/pictures/${id}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.character_id === characterId) needsChar = false;
-          }
-        } catch (e) {}
-        // Always set is_reference=true, and set character_id if needed
-        let url = `${BACKEND_URL}/pictures/${id}?is_reference=1`;
-        if (needsChar)
-          url += `&character_id=${encodeURIComponent(characterId)}`;
-        const res2 = await fetch(url, { method: "PATCH" });
-        if (!res2.ok)
-          throw new Error(`Failed to set reference for image ${id}`);
-      })
-    );
-    await fetchCharacters();
-    fetchSidebarCounts();
-    // Refresh images if needed
-    if (
-      selectedCharacter.value === characterId ||
-      selectedCharacter.value === ALL_PICTURES_ID ||
-      selectedCharacter.value === UNASSIGNED_PICTURES_ID
-    ) {
-      const id = selectedCharacter.value;
-      let url;
-      if (id === ALL_PICTURES_ID) {
-        url = `${BACKEND_URL}/pictures?info=true`;
-      } else if (id === UNASSIGNED_PICTURES_ID) {
-        url = `${BACKEND_URL}/pictures?character_id=&info=true`;
-      } else {
-        url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
-          id
-        )}&info=true`;
-      }
-      const res = await fetch(url);
-      if (res.ok) {
-        const baseImages = await res.json();
-        images.value = baseImages.map((img) => ({
-          ...img,
-          score: typeof img.score !== "undefined" ? img.score : null,
-          is_reference: Number(img.is_reference) || 0,
-          _thumbLoaded: false,
-        }));
-        // Remove any selected IDs not in the new images
-        const newIds = new Set(images.value.map((img) => img.id));
-        selectedImageIds.value = selectedImageIds.value.filter((id) =>
-          newIds.has(id)
-        );
-        lastSelectedIndex = null;
-        setTimeout(updateColumns, 0);
-      }
-    }
-  } catch (e) {
-    alert("Failed to set reference: " + (e.message || e));
-  }
-}
-
-// Add a ref to track the next character number
-const nextCharacterNumber = ref(1);
-
+// --- Character Management ---
 function addNewCharacter() {
-  // Find the next available number
+  // Open character editor with empty character to create new one
   let num = nextCharacterNumber.value;
   let name;
   const existingNames = new Set(characters.value.map((c) => c.name));
@@ -1631,40 +1123,21 @@ function addNewCharacter() {
     num++;
   } while (existingNames.has(name));
   nextCharacterNumber.value = num;
-  // POST to backend
-  fetch(`${BACKEND_URL}/characters`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, description: "" }),
-  })
-    .then(async (res) => {
-      if (!res.ok) throw new Error("Failed to create character");
-      const data = await res.json();
-      if (data && data.character && data.character.id) {
-        // Add to local list
-        characters.value.push(data.character);
-        // Optionally, start editing the new character name
-        editingCharacterId.value = data.character.id;
-        editingCharacterName.value = data.character.name;
-        nextTick(() => {
-          const input = document.querySelector(".edit-character-input");
-          if (input) {
-            input.focus();
-            input.select();
-          }
-        });
-        // Optionally, fetch thumbnail
-        fetchCharacterThumbnail(data.character.id);
-      }
-    })
-    .catch((e) => {
-      alert("Failed to create character: " + (e.message || e));
-    });
+
+  // Open editor with default values
+  openCharacterEditor({
+    id: null,
+    name: name,
+    description: "",
+    original_prompt: "",
+    original_seed: null,
+    loras: [],
+  });
 }
 
-// Inline edit state for character names
-const editingCharacterId = ref(null);
-const editingCharacterName = ref("");
+function updateEditingCharacterName(value) {
+  editingCharacterName.value = typeof value === "string" ? value : "";
+}
 
 function startEditingCharacter(char) {
   editingCharacterId.value = char.id;
@@ -1681,7 +1154,6 @@ function startEditingCharacter(char) {
 function saveEditingCharacter(char) {
   const newName = editingCharacterName.value.trim();
   if (newName && newName !== char.name) {
-    // PATCH backend
     fetch(`${BACKEND_URL}/characters/${char.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1701,12 +1173,63 @@ function saveEditingCharacter(char) {
   editingCharacterId.value = null;
   editingCharacterName.value = "";
 }
+
 function cancelEditingCharacter() {
   editingCharacterId.value = null;
   editingCharacterName.value = "";
 }
 
-// Confirm and delete character
+// --- Character Editor Dialog Functions ---
+function openCharacterEditor(char = null) {
+  characterEditorCharacter.value = char;
+  characterEditorOpen.value = true;
+}
+
+function closeCharacterEditor() {
+  characterEditorOpen.value = false;
+  characterEditorCharacter.value = null;
+}
+
+async function saveCharacterFromEditor(charData) {
+  try {
+    const isNew = !charData.id;
+    const method = isNew ? "POST" : "PATCH";
+    const url = isNew
+      ? `${BACKEND_URL}/characters`
+      : `${BACKEND_URL}/characters/${charData.id}`;
+
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(charData),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(errorText || "Failed to save character");
+    }
+
+    const data = await res.json();
+
+    if (isNew && data.character) {
+      // New character - add to list
+      await fetchCharacters();
+      selectedCharacter.value = data.character.id;
+    } else if (data.character) {
+      // Updated character - refresh the character in the list
+      const idx = characters.value.findIndex((c) => c.id === data.character.id);
+      if (idx !== -1) {
+        characters.value[idx] = data.character;
+      }
+      await fetchCharacters();
+    }
+
+    closeCharacterEditor();
+  } catch (e) {
+    alert("Failed to save character: " + (e.message || e));
+  }
+}
+
 function confirmDeleteCharacter() {
   const char = characters.value.find((c) => c.id === selectedCharacter.value);
   if (!char) return;
@@ -1718,12 +1241,8 @@ function confirmDeleteCharacter() {
     fetch(`${BACKEND_URL}/characters/${char.id}`, { method: "DELETE" })
       .then(async (res) => {
         if (!res.ok) throw new Error("Failed to delete character");
-        // Remove from local list
         characters.value = characters.value.filter((c) => c.id !== char.id);
-        // Reset selection
         selectedCharacter.value = ALL_PICTURES_ID;
-        selectedReferenceMode.value = false;
-        // Optionally, refresh images
         images.value = [];
         await fetchCharacters();
       })
@@ -1733,2281 +1252,86 @@ function confirmDeleteCharacter() {
   }
 }
 
-// Chat state
-// Add optional pictureUrl to assistant messages
-const chatMessages = ref([]); // {role: 'user'|'assistant', content: string, pictureUrl?: string}
-const chatInput = ref("");
-const chatLoading = ref(false);
-const chatMessagesContainer = ref(null);
-const chatInputField = ref(null);
-
-function renderMarkdown(text) {
-  return marked.parse(text || "");
-}
-
-// Computed: Get the selected character object (if any)
-const selectedCharacterObj = computed(() => {
-  if (
-    selectedCharacter.value &&
-    selectedCharacter.value !== ALL_PICTURES_ID &&
-    selectedCharacter.value !== UNASSIGNED_PICTURES_ID
-  ) {
-    const char =
-      characters.value.find((c) => c.id === selectedCharacter.value) || null;
-    if (char && typeof char.name === "string" && char.name.length > 0) {
-      // Capitalize first letter only
-      return {
-        ...char,
-        name: char.name.charAt(0).toUpperCase() + char.name.slice(1),
-      };
-    }
-    return char;
-  }
-  return null;
+const {
+  removeTagFromOverlayImage,
+  addTagToOverlay,
+  handleOverlaySetScore,
+} = useOverlayActions({
+  overlayImage,
+  backendUrl: BACKEND_URL,
+  setImageScore,
 });
 
-async function sendChatMessageAndFocus() {
-  const input = chatInput.value.trim();
-  if (!input || chatLoading.value) return;
-
-  let system_message =
-    "You should always respond as the character you are playing. Stay in character and don't break it. Let me speak for myself. Do not repeat yourself.";
-
-  if (chatMessages.value.length === 0) {
-    // First message, set character context
-    if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
-      system_message += ` You are now assuming the role of the character named '${selectedCharacterObj.value.name}'.`;
-      if (
-        selectedCharacterObj.value.description &&
-        selectedCharacterObj.value.description.trim().length > 0
-      ) {
-        system_message += ` Here is some information about you: ${selectedCharacterObj.value.description.trim()}`;
-      }
-    } else {
-      system_message +=
-        " You are now assuming the role of a generic character without a specific name or background.";
-    }
-    chatMessages.value.push(
-      { role: "user", content: input },
-      { role: "system", content: system_message }
-    );
-  } else {
-    chatMessages.value.push({ role: "user", content: input });
+// --- Watchers ---
+watch([selectedSort, selectedCharacter], () => {
+  if (searchQuery.value && searchQuery.value.trim()) {
+    return;
   }
-  chatInput.value = "";
-  chatLoading.value = true;
-  await nextTick();
-  scrollChatToBottom();
-  try {
-    const url = `http://${config.openai_host}:${config.openai_port}/v1/chat/completions`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: config.openai_model || "gpt-3.5-turbo",
-        messages: chatMessages.value.map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
-        stream: false,
-      }),
-    });
-    if (!res.ok) throw new Error("OpenAI server error");
-    const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content || "(No response)";
-    // Add the AI response first
-    chatMessages.value.push({ role: "assistant", content: reply });
-    await nextTick();
-    scrollChatToBottom();
+  pageOffset.value = 0;
+  hasMoreImages.value = true;
+  lastSelectedIndex = null;
+  refreshImages();
+});
 
-    // After AI responds, trigger /search with character name + last user input + last AI response
-    let lastUser = null;
-    for (let i = chatMessages.value.length - 2; i >= 0; i--) {
-      if (chatMessages.value[i].role === "user") {
-        lastUser = chatMessages.value[i].content;
-        break;
-      }
+watch(searchQuery, (newVal, oldVal) => {
+  if (!newVal && oldVal) {
+    if (previousSort.value && previousSort.value !== selectedSort.value) {
+      selectedSort.value = previousSort.value;
     }
-    let searchQuery = extractKeywords(reply);
-    if (lastUser) {
-      searchQuery = lastUser + " " + searchQuery;
-    }
-    if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
-      searchQuery = selectedCharacterObj.value.name + " " + searchQuery;
-    }
-    try {
-      const searchRes = await fetch(
-        `${BACKEND_URL}/search?query=${encodeURIComponent(searchQuery)}`
-      );
-      if (searchRes.ok) {
-        const searchData = await searchRes.json();
-        if (searchData && Array.isArray(searchData) && searchData.length > 0) {
-          // Weighted random selection by likeness_score
-          const totalScore = searchData.reduce(
-            (sum, pic) => sum + (pic.likeness_score || 0),
-            0
-          );
-          let r = Math.random() * totalScore;
-          let chosen = searchData[0];
-          for (const pic of searchData) {
-            r -= pic.likeness_score || 0;
-            if (r <= 0) {
-              chosen = pic;
-              break;
-            }
-          }
-          // Compose the image URL (assuming /pictures/:id)
-          const imageUrl = `${BACKEND_URL}/pictures/${chosen.id}`;
-          // Add the picture URL to the last assistant message
-          const lastMsg = chatMessages.value
-            .slice()
-            .reverse()
-            .find((m) => m.role === "assistant" && !m.pictureUrl);
-          if (lastMsg) {
-            lastMsg.pictureUrl = imageUrl;
-          }
-        }
-      }
-    } catch (e) {
-      // Ignore search errors
-    }
-  } catch (e) {
-    chatMessages.value.push({
-      role: "assistant",
-      content: "Error: " + (e.message || e),
-    });
-  } finally {
-    chatLoading.value = false;
-    await nextTick();
-    if (chatInputField.value) {
-      chatInputField.value.focus();
-    }
+    refreshImages();
   }
-}
+});
+
+watch(settingsDialog, (val) => {
+  if (val) fetchConfig();
+});
+
+watch(selectedSort, (val) => {
+  patchConfigUIOptions({ sort: val });
+});
+
+watch(thumbnailSize, (val) => {
+  patchConfigUIOptions({ thumbnail: val });
+  updateColumns();
+});
+
+watch(showStars, (val) => {
+  patchConfigUIOptions({ show_stars: val });
+});
+
+watch(
+  () => config.openai_host,
+  (val) => {
+    patchConfigUIOptions({ openai_host: val });
+  }
+);
+watch(
+  () => config.openai_port,
+  (val) => {
+    patchConfigUIOptions({ openai_port: val });
+  }
+);
+watch(
+  () => config.openai_model,
+  (val) => {
+    patchConfigUIOptions({ openai_model: val });
+  }
+);
+
+// --- Lifecycle ---
+onMounted(() => {
+  fetchConfig();
+  fetchSortOptions();
+  fetchCharacters();
+  window.addEventListener("resize", updateColumns);
+  window.addEventListener("keydown", handleOverlayKeydown);
+  setTimeout(updateColumns, 100);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleOverlayKeydown);
+  window.removeEventListener("resize", updateColumns);
+});
 </script>
-
-<template>
-  <v-app>
-    <!-- Import Progress Modal (fixed, outside app-viewport) -->
-    <div v-if="importInProgress" class="import-progress-modal">
-      <div class="import-progress-content">
-        <div class="import-progress-title">{{ importPhaseMessage }}</div>
-        <div class="import-progress-bar-bg">
-          <div
-            class="import-progress-bar"
-            :style="{
-              width:
-                (importTotal ? importProgress / importTotal : 0) * 100 + '%',
-            }"
-          ></div>
-        </div>
-        <div class="import-progress-label">
-          <template v-if="importPhase === 'hashing'">
-            Hashing {{ importProgress }} / {{ importTotal }}
-          </template>
-          <template v-else-if="importPhase === 'checking'">
-            Checking for duplicates...
-          </template>
-          <template v-else-if="importPhase === 'uploading'">
-            Uploading {{ importProgress }} / {{ importTotal }}
-          </template>
-          <template v-else-if="importPhase === 'done'">
-            Import complete!
-          </template>
-          <template v-else-if="importPhase === 'duplicates'">
-            All files are duplicates.
-          </template>
-          <template v-else-if="importPhase === 'cancelled'">
-            Import cancelled.
-          </template>
-          <template v-else-if="importPhase === 'error'">
-            Import failed.
-          </template>
-          <span v-if="importError" class="import-progress-error">{{
-            importError
-          }}</span>
-        </div>
-        <button
-          class="cancel-button"
-          @click="handleCancelImport"
-          v-if="
-            importPhase !== 'done' &&
-            importPhase !== 'duplicates' &&
-            importPhase !== 'cancelled' &&
-            importPhase !== 'error'
-          "
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-    <div class="app-viewport">
-      <div class="top-toolbar">
-        <v-btn
-          icon
-          @click="sidebarVisible = !sidebarVisible"
-          title="Toggle sidebar"
-          class="sidebar-toggle-btn"
-          style="margin-right: 16px"
-        >
-          <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
-        </v-btn>
-        <div class="toolbar-actions">
-          <v-icon style="display: flex; align-items: center; height: 100%"
-            >mdi-image-size-select-small</v-icon
-          >
-          <v-slider
-            v-model="thumbnailSize"
-            :min="128"
-            :max="256"
-            :step="32"
-            class="slider"
-            hide-details
-            style="
-              min-width: 100px;
-              vertical-align: middle;
-              margin-top: 4px;
-              margin-bottom: 4px;
-              margin-left: 8px;
-              margin-right: 16px;
-            "
-          />
-          <v-icon
-            style="
-              display: flex;
-              align-items: center;
-              height: 100%;
-              margin-right: 16px;
-            "
-            >mdi-image-size-select-large</v-icon
-          >
-          <v-btn
-            icon
-            :color="referenceFilterMode ? 'orange darken-2' : 'grey'"
-            @click="referenceFilterMode = !referenceFilterMode"
-            title="Show only reference images"
-            style="margin-right: 2px"
-          >
-            <v-icon>{{
-              referenceFilterMode ? "mdi-trophy" : "mdi-trophy-outline"
-            }}</v-icon>
-          </v-btn>
-          <v-btn
-            icon
-            :color="showStars ? 'orange' : 'grey'"
-            @click="showStars = !showStars"
-            title="Toggle star ratings"
-            style="margin-left: 2px; margin-right: 2px"
-          >
-            <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
-          </v-btn>
-          <v-btn
-            icon
-            color="red darken-2"
-            :disabled="!selectedImageIds.length"
-            @click="deleteSelectedImages"
-            title="Delete selected images"
-            style="margin-left: 2px; margin-right: 2px"
-          >
-            <v-icon>mdi-trash-can-outline</v-icon>
-          </v-btn>
-          <!-- Settings Dialog -->
-          <v-dialog v-model="settingsDialog" max-width="50vw">
-            <v-card class="settings-dialog-card">
-              <div class="settings-dialog-titlebar">
-                <div class="settings-dialog-title">Settings</div>
-                <button
-                  class="settings-dialog-close"
-                  @click="settingsDialog = false"
-                  aria-label="Close"
-                >
-                  &times;
-                </button>
-              </div>
-              <v-card-text>
-                <div class="settings-section">
-                  <strong>Image Roots</strong>
-                  <ul class="settings-image-roots">
-                    <li
-                      v-for="root in config.image_roots"
-                      :key="root"
-                      @click="selectImageRoot(root)"
-                      :class="[
-                        'settings-image-root',
-                        { selected: root === config.selected_image_root },
-                      ]"
-                      style="
-                        cursor: pointer;
-                        user-select: none;
-                        display: flex;
-                        align-items: center;
-                        padding: 8px 0 8px 8px;
-                        border-radius: 8px;
-                        margin-bottom: 2px;
-                      "
-                    >
-                      <span style="flex: 1">{{ root }}</span>
-                      <span
-                        v-if="root === config.selected_image_root"
-                        style="
-                          color: #1976d2;
-                          font-weight: bold;
-                          margin-left: 8px;
-                        "
-                        >(selected)</span
-                      >
-                      <button
-                        v-if="config.image_roots.length > 1"
-                        @click.stop="removeImageRoot(root)"
-                        title="Remove root"
-                        style="
-                          margin-left: 8px;
-                          background: none;
-                          border: none;
-                          color: #888;
-                          font-size: 1.2em;
-                          cursor: pointer;
-                        "
-                      >
-                        &times;
-                      </button>
-                    </li>
-                  </ul>
-                  <div style="display: flex; margin-top: 12px; gap: 8px">
-                    <input
-                      v-model="newImageRoot"
-                      @keydown.enter="addImageRoot"
-                      placeholder="Add new root"
-                      style="
-                        flex: 1;
-                        padding: 6px 10px;
-                        border-radius: 8px;
-                        border: 1px solid #bbb;
-                        font-size: 1em;
-                      "
-                    />
-                    <button
-                      @click="addImageRoot"
-                      :disabled="!newImageRoot.trim()"
-                      style="
-                        padding: 6px 16px;
-                        border-radius: 8px;
-                        background: #1976d2;
-                        color: #fff;
-                        border: none;
-                        font-weight: 600;
-                        cursor: pointer;
-                      "
-                    >
-                      Add
-                    </button>
-                  </div>
-                </div>
-                <div class="settings-section" style="margin-top: 32px">
-                  <strong>OpenAI Chat Service</strong>
-                  <div
-                    style="
-                      display: flex;
-                      gap: 12px;
-                      align-items: center;
-                      margin-top: 8px;
-                    "
-                  >
-                    <label style="min-width: 60px">Host:</label>
-                    <input
-                      v-model="config.openai_host"
-                      style="
-                        flex: 1;
-                        padding: 6px 10px;
-                        border-radius: 8px;
-                        border: 1px solid #bbb;
-                        font-size: 1em;
-                      "
-                      @change="patchConfigUIOptions()"
-                    />
-                    <label style="min-width: 50px; margin-left: 12px"
-                      >Port:</label
-                    >
-                    <input
-                      v-model.number="config.openai_port"
-                      type="number"
-                      min="1"
-                      max="65535"
-                      style="
-                        width: 90px;
-                        padding: 6px 10px;
-                        border-radius: 8px;
-                        border: 1px solid #bbb;
-                        font-size: 1em;
-                      "
-                      @change="patchConfigUIOptions()"
-                    />
-                  </div>
-                  <div
-                    style="
-                      display: flex;
-                      gap: 12px;
-                      align-items: center;
-                      margin-top: 12px;
-                    "
-                  >
-                    <label style="min-width: 60px">Model:</label>
-                    <select
-                      v-model="config.openai_model"
-                      style="
-                        flex: 1;
-                        padding: 6px 10px;
-                        border-radius: 8px;
-                        border: 1px solid #bbb;
-                        font-size: 1em;
-                      "
-                      @change="patchConfigUIOptions()"
-                    >
-                      <option v-if="openaiModelLoading" disabled>
-                        Loading models...
-                      </option>
-                      <option v-for="m in openaiModels" :key="m" :value="m">
-                        {{ m }}
-                      </option>
-                      <option
-                        v-if="
-                          !openaiModelLoading &&
-                          !openaiModels.length &&
-                          !openaiModelFetchError
-                        "
-                        disabled
-                      >
-                        No models found
-                      </option>
-                      <option v-if="openaiModelFetchError" disabled>
-                        {{ openaiModelFetchError }}
-                      </option>
-                    </select>
-                    <button
-                      @click="fetchOpenAIModels"
-                      style="
-                        margin-left: 8px;
-                        padding: 6px 12px;
-                        border-radius: 8px;
-                        background: #1976d2;
-                        color: #fff;
-                        border: none;
-                        font-weight: 600;
-                        cursor: pointer;
-                      "
-                    >
-                      Refresh
-                    </button>
-                  </div>
-                  <div
-                    v-if="openaiModelFetchError"
-                    style="color: #c00; margin-top: 6px"
-                  >
-                    {{ openaiModelFetchError }}
-                  </div>
-                </div>
-              </v-card-text>
-            </v-card>
-          </v-dialog>
-        </div>
-      </div>
-      <div class="file-manager">
-        <aside v-if="sidebarVisible" class="sidebar">
-          <div
-            class="sidebar-section-header"
-            @click="sidebarSections.pictures = !sidebarSections.pictures"
-          >
-            <v-icon small style="margin-right: 8px">{{
-              sidebarSections.pictures
-                ? "mdi-chevron-down"
-                : "mdi-chevron-right"
-            }}</v-icon>
-            Pictures
-          </div>
-          <transition name="fade">
-            <div v-show="sidebarSections.pictures">
-              <div
-                :class="[
-                  'sidebar-list-item',
-                  { active: selectedCharacter === ALL_PICTURES_ID },
-                ]"
-                @click="selectedCharacter = ALL_PICTURES_ID"
-              >
-                <span class="sidebar-list-icon">
-                  <v-icon size="44">mdi-image-multiple</v-icon>
-                </span>
-                <span class="sidebar-list-label">All Pictures</span>
-                <span class="sidebar-list-count">{{
-                  categoryCounts[ALL_PICTURES_ID] ?? ""
-                }}</span>
-              </div>
-              <div
-                :class="[
-                  'sidebar-list-item',
-                  { active: selectedCharacter === UNASSIGNED_PICTURES_ID },
-                ]"
-                @click="selectedCharacter = UNASSIGNED_PICTURES_ID"
-              >
-                <span class="sidebar-list-icon">
-                  <v-icon size="44">mdi-help-circle-outline</v-icon>
-                </span>
-                <span class="sidebar-list-label">Unassigned Pictures</span>
-                <span class="sidebar-list-count">{{
-                  categoryCounts[UNASSIGNED_PICTURES_ID] ?? ""
-                }}</span>
-              </div>
-            </div>
-          </transition>
-          <div
-            class="sidebar-section-header"
-            @click="sidebarSections.people = !sidebarSections.people"
-          >
-            <v-icon small style="margin-right: 8px">{{
-              sidebarSections.people ? "mdi-chevron-down" : "mdi-chevron-right"
-            }}</v-icon>
-            People
-            <span style="flex: 1 1 auto"></span>
-            <span
-              style="
-                display: grid;
-                grid-template-columns: 32px 32px;
-                gap: 0px;
-                align-items: center;
-                min-width: 64px;
-              "
-            >
-              <v-icon
-                v-if="
-                  selectedCharacter &&
-                  selectedCharacter !== ALL_PICTURES_ID &&
-                  selectedCharacter !== UNASSIGNED_PICTURES_ID
-                "
-                class="delete-character-inline"
-                color="white"
-                style="cursor: pointer; justify-self: end"
-                @click.stop="confirmDeleteCharacter"
-                title="Delete selected character"
-                >mdi-trash-can-outline
-              </v-icon>
-              <v-icon
-                class="add-character-inline"
-                @click.stop="addNewCharacter"
-                title="Add character"
-                style="justify-self: end"
-                >mdi-plus</v-icon
-              >
-            </span>
-          </div>
-          <transition name="fade">
-            <div v-show="sidebarSections.people">
-              <div v-if="error" class="sidebar-error">{{ error }}</div>
-              <div
-                v-if="sortedCharacters.length === 0"
-                class="sidebar-character-group"
-              >
-                <div class="sidebar-list-item">
-                  No characters found. Click the + button to add one.
-                </div>
-              </div>
-              <div
-                v-if="sortedCharacters.length > 0"
-                v-for="char in sortedCharacters"
-                :key="char.id"
-                class="sidebar-character-group"
-              >
-                <div
-                  :class="[
-                    'sidebar-list-item',
-                    {
-                      active: selectedCharacter === char.id,
-                      droppable: dragOverCharacter === char.id,
-                    },
-                  ]"
-                  @click="selectedCharacter = char.id"
-                  @dragover.prevent="dragOverCharacter = char.id"
-                  @dragleave="dragOverCharacter = null"
-                  @drop.prevent="onCharacterDrop(char.id, $event)"
-                >
-                  <span class="sidebar-list-icon">
-                    <img
-                      :src="
-                        characterThumbnails[char.id]
-                          ? characterThumbnails[char.id]
-                          : unknownPerson
-                      "
-                      alt=""
-                      class="sidebar-character-thumb"
-                    />
-                  </span>
-                  <span class="sidebar-list-label">
-                    <template v-if="editingCharacterId === char.id">
-                      <input
-                        v-model="editingCharacterName"
-                        class="edit-character-input"
-                        @keydown.enter="saveEditingCharacter(char)"
-                        @keydown.esc="cancelEditingCharacter"
-                        @blur="saveEditingCharacter(char)"
-                        ref="editInput"
-                        style="
-                          width: 90%;
-                          font-size: 1em;
-                          background: #fff;
-                          color: #222;
-                          border-radius: 4px;
-                          border: 1px solid #bbb;
-                          padding: 2px 6px;
-                          outline: none;
-                        "
-                      />
-                    </template>
-                    <template v-else>
-                      <span @dblclick.stop="startEditingCharacter(char)">
-                        {{
-                          char.name.charAt(0).toUpperCase() + char.name.slice(1)
-                        }}
-                      </span>
-                    </template>
-                  </span>
-                  <span class="sidebar-list-count">{{
-                    categoryCounts[char.id] ?? ""
-                  }}</span>
-                </div>
-              </div>
-            </div>
-          </transition>
-
-          <div
-            class="sidebar-section-header"
-            @click="sidebarSections.search = !sidebarSections.search"
-          >
-            <v-icon small style="margin-right: 8px">{{
-              sidebarSections.search ? "mdi-chevron-down" : "mdi-chevron-right"
-            }}</v-icon>
-            Search & Sorting
-            <span style="flex: 1 1 auto"></span>
-          </div>
-          <transition name="fade">
-            <div class="search-and-sort" v-show="sidebarSections.search">
-              <div class="sidebar-searchbar-wrapper">
-                <SearchBar
-                  v-model="searchQuery"
-                  placeholder="Search images..."
-                  class="sidebar-searchbar"
-                  @search="searchImages"
-                />
-              </div>
-              <div class="sidebar-searchbar-wrapper">
-                <!-- Sorting dropdown -->
-                <v-select
-                  v-model="selectedSort"
-                  :items="sortOptions"
-                  class="sidebar-sort-select"
-                  item-title="label"
-                  item-value="value"
-                  label="Sort by"
-                  dense
-                  hide-details
-                />
-              </div>
-            </div>
-          </transition>
-
-          <!-- Chat and Settings buttons at the bottom left of the sidebar -->
-          <div
-            style="
-              position: absolute;
-              left: 0;
-              bottom: 0;
-              width: 100%;
-              padding: 16px 0 8px 0;
-              display: flex;
-              flex-direction: row;
-              gap: 8px;
-              justify-content: flex-start;
-              align-items: flex-end;
-              pointer-events: none;
-            "
-          >
-            <v-btn
-              icon
-              class="sidebar-chat-btn"
-              @click="openChatOverlay"
-              style="
-                margin-left: 12px;
-                pointer-events: auto;
-                background: #29405a;
-                color: #fff;
-              "
-              title="OpenAI Chat"
-            >
-              <v-icon>mdi-chat</v-icon>
-            </v-btn>
-            <v-btn
-              icon
-              @click="openSettingsDialog"
-              style="pointer-events: auto; background: #29405a; color: #fff"
-              title="Settings"
-            >
-              <v-icon>mdi-cog</v-icon>
-            </v-btn>
-          </div>
-        </aside>
-        <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
-          <div
-            :class="['main-content', selectedCharacter ? 'accent-border' : '']"
-          >
-            <template v-if="selectedCharacter">
-              <div
-                class="image-grid"
-                :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
-                ref="gridContainer"
-                style="position: relative"
-                @dragenter.prevent="handleGridDragEnter"
-                @dragover.prevent="handleGridDragOver"
-                @dragleave.prevent="handleGridDragLeave"
-                @drop.prevent="handleGridDrop"
-                @scroll="onGridScroll"
-                @click="handleGridBackgroundClick"
-              >
-                <div
-                  v-if="images.length === 0 && !imagesLoading && !imagesError"
-                  class="empty-state"
-                >
-                  No images found for this character.
-                </div>
-                <div v-if="imagesError" class="empty-state">
-                  {{ imagesError }}
-                </div>
-                <div v-if="dragOverlayVisible" class="drag-overlay-grid">
-                  <span>{{ dragOverlayMessage }}</span>
-                </div>
-                <div
-                  v-for="(img, idx) in pagedImages"
-                  :key="img.id"
-                  class="image-card"
-                  :class="[
-                    isImageSelected(img.id) ? 'selected' : '',
-                    getSelectionBorderClasses(idx),
-                  ]"
-                  :draggable="isImageSelected(img.id)"
-                  @dragstart="onImageDragStart(img, idx, $event)"
-                  @click="handleGridBackgroundClick"
-                >
-                  <v-card class="thumbnail-card">
-                    <div class="thumbnail-container">
-                      <div
-                        class="star-overlay"
-                        v-if="showStars && thumbLoaded[img.id]"
-                      >
-                        <v-icon
-                          v-for="n in 5"
-                          :key="n"
-                          small
-                          :color="
-                            n <= (img.score || 0) ? 'orange' : 'grey darken-2'
-                          "
-                          style="cursor: pointer"
-                          @click.stop="setImageScore(img, n)"
-                          >mdi-star</v-icon
-                        >
-                      </div>
-                      <template
-                        v-if="
-                          (img.format && isSupportedVideoFile(img.format)) ||
-                          (!img.format &&
-                            isSupportedVideoFile(
-                              (img.id || '').split('.').pop()
-                            ))
-                        "
-                      >
-                        <img
-                          :src="`${BACKEND_URL}/thumbnails/${img.id}`"
-                          class="thumbnail-img video-thumb"
-                          @load="thumbLoaded[img.id] = true"
-                          @error="thumbLoaded[img.id] = true"
-                          @click.stop="
-                            (e) => {
-                              if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                                handleImageSelect(img, idx, e);
-                              } else {
-                                openOverlay(img);
-                              }
-                            }
-                          "
-                          style="cursor: pointer; border: 2px solid #2196f3"
-                        />
-                        <v-icon
-                          class="video-icon-overlay"
-                          style="
-                            position: absolute;
-                            bottom: 8px;
-                            left: 8px;
-                            color: #2196f3;
-                            background: white;
-                            border-radius: 50%;
-                          "
-                          >mdi-play-circle</v-icon
-                        >
-                      </template>
-                      <template v-else>
-                        <img
-                          :src="`${BACKEND_URL}/thumbnails/${img.id}`"
-                          class="thumbnail-img"
-                          @load="thumbLoaded[img.id] = true"
-                          @error="thumbLoaded[img.id] = true"
-                          @click.stop="
-                            (e) => {
-                              if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                                handleImageSelect(img, idx, e);
-                              } else {
-                                openOverlay(img);
-                              }
-                            }
-                          "
-                          style="cursor: pointer"
-                        />
-                      </template>
-                      <!-- Trophy icon for reference toggle -->
-                      <v-btn
-                        v-if="thumbLoaded[img.id]"
-                        icon
-                        size="small"
-                        class="reference-trophy-btn trophy-bg"
-                        @click.stop="toggleReference(img)"
-                        title="Toggle reference picture"
-                        style="
-                          position: absolute;
-                          top: 8px;
-                          left: 8px;
-                          z-index: 2;
-                        "
-                      >
-                        <v-icon
-                          :color="img.is_reference ? 'orange' : 'grey darken-2'"
-                          size="24px"
-                          >mdi-trophy</v-icon
-                        >
-                      </v-btn>
-                    </div>
-                    <!-- Show date under thumbnail if sorting by date -->
-                    <div
-                      v-if="
-                        selectedSort === 'date_desc' ||
-                        selectedSort === 'date_asc'
-                      "
-                      class="thumbnail-info"
-                    >
-                      {{ new Date(img.created_at).toLocaleString() }}
-                    </div>
-                    <!-- Show likeness score under thumbnail if sorting by likeness-->
-                    <div
-                      v-if="selectedSort === 'search_likeness'"
-                      class="thumbnail-info"
-                    >
-                      {{ formatLikenessScore(img.likeness_score) }}
-                    </div>
-                  </v-card>
-                </div>
-                <div
-                  v-if="chatOpen"
-                  class="chat-overlay"
-                  @click.self="closeChatOverlay"
-                >
-                  <div class="chat-overlay-content">
-                    <div class="chat-overlay-header">
-                      <span>
-                        <template v-if="selectedCharacterObj">
-                          Chat with {{ selectedCharacterObj.name }}
-                        </template>
-                        <template v-else> AI Chat </template>
-                      </span>
-                      <button
-                        class="overlay-close"
-                        @click="closeChatOverlay"
-                        aria-label="Close"
-                      >
-                        &times;
-                      </button>
-                    </div>
-                    <div
-                      class="overlay-chat-main"
-                      style="
-                        flex: 1;
-                        display: flex;
-                        flex-direction: column;
-                        min-height: 0;
-                      "
-                    >
-                      <div
-                        class="chat-messages"
-                        ref="chatMessagesContainer"
-                        style="flex: 1 1 0; overflow-y: auto; min-height: 0"
-                      >
-                        <div
-                          v-for="(msg, i) in chatMessages"
-                          :key="i"
-                          :class="
-                            msg.role === 'user'
-                              ? 'chat-message-user'
-                              : 'chat-message-assistant'
-                          "
-                        >
-                          <template v-if="msg.role === 'user'">
-                            <div class="chat-bubble user">
-                              <span class="chat-username">You</span>
-                              <span class="chat-text">{{ msg.content }}</span>
-                            </div>
-                          </template>
-                          <template v-else>
-                            <div class="chat-assistant-full">
-                              <span class="chat-username">AI</span>
-                              <span
-                                class="chat-text"
-                                v-html="renderMarkdown(msg.content)"
-                              ></span>
-                              <div
-                                v-if="msg.pictureUrl"
-                                class="chat-picture-result"
-                                style="margin-top: 0.5em"
-                              >
-                                <img
-                                  :src="msg.pictureUrl"
-                                  alt="result"
-                                  style="
-                                    max-width: 50%;
-                                    height: auto;
-                                    display: block;
-                                    margin: 0 auto;
-                                    border-radius: 8px;
-                                    box-shadow: 0 2px 8px #0002;
-                                  "
-                                  @load="scrollChatToBottom"
-                                />
-                              </div>
-                            </div>
-                          </template>
-                        </div>
-                        <div v-if="chatLoading" class="chat-message-assistant">
-                          <div class="chat-assistant-full">
-                            <span class="chat-username">AI</span>
-                            <span class="chat-text">...</span>
-                          </div>
-                        </div>
-                      </div>
-                      <form
-                        class="chat-input-row"
-                        @submit.prevent="sendChatMessageAndFocus"
-                        style="
-                          flex-shrink: 0;
-                          background: #f8fafd;
-                          border-top: 1px solid #e0e0e0;
-                          padding: 0.5em 0.7em;
-                          display: flex;
-                          align-items: flex-end;
-                        "
-                      >
-                        <textarea
-                          v-model="chatInput"
-                          class="chat-input"
-                          placeholder="Type your message..."
-                          rows="2"
-                          :disabled="chatLoading"
-                          ref="chatInputField"
-                          @keydown.enter.exact.prevent="sendChatMessageAndFocus"
-                          style="
-                            flex: 1;
-                            resize: none;
-                            min-height: 2.2em;
-                            max-height: 7em;
-                            border-radius: 6px;
-                            border: 1px solid #d0d0d0;
-                            margin-right: 0.5em;
-                            background: #fff;
-                          "
-                        ></textarea>
-                        <v-btn
-                          type="submit"
-                          :disabled="!chatInput.trim() || chatLoading"
-                          color="primary"
-                          class="chat-send-btn"
-                          style="min-width: 40px; min-height: 40px"
-                        >
-                          <v-icon>mdi-send</v-icon>
-                        </v-btn>
-                      </form>
-                    </div>
-                  </div>
-                </div>
-                <!-- Full image overlay -->
-                <div
-                  v-if="overlayOpen"
-                  class="image-overlay"
-                  @click.self="closeOverlay"
-                >
-                  <div class="overlay-content overlay-grid">
-                    <button
-                      class="overlay-close"
-                      @click="closeOverlay"
-                      aria-label="Close"
-                      style="
-                        position: absolute;
-                        top: 12px;
-                        right: 18px;
-                        z-index: 20;
-                      "
-                    >
-                      &times;
-                    </button>
-                    <div
-                      class="overlay-grid-main"
-                      style="
-                        display: grid;
-                        grid-template-columns: 64px 1fr 64px;
-                        align-items: center;
-                        width: 100%;
-                        height: 100%;
-                      "
-                    >
-                      <div
-                        style="
-                          display: flex;
-                          justify-content: center;
-                          align-items: center;
-                          height: 100%;
-                        "
-                      >
-                        <button
-                          class="overlay-nav overlay-nav-left"
-                          @click.stop="showPrevImage"
-                          aria-label="Previous"
-                        >
-                          <v-icon>mdi-skip-previous</v-icon>
-                        </button>
-                      </div>
-                      <div class="overlay-img-wrapper">
-                        <div style="position: relative; display: inline-block">
-                          <template v-if="overlayImage">
-                            <video
-                              v-if="
-                                isSupportedVideoFile(
-                                  getOverlayFormat(overlayImage)
-                                )
-                              "
-                              :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
-                              class="overlay-video"
-                              controls
-                              preload="auto"
-                              playsinline
-                              style="background: #111"
-                            ></video>
-                            <img
-                              v-else
-                              :src="`${BACKEND_URL}/pictures/${overlayImage.id}`"
-                              :alt="overlayImage.description || 'Full Image'"
-                              class="overlay-img"
-                            />
-                          </template>
-                          <div class="star-overlay" v-if="overlayImage">
-                            <v-icon
-                              v-for="n in 5"
-                              :key="n"
-                              large
-                              :color="
-                                n <= (overlayImage.score || 0)
-                                  ? 'orange'
-                                  : 'grey darken-2'
-                              "
-                              style="cursor: pointer"
-                              @click.stop="setImageScore(overlayImage, n)"
-                              >mdi-star</v-icon
-                            >
-                          </div>
-                          <v-btn
-                            icon
-                            size="small"
-                            class="reference-trophy-btn trophy-bg"
-                            @click.stop="toggleReference(overlayImage)"
-                            title="Toggle reference picture"
-                            style="
-                              position: absolute;
-                              top: 8px;
-                              left: 8px;
-                              z-index: 2;
-                            "
-                          >
-                            <v-icon
-                              :color="
-                                overlayImage.is_reference
-                                  ? 'orange'
-                                  : 'grey darken-2'
-                              "
-                              >mdi-trophy</v-icon
-                            >
-                          </v-btn>
-                        </div>
-                      </div>
-                      <div
-                        style="
-                          display: flex;
-                          justify-content: center;
-                          align-items: center;
-                          height: 100%;
-                        "
-                      >
-                        <button
-                          class="overlay-nav overlay-nav-right"
-                          @click.stop="showNextImage"
-                          aria-label="Next"
-                        >
-                          <v-icon>mdi-skip-next</v-icon>
-                        </button>
-                      </div>
-                    </div>
-                    <div class="overlay-desc">
-                      {{ overlayImage?.description || "No description" }}
-                    </div>
-                    <div
-                      v-if="
-                        overlayImage &&
-                        overlayImage.tags &&
-                        overlayImage.tags.length
-                      "
-                      class="overlay-tags"
-                      style="
-                        margin-top: 8px;
-                        margin-bottom: 0;
-                        text-align: center;
-                      "
-                    >
-                      <span
-                        v-for="tag in overlayImage.tags"
-                        :key="tag"
-                        class="overlay-tag"
-                        style="
-                          display: inline-flex;
-                          align-items: center;
-                          background: #eee;
-                          color: #333;
-                          border-radius: 16px;
-                          padding: 4px 16px 4px 14px;
-                          margin: 2px 2px;
-                          font-size: 1.15em;
-                          position: relative;
-                          min-height: 32px;
-                        "
-                      >
-                        {{ tag }}
-                        <button
-                          class="tag-delete-btn"
-                          @click.stop="removeTagFromOverlayImage(tag)"
-                          title="Remove tag"
-                          style="
-                            background: none;
-                            border: none;
-                            color: #888;
-                            font-size: 1.25em;
-                            margin-left: 10px;
-                            cursor: pointer;
-                            display: flex;
-                            align-items: center;
-                            justify-content: center;
-                            height: 24px;
-                            width: 24px;
-                            padding: 0;
-                          "
-                        >
-                          ×
-                        </button>
-                      </span>
-                      <!-- Add + button at the end for adding tags -->
-                      <button
-                        class="tag-add-btn"
-                        @click.stop="startAddTagOverlay()"
-                        title="Add tag"
-                        style="
-                          display: inline-flex;
-                          align-items: center;
-                          justify-content: center;
-                          background: #e0e0e0;
-                          color: #333;
-                          border: none;
-                          border-radius: 16px;
-                          font-size: 1.3em;
-                          margin: 2px 2px;
-                          height: 32px;
-                          width: 32px;
-                          cursor: pointer;
-                          padding: 0;
-                          vertical-align: middle;
-                        "
-                      >
-                        +
-                      </button>
-                      <!-- Input for adding a tag, shown only when adding -->
-                      <input
-                        v-if="addingTagOverlay"
-                        v-model="newTagOverlay"
-                        @keydown.enter="confirmAddTagOverlay"
-                        @blur="cancelAddTagOverlay"
-                        class="tag-add-input"
-                        style="
-                          margin-left: 8px;
-                          font-size: 1.1em;
-                          border-radius: 8px;
-                          border: 1px solid #bbb;
-                          padding: 2px 8px;
-                          min-width: 80px;
-                          outline: none;
-                        "
-                        placeholder="New tag"
-                        autofocus
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </template>
-            <template v-else>
-              <div class="empty-state">Select a character to view images.</div>
-            </template>
-          </div>
-        </main>
-      </div>
-    </div>
-  </v-app>
-</template>
-
-<style scoped>
-/* Sidebar chat button styles */
-.sidebar-chat-btn-wrapper {
-  position: absolute;
-  left: 0;
-  bottom: 24px;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  z-index: 2;
-}
-.sidebar-chat-btn {
-  background: #29405a;
-  color: #fff;
-  border-radius: 50%;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  transition: background 0.2s;
-}
-.sidebar-chat-btn:hover {
-  background: #ff9800;
-  color: #fff;
-}
-
-/* Chat overlay styles */
-.chat-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(0, 0, 0, 0.55);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.chat-overlay-content {
-  background: #fff;
-  width: 90vw;
-  height: 90vh;
-  border-radius: 18px;
-  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.18);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.chat-overlay-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1.2em 1.5em 1.2em 1.5em;
-  background: #29405a;
-  color: #fff;
-  font-size: 1.3em;
-  font-weight: 600;
-  position: relative;
-}
-
-.chat-overlay-header .overlay-close {
-  position: absolute;
-  top: 0.7em;
-  right: 1.1em;
-  font-size: 2.1em;
-  color: #fff;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  z-index: 10;
-  line-height: 1;
-  padding: 0 8px;
-  transition: color 0.2s;
-}
-.chat-overlay-header .overlay-close:hover {
-  color: #ff5252;
-}
-
-.chat-overlay-header .overlay-close {
-  position: absolute;
-  top: 0.7em;
-  right: 1.1em;
-  font-size: 2.1em;
-  color: #fff;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  z-index: 10;
-  line-height: 1;
-  padding: 0 8px;
-  transition: color 0.2s;
-}
-.chat-overlay-header .overlay-close:hover {
-  color: #ff5252;
-}
-
-.chat-overlay-body {
-  flex: 1;
-  background: #f7f7fa;
-  overflow-y: auto;
-  padding: 2em;
-}
-.app-viewport {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  z-index: 0;
-}
-
-.drag-overlay-grid {
-  position: absolute;
-  inset: 0;
-  background: rgba(32, 32, 32, 0.25);
-  color: #fff8e1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 2.2rem;
-  font-weight: 700;
-  z-index: 1000;
-  pointer-events: none;
-  user-select: none;
-  letter-spacing: 0.04em;
-  text-shadow: 0 2px 8px #000a;
-}
-
-body {
-  margin: 0;
-  padding: 0;
-}
-
-.image-grid {
-  display: grid;
-  gap: 0;
-  width: 100%;
-  height: 100%;
-  min-height: 64px;
-  flex: 1 1 0%;
-  padding: 4px 12px 4px 4px; /* Extra right padding for scrollbar */
-  overflow-y: auto;
-  background: #ddd;
-  align-content: start;
-  justify-content: start;
-}
-.image-card {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  margin: 0;
-  transition: box-shadow 0.2s, border 0.2s;
-  position: relative;
-  z-index: 0; /* Ensure stacking context */
-  border: 3px solid transparent;
-}
-
-.reference-trophy-btn {
-  position: absolute !important;
-  right: 8px;
-  bottom: 8px;
-  z-index: 12;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  background: transparent;
-  padding: 0;
-}
-.trophy-bg {
-  background: rgba(255, 255, 255, 0.8) !important;
-  border-radius: 50%;
-  width: 32px !important;
-  height: 32px !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: none !important;
-  outline: none !important;
-  border: 3px solid transparent;
-  transition: border 0.2s;
-}
-.trophy-bg:hover {
-  background: rgba(255, 255, 255, 1) !important;
-}
-.trophy-bg:focus,
-.trophy-bg:active {
-  border: 2px solid transparent !important;
-  outline: none !important;
-  box-shadow: none !important;
-}
-.image-card.selected {
-  z-index: 2;
-  position: relative;
-  border: 3px solid rgba(25, 118, 210, 0.32);
-}
-.selected-border-top {
-  border-top-color: #1976d2 !important;
-}
-.selected-border-bottom {
-  border-bottom-color: #1976d2 !important;
-}
-.selected-border-left {
-  border-left-color: #1976d2 !important;
-}
-.selected-border-right {
-  border-right-color: #1976d2 !important;
-}
-.image-card.selected::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(25, 118, 210, 0.32);
-  border-radius: 0;
-  pointer-events: none;
-  z-index: 1; /* Lower than border */
-}
-.v-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  box-shadow: none;
-  background: transparent;
-  width: 100%;
-  max-width: 256px;
-  min-width: 128px;
-  padding: 0;
-  margin: 0;
-}
-.v-img {
-  display: block;
-  min-width: 400px;
-  max-width: 90vw;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
-  padding: 32px 32px 20px 32px;
-  position: relative;
-  min-height: 2.5em;
-  font-size: 1rem;
-  text-align: center;
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  word-break: break-word;
-  margin: 0 auto 2px auto;
-  padding: 2px 4px 0 4px;
-}
-/* Original simple file manager layout */
-.file-manager {
-  display: flex;
-  flex-direction: row;
-  width: 100vw;
-  height: 100vh;
-  min-height: 0;
-  inset: 0;
-  min-width: 0;
-  background: #ccc;
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-.sidebar {
-  width: 280px;
-  background: #506168ff;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  min-height: 100vh;
-  box-sizing: border-box;
-}
-.sidebar-section-header {
-  position: relative;
-  font-size: 1.2rem;
-  font-weight: 800;
-  padding: 2px 2px 2px 2px;
-  margin-bottom: 2px;
-  margin-top: 0px;
-  border-radius: 0px;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  user-select: none;
-  background: #7f95aa;
-  color: #fff;
-  transition: background 0.2s, color 0.2s;
-}
-/* Fade transition for collapsible sections */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-.sidebar-list-item,
-.sidebar-list-item.active {
-  display: flex;
-  align-items: center;
-  min-height: 56px;
-  padding: 8px 16px;
-  cursor: pointer;
-  border-radius: 0px;
-  margin-bottom: 0px;
-  font-size: 1em;
-  font-weight: 500;
-  background: transparent;
-  color: #fff;
-  transition: background 0.18s, color 0.18s;
-  width: 100%;
-}
-.sidebar-list-item.active {
-  background: #f0f0f055;
-  color: #fff;
-  border-right: 0;
-  position: relative;
-}
-
-.sidebar-list-item.active::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 20px;
-  height: 100%;
-  background: linear-gradient(
-    to right,
-    rgba(255, 165, 0, 0) 0%,
-    rgba(255, 165, 0, 1) 100%
-  );
-  pointer-events: none;
-  z-index: 2;
-}
-
-.sidebar-list-item:hover {
-  background: #6c7a8a;
-  color: #fff;
-}
-
-.sidebar-list-icon {
-  display: flex;
-  align-items: center;
-  margin-right: 12px;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-}
-.sidebar-list-label {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
-}
-.sidebar-character-thumb {
-  max-width: 44px;
-  max-height: 44px;
-  object-fit: contain;
-  border-radius: 6px;
-  box-shadow: 0 0px 0px #bbb;
-}
-.sidebar-trophy-btn {
-  margin-left: 4px;
-}
-.main-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  background: #eee;
-  min-width: 0;
-  min-height: 100vh;
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
-  transition: width 0.2s;
-}
-.main-area.full-width {
-  width: 100vw;
-}
-.sidebar-toggle-btn {
-  min-width: 40px;
-  min-height: 40px;
-  margin-left: -8px;
-}
-.main-content {
-  flex: 1 1 0%;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  padding: 0;
-  border-left: 4px solid orange;
-  transition: border-color 0.2s;
-  min-height: 0;
-  height: 100%;
-}
-
-.empty-state {
-  color: #aaa;
-  font-size: 1.2rem;
-  margin-top: 32px;
-  text-align: center;
-}
-.thumbnail-slider {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  width: 100%;
-  margin-bottom: 32px;
-  min-height: 48px;
-}
-.slider {
-  flex: 1;
-  margin: 0 8px;
-  min-width: 100px;
-  max-width: 220px;
-}
-.thumbnail-slider {
-  margin-bottom: 4px;
-  min-height: 32px;
-}
-.slider {
-  margin: 0 2px;
-  min-width: 80px;
-  max-width: 180px;
-}
-.image-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(0, 0, 0, 0.2);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.overlay-content {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: rgba(117, 117, 117, 0.9);
-  border-radius: 8px;
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
-  padding: 24px 24px 16px 24px;
-}
-/* Overlay grid: fixed width, dynamic height, max 90vh */
-.overlay-grid {
-  display: grid;
-  grid-template-rows: auto 1fr auto auto;
-  grid-template-columns: 1fr;
-  width: 90vw;
-  min-width: 320px;
-  max-width: 95vw;
-  max-height: 90vh;
-  border-radius: 8px;
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
-  padding: 24px 24px 16px 24px;
-  align-items: center;
-  justify-items: center;
-  position: relative;
-  overflow-y: auto;
-}
-.overlay-grid-main {
-  display: grid;
-  grid-template-columns: 56px 1fr 56px;
-  grid-template-rows: 1fr;
-  align-items: center;
-  width: 100%;
-  height: 100%;
-}
-.overlay-img-wrapper {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 70vh;
-  max-width: 100%;
-  min-height: 256px;
-}
-.overlay-img-container {
-  height: 90%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-.overlay-img {
-  max-width: 100%;
-  max-height: 70vh;
-  min-height: 256px;
-  object-fit: contain;
-  border-radius: 8px;
-  background: #111;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-}
-
-.overlay-video {
-  max-width: 100%;
-  max-height: 70vh;
-  min-height: 256px;
-  object-fit: cover;
-  border-radius: 8px;
-  background: #111;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-}
-
-.overlay-close {
-  position: absolute;
-  top: 8px;
-  right: 12px;
-  font-size: 2.2rem;
-  color: #fff;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  z-index: 10;
-  line-height: 1;
-  padding: 0 8px;
-  transition: color 0.2s;
-}
-.overlay-close:hover {
-  color: #ff5252;
-}
-.overlay-desc {
-  color: #eee;
-  margin-top: 12px;
-  text-align: center;
-  max-width: 70vw;
-  word-break: break-word;
-  font-size: 1.1rem;
-}
-/* Overlay navigation buttons */
-.overlay-nav {
-  position: absolute;
-  top: 50%;
-  font-size: 2.5rem;
-  color: #444;
-  background: rgba(255, 255, 255, 0.7);
-  max-width: 52px;
-  max-height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  user-select: none;
-}
-
-.overlay-nav-left {
-  left: 12px;
-}
-
-.overlay-nav-right {
-  right: 12px;
-}
-
-.overlay-nav:hover {
-  background: #fff;
-  color: orange;
-}
-.overlay-nav {
-  z-index: 1200;
-}
-.top-toolbar {
-  width: 100%;
-  background: #cdcdcdff;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  padding: 0 24px;
-  border-bottom: 2px solid #888;
-  margin-bottom: 0;
-  z-index: 2;
-  position: relative;
-}
-.toolbar-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  margin-left: auto;
-  margin-right: 0px;
-  padding-right: 2px;
-}
-.star-overlay {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 12;
-  display: flex;
-  flex-direction: row;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 4px;
-  box-shadow: none;
-  font-size: 0.85em;
-  margin: 4px 4px 4px 4px;
-}
-.star-overlay:hover {
-  background: rgba(255, 255, 255, 1);
-}
-.star-overlay .v-icon {
-  font-size: 20px !important;
-  width: 20px;
-  height: 20px;
-}
-.image-card {
-  position: relative;
-}
-.v-card {
-  position: relative;
-  overflow: visible;
-}
-.v-img {
-  display: block;
-  position: relative;
-  z-index: 1;
-}
-.add-character-btn {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 2;
-}
-.add-character-inline {
-  color: #fff;
-  font-size: 1.3em;
-  cursor: pointer;
-  vertical-align: middle;
-  background: none !important;
-  border: none;
-  box-shadow: none;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 0.9em 1.2em 0.9em 1.5em;
-  background: #29405a;
-  color: #fff;
-  font-size: 1.3em;
-  font-weight: 600;
-  position: relative;
-  min-height: 48px;
-}
-
-.chat-overlay-header span {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  font-size: 1.13em;
-  font-weight: 600;
-  padding-right: 0.5em;
-}
-.chat-overlay-header .overlay-close {
-  position: absolute;
-  top: 0.5em;
-  right: 0.7em;
-  font-size: 2em;
-  color: #fff;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  z-index: 10;
-  line-height: 1;
-  padding: 0 4px;
-  transition: color 0.2s;
-  margin-left: 0;
-}
-/* Make disabled buttons more faded */
-.v-btn.v-btn--disabled,
-button[disabled] {
-  opacity: 0.35 !important;
-  filter: grayscale(30%);
-  pointer-events: none;
-}
-
-.thumbnail-info {
-  font-size: 0.85em;
-  color: #666;
-  margin-top: 2px;
-  text-align: center;
-  word-break: break-all;
-}
-.sidebar-list-count {
-  font-size: 0.92em;
-  color: #b0b8c9;
-  min-width: 2.5em;
-  text-align: right;
-  margin-left: 8px;
-  margin-right: 8px;
-  font-weight: 400;
-  opacity: 0.85;
-  letter-spacing: 0.01em;
-  align-self: center;
-  display: inline-block;
-}
-
-/* Import Progress Modal Styles */
-.import-progress-modal {
-  position: fixed !important;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(32, 32, 32, 0.65) !important;
-  z-index: 99999 !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: all;
-}
-.import-progress-content {
-  background: #222;
-  color: #fff8e1;
-  padding: 32px 48px;
-  border-radius: 16px;
-  box-shadow: 0 4px 32px #000a;
-  min-width: 320px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-.import-progress-title {
-  font-size: 1.5rem;
-  font-weight: 700;
-  margin-bottom: 24px;
-}
-.import-progress-bar-bg {
-  width: 100%;
-  height: 18px;
-  background: #444;
-  border-radius: 9px;
-  overflow: hidden;
-  margin-bottom: 16px;
-}
-.import-progress-bar {
-  height: 100%;
-  background: linear-gradient(90deg, #ff9800 0%, #ffc107 100%);
-  border-radius: 9px 0 0 9px;
-  transition: width 0.2s;
-}
-.import-progress-label {
-  font-size: 1.1rem;
-  margin-top: 8px;
-}
-.import-progress-error {
-  color: #ff5252;
-  margin-left: 12px;
-}
-.thumbnail-container {
-  width: 100%;
-  position: relative;
-  display: block;
-}
-.thumbnail-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: block;
-  border-radius: 8px;
-}
-.thumbnail-container:hover .thumbnail-img,
-.thumbnail-container:focus-within .thumbnail-img {
-  transform: scale(1.02);
-  box-shadow: 0 4px 24px 0 rgba(25, 118, 210, 0.2),
-    0 1.5px 6px 0 rgba(0, 0, 0, 0.3);
-  z-index: 2;
-  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
-}
-.thumbnail-img {
-  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
-}
-.thumbnail-card {
-  width: 100%;
-  height: 100%;
-  position: relative;
-}
-.v-btn:focus:not(:focus-visible),
-button:focus:not(:focus-visible) {
-  outline: none !important;
-  box-shadow: none !important;
-}
-
-.settings-dialog-titlebar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  background: #f5f5f7;
-  border-bottom: 1px solid #e0e0e0;
-  padding: 0.5em 1.5em 0.5em 1.5em;
-  box-sizing: border-box;
-  margin-bottom: 0;
-  border-radius: 0;
-}
-.settings-dialog-title {
-  font-size: 1.18em;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: #333;
-  margin: 0;
-}
-.settings-dialog-close {
-  background: none;
-  border: none;
-  font-size: 1.5em;
-  color: #888;
-  cursor: pointer;
-  line-height: 1;
-  padding: 0 8px;
-  transition: color 0.2s;
-  margin-left: 12px;
-}
-.settings-dialog-close:hover {
-  color: #1976d2;
-}
-
-/* Settings dialog styled to match overlay dialog */
-.settings-dialog-card {
-  min-width: 400px;
-  max-width: 90vw;
-  border-radius: 18px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25), 0 1.5px 6px rgba(0, 0, 0, 0.08);
-  background: #fff;
-  padding: 0px 0px 0px 0px;
-  position: relative;
-}
-.settings-section {
-  margin-bottom: 24px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #eee;
-}
-.settings-image-roots {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.settings-image-root {
-  display: block;
-  padding: 8px 0 8px 8px;
-  font-size: 1.12em;
-  color: #333;
-  border-radius: 8px;
-  transition: background 0.2s;
-}
-.settings-image-root.selected {
-  font-weight: bold;
-  color: #1976d2;
-  background: #e3f2fd;
-}
-.settings-dialog-card .headline {
-  font-size: 1.35em;
-  font-weight: 600;
-  margin-bottom: 12px;
-}
-.settings-dialog-card .v-card-actions {
-  margin-bottom: 24px;
-  padding: 24px 20px 16px 20px;
-  background: #fff;
-  border-radius: 14px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
-  border: none;
-  min-width: 90px;
-}
-.search-and-sort {
-  display: flex;
-  flex-direction: column;
-}
-.sidebar-sort-select {
-  background: rgba(200, 200, 200, 0.6);
-}
-
-.sidebar-searchbar-wrapper {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  position: relative;
-  width: 100%;
-  padding: 4px 4px 4px 4px;
-}
-.sidebar-searchbar {
-  width: 100%;
-  min-width: 0;
-  position: relative;
-  transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-/* Chat overlay chat UI */
-.overlay-chat-wrapper {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  width: 100%;
-}
-/* Modern chat overlay layout */
-.overlay-chat-main {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: stretch;
-}
-.overlay-chat-wrapper {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  width: 100%;
-  padding: 0 0 12px 0;
-  background: none;
-}
-.chat-messages {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: 100%;
-  overflow-y: auto;
-  padding: 1.2em 1.5em 1em 1.5em;
-  background: #f7f7fa;
-  border-radius: 12px;
-  margin-bottom: 1em;
-  display: flex;
-  flex-direction: column;
-  gap: 0.7em;
-}
-.chat-message {
-  display: flex;
-  flex-direction: row;
-  justify-content: flex-start;
-}
-.chat-bubble {
-  max-width: 0%;
-  padding: 0.7em 1.1em;
-  border-radius: 18px;
-  font-size: 1.08em;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  background: #fff;
-  color: #222;
-  word-break: break-word;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-}
-.chat-message-user {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 0.7em;
-}
-.chat-bubble.user {
-  background: #e3f2fd;
-  color: #1976d2;
-  border-radius: 18px;
-  padding: 0.7em 1.1em;
-  max-width: 90%;
-  align-self: flex-end;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-.chat-message-assistant {
-  display: flex;
-  justify-content: flex-start;
-  margin-bottom: 0.7em;
-}
-.chat-assistant-full {
-  width: 100%;
-  background: none;
-  color: #222;
-  border-radius: 0;
-  padding: 0.2em 0 0.2em 0;
-  box-shadow: none;
-  font-size: 1.08em;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-}
-.chat-username {
-  font-size: 0.92em;
-  font-weight: 600;
-  margin-bottom: 0.2em;
-  opacity: 0.7;
-}
-.chat-text {
-  white-space: pre-line;
-  word-break: break-word;
-}
-.chat-input-row {
-  display: flex;
-  gap: 0.5em;
-  align-items: flex-end;
-  padding: 0 1.5em 0 1.5em;
-  margin-bottom: 10px;
-}
-.chat-input {
-  flex: 1;
-  min-height: 2.5em;
-  max-height: 8em;
-  resize: vertical;
-  border-radius: 18px;
-  border: 1px solid #bbb;
-  padding: 0.9em 1.2em;
-  font-size: 1.1em;
-  outline: none;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
-}
-.chat-send-btn {
-  min-width: 48px;
-  min-height: 48px;
-  border-radius: 50%;
-  background: #1976d2;
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transition: background 0.2s;
-}
-.chat-send-btn:disabled {
-  background: #bbb;
-  color: #fff;
-  cursor: not-allowed;
-}
-</style>
+<template src="./App.template.html"></template>
+<style scoped src="./App.css"></style>
