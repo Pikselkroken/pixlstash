@@ -33,8 +33,6 @@ const emit = defineEmits([
   "drag-over-character",
   "drag-leave-character",
   "drop-on-character",
-  "open-chat",
-  "open-settings",
   "search-images",
   "update:selected-sort",
   "update:search-query",
@@ -97,14 +95,6 @@ function dragLeaveCharacter() {
 
 function dropOnCharacter(id, event) {
   emit("drop-on-character", { characterId: id, event });
-}
-
-function openChat() {
-  emit("open-chat");
-}
-
-function openSettings() {
-  emit("open-settings");
 }
 
 function searchImages(query) {
@@ -297,45 +287,6 @@ function searchImages(query) {
         </div>
       </div>
     </transition>
-
-    <div
-      style="
-        position: absolute;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        padding: 16px 0 8px 0;
-        display: flex;
-        flex-direction: row;
-        gap: 8px;
-        justify-content: flex-start;
-        align-items: flex-end;
-        pointer-events: none;
-      "
-    >
-      <v-btn
-        icon
-        class="sidebar-chat-btn"
-        @click="openChat"
-        style="
-          margin-left: 12px;
-          pointer-events: auto;
-          background: #29405a;
-          color: #fff;
-        "
-        title="OpenAI Chat"
-      >
-        <v-icon>mdi-chat</v-icon>
-      </v-btn>
-      <v-btn
-        icon
-        @click="openSettings"
-        style="pointer-events: auto; background: #29405a; color: #fff"
-        title="Settings"
-      >
-        <v-icon>mdi-cog</v-icon>
-      </v-btn>
-    </div>
   </aside>
 </template>
 
@@ -536,19 +487,6 @@ function searchImages(query) {
 
 .delete-character-inline:hover {
   background: #ff5252;
-}
-
-.sidebar-chat-btn {
-  background: #29405a;
-  color: #fff;
-  border-radius: 50%;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  transition: background 0.2s;
-}
-
-.sidebar-chat-btn:hover {
-  background: #ff9800;
-  color: #fff;
 }
 
 .search-and-sort {
