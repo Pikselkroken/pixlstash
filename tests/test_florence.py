@@ -11,9 +11,16 @@ from pixelurgy_vault.picture_tagger import PictureTagger
 
 
 @pytest.fixture(scope="module")
-def tagger():
+def tagger(request):
     """Create a PictureTagger instance with Florence-2 enabled."""
-    tagger = PictureTagger()
+    force_cpu = request.config.getoption("--force-cpu")
+
+    if force_cpu:
+        # Force CPU by setting device before enabling Florence
+        tagger = PictureTagger(device="cpu")
+    else:
+        tagger = PictureTagger()
+
     tagger.enable_florence_captioning()
     return tagger
 

@@ -112,7 +112,16 @@ class PictureTagger:
             version = transformers.__version__
             logger.info(f"Transformers version: {version}")
 
-            if torch.cuda.is_available():
+            # Check if device was explicitly set to CPU
+            device_str = str(self._device)
+            force_cpu = device_str == "cpu"
+
+            if force_cpu:
+                # Device explicitly set to CPU - respect that
+                logger.info("Device set to CPU, loading Florence-2 on CPU with FP32...")
+                self._load_florence_model(torch.device("cpu"), torch.float32)
+                logger.info("Florence-2 loaded successfully on CPU")
+            elif torch.cuda.is_available():
                 try:
                     logger.info("Attempting to load Florence-2 on GPU with FP16...")
                     self._load_florence_model(torch.device("cuda"), torch.float16)
