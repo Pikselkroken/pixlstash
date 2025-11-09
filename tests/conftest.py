@@ -2,7 +2,6 @@
 Pytest configuration and fixtures for test suite.
 """
 
-import pytest
 
 
 def pytest_addoption(parser):

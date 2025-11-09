@@ -371,7 +371,7 @@ class PictureTagger:
 
             # Ensure caption ends with complete sentence
             # If it doesn't end with sentence-ending punctuation, find the last complete sentence
-            if caption and not caption[-1] in ".!?":
+            if caption and caption[-1] not in ".!?":
                 # Find the last sentence-ending punctuation
                 last_period = max(
                     caption.rfind("."), caption.rfind("!"), caption.rfind("?")
