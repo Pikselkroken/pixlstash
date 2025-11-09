@@ -77,6 +77,9 @@ class PictureTagger:
         self._use_florence = False
         self._florence_device = None
         self._florence_model_name = "microsoft/Florence-2-base"
+        self._florence_max_tokens = (
+            60  # Default, can be overridden for faster generation
+        )
 
     def __enter__(self):
         logger.debug("PictureTagger.__enter__ called.")
@@ -158,13 +161,41 @@ class PictureTagger:
         self._florence_processor = AutoProcessor.from_pretrained(
             self._florence_model_name, trust_remote_code=True
         )
-        self._florence_model = AutoModelForCausalLM.from_pretrained(
-            self._florence_model_name,
-            trust_remote_code=True,
-            dtype=dtype,
-            attn_implementation="eager",
-        ).to(device)
+
+        # Try SDPA first, fall back to eager if not supported
+        attn_impl = "sdpa"
+        try:
+            self._florence_model = AutoModelForCausalLM.from_pretrained(
+                self._florence_model_name,
+                trust_remote_code=True,
+                dtype=dtype,
+                attn_implementation=attn_impl,
+            ).to(device)
+        except (TypeError, AttributeError) as e:
+            logger.warning(f"SDPA not supported, falling back to eager attention: {e}")
+            attn_impl = "eager"
+            self._florence_model = AutoModelForCausalLM.from_pretrained(
+                self._florence_model_name,
+                trust_remote_code=True,
+                dtype=dtype,
+                attn_implementation=attn_impl,
+            ).to(device)
+
         self._florence_model.eval()
+        logger.info(f"Florence-2 loaded with {attn_impl} attention")
+
+        # Try to compile the model for better performance (PyTorch 2.0+)
+        try:
+            if hasattr(torch, "compile") and device.type == "cuda":
+                logger.info("Compiling Florence-2 model for better performance...")
+                self._florence_model = torch.compile(
+                    self._florence_model,
+                    mode="reduce-overhead",  # Balance compilation time and performance
+                )
+                logger.info("Model compilation successful")
+        except Exception as compile_error:
+            logger.warning(f"Model compilation failed (not critical): {compile_error}")
+
         self._florence_device = device
         self._use_florence = True
 
@@ -209,6 +240,22 @@ class PictureTagger:
 
             image = Image.open(image_path).convert("RGB")
 
+            # Resize large images to speed up processing (Florence works well with smaller images)
+            # Florence-2 uses 768px internally, so going smaller helps a lot
+            MAX_DIM = 768
+            if max(image.size) > MAX_DIM:
+                aspect_ratio = image.width / image.height
+                if image.width > image.height:
+                    new_width = MAX_DIM
+                    new_height = int(MAX_DIM / aspect_ratio)
+                else:
+                    new_height = MAX_DIM
+                    new_width = int(MAX_DIM * aspect_ratio)
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                logger.debug(
+                    f"Resized image to {new_width}x{new_height} for faster processing"
+                )
+
             # Florence expects task tokens alone, so build the natural-language prompt separately.
             base_prompt = self._florence_processor.task_prompts_without_inputs.get(
                 "<MORE_DETAILED_CAPTION>",
@@ -243,6 +290,13 @@ class PictureTagger:
             inputs = self._florence_processor(
                 text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
             )
+
+            logger.debug(f"Processor output keys: {inputs.keys()}")
+            if "pixel_values" not in inputs or inputs["pixel_values"] is None:
+                logger.error(
+                    f"pixel_values missing or None in processor output: {inputs.keys()}"
+                )
+                return None
 
             # Replace the textual prompt with the tailored instruction while keeping the multimodal formatting.
             num_image_tokens = getattr(self._florence_processor, "num_image_tokens", 0)
@@ -286,15 +340,17 @@ class PictureTagger:
             logger.debug(f"Inputs moved to {florence_device}")
 
             # Use the Florence-2 specific generation method
-            with torch.no_grad():
+            # Use inference_mode for better performance than no_grad
+            with torch.inference_mode():
                 generated_ids = self._florence_model.generate(
                     input_ids=inputs["input_ids"],
                     pixel_values=inputs["pixel_values"],
-                    max_new_tokens=100,
+                    max_new_tokens=self._florence_max_tokens,  # Configurable for speed vs quality
                     early_stopping=False,
                     do_sample=False,
-                    num_beams=1,  # Use greedy decoding
-                    use_cache=False,  # Disable KV cache to avoid past_key_values issues
+                    num_beams=1,  # Use greedy decoding (fastest)
+                    use_cache=False,  # Disable cache - Florence-2 has issues with it
+                    pad_token_id=self._florence_processor.tokenizer.pad_token_id,
                 )
 
             generated_text = self._florence_processor.batch_decode(
@@ -312,6 +368,20 @@ class PictureTagger:
 
             # Remove any remaining special tokens like <s>
             caption = caption.replace("<s>", "").strip()
+
+            # Ensure caption ends with complete sentence
+            # If it doesn't end with sentence-ending punctuation, find the last complete sentence
+            if caption and not caption[-1] in ".!?":
+                # Find the last sentence-ending punctuation
+                last_period = max(
+                    caption.rfind("."), caption.rfind("!"), caption.rfind("?")
+                )
+                if last_period > 0:
+                    # Truncate to last complete sentence
+                    caption = caption[: last_period + 1].strip()
+                # If no sentence-ending punctuation found, add a period
+                elif caption:
+                    caption = caption + "."
 
             # Insert character name if provided
             if character_name:
