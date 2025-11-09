@@ -92,13 +92,13 @@ def test_florence_caption_performance(tagger, image_files):
     # Relax requirements when running on CPU; Florence takes longer there.
     device = getattr(tagger, "_florence_device", None)
     if device is not None and getattr(device, "type", "cpu") == "cuda":
-        assert (
-            time_per_image < 1.0
-        ), f"Performance too slow on GPU: {time_per_image:.3f}s per image"
+        assert time_per_image < 1.0, (
+            f"Performance too slow on GPU: {time_per_image:.3f}s per image"
+        )
     else:
-        assert (
-            time_per_image < 12.0
-        ), f"Performance too slow on CPU: {time_per_image:.3f}s per image"
+        assert time_per_image < 12.0, (
+            f"Performance too slow on CPU: {time_per_image:.3f}s per image"
+        )
 
 
 def test_florence_caption_content(tagger, image_files):
@@ -116,9 +116,9 @@ def test_florence_caption_content(tagger, image_files):
         assert "<pad>" not in caption, "Caption contains <pad> token"
 
         # Caption should start with capital letter or digit
-        assert (
-            caption[0].isupper() or caption[0].isdigit()
-        ), f"Caption doesn't start with capital: {caption}"
+        assert caption[0].isupper() or caption[0].isdigit(), (
+            f"Caption doesn't start with capital: {caption}"
+        )
 
 
 def test_florence_with_character_name(tagger, image_files):
@@ -131,9 +131,9 @@ def test_florence_with_character_name(tagger, image_files):
     )
 
     # Caption should contain the character name
-    assert (
-        test_character_name in caption
-    ), f"Caption doesn't contain character name: {caption}"
+    assert test_character_name in caption, (
+        f"Caption doesn't contain character name: {caption}"
+    )
 
     # Character name should appear after "named"
     assert "named" in caption.lower(), f"Caption doesn't use 'named' pattern: {caption}"

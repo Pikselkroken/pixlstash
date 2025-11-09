@@ -37,10 +37,6 @@ class PictureModel:
 
     __tablename__ = "pictures"
     id: str = field(default=None, metadata={"primary_key": True})
-    character_id: str = field(
-        default=None,
-        metadata={"foreign_key": "characters(id)", "index": True},
-    )
     file_path: str = field(default=None)
     description: str = field(default=None, metadata={"include_in_embedding": True})
     format: str = field(default=None)
@@ -60,21 +56,21 @@ class PictureModel:
         default=None,
         metadata={"index": True, "unique_index": True},
     )
+    primary_character_id: int = field(
+        default=None, metadata={"foreign_key": "characters(id)", "index": True}
+    )
     tags: list[str] = field(
         default_factory=list, metadata={"db_ignore": True, "include_in_embedding": True}
     )
+    character_ids: list[int] = field(default_factory=list, metadata={"db_ignore": True})
 
-    __indexes__ = [
-        {
-            "fields": ["character_id", "is_reference"],
-            "name": "idx_pictures_character_id_is_reference",
-        }
-    ]
+    __indexes__ = []
 
     def to_dict(self, include=None, exclude=None) -> dict:
         result = {
             "id": self.id,
-            "character_id": self.character_id,
+            "primary_character_id": self.primary_character_id,
+            "character_ids": self.character_ids,
             "file_path": self.file_path,
             "description": self.description,
             "tags": self.tags,
@@ -122,10 +118,13 @@ class PictureModel:
 
         return cls(
             id=row["id"],
-            character_id=row["character_id"] if "character_id" in row.keys() else None,
             file_path=row["file_path"] if "file_path" in row.keys() else None,
             description=row["description"] if "description" in row.keys() else None,
             tags=row["tags"] if "tags" in row.keys() else None,
+            primary_character_id=row["primary_character_id"]
+            if "primary_character_id" in row.keys()
+            else None,
+            character_ids=row["character_ids"] if "character_ids" in row.keys() else [],
             format=row["format"] if "format" in row.keys() else None,
             width=row["width"] if "width" in row.keys() else None,
             height=row["height"] if "height" in row.keys() else None,

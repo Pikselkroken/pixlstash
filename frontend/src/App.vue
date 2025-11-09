@@ -374,13 +374,13 @@ async function refreshImages(append = false) {
     if (id === ALL_PICTURES_ID) {
       url = `${BACKEND_URL}/pictures?${params.toString()}`;
     } else if (id === UNASSIGNED_PICTURES_ID) {
-      url = `${BACKEND_URL}/pictures?character_id=&${params.toString()}`;
+      url = `${BACKEND_URL}/pictures?primary_character_id=&${params.toString()}`;
     } else if (refMode) {
       url = `${BACKEND_URL}/characters/reference_pictures/${encodeURIComponent(
         id
       )}`;
     } else {
-      url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
+      url = `${BACKEND_URL}/pictures?primary_character_id=${encodeURIComponent(
         id
       )}&${params.toString()}`;
     }
@@ -417,7 +417,7 @@ async function fetchSidebarCounts() {
   } catch {}
   try {
     const resUnassigned = await fetch(
-      `${BACKEND_URL}/category/summary?character_id=null`
+      `${BACKEND_URL}/category/summary?primary_character_id=null`
     );
     if (resUnassigned.ok) {
       const data = await resUnassigned.json();
@@ -428,7 +428,7 @@ async function fetchSidebarCounts() {
     characters.value.map(async (char) => {
       try {
         const res = await fetch(
-          `${BACKEND_URL}/category/summary?character_id=${encodeURIComponent(
+          `${BACKEND_URL}/category/summary?primary_character_id=${encodeURIComponent(
             char.id
           )}`
         );
@@ -823,10 +823,10 @@ async function selectAllInCurrentView() {
     if (id === ALL_PICTURES_ID) {
       url = `${BACKEND_URL}/picture_ids?${params.toString()}`;
     } else if (id === UNASSIGNED_PICTURES_ID) {
-      url = `${BACKEND_URL}/picture_ids?character_id=&${params.toString()}`;
+      url = `${BACKEND_URL}/picture_ids?primary_character_id=&${params.toString()}`;
     } else if (refMode) {
       params.set("is_reference", "1");
-      url = `${BACKEND_URL}/picture_ids?character_id=${encodeURIComponent(
+      url = `${BACKEND_URL}/picture_ids?primary_character_id=${encodeURIComponent(
         id
       )}&${params.toString()}`;
       const res = await fetch(url);
@@ -834,7 +834,7 @@ async function selectAllInCurrentView() {
       selectedImageIds.value = await res.json();
       return;
     } else {
-      url = `${BACKEND_URL}/picture_ids?character_id=${encodeURIComponent(
+      url = `${BACKEND_URL}/picture_ids?primary_character_id=${encodeURIComponent(
         id
       )}&${params.toString()}`;
     }
@@ -843,7 +843,7 @@ async function selectAllInCurrentView() {
     const ids = await res.json();
     if (referenceFilterMode.value) {
       const fullUrl = `${BACKEND_URL}/pictures?${params.toString()}&is_reference=1${
-        id !== ALL_PICTURES_ID ? `&character_id=${encodeURIComponent(id)}` : ""
+        id !== ALL_PICTURES_ID ? `&primary_character_id=${encodeURIComponent(id)}` : ""
       }`;
       const fullRes = await fetch(fullUrl);
       if (!fullRes.ok) throw new Error("Failed to fetch pictures");
@@ -1119,7 +1119,7 @@ async function assignImagesToCharacter(imageIds, characterId) {
     await Promise.all(
       imageIds.map(async (id) => {
         const res = await fetch(
-          `${BACKEND_URL}/pictures/${id}?character_id=${encodeURIComponent(
+          `${BACKEND_URL}/pictures/${id}?primary_character_id=${encodeURIComponent(
             characterId
           )}`,
           { method: "PATCH" }
@@ -1146,9 +1146,9 @@ async function assignImagesToCharacter(imageIds, characterId) {
       if (id === ALL_PICTURES_ID) {
         url = `${BACKEND_URL}/pictures?info=true`;
       } else if (id === UNASSIGNED_PICTURES_ID) {
-        url = `${BACKEND_URL}/pictures?character_id=&info=true`;
+        url = `${BACKEND_URL}/pictures?primary_character_id=&info=true`;
       } else {
-        url = `${BACKEND_URL}/pictures?character_id=${encodeURIComponent(
+        url = `${BACKEND_URL}/pictures?primary_character_id=${encodeURIComponent(
           id
         )}&info=true`;
       }
