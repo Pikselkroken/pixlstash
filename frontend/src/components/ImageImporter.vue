@@ -3,7 +3,7 @@ import { computed, nextTick, ref } from "vue";
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
-  selectedCharacterId: { type: String, default: "" },
+  selectedCharacterId: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, default: "" },
   unassignedPicturesId: { type: String, default: "" },
 });

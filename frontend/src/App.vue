@@ -114,12 +114,17 @@ const expandedCharacters = ref({});
 const sidebarSections = ref({
   pictures: true,
   people: true,
+  sets: true,
   search: true,
 });
 const dragOverCharacter = ref(null);
 const nextCharacterNumber = ref(1);
 const editingCharacterId = ref(null);
 const editingCharacterName = ref("");
+
+// --- Picture Sets State ---
+const pictureSets = ref([]);
+const selectedSet = ref(null);
 
 // --- Image Grid State ---
 const images = ref([]);
@@ -462,6 +467,217 @@ async function fetchCharacterThumbnail(characterId) {
 function toggleSidebarSection(section) {
   if (!section || !(section in sidebarSections.value)) return;
   sidebarSections.value[section] = !sidebarSections.value[section];
+}
+
+// --- Picture Sets ---
+async function fetchPictureSets() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/picture_sets`);
+    if (!res.ok) throw new Error("Failed to fetch picture sets");
+    pictureSets.value = await res.json();
+  } catch (e) {
+    console.error("Error fetching picture sets:", e);
+  }
+}
+
+async function handleSelectSet(setId) {
+  selectedSet.value = setId;
+  selectedCharacter.value = null; // Clear character selection
+
+  try {
+    // Fetch the set with pictures (no ?info=true means we get the pictures)
+    const res = await fetch(`${BACKEND_URL}/picture_sets/${setId}`);
+    if (!res.ok) throw new Error("Failed to fetch set details");
+    const data = await res.json();
+
+    // The response now includes pictures directly
+    if (data.pictures && data.pictures.length > 0) {
+      images.value = data.pictures.map((img) => ({
+        ...img,
+        score: typeof img.score !== "undefined" ? img.score : null,
+      }));
+    } else {
+      images.value = [];
+    }
+
+    hasMoreImages.value = false;
+    await nextTick();
+    updateColumns();
+  } catch (e) {
+    console.error("Error loading set pictures:", e);
+    images.value = [];
+  }
+}
+
+async function handleCreateSet() {
+  const name = prompt("Enter set name:");
+  if (!name || !name.trim()) return;
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/picture_sets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), description: "" }),
+    });
+
+    if (!res.ok) throw new Error("Failed to create set");
+    await fetchPictureSets();
+  } catch (e) {
+    alert("Failed to create set: " + (e.message || e));
+  }
+}
+
+async function handleDeleteSet() {
+  if (!selectedSet.value) return;
+
+  const setToDelete = pictureSets.value.find((s) => s.id === selectedSet.value);
+  if (!setToDelete) return;
+
+  if (!confirm(`Delete picture set "${setToDelete.name}"?`)) return;
+
+  try {
+    const res = await fetch(
+      `${BACKEND_URL}/picture_sets/${selectedSet.value}`,
+      {
+        method: "DELETE",
+      }
+    );
+
+    if (!res.ok) throw new Error("Failed to delete set");
+
+    selectedSet.value = null;
+    images.value = [];
+    await fetchPictureSets();
+  } catch (e) {
+    alert("Failed to delete set: " + (e.message || e));
+  }
+}
+
+async function removeSelectedFromSet() {
+  if (!selectedSet.value || selectedImageIds.value.length === 0) return;
+
+  const setToUpdate = pictureSets.value.find((s) => s.id === selectedSet.value);
+  if (!setToUpdate) return;
+
+  try {
+    // Remove each selected image from the set
+    const removePromises = selectedImageIds.value.map(async (picId) => {
+      const res = await fetch(
+        `${BACKEND_URL}/picture_sets/${selectedSet.value}/pictures/${picId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Failed to remove image ${picId}`);
+    });
+
+    await Promise.all(removePromises);
+
+    // Remove from local images array
+    images.value = images.value.filter(
+      (img) => !selectedImageIds.value.includes(img.id)
+    );
+    selectedImageIds.value = [];
+
+    // Refresh the picture sets to update counts
+    await fetchPictureSets();
+
+    setTimeout(updateColumns, 0);
+  } catch (e) {
+    alert("Failed to remove images from set: " + (e.message || e));
+    // Refresh the view to ensure consistency
+    handleSelectSet(selectedSet.value);
+  }
+}
+
+async function removeSelectedFromCharacter() {
+  if (!selectedCharacter.value || selectedImageIds.value.length === 0) return;
+  if (
+    selectedCharacter.value === ALL_PICTURES_ID ||
+    selectedCharacter.value === UNASSIGNED_PICTURES_ID
+  )
+    return;
+
+  const character = characters.value.find(
+    (c) => c.id === selectedCharacter.value
+  );
+  if (!character) return;
+
+  try {
+    // Update each selected image to clear primary_character_id
+    const updatePromises = selectedImageIds.value.map(async (picId) => {
+      const res = await fetch(`${BACKEND_URL}/pictures/${picId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ primary_character_id: null }),
+      });
+      if (!res.ok)
+        throw new Error(`Failed to update image ${picId}: ${res.status}`);
+    });
+
+    await Promise.all(updatePromises);
+
+    // Remove from local images array
+    images.value = images.value.filter(
+      (img) => !selectedImageIds.value.includes(img.id)
+    );
+    selectedImageIds.value = [];
+
+    // Refresh character counts
+    await fetchSidebarCounts();
+
+    setTimeout(updateColumns, 0);
+  } catch (e) {
+    console.error("Error removing images:", e);
+    alert("Failed to remove images from character: " + (e.message || e));
+    // Refresh the view to ensure consistency
+    refreshImages();
+  }
+}
+
+async function handleDropOnSet({ setId, event }) {
+  // Get the dragged image IDs from the drag event
+  let draggedIds = [];
+  try {
+    const data = JSON.parse(event.dataTransfer.getData("application/json"));
+    if (data.imageIds && Array.isArray(data.imageIds)) {
+      draggedIds = data.imageIds;
+    }
+  } catch (e) {
+    console.error("Could not parse drag data:", e);
+    return;
+  }
+
+  if (draggedIds.length === 0) {
+    console.log("No images found in drag data");
+    return;
+  }
+
+  const targetSet = pictureSets.value.find((s) => s.id === setId);
+  if (!targetSet) return;
+
+  try {
+    // Add each image to the set
+    const addPromises = draggedIds.map(async (picId) => {
+      const res = await fetch(
+        `${BACKEND_URL}/picture_sets/${setId}/pictures/${picId}`,
+        { method: "POST" }
+      );
+      // 400 error might mean it's already in the set, which is ok
+      if (!res.ok && res.status !== 400) {
+        throw new Error(`Failed to add image ${picId}`);
+      }
+    });
+
+    await Promise.all(addPromises);
+
+    // Refresh the picture sets to update counts
+    await fetchPictureSets();
+
+    console.log(
+      `Added ${draggedIds.length} image(s) to set "${targetSet.name}"`
+    );
+  } catch (e) {
+    alert("Failed to add images to set: " + (e.message || e));
+  }
 }
 
 // --- Settings & Config ---
@@ -992,6 +1208,7 @@ async function setImageScore(img, n) {
 // --- Character Assignment ---
 function handleSelectCharacter(id) {
   selectedCharacter.value = id;
+  selectedSet.value = null; // Clear set selection when selecting a character
 }
 
 function handleDragOverCharacter(id) {
@@ -1069,43 +1286,23 @@ async function assignImagesToCharacter(imageIds, characterId) {
     );
     await fetchCharacters();
     fetchSidebarCounts();
+
+    // If we're viewing a specific character (not the one being dropped to) or a set, just remove the images locally
     if (
-      selectedCharacter.value !== ALL_PICTURES_ID &&
-      selectedCharacter.value !== UNASSIGNED_PICTURES_ID &&
-      selectedCharacter.value !== characterId
+      (selectedCharacter.value !== ALL_PICTURES_ID &&
+        selectedCharacter.value !== UNASSIGNED_PICTURES_ID &&
+        selectedCharacter.value !== characterId) ||
+      selectedSet.value !== null
     ) {
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
       selectedImageIds.value = selectedImageIds.value.filter((id) =>
         images.value.some((img) => img.id === id)
       );
       lastSelectedIndex = null;
+      setTimeout(updateColumns, 0);
     } else {
-      const id = selectedCharacter.value;
-      let url;
-      if (id === ALL_PICTURES_ID) {
-        url = `${BACKEND_URL}/pictures?info=true`;
-      } else if (id === UNASSIGNED_PICTURES_ID) {
-        url = `${BACKEND_URL}/pictures?primary_character_id=&info=true`;
-      } else {
-        url = `${BACKEND_URL}/pictures?primary_character_id=${encodeURIComponent(
-          id
-        )}&info=true`;
-      }
-      const res = await fetch(url);
-      if (res.ok) {
-        const baseImages = await res.json();
-        images.value = baseImages.map((img) => ({
-          ...img,
-          score: typeof img.score !== "undefined" ? img.score : null,
-          _thumbLoaded: false,
-        }));
-        const newIds = new Set(images.value.map((img) => img.id));
-        selectedImageIds.value = selectedImageIds.value.filter((id) =>
-          newIds.has(id)
-        );
-        lastSelectedIndex = null;
-        setTimeout(updateColumns, 0);
-      }
+      // Otherwise refresh the view properly with sorting
+      refreshImages();
     }
   } catch (e) {
     alert("Failed to assign character: " + (e.message || e));
@@ -1252,19 +1449,20 @@ function confirmDeleteCharacter() {
   }
 }
 
-const {
-  removeTagFromOverlayImage,
-  addTagToOverlay,
-  handleOverlaySetScore,
-} = useOverlayActions({
-  overlayImage,
-  backendUrl: BACKEND_URL,
-  setImageScore,
-});
+const { removeTagFromOverlayImage, addTagToOverlay, handleOverlaySetScore } =
+  useOverlayActions({
+    overlayImage,
+    backendUrl: BACKEND_URL,
+    setImageScore,
+  });
 
 // --- Watchers ---
-watch([selectedSort, selectedCharacter], () => {
+watch([selectedSort, selectedCharacter, selectedSet], () => {
   if (searchQuery.value && searchQuery.value.trim()) {
+    return;
+  }
+  // Don't refresh if a set is selected (set handles its own image loading)
+  if (selectedSet.value !== null) {
     return;
   }
   pageOffset.value = 0;
@@ -1323,6 +1521,7 @@ onMounted(() => {
   fetchConfig();
   fetchSortOptions();
   fetchCharacters();
+  fetchPictureSets();
   window.addEventListener("resize", updateColumns);
   window.addEventListener("keydown", handleOverlayKeydown);
   setTimeout(updateColumns, 100);

@@ -268,8 +268,9 @@
         :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
         :category-counts="categoryCounts"
         :sorted-characters="sortedCharacters"
+        :picture-sets="pictureSets"
+        :selected-set="selectedSet"
         :error="error"
-        :drag-over-character="dragOverCharacter"
         :character-thumbnails="characterThumbnails"
         :editing-character-id="editingCharacterId"
         :editing-character-name="editingCharacterName"
@@ -285,9 +286,11 @@
         @cancel-editing-character="cancelEditingCharacter"
         @update:editing-character-name="updateEditingCharacterName"
         @open-character-editor="openCharacterEditor"
-        @drag-over-character="handleDragOverCharacter"
-        @drag-leave-character="handleDragLeaveCharacter"
         @drop-on-character="handleDropOnCharacter"
+        @select-set="handleSelectSet"
+        @create-set="handleCreateSet"
+        @delete-set="handleDeleteSet"
+        @drop-on-set="handleDropOnSet"
         @open-chat="openChatOverlay"
         @open-settings="openSettingsDialog"
         @search-images="searchImages"
@@ -298,7 +301,7 @@
         <div
           :class="['main-content', selectedCharacter ? 'accent-border' : '']"
         >
-          <template v-if="selectedCharacter">
+          <template v-if="selectedCharacter || selectedSet !== null">
             <!-- Selection Info Bar -->
             <div
               v-if="selectedImageIds.length > 0"
@@ -326,6 +329,22 @@
                   gap: 12px;
                 "
               >
+                <v-btn
+                  v-if="selectedSet"
+                  small
+                  class="remove-from-set-button"
+                  variant="text"
+                  @click="removeSelectedFromSet"
+                  >Remove from set</v-btn
+                >
+                <v-btn
+                  v-if="selectedCharacter && selectedCharacter !== ALL_PICTURES_ID && selectedCharacter !== UNASSIGNED_PICTURES_ID"
+                  small
+                  class="remove-from-character-button"
+                  variant="text"
+                  @click="removeSelectedFromCharacter"
+                  >Remove from character</v-btn
+                >
                 <v-btn
                   small
                   class="clear-selection-button"
@@ -487,7 +506,7 @@
             </div>
           </template>
           <template v-else>
-            <div class="empty-state">Select a character to view images.</div>
+            <div class="empty-state">Nothing to see here.</div>
           </template>
         </div>
       </main>

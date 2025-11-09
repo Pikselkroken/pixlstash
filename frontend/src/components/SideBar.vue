@@ -1,17 +1,21 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import SearchBar from "./SearchBar.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 
+const dragOverSet = ref(null);
+const dragOverCharacterLocal = ref(null);
+
 const props = defineProps({
   sections: { type: Object, required: true },
-  selectedCharacter: { type: [String, Number], required: true },
+  selectedCharacter: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
   categoryCounts: { type: Object, required: true },
   sortedCharacters: { type: Array, required: true },
+  pictureSets: { type: Array, default: () => [] },
+  selectedSet: { type: [Number, null], default: null },
   error: { type: String, default: "" },
-  dragOverCharacter: { type: [String, Number, null], default: null },
   characterThumbnails: { type: Object, required: true },
   editingCharacterId: { type: [String, Number, null], default: null },
   editingCharacterName: { type: String, default: "" },
@@ -36,6 +40,10 @@ const emit = defineEmits([
   "search-images",
   "update:selected-sort",
   "update:search-query",
+  "select-set",
+  "create-set",
+  "delete-set",
+  "drop-on-set",
 ]);
 
 const editingNameModel = computed({
@@ -86,19 +94,45 @@ function openCharacterEditor(char) {
 }
 
 function dragOverCharacter(id) {
-  emit("drag-over-character", id);
+  dragOverCharacterLocal.value = id;
 }
 
 function dragLeaveCharacter() {
-  emit("drag-leave-character");
+  dragOverCharacterLocal.value = null;
 }
 
 function dropOnCharacter(id, event) {
+  dragOverCharacterLocal.value = null;
   emit("drop-on-character", { characterId: id, event });
 }
 
 function searchImages(query) {
   emit("search-images", query);
+}
+
+function selectSet(setId) {
+  emit("select-set", setId);
+}
+
+function createSet() {
+  emit("create-set");
+}
+
+function deleteSet() {
+  emit("delete-set");
+}
+
+function dragOverSetItem(setId) {
+  dragOverSet.value = setId;
+}
+
+function dragLeaveSetItem() {
+  dragOverSet.value = null;
+}
+
+function dropOnSetItem(setId, event) {
+  dragOverSet.value = null;
+  emit("drop-on-set", { setId, event });
 }
 </script>
 
@@ -196,7 +230,7 @@ function searchImages(query) {
               'sidebar-list-item',
               {
                 active: selectedCharacter === char.id,
-                droppable: dragOverCharacter === char.id,
+                droppable: dragOverCharacterLocal === char.id,
               },
             ]"
             @click="selectCharacter(char.id)"
@@ -256,6 +290,67 @@ function searchImages(query) {
       </div>
     </transition>
 
+    <div class="sidebar-section-header" @click="toggleSection('sets')">
+      <v-icon small style="margin-right: 8px">
+        {{ sections.sets ? "mdi-chevron-down" : "mdi-chevron-right" }}
+      </v-icon>
+      Picture Sets
+      <span class="sidebar-header-spacer"></span>
+      <div class="sidebar-header-actions">
+        <v-icon
+          v-if="selectedSet"
+          class="delete-character-inline"
+          color="white"
+          @click.stop="deleteSet"
+          title="Delete selected set"
+        >
+          mdi-trash-can-outline
+        </v-icon>
+        <v-icon
+          class="add-character-inline"
+          @click.stop="createSet"
+          title="Create new set"
+        >
+          mdi-plus
+        </v-icon>
+      </div>
+    </div>
+    <transition name="fade">
+      <div v-show="sections.sets">
+        <div
+          v-if="pictureSets.length === 0"
+          class="sidebar-list-item"
+        >
+          No picture sets. Click the + button to create one.
+        </div>
+        <div
+          v-for="set in pictureSets"
+          :key="set.id"
+          :class="[
+            'sidebar-list-item',
+            {
+              active: selectedSet === set.id,
+              droppable: dragOverSet === set.id,
+            },
+          ]"
+          @click="selectSet(set.id)"
+          @dragover.prevent="dragOverSetItem(set.id)"
+          @dragleave="dragLeaveSetItem"
+          @drop.prevent="dropOnSetItem(set.id, $event)"
+        >
+          <span class="sidebar-list-icon">
+            <v-icon size="44">mdi-folder-multiple-image</v-icon>
+          </span>
+          <span class="sidebar-list-label">
+            {{ set.name }}
+          </span>
+          <span class="sidebar-list-count">
+            {{ set.picture_count ?? 0 }}
+          </span>
+        </div>
+      </div>
+    </transition>
+
     <div class="sidebar-section-header" @click="toggleSection('search')">
       <v-icon small style="margin-right: 8px">
         {{ sections.search ? "mdi-chevron-down" : "mdi-chevron-right" }}
@@ -308,9 +403,9 @@ function searchImages(query) {
   font-size: 1.2rem;
   font-weight: 800;
   padding: 2px;
-  margin: 0 0 2px 0;
+  margin: 2px 0 2px 0;
   border-radius: 0;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);  
   display: flex;
   align-items: center;
   cursor: pointer;

@@ -673,6 +673,127 @@ class Server:
             except KeyError:
                 raise HTTPException(status_code=404, detail="Character not found")
 
+        # =====================
+        # Picture Sets Endpoints
+        # =====================
+
+        @self.api.get("/picture_sets")
+        async def get_picture_sets():
+            """List all picture sets."""
+            sets = self.vault.picture_sets.list_all()
+            result = []
+            for s in sets:
+                set_dict = s.to_dict()
+                set_dict["picture_count"] = self.vault.picture_sets.get_set_count(s.id)
+                result.append(set_dict)
+            return result
+
+        @self.api.post("/picture_sets")
+        async def create_picture_set(payload: dict = Body(...)):
+            """Create a new picture set."""
+            name = payload.get("name")
+            description = payload.get("description", "")
+
+            if not name:
+                raise HTTPException(status_code=400, detail="name is required")
+
+            picture_set = self.vault.picture_sets.create(
+                name=name, description=description
+            )
+            return {"status": "success", "picture_set": picture_set.to_dict()}
+
+        @self.api.get("/picture_sets/{id}")
+        async def get_picture_set(id: int, info: bool = Query(False)):
+            """Get a picture set by id. Use ?info=true to get metadata only."""
+            picture_set = self.vault.picture_sets.get(id)
+            if not picture_set:
+                raise HTTPException(status_code=404, detail="Picture set not found")
+
+            picture_ids = self.vault.picture_sets.get_pictures_in_set(id)
+
+            if info:
+                # Return metadata only
+                set_dict = picture_set.to_dict()
+                set_dict["picture_count"] = len(picture_ids)
+                return set_dict
+
+            # Return the full pictures data
+            pictures = []
+            for pic_id in picture_ids:
+                try:
+                    pic = self.vault.pictures[pic_id]
+                    pictures.append(pic.to_dict(exclude=["file_path", "thumbnail"]))
+                except KeyError:
+                    logger.warning(f"Picture {pic_id} in set {id} not found")
+                    continue
+
+            return {"pictures": pictures, "set": picture_set.to_dict()}
+
+        @self.api.patch("/picture_sets/{id}")
+        async def update_picture_set(id: int, payload: dict = Body(...)):
+            """Update a picture set's name and/or description."""
+            name = payload.get("name")
+            description = payload.get("description")
+
+            success = self.vault.picture_sets.update(
+                id, name=name, description=description
+            )
+            if not success:
+                raise HTTPException(status_code=404, detail="Picture set not found")
+
+            return {"status": "success"}
+
+        @self.api.delete("/picture_sets/{id}")
+        async def delete_picture_set(id: int):
+            """Delete a picture set and all its members."""
+            success = self.vault.picture_sets.delete(id)
+            if not success:
+                raise HTTPException(status_code=404, detail="Picture set not found")
+
+            return {"status": "success", "deleted_id": id}
+
+        @self.api.get("/picture_sets/{id}/pictures")
+        async def get_picture_set_pictures(id: int):
+            """Get all picture ids in a set."""
+            picture_set = self.vault.picture_sets.get(id)
+            if not picture_set:
+                raise HTTPException(status_code=404, detail="Picture set not found")
+
+            picture_ids = self.vault.picture_sets.get_pictures_in_set(id)
+            return {"picture_ids": picture_ids}
+
+        @self.api.post("/picture_sets/{id}/pictures/{picture_id}")
+        async def add_picture_to_set(id: int, picture_id: str):
+            """Add a picture to a set."""
+            success = self.vault.picture_sets.add_picture(id, picture_id)
+            if not success:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Failed to add picture to set (set may not exist or picture already in set)",
+                )
+
+            return {"status": "success"}
+
+        @self.api.delete("/picture_sets/{id}/pictures/{picture_id}")
+        async def remove_picture_from_set(id: int, picture_id: str):
+            """Remove a picture from a set."""
+            success = self.vault.picture_sets.remove_picture(id, picture_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="Picture not in set")
+
+            return {"status": "success"}
+
+        @self.api.put("/picture_sets/{id}/pictures")
+        async def set_picture_set_pictures(id: int, payload: dict = Body(...)):
+            """Replace all pictures in a set with the given list."""
+            picture_ids = payload.get("picture_ids", [])
+
+            success = self.vault.picture_sets.set_pictures(id, picture_ids)
+            if not success:
+                raise HTTPException(status_code=404, detail="Picture set not found")
+
+            return {"status": "success", "picture_count": len(set(picture_ids))}
+
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
             """List all characters or filter by name."""

@@ -50,8 +50,16 @@ class VaultDatabase:
         self._conn: Optional[sqlite3.Connection] = None
 
         from .picture_character import PictureCharacterModel
+        from .picture_set import PictureSetModel, PictureSetMemberModel
 
-        models = [CharacterModel, PictureModel, PictureTagModel, PictureCharacterModel]
+        models = [
+            CharacterModel,
+            PictureModel,
+            PictureTagModel,
+            PictureCharacterModel,
+            PictureSetModel,
+            PictureSetMemberModel,
+        ]
 
         if not db_exists:
             logger.info("Creating tables and importing default data...")

@@ -6,6 +6,7 @@ from .logging import get_logger
 from .characters import Characters
 from .pictures import Pictures
 from .picture_characters import PictureCharacters
+from .picture_sets import PictureSets
 from .picture_utils import PictureUtils
 from .character import Character
 from .database import VaultDatabase
@@ -54,6 +55,7 @@ class Vault:
 
         self.characters = Characters(self.db)
         self.picture_characters = PictureCharacters(self.db)
+        self.picture_sets = PictureSets(self.db)
         self.pictures = Pictures(self.db, self.characters)
 
         self.start_background_workers()
