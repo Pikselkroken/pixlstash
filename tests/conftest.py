@@ -3,7 +3,6 @@ Pytest configuration and fixtures for test suite.
 """
 
 
-
 def pytest_addoption(parser):
     """Add custom command line options."""
     parser.addoption(
