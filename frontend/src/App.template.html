@@ -70,9 +70,26 @@
           :color="showStars ? 'orange' : 'grey'"
           @click="showStars = !showStars"
           title="Toggle star ratings"
-          style="margin-left: 2px; margin-right: 2px"
+          style="margin-left: 4px"
         >
           <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          @click="settingsDialog = true"
+          title="Open settings"
+          style="margin-left: 4px"
+        >
+          <v-icon>mdi-cog</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          :color="chatOpen ? 'primary' : 'grey'"
+          @click="openChatOverlay"
+          title="Open AI chat"
+          style="margin-left: 4px"
+        >
+          <v-icon>mdi-robot</v-icon>
         </v-btn>
 
         <!-- Settings Dialog -->
@@ -240,25 +257,6 @@
             </v-card-text>
           </v-card>
         </v-dialog>
-      </div>
-      <div class="toolbar-buttons">
-        <v-btn
-          icon
-          @click="settingsDialog = true"
-          title="Open settings"
-          style="margin-right: 8px"
-        >
-          <v-icon>mdi-cog</v-icon>
-        </v-btn>
-        <v-btn
-          icon
-          :color="chatOpen ? 'primary' : 'grey'"
-          @click="openChatOverlay"
-          title="Open AI chat"
-          style="margin-left: 8px"
-        >
-          <v-icon>mdi-robot</v-icon>
-        </v-btn>
       </div>
     </div>
     <div class="file-manager">
