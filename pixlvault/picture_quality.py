@@ -1,6 +1,11 @@
-from typing import Optional
+import cv2
 import json
 import numpy as np
+import time
+
+
+from scipy.ndimage import median_filter
+from typing import Optional
 
 from pixlvault.logging import get_logger
 
@@ -8,6 +13,48 @@ logger = get_logger(__name__)
 
 
 class PictureQuality:
+    @staticmethod
+    def calculate_quality_batch(images: np.ndarray) -> list:
+        """
+        Calculate quality metrics for a batch of images.
+        Accepts a 4D np.ndarray (batch, height, width, channels) and returns a list of PictureQuality instances.
+        All metrics are vectorized for speed. If any metric is None, set to -1.0.
+        """
+        batch_size = images.shape[0]
+        if images.ndim != 4:
+            raise ValueError("Input must be a 4D array: (batch, height, width, channels)")
+        # Vectorized brightness and contrast
+        brightness = images.mean(axis=(1,2,3)) / 255.0
+        contrast = images.std(axis=(1,2,3)) / 255.0
+        if images.shape[3] == 3:
+            gray = images.mean(axis=3)
+        else:
+            gray = images.squeeze(axis=3) if images.shape[3] == 1 else images
+        laplacians = np.array([cv2.Laplacian(gray[i].astype(np.float32), cv2.CV_32F) for i in range(batch_size)])
+        noise_level = np.clip(np.abs(laplacians).mean(axis=(1,2)) / 255.0, 0, 1)
+        sharpness = np.clip(laplacians.var(axis=(1,2)) / 100.0, 0, 1)
+        edges = np.array([cv2.Canny(gray[i].astype(np.uint8), 100, 200) for i in range(batch_size)])
+        edge_density = (edges > 0).sum(axis=(1,2)) / edges[0].size
+        # Post-calc None checks
+        def fix_none(arr):
+            arr = np.array(arr)
+            arr[np.equal(arr, None)] = -1.0
+            return arr
+        sharpness = fix_none(sharpness)
+        edge_density = fix_none(edge_density)
+        contrast = fix_none(contrast)
+        brightness = fix_none(brightness)
+        noise_level = fix_none(noise_level)
+        results = []
+        for i in range(batch_size):
+            results.append(PictureQuality(
+                sharpness=sharpness[i],
+                edge_density=edge_density[i],
+                contrast=contrast[i],
+                brightness=brightness[i],
+                noise_level=noise_level[i],
+            ))
+        return results
     """
     Stores subjective and objective quality metrics for an image.
     Fractional parameters can be calculated automatically.
@@ -38,22 +85,14 @@ class PictureQuality:
         }
     
     @staticmethod
-    def from_db_value(value):
-        """
-        Accepts a value from the DB (str, dict, or tuple containing a str/dict) and returns a PictureQuality instance.
-        """
-        if value is None:
-            return None
-        if isinstance(value, tuple):
-            value = value[0]
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except Exception:
-                pass
-        if isinstance(value, dict):
-            return PictureQuality.from_dict(value)
-        return None
+    def from_db_columns(sharpness=None, edge_density=None, contrast=None, brightness=None, noise_level=None):
+        return PictureQuality(
+            sharpness=sharpness,
+            edge_density=edge_density,
+            contrast=contrast,
+            brightness=brightness,
+            noise_level=noise_level,
+        )
 
     @staticmethod
     def from_dict(data: dict) -> "PictureQuality":
@@ -73,31 +112,30 @@ class PictureQuality:
         """
         Calculate objective metrics from a NumPy image array.
         Logs timing for each metric calculation.
+        If any metric is None, set to -1.0.
         """
-        import time
-
         timings = {}
-
         t0 = time.time()
         sharpness = PictureQuality._calculate_sharpness(image)
         timings["sharpness"] = time.time() - t0
-
         t0 = time.time()
         edge_density = PictureQuality._calculate_edge_density(image)
         timings["edge_density"] = time.time() - t0
-
         t0 = time.time()
         contrast = PictureQuality._calculate_contrast(image)
         timings["contrast"] = time.time() - t0
-
         t0 = time.time()
         brightness = PictureQuality._calculate_brightness(image)
         timings["brightness"] = time.time() - t0
-
         t0 = time.time()
         noise_level = PictureQuality._calculate_noise_level(image)
         timings["noise_level"] = time.time() - t0
-
+        # Post-calc None checks
+        sharpness = -1.0 if sharpness is None else sharpness
+        edge_density = -1.0 if edge_density is None else edge_density
+        contrast = -1.0 if contrast is None else contrast
+        brightness = -1.0 if brightness is None else brightness
+        noise_level = -1.0 if noise_level is None else noise_level
         return PictureQuality(
             sharpness=sharpness,
             edge_density=edge_density,
@@ -136,16 +174,12 @@ class PictureQuality:
     @staticmethod
     def _calculate_sharpness(image: np.ndarray) -> float:
         # Example: variance of Laplacian
-        import cv2
-
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
         return min(laplacian_var / 100.0, 1.0)
 
     @staticmethod
     def _calculate_edge_density(image: np.ndarray) -> float:
-        import cv2
-
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         edges = cv2.Canny(gray, 100, 200)
         return float(np.count_nonzero(edges)) / edges.size
@@ -165,8 +199,6 @@ class PictureQuality:
     @staticmethod
     def _calculate_noise_level(image: np.ndarray) -> float:
         # Optimized: grayscale and quarter resolution
-        from scipy.ndimage import median_filter
-        import cv2
 
         # Convert to grayscale
         if image.ndim == 3:

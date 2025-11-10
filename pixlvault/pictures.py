@@ -1,4 +1,5 @@
 import gc
+import concurrent
 import numpy as np
 import json
 import sqlite3
@@ -21,22 +22,26 @@ logger = get_logger(__name__)
 
 # Enum for sorting mechanisms
 class SortMechanism(str, Enum):
-    DATE_DESC = "date_desc"
-    DATE_ASC = "date_asc"
-    SCORE_DESC = "score_desc"
-    SCORE_ASC = "score_asc"
+    # If value starts with "ORDER BY", it's SQL-sortable; underscores become spaces for SQL
+    DATE_DESC = "ORDER BY created_at DESC"
+    DATE_ASC = "ORDER BY created_at ASC"
+    SCORE_DESC = "ORDER BY score DESC"
+    SCORE_ASC = "ORDER BY score ASC"
     SEARCH_LIKENESS = "search_likeness"
-    SHARPNESS_DESC = "sharpness_desc"
-    SHARPNESS_ASC = "sharpness_asc"
-    EDGE_DENSITY_DESC = "edge_density_desc"
-    EDGE_DENSITY_ASC = "edge_density_asc"
-    NOISE_LEVEL_DESC = "noise_level_desc"
-    NOISE_LEVEL_ASC = "noise_level_asc"
-    HAS_DESCRIPTION = "has_description"
-    NO_DESCRIPTION = "no_description"
-    FORMAT_ASC = "format_asc"
-    FORMAT_DESC = "format_desc"
+    SHARPNESS_DESC = "ORDER BY sharpness DESC"
+    SHARPNESS_ASC = "ORDER BY sharpness ASC"
+    EDGE_DENSITY_DESC = "ORDER BY edge_density DESC"
+    EDGE_DENSITY_ASC = "ORDER BY edge_density ASC"
+    NOISE_LEVEL_DESC = "ORDER BY noise_level DESC"
+    NOISE_LEVEL_ASC = "ORDER BY noise_level ASC"
+    HAS_DESCRIPTION = "ORDER BY description IS NOT NULL DESC"
+    NO_DESCRIPTION = "ORDER BY escription IS NULL DESC"
+    FORMAT_ASC = "ORDER BY format ASC"
+    FORMAT_DESC = "ORDER BY format DESC"
 
+    @classmethod
+    def is_sql_sortable(cls, sort):
+        return sort and str(sort).startswith("ORDER BY")
 
 # List of available sorting mechanisms for API
 def get_sort_mechanisms():
@@ -64,6 +69,7 @@ def get_sort_mechanisms():
 
 
 class Pictures:
+
     INSIGHTFACE_CLEANUP_TIMEOUT = 20  # seconds
 
     def __init__(self, db, characters=None):
@@ -403,15 +409,20 @@ class Pictures:
         return self.from_batch_of_db_dicts(rows)
 
     def _quality_worker_loop(self, interval):
+        # ...existing code...
+        # Efficiently group pictures by size before batch quality calculation
+        # (inside the main loop, after fetching pics)
+        BATCH_SIZE = 8
         # Create a new connection for this thread
         while not self._quality_worker_stop.is_set():
             quality_updates = 0
             try:
                 pics = []
+                logger.debug("Searching for pictures needing quality or face quality calculation.")
                 with self._db.threaded_connection as thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
-                        "SELECT * FROM pictures WHERE quality IS NULL OR face_quality IS NULL"
+                        "SELECT * FROM pictures WHERE sharpness IS NULL OR edge_density IS NULL OR noise_level IS NULL OR contrast IS NULL OR brightness IS NULL OR face_sharpness IS NULL OR face_edge_density IS NULL OR face_noise_level IS NULL OR face_contrast IS NULL OR face_brightness IS NULL",
                     )
                     rows = cursor.fetchall()
                     logger.debug(
@@ -419,22 +430,29 @@ class Pictures:
                     )
                     pics = self.from_batch_of_db_dicts(rows)
 
-                logger.debug(f"Calculating quality for {len(pics)} pictures.")
-                for pic in pics:
-                    logger.debug(f"Calculating quality for picture {pic.id}")
-                    if self._quality_worker_stop.is_set():
-                        break
-                    logger.debug("Checked stop event for iteration")
-                    self._calculate_quality(pic)
-                    quality_updates += 1
-                if pics:
+                logger.debug(f"Read metadata for {len(pics)} pictures.")
+                # Group by image size for efficient batching
+                grouped = self._group_pictures_by_size(pics)
+                logger.debug(f"Grouped {len(grouped)} picture batches by size. Will calculate quality now.")
+                quality_updates = []
+                for group in grouped.values():
+                    # Only process up to BATCH_SIZE images per group in this iteration
+                    batch = group[:BATCH_SIZE]
+                    if batch:
+                        # Use the image size from metadata for logging
+                        size = PictureUtils.load_metadata(batch[0].file_path)
+                        logger.info(f"Processing batch of {len(batch)} images of size {size}.")
+                        quality_updates.extend(self._calculate_quality(batch))
+
+                if quality_updates:
                     with self._db.threaded_connection as thread_conn:
-                        self._update_quality(thread_conn, pics)
+                        self._update_quality(thread_conn, quality_updates)
             except (sqlite3.OperationalError, OSError) as e:
-                # Database file was deleted or connection lost during shutdown
-                logger.debug(
-                    f"Quality worker exiting due to DB error (likely shutdown): {e}"
-                )
+                msg = str(e)
+                if "no such column" in msg:
+                    logger.error(f"Quality worker exiting due to schema error (missing column): {e}")
+                else:
+                    logger.error(f"Quality worker exiting due to DB error (likely shutdown): {e}")
                 break
             except Exception as e:
                 logger.error(f"Quality worker error: {e}")
@@ -442,34 +460,129 @@ class Pictures:
             if quality_updates == 0:
                 self._quality_worker_stop.wait(interval)
 
-    def _calculate_quality(self, pic):
-        try:
-            image_np = PictureUtils.load_image_or_video(pic.file_path)
-            # Only calculate and update quality if it is NULL
-            if pic.quality is None:
-                pic.quality = PictureQuality.calculate_quality(image_np)
+    def _group_pictures_by_size(self, pics: List[PictureModel]):
+        """
+        If all images are the same size, process as one batch. Otherwise, group by size. Videos are always separate batches.
+        Returns a dict: {key: [PictureModel, ...]}, where key is (h, w, c) for images, or file_path for videos.
+        """
+        from collections import defaultdict
+        import os
+        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
+        image_sizes = []
+        image_pics = []
+        video_groups = defaultdict(list)
+        for pic in pics:
+            ext = os.path.splitext(pic.file_path)[1].lower()
+            if ext in video_exts:
+                video_groups[pic.file_path].append(pic)
+            else:
+                try:
+                    size = PictureUtils.load_metadata(pic.file_path)
+                    if size:
+                        image_sizes.append(size)
+                        image_pics.append((size, pic))
+                except Exception as e:
+                    logger.error(f"Failed to read metadata for grouping: {pic.file_path}, error: {e}")
+        all_groups = dict(video_groups)
+        if image_sizes:
+            unique_sizes = set(image_sizes)
+            logger.debug(f"Read metadata for {len(image_pics)} images. Found {len(unique_sizes)} unique sizes.")
+            if len(unique_sizes) == 1:
+                batch_size = len(image_pics)
+                logger.debug(f"All images same size: batching {batch_size} images together.")
+                all_groups[list(unique_sizes)[0]] = [pic for _, pic in image_pics]
+            else:
+                from collections import defaultdict
+                image_groups = defaultdict(list)
+                for size, pic in image_pics:
+                    image_groups[size].append(pic)
+                for size, group in image_groups.items():
+                    logger.info(f"Batch for size {size}: {len(group)} images.")
+                all_groups.update(image_groups)
+        if video_groups:
+            for vkey, vgroup in video_groups.items():
+                logger.info(f"Video batch for {vkey}: {len(vgroup)} video(s).")
+        return all_groups
 
-            # Always attempt to calculate and update face_quality if it is NULL
-            if pic.face_quality is None and pic.face_bbox is not None:
-                pic.face_quality = PictureQuality.calculate_face_quality(
-                    image_np, pic.face_bbox
-                )
+    def _calculate_quality(self, pics: List[PictureModel]) -> List[PictureModel]:
+        try:
+            # Load all images in batch
+            images = []
+            for pic in pics:
+                images.append(PictureUtils.load_image_or_video(pic.file_path))
+            # Ensure all images are same shape for batching
+            shapes = [img.shape for img in images]
+            if len(set(shapes)) > 1:
+                logger.warning("Images in batch are not the same shape; falling back to per-image quality calculation.")
+                for i, pic in enumerate(pics):
+                    q = PictureQuality.calculate_quality(images[i])
+                    pic.sharpness = q.sharpness
+                    pic.edge_density = q.edge_density
+                    pic.contrast = q.contrast
+                    pic.brightness = q.brightness
+                    pic.noise_level = q.noise_level
+            else:
+                batch_array = np.stack(images, axis=0)
+                qualities = PictureQuality.calculate_quality_batch(batch_array)
+                for pic, q in zip(pics, qualities):
+                    pic.sharpness = q.sharpness
+                    pic.edge_density = q.edge_density
+                    pic.contrast = q.contrast
+                    pic.brightness = q.brightness
+                    pic.noise_level = q.noise_level
+            # Face metrics (per-image)
+            for i, pic in enumerate(pics):
+                if (
+                    (pic.face_sharpness is None or pic.face_edge_density is None or pic.face_contrast is None or pic.face_brightness is None or pic.face_noise_level is None)
+                    and pic.face_bbox is not None
+                ):
+                    fq = PictureQuality.calculate_face_quality(images[i], pic.face_bbox)
+                    if fq:
+                        pic.face_sharpness = fq.sharpness
+                        pic.face_edge_density = fq.edge_density
+                        pic.face_contrast = fq.contrast
+                        pic.face_brightness = fq.brightness
+                        pic.face_noise_level = fq.noise_level
+            return pics
         except Exception as e:
-            logger.error(f"Failed to calculate quality for {pic.id}: {e}")
+            logger.error(f"Failed to calculate quality for batch: {e}")
 
     def _update_quality(self, thread_conn, pics):
         cursor = thread_conn.cursor()
         values = []
         for pic in pics:
-            logger.debug("Picture id %s quality: %s and face_quality %s", pic.id, pic.quality, pic.face_quality)
-            quality_json = json.dumps(pic.quality.to_dict()) if pic.quality is not None else None
-            face_quality_json = (
-                json.dumps(pic.face_quality.to_dict()) if pic.face_quality is not None else None
+            logger.debug(
+                "Picture id %s sharpness: %s edge_density: %s contrast: %s brightness: %s noise_level: %s face_sharpness: %s face_edge_density: %s face_contrast: %s face_brightness: %s face_noise_level: %s",
+                pic.id,
+                pic.sharpness,
+                pic.edge_density,
+                pic.contrast,
+                pic.brightness,
+                pic.noise_level,
+                pic.face_sharpness,
+                pic.face_edge_density,
+                pic.face_contrast,
+                pic.face_brightness,
+                pic.face_noise_level,
             )
-            values.append((quality_json, face_quality_json, pic.id))
+            values.append(
+                (
+                    pic.sharpness,
+                    pic.edge_density,
+                    pic.contrast,
+                    pic.brightness,
+                    pic.noise_level,
+                    pic.face_sharpness,
+                    pic.face_edge_density,
+                    pic.face_contrast,
+                    pic.face_brightness,
+                    pic.face_noise_level,
+                    pic.id,
+                )
+            )
 
         cursor.executemany(
-            "UPDATE pictures SET quality = ?, face_quality = ? WHERE id = ?",
+            "UPDATE pictures SET sharpness = ?, edge_density = ?, contrast = ?, brightness = ?, noise_level = ?, face_sharpness = ?, face_edge_density = ?, face_contrast = ?, face_brightness = ?, face_noise_level = ? WHERE id = ?",
             values,
         )
         thread_conn.commit()
@@ -632,8 +745,23 @@ class Pictures:
                     return max(0, x2 - x1) * max(0, y2 - y1)
 
                 face = max(faces, key=face_area)
-                bbox = [float(v) for v in face.bbox]
-                pic.face_bbox = bbox
+                x1, y1, x2, y2 = [float(v) for v in face.bbox]
+                # Round width and height to nearest multiple of 64
+                w = x2 - x1
+                h = y2 - y1
+                def round64(val):
+                    return int(round(val / 64.0) * 64)
+                w_rounded = round64(w)
+                h_rounded = round64(h)
+                # Center the bbox after rounding
+                cx = x1 + w / 2.0
+                cy = y1 + h / 2.0
+                x1_new = cx - w_rounded / 2.0
+                y1_new = cy - h_rounded / 2.0
+                x2_new = cx + w_rounded / 2.0
+                y2_new = cy + h_rounded / 2.0
+                bbox_rounded = [x1_new, y1_new, x2_new, y2_new]
+                pic.face_bbox = bbox_rounded
 
                 logger.debug(f"Calculated largest face bbox for picture {pic.id}.")
                 bboxes_updated += 1
@@ -723,19 +851,30 @@ class Pictures:
         Special case: if a value is an empty string, search for IS NULL.
         Uses VaultDatabase for all DB access.
         """
-        if not kwargs:
-            rows = self._db.query("SELECT * FROM pictures")
-        else:
-            clauses = []
-            values = []
-            for k, v in kwargs.items():
-                if v == "" or v == "null":
-                    clauses.append(f"{k} IS NULL")
-                else:
-                    clauses.append(f"{k}=?")
-                    values.append(v)
-            query = "SELECT * FROM pictures WHERE " + " AND ".join(clauses)
-            rows = self._db.query(query, tuple(values))
+        sort = kwargs.pop("sort", None)
+        offset = kwargs.pop("offset", None)
+        limit = kwargs.pop("limit", None)
+        order_by = ""
+        if SortMechanism.is_sql_sortable(sort):
+            order_by = sort
+        clauses = []
+        values = []
+        for k, v in kwargs.items():
+            if v == "" or v == "null":
+                clauses.append(f"{k} IS NULL")
+            else:
+                clauses.append(f"{k}=?")
+                values.append(v)
+        where_clause = ""
+        if clauses:
+            where_clause = "WHERE " + " AND ".join(clauses)
+        query = f"SELECT * FROM pictures {where_clause} {order_by}".strip()
+        logger.info("FULL QUERY: %s with values %s", query, values)
+        if limit is not None:
+            query += f" LIMIT {int(limit)}"
+        if offset is not None:
+            query += f" OFFSET {int(offset)}"
+        rows = self._db.query(query, tuple(values))
         result = []
         for row in rows:
             pic = PictureModel.from_dict(row)

@@ -17,6 +17,39 @@ logger = get_logger(__name__)
 
 class PictureUtils:
     @staticmethod
+    def load_metadata(file_path):
+        """
+        Efficiently return (height, width, channels) for image or video without loading full pixel data.
+        """
+        try:
+            # Try image first
+            with Image.open(file_path) as img:
+                w, h = img.size
+                mode = img.mode
+                if mode == "RGB":
+                    c = 3
+                elif mode == "L":
+                    c = 1
+                else:
+                    c = len(img.getbands())
+                return (h, w, c)
+        except Exception:
+            pass
+        # Try video
+        try:
+            import cv2
+            cap = cv2.VideoCapture(file_path)
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                h, w = frame.shape[:2]
+                c = frame.shape[2] if len(frame.shape) > 2 else 1
+                return (h, w, c)
+        except Exception:
+            pass
+        logger.error(f"Failed to read metadata for {file_path}")
+        return None
+    @staticmethod
     def load_image_or_video(file_path):
         try:
             # Try to open as image first

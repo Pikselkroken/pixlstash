@@ -336,23 +336,24 @@ async function fetchSortOptions() {
     const res = await fetch(`${BACKEND_URL}/sort_mechanisms`);
     if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
     const options = await res.json();
+    // Use backend-provided values directly
     sortOptions.value = options.map((opt) => ({
       label: opt.label,
       value: opt.id,
     }));
-    if (!selectedSort.value && options.length) {
-      selectedSort.value =
-        options.find((o) => o.id === "unsorted")?.id || options[0].id;
+    if (!selectedSort.value && sortOptions.value.length) {
+      selectedSort.value = sortOptions.value[0].value;
     }
   } catch (e) {
+    // Fallback to hardcoded options only if backend fails
     sortOptions.value = [
-      { label: "Date: Latest First", value: "date_desc" },
-      { label: "Date: Oldest First", value: "date_asc" },
-      { label: "Score: Highest First", value: "score_desc" },
-      { label: "Score: Lowest First", value: "score_asc" },
+      { label: "Date: Latest First", value: "created_at DESC" },
+      { label: "Date: Oldest First", value: "created_at ASC" },
+      { label: "Score: Highest First", value: "score DESC" },
+      { label: "Score: Lowest First", value: "score ASC" },
       { label: "Search Likeness", value: "search_likeness" },
     ];
-    if (!selectedSort.value) selectedSort.value = "date_desc";
+    if (!selectedSort.value) selectedSort.value = sortOptions.value[0].value;
   }
 }
 

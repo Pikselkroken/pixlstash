@@ -48,6 +48,28 @@ class VaultUpgrade:
             self.schema_version.set_version(3)
             self.logger.info("Database schema upgraded to version 3")
 
+        # Version 4: Add sharpness, edge_density, noise_level columns to pictures
+        if current_version < 4:
+            self.logger.info("Upgrading database schema to version 4 (quality columns)...")
+            self._upgrade_to_v4()
+            self.schema_version.set_version(4)
+            self.logger.info("Database schema upgraded to version 4")
+
+    def _upgrade_to_v4(self):
+        cursor = self.connection.cursor()
+        # Add columns if they don't exist
+        columns_to_add = [
+            "sharpness", "edge_density", "contrast", "brightness", "noise_level",
+            "face_sharpness", "face_edge_density", "face_contrast", "face_brightness", "face_noise_level"
+        ]
+        cursor.execute(f"PRAGMA table_info(pictures)")
+        columns = [row[1] for row in cursor.fetchall()]
+        for col in columns_to_add:
+            if col not in columns:
+                cursor.execute(f"ALTER TABLE pictures ADD COLUMN {col} REAL")
+                self.logger.info(f"Added column {col} to pictures table.")
+        self.connection.commit()
+
     def _ensure_reference_picture_sets(self):
         self.logger.info("Ensuring reference picture sets for all characters...")
         cursor = self.connection.cursor()

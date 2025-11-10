@@ -1084,75 +1084,7 @@ class Server:
                     pics = self.vault.pictures.find_by_text(query, top_n=offset + limit)
                     pics = pics[offset : offset + limit]
             else:
-                pics = self.vault.pictures.find(**query_params)
-
-                if sort in [
-                    SortMechanism.SCORE_DESC.value,
-                    SortMechanism.SCORE_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.SCORE_DESC.value
-                    pics.sort(
-                        key=lambda p: p.score if p.score is not None else -1,
-                        reverse=reverse,
-                    )
-                elif sort in [
-                    SortMechanism.DATE_DESC.value,
-                    SortMechanism.DATE_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.DATE_DESC.value
-                    pics.sort(key=lambda p: p.created_at or "", reverse=reverse)
-                elif sort in [
-                    SortMechanism.SHARPNESS_DESC.value,
-                    SortMechanism.SHARPNESS_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.SHARPNESS_DESC.value
-                    pics.sort(
-                        key=lambda p: json.loads(p.quality).get("sharpness", -1)
-                        if p.quality
-                        else -1,
-                        reverse=reverse,
-                    )
-                elif sort in [
-                    SortMechanism.EDGE_DENSITY_DESC.value,
-                    SortMechanism.EDGE_DENSITY_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.EDGE_DENSITY_DESC.value
-                    pics.sort(
-                        key=lambda p: json.loads(p.quality).get("edge_density", -1)
-                        if p.quality
-                        else -1,
-                        reverse=reverse,
-                    )
-                elif sort in [
-                    SortMechanism.NOISE_LEVEL_DESC.value,
-                    SortMechanism.NOISE_LEVEL_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.NOISE_LEVEL_DESC.value
-                    pics.sort(
-                        key=lambda p: json.loads(p.quality).get("noise_level", -1)
-                        if p.quality
-                        else -1,
-                        reverse=reverse,
-                    )
-                elif sort == SortMechanism.HAS_DESCRIPTION.value:
-                    # Pictures with descriptions first
-                    pics.sort(key=lambda p: 0 if p.description else 1)
-                elif sort == SortMechanism.NO_DESCRIPTION.value:
-                    # Pictures without descriptions first
-                    pics.sort(key=lambda p: 1 if p.description else 0)
-                elif sort in [
-                    SortMechanism.FORMAT_ASC.value,
-                    SortMechanism.FORMAT_DESC.value,
-                ]:
-                    reverse = sort == SortMechanism.FORMAT_DESC.value
-                    pics.sort(
-                        key=lambda p: p.format.lower() if p.format else "zzz",
-                        reverse=reverse,
-                    )
-                # else: unsorted
-                if limit != sys.maxsize:
-                    pics = pics[offset : offset + limit]
-
+                pics = self.vault.pictures.find(sort=sort, offset=offset, limit=limit, **query_params)
             return [pic.to_dict() for pic in pics]
 
         @self.api.get("/export/zip")

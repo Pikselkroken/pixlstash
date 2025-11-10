@@ -48,8 +48,16 @@ class PictureModel:
     text_embedding: bytes = field(default=None)
     face_bbox: str = field(default=None)
     thumbnail: bytes = field(default=None)
-    quality: PictureQuality = field(default=None)
-    face_quality: PictureQuality = field(default=None)
+    sharpness: float = field(default=None)
+    edge_density: float = field(default=None)
+    contrast: float = field(default=None)
+    brightness: float = field(default=None)
+    noise_level: float = field(default=None)
+    face_sharpness: float = field(default=None)
+    face_edge_density: float = field(default=None)
+    face_contrast: float = field(default=None)
+    face_brightness: float = field(default=None)
+    face_noise_level: float = field(default=None)
     score: int = field(default=None)
     character_likeness: float = field(default=None)
     facial_features: bytes = field(default=None)
@@ -93,8 +101,16 @@ class PictureModel:
             "thumbnail": base64.b64encode(self.thumbnail).decode("ascii")
             if self.thumbnail is not None
             else None,
-            "quality": self.quality,
-            "face_quality": self.face_quality,
+            "sharpness": self.sharpness,
+            "edge_density": self.edge_density,
+            "contrast": self.contrast,
+            "brightness": self.brightness,
+            "noise_level": self.noise_level,
+            "face_sharpness": self.face_sharpness,
+            "face_edge_density": self.face_edge_density,
+            "face_contrast": self.face_contrast,
+            "face_brightness": self.face_brightness,
+            "face_noise_level": self.face_noise_level,
             "score": self.score,
             "character_likeness": self.character_likeness,
             "pixel_sha": self.pixel_sha,
@@ -110,11 +126,8 @@ class PictureModel:
     @classmethod
     def from_dict(cls, row: Union[dict, sqlite3.Row]) -> Self:
         assert isinstance(row, dict) or isinstance(row, sqlite3.Row)
-
         assert "id" in row.keys(), "PictureModel.from_dict requires 'id' field in row"
 
-        # text_embedding and thumbnail are always stored as base64 strings in DB (from to_dict())
-        # Decode them to bytes for internal use
         text_embedding = None
         if "text_embedding" in row.keys() and row["text_embedding"] is not None:
             text_embedding = base64.b64decode(row["text_embedding"])
@@ -127,18 +140,16 @@ class PictureModel:
         if "thumbnail" in row.keys() and row["thumbnail"] is not None:
             thumbnail = base64.b64decode(row["thumbnail"])
 
-        quality = PictureQuality.from_db_value(row["quality"] if "quality" in row.keys() else None)
-
-        face_quality = None
-        if "face_quality" in row.keys() and row["face_quality"] is not None:
-            value = row["face_quality"]
-            if isinstance(value, tuple):
-                value = value[0]
-            if isinstance(value, str):
-                face_quality_dict = json.loads(value)
-            else:
-                face_quality_dict = value
-            face_quality = PictureQuality.from_db_value(row["face_quality"] if "face_quality" in row.keys() else None)
+        sharpness = row["sharpness"] if "sharpness" in row.keys() else None
+        edge_density = row["edge_density"] if "edge_density" in row.keys() else None
+        contrast = row["contrast"] if "contrast" in row.keys() else None
+        brightness = row["brightness"] if "brightness" in row.keys() else None
+        noise_level = row["noise_level"] if "noise_level" in row.keys() else None
+        face_sharpness = row["face_sharpness"] if "face_sharpness" in row.keys() else None
+        face_edge_density = row["face_edge_density"] if "face_edge_density" in row.keys() else None
+        face_contrast = row["face_contrast"] if "face_contrast" in row.keys() else None
+        face_brightness = row["face_brightness"] if "face_brightness" in row.keys() else None
+        face_noise_level = row["face_noise_level"] if "face_noise_level" in row.keys() else None
 
         return cls(
             id=row["id"],
@@ -160,8 +171,16 @@ class PictureModel:
             if "face_bbox" in row.keys() and row["face_bbox"]
             else None,
             thumbnail=thumbnail,
-            quality=quality,
-            face_quality=face_quality,
+            sharpness=sharpness,
+            edge_density=edge_density,
+            contrast=contrast,
+            brightness=brightness,
+            noise_level=noise_level,
+            face_sharpness=face_sharpness,
+            face_edge_density=face_edge_density,
+            face_contrast=face_contrast,
+            face_brightness=face_brightness,
+            face_noise_level=face_noise_level,
             score=row["score"] if "score" in row.keys() else None,
             character_likeness=row["character_likeness"]
             if "character_likeness" in row.keys()
