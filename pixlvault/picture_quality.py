@@ -26,6 +26,26 @@ class PictureQuality:
         self.brightness = brightness  # Normalized brightness (0.0-1.0)
         self.noise_level = noise_level  # Estimated noise (0.0-1.0)
 
+    def to_dict(self):
+        """Convert PictureQuality instance to dictionary."""
+        return {
+            "sharpness": self.sharpness,
+            "edge_density": self.edge_density,
+            "contrast": self.contrast,
+            "brightness": self.brightness,
+            "noise_level": self.noise_level,
+        }
+    @staticmethod
+    def from_dict(data: dict) -> "PictureQuality":
+        """Create PictureQuality instance from dictionary."""
+        return PictureQuality(
+            sharpness=data.get("sharpness"),
+            edge_density=data.get("edge_density"),
+            contrast=data.get("contrast"),
+            brightness=data.get("brightness"),
+            noise_level=data.get("noise_level"),
+        )
+
     @staticmethod
     def calculate_metrics(
         image: np.ndarray, face_crop: Optional[np.ndarray] = None

@@ -84,6 +84,7 @@ class PictureTagger:
         self._tag_naturaliser = TagNaturaliser()
 
         # Initialize Florence-2 for captioning
+        logger.info("Initializing Florence-2 for captioning...")
         self._florence_model = None
         self._florence_processor = None
 
@@ -92,7 +93,7 @@ class PictureTagger:
 
         self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 60
 
-        self._init_florence_captioning
+        self._init_florence_captioning()
 
     def __enter__(self):
         logger.debug("PictureTagger.__enter__ called.")
@@ -319,7 +320,7 @@ class PictureTagger:
                 )
                 if self._reload_florence_on_cpu():
                     return self._generate_florence_caption(
-                        image_path, character_name, tags=tags, _retry_on_cpu=False
+                        image_path, character_name, _retry_on_cpu=False
                     )
 
             logger.error(f"Florence-2 captioning failed for {image_path}: {e}")
@@ -612,74 +613,64 @@ class PictureTagger:
         logger.info(f"Completed tagging for {len(all_results)} images.")
         return self._merge_video_frame_tags(all_results)
 
-    def generate_text_embedding(self, character=None, picture=None):
+    def generate_description(self, picture, character=None):
+        florence_caption = self._generate_florence_caption(
+            picture.file_path
+        )
+        if florence_caption:
+            character_name_capitalized = None
+            if character and hasattr(character, "name") and character.name:
+                character_name_capitalized = " ".join(
+                    word.capitalize() for word in character.name.split()
+                )
+                import re
+                person_pattern = r"\b(a young woman|a woman|the woman|a young man|a man|the man|a person|the person)\b"
+                match = re.search(person_pattern, florence_caption, re.IGNORECASE)
+                if match:
+                    insert_pos = match.end()
+                    florence_caption = (
+                        florence_caption[:insert_pos]
+                        + f" named {character_name_capitalized}"
+                        + florence_caption[insert_pos:]
+                    )
+                else:
+                    florence_caption = (
+                        f"{character_name_capitalized}. {florence_caption}"
+                    )
+            logger.debug(f"Text embedding: using Florence-2 caption: {florence_caption}")
+        else:
+            logger.error(
+                "Florence captioning failed for %s", getattr(picture, "file_path", None),
+            )
+            raise RuntimeError(
+                "Florence captioning failed."
+            )
+        return florence_caption
+
+    def generate_text_embedding(self, picture, character=None):
         """
         Generate a CLIP embedding from all text found in character and picture objects (recursively), avoiding cycles.
         Returns text_embedding and full_text.
         """
 
-        # Try Florence-2 captioning first if enabled and picture has file_path
-        full_text = None
-        expect_florence_caption = (
-            self._use_florence
-            and picture
-            and hasattr(picture, "file_path")
-            and picture.file_path
-        )
-        if expect_florence_caption:
-            florence_caption = self._generate_florence_caption(
-                picture.file_path, tags=getattr(picture, "tags", None)
+        texts = []
+        if character:
+            texts.extend(self._collect_text(character))
+        if picture:
+            texts.extend(self._collect_text(picture))
+        texts = self._filter_texts(texts)
+        logger.debug(f"Text Embedding: texts used for embedding (filtered): {texts}")
+        if not texts:
+            logger.error(
+                "Text Embedding: No text data for embedding. character=%s, picture=%s",
+                character,
+                picture,
             )
-            if florence_caption:
-                character_name_capitalized = None
-                if character and hasattr(character, "name") and character.name:
-                    character_name_capitalized = " ".join(
-                        word.capitalize() for word in character.name.split()
-                    )
-                    import re
-                    person_pattern = r"\b(a young woman|a woman|the woman|a young man|a man|the man|a person|the person)\b"
-                    match = re.search(person_pattern, florence_caption, re.IGNORECASE)
-                    if match:
-                        insert_pos = match.end()
-                        florence_caption = (
-                            florence_caption[:insert_pos]
-                            + f" named {character_name_capitalized}"
-                            + florence_caption[insert_pos:]
-                        )
-                    else:
-                        florence_caption = (
-                            f"{character_name_capitalized}. {florence_caption}"
-                        )
-                full_text = florence_caption
-                logger.debug(f"Text embedding: using Florence-2 caption: {full_text}")
-            else:
-                logger.error(
-                    "Florence captioning failed; refusing to fall back to tag-based description for %s",
-                    getattr(picture, "file_path", None),
-                )
-                raise RuntimeError(
-                    "Florence captioning failed and Florence-only captions are enabled."
-                )
-
-        if full_text is None:
-            texts = []
-            if character:
-                texts.extend(self._collect_text(character))
-            if picture:
-                texts.extend(self._collect_text(picture))
-            texts = self._filter_texts(texts)
-            logger.debug(f"Text Embedding: texts used for embedding (filtered): {texts}")
-            if not texts:
-                logger.error(
-                    "Text Embedding: No text data for embedding. character=%s, picture=%s",
-                    character,
-                    picture,
-                )
-                raise ValueError("No text data for embedding.")
-            logger.debug(f"Text Embedding: tags going into description: {texts}")
-            full_text = self._tag_naturaliser.tags_to_sentence(texts)
-            full_text = full_text.lower()
-            logger.debug(f"Text Embedding: full_text for CLIP: {full_text}")
+            raise ValueError("No text data for embedding.")
+        logger.debug(f"Text Embedding: tags going into description: {texts}")
+        full_text = self._tag_naturaliser.tags_to_sentence(texts)
+        full_text = full_text.lower()
+        logger.debug(f"Text Embedding: full_text for CLIP: {full_text}")
 
         # Generate text embedding
         text_embedding = None

@@ -64,13 +64,13 @@ class Vault:
         logger.info("Stopping background workers...")
         self.pictures.stop_quality_worker()        
         self.pictures.stop_facial_features_worker()
-        self.pictures.stop_embeddings_worker()
+        self.pictures.stop_text_embedding_worker()
 
     def start_background_workers(self):
         logger.info("Starting background workers...")
         self.pictures.start_quality_worker()
         self.pictures.start_facial_features_worker()
-        self.pictures.start_embeddings_worker()
+        self.pictures.start_text_embedding_worker()
 
     def __repr__(self):
         """
