@@ -17,6 +17,23 @@ logger = get_logger(__name__)
 
 class PictureUtils:
     @staticmethod
+    def batch_facial_likeness(facial_features_list: list[np.ndarray]) -> np.ndarray:
+        """
+        Given a list of facial feature arrays (all same shape), compute a likeness matrix (cosine similarity).
+        Each entry [i, j] is the cosine similarity between facial_features_list[i] and facial_features_list[j].
+        Returns an (N, N) numpy array.
+        """
+        import numpy as np
+
+        X = np.stack(facial_features_list, axis=0)  # shape (N, D)
+        # Normalize each vector
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+        X_norm = X / (norms + 1e-8)
+        # Cosine similarity matrix
+        likeness_matrix = np.dot(X_norm, X_norm.T)
+        return likeness_matrix
+
+    @staticmethod
     def load_metadata(file_path):
         """
         Efficiently return (height, width, channels) for image or video without loading full pixel data.
@@ -344,3 +361,37 @@ class PictureUtils:
             pixel_sha=pixel_sha,
         )
         return pic
+
+    @staticmethod
+    def batch_face_likeness(face_crops: list[list[np.ndarray]]) -> np.ndarray:
+        """
+        Given a list of lists of face crops (as numpy arrays), compute a likeness matrix (cosine similarity).
+        Each entry [i, j] is the best likeness between any crop in i and any crop in j.
+        Returns an (N, N) numpy array.
+        """
+        import numpy as np
+
+        N = len(face_crops)
+        likeness_matrix = np.zeros((N, N), dtype=np.float32)
+        # Flatten all crops and stack into tensors for batch ops
+        flat_crops = [
+            [
+                crop.flatten().astype(np.float32)
+                / (np.linalg.norm(crop.flatten().astype(np.float32)) + 1e-8)
+                for crop in crops
+            ]
+            for crops in face_crops
+        ]
+        for i in range(N):
+            for j in range(N):
+                if i == j or not flat_crops[i] or not flat_crops[j]:
+                    likeness_matrix[i, j] = 0.0
+                else:
+                    # Compute all pairwise cosine similarities, take max
+                    sims = [
+                        float(np.dot(c1, c2))
+                        for c1 in flat_crops[i]
+                        for c2 in flat_crops[j]
+                    ]
+                    likeness_matrix[i, j] = max(sims) if sims else 0.0
+        return likeness_matrix

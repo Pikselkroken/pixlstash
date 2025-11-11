@@ -59,28 +59,14 @@ class VaultUpgrade:
             self.schema_version.set_version(4)
             self.logger.info("Database schema upgraded to version 4")
 
-    def _upgrade_to_v4(self):
-        cursor = self.connection.cursor()
-        # Add columns if they don't exist
-        columns_to_add = [
-            "sharpness",
-            "edge_density",
-            "contrast",
-            "brightness",
-            "noise_level",
-            "face_sharpness",
-            "face_edge_density",
-            "face_contrast",
-            "face_brightness",
-            "face_noise_level",
-        ]
-        cursor.execute("PRAGMA table_info(pictures)")
-        columns = [row[1] for row in cursor.fetchall()]
-        for col in columns_to_add:
-            if col not in columns:
-                cursor.execute(f"ALTER TABLE pictures ADD COLUMN {col} REAL")
-                self.logger.info(f"Added column {col} to pictures table.")
-        self.connection.commit()
+        # Version 5: Add picture_likeness table
+        if current_version < 5:
+            self.logger.info(
+                "Upgrading database schema to version 5 (picture_likeness)..."
+            )
+            self._upgrade_to_v5()
+            self.schema_version.set_version(5)
+            self.logger.info("Database schema upgraded to version 5")
 
     def _ensure_reference_picture_sets(self):
         self.logger.info("Ensuring reference picture sets for all characters...")
@@ -172,3 +158,47 @@ class VaultUpgrade:
         """)
         self.connection.commit()
         self.logger.info("reference_picture_likeness table created successfully")
+
+    def _upgrade_to_v4(self):
+        cursor = self.connection.cursor()
+        # Add columns if they don't exist
+        columns_to_add = [
+            "sharpness",
+            "edge_density",
+            "contrast",
+            "brightness",
+            "noise_level",
+            "face_sharpness",
+            "face_edge_density",
+            "face_contrast",
+            "face_brightness",
+            "face_noise_level",
+        ]
+        cursor.execute("PRAGMA table_info(pictures)")
+        columns = [row[1] for row in cursor.fetchall()]
+        for col in columns_to_add:
+            if col not in columns:
+                cursor.execute(f"ALTER TABLE pictures ADD COLUMN {col} REAL")
+                self.logger.info(f"Added column {col} to pictures table.")
+        self.connection.commit()
+
+    def _upgrade_to_v5(self):
+        """Add picture_likeness table for pairwise likeness scores."""
+        self.logger.info("Creating picture_likeness table...")
+        self.connection.execute("""
+            CREATE TABLE IF NOT EXISTS picture_likeness (
+                picture_id_a TEXT NOT NULL,
+                picture_id_b TEXT NOT NULL,
+                likeness REAL,
+                metric TEXT,
+                PRIMARY KEY (picture_id_a, picture_id_b)
+            )
+        """)
+        self.connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_picture_likeness_picture_id_a ON picture_likeness(picture_id_a)
+        """)
+        self.connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_picture_likeness_picture_id_b ON picture_likeness(picture_id_b)
+        """)
+        self.connection.commit()
+        self.logger.info("picture_likeness table created successfully")
