@@ -1,6 +1,6 @@
-import sqlite3
 from dataclasses import dataclass, field
 from typing import Self
+
 
 @dataclass
 class ReferencePictureLikenessModel:
@@ -8,10 +8,17 @@ class ReferencePictureLikenessModel:
     Database model for the reference_picture_likeness table.
     Stores likeness scores for each (picture, reference_picture, face) combination.
     """
+
     __tablename__ = "reference_picture_likeness"
-    picture_id: str = field(default=None, metadata={"foreign_key": "pictures(id)", "composite_key": True})
-    reference_picture_id: str = field(default=None, metadata={"foreign_key": "pictures(id)", "composite_key": True})
-    character_id: int = field(default=None, metadata={"foreign_key": "characters(id)", "composite_key": True})
+    picture_id: str = field(
+        default=None, metadata={"foreign_key": "pictures(id)", "composite_key": True}
+    )
+    reference_picture_id: str = field(
+        default=None, metadata={"foreign_key": "pictures(id)", "composite_key": True}
+    )
+    character_id: int = field(
+        default=None, metadata={"foreign_key": "characters(id)", "composite_key": True}
+    )
     face_index: int = field(default=None, metadata={"composite_key": True})
     likeness_score: float = field(default=None)
 

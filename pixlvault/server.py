@@ -445,7 +445,6 @@ class Server:
                     d["likeness_score"] = likeness_score
                 return d
 
-
             q = query.strip().lower()
             if not q:
                 return []
@@ -490,7 +489,9 @@ class Server:
                 for tag in tags_and_name:
                     tag_lower = str(tag).lower()
                     score = fuzz.ratio(q, tag_lower) / 100
-                    score *= min(len(q), len(tag_lower)) / max(len(q), len(tag_lower), 1)
+                    score *= min(len(q), len(tag_lower)) / max(
+                        len(q), len(tag_lower), 1
+                    )
                     full_tag_scores.append(score)
                     if score >= 0.8:
                         strong_tag_matches += 1
@@ -498,7 +499,9 @@ class Server:
                 # Also match full query against character name
                 for name_word in char_name_words:
                     score = fuzz.ratio(q, name_word) / 100
-                    score *= min(len(q), len(name_word)) / max(len(q), len(name_word), 1)
+                    score *= min(len(q), len(name_word)) / max(
+                        len(q), len(name_word), 1
+                    )
                     if score >= 0.8:
                         char_name_match = True
 
@@ -508,7 +511,9 @@ class Server:
                     # Character name
                     for name_word in char_name_words:
                         score = fuzz.ratio(q_word, name_word) / 100
-                        score *= min(len(q_word), len(name_word)) / max(len(q_word), len(name_word), 1)
+                        score *= min(len(q_word), len(name_word)) / max(
+                            len(q_word), len(name_word), 1
+                        )
                         if score > max_score:
                             max_score = score
                         if score >= 0.8:
@@ -517,7 +522,9 @@ class Server:
                     for tag in tags_and_name:
                         tag_lower = str(tag).lower()
                         score = fuzz.ratio(q_word, tag_lower) / 100
-                        score *= min(len(q_word), len(tag_lower)) / max(len(q_word), len(tag_lower), 1)
+                        score *= min(len(q_word), len(tag_lower)) / max(
+                            len(q_word), len(tag_lower), 1
+                        )
                         if score > max_score:
                             max_score = score
                         if score >= 0.8:
@@ -540,7 +547,10 @@ class Server:
                 match_coverage = decent_matches / len(tag_scores) if tag_scores else 0
                 coverage_penalty = 1.0 if match_coverage >= 0.5 else match_coverage * 2
 
-                total_score = max(0.4 * max_score + 0.6 * max_score, desc_score) * coverage_penalty
+                total_score = (
+                    max(0.4 * max_score + 0.6 * max_score, desc_score)
+                    * coverage_penalty
+                )
 
                 fuzzy_scores[pic.id] = total_score
                 character_match_bonus[pic.id] = 0.15 if char_name_match else 0
@@ -572,9 +582,9 @@ class Server:
             # 4 words: 30% fuzzy, 70% semantic
             # 5+ 20% fuzzy, 80% semantic
             if n_words <= 2:
-                fuzzy_w, sem_w = 0.9, 0.1
-            elif n_words == 3:
                 fuzzy_w, sem_w = 0.6, 0.4
+            elif n_words == 3:
+                fuzzy_w, sem_w = 0.5, 0.5
             elif n_words == 4:
                 fuzzy_w, sem_w = 0.3, 0.7
             else:
@@ -603,9 +613,6 @@ class Server:
                     )
                 # else: very weak match (<0.15): no bonuses applied
 
-                logger.info(
-                    f"Got combined score of {combined_score} for PicID={pic_id} (Fuzzy={fuzzy_score}, Semantic={sem_score}, CharBonus={char_bonus}, TagBonus={tag_bonus})"
-                )
                 pic = next((p for p in all_pics if p.id == pic_id), None)
                 if pic:
                     if combined_score < threshold:
@@ -630,6 +637,12 @@ class Server:
 
             # Sort by combined score, then by created_at
             combined.sort(key=lambda x: (-x[1], x[0].created_at or ""))
+
+            for pic, combined_score, fuzzy_score, sem_score in combined:
+                logger.info(
+                    f"Got combined score of {combined_score} for PicID={pic.id} (Fuzzy={fuzzy_score}, Semantic={sem_score}, CharBonus={char_bonus}, TagBonus={tag_bonus})"
+                )
+
             # Optionally, include fuzzy/semantic scores for debugging:
             # return [{**pic_to_dict(pic), "score": score, "fuzzy": fuzzy, "semantic": sem} for pic, score, fuzzy, sem in combined[:top_n]]
             return [
@@ -653,7 +666,8 @@ class Server:
                 # Drop embeddings for all pictures with this primary_character_id
                 pics = self.vault.pictures.find(primary_character_id=id)
                 for pic in pics:
-                    pic.embedding = None
+                    pic.description = None
+                    pic.text_embedding = None
 
                 self.vault.pictures.update(pics)
             if description is not None and description != char.description:
@@ -904,7 +918,9 @@ class Server:
             for key, value in params.items():
                 # Instrument for debugging: log if value is bytes
                 if isinstance(value, bytes):
-                    logger.error(f"PATCH attempted to set field '{key}' to bytes value: {value!r} (type={type(value)})")
+                    logger.error(
+                        f"PATCH attempted to set field '{key}' to bytes value: {value!r} (type={type(value)})"
+                    )
                 try:
                     cast_val = int(value)
                 except Exception:
@@ -916,15 +932,26 @@ class Server:
                     )
                     # Assert metrics are not bytes before assignment
                     if key in [
-                        "sharpness", "edge_density", "contrast", "brightness", "noise_level",
-                        "face_sharpness", "face_edge_density", "face_contrast", "face_brightness", "face_noise_level"
+                        "sharpness",
+                        "edge_density",
+                        "contrast",
+                        "brightness",
+                        "noise_level",
+                        "face_sharpness",
+                        "face_edge_density",
+                        "face_contrast",
+                        "face_brightness",
+                        "face_noise_level",
                     ]:
-                        assert not isinstance(cast_val, bytes), f"PATCH attempted to set metric '{key}' to bytes for picture {id}: {cast_val!r}"
+                        assert not isinstance(cast_val, bytes), (
+                            f"PATCH attempted to set metric '{key}' to bytes for picture {id}: {cast_val!r}"
+                        )
                     old_val = getattr(pic, key)
                     setattr(pic, key, cast_val)
                     # Drop embedding if primary_character_id changes
                     if key == "primary_character_id" and old_val != cast_val:
-                        pic.embedding = None
+                        pic.description = None
+                        pic.text_embedding = None
                     updated = True
             if updated:
                 self.vault.pictures.update(pic)
@@ -1093,7 +1120,9 @@ class Server:
                     pics = self.vault.pictures.find_by_text(query, top_n=offset + limit)
                     pics = pics[offset : offset + limit]
             else:
-                pics = self.vault.pictures.find(sort=sort, offset=offset, limit=limit, **query_params)
+                pics = self.vault.pictures.find(
+                    sort=sort, offset=offset, limit=limit, **query_params
+                )
             return [pic.to_dict() for pic in pics]
 
         @self.api.get("/export/zip")

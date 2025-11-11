@@ -5,7 +5,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Self, Union
 
-from .picture_quality import PictureQuality
 from .logging import get_logger
 
 # Configure logging for the module
@@ -72,7 +71,8 @@ class PictureModel:
         default=None, metadata={"foreign_key": "picture_sets(id)", "index": True}
     )
     tags: list[str] = field(
-        default_factory=list, metadata={"db_ignore": True, "include_in_text_embedding": True}
+        default_factory=list,
+        metadata={"db_ignore": True, "include_in_text_embedding": True},
     )
     character_ids: list[int] = field(default_factory=list, metadata={"db_ignore": True})
 
@@ -84,9 +84,10 @@ class PictureModel:
             if isinstance(val, bytes):
                 # Log and convert to float if possible, else None
                 import struct
+
                 try:
                     # Try to decode as float32
-                    return struct.unpack('f', val)[0]
+                    return struct.unpack("f", val)[0]
                 except Exception:
                     return None
             return float(val) if val is not None else None
@@ -161,11 +162,19 @@ class PictureModel:
         contrast = row["contrast"] if "contrast" in row.keys() else None
         brightness = row["brightness"] if "brightness" in row.keys() else None
         noise_level = row["noise_level"] if "noise_level" in row.keys() else None
-        face_sharpness = row["face_sharpness"] if "face_sharpness" in row.keys() else None
-        face_edge_density = row["face_edge_density"] if "face_edge_density" in row.keys() else None
+        face_sharpness = (
+            row["face_sharpness"] if "face_sharpness" in row.keys() else None
+        )
+        face_edge_density = (
+            row["face_edge_density"] if "face_edge_density" in row.keys() else None
+        )
         face_contrast = row["face_contrast"] if "face_contrast" in row.keys() else None
-        face_brightness = row["face_brightness"] if "face_brightness" in row.keys() else None
-        face_noise_level = row["face_noise_level"] if "face_noise_level" in row.keys() else None
+        face_brightness = (
+            row["face_brightness"] if "face_brightness" in row.keys() else None
+        )
+        face_noise_level = (
+            row["face_noise_level"] if "face_noise_level" in row.keys() else None
+        )
 
         return cls(
             id=row["id"],

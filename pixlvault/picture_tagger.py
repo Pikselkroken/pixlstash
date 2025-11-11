@@ -12,7 +12,7 @@ import re
 import torch
 
 from tqdm import tqdm
-
+from sentence_transformers import SentenceTransformer
 
 from .logging import get_logger
 from pixlvault.tag_naturaliser import TagNaturaliser
@@ -267,20 +267,38 @@ class PictureTagger:
                     f"Resized image to {new_width}x{new_height} for faster processing"
                 )
 
-
             # Standard Florence captioning: no tag hints, just use the default prompt
             inputs = self._florence_processor(
                 text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
             )
 
-            if "pixel_values" not in inputs or inputs["pixel_values"] is None:
-                logger.error(
-                    f"pixel_values missing or None in processor output: {inputs.keys()}"
-                )
-                return None
-
+            # Move inputs to device (use Florence's device, not the general device)
             florence_device = getattr(self, "_florence_device", self._device)
-            inputs = {k: v.to(florence_device) if torch.is_tensor(v) else v for k, v in inputs.items()}
+
+            # Match the dtype of the model (FP16 on GPU, FP32 on CPU)
+            target_dtype = (
+                self._florence_model.dtype
+                if hasattr(self._florence_model, "dtype")
+                else None
+            )
+
+            if target_dtype and target_dtype == torch.float16:
+                inputs = {
+                    k: v.to(florence_device).half()
+                    if torch.is_tensor(v) and v.dtype == torch.float32
+                    else v.to(florence_device)
+                    if torch.is_tensor(v)
+                    else v
+                    for k, v in inputs.items()
+                }
+
+            else:
+                inputs = {
+                    k: v.to(florence_device) if torch.is_tensor(v) else v
+                    for k, v in inputs.items()
+                }
+
+            logger.debug(f"Inputs moved to {florence_device}")
 
             with torch.inference_mode():
                 generated_ids = self._florence_model.generate(
@@ -614,9 +632,7 @@ class PictureTagger:
         return self._merge_video_frame_tags(all_results)
 
     def generate_description(self, picture, character=None):
-        florence_caption = self._generate_florence_caption(
-            picture.file_path
-        )
+        florence_caption = self._generate_florence_caption(picture.file_path)
         if florence_caption:
             character_name_capitalized = None
             if character and hasattr(character, "name") and character.name:
@@ -624,6 +640,7 @@ class PictureTagger:
                     word.capitalize() for word in character.name.split()
                 )
                 import re
+
                 person_pattern = r"\b(a young woman|a woman|the woman|a young man|a man|the man|a person|the person)\b"
                 match = re.search(person_pattern, florence_caption, re.IGNORECASE)
                 if match:
@@ -637,19 +654,20 @@ class PictureTagger:
                     florence_caption = (
                         f"{character_name_capitalized}. {florence_caption}"
                     )
-            logger.debug(f"Text embedding: using Florence-2 caption: {florence_caption}")
+            logger.debug(
+                f"Text embedding: using Florence-2 caption: {florence_caption}"
+            )
         else:
             logger.error(
-                "Florence captioning failed for %s", getattr(picture, "file_path", None),
+                "Florence captioning failed for %s",
+                getattr(picture, "file_path", None),
             )
-            raise RuntimeError(
-                "Florence captioning failed."
-            )
+            raise RuntimeError("Florence captioning failed.")
         return florence_caption
 
     def generate_text_embedding(self, picture, character=None):
         """
-        Generate a CLIP embedding from all text found in character and picture objects (recursively), avoiding cycles.
+        Generate a SBERT embedding from all text found in character and picture objects (recursively), avoiding cycles.
         Returns text_embedding and full_text.
         """
 
@@ -670,35 +688,14 @@ class PictureTagger:
         logger.debug(f"Text Embedding: tags going into description: {texts}")
         full_text = self._tag_naturaliser.tags_to_sentence(texts)
         full_text = full_text.lower()
-        logger.debug(f"Text Embedding: full_text for CLIP: {full_text}")
+        logger.info(f"Text Embedding: full_text for SBERT: {full_text}")
 
-        # Generate text embedding
-        text_embedding = None
-        try:
-            with torch.no_grad():
-                text_tokens = self._clip_tokenizer([full_text]).to(self._clip_device)
-                text_embedding = self._clip_model.encode_text(text_tokens)
-                text_embedding = text_embedding.cpu().numpy()[0]
-        except RuntimeError as e:
-            if (
-                ("CUDA out of memory" in str(e))
-                or ("not compatible" in str(e))
-                or ("CUDA error" in str(e))
-            ):
-                logger.warning(
-                    f"CLIP embedding failed on CUDA: {e}. Falling back to CPU."
-                )
-                self._clip_device = "cpu"
-                self._clip_model = self._clip_model.to(self._clip_device)
-                with torch.no_grad():
-                    text_tokens = self._clip_tokenizer([full_text]).to(
-                        self._clip_device
-                    )
-                    text_embedding = self._clip_model.encode_text(text_tokens)
-                    text_embedding = text_embedding.cpu().numpy()[0]
-            else:
-                raise
-
+        # Generate text embedding using SBERT
+        sbert_model = getattr(self, "_sbert_model", None)
+        if sbert_model is None:
+            sbert_model = SentenceTransformer("all-MiniLM-L6-v2")
+            self._sbert_model = sbert_model
+        text_embedding = sbert_model.encode(full_text)
         return text_embedding, full_text
 
     def generate_facial_features(self, picture):
@@ -707,15 +704,29 @@ class PictureTagger:
         Returns facial_features or None.
         """
         facial_features = None
-        if picture and hasattr(picture, "file_path") and hasattr(picture, "face_bbox") and picture.face_bbox:
+        if (
+            picture
+            and hasattr(picture, "file_path")
+            and hasattr(picture, "face_bbox")
+            and picture.face_bbox
+        ):
             try:
                 from pixlvault.picture_utils import PictureUtils
-                face_crop = PictureUtils.load_and_crop_face_bbox(picture.file_path, picture.face_bbox)
+
+                face_crop = PictureUtils.load_and_crop_face_bbox(
+                    picture.file_path, picture.face_bbox
+                )
                 if face_crop is not None:
                     # Preprocess for CLIP
-                    img_input = self._clip_preprocess(face_crop).unsqueeze(0).to(self._clip_device)
+                    img_input = (
+                        self._clip_preprocess(face_crop)
+                        .unsqueeze(0)
+                        .to(self._clip_device)
+                    )
                     with torch.no_grad():
-                        facial_features = self._clip_model.encode_image(img_input).cpu().numpy()[0]
+                        facial_features = (
+                            self._clip_model.encode_image(img_input).cpu().numpy()[0]
+                        )
             except RuntimeError as e:
                 if (
                     ("CUDA out of memory" in str(e))
@@ -729,18 +740,29 @@ class PictureTagger:
                     self._clip_model = self._clip_model.to(self._clip_device)
                     try:
                         if face_crop is not None:
-                            img_input = self._clip_preprocess(face_crop).unsqueeze(0).to(self._clip_device)
+                            img_input = (
+                                self._clip_preprocess(face_crop)
+                                .unsqueeze(0)
+                                .to(self._clip_device)
+                            )
                             with torch.no_grad():
-                                facial_features = self._clip_model.encode_image(img_input).cpu().numpy()[0]
+                                facial_features = (
+                                    self._clip_model.encode_image(img_input)
+                                    .cpu()
+                                    .numpy()[0]
+                                )
                     except Exception as e2:
-                        logger.error(f"Failed to generate facial features on CPU for {getattr(picture, 'file_path', None)}: {e2}")
+                        logger.error(
+                            f"Failed to generate facial features on CPU for {getattr(picture, 'file_path', None)}: {e2}"
+                        )
                         facial_features = None
                 else:
-                    logger.error(f"Failed to generate facial features for {getattr(picture, 'file_path', None)}: {e}")
+                    logger.error(
+                        f"Failed to generate facial features for {getattr(picture, 'file_path', None)}: {e}"
+                    )
                     facial_features = None
 
         return facial_features
-    
 
     def correct_tags_with_florence(self, florence_desc, current_tags=None):
         """
@@ -749,6 +771,7 @@ class PictureTagger:
         """
         try:
             import spacy
+
             nlp = spacy.load("en_core_web_sm")
             doc = nlp(florence_desc)
             candidates = set()

@@ -38,6 +38,7 @@ class PictureUtils:
         # Try video
         try:
             import cv2
+
             cap = cv2.VideoCapture(file_path)
             ret, frame = cap.read()
             cap.release()
@@ -49,6 +50,7 @@ class PictureUtils:
             pass
         logger.error(f"Failed to read metadata for {file_path}")
         return None
+
     @staticmethod
     def load_image_or_video(file_path):
         try:

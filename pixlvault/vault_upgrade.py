@@ -43,14 +43,18 @@ class VaultUpgrade:
         self._ensure_reference_picture_sets()
         # Version 3: Add reference_picture_likeness table
         if current_version < 3:
-            self.logger.info("Upgrading database schema to version 3 (reference_picture_likeness)...")
+            self.logger.info(
+                "Upgrading database schema to version 3 (reference_picture_likeness)..."
+            )
             self._upgrade_to_v3()
             self.schema_version.set_version(3)
             self.logger.info("Database schema upgraded to version 3")
 
         # Version 4: Add sharpness, edge_density, noise_level columns to pictures
         if current_version < 4:
-            self.logger.info("Upgrading database schema to version 4 (quality columns)...")
+            self.logger.info(
+                "Upgrading database schema to version 4 (quality columns)..."
+            )
             self._upgrade_to_v4()
             self.schema_version.set_version(4)
             self.logger.info("Database schema upgraded to version 4")
@@ -59,10 +63,18 @@ class VaultUpgrade:
         cursor = self.connection.cursor()
         # Add columns if they don't exist
         columns_to_add = [
-            "sharpness", "edge_density", "contrast", "brightness", "noise_level",
-            "face_sharpness", "face_edge_density", "face_contrast", "face_brightness", "face_noise_level"
+            "sharpness",
+            "edge_density",
+            "contrast",
+            "brightness",
+            "noise_level",
+            "face_sharpness",
+            "face_edge_density",
+            "face_contrast",
+            "face_brightness",
+            "face_noise_level",
         ]
-        cursor.execute(f"PRAGMA table_info(pictures)")
+        cursor.execute("PRAGMA table_info(pictures)")
         columns = [row[1] for row in cursor.fetchall()]
         for col in columns_to_add:
             if col not in columns:
@@ -130,7 +142,7 @@ class VaultUpgrade:
 
         self.connection.commit()
         self.logger.info("Picture sets tables created successfully")
-    
+
     def _upgrade_to_v3(self):
         """Add reference_picture_likeness table for likeness scores."""
         self.logger.info("Creating reference_picture_likeness table...")
@@ -151,7 +163,7 @@ class VaultUpgrade:
         """)
         self.connection.execute("""
             ALTER TABLE pictures ADD COLUMN facial_features BLOB
-        """)    
+        """)
         self.connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_reference_picture_likeness_reference_picture_id ON reference_picture_likeness(reference_picture_id)
         """)

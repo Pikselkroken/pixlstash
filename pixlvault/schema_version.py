@@ -19,7 +19,9 @@ class SchemaVersion:
         )
         cursor.execute("SELECT COUNT(*) as count FROM schema_version")
         if cursor.fetchone()["count"] == 0:
-            cursor.execute(f"INSERT INTO schema_version (version) VALUES ({self.CURRENT_SCHEMA_VERSION})")
+            cursor.execute(
+                f"INSERT INTO schema_version (version) VALUES ({self.CURRENT_SCHEMA_VERSION})"
+            )
         self.connection.commit()
 
     def get_version(self) -> int:

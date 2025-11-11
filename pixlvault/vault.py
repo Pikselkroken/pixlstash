@@ -62,7 +62,7 @@ class Vault:
 
     def stop_background_workers(self):
         logger.info("Stopping background workers...")
-        self.pictures.stop_quality_worker()        
+        self.pictures.stop_quality_worker()
         self.pictures.stop_facial_features_worker()
         self.pictures.stop_text_embedding_worker()
 

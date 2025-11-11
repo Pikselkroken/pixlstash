@@ -1,7 +1,5 @@
 import gc
-import concurrent
 import numpy as np
-import json
 import sqlite3
 import time
 import os
@@ -43,6 +41,7 @@ class SortMechanism(str, Enum):
     def is_sql_sortable(cls, sort):
         return sort and str(sort).startswith("ORDER BY")
 
+
 # List of available sorting mechanisms for API
 def get_sort_mechanisms():
     """Return a list of available sort mechanisms as dicts for API consumption."""
@@ -76,6 +75,7 @@ class Pictures:
         """
         from collections import defaultdict
         import math
+
         face_groups = defaultdict(list)
         for pic in pics:
             if pic.face_bbox is not None and len(pic.face_bbox) == 4:
@@ -199,18 +199,22 @@ class Pictures:
                     pics_needing_face_bboxes
                 )
                 if not insightface_ok:
-                    logger.debug("InsightFace model not available, skipping facial feature generation.")
+                    logger.debug(
+                        "InsightFace model not available, skipping facial feature generation."
+                    )
                     break
 
                 data_updated |= bboxes_updated
 
                 if self._facial_features_worker_stop.is_set():
                     break
-                
+
                 # 2. Generate facial features for pictures missing them
                 missing_facial_features = []
                 with self._db.threaded_connection as thread_conn:
-                    missing_facial_features = self._fetch_missing_facial_features(thread_conn)
+                    missing_facial_features = self._fetch_missing_facial_features(
+                        thread_conn
+                    )
                 if missing_facial_features:
                     logger.debug(
                         f"Generating facial features for {len(missing_facial_features)} pictures."
@@ -257,7 +261,7 @@ class Pictures:
                         f"Generating descriptions for {len(missing_descriptions)} pictures."
                     )
                     descriptions_generated = self._generate_descriptions(
-                            self._picture_tagger, missing_descriptions
+                        self._picture_tagger, missing_descriptions
                     )
 
                 if self._text_embedding_worker_stop.is_set():
@@ -286,13 +290,11 @@ class Pictures:
 
                 if self._text_embedding_worker_stop.is_set():
                     break
-                
+
                 # 6. Store generated tags
                 if tagged_pictures:
                     with self._db.threaded_connection as thread_conn:
-                        self._update_picture_tags(
-                            thread_conn, tagged_pictures
-                        )
+                        self._update_picture_tags(thread_conn, tagged_pictures)
                     data_updated = True
 
                 # 7. Fetch pictures to embed
@@ -303,7 +305,9 @@ class Pictures:
                 # 8. Generate text embeddings for fetched pictures from descriptions and tags
                 embeddings_generated = []
                 if pictures_to_embed:
-                    embeddings_generated = self._generate_text_embeddings(pictures_to_embed)                    
+                    embeddings_generated = self._generate_text_embeddings(
+                        pictures_to_embed
+                    )
 
                 # 9. Store generated embeddings
                 if embeddings_generated:
@@ -333,7 +337,7 @@ class Pictures:
             """
             SELECT *
             FROM pictures WHERE description IS NOT NULL
-            """             
+            """
         )
         pictures_with_descriptions = cursor.fetchall()
 
@@ -343,7 +347,9 @@ class Pictures:
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM picture_tags WHERE picture_id = ?
-                """, (picture_id,))
+                """,
+                (picture_id,),
+            )
             tag_count_row = cursor.fetchone()
             tag_count = tag_count_row[0] if tag_count_row else 0
             if tag_count == 0:
@@ -362,11 +368,10 @@ class Pictures:
             """
             SELECT *
             FROM pictures WHERE description IS NOT NULL AND text_embedding IS NULL
-            """             
+            """
         )
         pictures_missing_embeddings = cursor.fetchall()
         return self.from_batch_of_db_dicts(pictures_missing_embeddings, [])
-
 
     def _fetch_missing_descriptions(self, thread_conn):
         logger.debug("Starting the database fetch for missing descriptions")
@@ -395,7 +400,9 @@ class Pictures:
             for tag_row in tag_rows:
                 tag_map[tag_row["picture_id"]].append({"tag": tag_row["tag"]})
 
-            tag_dicts = [tag_map.get(row["id"], []) for row in rows_missing_descriptions]
+            tag_dicts = [
+                tag_map.get(row["id"], []) for row in rows_missing_descriptions
+            ]
             missing_descriptions = self.from_batch_of_db_dicts(
                 rows_missing_descriptions, tag_dicts
             )
@@ -432,25 +439,35 @@ class Pictures:
             quality_updates = 0
             try:
                 # 1. Full image quality measures
-                logger.debug("Searching for pictures needing full image quality calculation.")
+                logger.debug(
+                    "Searching for pictures needing full image quality calculation."
+                )
                 with self._db.threaded_connection as thread_conn:
                     cursor = thread_conn.cursor()
                     cursor.execute(
                         "SELECT * FROM pictures WHERE sharpness IS NULL OR edge_density IS NULL OR noise_level IS NULL OR contrast IS NULL OR brightness IS NULL",
                     )
                     rows = cursor.fetchall()
-                    logger.debug(f"Quality worker found {len(rows)} pictures needing full image quality calculation.")
+                    logger.debug(
+                        f"Quality worker found {len(rows)} pictures needing full image quality calculation."
+                    )
                     pics_full = self.from_batch_of_db_dicts(rows)
 
-                logger.debug(f"Read metadata for {len(pics_full)} pictures needing full image quality.")
+                logger.debug(
+                    f"Read metadata for {len(pics_full)} pictures needing full image quality."
+                )
                 grouped_full = self._group_pictures_by_size(pics_full, region="full")
-                logger.debug(f"Grouped {len(grouped_full)} full image batches by size. Will calculate quality now.")
+                logger.debug(
+                    f"Grouped {len(grouped_full)} full image batches by size. Will calculate quality now."
+                )
 
                 for group in grouped_full.values():
                     batch = group[:BATCH_SIZE]
                     if batch:
                         size = PictureUtils.load_metadata(batch[0].file_path)
-                        logger.info(f"Processing batch of {len(batch)} images of size {size} out of a total of {len(group)}.")
+                        logger.info(
+                            f"Processing batch of {len(batch)} images of size {size} out of a total of {len(group)}."
+                        )
                         quality_updates = self._calculate_quality(batch)
                         if quality_updates:
                             with self._db.threaded_connection as thread_conn:
@@ -464,22 +481,33 @@ class Pictures:
                         "SELECT * FROM pictures WHERE face_sharpness IS NULL OR face_edge_density IS NULL OR face_noise_level IS NULL OR face_contrast IS NULL OR face_brightness IS NULL",
                     )
                     rows = cursor.fetchall()
-                    logger.debug(f"Quality worker found {len(rows)} pictures needing face quality calculation.")
+                    logger.debug(
+                        f"Quality worker found {len(rows)} pictures needing face quality calculation."
+                    )
                     pics_face = self.from_batch_of_db_dicts(rows)
 
-                logger.debug(f"Read metadata for {len(pics_face)} pictures needing face quality.")
+                logger.debug(
+                    f"Read metadata for {len(pics_face)} pictures needing face quality."
+                )
                 grouped_face = self._group_pictures_by_size(pics_face, region="face")
-                logger.debug(f"Grouped {len(grouped_face)} face crop batches by bbox size. Will calculate face quality now.")
+                logger.debug(
+                    f"Grouped {len(grouped_face)} face crop batches by bbox size. Will calculate face quality now."
+                )
                 for group in grouped_face.values():
                     batch = group[:BATCH_SIZE]
                     if batch:
                         bbox_size = None
-                        if batch[0].face_bbox is not None and len(batch[0].face_bbox) == 4:
+                        if (
+                            batch[0].face_bbox is not None
+                            and len(batch[0].face_bbox) == 4
+                        ):
                             x1, y1, x2, y2 = batch[0].face_bbox
                             w = int(round((x2 - x1) / 64.0) * 64)
                             h = int(round((y2 - y1) / 64.0) * 64)
                             bbox_size = (h, w, 3)
-                        logger.info(f"Processing face batch of {len(batch)} images of bbox size {bbox_size}.")
+                        logger.info(
+                            f"Processing face batch of {len(batch)} images of bbox size {bbox_size}."
+                        )
                         quality_updates = self._calculate_quality(batch, True)
                         if quality_updates:
                             with self._db.threaded_connection as thread_conn:
@@ -488,9 +516,13 @@ class Pictures:
             except (sqlite3.OperationalError, OSError) as e:
                 msg = str(e)
                 if "no such column" in msg:
-                    logger.error(f"Quality worker exiting due to schema error (missing column): {e}")
+                    logger.error(
+                        f"Quality worker exiting due to schema error (missing column): {e}"
+                    )
                 else:
-                    logger.error(f"Quality worker exiting due to DB error (likely shutdown): {e}")
+                    logger.error(
+                        f"Quality worker exiting due to DB error (likely shutdown): {e}"
+                    )
                 break
             except Exception as e:
                 logger.error(f"Quality worker error: {e}")
@@ -506,7 +538,8 @@ class Pictures:
         """
         from collections import defaultdict
         import os
-        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
+
+        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
         sizes = []
         pic_groups = []
         video_groups = defaultdict(list)
@@ -518,7 +551,11 @@ class Pictures:
                 try:
                     if region == "full":
                         size = PictureUtils.load_metadata(pic.file_path)
-                    elif region == "face" and pic.face_bbox is not None and len(pic.face_bbox) == 4:
+                    elif (
+                        region == "face"
+                        and pic.face_bbox is not None
+                        and len(pic.face_bbox) == 4
+                    ):
                         x1, y1, x2, y2 = pic.face_bbox
                         w = int(round((x2 - x1) / 64.0) * 64)
                         h = int(round((y2 - y1) / 64.0) * 64)
@@ -530,14 +567,20 @@ class Pictures:
                         sizes.append(size)
                         pic_groups.append((size, pic))
                 except Exception as e:
-                    logger.error(f"Failed to read metadata for grouping: {pic.file_path}, error: {e}")
+                    logger.error(
+                        f"Failed to read metadata for grouping: {pic.file_path}, error: {e}"
+                    )
         all_groups = dict(video_groups)
         if sizes:
             unique_sizes = set(sizes)
-            logger.debug(f"Read metadata for {len(pic_groups)} images. Found {len(unique_sizes)} unique sizes.")
+            logger.debug(
+                f"Read metadata for {len(pic_groups)} images. Found {len(unique_sizes)} unique sizes."
+            )
             if len(unique_sizes) == 1:
                 batch_size = len(pic_groups)
-                logger.debug(f"All images same size: batching {batch_size} images together.")
+                logger.debug(
+                    f"All images same size: batching {batch_size} images together."
+                )
                 all_groups[list(unique_sizes)[0]] = [pic for _, pic in pic_groups]
             else:
                 image_groups = defaultdict(list)
@@ -545,7 +588,9 @@ class Pictures:
                     image_groups[size].append(pic)
                 for size, group in image_groups.items():
                     if region == "face":
-                        logger.debug(f"Face batch for bbox size {size}: {len(group)} images.")
+                        logger.debug(
+                            f"Face batch for bbox size {size}: {len(group)} images."
+                        )
                     else:
                         logger.debug(f"Batch for size {size}: {len(group)} images.")
                 all_groups.update(image_groups)
@@ -554,7 +599,9 @@ class Pictures:
                 logger.info(f"Video batch for {vkey}: {len(vgroup)} video(s).")
         return all_groups
 
-    def _calculate_quality(self, pics: List[PictureModel], is_face: bool = False) -> List[PictureModel]:
+    def _calculate_quality(
+        self, pics: List[PictureModel], is_face: bool = False
+    ) -> List[PictureModel]:
         try:
             images = []
             if not is_face:
@@ -564,7 +611,15 @@ class Pictures:
                 batch_array = np.stack(images, axis=0)
                 qualities = PictureQuality.calculate_quality_batch(batch_array)
                 for pic, q in zip(pics, qualities):
-                    logger.debug("[QUALITY] Picture id %s calculated sharpness: %s edge_density: %s contrast: %s brightness: %s noise_level: %s", pic.id, q.sharpness, q.edge_density, q.contrast, q.brightness, q.noise_level)
+                    logger.debug(
+                        "[QUALITY] Picture id %s calculated sharpness: %s edge_density: %s contrast: %s brightness: %s noise_level: %s",
+                        pic.id,
+                        q.sharpness,
+                        q.edge_density,
+                        q.contrast,
+                        q.brightness,
+                        q.noise_level,
+                    )
                     pic.sharpness = q.sharpness
                     pic.edge_density = q.edge_density
                     pic.contrast = q.contrast
@@ -573,7 +628,11 @@ class Pictures:
             else:
                 # Face crop quality
                 h, w, _ = None, None, None
-                if pics and pics[0].face_bbox is not None and len(pics[0].face_bbox) == 4:
+                if (
+                    pics
+                    and pics[0].face_bbox is not None
+                    and len(pics[0].face_bbox) == 4
+                ):
                     x1, y1, x2, y2 = pics[0].face_bbox
                     w = int(round((x2 - x1) / 64.0) * 64)
                     h = int(round((y2 - y1) / 64.0) * 64)
@@ -587,8 +646,12 @@ class Pictures:
                         if x2 > x1 and y2 > y1:
                             img = PictureUtils.load_image_or_video(pic.file_path)
                             if img is not None:
-                                crop = img[int(y1):int(y2), int(x1):int(x2)]
-                                if h is not None and w is not None and (crop.shape[0] != h or crop.shape[1] != w):
+                                crop = img[int(y1) : int(y2), int(x1) : int(x2)]
+                                if (
+                                    h is not None
+                                    and w is not None
+                                    and (crop.shape[0] != h or crop.shape[1] != w)
+                                ):
                                     try:
                                         crop = cv2.resize(crop, (w, h))
                                     except Exception:
@@ -623,9 +686,17 @@ class Pictures:
         values = []
         for pic in pics:
             # Assert metrics are not bytes
-            for metric_name in ["sharpness", "edge_density", "contrast", "brightness", "noise_level"]:
+            for metric_name in [
+                "sharpness",
+                "edge_density",
+                "contrast",
+                "brightness",
+                "noise_level",
+            ]:
                 metric_value = getattr(pic, metric_name)
-                assert not isinstance(metric_value, bytes), f"Corrupt metric: {metric_name} for picture {pic.id} is bytes: {metric_value!r}"
+                assert not isinstance(metric_value, bytes), (
+                    f"Corrupt metric: {metric_name} for picture {pic.id} is bytes: {metric_value!r}"
+                )
             logger.debug(
                 "[UPDATE] Picture id %s sharpness: %s edge_density: %s contrast: %s brightness: %s noise_level: %s",
                 pic.id,
@@ -646,7 +717,9 @@ class Pictures:
                 )
             )
 
-        logger.debug(f"[UPDATE] Committing {len(values)} full image quality updates to database.")
+        logger.debug(
+            f"[UPDATE] Committing {len(values)} full image quality updates to database."
+        )
         cursor.executemany(
             "UPDATE pictures SET sharpness = ?, edge_density = ?, contrast = ?, brightness = ?, noise_level = ? WHERE id = ?",
             values,
@@ -658,9 +731,17 @@ class Pictures:
         values = []
         for pic in pics:
             # Assert face metrics are not bytes
-            for metric_name in ["face_sharpness", "face_edge_density", "face_contrast", "face_brightness", "face_noise_level"]:
+            for metric_name in [
+                "face_sharpness",
+                "face_edge_density",
+                "face_contrast",
+                "face_brightness",
+                "face_noise_level",
+            ]:
                 metric_value = getattr(pic, metric_name)
-                assert not isinstance(metric_value, bytes), f"Corrupt face metric: {metric_name} for picture {pic.id} is bytes: {metric_value!r}"
+                assert not isinstance(metric_value, bytes), (
+                    f"Corrupt face metric: {metric_name} for picture {pic.id} is bytes: {metric_value!r}"
+                )
             logger.debug(
                 "[UPDATE] Picture id %s face_sharpness: %s face_edge_density: %s face_contrast: %s face_brightness: %s face_noise_level: %s",
                 pic.id,
@@ -681,7 +762,9 @@ class Pictures:
                 )
             )
 
-        logger.debug(f"[UPDATE] Committing {len(values)} face quality updates to database.")
+        logger.debug(
+            f"[UPDATE] Committing {len(values)} face quality updates to database."
+        )
         cursor.executemany(
             "UPDATE pictures SET face_sharpness = ?, face_edge_density = ?, face_contrast = ?, face_brightness = ?, face_noise_level = ? WHERE id = ?",
             values,
@@ -713,11 +796,15 @@ class Pictures:
                         tags = [t for t in tags if t != char_tag]
                     # Use Florence description to correct tags
                     try:
-                        corrected_tags = picture_tagger.correct_tags_with_florence(pic.file_path, tags)
+                        corrected_tags = picture_tagger.correct_tags_with_florence(
+                            pic.file_path, tags
+                        )
                         if corrected_tags:
                             tags = corrected_tags
                     except Exception as e:
-                        logger.error(f"Florence tag correction failed for {pic.file_path}: {e}")
+                        logger.error(
+                            f"Florence tag correction failed for {pic.file_path}: {e}"
+                        )
                     if tags:
                         pic.tags = tags
                         # Replace all tags in picture_tags table
@@ -850,8 +937,10 @@ class Pictures:
                 # Round width and height to nearest multiple of 64
                 w = x2 - x1
                 h = y2 - y1
+
                 def round64(val):
                     return int(round(val / 64.0) * 64)
+
                 w_rounded = round64(w)
                 h_rounded = round64(h)
                 # Center the bbox after rounding
@@ -934,7 +1023,9 @@ class Pictures:
                 logger.debug(
                     f"Generating embedding for picture {pic.id} with character {char_id} and character name {getattr(character_obj, 'name', None)}"
                 )
-                pic.description = picture_tagger.generate_description(picture=pic, character=character_obj)
+                pic.description = picture_tagger.generate_description(
+                    picture=pic, character=character_obj
+                )
                 descriptions_generated.append(pic)
 
             except Exception as e:
@@ -1018,15 +1109,16 @@ class Pictures:
             )
             return []
         # Generate query embedding
-        query_emb, _, _ = self._picture_tagger.generate_text_embedding(
-            picture={"description": text}
-        )
+        (
+            query_emb,
+            _,
+        ) = self._picture_tagger.generate_text_embedding(picture={"description": text})
         logger.debug(
             f"Semantic search: query embedding shape: {getattr(query_emb, 'shape', None)}"
         )
         # Load all picture embeddings and ids
         rows = self._db.query(
-            "SELECT id, embedding FROM pictures WHERE embedding IS NOT NULL"
+            "SELECT id, text_embedding FROM pictures WHERE text_embedding IS NOT NULL"
         )
         logger.debug(
             f"Semantic search: found {len(rows)} candidate images with embeddings."
@@ -1038,7 +1130,7 @@ class Pictures:
         sims = []
         for row in rows:
             pic_id = row["id"] if isinstance(row, dict) else row[0]
-            emb_blob = row["embedding"] if isinstance(row, dict) else row[1]
+            emb_blob = row["text_embedding"] if isinstance(row, dict) else row[1]
             if emb_blob is None:
                 continue
 

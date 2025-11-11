@@ -990,7 +990,7 @@ async function searchImages(query) {
   try {
     const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
       q
-    )}&threshold=0.5&top_n=1000`;
+    )}&threshold=0.6&top_n=1000`;
     const res = await fetch(url);
     if (!res.ok) throw new Error("Search failed");
     const baseImages = await res.json();
