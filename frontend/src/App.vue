@@ -371,7 +371,7 @@ async function refreshImages(append = false) {
     let url;
     const params = new URLSearchParams();
     params.set("info", "true");
-    params.set("sort", selectedSort.value || "date_desc");
+    params.set("sort", selectedSort.value || "ORDER BY created_at DES");
     params.set("offset", String(pageOffset.value));
     params.set("limit", String(pageSize.value));
     if (id === ALL_PICTURES_ID) {
@@ -1055,7 +1055,7 @@ async function selectAllInCurrentView() {
     }
     let url;
     const params = new URLSearchParams();
-    params.set("sort", selectedSort.value || "date_desc");
+    params.set("sort", selectedSort.value || "ORDER BY created_at DES");
     if (id === ALL_PICTURES_ID) {
       url = `${BACKEND_URL}/picture_ids?${params.toString()}`;
     } else if (id === UNASSIGNED_PICTURES_ID) {

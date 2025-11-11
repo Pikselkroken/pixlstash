@@ -1,4 +1,5 @@
 1. Monitoring a folder
 2. Missing tests: get_face_thumbnail, check_hashes
-3. 
+3. Likeness calculation to reference
+4. Image stacking
 

@@ -161,7 +161,7 @@ class Server:
                 "image_roots": [default_image_root],
                 "selected_image_root": default_image_root,
                 "description": DEFAULT_DESCRIPTION,
-                "sort": "date_desc",
+                "sort": "ORDER BY created_at DES",
                 "thumbnail": "default",
                 "show_stars": True,
                 "openai_host": "localhost",
@@ -174,7 +174,7 @@ class Server:
                 # Ensure new config options exist
 
                 if "sort_order" not in config:
-                    config["sort_order"] = "date_desc"
+                    config["sort_order"] = "ORDER BY created_at DESC"
                 if "thumbnail_size" not in config:
                     config["thumbnail_size"] = "default"
                 if "show_stars" not in config:
