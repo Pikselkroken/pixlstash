@@ -18,7 +18,7 @@ class PictureLikenessModel:
         default=None,
         metadata={"foreign_key": "pictures(id)", "composite_key": True, "index": True},
     )
-    likeness_score: float = field(default=None)
+    likeness: float = field(default=None)
     metric: str = field(default=None)
 
     @classmethod
@@ -26,7 +26,7 @@ class PictureLikenessModel:
         return cls(
             picture_id_a=row["picture_id_a"],
             picture_id_b=row["picture_id_b"],
-            likeness_score=row.get("likeness_score"),
+            likeness=row.get("likeness"),
             metric=row.get("metric"),
         )
 
@@ -34,6 +34,6 @@ class PictureLikenessModel:
         return {
             "picture_id_a": self.picture_id_a,
             "picture_id_b": self.picture_id_b,
-            "likeness_score": self.likeness_score,
+            "likeness": self.likeness,
             "metric": self.metric,
         }

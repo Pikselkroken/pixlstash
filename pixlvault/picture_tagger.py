@@ -713,7 +713,21 @@ class PictureTagger:
         if sbert_model is None:
             sbert_model = SentenceTransformer("all-MiniLM-L6-v2")
             self._sbert_model = sbert_model
-        text_embedding = sbert_model.encode(full_text)
+
+        text_embedding = None
+        try:
+            text_embedding = sbert_model.encode(full_text)
+        except RuntimeError as e:
+            if "CUDA" in str(e):
+                logger.warning(
+                    f"SBERT embedding failed on CUDA: {e}. Falling back to CPU."
+                )
+                sbert_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+                self._sbert_model = sbert_model
+                text_embedding = sbert_model.encode(full_text)
+            else:
+                logger.error(f"Failed to generate text embedding: {e}")
+                raise
         return text_embedding, full_text
 
     def generate_facial_features(self, picture):
