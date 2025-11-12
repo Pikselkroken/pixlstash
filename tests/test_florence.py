@@ -16,11 +16,7 @@ def tagger(request):
 
     tagger = PictureTagger()
 
-    tagger.enable_florence_captioning()
-
-    # Verify Florence-2 actually loaded
-    if not tagger._use_florence or tagger._florence_model is None:
-        pytest.fail("Florence-2 failed to load. Cannot run tests.")
+    tagger._init_florence_captioning()
 
     return tagger
 
@@ -149,7 +145,7 @@ def test_florence_caption_content(tagger, image_files):
 def test_florence_with_character_name(tagger, image_files):
     """Test that character names are properly integrated into captions."""
     test_image = image_files[0]
-    test_character_name = "Clementine"
+    test_character_name = "Esmeralda"
 
     caption = tagger._generate_florence_caption(
         test_image, character_name=test_character_name

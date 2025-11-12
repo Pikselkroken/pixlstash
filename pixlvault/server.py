@@ -161,7 +161,7 @@ class Server:
                 "image_roots": [default_image_root],
                 "selected_image_root": default_image_root,
                 "description": DEFAULT_DESCRIPTION,
-                "sort": "date_desc",
+                "sort": "ORDER BY created_at DES",
                 "thumbnail": "default",
                 "show_stars": True,
                 "openai_host": "localhost",
@@ -174,7 +174,7 @@ class Server:
                 # Ensure new config options exist
 
                 if "sort_order" not in config:
-                    config["sort_order"] = "date_desc"
+                    config["sort_order"] = "ORDER BY created_at DESC"
                 if "thumbnail_size" not in config:
                     config["thumbnail_size"] = "default"
                 if "show_stars" not in config:
@@ -280,6 +280,76 @@ class Server:
             )
 
     def _setup_routes(self):
+        @self.api.get("/picture_stacks")
+        async def get_picture_stacks(threshold: float = 0.98, min_group_size: int = 2):
+            """
+            Return groups (stacks) of near-identical pictures based on likeness threshold.
+            Each stack contains picture dicts and preselection info.
+            """
+            # Query all likeness pairs above threshold
+            db = self.vault.pictures._db
+            rows = db.query(
+                "SELECT picture_id_a, picture_id_b, likeness FROM picture_likeness WHERE likeness >= ?",
+                (threshold,),
+            )
+            # Build undirected graph of connections
+            from collections import defaultdict, deque
+
+            neighbors = defaultdict(set)
+            for row in rows:
+                a = row["picture_id_a"] if isinstance(row, dict) else row[0]
+                b = row["picture_id_b"] if isinstance(row, dict) else row[1]
+                neighbors[a].add(b)
+                neighbors[b].add(a)
+            # Find connected components (groups)
+            visited = set()
+            groups = []
+            for node in neighbors:
+                if node in visited:
+                    continue
+                stack = set()
+                queue = deque([node])
+                while queue:
+                    n = queue.popleft()
+                    if n in visited:
+                        continue
+                    visited.add(n)
+                    stack.add(n)
+                    for nbr in neighbors[n]:
+                        if nbr not in visited:
+                            queue.append(nbr)
+                if len(stack) >= min_group_size:
+                    groups.append(list(stack))
+            # For each group, fetch picture info and select best
+            stacks = []
+            for group in groups:
+                pics = [self.vault.pictures[pid] for pid in group]
+
+                # Preselect: highest resolution, sharpness, lowest noise
+                def preselect_key(pic):
+                    res = PictureUtils.load_metadata(pic.file_path)
+                    sharp = getattr(pic, "sharpness", -1)
+                    noise = getattr(pic, "noise_level", 1e9)
+                    # Prefer higher resolution, sharpness, lower noise
+                    return (
+                        (res[0] * res[1]) if res else 0,
+                        sharp,
+                        -noise,
+                    )
+
+                best_idx = max(range(len(pics)), key=lambda i: preselect_key(pics[i]))
+                stacks.append(
+                    {
+                        "pictures": [pic.to_dict() for pic in pics],
+                        "preselected_index": best_idx,
+                    }
+                )
+            return {
+                "stacks": stacks,
+                "threshold": threshold,
+                "min_group_size": min_group_size,
+            }
+
         @self.api.get("/config")
         async def get_config():
             """
@@ -457,15 +527,14 @@ class Server:
             # Fuzzy search (tag/description/character name)
             all_pics = self.vault.pictures.find()
             fuzzy_scores = {}
-            character_match_bonus = {}  # Track character name matches for bonus
-            strong_tag_match_bonus = {}  # Track strong tag matches for bonus
+            character_match_bonus = {}
+            strong_tag_match_bonus = {}
 
             for pic in all_pics:
                 tag_scores = []
                 char_name_match = False
                 strong_tag_matches = 0
 
-                # Add character name to tags for fuzzy search
                 tags_and_name = list(pic.tags)
                 char_name = None
                 char_id = getattr(pic, "primary_character_id", None)
@@ -484,11 +553,32 @@ class Server:
                     for name in names:
                         tags_and_name.append(name)
 
+                # --- Multi-word tag matching ---
+                # First, try to match the full query against tags
+                full_tag_scores = []
+                for tag in tags_and_name:
+                    tag_lower = str(tag).lower()
+                    score = fuzz.ratio(q, tag_lower) / 100
+                    score *= min(len(q), len(tag_lower)) / max(
+                        len(q), len(tag_lower), 1
+                    )
+                    full_tag_scores.append(score)
+                    if score >= 0.8:
+                        strong_tag_matches += 1
+
+                # Also match full query against character name
+                for name_word in char_name_words:
+                    score = fuzz.ratio(q, name_word) / 100
+                    score *= min(len(q), len(name_word)) / max(
+                        len(q), len(name_word), 1
+                    )
+                    if score >= 0.8:
+                        char_name_match = True
+
+                # Now, match each query word against tags and character name as before
                 for q_word in q_split:
                     max_score = 0
-                    logger.debug(f"Query word: {q_word}")
-
-                    # Check character name match first
+                    # Character name
                     for name_word in char_name_words:
                         score = fuzz.ratio(q_word, name_word) / 100
                         score *= min(len(q_word), len(name_word)) / max(
@@ -496,54 +586,43 @@ class Server:
                         )
                         if score > max_score:
                             max_score = score
-                            if score >= 0.8:  # Strong character name match
-                                char_name_match = True
-
-                    # Check tags
+                        if score >= 0.8:
+                            char_name_match = True
+                    # Tags
                     for tag in tags_and_name:
-                        score = fuzz.ratio(q_word, str(tag).lower()) / 100
-                        score *= min(len(q_word), len(tag)) / max(
-                            len(q_word), len(tag), 1
+                        tag_lower = str(tag).lower()
+                        score = fuzz.ratio(q_word, tag_lower) / 100
+                        score *= min(len(q_word), len(tag_lower)) / max(
+                            len(q_word), len(tag_lower), 1
                         )
                         if score > max_score:
                             max_score = score
-
-                        # Count strong tag matches (>=0.8)
                         if score >= 0.8:
                             strong_tag_matches += 1
-
                     tag_scores.append(max_score)
-                    desc_score = (
-                        fuzz.ratio(q_word, (pic.description or "").lower()) / 100.0
-                    )
+                # Description
+                desc_score = fuzz.ratio(q, (pic.description or "").lower()) / 100.0
 
-                logger.info(
-                    f"PicID={pic.id} Desc='{pic.description}' Desc score={desc_score}, Tag scores={tag_scores}"
-                )
+                # Combine scores: prioritize full tag matches if multi-word query
+                if n_words > 1:
+                    # Use max of full tag match and average word match
+                    avg_score = sum(tag_scores) / len(tag_scores) if tag_scores else 0
+                    max_full_tag_score = max(full_tag_scores) if full_tag_scores else 0
+                    max_score = max(max_full_tag_score, avg_score)
+                else:
+                    max_score = max(tag_scores) if tag_scores else 0
 
-                # Calculate fuzzy score with penalty for low match coverage
-                avg_score = sum(tag_scores) / len(tag_scores) if tag_scores else 0
-                max_score = max(tag_scores) if tag_scores else 0
-
-                # Count how many query words had decent matches (>0.5)
+                # Coverage penalty as before
                 decent_matches = sum(1 for s in tag_scores if s > 0.5)
                 match_coverage = decent_matches / len(tag_scores) if tag_scores else 0
-
-                # Penalize if most words don't match well
-                # If <50% of words match, reduce the score significantly
                 coverage_penalty = 1.0 if match_coverage >= 0.5 else match_coverage * 2
 
                 total_score = (
-                    max(0.4 * avg_score + 0.6 * max_score, desc_score)
+                    max(0.4 * max_score + 0.6 * max_score, desc_score)
                     * coverage_penalty
                 )
 
-                logger.info(
-                    f"PicID={pic.id} Desc='{pic.description}' Desc score={desc_score}, Tag scores={tag_scores}, coverage={match_coverage:.2f}, penalty={coverage_penalty:.2f}, total score={total_score:.2f}"
-                )
                 fuzzy_scores[pic.id] = total_score
-
-                # Store bonuses for later application
                 character_match_bonus[pic.id] = 0.15 if char_name_match else 0
                 strong_tag_match_bonus[pic.id] = min(0.20, strong_tag_matches * 0.05)
 
@@ -573,9 +652,9 @@ class Server:
             # 4 words: 30% fuzzy, 70% semantic
             # 5+ 20% fuzzy, 80% semantic
             if n_words <= 2:
-                fuzzy_w, sem_w = 0.9, 0.1
-            elif n_words == 3:
                 fuzzy_w, sem_w = 0.6, 0.4
+            elif n_words == 3:
+                fuzzy_w, sem_w = 0.5, 0.5
             elif n_words == 4:
                 fuzzy_w, sem_w = 0.3, 0.7
             else:
@@ -604,9 +683,6 @@ class Server:
                     )
                 # else: very weak match (<0.15): no bonuses applied
 
-                logger.info(
-                    f"Got combined score of {combined_score} for PicID={pic_id} (Fuzzy={fuzzy_score}, Semantic={sem_score}, CharBonus={char_bonus}, TagBonus={tag_bonus})"
-                )
                 pic = next((p for p in all_pics if p.id == pic_id), None)
                 if pic:
                     if combined_score < threshold:
@@ -631,6 +707,12 @@ class Server:
 
             # Sort by combined score, then by created_at
             combined.sort(key=lambda x: (-x[1], x[0].created_at or ""))
+
+            for pic, combined_score, fuzzy_score, sem_score in combined:
+                logger.info(
+                    f"Got combined score of {combined_score} for PicID={pic.id} (Fuzzy={fuzzy_score}, Semantic={sem_score}, CharBonus={char_bonus}, TagBonus={tag_bonus})"
+                )
+
             # Optionally, include fuzzy/semantic scores for debugging:
             # return [{**pic_to_dict(pic), "score": score, "fuzzy": fuzzy, "semantic": sem} for pic, score, fuzzy, sem in combined[:top_n]]
             return [
@@ -654,7 +736,8 @@ class Server:
                 # Drop embeddings for all pictures with this primary_character_id
                 pics = self.vault.pictures.find(primary_character_id=id)
                 for pic in pics:
-                    pic.embedding = None
+                    pic.description = None
+                    pic.text_embedding = None
 
                 self.vault.pictures.update(pics)
             if description is not None and description != char.description:
@@ -903,6 +986,11 @@ class Server:
             updated = False
             # Update fields
             for key, value in params.items():
+                # Instrument for debugging: log if value is bytes
+                if isinstance(value, bytes):
+                    logger.error(
+                        f"PATCH attempted to set field '{key}' to bytes value: {value!r} (type={type(value)})"
+                    )
                 try:
                     cast_val = int(value)
                 except Exception:
@@ -910,13 +998,30 @@ class Server:
 
                 if hasattr(pic, key):
                     logger.debug(
-                        f"Updating picture id={id} field={key} to value={cast_val}"
+                        f"Updating picture id={id} field={key} to value={cast_val} (type={type(cast_val)})"
                     )
+                    # Assert metrics are not bytes before assignment
+                    if key in [
+                        "sharpness",
+                        "edge_density",
+                        "contrast",
+                        "brightness",
+                        "noise_level",
+                        "face_sharpness",
+                        "face_edge_density",
+                        "face_contrast",
+                        "face_brightness",
+                        "face_noise_level",
+                    ]:
+                        assert not isinstance(cast_val, bytes), (
+                            f"PATCH attempted to set metric '{key}' to bytes for picture {id}: {cast_val!r}"
+                        )
                     old_val = getattr(pic, key)
                     setattr(pic, key, cast_val)
                     # Drop embedding if primary_character_id changes
                     if key == "primary_character_id" and old_val != cast_val:
-                        pic.embedding = None
+                        pic.description = None
+                        pic.text_embedding = None
                     updated = True
             if updated:
                 self.vault.pictures.update(pic)
@@ -1085,75 +1190,9 @@ class Server:
                     pics = self.vault.pictures.find_by_text(query, top_n=offset + limit)
                     pics = pics[offset : offset + limit]
             else:
-                pics = self.vault.pictures.find(**query_params)
-
-                if sort in [
-                    SortMechanism.SCORE_DESC.value,
-                    SortMechanism.SCORE_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.SCORE_DESC.value
-                    pics.sort(
-                        key=lambda p: p.score if p.score is not None else -1,
-                        reverse=reverse,
-                    )
-                elif sort in [
-                    SortMechanism.DATE_DESC.value,
-                    SortMechanism.DATE_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.DATE_DESC.value
-                    pics.sort(key=lambda p: p.created_at or "", reverse=reverse)
-                elif sort in [
-                    SortMechanism.SHARPNESS_DESC.value,
-                    SortMechanism.SHARPNESS_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.SHARPNESS_DESC.value
-                    pics.sort(
-                        key=lambda p: json.loads(p.quality).get("sharpness", -1)
-                        if p.quality
-                        else -1,
-                        reverse=reverse,
-                    )
-                elif sort in [
-                    SortMechanism.EDGE_DENSITY_DESC.value,
-                    SortMechanism.EDGE_DENSITY_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.EDGE_DENSITY_DESC.value
-                    pics.sort(
-                        key=lambda p: json.loads(p.quality).get("edge_density", -1)
-                        if p.quality
-                        else -1,
-                        reverse=reverse,
-                    )
-                elif sort in [
-                    SortMechanism.NOISE_LEVEL_DESC.value,
-                    SortMechanism.NOISE_LEVEL_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.NOISE_LEVEL_DESC.value
-                    pics.sort(
-                        key=lambda p: json.loads(p.quality).get("noise_level", -1)
-                        if p.quality
-                        else -1,
-                        reverse=reverse,
-                    )
-                elif sort == SortMechanism.HAS_DESCRIPTION.value:
-                    # Pictures with descriptions first
-                    pics.sort(key=lambda p: 0 if p.description else 1)
-                elif sort == SortMechanism.NO_DESCRIPTION.value:
-                    # Pictures without descriptions first
-                    pics.sort(key=lambda p: 1 if p.description else 0)
-                elif sort in [
-                    SortMechanism.FORMAT_ASC.value,
-                    SortMechanism.FORMAT_DESC.value,
-                ]:
-                    reverse = sort == SortMechanism.FORMAT_DESC.value
-                    pics.sort(
-                        key=lambda p: p.format.lower() if p.format else "zzz",
-                        reverse=reverse,
-                    )
-                # else: unsorted
-                if limit != sys.maxsize:
-                    pics = pics[offset : offset + limit]
-
+                pics = self.vault.pictures.find(
+                    sort=sort, offset=offset, limit=limit, **query_params
+                )
             return [pic.to_dict() for pic in pics]
 
         @self.api.get("/export/zip")
@@ -1294,11 +1333,31 @@ class Server:
             thumb_url = None
             if char_id not in (None, "", "null"):
                 thumb_url = f"/face_thumbnail/{char_id}"
+
+            # Ensure reference set exists for this character
+            reference_set_id = None
+            if char_id not in (None, "", "null"):
+                ref_sets = self.vault.picture_sets.list_all()
+                # Try to find reference set
+                for s in ref_sets:
+                    if s.name == "reference_pictures" and str(s.description) == str(
+                        char_id
+                    ):
+                        reference_set_id = s.id
+                        break
+                # If not found, create it
+                if reference_set_id is None:
+                    reference_set = self.vault.picture_sets.create(
+                        name="reference_pictures", description=str(char_id)
+                    )
+                    reference_set_id = reference_set.id
+
             summary = {
                 "primary_character_id": char_id,
                 "image_count": image_count,
                 "last_updated": last_updated,
                 "thumbnail_url": thumb_url,
+                "reference_picture_set_id": reference_set_id,
             }
             return summary
 

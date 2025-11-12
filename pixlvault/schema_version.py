@@ -1,4 +1,5 @@
 class SchemaVersion:
+    CURRENT_SCHEMA_VERSION = 1
     """
     Manages the schema version for the vault database.
     """
@@ -18,6 +19,7 @@ class SchemaVersion:
         )
         cursor.execute("SELECT COUNT(*) as count FROM schema_version")
         if cursor.fetchone()["count"] == 0:
+            # Start schema at version 1 for new databases
             cursor.execute("INSERT INTO schema_version (version) VALUES (1)")
         self.connection.commit()
 

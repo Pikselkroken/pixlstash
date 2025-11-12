@@ -22,3 +22,5 @@ insightface
 rapidfuzz
 tqdm
 einops
+spacy
+sentence_transformers

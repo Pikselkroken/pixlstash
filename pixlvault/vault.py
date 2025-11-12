@@ -62,21 +62,17 @@ class Vault:
 
     def stop_background_workers(self):
         logger.info("Stopping background workers...")
-        if hasattr(self, "pictures") and hasattr(self.pictures, "stop_quality_worker"):
-            self.pictures.stop_quality_worker()
-        if hasattr(self, "pictures") and hasattr(
-            self.pictures, "stop_embeddings_worker"
-        ):
-            self.pictures.stop_embeddings_worker()
+        self.pictures.stop_quality_worker()
+        self.pictures.stop_facial_features_worker()
+        self.pictures.stop_text_embedding_worker()
+        self.pictures.stop_likeness_worker()
 
     def start_background_workers(self):
         logger.info("Starting background workers...")
-        if hasattr(self, "pictures") and hasattr(self.pictures, "start_quality_worker"):
-            self.pictures.start_quality_worker()
-        if hasattr(self, "pictures") and hasattr(
-            self.pictures, "start_embeddings_worker"
-        ):
-            self.pictures.start_embeddings_worker()
+        self.pictures.start_facial_features_worker(interval=3)
+        self.pictures.start_quality_worker(interval=4)
+        self.pictures.start_text_embedding_worker(interval=5)
+        self.pictures.start_likeness_worker(interval=6)
 
     def __repr__(self):
         """

@@ -1,0 +1,61 @@
+# Copilot Instructions for PixlVault
+
+## Patch Reliability Policy
+
+- **Always read file context before making changes:**
+  - Before generating or applying any code patch, you must always read enough lines around the target location (and at very least 20 lines before and after) to fully understand the code structure, logic, and dependencies.
+  - Never create or apply a patch without first inspecting the relevant file context.
+  - If the code region is ambiguous, read additional context until the correct placement is certain.
+  - You must always check a patch for illogical and abrupt changes that don't fit the surrounding code.
+  - An example of an illogical change is a class method being placed outside of its class definition or code being placed above the top import statements.
+  - An illogical change is placing a class method above the class docstring or above the __init__ method, rather than after the docstring and any class-level variables. All methods must be defined within the class block, following the established order and indentation.
+  - All schema upgrade steps in upgrade_if_necessary must be placed in strictly increasing version order, directly after the previous version’s block. Never insert a new version check out of sequence. This ensures upgrades are applied in the correct order and the code remains maintainable and logical.
+  - Always ensure correct indentation and placement within the class block. Read surrounding code to confirm the proper structure.
+  - Always ensure a blank line between top-level functions and class definitions
+  - For any class the code order must be:
+    1. import statements
+    2. Class definition
+    3. Class docstring
+    4. Class-level variables
+    5. __init__ method including initialisation of object properties
+    6. Properties (getters/setters)
+    7. Public methods in logical order
+    8. Private methods in logical order
+## Project Architecture
+
+- **Backend:** Python FastAPI server (`pixlvault/server.py`), with core logic in `pixlvault/` and `build/pixelurgy_vault/`.
+- **Frontend:** Vue 3 + Vite app in `frontend/`.
+- **Database:** SQLite (`vault.db`), schema managed via Python and bash scripts.
+- **Image Quality:** Batch processing and metrics in `pixlvault/pictures.py` and `pixlvault/picture_quality.py`.
+
+## Developer Workflows
+
+- **Install dependencies:** `pip install -e .`
+- **Run server:** `python -m pixlvault.server`
+- **Run tests:** `python -m pytest -s -vvv --fast-captions --force-cpu`
+- **Check formatting:** `ruff check pixlvault`
+- **Build frontend:** `npm run build` (in `frontend/`)
+- **Dev frontend:** `npm run dev` (in `frontend/`)
+
+## Conventions & Patterns
+
+- **Batching:** Group images and face crops by size for efficient quality calculation.
+- **Error Handling:** Always set metrics to -1.0 if calculation fails; log detailed warnings for OpenCV errors (file path, bbox, crop shape, error).
+- **Database Updates:** Log before updating metrics; ensure all metrics are set to avoid repeated selection.
+- **Bounding Boxes:** Clamp to image edges before cropping/resizing.
+
+## Integration Points
+
+- **External:** Uses OpenCV, NumPy, PIL, FastAPI, rapidfuzz, and Vue 3.
+- **Cross-component:** Backend serves REST API; frontend consumes API and displays images/metrics.
+
+## Example: Reliable Patch Workflow
+
+1. Read 20-50 lines around the target code region.
+2. Confirm logic, dependencies, and placement.
+3. Generate patch only after context is clear.
+4. If unsure, read more or ask for clarification.
+
+---
+
+*These instructions are enforced for all AI coding agents working in this repository. Update this file to refine agent behavior as needed.*

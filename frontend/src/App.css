@@ -29,76 +29,6 @@ body {
   padding: 0;
 }
 
-.image-grid {
-  display: grid;
-  gap: 0;
-  width: 100%;
-  height: 100%;
-  min-height: 64px;
-  flex: 1 1 0%;
-  padding: 4px 12px 4px 4px; /* Extra right padding for scrollbar */
-  overflow-y: auto;
-  background: #ddd;
-  align-content: start;
-  justify-content: start;
-}
-.image-card {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  margin: 0;
-  transition: box-shadow 0.2s, border 0.2s;
-  position: relative;
-  z-index: 0; /* Ensure stacking context */
-  border: 3px solid transparent;
-}
-
-.image-card.selected {
-  z-index: 2;
-  position: relative;
-  border: 3px solid rgba(25, 118, 210, 0.32);
-}
-.selected-border-top {
-  border-top-color: #1976d2 !important;
-}
-.selected-border-bottom {
-  border-bottom-color: #1976d2 !important;
-}
-.selected-border-left {
-  border-left-color: #1976d2 !important;
-}
-.selected-border-right {
-  border-right-color: #1976d2 !important;
-}
-.image-card.selected::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(25, 118, 210, 0.32);
-  border-radius: 0;
-  pointer-events: none;
-  z-index: 1; /* Lower than border */
-}
-.v-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  box-shadow: none;
-  background: transparent;
-  width: 100%;
-  max-width: 256px;
-  min-width: 128px;
-  padding: 0;
-  margin: 0;
-}
-
-/* Original simple file manager layout */
 .file-manager {
   display: flex;
   flex-direction: row;
@@ -254,13 +184,37 @@ button[disabled] {
   width: 100%;
   position: relative;
   display: block;
+  aspect-ratio: 1 / 1;
 }
 .thumbnail-img {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
   display: block;
   border-radius: 8px;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+/* Spinner for thumbnail loading */
+.thumbnail-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  border: 4px solid #eee;
+  border-top: 4px solid #1976d2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  z-index: 10;
+}
+
+@keyframes spin {
+  0% { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
 }
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {

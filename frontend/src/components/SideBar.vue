@@ -45,7 +45,22 @@ const emit = defineEmits([
   "delete-set",
   "drop-on-set",
   "open-set-editor",
+  "switch-to-likeness",
 ]);
+
+
+// Use reference_picture_set_id from categoryCounts (populated from backend /category/summary)
+const referenceSetInfoByCharacter = computed(() => {
+  const map = {};
+  props.sortedCharacters.forEach(char => {
+    // Find the reference set for this character by matching name and description
+    const set = props.pictureSets.find(s => s.name === 'reference_pictures' && s.description === String(char.id));
+    if (set) {
+      map[char.id] = set;
+    }
+  });
+  return map;
+});
 
 const editingNameModel = computed({
   get: () => props.editingCharacterName,
@@ -138,6 +153,34 @@ function dragLeaveSetItem() {
 function dropOnSetItem(setId, event) {
   dragOverSet.value = null;
   emit("drop-on-set", { setId, event });
+}
+
+
+// Ensure collapsedCharacters is reactive and initialized for all characters
+import { watch } from "vue";
+const collapsedCharacters = ref({});
+
+watch(
+  () => props.sortedCharacters,
+  (chars) => {
+    // Initialize collapse state for all characters to true (collapsed by default)
+    chars.forEach((char) => {
+      if (!(char.id in collapsedCharacters.value)) {
+        collapsedCharacters.value[char.id] = true;
+      }
+    });
+  },
+  { immediate: true }
+);
+
+function toggleCharacterCollapse(charId) {
+  collapsedCharacters.value[charId] = !collapsedCharacters.value[charId];
+}
+
+function isReferenceSet(set, char) {
+  // Defensive: check if set is defined before accessing properties
+  if (!set) return false;
+  return set.character_id === char.id && set.name === 'reference_pictures';
 }
 
 function isTruncated(event, text) {
@@ -251,7 +294,10 @@ function isTruncated(event, text) {
             @dragleave="dragLeaveCharacter"
             @drop.prevent="dropOnCharacter(char.id, $event)"
           >
-            <span class="sidebar-list-icon">
+            <span style="display: flex; align-items: center;">
+              <v-icon small style="margin-right:8px;cursor:pointer;" @click.stop="toggleCharacterCollapse(char.id)">
+                {{ collapsedCharacters[char.id] ? 'mdi-chevron-right' : 'mdi-chevron-down' }}
+              </v-icon>
               <img
                 :src="
                   characterThumbnails[char.id]
@@ -303,7 +349,34 @@ function isTruncated(event, text) {
             <span class="sidebar-list-count">
               {{ categoryCounts[char.id] ?? "" }}
             </span>
+            <!-- Collapse icon moved to the left of thumbnail -->
           </div>
+          <transition name="fade">
+            <div v-show="!collapsedCharacters[char.id]" class="sidebar-character-details">
+              <div class="sidebar-reference-pictures">
+                <template v-if="referenceSetInfoByCharacter[char.id]">
+                  <div
+                    :class="[
+                      'sidebar-list-item',
+                      'sidebar-reference-set',
+                      { active: selectedSet === referenceSetInfoByCharacter[char.id].id,
+                        droppable: dragOverSet === referenceSetInfoByCharacter[char.id].id }
+                    ]"
+                    @click="selectSet(referenceSetInfoByCharacter[char.id].id)"
+                    @dragover.prevent="dragOverSetItem(referenceSetInfoByCharacter[char.id].id)"
+                    @dragleave="dragLeaveSetItem"
+                    @drop.prevent="dropOnSetItem(referenceSetInfoByCharacter[char.id].id, $event)"
+                  >
+                    <v-icon size="22" class="sidebar-reference-icon">mdi-layers</v-icon>
+                    <span class="sidebar-list-label">Reference Pictures</span>
+                  </div>
+                </template>
+                <template v-else>
+                  <span style="color: #888; font-size: 0.9em; padding-left: 32px;">No reference set found for this character</span>
+                </template>
+              </div>
+            </div>
+          </transition>
         </div>
       </div>
     </transition>
@@ -341,44 +414,62 @@ function isTruncated(event, text) {
         >
           No picture sets. Click the + button to create one.
         </div>
-        <div
-          v-for="set in pictureSets"
-          :key="set.id"
-          :class="[
-            'sidebar-list-item',
-            {
-              active: selectedSet === set.id,
-              droppable: dragOverSet === set.id,
-            },
-          ]"
-          @click="selectSet(set.id)"
-          @dragover.prevent="dragOverSetItem(set.id)"
-          @dragleave="dragLeaveSetItem"
-          @drop.prevent="dropOnSetItem(set.id, $event)"
-        >
-          <span class="sidebar-list-icon">
-            <v-icon size="44">mdi-layers</v-icon>
-          </span>
-          <span class="sidebar-list-label">
-            <v-tooltip location="top">
-              <template #activator="{ props }">
-                <span v-bind="props" class="sidebar-list-label-text">
-                  {{ set.name }}
-                </span>
-              </template>
-              <span>{{ set.name }}</span>
-            </v-tooltip>
-          </span>
-          <button
-            class="character-edit-btn"
-            @click.stop="openSetEditor(set)"
-            title="Edit picture set details"
+        <template v-for="(pset, idx) in pictureSets.filter(pset => pset.name !== 'reference_pictures')" :key="pset.id">
+          <div
+            :class="[
+              'sidebar-list-item',
+              {
+                active: selectedSet === pset.id,
+                droppable: dragOverSet === pset.id,
+              },
+            ]"
+            @click="selectSet(pset.id)"
+            @dragover.prevent="dragOverSetItem(pset.id)"
+            @dragleave="dragLeaveSetItem"
+            @drop.prevent="dropOnSetItem(pset.id, $event)"
           >
-            <v-icon size="small">mdi-pencil</v-icon>
-          </button>
-          <span class="sidebar-list-count">
-            {{ set.picture_count ?? 0 }}
+            <span class="sidebar-list-icon">
+              <v-icon size="44">mdi-layers</v-icon>
+            </span>
+            <span class="sidebar-list-label">
+              <v-tooltip location="top">
+                <template #activator="{ props }">
+                  <span v-bind="props" class="sidebar-list-label-text">
+                    {{ pset.name }}
+                  </span>
+                </template>
+                <span>{{ pset.name }}</span>
+              </v-tooltip>
+            </span>
+            <button
+              class="character-edit-btn"
+              @click.stop="openSetEditor(pset)"
+              title="Edit picture set details"
+            >
+              <v-icon size="small">mdi-pencil</v-icon>
+            </button>
+            <span class="sidebar-list-count">
+              {{ pset.picture_count ?? 0 }}
+            </span>
+          </div>
+        </template>
+      </div>
+    </transition>
+
+    <div class="sidebar-section-header" @click="toggleSection('analysis')">
+      <v-icon small style="margin-right: 8px">
+        {{ sections.analysis ? "mdi-chevron-down" : "mdi-chevron-right" }}
+      </v-icon>
+      Analysis
+      <span style="flex: 1 1 auto"></span>
+    </div>
+    <transition name="fade">
+      <div v-show="sections.analysis">
+        <div class="sidebar-list-item" @click="$emit('switch-to-likeness')">
+          <span class="sidebar-list-icon">
+            <v-icon size="44">mdi-account-group</v-icon>
           </span>
+          <span class="sidebar-list-label">Likeness View</span>
         </div>
       </div>
     </transition>
@@ -477,7 +568,7 @@ function isTruncated(event, text) {
 .sidebar-list-item.active {
   background: #f0f0f055;
   color: #fff;
-  border-right: 0;
+  border-right: 0;  
   position: relative;
 }
 
@@ -660,5 +751,43 @@ function isTruncated(event, text) {
 .character-edit-btn:hover {
   color: rgba(255, 255, 255, 1);
   background-color: rgba(255, 255, 255, 0.1);
+}
+/* Reference set child entry styling */
+.sidebar-reference-set {
+  font-size: 0.88em;
+  padding-left: 40px;
+}
+
+.sidebar-reference-set.active {
+  background: #f0f0f055;
+  color: #fff;
+  position: relative;
+  padding-left: 40px;
+}
+
+.sidebar-reference-set.active::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 20px;
+  height: 100%;
+  background: linear-gradient(
+    to right,
+    rgba(255, 165, 0, 0) 30%,
+    rgba(255, 165, 0, 1) 90%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+
+.sidebar-reference-set .sidebar-list-label {
+  font-size: 0.92em;
+  font-weight: 400;
+}
+
+.sidebar-reference-icon {
+  margin-right: 4px;
 }
 </style>

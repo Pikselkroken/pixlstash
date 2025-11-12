@@ -13,9 +13,11 @@ import {
 import SideBar from "./components/SideBar.vue";
 import ChatWindow from "./components/ChatWindow.vue";
 import ImageImporter from "./components/ImageImporter.vue";
+import ImageGrid from "./components/ImageGrid.vue";
 import ImageOverlay from "./components/ImageOverlay.vue";
 import CharacterEditor from "./components/CharacterEditor.vue";
 import PictureSetEditor from "./components/PictureSetEditor.vue";
+import LikenessRows from "./components/LikenessRows.vue";
 import { useOverlayActions } from "./composables/useOverlayActions";
 
 // --- Backend Constants & Identifiers ---
@@ -85,10 +87,30 @@ const VIDEO_EXTENSIONS = [
   "m4v",
 ];
 
+
 // --- Template & Component Refs ---
 const gridContainer = ref(null);
 const imageImporterRef = ref(null);
 const chatWindowRef = ref(null);
+
+const currentView = ref('grid'); // or 'likeness'
+
+function handleEndKey() {
+  // Jump to last visible page
+  console.log('Scrolling to END. totalImages.value:', totalImages.value);
+  // Simple: load last page and scroll to bottom
+  pageOffset.value = Math.max(totalImages.value - pageSize.value, 0);
+  refreshImages();
+  nextTick(() => {
+    const gridEl = document.querySelector('.image-grid');
+    if (gridEl) gridEl.scrollTop = gridEl.scrollHeight;
+  });
+}
+
+function handleInfiniteScroll() {
+  pageOffset.value += pageSize.value;
+  refreshImages(true);
+}
 
 // --- Drag-and-Drop State ---
 const dragOverlayVisible = ref(false);
@@ -102,6 +124,7 @@ const previousSort = ref("");
 const pageSize = ref(100);
 const pageOffset = ref(0);
 const hasMoreImages = ref(true);
+const totalImages = ref(0);
 
 // --- Character & Sidebar State ---
 const selectedCharacter = ref(ALL_PICTURES_ID);
@@ -116,6 +139,7 @@ const sidebarSections = ref({
   pictures: true,
   people: true,
   sets: true,
+  analysis: true,
   search: true,
 });
 const dragOverCharacter = ref(null);
@@ -212,38 +236,7 @@ const selectedCharacterObj = computed(() => {
 });
 
 // --- Selection Helpers ---
-const isImageSelected = (id) =>
-  selectedImageIds.value.includes(id) &&
-  pagedImages.value.some((img) => img.id === id);
-
-const getSelectionBorderClasses = (idx) => {
-  const sorted = pagedImages.value;
-  if (!isImageSelected(sorted[idx]?.id)) return "";
-  const cols = columns.value;
-  const total = sorted.length;
-  const row = Math.floor(idx / cols);
-  const col = idx % cols;
-  const classes = [];
-  if (row === 0 || !isImageSelected(sorted[(row - 1) * cols + col]?.id)) {
-    classes.push("selected-border-top");
-  }
-  if (
-    row === Math.floor((total - 1) / cols) ||
-    !isImageSelected(sorted[(row + 1) * cols + col]?.id)
-  ) {
-    classes.push("selected-border-bottom");
-  }
-  if (col === 0 || !isImageSelected(sorted[row * cols + (col - 1)]?.id)) {
-    classes.push("selected-border-left");
-  }
-  if (
-    col === cols - 1 ||
-    !isImageSelected(sorted[row * cols + (col + 1)]?.id)
-  ) {
-    classes.push("selected-border-right");
-  }
-  return classes.join(" ");
-};
+// Now handled in ImageGrid.vue
 
 // --- Text & Display Utilities ---
 function formatLikenessScore(score) {
@@ -336,23 +329,24 @@ async function fetchSortOptions() {
     const res = await fetch(`${BACKEND_URL}/sort_mechanisms`);
     if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
     const options = await res.json();
+    // Use backend-provided values directly
     sortOptions.value = options.map((opt) => ({
       label: opt.label,
       value: opt.id,
     }));
-    if (!selectedSort.value && options.length) {
-      selectedSort.value =
-        options.find((o) => o.id === "unsorted")?.id || options[0].id;
+    if (!selectedSort.value && sortOptions.value.length) {
+      selectedSort.value = sortOptions.value[0].value;
     }
   } catch (e) {
+    // Fallback to hardcoded options only if backend fails
     sortOptions.value = [
-      { label: "Date: Latest First", value: "date_desc" },
-      { label: "Date: Oldest First", value: "date_asc" },
-      { label: "Score: Highest First", value: "score_desc" },
-      { label: "Score: Lowest First", value: "score_asc" },
+      { label: "Date: Latest First", value: "created_at DESC" },
+      { label: "Date: Oldest First", value: "created_at ASC" },
+      { label: "Score: Highest First", value: "score DESC" },
+      { label: "Score: Lowest First", value: "score ASC" },
       { label: "Search Likeness", value: "search_likeness" },
     ];
-    if (!selectedSort.value) selectedSort.value = "date_desc";
+    if (!selectedSort.value) selectedSort.value = sortOptions.value[0].value;
   }
 }
 
@@ -370,7 +364,7 @@ async function refreshImages(append = false) {
     let url;
     const params = new URLSearchParams();
     params.set("info", "true");
-    params.set("sort", selectedSort.value || "date_desc");
+    params.set("sort", selectedSort.value || "ORDER BY created_at DES");
     params.set("offset", String(pageOffset.value));
     params.set("limit", String(pageSize.value));
     if (id === ALL_PICTURES_ID) {
@@ -385,11 +379,14 @@ async function refreshImages(append = false) {
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch images");
     let baseImages = await res.json();
+    console.log('API response:', baseImages); // <--- Add this line
+
     const newImages = baseImages.map((img) => ({
       ...img,
       score: typeof img.score !== "undefined" ? img.score : null,
     }));
     images.value = append ? [...images.value, ...newImages] : newImages;
+    console.log('images.value after assignment:', images.value); // <--- Add this line
     hasMoreImages.value = newImages.length === pageSize.value;
     setTimeout(updateColumns, 0);
   } catch (e) {
@@ -401,6 +398,22 @@ async function refreshImages(append = false) {
 
 // --- Sidebar & Character Data ---
 async function fetchSidebarCounts() {
+  // Fetch total image count for END key logic
+  try {
+    const resAll = await fetch(`${BACKEND_URL}/category/summary`);
+    if (resAll.ok) {
+      const data = await resAll.json();
+      totalImages.value = data.image_count || 0;
+      categoryCounts.value[ALL_PICTURES_ID] = data.image_count;
+    }
+  } catch {}
+function handleEndKey() {
+  // Jump to last page
+  if (totalImages.value > 0) {
+    pageOffset.value = Math.max(totalImages.value - pageSize.value, 0);
+    refreshImages();
+  }
+}
   try {
     const resAll = await fetch(`${BACKEND_URL}/category/summary`);
     if (resAll.ok) {
@@ -485,6 +498,7 @@ async function fetchPictureSets() {
 }
 
 async function handleSelectSet(setId) {
+  handleSwitchToGrid();
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
 
@@ -544,6 +558,7 @@ async function handleDeleteSet() {
 }
 
 async function removeSelectedFromSet() {
+  handleSwitchToGrid();
   if (!selectedSet.value || selectedImageIds.value.length === 0) return;
 
   const setToUpdate = pictureSets.value.find((s) => s.id === selectedSet.value);
@@ -579,6 +594,7 @@ async function removeSelectedFromSet() {
 }
 
 async function removeSelectedFromCharacter() {
+  handleSwitchToGrid();
   if (!selectedCharacter.value || selectedImageIds.value.length === 0) return;
   if (
     selectedCharacter.value === ALL_PICTURES_ID ||
@@ -668,6 +684,16 @@ async function handleDropOnSet({ setId, event }) {
   } catch (e) {
     alert("Failed to add images to set: " + (e.message || e));
   }
+}
+
+
+function handleSwitchToLikeness() { currentView.value = 'likeness'; }
+function handleSwitchToGrid() { currentView.value = 'grid'; }
+
+// Make sure clearSelection is defined for template
+function clearSelection() {
+  selectedImageIds.value = [];
+  lastSelectedIndex = null;
 }
 
 // --- Settings & Config ---
@@ -894,8 +920,23 @@ function onGridScroll(e) {
   }
 }
 
+async function fetchImageInfo(imageId) {
+  try {
+    const res = await fetch(`${BACKEND_URL}/pictures/${imageId}?info=true`);
+    if (!res.ok) throw new Error("Failed to fetch tags");
+    return await res.json();
+  } catch (e) {
+    console.error("Tag fetch failed:", e);
+    return [];
+  }
+}
+
 // --- Overlay & Tag Editing ---
-function openOverlay(img) {
+async function openOverlay(img) {
+  if (img && img.id) {
+    const latestInfo = await fetchImageInfo(img.id);
+    img.tags = latestInfo.tags;
+  }
   overlayImage.value = img;
   overlayOpen.value = true;
 }
@@ -957,6 +998,7 @@ async function exportCurrentView() {
 
 // --- Search ---
 async function searchImages(query) {
+  handleSwitchToGrid();
   const q = (typeof query === "string" ? query : searchQuery.value).trim();
   if (!q) return;
   searchQuery.value = q;
@@ -974,7 +1016,7 @@ async function searchImages(query) {
   try {
     const url = `${BACKEND_URL}/search?query=${encodeURIComponent(
       q
-    )}&threshold=0.5&top_n=1000`;
+    )}&threshold=0.6&top_n=1000`;
     const res = await fetch(url);
     if (!res.ok) throw new Error("Search failed");
     const baseImages = await res.json();
@@ -1039,7 +1081,7 @@ async function selectAllInCurrentView() {
     }
     let url;
     const params = new URLSearchParams();
-    params.set("sort", selectedSort.value || "date_desc");
+    params.set("sort", selectedSort.value || "ORDER BY created_at DES");
     if (id === ALL_PICTURES_ID) {
       url = `${BACKEND_URL}/picture_ids?${params.toString()}`;
     } else if (id === UNASSIGNED_PICTURES_ID) {
@@ -1060,6 +1102,31 @@ async function selectAllInCurrentView() {
 }
 
 function handleOverlayKeydown(e) {
+  // END key support for grid view
+  if (e.key === "End" && currentView.value === "grid") {
+    e.preventDefault();
+    handleEndKey();
+    return;
+  }
+  // HOME key support for grid view
+  if (e.key === "Home" && currentView.value === "grid") {
+    e.preventDefault();
+    pageOffset.value = 0;
+    refreshImages();
+    return;
+  }
+  // PGUP/PGDN key support for grid view
+  if (currentView.value === "grid" && (e.key === "PageUp" || e.key === "PageDown")) {
+    e.preventDefault();
+    if (e.key === "PageUp") {
+      pageOffset.value = Math.max(pageOffset.value - pageSize.value, 0);
+      refreshImages();
+    } else if (e.key === "PageDown") {
+      pageOffset.value = Math.min(pageOffset.value + pageSize.value, Math.max(totalImages.value - pageSize.value, 0));
+      refreshImages();
+    }
+    return;
+  }
   const tag =
     e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
   const isEditable =
@@ -1154,6 +1221,7 @@ function showNextImage() {
 
 // --- Image Mutations ---
 async function deleteSelectedImages() {
+  handleSwitchToGrid();
   if (!selectedImageIds.value.length) return;
   const confirmed = confirm(
     `Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`
@@ -1180,6 +1248,8 @@ async function patchScoreForSelection(score) {
   if (!selectedImageIds.value.length) return;
   for (const id of selectedImageIds.value) {
     try {
+      // Debug log PATCH request
+      console.debug("PATCH /pictures/", id, "?score=", score);
       const res = await fetch(`${BACKEND_URL}/pictures/${id}?score=${score}`, {
         method: "PATCH",
       });
@@ -1196,6 +1266,8 @@ async function patchScoreForSelection(score) {
 async function setImageScore(img, n) {
   const newScore = (img.score || 0) === n ? 0 : n;
   try {
+    // Debug log PATCH request
+    console.debug("PATCH /pictures/", img.id, "?score=", newScore);
     const res = await fetch(
       `${BACKEND_URL}/pictures/${img.id}?score=${newScore}`,
       { method: "PATCH" }
@@ -1236,6 +1308,7 @@ async function setImageScore(img, n) {
 
 // --- Character Assignment ---
 function handleSelectCharacter(id) {
+  handleSwitchToGrid();
   selectedCharacter.value = id;
   selectedSet.value = null; // Clear set selection when selecting a character
 }
@@ -1254,10 +1327,12 @@ function handleDropOnCharacter(payload) {
 }
 
 function handleUpdateSearchQuery(value) {
+  handleSwitchToGrid();
   searchQuery.value = value;
 }
 
 function handleUpdateSelectedSort(value) {
+  handleSwitchToGrid();
   selectedSort.value = value;
 }
 
@@ -1572,6 +1647,16 @@ const { removeTagFromOverlayImage, addTagToOverlay, handleOverlaySetScore } =
   });
 
 // --- Watchers ---
+// Scroll to bottom after END loads last page
+watch(images, (newVal, oldVal) => {
+  if (pageOffset.value >= Math.max(totalImages.value - pageSize.value, 0)) {
+    nextTick(() => {
+      const gridEl = document.querySelector('.image-grid');
+      if (gridEl) gridEl.scrollTop = gridEl.scrollHeight;
+    });
+  }
+});
+
 watch([selectedSort, selectedCharacter, selectedSet], () => {
   if (searchQuery.value && searchQuery.value.trim()) {
     return;
@@ -1631,8 +1716,21 @@ watch(
   }
 );
 
+// Watch for vault change and update view
+watch(
+  () => config.selected_image_root,
+  (val, oldVal) => {
+    if (val !== oldVal) {
+      fetchCharacters();
+      fetchSidebarCounts && fetchSidebarCounts();
+      refreshImages();
+    }
+  }
+);
+
 // --- Lifecycle ---
 onMounted(() => {
+
   fetchConfig();
   fetchSortOptions();
   fetchCharacters();
@@ -1640,12 +1738,32 @@ onMounted(() => {
   window.addEventListener("resize", updateColumns);
   window.addEventListener("keydown", handleOverlayKeydown);
   setTimeout(updateColumns, 100);
+
+  // Ensure gridContainer.value is set to the actual DOM node
+  nextTick(() => {
+    if (gridContainer.value && gridContainer.value.$el) {
+      gridContainer.value = gridContainer.value.$el;
+    }
+    // If using Vue 3, $el may not be available, fallback to $refs
+    if (gridContainer.value && gridContainer.value instanceof HTMLElement) {
+      // Already correct
+    } else if (gridContainer.value && gridContainer.value.$el) {
+      gridContainer.value = gridContainer.value.$el;
+    }
+  });
+
+  setTimeout(() => {
+    console.log('pagedImages.value:', pagedImages.value);
+  }, 500);
 });
+
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleOverlayKeydown);
   window.removeEventListener("resize", updateColumns);
 });
+
+defineExpose({ currentView, clearSelection });
 </script>
 <template src="./App.template.html"></template>
 <style scoped src="./App.css"></style>

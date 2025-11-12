@@ -1,6 +1,6 @@
 # PixlVault
 
-A REST API server for PixlVault, running on localhost:8765.
+A REST API server for PixlVault
 
 ## Development
 

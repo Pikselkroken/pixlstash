@@ -1,5 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
+// FIFO queue for last 20 displayed pictures
+const displayedPictureQueue = ref([]);
 import { marked } from "marked";
 
 const props = defineProps({
@@ -201,63 +203,77 @@ async function sendChatMessageAndFocus() {
         const searchRes = await fetch(
           `${props.backendUrl}/search?query=${encodeURIComponent(
             searchQuery
-          )}&top_n=10`
+          )}&top_n=50`
         );
         if (searchRes.ok) {
           const searchData = await searchRes.json();
           console.log("Search query:", searchQuery);
-          if (Array.isArray(searchData) && searchData.length > 0) {
-            // Always use the best result (highest likeness_score)
-            const bestResult = searchData[0];
-
-            // Get top 3 results for display
-            const top3Results = searchData.slice(0, 3);
-            console.log(
-              "Search results (top 3):",
-              top3Results.map((r) => ({
-                id: r.id,
-                score: r.likeness_score,
-                description: r.description,
-              }))
-            );
-
-            // Build compact debug info with descriptions
-            let debugInfo = `🔍 ${searchData.length} results | Selected: #1\n\n`;
-            for (let i = 0; i < top3Results.length; i++) {
-              const pic = top3Results[i];
-              const score = (pic.likeness_score * 100).toFixed(0);
-              const desc = pic.description
-                ? pic.description.length > 250
-                  ? pic.description.substring(0, 250) + "..."
-                  : pic.description
-                : "No description";
-              debugInfo += `${i + 1}. ${score}% - ${desc}\n`;
-            }
-
-            // Add debug info as a system message with top 3 picture IDs
-            chatMessages.value.push({
-              role: "system",
-              content: debugInfo,
-              isDebug: true,
-              searchResults: top3Results.map((r) => ({
-                id: r.id,
-                score: r.likeness_score,
-              })),
-            });
-
-            const imageUrl = `${props.backendUrl}/pictures/${bestResult.id}`;
-            for (let i = chatMessages.value.length - 1; i >= 0; i--) {
-              const msg = chatMessages.value[i];
-              if (msg.role === "assistant" && !msg.pictureUrl && !msg.isDebug) {
-                chatMessages.value[i] = { ...msg, pictureUrl: imageUrl };
-                break;
+            if (Array.isArray(searchData) && searchData.length > 0) {
+              // Filter out pictures in the FIFO queue
+              const filteredResults = searchData.filter(
+                (pic) => !displayedPictureQueue.value.includes(pic.id)
+              );
+              if (filteredResults.length === 0) {
+                chatMessages.value.push({
+                  role: "system",
+                  content: `🔍 All top results have already been shown in chat.`,
+                  isDebug: true,
+                });
+                await nextTick();
+                scrollToBottom();
+                return;
               }
-            }
-
-            // Scroll after adding debug and image
-            await nextTick();
-            scrollToBottom();
-          } else {
+              // Always use the best result (highest likeness_score) not in FIFO
+              const bestResult = filteredResults[0];
+              // Get top 3 results for display (not in FIFO)
+              const top3Results = filteredResults.slice(0, 3);
+              console.log(
+                "Search results (top 3, not in FIFO):",
+                top3Results.map((r) => ({
+                  id: r.id,
+                  score: r.likeness_score,
+                  description: r.description,
+                }))
+              );
+              // Build compact debug info with descriptions
+              let debugInfo = `🔍 ${filteredResults.length} results | Selected: #1\n\n`;
+              for (let i = 0; i < top3Results.length; i++) {
+                const pic = top3Results[i];
+                const score = (pic.likeness_score * 100).toFixed(0);
+                const desc = pic.description
+                  ? pic.description.length > 250
+                    ? pic.description.substring(0, 250) + "..."
+                    : pic.description
+                  : "No description";
+                debugInfo += `${i + 1}. ${score}% - ${desc}\n`;
+              }
+              // Add debug info as a system message with top 3 picture IDs
+              chatMessages.value.push({
+                role: "system",
+                content: debugInfo,
+                isDebug: true,
+                searchResults: top3Results.map((r) => ({
+                  id: r.id,
+                  score: r.likeness_score,
+                })),
+              });
+              // Add bestResult.id to FIFO queue
+              displayedPictureQueue.value.push(bestResult.id);
+              if (displayedPictureQueue.value.length > 20) {
+                displayedPictureQueue.value.shift(); // Remove oldest
+              }
+              const imageUrl = `${props.backendUrl}/pictures/${bestResult.id}`;
+              for (let i = chatMessages.value.length - 1; i >= 0; i--) {
+                const msg = chatMessages.value[i];
+                if (msg.role === "assistant" && !msg.pictureUrl && !msg.isDebug) {
+                  chatMessages.value[i] = { ...msg, pictureUrl: imageUrl };
+                  break;
+                }
+              }
+              // Scroll after adding debug and image
+              await nextTick();
+              scrollToBottom();
+            } else {
             // No results found
             chatMessages.value.push({
               role: "system",
@@ -320,6 +336,8 @@ defineExpose({ focusInput, scrollToBottom });
               </div>
             </template>
             <template v-else-if="msg.role === 'system' && msg.isDebug">
+              <!-- Debug info commented out for now -->
+              <!--
               <div class="chat-debug-message">
                 <span class="chat-username">Debug</span>
                 <div class="debug-content">
@@ -347,14 +365,10 @@ defineExpose({ focusInput, scrollToBottom });
                   ></span>
                 </div>
               </div>
+              -->
             </template>
             <template v-else>
               <div class="chat-assistant-full">
-                <span class="chat-username">AI</span>
-                <span
-                  class="chat-text"
-                  v-html="renderMarkdown(msg.content)"
-                ></span>
                 <div v-if="msg.pictureUrl" class="chat-picture-result">
                   <img
                     :src="msg.pictureUrl"
@@ -362,6 +376,11 @@ defineExpose({ focusInput, scrollToBottom });
                     @load="handleImageLoad"
                   />
                 </div>
+                <span class="chat-username">AI</span>
+                <span
+                  class="chat-text"
+                  v-html="renderMarkdown(msg.content)"
+                ></span>
               </div>
             </template>
           </div>

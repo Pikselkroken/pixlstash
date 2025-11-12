@@ -88,6 +88,5 @@ function clearInput() {
 /* Remove rounded corners from v-text-field (solo variant) */
 ::v-deep(.search-bar-text-field .v-field) {
   border-radius: 0 !important;
-  background-color: #ddd;
 }
 </style>

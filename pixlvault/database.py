@@ -51,6 +51,7 @@ class VaultDatabase:
 
         from .picture_character import PictureCharacterModel
         from .picture_set import PictureSetModel, PictureSetMemberModel
+        from .picture_likeness import PictureLikenessModel
 
         models = [
             CharacterModel,
@@ -59,6 +60,7 @@ class VaultDatabase:
             PictureCharacterModel,
             PictureSetModel,
             PictureSetMemberModel,
+            PictureLikenessModel,
         ]
 
         if not db_exists:

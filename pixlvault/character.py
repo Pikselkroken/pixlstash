@@ -9,12 +9,14 @@ class CharacterModel:
     id: int = field(default=None, metadata={"primary_key": True})
     name: str = field(
         default=None,
-        metadata={"include_in_embedding": True, "index": True},
+        metadata={"include_in_text_embedding": True, "index": True},
     )
     original_seed: int = field(default=None)
-    original_prompt: str = field(default=None, metadata={"include_in_embedding": True})
+    original_prompt: str = field(
+        default=None, metadata={"include_in_text_embedding": True}
+    )
     loras: list = field(default_factory=list)
-    description: str = field(default=None, metadata={"include_in_embedding": True})
+    description: str = field(default=None, metadata={"include_in_text_embedding": True})
 
 
 class Character:
