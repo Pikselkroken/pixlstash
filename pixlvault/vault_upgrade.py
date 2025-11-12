@@ -67,6 +67,13 @@ class VaultUpgrade:
             self._upgrade_to_v5()
             self.schema_version.set_version(5)
             self.logger.info("Database schema upgraded to version 5")
+            # Add partial index for facial_features == ''
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_pictures_facial_features_empty ON pictures(id) WHERE facial_features = '';
+                """
+            )
 
     def _ensure_reference_picture_sets(self):
         self.logger.info("Ensuring reference picture sets for all characters...")
@@ -160,6 +167,12 @@ class VaultUpgrade:
         self.logger.info("reference_picture_likeness table created successfully")
 
     def _upgrade_to_v4(self):
+        # Add partial index for face_bbox IS NOT NULL AND face_bbox != ''
+        self.connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pictures_face_bbox_not_null
+            ON pictures(id)
+            WHERE face_bbox IS NOT NULL AND face_bbox != '';
+        """)
         cursor = self.connection.cursor()
         # Add columns if they don't exist
         columns_to_add = [
@@ -180,6 +193,11 @@ class VaultUpgrade:
             if col not in columns:
                 cursor.execute(f"ALTER TABLE pictures ADD COLUMN {col} REAL")
                 self.logger.info(f"Added column {col} to pictures table.")
+        # Add full indexes for all quality measures
+        for col in columns_to_add:
+            self.connection.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_pictures_{col} ON pictures({col})"
+            )
         self.connection.commit()
 
     def _upgrade_to_v5(self):
@@ -199,6 +217,12 @@ class VaultUpgrade:
         """)
         self.connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_picture_likeness_picture_id_b ON picture_likeness(picture_id_b)
+        """)
+        # Add partial index for facial_features IS NOT NULL
+        self.connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pictures_facial_features_not_null
+            ON pictures(id)
+            WHERE facial_features IS NOT NULL;
         """)
         self.connection.commit()
         self.logger.info("picture_likeness table created successfully")

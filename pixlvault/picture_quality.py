@@ -13,6 +13,23 @@ logger = get_logger(__name__)
 
 class PictureQuality:
     @staticmethod
+    def batch_likeness_scores(features_a, features_b):
+        """
+        Given two lists of facial feature arrays (np.ndarray), compute cosine similarity for each pair.
+        Returns a numpy array of likeness scores (shape: [len(features_a)]).
+        """
+        import numpy as np
+
+        X_a = np.stack(features_a, axis=0)
+        X_b = np.stack(features_b, axis=0)
+        norms_a = np.linalg.norm(X_a, axis=1, keepdims=True)
+        norms_b = np.linalg.norm(X_b, axis=1, keepdims=True)
+        X_a_norm = X_a / (norms_a + 1e-8)
+        X_b_norm = X_b / (norms_b + 1e-8)
+        likeness_values = np.sum(X_a_norm * X_b_norm, axis=1)
+        return likeness_values
+
+    @staticmethod
     def calculate_quality_batch(images: np.ndarray) -> list:
         """
         Calculate quality metrics for a batch of images.

@@ -280,6 +280,76 @@ class Server:
             )
 
     def _setup_routes(self):
+        @self.api.get("/picture_stacks")
+        async def get_picture_stacks(threshold: float = 0.98, min_group_size: int = 2):
+            """
+            Return groups (stacks) of near-identical pictures based on likeness threshold.
+            Each stack contains picture dicts and preselection info.
+            """
+            # Query all likeness pairs above threshold
+            db = self.vault.pictures._db
+            rows = db.query(
+                "SELECT picture_id_a, picture_id_b, likeness FROM picture_likeness WHERE likeness >= ?",
+                (threshold,),
+            )
+            # Build undirected graph of connections
+            from collections import defaultdict, deque
+
+            neighbors = defaultdict(set)
+            for row in rows:
+                a = row["picture_id_a"] if isinstance(row, dict) else row[0]
+                b = row["picture_id_b"] if isinstance(row, dict) else row[1]
+                neighbors[a].add(b)
+                neighbors[b].add(a)
+            # Find connected components (groups)
+            visited = set()
+            groups = []
+            for node in neighbors:
+                if node in visited:
+                    continue
+                stack = set()
+                queue = deque([node])
+                while queue:
+                    n = queue.popleft()
+                    if n in visited:
+                        continue
+                    visited.add(n)
+                    stack.add(n)
+                    for nbr in neighbors[n]:
+                        if nbr not in visited:
+                            queue.append(nbr)
+                if len(stack) >= min_group_size:
+                    groups.append(list(stack))
+            # For each group, fetch picture info and select best
+            stacks = []
+            for group in groups:
+                pics = [self.vault.pictures[pid] for pid in group]
+
+                # Preselect: highest resolution, sharpness, lowest noise
+                def preselect_key(pic):
+                    res = PictureUtils.load_metadata(pic.file_path)
+                    sharp = getattr(pic, "sharpness", -1)
+                    noise = getattr(pic, "noise_level", 1e9)
+                    # Prefer higher resolution, sharpness, lower noise
+                    return (
+                        (res[0] * res[1]) if res else 0,
+                        sharp,
+                        -noise,
+                    )
+
+                best_idx = max(range(len(pics)), key=lambda i: preselect_key(pics[i]))
+                stacks.append(
+                    {
+                        "pictures": [pic.to_dict() for pic in pics],
+                        "preselected_index": best_idx,
+                    }
+                )
+            return {
+                "stacks": stacks,
+                "threshold": threshold,
+                "min_group_size": min_group_size,
+            }
+
         @self.api.get("/config")
         async def get_config():
             """

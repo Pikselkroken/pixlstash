@@ -69,165 +69,6 @@ def get_sort_mechanisms():
 
 
 class Pictures:
-    def start_likeness_worker(self, batch_size=32768, interval=1):
-        import threading
-
-        if (
-            hasattr(self, "_likeness_worker")
-            and self._likeness_worker
-            and self._likeness_worker.is_alive()
-        ):
-            logger.info("Likeness worker already running.")
-            return
-        self._likeness_worker_stop = threading.Event()
-        self._likeness_worker = threading.Thread(
-            target=self._likeness_loop, args=(batch_size, interval), daemon=True
-        )
-        self._likeness_worker.start()
-
-    def stop_likeness_worker(self):
-        if hasattr(self, "_likeness_worker_stop") and self._likeness_worker_stop:
-            self._likeness_worker_stop.set()
-        if hasattr(self, "_likeness_worker") and self._likeness_worker:
-            self._likeness_worker.join(timeout=10)
-
-    def _likeness_loop(self, batch_size, interval):
-        logger.info("Starting likeness worker loop...")
-        import numpy as np
-
-        while not self._likeness_worker_stop.is_set():
-            data_updated = False
-            # Get all pictures with facial_features for batch
-            with self._db.threaded_connection as thread_conn:
-                cursor = thread_conn.cursor()
-                cursor.execute(
-                    f"SELECT * FROM pictures WHERE facial_features IS NOT NULL LIMIT (10 * {batch_size})"
-                )
-                rows = cursor.fetchall()
-            all_pics = [PictureModel.from_dict(row) for row in rows]
-            # Get the true count of pictures with facial_features
-            with self._db.threaded_connection as thread_conn:
-                cursor = thread_conn.cursor()
-                cursor.execute(
-                    "SELECT COUNT(*) FROM pictures WHERE facial_features IS NOT NULL"
-                )
-                n_total = cursor.fetchone()[0]
-                cursor.execute("SELECT COUNT(*) FROM picture_likeness")
-                likeness_count = cursor.fetchone()[0]
-            total_pairs = n_total * (n_total - 1)
-            total_pairs_remaining = total_pairs - likeness_count
-            logger.info(
-                f"Likeness worker: {total_pairs_remaining} pairwise likenesses remain to be calculated."
-            )
-            if n_total == 0:
-                logger.info(
-                    "No pictures with valid facial_features found. Waiting interval before retrying."
-                )
-                self._likeness_worker_stop.wait(interval)
-                continue
-
-            # Build set of existing pairs
-            with self._db.threaded_connection as thread_conn:
-                cursor = thread_conn.cursor()
-                cursor.execute(
-                    "SELECT picture_id_a, picture_id_b FROM picture_likeness"
-                )
-                existing_pairs = set((row[0], row[1]) for row in cursor.fetchall())
-
-            # Prepare batch of new pairs to process
-            batch = []
-            for i, pic_a in enumerate(all_pics):
-                for j, pic_b in enumerate(all_pics):
-                    if i == j:
-                        continue
-                    if (pic_a.id, pic_b.id) in existing_pairs:
-                        continue
-                    # Only process if both have facial_features
-                    if not getattr(pic_a, "facial_features", None) or not getattr(
-                        pic_b, "facial_features", None
-                    ):
-                        continue
-                    batch.append((pic_a, pic_b))
-                    if len(batch) >= batch_size:
-                        break
-                if len(batch) >= batch_size:
-                    break
-
-            if not batch:
-                logger.info(
-                    "No new likeness pairs to process. Waiting interval before retrying."
-                )
-                self._likeness_worker_stop.wait(interval)
-                continue
-
-            # Calculate likeness for batch using PictureUtils.batch_facial_likeness
-
-            # Prepare facial_features arrays for batch
-            pic_a_list = [pic_a for pic_a, _ in batch]
-            pic_b_list = [pic_b for _, pic_b in batch]
-            features_a = [
-                np.frombuffer(pic.facial_features, dtype=np.float32)
-                for pic in pic_a_list
-            ]
-            features_b = [
-                np.frombuffer(pic.facial_features, dtype=np.float32)
-                for pic in pic_b_list
-            ]
-            # Stack all features and compute likeness
-            # If batch is small, can stack both and compute all pairwise
-            X_a = np.stack(features_a, axis=0)
-            X_b = np.stack(features_b, axis=0)
-            # Normalize
-            norms_a = np.linalg.norm(X_a, axis=1, keepdims=True)
-            norms_b = np.linalg.norm(X_b, axis=1, keepdims=True)
-            X_a_norm = X_a / (norms_a + 1e-8)
-            X_b_norm = X_b / (norms_b + 1e-8)
-            # Cosine similarity for each pair (i, j)
-            likeness_values = np.sum(X_a_norm * X_b_norm, axis=1)
-            likeness_scores = [
-                (pic_a.id, pic_b.id, float(likeness))
-                for (pic_a, pic_b), likeness in zip(batch, likeness_values)
-            ]
-
-            # Store likeness scores in DB
-            with self._db.threaded_connection as thread_conn:
-                cursor = thread_conn.cursor()
-                for pic_id_a, pic_id_b, likeness in likeness_scores:
-                    cursor.execute(
-                        """
-                        INSERT INTO picture_likeness (
-                            picture_id_a, picture_id_b, likeness, metric
-                        ) VALUES (?, ?, ?, ?)
-                        """,
-                        (pic_id_a, pic_id_b, likeness, "cosine"),
-                    )
-                thread_conn.commit()
-                data_updated = True
-
-            if not data_updated:
-                logger.info(
-                    "No likeness data updated. Waiting interval before retrying."
-                )
-                self._likeness_worker_stop.wait(interval)
-        logger.info("Likeness worker stopped.")
-
-    def _group_face_crops_by_size(self, pics: List[PictureModel]):
-        """
-        Group face crops by their rounded bounding box size (width, height).
-        Returns a dict: {(w, h): [PictureModel, ...]}
-        """
-        from collections import defaultdict
-        import math
-
-        face_groups = defaultdict(list)
-        for pic in pics:
-            if pic.face_bbox is not None and len(pic.face_bbox) == 4:
-                x1, y1, x2, y2 = pic.face_bbox
-                w = int(math.ceil((x2 - x1) / 64.0) * 64)
-                h = int(math.ceil((y2 - y1) / 64.0) * 64)
-                face_groups[(w, h)].append(pic)
-        return face_groups
-
     INSIGHTFACE_CLEANUP_TIMEOUT = 20  # seconds
 
     def __init__(self, db, characters=None):
@@ -294,7 +135,7 @@ class Pictures:
         """
         self._set_tags_for_picture(picture_id, tags)
 
-    def start_facial_features_worker(self, interval=1):
+    def start_facial_features_worker(self, interval=5):
         import threading
 
         if self._facial_features_worker and self._facial_features_worker.is_alive():
@@ -311,7 +152,7 @@ class Pictures:
         if self._facial_features_worker:
             self._facial_features_worker.join(timeout=10)
 
-    def start_text_embedding_worker(self, interval=1):
+    def start_text_embedding_worker(self, interval=5):
         import threading
 
         if self._text_embedding_worker and self._text_embedding_worker.is_alive():
@@ -328,16 +169,169 @@ class Pictures:
         if self._text_embedding_worker:
             self._text_embedding_worker.join(timeout=10)
 
+    def start_likeness_worker(self, batch_size=131072, interval=5):
+        import threading
+
+        if (
+            hasattr(self, "_likeness_worker")
+            and self._likeness_worker
+            and self._likeness_worker.is_alive()
+        ):
+            logger.info("Likeness worker already running.")
+            return
+        self._likeness_worker_stop = threading.Event()
+        self._likeness_worker = threading.Thread(
+            target=self._likeness_loop, args=(batch_size, interval), daemon=True
+        )
+        self._likeness_worker.start()
+
+    def stop_likeness_worker(self):
+        if hasattr(self, "_likeness_worker_stop") and self._likeness_worker_stop:
+            self._likeness_worker_stop.set()
+        if hasattr(self, "_likeness_worker") and self._likeness_worker:
+            self._likeness_worker.join(timeout=10)
+
+    def _likeness_loop(self, batch_size, interval):
+        num_threads = 4
+        while not self._likeness_worker_stop.is_set():
+            data_updated = False
+            start = time.time()
+            logger.debug("[LIKENESS] Starting iteration...")
+            with self._db.threaded_connection as thread_conn:
+                cursor = thread_conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM pictures WHERE facial_features IS NOT NULL"
+                )
+                n_total = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM picture_likeness")
+                likeness_count = cursor.fetchone()[0]
+
+            total_pairs = n_total * (n_total - 1)
+            total_pairs_remaining = total_pairs - likeness_count
+            if total_pairs_remaining == 0:
+                logger.info(
+                    "[LIKENESS] Iteration done after %.2f seconds."
+                    % (time.time() - start)
+                )
+                self._likeness_worker_stop.wait(interval)
+                continue
+            logger.info(
+                f"Likeness worker: {total_pairs_remaining} pairwise likenesses remain to be calculated."
+            )
+
+            with self._db.threaded_connection as thread_conn:
+                cursor = thread_conn.cursor()
+                cursor.execute(
+                    f"SELECT * FROM pictures WHERE facial_features IS NOT NULL LIMIT ({num_threads * batch_size})"
+                )
+                rows = cursor.fetchall()
+            with self._db.threaded_connection as thread_conn:
+                cursor = thread_conn.cursor()
+                cursor.execute(
+                    "SELECT picture_id_a, picture_id_b FROM picture_likeness LIMIT (?)",
+                    (num_threads * batch_size,),
+                )
+                existing_pairs = set((row[0], row[1]) for row in cursor.fetchall())
+
+            pending_pairs = []
+            all_pics = [PictureModel.from_dict(row) for row in rows]
+            for i, pic_a in enumerate(all_pics):
+                for j, pic_b in enumerate(all_pics):
+                    if i == j:
+                        continue
+                    if (pic_a.id, pic_b.id) in existing_pairs:
+                        continue
+                    if not getattr(pic_a, "facial_features", None) or not getattr(
+                        pic_b, "facial_features", None
+                    ):
+                        continue
+                    pending_pairs.append((pic_a, pic_b))
+
+            if pending_pairs:
+                # Print total pairs to process
+                total_to_process = batch_size * num_threads
+
+                batches = [
+                    pending_pairs[i : i + batch_size]
+                    for i in range(0, total_to_process, batch_size)
+                ]
+
+                import concurrent.futures
+
+                def process_batch(batch, batch_idx, processed_so_far):
+                    pic_a_list = [pic_a for pic_a, _ in batch]
+                    pic_b_list = [pic_b for _, pic_b in batch]
+                    features_a = [
+                        np.frombuffer(pic.facial_features, dtype=np.float32)
+                        for pic in pic_a_list
+                    ]
+                    features_b = [
+                        np.frombuffer(pic.facial_features, dtype=np.float32)
+                        for pic in pic_b_list
+                    ]
+                    likeness_values = PictureQuality.batch_likeness_scores(
+                        features_a, features_b
+                    )
+                    likeness_scores = [
+                        (pic_a.id, pic_b.id, float(likeness), "cosine")
+                        for (pic_a, pic_b), likeness in zip(batch, likeness_values)
+                    ]
+                    return likeness_scores
+
+                # Run batches in thread pool and join
+                processed_total = 0
+                all_likeness_scores = []
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=len(batches)
+                ) as executor:
+                    futures = [
+                        executor.submit(process_batch, batch, idx, processed_total)
+                        for idx, batch in enumerate(batches)
+                        if batch
+                    ]
+                    for future in concurrent.futures.as_completed(futures):
+                        batch_scores = future.result()
+                        all_likeness_scores.extend(batch_scores)
+                        processed_total += len(batch_scores)
+
+                # Bulk insert all likeness scores in one transaction
+                if all_likeness_scores:
+                    with self._db.threaded_connection as thread_conn:
+                        cursor = thread_conn.cursor()
+                        cursor.executemany(
+                            """
+                            INSERT INTO picture_likeness (
+                                picture_id_a, picture_id_b, likeness, metric
+                            ) VALUES (?, ?, ?, ?)
+                            """,
+                            all_likeness_scores,
+                        )
+                        thread_conn.commit()
+                    logger.info(
+                        f"[LIKENESS] Bulk inserted {len(all_likeness_scores)} likeness scores."
+                    )
+                data_updated = True
+
+            logger.info(
+                "[LIKENESS] Iteration done after %.2f seconds." % (time.time() - start)
+            )
+            if not data_updated:
+                self._likeness_worker_stop.wait(interval)
+        logger.info("[LIKENESS] Likeness worker stopped.")
+
     def _facial_features_loop(self, interval):
         while not self._facial_features_worker_stop.is_set():
             try:
                 data_updated = False
 
+                start = time.time()
                 # 1. Calculate face bboxes
-                logger.debug(
-                    "Generating face bounding boxes for pictures needing them."
-                )
+                logger.debug("[FACIAL_FEATURES] Starting iteration...")
                 pics_needing_face_bboxes = self._find_pics_needing_face_bbox()
+                logger.info(
+                    "[FACIAL_FEATURES] It took %.2f seconds to fetch pictures needing face bboxes."
+                    % (time.time() - start)
+                )
                 logger.debug(
                     f"Found {len(pics_needing_face_bboxes)} pictures needing face bboxes. Doing {MAX_CONCURRENT_IMAGES} at a time."
                 )
@@ -355,14 +349,19 @@ class Pictures:
                 if self._facial_features_worker_stop.is_set():
                     break
 
+                start_facial_features_fetch = time.time()
                 # 2. Generate facial features for pictures missing them
                 missing_facial_features = []
                 with self._db.threaded_connection as thread_conn:
                     missing_facial_features = self._fetch_missing_facial_features(
                         thread_conn
                     )
+                logger.info(
+                    "[FACIAL_FEATURES] It took %.2f seconds to fetch pictures needing facial features."
+                    % (time.time() - start_facial_features_fetch)
+                )
                 if missing_facial_features:
-                    logger.info(
+                    logger.debug(
                         f"Generating facial features for {len(missing_facial_features)} pictures."
                     )
                     features_updated = self._generate_facial_features(
@@ -374,6 +373,9 @@ class Pictures:
                         )
                     data_updated |= features_updated
 
+                logger.info(
+                    "[FACIAL_FEATURES] Done after %.2f seconds." % (time.time() - start)
+                )
                 if not data_updated:
                     # Wait for the specified interval before checking again
                     self._facial_features_worker_stop.wait(interval)
@@ -388,18 +390,23 @@ class Pictures:
         # Create a new connection for this thread
         while not self._text_embedding_worker_stop.is_set():
             try:
+                start = time.time()
+                logger.debug("[TEXT_EMBEDDING] Starting iteration...")
+
                 data_updated = False
 
                 # 1. Fetch missing descriptions
-                missing_tags = []
                 missing_descriptions = []
-                logger.debug("Searching for pictures missing descriptions.")
                 with self._db.threaded_connection as thread_conn:
                     missing_descriptions = self._fetch_missing_descriptions(thread_conn)
 
                 if self._text_embedding_worker_stop.is_set():
                     break
 
+                logger.info(
+                    "[TEXT_EMBEDDING] It took %.2f seconds to fetch missing descriptions."
+                    % (time.time() - start)
+                )
                 # 2. Generate descriptions
                 descriptions_generated = []
                 if missing_descriptions:
@@ -421,11 +428,16 @@ class Pictures:
                         )
                     data_updated = True
 
+                tag_start = time.time()
                 # 4. Fetch missing tags
                 missing_tags = []
                 with self._db.threaded_connection as thread_conn:
                     missing_tags = self._fetch_missing_tags(thread_conn)
 
+                logger.info(
+                    "[TEXT_EMBEDDING] It took %.2f seconds to fetch missing tags."
+                    % (time.time() - tag_start)
+                )
                 # 5. Generate missing tags
                 tagged_pictures = []
                 if missing_tags:
@@ -443,10 +455,16 @@ class Pictures:
                         self._update_picture_tags(thread_conn, tagged_pictures)
                     data_updated = True
 
+                embed_start = time.time()
                 # 7. Fetch pictures to embed
                 pictures_to_embed = []
                 with self._db.threaded_connection as thread_conn:
                     pictures_to_embed = self._fetch_missing_text_embeddings(thread_conn)
+
+                logger.info(
+                    "[TEXT_EMBEDDING] It took %.2f seconds to fetch missing text embeddings."
+                    % (time.time() - embed_start)
+                )
 
                 # 8. Generate text embeddings for fetched pictures from descriptions and tags
                 embeddings_generated = []
@@ -463,6 +481,9 @@ class Pictures:
                         )
                     data_updated = True
 
+                logger.info(
+                    "[TEXT_EMBEDDING] Done after %.2f seconds." % (time.time() - start)
+                )
                 if not data_updated:
                     self._text_embedding_worker_stop.wait(interval)
             except (sqlite3.OperationalError, OSError) as e:
@@ -476,32 +497,19 @@ class Pictures:
     def _fetch_missing_tags(self, thread_conn):
         """Return PictureModels needing tags using the provided connection."""
 
-        logger.debug("Starting the database fetch for missing tags.")
+        logger.debug("Starting the optimized database fetch for missing tags.")
         cursor = thread_conn.cursor()
-
         cursor.execute(
             """
-            SELECT *
-            FROM pictures WHERE description IS NOT NULL
+            SELECT p.*
+            FROM pictures p
+            LEFT JOIN picture_tags pt ON pt.picture_id = p.id
+            WHERE p.description IS NOT NULL
+            GROUP BY p.id
+            HAVING COUNT(pt.tag) = 0
             """
         )
-        pictures_with_descriptions = cursor.fetchall()
-
-        missing_tags = []
-        for picture_row in pictures_with_descriptions:
-            picture_id = picture_row["id"]
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM picture_tags WHERE picture_id = ?
-                """,
-                (picture_id,),
-            )
-            tag_count_row = cursor.fetchone()
-            tag_count = tag_count_row[0] if tag_count_row else 0
-            if tag_count == 0:
-                missing_tags.append(picture_row)
-
-        logger.debug(f"Found {len(missing_tags)} pictures missing tags.")
+        missing_tags = cursor.fetchall()
         return self.from_batch_of_db_dicts(missing_tags)
 
     def _fetch_missing_text_embeddings(self, thread_conn):
@@ -557,20 +565,18 @@ class Pictures:
 
     def _fetch_missing_facial_features(self, thread_conn):
         """Return PictureModels needing facial features using the provided connection."""
-
-        logger.debug("Starting the database fetch for missing facial features.")
+        logger.debug(
+            "Starting the optimized database fetch for missing facial features."
+        )
         cursor = thread_conn.cursor()
-
-        # Find pictures missing facial features (for those with a valid face_bbox)
         cursor.execute(
             """
             SELECT p.*
             FROM pictures p
-            WHERE p.face_bbox IS NOT NULL AND p.face_bbox != ''
+            WHERE p.face_bbox IS NOT NULL
+              AND p.face_bbox != ''
               AND (p.facial_features IS NULL OR p.facial_features = '')
-              AND EXISTS (
-                  SELECT 1 FROM picture_tags pt WHERE pt.picture_id = p.id
-              )
+            GROUP BY p.id
             """
         )
         rows = cursor.fetchall()
@@ -582,8 +588,11 @@ class Pictures:
         # (inside the main loop, after fetching pics)
         BATCH_SIZE = 8
         while not self._quality_worker_stop.is_set():
+            start = time.time()
+            logger.debug("[QUALITY] Starting iteration...")
             quality_updates = 0
             try:
+                start_quality_fetch = time.time()
                 # 1. Full image quality measures
                 logger.debug(
                     "Searching for pictures needing full image quality calculation."
@@ -599,12 +608,22 @@ class Pictures:
                     )
                     pics_full = self.from_batch_of_db_dicts(rows)
 
+                start_quality_grouping = time.time()
+                logger.debug(
+                    "[QUALITY] It took %.2f seconds to fetch pictures needing quality calculation."
+                    % (start_quality_grouping - start_quality_fetch)
+                )
                 logger.debug(
                     f"Read metadata for {len(pics_full)} pictures needing full image quality."
                 )
                 grouped_full = self._group_pictures_by_size(pics_full, region="full")
                 logger.debug(
                     f"Grouped {len(grouped_full)} full image batches by size. Will calculate quality now."
+                )
+                start_quality_calculation = time.time()
+                logger.debug(
+                    "[QUALITY] It took %.2f seconds to group pictures by size."
+                    % (start_quality_calculation - start_quality_grouping)
                 )
 
                 for group in grouped_full.values():
@@ -618,7 +637,11 @@ class Pictures:
                         if quality_updates:
                             with self._db.threaded_connection as thread_conn:
                                 self._update_quality(thread_conn, quality_updates)
-
+                start_face_quality_fetch = time.time()
+                logger.debug(
+                    "[QUALITY] It took %.2f seconds to calculate full image quality."
+                    % (start_face_quality_fetch - start_quality_calculation)
+                )
                 # 2. Face quality measures
                 logger.debug("Searching for pictures needing face quality calculation.")
                 with self._db.threaded_connection as thread_conn:
@@ -631,7 +654,10 @@ class Pictures:
                         f"Quality worker found {len(rows)} pictures needing face quality calculation."
                     )
                     pics_face = self.from_batch_of_db_dicts(rows)
-
+                logger.debug(
+                    "[QUALITY] It took %.2f seconds to fetch pictures needing face quality calculation."
+                    % (time.time() - start_face_quality_fetch)
+                )
                 logger.debug(
                     f"Read metadata for {len(pics_face)} pictures needing face quality."
                 )
@@ -673,6 +699,7 @@ class Pictures:
             except Exception as e:
                 logger.error(f"Quality worker error: {e}")
 
+            logger.info("[QUALITY] Done after %.2f seconds." % (time.time() - start))
             if quality_updates == 0:
                 self._quality_worker_stop.wait(interval)
 
@@ -1319,7 +1346,7 @@ class Pictures:
                 results.append(pic)
         return results
 
-    def start_quality_worker(self, interval=1):
+    def start_quality_worker(self, interval=5):
         if self._quality_worker and self._quality_worker.is_alive():
             return
         self._quality_worker_stop = threading.Event()
