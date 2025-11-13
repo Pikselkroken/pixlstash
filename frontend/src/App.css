@@ -118,14 +118,14 @@ body {
   padding-right: 2px;
 }
 @font-face {
-  font-family: 'PressStart2P';
-  src: url('/src/assets/fonts/PressStart2P-Regular.ttf') format('truetype');
+  font-family: "PressStart2P";
+  src: url("/src/assets/fonts/PressStart2P-Regular.ttf") format("truetype");
   font-weight: normal;
   font-style: normal;
 }
 
 .toolbar-title {
-  font-family: 'PressStart2P', monospace;
+  font-family: "PressStart2P", monospace;
   font-size: 1.5em;
   letter-spacing: 2px;
   position: relative;
@@ -214,8 +214,12 @@ button[disabled] {
 }
 
 @keyframes spin {
-  0% { transform: translate(-50%, -50%) rotate(0deg); }
-  100% { transform: translate(-50%, -50%) rotate(360deg); }
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
 }
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {
