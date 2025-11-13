@@ -11,7 +11,10 @@
     @scroll="onGridScroll"
     @click="handleGridBackgroundClick"
   >
-    <div v-if="images.length === 0 && !imagesLoading && !imagesError" class="empty-state">
+    <div
+      v-if="images.length === 0 && !imagesLoading && !imagesError"
+      class="empty-state"
+    >
       No images found for this character.
     </div>
     <div v-if="imagesError" class="empty-state">
@@ -24,7 +27,10 @@
       v-for="(img, idx) in pagedImages"
       :key="img.id"
       class="image-card"
-      :class="[isImageSelected(img.id) ? 'selected' : '', getSelectionBorderClasses(idx)]"
+      :class="[
+        isImageSelected(img.id) ? 'selected' : '',
+        getSelectionBorderClasses(idx),
+      ]"
       :draggable="isImageSelected(img.id)"
       @dragstart="onImageDragStart(img, idx, $event)"
       @click="handleGridBackgroundClick"
@@ -42,18 +48,39 @@
               >mdi-star</v-icon
             >
           </div>
-          <template v-if="(img.format && isSupportedVideoFile(img.format)) || (!img.format && isSupportedVideoFile((img.id || '').split('.').pop()))">
+          <template
+            v-if="
+              (img.format && isSupportedVideoFile(img.format)) ||
+              (!img.format &&
+                isSupportedVideoFile((img.id || '').split('.').pop()))
+            "
+          >
             <img
               :src="`${BACKEND_URL}/thumbnails/${img.id}`"
               class="thumbnail-img video-thumb"
               @load="thumbLoaded[img.id] = true"
               @error="thumbLoaded[img.id] = true"
-              @click.stop="(e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) { handleImageSelect(img, idx, e); } else { openOverlay(img); } }"
+              @click.stop="
+                (e) => {
+                  if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                    handleImageSelect(img, idx, e);
+                  } else {
+                    openOverlay(img);
+                  }
+                }
+              "
               style="cursor: pointer; border: 2px solid #2196f3"
             />
             <v-icon
               class="video-icon-overlay"
-              style="position: absolute; bottom: 8px; left: 8px; color: #2196f3; background: white; border-radius: 50%;"
+              style="
+                position: absolute;
+                bottom: 8px;
+                left: 8px;
+                color: #2196f3;
+                background: white;
+                border-radius: 50%;
+              "
               >mdi-play-circle</v-icon
             >
           </template>
@@ -63,12 +90,26 @@
               class="thumbnail-img"
               @load="thumbLoaded[img.id] = true"
               @error="thumbLoaded[img.id] = true"
-              @click.stop="(e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) { handleImageSelect(img, idx, e); } else { openOverlay(img); } }"
+              @click.stop="
+                (e) => {
+                  if (e.ctrlKey || e.metaKey || e.shiftKey) {
+                    handleImageSelect(img, idx, e);
+                  } else {
+                    openOverlay(img);
+                  }
+                }
+              "
               style="cursor: pointer"
             />
           </template>
         </div>
-        <div v-if="selectedSort === 'ORDER BY created_at DESC' || selectedSort === 'ORDER BY created_at ASC'" class="thumbnail-info">
+        <div
+          v-if="
+            selectedSort === 'ORDER BY created_at DESC' ||
+            selectedSort === 'ORDER BY created_at ASC'
+          "
+          class="thumbnail-info"
+        >
           {{ new Date(img.created_at).toLocaleString() }}
         </div>
         <div v-if="selectedSort === 'search_likeness'" class="thumbnail-info">
@@ -79,10 +120,21 @@
   </div>
 </template>
 <script setup>
-
-import { defineEmits, computed, onMounted, ref } from 'vue';
-const emit = defineEmits(['open-overlay', 'select-image', 'clear-selection', 'infinite-scroll']);
-
+import {
+  defineEmits,
+  computed,
+  onMounted,
+  ref,
+  watch,
+  nextTick,
+  onUnmounted,
+} from "vue";
+const emit = defineEmits([
+  "open-overlay",
+  "select-image",
+  "clear-selection",
+  "infinite-scroll",
+]);
 
 // Props
 const props = defineProps({
@@ -91,7 +143,6 @@ const props = defineProps({
   imagesError: String,
   thumbLoaded: Object,
   thumbnailSize: Number,
-  columns: Number,
   sidebarVisible: Boolean,
   selectedImageIds: Array,
   showStars: Boolean,
@@ -107,13 +158,17 @@ const props = defineProps({
 // Internal computed for pagedImages (for now, just use images)
 const pagedImages = computed(() => props.images);
 
+// Internal columns state
+const columns = ref(1);
+
 // Selection logic
-const isImageSelected = (id) => props.selectedImageIds && props.selectedImageIds.includes(id);
+const isImageSelected = (id) =>
+  props.selectedImageIds && props.selectedImageIds.includes(id);
 
 const getSelectionBorderClasses = (idx) => {
   const sorted = pagedImages.value;
   if (!isImageSelected(sorted[idx]?.id)) return "";
-  const cols = props.columns;
+  const cols = columns.value;
   const total = sorted.length;
   const row = Math.floor(idx / cols);
   const col = idx % cols;
@@ -157,23 +212,24 @@ const onImageDragStart = (img, idx, event) => {
 
 const handleGridBackgroundClick = (e) => {
   if (!e.target.closest(".thumbnail-card")) {
-    emit('clear-selection');
+    emit("clear-selection");
   }
 };
 
 const handleImageSelect = (img, idx, event) => {
-    emit('select-image', img, idx, event);
+  emit("select-image", img, idx, event);
 };
 
 const openOverlay = (img) => {
-  emit('open-overlay', img);
+  emit("open-overlay", img);
 };
 
 const setImageScore = (img, n) => {
-  emit('set-image-score', img, n);
+  emit("set-image-score", img, n);
 };
 
-const formatLikenessScore = (score) => score !== undefined ? score.toFixed(2) : "";
+const formatLikenessScore = (score) =>
+  score !== undefined ? score.toFixed(2) : "";
 
 const isSupportedVideoFile = (format) => {
   if (!format) return false;
@@ -183,12 +239,47 @@ const isSupportedVideoFile = (format) => {
 
 const gridContainer = ref(null);
 
+function updateColumns() {
+  nextTick(() => {
+    const el = gridContainer.value?.$el || gridContainer.value;
+    if (!el) return;
+    const containerWidth = el.offsetWidth;
+    columns.value = Math.max(
+      1,
+      Math.floor(containerWidth / (props.thumbnailSize + 32))
+    );
+  });
+}
+
+onMounted(() => {
+  updateColumns();
+  window.addEventListener("resize", updateColumns);
+});
+
+watch(
+  () => props.thumbnailSize,
+  () => {
+    updateColumns();
+  }
+);
+
+watch(
+  () => props.images,
+  () => {
+    updateColumns();
+  }
+);
+
+onUnmounted(() => {
+  window.removeEventListener("resize", updateColumns);
+});
+
 // Expose the grid DOM node to parent
 defineExpose({ gridEl: gridContainer });
 
 onMounted(() => {
   if (gridContainer.value) {
-    gridContainer.value.addEventListener('scroll', onGridScroll);
+    gridContainer.value.addEventListener("scroll", onGridScroll);
   }
 });
 
@@ -196,7 +287,7 @@ function onGridScroll(e) {
   const el = e.target;
   if (props.imagesLoading) return;
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
-    emit('infinite-scroll');
+    emit("infinite-scroll");
   }
 }
 </script>
@@ -296,6 +387,8 @@ function onGridScroll(e) {
 .v-card {
   position: relative;
   overflow: visible;
+  max-width: none;
+  min-width: none;
 }
 .thumbnail-info {
   font-size: 0.85em;
@@ -338,8 +431,12 @@ function onGridScroll(e) {
 }
 
 @keyframes spin {
-  0% { transform: translate(-50%, -50%) rotate(0deg); }
-  100% { transform: translate(-50%, -50%) rotate(360deg); }
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
 }
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {
@@ -352,6 +449,8 @@ function onGridScroll(e) {
 .thumbnail-card {
   width: 100%;
   height: 100%;
+  max-width: none;
+  min-width: none;
   position: relative;
 }
 </style>
