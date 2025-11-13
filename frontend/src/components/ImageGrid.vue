@@ -292,24 +292,24 @@ function onGridScroll(e) {
 }
 </script>
 <style scoped>
- .image-grid {
-   display: grid;
-   gap: 0;
-   width: calc(100% - 8px);
-   box-sizing: border-box;
-   flex: 1 1 0%;
-   min-height: 0;
-   overflow-y: auto;
-   padding: 0 16px 0 16px !important; /* Extra right padding for visible scrollbar */
-   overflow: auto;
-   scrollbar-width: 16px !important;
-   scrollbar-color: orange #ddd;
-   align-content: start;
-   justify-content: start;
-   padding-bottom: 72px !important;
+.image-grid {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  box-sizing: border-box;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0px 0 0px !important; /* Extra right padding for visible scrollbar */
+  overflow: auto;
+  scrollbar-width: 16px !important;
+  scrollbar-color: orange #ddd;
+  align-content: start;
+  justify-content: start;
+  padding-bottom: 72px !important;
 }
 .image-grid::-webkit-scrollbar {
-  width: 24px;
+  width: 8px;
 }
 .image-grid::-webkit-scrollbar-thumb {
   background: orange;
@@ -369,7 +369,7 @@ function onGridScroll(e) {
   width: 100%;
   max-width: 256px;
   min-width: 128px;
-  padding: 0;
+  padding: 4px;
   margin: 0;
 }
 .star-overlay {
