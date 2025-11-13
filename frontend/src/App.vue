@@ -87,22 +87,21 @@ const VIDEO_EXTENSIONS = [
   "m4v",
 ];
 
-
 // --- Template & Component Refs ---
 const gridContainer = ref(null);
 const imageImporterRef = ref(null);
 const chatWindowRef = ref(null);
 
-const currentView = ref('grid'); // or 'likeness'
+const currentView = ref("grid"); // or 'likeness'
 
 function handleEndKey() {
   // Jump to last visible page
-  console.log('Scrolling to END. totalImages.value:', totalImages.value);
+  console.log("Scrolling to END. totalImages.value:", totalImages.value);
   // Simple: load last page and scroll to bottom
   pageOffset.value = Math.max(totalImages.value - pageSize.value, 0);
   refreshImages();
   nextTick(() => {
-    const gridEl = document.querySelector('.image-grid');
+    const gridEl = document.querySelector(".image-grid");
     if (gridEl) gridEl.scrollTop = gridEl.scrollHeight;
   });
 }
@@ -379,14 +378,14 @@ async function refreshImages(append = false) {
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch images");
     let baseImages = await res.json();
-    console.log('API response:', baseImages); // <--- Add this line
+    console.log("API response:", baseImages); // <--- Add this line
 
     const newImages = baseImages.map((img) => ({
       ...img,
       score: typeof img.score !== "undefined" ? img.score : null,
     }));
     images.value = append ? [...images.value, ...newImages] : newImages;
-    console.log('images.value after assignment:', images.value); // <--- Add this line
+    console.log("images.value after assignment:", images.value); // <--- Add this line
     hasMoreImages.value = newImages.length === pageSize.value;
     setTimeout(updateColumns, 0);
   } catch (e) {
@@ -407,13 +406,13 @@ async function fetchSidebarCounts() {
       categoryCounts.value[ALL_PICTURES_ID] = data.image_count;
     }
   } catch {}
-function handleEndKey() {
-  // Jump to last page
-  if (totalImages.value > 0) {
-    pageOffset.value = Math.max(totalImages.value - pageSize.value, 0);
-    refreshImages();
+  function handleEndKey() {
+    // Jump to last page
+    if (totalImages.value > 0) {
+      pageOffset.value = Math.max(totalImages.value - pageSize.value, 0);
+      refreshImages();
+    }
   }
-}
   try {
     const resAll = await fetch(`${BACKEND_URL}/category/summary`);
     if (resAll.ok) {
@@ -686,10 +685,17 @@ async function handleDropOnSet({ setId, event }) {
   }
 }
 
-
-function handleSwitchToLikeness() { currentView.value = 'likeness'; }
-function handleSwitchToGrid() { currentView.value = 'grid'; }
-
+function handleSwitchToLikeness() {
+  currentView.value = "likeness";
+}
+function handleSwitchToGrid() {
+  currentView.value = "grid";
+  nextTick(() => {
+    nextTick(() => {
+      updateColumns();
+    });
+  });
+}
 // Make sure clearSelection is defined for template
 function clearSelection() {
   selectedImageIds.value = [];
@@ -1116,13 +1122,19 @@ function handleOverlayKeydown(e) {
     return;
   }
   // PGUP/PGDN key support for grid view
-  if (currentView.value === "grid" && (e.key === "PageUp" || e.key === "PageDown")) {
+  if (
+    currentView.value === "grid" &&
+    (e.key === "PageUp" || e.key === "PageDown")
+  ) {
     e.preventDefault();
     if (e.key === "PageUp") {
       pageOffset.value = Math.max(pageOffset.value - pageSize.value, 0);
       refreshImages();
     } else if (e.key === "PageDown") {
-      pageOffset.value = Math.min(pageOffset.value + pageSize.value, Math.max(totalImages.value - pageSize.value, 0));
+      pageOffset.value = Math.min(
+        pageOffset.value + pageSize.value,
+        Math.max(totalImages.value - pageSize.value, 0)
+      );
       refreshImages();
     }
     return;
@@ -1651,7 +1663,7 @@ const { removeTagFromOverlayImage, addTagToOverlay, handleOverlaySetScore } =
 watch(images, (newVal, oldVal) => {
   if (pageOffset.value >= Math.max(totalImages.value - pageSize.value, 0)) {
     nextTick(() => {
-      const gridEl = document.querySelector('.image-grid');
+      const gridEl = document.querySelector(".image-grid");
       if (gridEl) gridEl.scrollTop = gridEl.scrollHeight;
     });
   }
@@ -1730,7 +1742,6 @@ watch(
 
 // --- Lifecycle ---
 onMounted(() => {
-
   fetchConfig();
   fetchSortOptions();
   fetchCharacters();
@@ -1753,10 +1764,9 @@ onMounted(() => {
   });
 
   setTimeout(() => {
-    console.log('pagedImages.value:', pagedImages.value);
+    console.log("pagedImages.value:", pagedImages.value);
   }, 500);
 });
-
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleOverlayKeydown);
