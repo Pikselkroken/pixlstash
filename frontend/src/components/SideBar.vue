@@ -1,60 +1,109 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, onMounted, watch } from "vue";
+import ImageImporter from "./ImageImporter.vue";
+import CharacterEditor from "./CharacterEditor.vue";
+import PictureSetEditor from "./PictureSetEditor.vue";
 import SearchBar from "./SearchBar.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 
-const dragOverSet = ref(null);
-const dragOverCharacterLocal = ref(null);
-
 const props = defineProps({
-  sections: { type: Object, required: true },
   selectedCharacter: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
-  categoryCounts: { type: Object, required: true },
-  sortedCharacters: { type: Array, required: true },
-  pictureSets: { type: Array, default: () => [] },
   selectedSet: { type: [Number, null], default: null },
-  error: { type: String, default: "" },
-  characterThumbnails: { type: Object, required: true },
-  editingCharacterId: { type: [String, Number, null], default: null },
-  editingCharacterName: { type: String, default: "" },
   searchQuery: { type: String, default: "" },
-  sortOptions: { type: Array, required: true },
   selectedSort: { type: String, default: "" },
+  backendUrl: { type: String, required: true },
 });
 
 const emit = defineEmits([
-  "toggle-section",
   "select-character",
-  "delete-character",
-  "create-character",
-  "start-editing-character",
-  "save-editing-character",
-  "cancel-editing-character",
-  "update:editing-character-name",
-  "open-character-editor",
-  "drag-over-character",
-  "drag-leave-character",
-  "drop-on-character",
-  "search-images",
   "update:selected-sort",
   "update:search-query",
   "select-set",
-  "create-set",
-  "delete-set",
-  "drop-on-set",
-  "open-set-editor",
   "switch-to-likeness",
+  "import-finished",
+  "set-error",
+  "set-loading",
 ]);
 
+const dragOverSet = ref(null);
+
+// --- Sorting State ---
+const sortOptions = ref([]);
+
+// --- Character & Sidebar State ---
+const characters = ref([]);
+const categoryCounts = ref({
+  [props.allPicturesId]: 0,
+  [props.unassignedPicturesId]: 0,
+});
+const characterThumbnails = ref({});
+const expandedCharacters = ref({});
+
+// Ensure collapsedCharacters is reactive and initialized for all characters
+const collapsedCharacters = ref({});
+
+const sections = ref({
+  pictures: true,
+  people: true,
+  sets: true,
+  analysis: true,
+  search: true,
+});
+const dragOverCharacter = ref(null);
+const nextCharacterNumber = ref(1);
+const editingCharacterId = ref(null);
+const editingCharacterName = ref("");
+
+// --- Picture Sets State ---
+const pictureSets = ref([]);
+
+// --- Character Editor State ---
+const characterEditorOpen = ref(false);
+const characterEditorCharacter = ref(null);
+
+const setEditorOpen = ref(false);
+const setEditorSet = ref(null);
+
+const sidebarError = ref(null);
+
+const sortedCharacters = computed(() => {
+  return [...characters.value]
+    .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    );
+});
+
+const selectedCharacterObj = computed(() => {
+  if (
+    props.selectedCharacter &&
+    props.selectedCharacter !== props.allPicturesId &&
+    props.selectedCharacter !== props.unassignedPicturesId
+  ) {
+    const char =
+      characters.value.find((c) => c.id === props.selectedCharacter) || null;
+    if (char && typeof char.name === "string" && char.name.length > 0) {
+      return {
+        ...char,
+        name: char.name.charAt(0).toUpperCase() + char.name.slice(1),
+      };
+    }
+    return char;
+  }
+  return null;
+});
 
 // Use reference_picture_set_id from categoryCounts (populated from backend /category/summary)
 const referenceSetInfoByCharacter = computed(() => {
   const map = {};
-  props.sortedCharacters.forEach(char => {
+  sortedCharacters.value.forEach((char) => {
     // Find the reference set for this character by matching name and description
-    const set = props.pictureSets.find(s => s.name === 'reference_pictures' && s.description === String(char.id));
+    const set = pictureSets.value.find(
+      (s) =>
+        s.name === "reference_pictures" && s.description === String(char.id)
+    );
     if (set) {
       map[char.id] = set;
     }
@@ -63,7 +112,7 @@ const referenceSetInfoByCharacter = computed(() => {
 });
 
 const editingNameModel = computed({
-  get: () => props.editingCharacterName,
+  get: () => editingCharacterName.value,
   set: (value) => emit("update:editing-character-name", value ?? ""),
 });
 
@@ -77,8 +126,31 @@ const searchModel = computed({
   set: (value) => emit("update:search-query", value ?? ""),
 });
 
+// --- Character Editor Dialog Functions ---
+function openCharacterEditor(char = null) {
+  characterEditorCharacter.value = char;
+  characterEditorOpen.value = true;
+}
+
+function closeCharacterEditor() {
+  characterEditorOpen.value = false;
+  characterEditorCharacter.value = null;
+}
+
+// --- Picture Set Editor ---
+function openSetEditor(set = null) {
+  setEditorSet.value = set;
+  setEditorOpen.value = true;
+}
+
+function closeSetEditor() {
+  setEditorOpen.value = false;
+  setEditorSet.value = null;
+}
+
 function toggleSection(section) {
-  emit("toggle-section", section);
+  if (!section || !(section in sections.value)) return;
+  sections.value[section] = !sections.value[section];
 }
 
 function selectCharacter(id) {
@@ -91,39 +163,6 @@ function deleteCharacter() {
 
 function createCharacter() {
   emit("create-character");
-}
-
-function startEditingCharacter(char) {
-  emit("start-editing-character", char);
-}
-
-function saveEditingCharacter(char) {
-  emit("save-editing-character", char);
-}
-
-function cancelEditingCharacter() {
-  emit("cancel-editing-character");
-}
-
-function openCharacterEditor(char) {
-  emit("open-character-editor", char);
-}
-
-function openSetEditor(set) {
-  emit("open-set-editor", set);
-}
-
-function dragOverCharacter(id) {
-  dragOverCharacterLocal.value = id;
-}
-
-function dragLeaveCharacter() {
-  dragOverCharacterLocal.value = null;
-}
-
-function dropOnCharacter(id, event) {
-  dragOverCharacterLocal.value = null;
-  emit("drop-on-character", { characterId: id, event });
 }
 
 function searchImages(query) {
@@ -142,6 +181,19 @@ function deleteSet() {
   emit("delete-set");
 }
 
+function handleImportFinished() {
+  emit("import-finished");
+}
+
+function setLoading(isLoading) {
+  emit("set-loading", isLoading);
+}
+
+function setError(message) {
+  sidebarError.value = message;
+  emit("set-error", message);
+}
+
 function dragOverSetItem(setId) {
   dragOverSet.value = setId;
 }
@@ -155,15 +207,10 @@ function dropOnSetItem(setId, event) {
   emit("drop-on-set", { setId, event });
 }
 
-
-// Ensure collapsedCharacters is reactive and initialized for all characters
-import { watch } from "vue";
-const collapsedCharacters = ref({});
-
+// Watch sortedCharacters and initialize collapse state for all characters
 watch(
-  () => props.sortedCharacters,
+  () => sortedCharacters.value,
   (chars) => {
-    // Initialize collapse state for all characters to true (collapsed by default)
     chars.forEach((char) => {
       if (!(char.id in collapsedCharacters.value)) {
         collapsedCharacters.value[char.id] = true;
@@ -173,26 +220,422 @@ watch(
   { immediate: true }
 );
 
+() => sortedCharacters.value,
+  (chars) => {
+    // Initialize collapse state for all characters to true (collapsed by default)
+    chars.forEach((char) => {
+      if (!(char.id in collapsedCharacters.value)) {
+        collapsedCharacters.value[char.id] = true;
+      }
+    });
+  },
+  { immediate: true };
+
 function toggleCharacterCollapse(charId) {
   collapsedCharacters.value[charId] = !collapsedCharacters.value[charId];
 }
 
-function isReferenceSet(set, char) {
-  // Defensive: check if set is defined before accessing properties
-  if (!set) return false;
-  return set.character_id === char.id && set.name === 'reference_pictures';
-}
-
-function isTruncated(event, text) {
-  const element = event.target;
-  return (
-    element.scrollWidth > element.clientWidth ||
-    element.scrollHeight > element.clientHeight
+// --- Sidebar & Character Data ---
+async function fetchSidebarCounts() {
+  // Fetch total image count for END key logic
+  try {
+    const resAll = await fetch(`${props.backendUrl}/category/summary`);
+    if (resAll.ok) {
+      const data = await resAll.json();
+      totalImages.value = data.image_count || 0;
+      categoryCounts.value[props.allPicturesId] = data.image_count;
+    }
+  } catch {}
+  try {
+    const resAll = await fetch(`${props.backendUrl}/category/summary`);
+    if (resAll.ok) {
+      const data = await resAll.json();
+      categoryCounts.value[props.allPicturesId] = data.image_count;
+    }
+  } catch {}
+  try {
+    const resUnassigned = await fetch(
+      `${props.backendUrl}/category/summary?primary_character_id=null`
+    );
+    if (resUnassigned.ok) {
+      const data = await resUnassigned.json();
+      categoryCounts.value[props.unassignedPicturesId] = data.image_count;
+    }
+  } catch {}
+  await Promise.all(
+    characters.value.map(async (char) => {
+      try {
+        const res = await fetch(
+          `${
+            props.backendUrl
+          }/category/summary?primary_character_id=${encodeURIComponent(
+            char.id
+          )}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          categoryCounts.value[char.id] = data.image_count;
+        }
+      } catch {}
+    })
   );
 }
+
+async function fetchCharacters() {
+  setLoading(true);
+  setError(null);
+  try {
+    const res = await fetch(`${props.backendUrl}/characters`);
+    if (!res.ok) throw new Error("Failed to fetch characters");
+    const chars = await res.json();
+    characters.value = chars;
+    console.log("characters", characters.value);
+    for (const char of chars) {
+      fetchCharacterThumbnail(char.id);
+    }
+  } catch (e) {
+    setError(e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function refreshSidebar() {
+  console.log("Refreshing sidebar");
+  fetchCharacters();
+  fetchPictureSets();
+  fetchSidebarCounts();
+}
+defineExpose({ refreshSidebar });
+
+async function fetchCharacterThumbnail(characterId) {
+  try {
+    const cacheBuster = Date.now();
+    const thumbUrl = `${props.backendUrl}/face_thumbnail/${characterId}?cb=${cacheBuster}`;
+    const res = await fetch(thumbUrl);
+    if (res.ok && res.headers.get("content-type")?.includes("image/png")) {
+      characterThumbnails.value[characterId] = thumbUrl;
+    } else {
+      characterThumbnails.value[characterId] = null;
+    }
+  } catch (e) {
+    characterThumbnails.value[characterId] = null;
+  }
+}
+
+function toggleSidebarSection(section) {
+  if (!section || !(section in sections.value)) return;
+  sections.value[section] = !sections.value[section];
+}
+
+// --- Sorting & Pagination ---
+async function fetchSortOptions() {
+  try {
+    const res = await fetch(`${props.backendUrl}/sort_mechanisms`);
+    if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
+    const options = await res.json();
+    // Use backend-provided values directly
+    sortOptions.value = options.map((opt) => ({
+      label: opt.label,
+      value: opt.id,
+    }));
+    if (!sortModel.value && sortOptions.value.length) {
+      sortModel.value = sortOptions.value[0].value;
+    }
+  } catch (e) {
+    // Fallback to hardcoded options only if backend fails
+    sortOptions.value = [
+      { label: "Date: Latest First", value: "created_at DESC" },
+      { label: "Date: Oldest First", value: "created_at ASC" },
+      { label: "Score: Highest First", value: "score DESC" },
+      { label: "Score: Lowest First", value: "score ASC" },
+      { label: "Search Likeness", value: "search_likeness" },
+    ];
+    if (!selectedSort.value) selectedSort.value = sortOptions.value[0].value;
+  }
+}
+
+// --- Picture Sets ---
+async function fetchPictureSets() {
+  try {
+    const res = await fetch(`${props.backendUrl}/picture_sets`);
+    if (!res.ok) throw new Error("Failed to fetch picture sets");
+    pictureSets.value = await res.json();
+  } catch (e) {
+    console.error("Error fetching picture sets:", e);
+  }
+}
+
+function handleCreateSet() {
+  openSetEditor(null);
+}
+
+async function handleDeleteSet() {
+  if (!selectedSet.value) return;
+
+  const setToDelete = pictureSets.value.find((s) => s.id === selectedSet.value);
+  if (!setToDelete) return;
+
+  if (!confirm(`Delete picture set "${setToDelete.name}"?`)) return;
+
+  try {
+    const res = await fetch(
+      `${props.backendUrl}/picture_sets/${selectedSet.value}`,
+      {
+        method: "DELETE",
+      }
+    );
+
+    if (!res.ok) throw new Error("Failed to delete set");
+
+    selectedSet.value = null;
+    await fetchPictureSets();
+  } catch (e) {
+    alert("Failed to delete set: " + (e.message || e));
+  }
+}
+
+async function removeSelectedFromSet() {
+  handleSwitchToGrid();
+  if (!selectedSet.value || selectedImageIds.value.length === 0) return;
+
+  const setToUpdate = pictureSets.value.find((s) => s.id === selectedSet.value);
+  if (!setToUpdate) return;
+
+  try {
+    // Remove each selected image from the set
+    const removePromises = selectedImageIds.value.map(async (picId) => {
+      const res = await fetch(
+        `${props.backendUrl}/picture_sets/${selectedSet.value}/pictures/${picId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Failed to remove image ${picId}`);
+    });
+
+    await Promise.all(removePromises);
+
+    // No longer remove from local images array
+    selectedImageIds.value = [];
+
+    // Refresh the picture sets to update counts
+    await fetchPictureSets();
+  } catch (e) {
+    alert("Failed to remove images from set: " + (e.message || e));
+    // Refresh the view to ensure consistency
+    handleSelectSet(selectedSet.value);
+  }
+}
+
+async function removeSelectedFromCharacter() {
+  //handleSwitchToGrid();
+  if (!props.selectedCharacter || selectedImageIds.value.length === 0) return;
+  if (
+    props.selectedCharacter === props.allPicturesId ||
+    props.selectedCharacter === props.unassignedPicturesId
+  )
+    return;
+
+  const character = characters.value.find(
+    (c) => c.id === props.selectedCharacter
+  );
+  if (!character) return;
+
+  try {
+    // Update each selected image to clear primary_character_id
+    const updatePromises = selectedImageIds.value.map(async (picId) => {
+      const res = await fetch(`${props.backendUrl}/pictures/${picId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ primary_character_id: null }),
+      });
+      if (!res.ok)
+        throw new Error(`Failed to update image ${picId}: ${res.status}`);
+    });
+
+    await Promise.all(updatePromises);
+
+    // No longer remove from local images array
+    selectedImageIds.value = [];
+
+    // Refresh character counts
+    await fetchSidebarCounts();
+  } catch (e) {
+    console.error("Error removing images:", e);
+    alert("Failed to remove images from character: " + (e.message || e));
+  }
+}
+
+async function handleDropOnSet({ setId, event }) {
+  // Get the dragged image IDs from the drag event
+  let draggedIds = [];
+  try {
+    const data = JSON.parse(event.dataTransfer.getData("application/json"));
+    if (data.imageIds && Array.isArray(data.imageIds)) {
+      draggedIds = data.imageIds;
+    }
+  } catch (e) {
+    console.error("Could not parse drag data:", e);
+    return;
+  }
+
+  if (draggedIds.length === 0) {
+    console.log("No images found in drag data");
+    return;
+  }
+
+  const targetSet = pictureSets.value.find((s) => s.id === setId);
+  if (!targetSet) return;
+
+  try {
+    // Add each image to the set
+    const addPromises = draggedIds.map(async (picId) => {
+      const res = await fetch(
+        `${props.backendUrl}/picture_sets/${setId}/pictures/${picId}`,
+        { method: "POST" }
+      );
+      // 400 error might mean it's already in the set, which is ok
+      if (!res.ok && res.status !== 400) {
+        throw new Error(`Failed to add image ${picId}`);
+      }
+    });
+
+    await Promise.all(addPromises);
+
+    // Refresh the picture sets to update counts
+    await fetchPictureSets();
+
+    console.log(
+      `Added ${draggedIds.length} image(s) to set "${targetSet.name}"`
+    );
+  } catch (e) {
+    alert("Failed to add images to set: " + (e.message || e));
+  }
+}
+
+function handleDragOverCharacter(id) {
+  dragOverCharacter.value = id;
+}
+
+function handleDragLeaveCharacter() {
+  dragOverCharacter.value = null;
+}
+
+function handleDropOnCharacter(payload) {
+  if (!payload || !payload.characterId) return;
+  onCharacterDrop(payload.characterId, payload.event);
+}
+
+// --- Character Management ---
+function addNewCharacter() {
+  // Open character editor with empty character to create new one
+  let num = nextCharacterNumber.value;
+  let name;
+  const existingNames = new Set(characters.value.map((c) => c.name));
+  do {
+    name = `Character ${num}`;
+    num++;
+  } while (existingNames.has(name));
+  nextCharacterNumber.value = num;
+
+  // Open editor with default values
+  openCharacterEditor({
+    id: null,
+    name: name,
+    description: "",
+    original_prompt: "",
+    original_seed: null,
+    loras: [],
+  });
+}
+
+function confirmDeleteCharacter() {
+  const char = characters.value.find((c) => c.id === props.selectedCharacter);
+  if (!char) return;
+  if (
+    window.confirm(
+      `Delete character '${char.name}'? This will unassign all their images.`
+    )
+  ) {
+    fetch(`${props.backendUrl}/characters/${char.id}`, { method: "DELETE" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to delete character");
+        characters.value = characters.value.filter((c) => c.id !== char.id);
+        selectCharacter(props.allPicturesId);
+        images.value = [];
+        await fetchCharacters();
+      })
+      .catch((e) => {
+        alert("Failed to delete character: " + (e.message || e));
+      });
+  }
+}
+
+function updateEditingCharacterName(value) {
+  editingCharacterName.value = typeof value === "string" ? value : "";
+}
+
+function startEditingCharacter(char) {
+  editingCharacterId.value = char.id;
+  editingCharacterName.value = char.name;
+  nextTick(() => {
+    const input = document.querySelector(".edit-character-input");
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  });
+}
+
+function saveEditingCharacter(char) {
+  const newName = editingCharacterName.value.trim();
+  if (newName && newName !== char.name) {
+    fetch(`${props.backendUrl}/characters/${char.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName }),
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to update character");
+        const data = await res.json();
+        if (data && data.character) {
+          char.name = data.character.name;
+        }
+      })
+      .catch((e) => {
+        alert("Failed to update character: " + (e.message || e));
+      });
+  }
+  editingCharacterId.value = null;
+  editingCharacterName.value = "";
+}
+
+function cancelEditingCharacter() {
+  editingCharacterId.value = null;
+  editingCharacterName.value = "";
+}
+
+onMounted(() => {
+  fetchSortOptions();
+  fetchCharacters();
+  fetchPictureSets();
+});
 </script>
 
 <template>
+  <ImageImporter
+    ref="imageImporterRef"
+    :backend-url="props.backendUrl"
+    :selected-character-id="props.selectedCharacter"
+    :all-pictures-id="props.allPicturesId"
+    :unassigned-pictures-id="props.unassignedPicturesId"
+    @import-finished="handleImportFinished"
+  />
+  <CharacterEditor
+    :open="characterEditorOpen"
+    :character="characterEditorCharacter"
+  />
+  <PictureSetEditor :open="setEditorOpen" :set="setEditorSet" />
+
   <aside class="sidebar">
     <div class="sidebar-section-header" @click="toggleSection('pictures')">
       <v-icon small style="margin-right: 8px">
@@ -205,31 +648,31 @@ function isTruncated(event, text) {
         <div
           :class="[
             'sidebar-list-item',
-            { active: selectedCharacter === allPicturesId },
+            { active: props.selectedCharacter === props.allPicturesId },
           ]"
-          @click="selectCharacter(allPicturesId)"
+          @click="selectCharacter(props.allPicturesId)"
         >
           <span class="sidebar-list-icon">
             <v-icon size="44">mdi-image-multiple</v-icon>
           </span>
           <span class="sidebar-list-label">All Pictures</span>
           <span class="sidebar-list-count">
-            {{ categoryCounts[allPicturesId] ?? "" }}
+            {{ categoryCounts[props.allPicturesId] ?? "" }}
           </span>
         </div>
         <div
           :class="[
             'sidebar-list-item',
-            { active: selectedCharacter === unassignedPicturesId },
+            { active: selectedCharacter === props.unassignedPicturesId },
           ]"
-          @click="selectCharacter(unassignedPicturesId)"
+          @click="selectCharacter(props.unassignedPicturesId)"
         >
           <span class="sidebar-list-icon">
             <v-icon size="44">mdi-help-circle-outline</v-icon>
           </span>
           <span class="sidebar-list-label">Unassigned Pictures</span>
           <span class="sidebar-list-count">
-            {{ categoryCounts[unassignedPicturesId] ?? "" }}
+            {{ categoryCounts[props.unassignedPicturesId] ?? "" }}
           </span>
         </div>
       </div>
@@ -244,9 +687,9 @@ function isTruncated(event, text) {
       <div class="sidebar-header-actions">
         <v-icon
           v-if="
-            selectedCharacter &&
-            selectedCharacter !== allPicturesId &&
-            selectedCharacter !== unassignedPicturesId
+            props.selectedCharacter &&
+            props.selectedCharacter !== props.allPicturesId &&
+            props.selectedCharacter !== props.unassignedPicturesId
           "
           class="delete-character-inline"
           color="white"
@@ -266,7 +709,9 @@ function isTruncated(event, text) {
     </div>
     <transition name="fade">
       <div v-show="sections.people">
-        <div v-if="error" class="sidebar-error">{{ error }}</div>
+        <div v-if="sidebarError" class="sidebar-error">
+          {{ sidebarError.value }}
+        </div>
         <div
           v-if="sortedCharacters.length === 0"
           class="sidebar-character-group"
@@ -286,17 +731,27 @@ function isTruncated(event, text) {
               'sidebar-list-item',
               {
                 active: selectedCharacter === char.id,
-                droppable: dragOverCharacterLocal === char.id,
+                droppable: dragOverCharacter === char.id,
               },
             ]"
             @click="selectCharacter(char.id)"
-            @dragover.prevent="dragOverCharacter(char.id)"
-            @dragleave="dragLeaveCharacter"
-            @drop.prevent="dropOnCharacter(char.id, $event)"
+            @dragover.prevent="handleDragOverCharacter(char.id)"
+            @dragleave="handleDragLeaveCharacter"
+            @drop.prevent="
+              handleDropOnCharacter({ characterId: char.id, event: $event })
+            "
           >
-            <span style="display: flex; align-items: center;">
-              <v-icon small style="margin-right:8px;cursor:pointer;" @click.stop="toggleCharacterCollapse(char.id)">
-                {{ collapsedCharacters[char.id] ? 'mdi-chevron-right' : 'mdi-chevron-down' }}
+            <span style="display: flex; align-items: center">
+              <v-icon
+                small
+                style="margin-right: 8px; cursor: pointer"
+                @click.stop="toggleCharacterCollapse(char.id)"
+              >
+                {{
+                  collapsedCharacters[char.id]
+                    ? "mdi-chevron-right"
+                    : "mdi-chevron-down"
+                }}
               </v-icon>
               <img
                 :src="
@@ -331,8 +786,14 @@ function isTruncated(event, text) {
               <template v-else>
                 <v-tooltip location="top">
                   <template #activator="{ props }">
-                    <span v-bind="props" @dblclick.stop="startEditingCharacter(char)" class="sidebar-list-label-text">
-                      {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
+                    <span
+                      v-bind="props"
+                      @dblclick.stop="startEditingCharacter(char)"
+                      class="sidebar-list-label-text"
+                    >
+                      {{
+                        char.name.charAt(0).toUpperCase() + char.name.slice(1)
+                      }}
                     </span>
                   </template>
                   <span>{{ char.name }}</span>
@@ -352,27 +813,48 @@ function isTruncated(event, text) {
             <!-- Collapse icon moved to the left of thumbnail -->
           </div>
           <transition name="fade">
-            <div v-show="!collapsedCharacters[char.id]" class="sidebar-character-details">
+            <div
+              v-show="!collapsedCharacters[char.id]"
+              class="sidebar-character-details"
+            >
               <div class="sidebar-reference-pictures">
                 <template v-if="referenceSetInfoByCharacter[char.id]">
                   <div
                     :class="[
                       'sidebar-list-item',
                       'sidebar-reference-set',
-                      { active: selectedSet === referenceSetInfoByCharacter[char.id].id,
-                        droppable: dragOverSet === referenceSetInfoByCharacter[char.id].id }
+                      {
+                        active:
+                          selectedSet ===
+                          referenceSetInfoByCharacter[char.id].id,
+                        droppable:
+                          dragOverSet ===
+                          referenceSetInfoByCharacter[char.id].id,
+                      },
                     ]"
                     @click="selectSet(referenceSetInfoByCharacter[char.id].id)"
-                    @dragover.prevent="dragOverSetItem(referenceSetInfoByCharacter[char.id].id)"
+                    @dragover.prevent="
+                      dragOverSetItem(referenceSetInfoByCharacter[char.id].id)
+                    "
                     @dragleave="dragLeaveSetItem"
-                    @drop.prevent="dropOnSetItem(referenceSetInfoByCharacter[char.id].id, $event)"
+                    @drop.prevent="
+                      dropOnSetItem(
+                        referenceSetInfoByCharacter[char.id].id,
+                        $event
+                      )
+                    "
                   >
-                    <v-icon size="22" class="sidebar-reference-icon">mdi-layers</v-icon>
+                    <v-icon size="22" class="sidebar-reference-icon"
+                      >mdi-layers</v-icon
+                    >
                     <span class="sidebar-list-label">Reference Pictures</span>
                   </div>
                 </template>
                 <template v-else>
-                  <span style="color: #888; font-size: 0.9em; padding-left: 32px;">No reference set found for this character</span>
+                  <span
+                    style="color: #888; font-size: 0.9em; padding-left: 32px"
+                    >No reference set found for this character</span
+                  >
                 </template>
               </div>
             </div>
@@ -408,13 +890,15 @@ function isTruncated(event, text) {
     </div>
     <transition name="fade">
       <div v-show="sections.sets">
-        <div
-          v-if="pictureSets.length === 0"
-          class="sidebar-list-item"
-        >
+        <div v-if="pictureSets.length === 0" class="sidebar-list-item">
           No picture sets. Click the + button to create one.
         </div>
-        <template v-for="(pset, idx) in pictureSets.filter(pset => pset.name !== 'reference_pictures')" :key="pset.id">
+        <template
+          v-for="(pset, idx) in pictureSets.filter(
+            (pset) => pset.name !== 'reference_pictures'
+          )"
+          :key="pset.id"
+        >
           <div
             :class="[
               'sidebar-list-item',
@@ -528,7 +1012,7 @@ function isTruncated(event, text) {
   padding: 2px;
   margin: 2px 0 2px 0;
   border-radius: 0;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);  
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -568,7 +1052,7 @@ function isTruncated(event, text) {
 .sidebar-list-item.active {
   background: #f0f0f055;
   color: #fff;
-  border-right: 0;  
+  border-right: 0;
   position: relative;
 }
 
@@ -780,7 +1264,6 @@ function isTruncated(event, text) {
   pointer-events: none;
   z-index: 2;
 }
-
 
 .sidebar-reference-set .sidebar-list-label {
   font-size: 0.92em;
