@@ -1,5 +1,6 @@
 import uvicorn
 import io
+import math
 import os
 import json
 import uuid
@@ -173,8 +174,8 @@ class Server:
                 config = json.load(f)
                 # Ensure new config options exist
 
-                if "sort_order" not in config:
-                    config["sort_order"] = "ORDER BY created_at DESC"
+                if "sort" not in config:
+                    config["sort"] = "ORDER BY created_at DESC"
                 if "thumbnail_size" not in config:
                     config["thumbnail_size"] = "default"
                 if "show_stars" not in config:
@@ -646,27 +647,13 @@ class Server:
                 )
             semantic_scores = {pic.id: score for pic, score in semantic_results}
 
-            # Weighting: more words = more semantic weight
-            # <=2 words: 80% fuzzy, 20% semantic
-            # 3 words: 50/50
-            # 4 words: 30% fuzzy, 70% semantic
-            # 5+ 20% fuzzy, 80% semantic
-            if n_words <= 2:
-                fuzzy_w, sem_w = 0.6, 0.4
-            elif n_words == 3:
-                fuzzy_w, sem_w = 0.5, 0.5
-            elif n_words == 4:
-                fuzzy_w, sem_w = 0.3, 0.7
-            else:
-                fuzzy_w, sem_w = 0.2, 0.8
-
             # Merge scores
             all_ids = set(fuzzy_scores.keys()) | set(semantic_scores.keys())
             combined = []
             for pic_id in all_ids:
                 fuzzy_score = fuzzy_scores.get(pic_id, 0)
                 sem_score = semantic_scores.get(pic_id, 0)
-                combined_score = fuzzy_w * fuzzy_score + sem_w * sem_score
+                combined_score = math.sqrt((fuzzy_score**2 + sem_score**2) / 2)
 
                 # Apply bonuses ONLY if base score is reasonable (>=0.3)
                 # This prevents weak matches from getting artificially boosted
