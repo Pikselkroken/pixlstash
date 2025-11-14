@@ -103,13 +103,65 @@ watch(
 
 function save() {
   if (!isValid.value) return;
-  emit("save", { ...localSet.value });
+  saveSetFromEditor({ ...localSet.value });
 }
 
 // Keyboard shortcuts
 function handleKeydown(event) {
   if (event.key === "Escape") {
     emit("close");
+  }
+}
+
+async function saveSetFromEditor(setData) {
+  try {
+    const isNew = !setData.id;
+    const method = isNew ? "POST" : "PATCH";
+    const url = isNew
+      ? `${BACKEND_URL}/picture_sets`
+      : `${BACKEND_URL}/picture_sets/${setData.id}`;
+
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(setData),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(errorText || "Failed to save picture set");
+    }
+
+    const data = await res.json();
+
+    // Refresh picture sets list
+    await fetchPictureSets();
+
+    if (isNew && data.picture_set) {
+      const setId = data.picture_set.id;
+      // If pictures are selected, add them to the new set
+      if (selectedImageIds.value.length > 0) {
+        const addPromises = selectedImageIds.value.map((pictureId) =>
+          fetch(`${BACKEND_URL}/picture_sets/${setId}/pictures/${pictureId}`, {
+            method: "POST",
+          })
+        );
+        await Promise.all(addPromises);
+
+        // Clear selection
+        selectedImageIds.value = [];
+
+        // Refresh picture sets list to update counts
+        await fetchPictureSets();
+      }
+
+      // Select the set (this will load its pictures)
+      await handleSelectSet(setId);
+    }
+
+    closeSetEditor();
+  } catch (e) {
+    alert("Failed to save picture set: " + (e.message || e));
   }
 }
 

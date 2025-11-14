@@ -208,6 +208,69 @@ function handleKeydown(event) {
   }
 }
 
+async function saveCharacterFromEditor(charData) {
+  try {
+    const isNew = !charData.id;
+    const method = isNew ? "POST" : "PATCH";
+    const url = isNew
+      ? `${BACKEND_URL}/characters`
+      : `${BACKEND_URL}/characters/${charData.id}`;
+
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(charData),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(errorText || "Failed to save character");
+    }
+
+    const data = await res.json();
+
+    if (isNew && data.character) {
+      // New character - add to list
+      await fetchCharacters();
+      selectedCharacter.value = data.character.id;
+
+      // If pictures are selected, assign them to the new character
+      if (selectedImageIds.value.length > 0) {
+        const updatePromises = selectedImageIds.value.map((pictureId) =>
+          fetch(`${BACKEND_URL}/pictures/${pictureId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ primary_character_id: data.character.id }),
+          })
+        );
+        await Promise.all(updatePromises);
+
+        // Clear selection
+        selectedImageIds.value = [];
+
+        // Refresh the character thumbnail
+        await fetchCharacterThumbnail(data.character.id);
+        // Reload pictures by re-selecting the character
+        const tempChar = selectedCharacter.value;
+        selectedCharacter.value = null;
+        await nextTick();
+        selectedCharacter.value = tempChar;
+      }
+    } else if (data.character) {
+      // Updated character - refresh the character in the list
+      const idx = characters.value.findIndex((c) => c.id === data.character.id);
+      if (idx !== -1) {
+        characters.value[idx] = data.character;
+      }
+      await fetchCharacters();
+    }
+
+    closeCharacterEditor();
+  } catch (e) {
+    alert("Failed to save character: " + (e.message || e));
+  }
+}
+
 // Add/remove keyboard listener when dialog opens/closes
 watch(
   () => props.open,

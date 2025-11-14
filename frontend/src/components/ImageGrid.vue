@@ -1,4 +1,12 @@
 <template>
+  <ImageOverlay
+    :open="overlayOpen"
+    :image="overlayImage"
+    :backend-url="props.backendUrl"
+    @close="closeOverlay"
+    @set-score="setScore"
+  />
+
   <div
     class="image-grid"
     :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
@@ -12,7 +20,9 @@
     @click="handleGridBackgroundClick"
   >
     <div
-      v-if="allGridImages.length === 0 && !props.imagesLoading && !props.imagesError"
+      v-if="
+        allGridImages.length === 0 && !props.imagesLoading && !props.imagesError
+      "
       class="empty-state"
     >
       No images found for this character.
@@ -58,9 +68,7 @@
                 left: 0,
               }"
             >
-              <span>
-                Image #{{ String(idx + 1).padStart(5, '0') }}
-              </span>
+              <span> Image #{{ String(idx + 1).padStart(5, "0") }} </span>
             </div>
           </template>
         </div>
@@ -68,66 +76,185 @@
     </div>
   </div>
 </template>
+
 <script setup>
 // Number of images before/after viewport to load thumbnails for
-const LAZY_THUMB_WINDOW = 40;
+import { computed, onMounted, ref, watch, nextTick, onUnmounted } from "vue";
 import {
-  defineEmits,
-  computed,
-  onMounted,
-  ref,
-  watch,
-  nextTick,
-  onUnmounted,
-} from "vue";
-const emit = defineEmits([
-  "open-overlay",
-  "select-image",
-  "clear-selection",
-]);
+  isSupportedMediaFile,
+  dataTransferHasSupportedMedia,
+  isSupportedVideoFile,
+  getOverlayFormat,
+} from "../utils/media.js";
+import ImageImporter from "./ImageImporter.vue";
+import ImageOverlay from "./ImageOverlay.vue";
+import { useOverlayActions } from "../utils/useOverlayActions";
 
+const emit = defineEmits(["open-overlay", "select-image", "clear-selection"]);
 
 // Props
 const props = defineProps({
-  images: Array,
-  imagesLoading: Boolean,
-  imagesError: String,
-  thumbLoaded: Object,
   thumbnailSize: Number,
   sidebarVisible: Boolean,
-  selectedImageIds: Array,
-  showStars: Boolean,
-  selectedSort: String,
-  dragOverlayVisible: Boolean,
-  dragOverlayMessage: String,
-  BACKEND_URL: String,
-  selectedCharacter: String,
-  selectedSet: [String, Number, null],
+  backendUrl: String,
+  selectedCharacter: { type: [String, Number, null], default: null },
+  selectedSet: { type: [String, Number, null], default: null },
   searchQuery: String,
-  selectedCharacterObj: Object,
-  config: Object,
-  extractKeywords: Function,
+  selectedSort: String,
+  showStars: Boolean,
 });
+
+const LAZY_THUMB_WINDOW = 40;
+
+// Image overlay
+const overlayOpen = ref(false);
+const overlayImage = ref(null);
+
+// Drag-and-drop overlay state
+const dragOverlayVisible = ref(false);
+const dragOverlayMessage = ref("");
+const dragSource = ref(null);
+
+// --- Overlay ---
+async function fetchImageInfo(imageId) {
+  try {
+    const res = await fetch(`${backendUrl}/pictures/${imageId}?info=true`);
+    if (!res.ok) throw new Error("Failed to fetch tags");
+    return await res.json();
+  } catch (e) {
+    console.error("Tag fetch failed:", e);
+    return [];
+  }
+}
+
+async function openOverlay(img) {
+  if (img && img.id) {
+    const latestInfo = await fetchImageInfo(img.id);
+    img.tags = latestInfo.tags;
+  }
+  overlayImage.value = img;
+  overlayOpen.value = true;
+}
+
+function closeOverlay() {
+  overlayOpen.value = false;
+}
+
+async function setScore(img, n) {
+  const newScore = (img.score || 0) === n ? 0 : n;
+  try {
+    // Debug log PATCH request
+    console.debug("PATCH /pictures/", img.id, "?score=", newScore);
+    const res = await fetch(
+      `${backendUrl}/pictures/${img.id}?score=${newScore}`,
+      { method: "PATCH" }
+    );
+    if (!res.ok) throw new Error(`Failed to set score for image ${img.id}`);
+    if (
+      selectedSort.value === "score_desc" ||
+      selectedSort.value === "score_asc"
+    ) {
+      const idx = images.value.findIndex((i) => i.id === img.id);
+      if (idx === -1) return;
+      img.score = newScore;
+      images.value.splice(idx, 1);
+      let insertIdx = 0;
+      if (selectedSort.value === "score_desc") {
+        insertIdx = images.value.findIndex((i) => (i.score || 0) < newScore);
+        if (insertIdx === -1) insertIdx = images.value.length;
+      } else {
+        insertIdx = images.value.findIndex((i) => (i.score || 0) > newScore);
+        if (insertIdx === -1) insertIdx = images.value.length;
+      }
+      images.value.splice(insertIdx, 0, img);
+      nextTick(() => {
+        const grid = gridContainer.value;
+        if (!grid) return;
+        const card = grid.querySelectorAll(".image-card")[insertIdx];
+        if (card && card.scrollIntoView) {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    } else {
+      img.score = newScore;
+    }
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// Drag-and-drop overlay handlers
+function handleGridDragEnter(e) {
+  if (
+    e.relatedTarget &&
+    gridContainer.value &&
+    gridContainer.value.contains(e.relatedTarget)
+  )
+    return;
+  if (!e.dataTransfer) return;
+  const hasSupported = dataTransferHasSupportedMedia(e.dataTransfer);
+  if (!hasSupported) return;
+  dragOverlayVisible.value = true;
+  dragOverlayMessage.value = "Drop files here to import";
+  e.preventDefault();
+  console.debug("Overlay shown");
+}
+
+function handleGridDragOver(e) {
+  if (dataTransferHasSupportedMedia(e.dataTransfer)) {
+    if (!dragOverlayVisible.value) {
+      dragOverlayVisible.value = true;
+      dragOverlayMessage.value = "Drop files here to import";
+    }
+    e.preventDefault();
+  }
+}
+
+function handleGridDragLeave(e) {
+  if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+    dragOverlayVisible.value = false;
+  } else {
+    console.debug("Drag still inside grid, overlay remains");
+  }
+}
+
+function handleGridDrop(e) {
+  dragOverlayVisible.value = false;
+  if (dragSource.value === "grid") {
+    dragSource.value = null;
+    return;
+  }
+  if (!e.dataTransfer || !e.dataTransfer.files) return;
+  const files = Array.from(e.dataTransfer.files).filter(isSupportedMediaFile);
+  console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
+  console.debug("[IMPORT] Supported files after filter:", files);
+  if (!files.length) {
+    alert("No supported image files found.");
+    return;
+  }
+  dragSource.value = null;
+  // Emit import event for parent to handle
+  emit("import-files", files);
+}
 
 // Method to handle global key presses from App.vue
 function onGlobalKeyPress(key, event) {
   if (gridContainer.value) {
-    if (key === 'Home') {
+    if (key === "Home") {
       gridContainer.value.scrollTop = 0;
       onGridScroll({ target: gridContainer.value });
-    } else if (key === 'End') {
+    } else if (key === "End") {
       gridContainer.value.scrollTop = gridContainer.value.scrollHeight;
       onGridScroll({ target: gridContainer.value });
-    } else if (key === 'PageUp') {
+    } else if (key === "PageUp") {
       gridContainer.value.scrollTop -= gridContainer.value.clientHeight;
       onGridScroll({ target: gridContainer.value });
-    } else if (key === 'PageDown') {
+    } else if (key === "PageDown") {
       gridContainer.value.scrollTop += gridContainer.value.clientHeight;
       onGridScroll({ target: gridContainer.value });
     }
   }
 }
-
 
 // Local state for all image IDs
 const allImageIds = ref([]);
@@ -136,19 +263,19 @@ const imagesError = ref(null);
 
 function buildPictureIdsQueryParams() {
   const params = new URLSearchParams();
-  if (props.selectedCharacter && props.selectedCharacter !== '__all__') {
-    if (props.selectedCharacter === '__unassigned__') {
-      params.append('primary_character_id', '');
+  if (props.selectedCharacter && props.selectedCharacter !== "__all__") {
+    if (props.selectedCharacter === "__unassigned__") {
+      params.append("primary_character_id", "");
     } else {
-      params.append('primary_character_id', props.selectedCharacter);
+      params.append("primary_character_id", props.selectedCharacter);
     }
   }
- 
+
   if (props.searchQuery && props.searchQuery.trim()) {
-    params.append('query', props.searchQuery.trim());
+    params.append("query", props.searchQuery.trim());
   }
   if (props.selectedSort && props.selectedSort.trim()) {
-    params.append('sort', props.selectedSort.trim());
+    params.append("sort", props.selectedSort.trim());
   }
   return params.toString();
 }
@@ -158,13 +285,17 @@ async function fetchAllPictureIds() {
   imagesError.value = null;
   try {
     let url = null;
-    if (false && props.selectedSet !== null && typeof props.selectedSet !== 'undefined') {
-        url = `${props.BACKEND_URL}/picture_sets/${props.selectedSet}`;
+    if (
+      false &&
+      props.selectedSet !== null &&
+      typeof props.selectedSet !== "undefined"
+    ) {
+      url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
     } else {
-        url = `${props.BACKEND_URL}/picture_ids?${buildPictureIdsQueryParams()}`;
-    }   
+      url = `${props.backendUrl}/picture_ids?${buildPictureIdsQueryParams()}`;
+    }
     console.log("Fetching picture IDs from URL:", url);
-    
+
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch picture ids");
     const ids = await res.json();
@@ -181,18 +312,20 @@ onMounted(() => {
   fetchAllPictureIds();
 });
 
-watch([
-  () => props.selectedCharacter,
-  () => props.selectedSet,
-  () => props.searchQuery,
-  () => props.selectedSort
-], () => {
-  // Reset loaded ranges and thumbnails when filters change
-  thumbnails.value = {};
-  loadedRanges.value = [];
-  fetchAllPictureIds();
-});
-
+watch(
+  [
+    () => props.selectedCharacter,
+    () => props.selectedSet,
+    () => props.searchQuery,
+    () => props.selectedSort,
+  ],
+  () => {
+    // Reset loaded ranges and thumbnails when filters change
+    thumbnails.value = {};
+    loadedRanges.value = [];
+    fetchAllPictureIds();
+  }
+);
 
 // Thumbnails state: id -> thumbnail data (or null if not loaded)
 const thumbnails = ref({});
@@ -213,7 +346,6 @@ const allGridImages = computed(() => {
     thumbnail: thumbnails.value[id] || null,
   }));
 });
-
 
 // Batch fetch metadata (including thumbnail) for visible range
 async function fetchThumbnailsBatch(start, end) {
@@ -239,34 +371,34 @@ async function fetchThumbnailsBatch(start, end) {
   const offset = start;
   const limit = end - start;
   const params = new URLSearchParams();
-  params.append('info', 'true');
-  params.append('offset', offset);
-  params.append('limit', limit);
+  params.append("info", "true");
+  params.append("offset", offset);
+  params.append("limit", limit);
   // Add filters
-  if (props.selectedCharacter && props.selectedCharacter !== '__all__') {
-    if (props.selectedCharacter === '__unassigned__') {
-      params.append('primary_character_id', '');
+  if (props.selectedCharacter && props.selectedCharacter !== "__all__") {
+    if (props.selectedCharacter === "__unassigned__") {
+      params.append("primary_character_id", "");
     } else {
-      params.append('primary_character_id', props.selectedCharacter);
+      params.append("primary_character_id", props.selectedCharacter);
     }
   }
-  if (props.selectedSet !== null && typeof props.selectedSet !== 'undefined') {
-    params.append('set_id', props.selectedSet);
+  if (props.selectedSet !== null && typeof props.selectedSet !== "undefined") {
+    params.append("set_id", props.selectedSet);
   }
   if (props.searchQuery && props.searchQuery.trim()) {
-    params.append('query', props.searchQuery.trim());
+    params.append("query", props.searchQuery.trim());
   }
   if (props.selectedSort && props.selectedSort.trim()) {
-    params.append('sort', props.selectedSort.trim());
+    params.append("sort", props.selectedSort.trim());
   }
   try {
-    const url = `${props.BACKEND_URL}/pictures?${params.toString()}`;
+    const url = `${props.backendUrl}/pictures?${params.toString()}`;
     const res = await fetch(url);
     if (res.ok) {
       const images = await res.json();
       for (const img of images) {
         if (img.id && img.thumbnail) {
-          thumbnails.value[img.id] = `${props.BACKEND_URL}/thumbnails/${img.id}`;
+          thumbnails.value[img.id] = `${props.backendUrl}/thumbnails/${img.id}`;
         } else if (img.id) {
           thumbnails.value[img.id] = null;
         }
@@ -279,11 +411,14 @@ async function fetchThumbnailsBatch(start, end) {
 }
 
 function updateVisibleThumbnails() {
-  let midPoint = Math.min(Math.max(0, Math.floor((visibleStart.value + visibleEnd.value) / 2)), allImageIds.value.length );
+  let midPoint = Math.min(
+    Math.max(0, Math.floor((visibleStart.value + visibleEnd.value) / 2)),
+    allImageIds.value.length
+  );
 
-  let start = midPoint - LAZY_THUMB_WINDOW
+  let start = midPoint - LAZY_THUMB_WINDOW;
   let end = midPoint + LAZY_THUMB_WINDOW;
-  
+
   // Debounce fetches to avoid excessive requests
   if (thumbFetchTimeout) clearTimeout(thumbFetchTimeout);
   thumbFetchTimeout = setTimeout(() => {
@@ -295,13 +430,13 @@ function updateVisibleThumbnails() {
 function onGridScroll(e) {
   const el = e.target;
   if (!el) return;
-    // Measure actual row height from the DOM
-    let cardHeight = props.thumbnailSize + 24;
-    const firstCard = gridContainer.value?.querySelector('.image-card');
-    if (firstCard) {
-      const rect = firstCard.getBoundingClientRect();
-      cardHeight = rect.height;
-    }
+  // Measure actual row height from the DOM
+  let cardHeight = props.thumbnailSize + 24;
+  const firstCard = gridContainer.value?.querySelector(".image-card");
+  if (firstCard) {
+    const rect = firstCard.getBoundingClientRect();
+    cardHeight = rect.height;
+  }
   const scrollTop = el.scrollTop;
   const gridHeight = el.clientHeight;
   const firstVisibleRow = Math.floor(scrollTop / cardHeight);
@@ -309,7 +444,7 @@ function onGridScroll(e) {
   const cols = columns.value;
   const totalImages = allImageIds.value.length;
   visibleStart.value = firstVisibleRow * cols;
-  visibleEnd.value =visibleStart.value + rowsVisible * cols;
+  visibleEnd.value = visibleStart.value + rowsVisible * cols;
   updateVisibleThumbnails();
 }
 
@@ -382,32 +517,13 @@ const onImageDragStart = (img, idx, event) => {
   event.dataTransfer.effectAllowed = "move";
 };
 
-const handleGridBackgroundClick = (e) => {
-  if (!e.target.closest(".thumbnail-card")) {
-    emit("clear-selection");
-  }
-};
+const handleGridBackgroundClick = (e) => {};
 
-const handleImageSelect = (img, idx, event) => {
-  emit("select-image", img, idx, event);
-};
-
-const openOverlay = (img) => {
-  emit("open-overlay", img);
-};
-
-const setImageScore = (img, n) => {
-  emit("set-image-score", img, n);
-};
-
-const formatLikenessScore = (score) =>
-  score !== undefined ? score.toFixed(2) : "";
-
-const isSupportedVideoFile = (format) => {
-  if (!format) return false;
-  const videoExts = ["mp4", "avi", "mov", "webm", "mkv", "flv", "wmv", "m4v"];
-  return videoExts.includes(format.toLowerCase());
-};
+// --- Text & Display Utilities ---
+function formatLikenessScore(score) {
+  if (typeof score !== "number") return "";
+  return `Likeness: ${(score * 100).toFixed(2)}%`;
+}
 
 const gridContainer = ref(null);
 
@@ -454,7 +570,6 @@ onMounted(() => {
     gridContainer.value.addEventListener("scroll", onGridScroll);
   }
 });
-
 </script>
 <style scoped>
 .image-grid {

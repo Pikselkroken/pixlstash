@@ -65,7 +65,6 @@
                 >mdi-star</v-icon
               >
             </div>
-
           </div>
         </div>
         <div
@@ -260,6 +259,24 @@ function confirmAddTag() {
   }
   emit("add-tag", trimmed);
   resetTagInput();
+}
+
+function showPrevImage() {
+  const sorted = pagedImages.value;
+  if (!overlayImage.value || !sorted.length) return;
+  const idx = sorted.findIndex((i) => i.id === overlayImage.value.id);
+  if (idx === -1) return;
+  const prevIdx = (idx - 1 + sorted.length) % sorted.length;
+  overlayImage.value = sorted[prevIdx];
+}
+
+function showNextImage() {
+  const sorted = pagedImages.value;
+  if (!overlayImage.value || !sorted.length) return;
+  const idx = sorted.findIndex((i) => i.id === overlayImage.value.id);
+  if (idx === -1) return;
+  const nextIdx = (idx + 1) % sorted.length;
+  overlayImage.value = sorted[nextIdx];
 }
 </script>
 
