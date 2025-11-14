@@ -1,8 +1,10 @@
 <template>
   <ImageOverlay
     :open="overlayOpen"
-    :image="overlayImage"
-    :backend-url="props.backendUrl"
+    :initialImage="overlayImage"
+    :allImages="allGridImages"
+    :backendUrl="props.backendUrl"
+    :isVideo="isSupportedVideoFile(overlayImage?.file_path)"
     @close="closeOverlay"
     @set-score="setScore"
   />
@@ -45,7 +47,7 @@
       @dragstart="onImageDragStart(img, idx, $event)"
       @click="handleGridBackgroundClick"
     >
-      <v-card class="thumbnail-card">
+      <v-card class="thumbnail-card" @click="openOverlay(img)">
         <div class="thumbnail-container">
           <template v-if="img.thumbnail">
             <img :src="img.thumbnail" class="thumbnail-img" />
@@ -118,7 +120,9 @@ const dragSource = ref(null);
 // --- Overlay ---
 async function fetchImageInfo(imageId) {
   try {
-    const res = await fetch(`${backendUrl}/pictures/${imageId}?info=true`);
+    const res = await fetch(
+      `${props.backendUrl}/pictures/${imageId}?info=true`
+    );
     if (!res.ok) throw new Error("Failed to fetch tags");
     return await res.json();
   } catch (e) {
@@ -130,9 +134,10 @@ async function fetchImageInfo(imageId) {
 async function openOverlay(img) {
   if (img && img.id) {
     const latestInfo = await fetchImageInfo(img.id);
-    img.tags = latestInfo.tags;
+    // Merge all fields from latestInfo into img
+    Object.assign(img, latestInfo);
   }
-  overlayImage.value = img;
+  overlayImage.value = { ...img };
   overlayOpen.value = true;
 }
 
@@ -142,24 +147,34 @@ function closeOverlay() {
 
 async function setScore(img, n) {
   const newScore = (img.score || 0) === n ? 0 : n;
+  const imageId = img.id || (overlayImage.value && overlayImage.value.id);
+  if (!imageId) {
+    alert("Failed to set score: image id is missing.");
+    return;
+  }
   try {
-    // Debug log PATCH request
-    console.debug("PATCH /pictures/", img.id, "?score=", newScore);
+    console.debug("PATCH /pictures/", imageId, "?score=", newScore);
     const res = await fetch(
-      `${backendUrl}/pictures/${img.id}?score=${newScore}`,
+      `${props.backendUrl}/pictures/${imageId}?score=${newScore}`,
       { method: "PATCH" }
     );
-    if (!res.ok) throw new Error(`Failed to set score for image ${img.id}`);
+    if (!res.ok) throw new Error(`Failed to set score for image ${imageId}`);
+    // Fetch latest info after score update
+    const latestInfo = await fetchImageInfo(imageId);
+    if (overlayImage.value && overlayImage.value.id === imageId) {
+      overlayImage.value = { ...overlayImage.value, ...latestInfo };
+    }
+    // ...existing code for sorting and updating images array...
     if (
-      selectedSort.value === "score_desc" ||
-      selectedSort.value === "score_asc"
+      props.selectedSort.value === "score_desc" ||
+      props.selectedSort.value === "score_asc"
     ) {
-      const idx = images.value.findIndex((i) => i.id === img.id);
+      const idx = images.value.findIndex((i) => i.id === imageId);
       if (idx === -1) return;
       img.score = newScore;
       images.value.splice(idx, 1);
       let insertIdx = 0;
-      if (selectedSort.value === "score_desc") {
+      if (props.selectedSort.value === "score_desc") {
         insertIdx = images.value.findIndex((i) => (i.score || 0) < newScore);
         if (insertIdx === -1) insertIdx = images.value.length;
       } else {

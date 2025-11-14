@@ -20,7 +20,7 @@ body {
   width: 100vw;
   height: 100vh;
   z-index: 0;
-  background: rgba(255,0,0,0.08);
+  background: rgba(255, 0, 0, 0.08);
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -134,16 +134,16 @@ body {
   padding-right: 2px;
 }
 @font-face {
-  font-family: 'PressStart2P';
-  src: url('/src/assets/fonts/PressStart2P-Regular.ttf') format('truetype');
+  font-family: "PressStart2P";
+  src: url("/src/assets/fonts/PressStart2P-Regular.ttf") format("truetype");
   font-weight: normal;
   font-style: normal;
 }
 
 .toolbar-title {
-  font-family: 'PressStart2P', monospace;
+  font-family: "PressStart2P", monospace;
   font-size: 1.5em;
-  letter-spacing: 2px;
+  letter-spacing: 0px;
   position: relative;
   color: rgb(var(--v-theme-on-primary)) !important;
 }
@@ -230,8 +230,12 @@ button[disabled] {
 }
 
 @keyframes spin {
-  0% { transform: translate(-50%, -50%) rotate(0deg); }
-  100% { transform: translate(-50%, -50%) rotate(360deg); }
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
 }
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {

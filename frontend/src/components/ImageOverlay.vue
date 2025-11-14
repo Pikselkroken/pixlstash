@@ -29,7 +29,7 @@
         >
           <button
             class="overlay-nav overlay-nav-left"
-            @click.stop="emit('prev')"
+            @click.stop="showPrevImage"
             aria-label="Previous"
           >
             <v-icon>mdi-skip-previous</v-icon>
@@ -61,7 +61,7 @@
                 large
                 :color="n <= (image?.score || 0) ? 'orange' : 'grey darken-2'"
                 style="cursor: pointer"
-                @click.stop="emit('set-score', n)"
+                @click.stop="emit('set-score', image, n)"
                 >mdi-star</v-icon
               >
             </div>
@@ -77,7 +77,7 @@
         >
           <button
             class="overlay-nav overlay-nav-right"
-            @click.stop="emit('next')"
+            @click.stop="showNextImage"
             aria-label="Next"
           >
             <v-icon>mdi-skip-next</v-icon>
@@ -181,16 +181,29 @@
 </template>
 
 <script setup>
+import { onMounted, onUnmounted } from "vue";
 import { computed, nextTick, ref, toRefs, watch } from "vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  image: { type: Object, default: null },
+  initialImage: { type: Object, default: null },
+  allImages: { type: Array, default: () => [] },
   backendUrl: { type: String, required: true },
   isVideo: { type: Boolean, default: false },
 });
 
-const { open, image, backendUrl, isVideo } = toRefs(props);
+const { open, initialImage, allImages, backendUrl, isVideo } = toRefs(props);
+
+const image = ref(null);
+
+// Watch for changes to initialImage and update local image copy
+watch(
+  () => initialImage.value,
+  (newImg) => {
+    image.value = newImg ? { ...newImg } : null;
+  },
+  { immediate: true }
+);
 
 const emit = defineEmits([
   "close",
@@ -262,22 +275,43 @@ function confirmAddTag() {
 }
 
 function showPrevImage() {
-  const sorted = pagedImages.value;
-  if (!overlayImage.value || !sorted.length) return;
-  const idx = sorted.findIndex((i) => i.id === overlayImage.value.id);
+  const sorted = allImages.value;
+  if (!image.value || !sorted.length) return;
+  const idx = sorted.findIndex((i) => i.id === image.value.id);
   if (idx === -1) return;
   const prevIdx = (idx - 1 + sorted.length) % sorted.length;
-  overlayImage.value = sorted[prevIdx];
+  image.value = sorted[prevIdx];
 }
 
 function showNextImage() {
-  const sorted = pagedImages.value;
-  if (!overlayImage.value || !sorted.length) return;
-  const idx = sorted.findIndex((i) => i.id === overlayImage.value.id);
+  const sorted = allImages.value;
+  if (!image.value || !sorted.length) return;
+  const idx = sorted.findIndex((i) => i.id === image.value.id);
   if (idx === -1) return;
   const nextIdx = (idx + 1) % sorted.length;
-  overlayImage.value = sorted[nextIdx];
+  image.value = sorted[nextIdx];
 }
+
+function handleKeydown(e) {
+  if (!open.value) return;
+  if (e.key === "Escape") {
+    emit("close");
+  } else if (["ArrowLeft", "Left"].includes(e.key)) {
+    showPrevImage();
+  } else if (["ArrowRight", "Right"].includes(e.key)) {
+    showNextImage();
+  } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
+    const score = parseInt(e.key, 10);
+    if (image.value) emit("set-score", image.value, score);
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", handleKeydown);
+});
+onUnmounted(() => {
+  window.removeEventListener("keydown", handleKeydown);
+});
 </script>
 
 <style scoped>
