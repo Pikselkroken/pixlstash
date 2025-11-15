@@ -28,6 +28,7 @@ class PictureUtils:
         """
         import cv2
         from PIL import Image
+
         frames = []
         cap = cv2.VideoCapture(file_path)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))

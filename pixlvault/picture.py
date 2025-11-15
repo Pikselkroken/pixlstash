@@ -57,7 +57,7 @@ class PictureModel:
     face_contrast: float = field(default=None)
     face_brightness: float = field(default=None)
     face_noise_level: float = field(default=None)
-    score: int = field(default=None)
+    score: int = field(default=None, metadata={"index": True})
     character_likeness: float = field(default=None)
     facial_features: bytes = field(default=None)
     pixel_sha: str = field(
@@ -77,6 +77,17 @@ class PictureModel:
     character_ids: list[int] = field(default_factory=list, metadata={"db_ignore": True})
 
     __indexes__ = []
+
+    @classmethod
+    def metadata(cls):
+        """
+        Return a list of field names that are not type bytes (for lightweight/bulk queries).
+        """
+        return [
+            f.name
+            for f in cls.__dataclass_fields__.values()
+            if f.type is not bytes and f.metadata.get("db_ignore") is not True
+        ]
 
     def to_dict(self, include=None, exclude=None) -> dict:
         # Ensure no raw bytes are returned for any field

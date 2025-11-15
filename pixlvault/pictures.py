@@ -1235,6 +1235,7 @@ class Pictures:
         sort = kwargs.pop("sort", None)
         offset = kwargs.pop("offset", None)
         limit = kwargs.pop("limit", None)
+        info = kwargs.pop("info", False)
         order_by = ""
         if SortMechanism.is_sql_sortable(sort):
             order_by = sort
@@ -1249,7 +1250,12 @@ class Pictures:
         where_clause = ""
         if clauses:
             where_clause = "WHERE " + " AND ".join(clauses)
-        query = f"SELECT * FROM pictures {where_clause} {order_by}".strip()
+        if info:
+            fields = PictureModel.metadata()
+            select_fields = ", ".join(fields)
+            query = f"SELECT {select_fields} FROM pictures {where_clause} {order_by}".strip()
+        else:
+            query = f"SELECT * FROM pictures {where_clause} {order_by}".strip()
         if limit is not None:
             query += f" LIMIT {int(limit)}"
         if offset is not None:
@@ -1258,13 +1264,14 @@ class Pictures:
         result = []
         for row in rows:
             pic = PictureModel.from_dict(row)
-            tag_rows = self._db.query(
-                "SELECT tag FROM picture_tags WHERE picture_id = ?", (pic.id,)
-            )
-            pic.tags = [
-                tag_row["tag"] if isinstance(tag_row, dict) else tag_row[0]
-                for tag_row in tag_rows
-            ]
+            if not info:
+                tag_rows = self._db.query(
+                    "SELECT tag FROM picture_tags WHERE picture_id = ?", (pic.id,)
+                )
+                pic.tags = [
+                    tag_row["tag"] if isinstance(tag_row, dict) else tag_row[0]
+                    for tag_row in tag_rows
+                ]
             result.append(pic)
         return result
 

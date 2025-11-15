@@ -8,6 +8,7 @@ import mimetypes
 import re
 import concurrent.futures
 import sys
+import time
 
 from dataclasses import asdict
 from contextlib import asynccontextmanager
@@ -19,7 +20,7 @@ from rapidfuzz import fuzz
 from typing import List
 
 from pixlvault.character import CharacterModel
-from pixlvault.logging import get_logger
+from pixlvault.logging import get_logger, uvicorn_log_config
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pictures import get_sort_mechanisms
 from pixlvault.vault import Vault
@@ -104,6 +105,7 @@ class Server:
         uvicorn_kwargs = dict(
             host="0.0.0.0",
             port=self._server_config.get("port", 8000),
+            log_config=uvicorn_log_config,
         )
         if self._server_config.get("require_ssl", False):
             uvicorn_kwargs["ssl_keyfile"] = self._server_config.get("ssl_keyfile")
@@ -361,6 +363,10 @@ class Server:
 
         @self.api.patch("/config")
         async def patch_config(request: Request):
+            import time
+
+            start_time = time.time()
+            logger.info(f"[TIMING] PATCH /config called at {start_time:.3f}")
             """
             Update existing config values or append to existing lists. Does not allow adding new keys.
             Body: { key: value, ... } (value replaces or is appended to existing key)
@@ -422,6 +428,8 @@ class Server:
                     image_root=new_root,
                     description=self._config.get("description"),
                 )
+            elapsed = time.time() - start_time
+            logger.info(f"[TIMING] PATCH /config completed in {elapsed:.3f} seconds")
             return {"status": "success", "updated": updated, "config": self._config}
 
         @self.api.get("/sort_mechanisms")
@@ -431,6 +439,23 @@ class Server:
 
         @self.api.get("/face_thumbnail/{primary_character_id}")
         async def get_face_thumbnail(primary_character_id: str):
+            start_time = time.time()
+            logger.info(
+                f"[TIMING] GET /face_thumbnail/{primary_character_id} called at {start_time:.3f}"
+            )
+            query_start = time.time()
+            # Instrument: time the DB query
+            pics = self.vault.pictures.find(
+                primary_character_id=primary_character_id,
+                sort="ORDER BY score DESC, created_at DESC",
+                limit=1,
+            )
+            query_elapsed = time.time() - query_start
+            logger.info(
+                f"[TIMING] DB query for /face_thumbnail/{primary_character_id} took {query_elapsed:.3f} seconds, returned {len(pics)} rows"
+            )
+            process_start = time.time()
+            step_times = {}
             """
             Return a face-cropped thumbnail for the highest scored picture of the character.
             If no scored picture, fallback to first image. If no face bbox, fallback to normal thumbnail.
@@ -439,21 +464,9 @@ class Server:
             logger.debug(
                 f"Generating face thumbnail for primary_character_id: {primary_character_id}"
             )
-            pics = self.vault.pictures.find(primary_character_id=primary_character_id)
-            logger.debug(
-                f"Found {len(pics)} pictures for primary_character_id: {primary_character_id}"
-            )
             if not pics:
                 raise HTTPException(status_code=404, detail="No pictures for character")
 
-            # Sort by score descending, then by created_at
-            def score_key(picture):
-                return (
-                    picture.score if picture.score is not None else -1,
-                    picture.created_at,
-                )
-
-            pics.sort(key=score_key, reverse=True)
             pic = pics[0]
 
             if pic.thumbnail is None:
@@ -470,11 +483,14 @@ class Server:
             if not pic.thumbnail:
                 raise HTTPException(status_code=404, detail="No thumbnail available")
             try:
+                load_start = time.time()
                 thumb_img = Image.open(io.BytesIO(pic.thumbnail))
+                step_times["load"] = time.time() - load_start
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid thumbnail image")
             # If face_bbox is available, crop to it
             if face_bbox and len(face_bbox) == 4:
+                crop_start = time.time()
                 logger.debug(f"Cropping thumbnail to face bbox: {face_bbox}")
                 x1, y1, x2, y2 = [int(round(v)) for v in face_bbox]
                 w, h = thumb_img.size
@@ -484,15 +500,32 @@ class Server:
                 y2 = max(0, min(h, y2))
                 if x2 > x1 and y2 > y1:
                     thumb_img = thumb_img.crop((x1, y1, x2, y2))
+                step_times["crop"] = time.time() - crop_start
             # Resize so height=96px, width scaled proportionally
             target_height = 96
             w, h = thumb_img.size
             if h != target_height:
+                resize_start = time.time()
                 scale = target_height / h
                 new_w = int(round(w * scale))
                 thumb_img = thumb_img.resize((new_w, target_height), Image.LANCZOS)
+                step_times["resize"] = time.time() - resize_start
             buf = io.BytesIO()
+            save_start = time.time()
             thumb_img.save(buf, format="PNG")
+            step_times["save"] = time.time() - save_start
+            process_elapsed = time.time() - process_start
+            elapsed = time.time() - start_time
+            logger.info(
+                f"[TIMING] Processing for /face_thumbnail/{primary_character_id} (excluding DB query) took {process_elapsed:.3f} seconds"
+            )
+            for step, t in step_times.items():
+                logger.info(
+                    f"[TIMING] Step '{step}' for /face_thumbnail/{primary_character_id} took {t:.3f} seconds"
+                )
+            logger.info(
+                f"[TIMING] GET /face_thumbnail/{primary_character_id} completed in {elapsed:.3f} seconds"
+            )
             return Response(content=buf.getvalue(), media_type="image/png")
 
         @self.api.get("/search")
@@ -1086,64 +1119,6 @@ class Server:
 
             return {"results": import_results}
 
-        @self.api.get("/picture_ids")
-        async def list_picture_ids(
-            request: Request,
-            sort: str = Query("unsorted"),
-            query: str = Query(None),
-        ):
-            """
-            Get only picture IDs for the current view (no thumbnails, embeddings, or other heavy data).
-            Much faster than /pictures endpoint for selecting all images.
-            Respects all filter parameters (primary_character_id, tags, etc.) and search.
-            """
-            from pixlvault.pictures import SortMechanism
-
-            query_params = dict(request.query_params)
-            query_params.pop("sort", None)
-            query_params.pop("query", None)
-
-            # Convert tags to list if present
-            if "tags" in query_params and isinstance(query_params["tags"], str):
-                try:
-                    query_params["tags"] = json.loads(query_params["tags"])
-                except Exception:
-                    query_params["tags"] = [query_params["tags"]]
-
-            # Handle search likeness sort (semantic search)
-            if sort == SortMechanism.SEARCH_LIKENESS.value and query:
-                pics = self.vault.pictures.find_by_text(query, top_n=sys.maxsize)
-            else:
-                pics = self.vault.pictures.find(**query_params)
-
-                if sort in [
-                    SortMechanism.SCORE_DESC.value,
-                    SortMechanism.SCORE_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.SCORE_DESC.value
-                    pics.sort(
-                        key=lambda p: p.score if p.score is not None else -1,
-                        reverse=reverse,
-                    )
-                elif sort in [
-                    SortMechanism.DATE_DESC.value,
-                    SortMechanism.DATE_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.DATE_DESC.value
-                    pics.sort(key=lambda p: p.created_at or "", reverse=reverse)
-                elif sort in [
-                    SortMechanism.FORMAT_ASC.value,
-                    SortMechanism.FORMAT_DESC.value,
-                ]:
-                    reverse = sort == SortMechanism.FORMAT_DESC.value
-                    pics.sort(
-                        key=lambda p: p.format.lower() if p.format else "zzz",
-                        reverse=reverse,
-                    )
-
-            # Return only IDs - much faster than full to_dict()
-            return [pic.id for pic in pics]
-
         @self.api.get("/pictures")
         async def list_pictures(
             request: Request,
@@ -1155,6 +1130,7 @@ class Server:
         ):
             from pixlvault.pictures import SortMechanism
 
+            start = time.time()
             query_params = dict(request.query_params)
             query_params.pop("info", None)
             query_params.pop("sort", None)
@@ -1178,9 +1154,12 @@ class Server:
                     pics = pics[offset : offset + limit]
             else:
                 pics = self.vault.pictures.find(
-                    sort=sort, offset=offset, limit=limit, **query_params
+                    sort=sort, offset=offset, limit=limit, info=info, **query_params
                 )
-            return [pic.to_dict() for pic in pics]
+            dicts = [pic.to_dict() for pic in pics]
+            elapsed = time.time() - start
+            logger.info(f"GET /pictures completed in {elapsed:.3f} seconds")
+            return dicts
 
         @self.api.get("/export/zip")
         async def export_pictures_zip(

@@ -256,6 +256,7 @@ class PictureTagger:
             caption = None
             if ext in video_exts:
                 from pixlvault.picture_utils import PictureUtils
+
                 frames = PictureUtils.extract_video_frames(image_path)
                 for idx, pil_img in enumerate(frames):
                     # Resize large images to speed up processing
@@ -318,9 +319,7 @@ class PictureTagger:
                         generated_text.replace("<s>", "").replace("</s>", "").strip()
                     )
                     # Ensure caption ends at last sentence-ending punctuation
-                    last_punct = max(
-                        [caption.rfind(p) for p in [".", "!", "?"]]
-                    )
+                    last_punct = max([caption.rfind(p) for p in [".", "!", "?"]])
                     if last_punct != -1:
                         caption = caption[: last_punct + 1].strip()
                     if caption:
@@ -383,9 +382,7 @@ class PictureTagger:
                 )[0]
                 caption = generated_text.replace("<s>", "").replace("</s>", "").strip()
                 # Ensure caption ends at last sentence-ending punctuation
-                last_punct = max(
-                    [caption.rfind(p) for p in [".", "!", "?"]]
-                )
+                last_punct = max([caption.rfind(p) for p in [".", "!", "?"]])
                 if last_punct != -1:
                     caption = caption[: last_punct + 1].strip()
                 if caption:
