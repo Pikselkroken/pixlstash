@@ -980,7 +980,7 @@ class Pictures:
                     # Use Florence description to correct tags
                     try:
                         corrected_tags = picture_tagger.correct_tags_with_florence(
-                            pic.file_path, tags
+                            pic.description, tags
                         )
                         if corrected_tags:
                             tags = corrected_tags

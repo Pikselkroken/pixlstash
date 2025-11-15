@@ -247,11 +247,11 @@ async function sendChatMessageAndFocus() {
             for (let i = 0; i < top3Results.length; i++) {
               const pic = top3Results[i];
               const score = (pic.likeness_score * 100).toFixed(0);
-              const desc = pic.description
-                ? pic.description.length > 250
-                  ? pic.description.substring(0, 250) + "..."
-                  : pic.description
-                : "No description";
+              const description = pic.description || "No description";
+              let desc = description;
+              if (typeof description === "string" && description.length > 250) {
+                desc = description.substring(0, 250) + "...";
+              }
               debugInfo += `${i + 1}. ${score}% - ${desc}\n`;
             }
             // Add debug info as a system message with top 3 picture IDs

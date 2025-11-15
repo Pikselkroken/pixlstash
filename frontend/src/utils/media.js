@@ -38,7 +38,7 @@ export function dataTransferHasSupportedMedia(dataTransfer) {
     const item = items[i];
     if (!item || item.kind !== 'file') continue;
     const mime = item.type || '';
-    if (mime.startsWith('image/') || mime.startsWith('video/')) {
+    if (typeof mime === 'string' && (mime.startsWith('image/') || mime.startsWith('video/'))) {
       return true;
     }
     if (!mime && typeof item.getAsFile === 'function') {

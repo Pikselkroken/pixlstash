@@ -277,15 +277,6 @@
                 :selectedSort="selectedSort"
                 :showStars="showStars"
               />
-
-              <ImageImporter
-                ref="imageImporterRef"
-                :backendUrl="BACKEND_URL"
-                :selectedCharacterId="selectedCharacter"
-                :allPicturesId="ALL_PICTURES_ID"
-                :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-                @import-finished="refreshGrid"
-              />
             </template>
 
             <ChatWindow

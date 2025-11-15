@@ -97,7 +97,7 @@ async function handleImagesUploaded(newIds) {
   console.log('[IMPORT] Import finished event received.');
   console.log('[IMPORT] Fetching sorted image IDs from backend...');
   await fetchAllPictureIds();
-  console.log('[IMPORT] Updated allImageIds:', allImageIds.value);
+  console.log('[IMPORT] Updated images:', images.value);
   // Do NOT clear thumbnails; keep existing ones
   console.log('[IMPORT] Preserving existing thumbnails.');
   // Reset loadedRanges so new thumbnails can be fetched
@@ -316,7 +316,8 @@ function onGlobalKeyPress(key, event) {
 }
 
 // Local state for all image IDs
-const allImageIds = ref([]);
+
+const images = ref([]); // Unified reactive array for image metadata
 const imagesLoading = ref(false);
 const imagesError = ref(null);
 
@@ -358,10 +359,20 @@ async function fetchAllPictureIds() {
     const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch picture ids");
     const ids = await res.json();
-    allImageIds.value = ids;
+    // Populate images array with metadata fields
+    images.value = ids.map((id) => ({
+      id,
+      thumbnail: null,
+      score: null,
+      date: null,
+      sharpness: null,
+      edge_density: null,
+      noise_level: null,
+    }));
+    console.log('[GRID] images.value:', images.value);
   } catch (e) {
     imagesError.value = e.message;
-    allImageIds.value = [];
+    images.value = [];
   } finally {
     imagesLoading.value = false;
   }
@@ -379,15 +390,11 @@ watch(
     () => props.selectedSort,
   ],
   () => {
-    // Reset loaded ranges and thumbnails when filters change
-    thumbnails.value = {};
     loadedRanges.value = [];
     fetchAllPictureIds();
   }
 );
 
-// Thumbnails state: id -> thumbnail data (or null if not loaded)
-const thumbnails = ref({});
 // Track loaded batch ranges to avoid duplicate requests
 const loadedRanges = ref([]);
 // Debounce timer for scroll-triggered fetches
@@ -399,11 +406,13 @@ const visibleEnd = ref(0);
 
 // Compute grid images (id, idx, thumbnail)
 const allGridImages = computed(() => {
-  return allImageIds.value.map((id, idx) => ({
-    id,
+  // For now, just use images.value and add idx
+  const gridImages = images.value.map((img, idx) => ({
+    ...img,
     idx,
-    thumbnail: thumbnails.value[id] || null,
   }));
+  console.log('[GRID] allGridImages:', gridImages);
+  return gridImages;
 });
 
 // Batch fetch metadata (including thumbnail) for visible range
@@ -417,8 +426,9 @@ async function fetchThumbnailsBatch(start, end) {
   // Only fetch for IDs not already loaded
   const idsToFetch = [];
   for (let i = start; i < end; i++) {
-    const id = allImageIds.value[i];
-    if (id && thumbnails.value[id] === undefined) {
+    const img = images.value[i];
+    const id = img && img.id;
+    if (id && img.thumbnail === null) {
       idsToFetch.push(id);
     }
   }
@@ -454,12 +464,19 @@ async function fetchThumbnailsBatch(start, end) {
     const url = `${props.backendUrl}/pictures?${params.toString()}`;
     const res = await fetch(url);
     if (res.ok) {
-      const images = await res.json();
-      for (const img of images) {
-        if (img.id && img.thumbnail) {
-          thumbnails.value[img.id] = `${props.backendUrl}/thumbnails/${img.id}`;
-        } else if (img.id) {
-          thumbnails.value[img.id] = null;
+      const metaImages = await res.json();
+      for (const meta of metaImages) {
+        if (meta.id) {
+          const idx = images.value.findIndex((img) => img.id === meta.id);
+          if (idx !== -1) {
+            const img = images.value[idx];
+            img.thumbnail = meta.thumbnail ? `${props.backendUrl}/thumbnails/${meta.id}` : null;
+            img.score = meta.score ?? null;
+            img.date = meta.date ?? null;
+            img.sharpness = meta.sharpness ?? null;
+            img.edge_density = meta.edge_density ?? null;
+            img.noise_level = meta.noise_level ?? null;
+          }
         }
       }
       loadedRanges.value.push([start, end]);
@@ -472,7 +489,7 @@ async function fetchThumbnailsBatch(start, end) {
 function updateVisibleThumbnails() {
   let midPoint = Math.min(
     Math.max(0, Math.floor((visibleStart.value + visibleEnd.value) / 2)),
-    allImageIds.value.length
+    images.value.length
   );
 
   let start = midPoint - LAZY_THUMB_WINDOW;
@@ -501,7 +518,7 @@ function onGridScroll(e) {
   const firstVisibleRow = Math.floor(scrollTop / cardHeight);
   const rowsVisible = Math.ceil(gridHeight / cardHeight);
   const cols = columns.value;
-  const totalImages = allImageIds.value.length;
+  const totalImages = images.value.length;
   visibleStart.value = firstVisibleRow * cols;
   visibleEnd.value = visibleStart.value + rowsVisible * cols;
   updateVisibleThumbnails();
@@ -516,7 +533,8 @@ onMounted(() => {
   });
 });
 
-watch(allImageIds, () => {
+// No longer needed: watch for changes to images.value instead
+watch(images, () => {
   nextTick(() => {
     if (gridContainer.value) {
       onGridScroll({ target: gridContainer.value });
