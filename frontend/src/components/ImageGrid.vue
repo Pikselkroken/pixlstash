@@ -385,7 +385,14 @@ watch(
   () => {
     // Reset loaded ranges and thumbnails when filters change
     loadedRanges.value = [];
-    fetchTotalImageCount();
+    allGridImages.value = [];
+    fetchTotalImageCount().then(() => {
+      nextTick(() => {
+        if (gridContainer.value) {
+          onGridScroll({ target: gridContainer.value });
+        }
+      });
+    });
   }
 );
 
