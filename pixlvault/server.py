@@ -1,3 +1,4 @@
+import base64
 import uvicorn
 import io
 import math
@@ -783,12 +784,15 @@ class Server:
         @self.api.get("/picture_sets")
         async def get_picture_sets():
             """List all picture sets."""
+            start = time.time()
             sets = self.vault.picture_sets.list_all()
             result = []
             for s in sets:
                 set_dict = s.to_dict()
                 set_dict["picture_count"] = self.vault.picture_sets.get_set_count(s.id)
                 result.append(set_dict)
+            elapsed = time.time() - start
+            print(f"[SERVER] get_picture_sets took {elapsed:.4f} seconds")
             return result
 
         @self.api.post("/picture_sets")
@@ -900,12 +904,17 @@ class Server:
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
             """List all characters or filter by name."""
+            start = time.time()
             chars = (
                 self.vault.characters.find(name=name)
                 if name
                 else self.vault.characters.find()
             )
-            return [c.__dict__ for c in chars]
+            dicts = [c.__dict__ for c in chars]
+            elapsed = time.time() - start
+            logger.warning(f"[SERVER] get_characters took {elapsed:.4f} seconds")
+            logger.info(f"Returning characters: {dicts}")
+            return dicts
 
         @self.api.post("/characters")
         async def create_character(payload: dict = Body(...)):
@@ -960,17 +969,18 @@ class Server:
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
 
-        @self.api.get("/thumbnails/{id}")
-        async def get_thumbnail(id: str):
+        @self.api.get("/thumbnails")
+        async def get_thumbnails(ids: str = Query(...)):
             try:
-                pic = self.vault.pictures[id]
-                thumbnail_bytes = pic.thumbnail
-                if not thumbnail_bytes:
-                    logger.error(f"No thumbnail available for picture id={pic.id}")
-                    raise HTTPException(
-                        status_code=404, detail="No thumbnail available"
-                    )
-                return Response(content=thumbnail_bytes, media_type="image/png")
+                ids = ids.split(",")
+                results = {}
+                for id in ids:
+                    pic = self.vault.pictures[id]
+                    thumbnail_bytes = pic.thumbnail
+                    results[id] = base64.b64encode(thumbnail_bytes).decode("utf-8")
+                response = JSONResponse(results)
+                response.headers["Access-Control-Allow-Origin"] = "*"
+                return response
             except KeyError:
                 logger.error(f"Picture not found for id={id} (thumbnail request)")
                 raise HTTPException(status_code=404, detail="Picture not found")
@@ -1047,7 +1057,7 @@ class Server:
                 self.vault.pictures.update(pic)
             return {"status": "success", "picture": pic.to_dict()}
 
-        @self.api.get("/favicon.ico")
+        @self.api.get("/frontend/public/favicon.ico")
         def favicon():
             favicon_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
             return FileResponse(favicon_path)
@@ -1274,27 +1284,24 @@ class Server:
             - If primary_character_id is null/None/empty: unassigned pictures
             - If primary_character_id is set: that character's pictures
             """
-
+            start = time.time()
             # Determine which set to query
             if primary_character_id is None:
                 # All
-                pics = self.vault.pictures.find()
+                image_count = self.vault.pictures.find(count=True)
                 char_id = None
             elif primary_character_id == "null":
                 # Unassigned
-                pics = self.vault.pictures.find(primary_character_id="null")
+                image_count = self.vault.pictures.find(
+                    primary_character_id="null", count=True
+                )
                 char_id = None
             else:
-                pics = self.vault.pictures.find(
-                    primary_character_id=primary_character_id
+                image_count = self.vault.pictures.find(
+                    primary_character_id=primary_character_id, count=True
                 )
                 char_id = primary_character_id
 
-            image_count = len(pics)
-
-            last_updated = max(
-                (p.created_at for p in pics if p.created_at), default=None
-            )
             # Thumbnail URL (reuse existing endpoint)
             thumb_url = None
             if char_id not in (None, "", "null"):
@@ -1321,10 +1328,12 @@ class Server:
             summary = {
                 "primary_character_id": char_id,
                 "image_count": image_count,
-                "last_updated": last_updated,
                 "thumbnail_url": thumb_url,
                 "reference_picture_set_id": reference_set_id,
             }
+            elapsed = time.time() - start
+            logger.info(f"Category summary computed in {elapsed:.4f} seconds")
+            logger.info(f"Category summary: {summary}")
             return summary
 
     def create_picture_imports(self, uploaded_files, dest_folder, primary_character_id):
