@@ -1236,6 +1236,27 @@ class Pictures:
         offset = kwargs.pop("offset", None)
         limit = kwargs.pop("limit", None)
         info = kwargs.pop("info", False)
+        count = kwargs.pop("count", False)
+        if count:
+            # Return count of matching pictures
+            clauses = []
+            values = []
+            for k, v in kwargs.items():
+                if v == "" or v == "null":
+                    clauses.append(f"{k} IS NULL")
+                else:
+                    clauses.append(f"{k}=?")
+                    values.append(v)
+            where_clause = ""
+            if clauses:
+                where_clause = "WHERE " + " AND ".join(clauses)
+            query = f"SELECT COUNT(*) FROM pictures {where_clause}".strip()
+            rows = self._db.query(query, tuple(values))
+            if rows:
+                return rows[0][0]
+            else:
+                return 0
+
         order_by = ""
         if SortMechanism.is_sql_sortable(sort):
             order_by = sort
