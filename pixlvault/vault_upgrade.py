@@ -235,19 +235,8 @@ class VaultUpgrade:
             CREATE TABLE IF NOT EXISTS likeness_work_queue (
                 picture_id_a TEXT NOT NULL,
                 picture_id_b TEXT NOT NULL,
-                processed INTEGER DEFAULT 0,
-                PRIMARY KEY (picture_id_a, picture_id_b)
+                UNIQUE (picture_id_a, picture_id_b)
             )
-        """)
-        self.connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_likeness_work_queue_processed
-            ON likeness_work_queue(processed)
-        """)
-        self.connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_lwq_picture_id_a ON likeness_work_queue(picture_id_a)
-        """)
-        self.connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_lwq_picture_id_b ON likeness_work_queue(picture_id_b)
         """)
         self.connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_lwq_pair ON likeness_work_queue(picture_id_a, picture_id_b)

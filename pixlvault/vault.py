@@ -103,7 +103,7 @@ class Vault:
     def get_description(self) -> Optional[str]:
         return self.db.get_description()
 
-    def import_default_data(self):
+    def import_default_data(self, add_tagger_test_images: bool = False):
         """
         Import default data into the vault.
         Extend this method to add default pictures or metadata as needed.
@@ -124,6 +124,26 @@ class Vault:
             source_file_path=logo_src,
             character_id=character.id,
         )
+        if add_tagger_test_images:
+            # Add all pictures/TaggerTest*.png
+            for file in os.listdir(
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), "../pictures")
+            ):
+                if file.startswith("TaggerTest") and file.endswith(".png"):
+                    src_path = os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)),
+                        "TaggerTestImages",
+                        file,
+                    )
+                    pic = PictureUtils.create_picture_from_file(
+                        image_root_path=logo_dest_folder,
+                        source_file_path=src_path,
+                        character_id=character.id,
+                    )
+                    assert pic.file_path
+                    self.pictures.add(pic)
+                    logger.debug(f"Imported default picture: {pic.file_path}")
+
         assert picture.file_path
         self.pictures.add(picture)
         logger.info("Imported default data into the vault.")

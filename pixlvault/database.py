@@ -83,6 +83,19 @@ class VaultDatabase:
                 )
                 self._conn.execute(sql)
                 self._create_indexes_for_model(model)
+            # Explicitly create likeness_work_queue table and indices
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS likeness_work_queue (
+                    picture_id_a TEXT NOT NULL,
+                    picture_id_b TEXT NOT NULL,
+                    UNIQUE (picture_id_a, picture_id_b)
+                );
+                """
+            )
+            self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_lwq_pair ON likeness_work_queue(picture_id_a, picture_id_b)
+        """)
             self._conn.commit()
         else:
             logger.debug("Using existing database, skipping default import.")
