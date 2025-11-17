@@ -85,7 +85,7 @@ class VaultUpgrade:
         cursor = self.connection.cursor()
         # Get all characters
         cursor.execute("SELECT id FROM characters")
-        character_ids = [row["id"] for row in cursor.fetchall()]
+        character_ids = [row[0] for row in cursor.fetchall()]
         for char_id in character_ids:
             # Check if reference picture set exists for this character
             cursor.execute(

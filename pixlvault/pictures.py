@@ -16,6 +16,7 @@ from pixlvault.picture import PictureModel
 from pixlvault.picture_quality import PictureQuality
 from pixlvault.picture_tagger import PictureTagger, MAX_CONCURRENT_IMAGES
 from pixlvault.picture_utils import PictureUtils
+from pixlvault.database import DBPriority
 
 logger = get_logger(__name__)
 
@@ -80,7 +81,9 @@ class Pictures:
         # Pass device to PictureTagger (default: None lets PictureTagger auto-detect)
         self._device = device
         self._picture_tagger = PictureTagger(device=device)
-        logger.info(f"Initialized PictureTagger for Pictures manager with device={device!r}.")
+        logger.info(
+            f"Initialized PictureTagger for Pictures manager with device={device!r}."
+        )
 
         self._facial_features_worker = None
         self._facial_features_worker_stop = None
@@ -91,61 +94,58 @@ class Pictures:
         self._quality_worker = None
         self._quality_worker_stop = None
 
-    def _get_tags_for_picture(self, picture_id):
-        rows = self._db.query(
-            "SELECT tag FROM picture_tags WHERE picture_id = ?", (picture_id,)
-        )
-        return [row["tag"] if isinstance(row, dict) else row[0] for row in rows]
-
-    def _set_tags_for_picture(self, picture_id, tags):
-        self._db.execute(
-            "DELETE FROM picture_tags WHERE picture_id = ?", (picture_id,), commit=True
-        )
-        if tags:
-            self._db.executemany(
-                "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
-                [(picture_id, tag) for tag in tags],
-                commit=True,
-            )
-
     def __getitem__(self, picture_id):
         logger.debug(f"Fetching picture with id={picture_id} (type={type(picture_id)})")
-        rows = self._db.query("SELECT * FROM pictures WHERE id = ?", (picture_id,))
-        if not rows:
-            raise KeyError(f"Picture with id {picture_id} not found.")
-        pic = PictureModel.from_dict(rows[0])
-        pic.tags = self._get_tags_for_picture(picture_id)
-        return pic
+
+        def get_pictures(conn, picture_id):
+            picture_row = conn.execute(
+                "SELECT * FROM pictures WHERE id = ?", picture_id
+            ).fetchone()
+            if not picture_row:
+                raise KeyError(f"Picture with id {picture_id} not found.")
+            pic = PictureModel.from_dict(picture_row)
+            tags_rows = conn.execute(
+                "SELECT tag FROM picture_tags WHERE picture_id = ?", picture_id
+            )
+            pic.tags = [tag_row["tag"] for tag_row in tags_rows]
+            return pic
+
+        return self._db.execute_read(get_pictures, (picture_id,))
 
     def __setitem__(self, picture_id, picture):
         picture.id = picture_id
         self.import_picture(picture)
 
     def __delitem__(self, picture_id):
-        self._db.execute(
-            "DELETE FROM pictures WHERE id = ?", (picture_id,), commit=True
-        )
+        self._db.submit_write(
+            lambda conn: conn.execute(
+                "DELETE FROM picture_tags WHERE picture_id = ?", (picture_id,)
+            ),
+            priority=DBPriority.IMMEDIATE,
+        ).result()
 
     def __iter__(self):
-        rows = self._db.query("SELECT * FROM pictures")
-        for row in rows:
-            yield PictureModel.from_dict(row)
-
-    def _update_picture_tags(self, thread_conn, pictures):
-        """
-        Update the tags for a picture in the database using the picture_tags table.
-        """
-        cursor = thread_conn.cursor()
-        cursor.executemany(
-            "DELETE FROM picture_tags WHERE picture_id = ?",
-            [(picture.id,) for picture in pictures],
-        )
-        for picture in pictures:
-            cursor.executemany(
-                "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
-                [(picture.id, tag) for tag in picture.tags],
+        def row_generator(conn):
+            cursor = conn.execute("SELECT * FROM pictures")
+            picture_rows = list(cursor)
+            if not picture_rows:
+                return
+            # Fetch all tags for these pictures in one query
+            pic_ids = [row["id"] for row in picture_rows]
+            placeholders = ",".join(["?"] * len(pic_ids))
+            tag_cursor = conn.execute(
+                f"SELECT picture_id, tag FROM picture_tags WHERE picture_id IN ({placeholders})",
+                pic_ids,
             )
-        thread_conn.commit()
+            tag_map = {}
+            for tag_row in tag_cursor:
+                tag_map.setdefault(tag_row["picture_id"], []).append(tag_row["tag"])
+            for row in picture_rows:
+                pic = PictureModel.from_dict(row)
+                pic.tags = tag_map.get(row["id"], [])
+                yield pic
+
+        yield from self._db.execute_read(row_generator)
 
     def start_facial_features_worker(self, interval=5):
         import threading
@@ -210,65 +210,68 @@ class Pictures:
             logger.debug("[LIKENESS] Starting iteration...")
             pending_pairs = []
 
-            with self._db.threaded_connection as thread_conn:
-                cursor = thread_conn.cursor()
-                # Bulk cleanup: remove already-calculated pairs from work queue
-                cursor.execute(
+            self._db.submit_write(
+                lambda conn: conn.execute(
                     """
-                    DELETE FROM likeness_work_queue
-                    WHERE EXISTS (
-                        SELECT 1 FROM picture_likeness
-                        WHERE picture_likeness.picture_id_a = likeness_work_queue.picture_id_a
-                          AND picture_likeness.picture_id_b = likeness_work_queue.picture_id_b
-                    )
-                    """
+                DELETE FROM likeness_work_queue
+                WHERE EXISTS (
+                    SELECT 1 FROM picture_likeness
+                    WHERE picture_likeness.picture_id_a = likeness_work_queue.picture_id_a
+                        AND picture_likeness.picture_id_b = likeness_work_queue.picture_id_b
                 )
-                thread_conn.commit()
-                time_after_cleanup = time.time()
-                logger.debug(
-                    f"[LIKENESS] DELETING existing items from likeness_work_queue took {time_after_cleanup - start:.2f} seconds."
-                )
-            with self._db.threaded_connection as thread_conn:
-                cursor = thread_conn.cursor()
-                # Select pending pairs from likeness_work_queue only
-                cursor.execute(
+            """
+                ),
+                priority=DBPriority.LOW,
+            ).result()
+            time_after_cleanup = time.time()
+            logger.debug(
+                f"[LIKENESS] DELETING existing items from likeness_work_queue took {time_after_cleanup - start:.2f} seconds."
+            )
+
+            rows = self._db.execute_read(
+                lambda conn: conn.execute(
                     "SELECT picture_id_a, picture_id_b FROM likeness_work_queue ORDER BY rowid LIMIT ?",
                     (batch_size,),
-                )
-                rows = cursor.fetchall()
-                cursor.execute("SELECT COUNT(*) FROM likeness_work_queue")
-                total_pending = cursor.fetchone()[0]
-                logger.debug(
-                    f"[LIKENESS] Fetched {len(rows)} rows from likeness_work_queue out of {total_pending}."
-                )
-                # Batch fetch all required pictures
-                all_ids = set()
-                for row in rows:
-                    all_ids.add(row[0])
-                    all_ids.add(row[1])
-                if all_ids:
-                    placeholders = ",".join(["?"] * len(all_ids))
-                    cursor.execute(
+                ).fetchall()
+            )
+
+            total_pending = self._db.execute_read(
+                lambda conn: conn.execute(
+                    "SELECT COUNT(*) FROM likeness_work_queue"
+                ).fetchone()
+            )[0]
+            logger.debug(
+                f"[LIKENESS] Fetched {len(rows)} rows from likeness_work_queue out of {total_pending}."
+            )
+            # Batch fetch all required pictures
+            all_ids = set()
+            for row in rows:
+                all_ids.add(row[0])
+                all_ids.add(row[1])
+            if all_ids:
+                placeholders = ",".join(["?"] * len(all_ids))
+                pic_rows = self._db.execute_read(
+                    lambda conn: conn.execute(
                         f"SELECT * FROM pictures WHERE id IN ({placeholders})",
                         tuple(all_ids),
-                    )
-                    pic_rows = cursor.fetchall()
-                    pic_dict = {
-                        row["id"]
-                        if isinstance(row, dict)
-                        else row[0]: PictureModel.from_dict(row)
-                        for row in pic_rows
-                    }
-                    for row in rows:
-                        pic_a_id, pic_b_id = row[0], row[1]
-                        pic_a = pic_dict.get(pic_a_id)
-                        pic_b = pic_dict.get(pic_b_id)
-                        if not pic_a or not pic_b:
-                            continue
-                        # Only process if both have facial features
-                        if not pic_a.facial_features or not pic_b.facial_features:
-                            continue
-                        pending_pairs.append((pic_a_id, pic_b_id, pic_a, pic_b))
+                    ).fetchall()
+                )
+                pic_dict = {
+                    row["id"]
+                    if isinstance(row, dict)
+                    else row[0]: PictureModel.from_dict(row)
+                    for row in pic_rows
+                }
+                for row in rows:
+                    pic_a_id, pic_b_id = row[0], row[1]
+                    pic_a = pic_dict.get(pic_a_id)
+                    pic_b = pic_dict.get(pic_b_id)
+                    if not pic_a or not pic_b:
+                        continue
+                    # Only process if both have facial features
+                    if not pic_a.facial_features or not pic_b.facial_features:
+                        continue
+                    pending_pairs.append((pic_a_id, pic_b_id, pic_a, pic_b))
 
             logger.debug(
                 "[LIKENESS] Got %d pending likeness pairs to process from work queue."
@@ -328,8 +331,9 @@ class Pictures:
                 )
                 # Bulk insert all likeness scores and remove processed pairs
                 if all_likeness_scores:
-                    with self._db.threaded_connection as thread_conn:
-                        cursor = thread_conn.cursor()
+
+                    def insert_likeness_scores(conn, all_likeness_scores):
+                        cursor = conn.cursor()
                         cursor.executemany(
                             """
                             INSERT OR IGNORE INTO picture_likeness (
@@ -343,7 +347,13 @@ class Pictures:
                             "DELETE FROM likeness_work_queue WHERE picture_id_a = ? AND picture_id_b = ?",
                             all_processed_pairs,
                         )
-                        thread_conn.commit()
+                        conn.commit()
+
+                    self._db.submit_write(
+                        insert_likeness_scores,
+                        all_likeness_scores,
+                        priority=DBPriority.LOW,
+                    )
                     logger.debug(
                         f"[LIKENESS] Bulk inserted {len(all_likeness_scores)} likeness scores and removed {len(all_processed_pairs)} processed pairs from work queue."
                     )
@@ -397,11 +407,7 @@ class Pictures:
                     break
 
                 # 2. Generate facial features for pictures missing them
-                missing_facial_features = []
-                with self._db.threaded_connection as thread_conn:
-                    missing_facial_features = self._fetch_missing_facial_features(
-                        thread_conn
-                    )
+                missing_facial_features = self._fetch_missing_facial_features()
                 logger.debug(
                     "[FACIAL_FEATURES] It took %.2f seconds to fetch %d pictures needing facial features."
                     % (time.time() - time_after_calculate, len(missing_facial_features))
@@ -413,10 +419,9 @@ class Pictures:
                     features_updated = self._generate_facial_features(
                         self._picture_tagger, missing_facial_features
                     )
-                    with self._db.threaded_connection as thread_conn:
-                        self._update_attributes(
-                            thread_conn, missing_facial_features, ["facial_features"]
-                        )
+                    self._update_attributes(
+                        missing_facial_features, ["facial_features"]
+                    ).result()
                     data_updated |= features_updated
 
                 timing = time.time() - start
@@ -443,9 +448,7 @@ class Pictures:
                 data_updated = False
 
                 # 1. Fetch missing descriptions
-                missing_descriptions = []
-                with self._db.threaded_connection as thread_conn:
-                    missing_descriptions = self._fetch_missing_descriptions(thread_conn)
+                missing_descriptions = self._fetch_missing_descriptions()
 
                 if self._text_embedding_worker_stop.is_set():
                     break
@@ -455,58 +458,40 @@ class Pictures:
                     % (time.time() - start)
                 )
                 # 2. Generate descriptions
-                descriptions_generated = []
-                if missing_descriptions:
-                    logger.debug(
-                        f"Generating descriptions for {len(missing_descriptions)} pictures."
-                    )
-                    descriptions_generated = self._generate_descriptions(
-                        self._picture_tagger, missing_descriptions
-                    )
+                descriptions_generated = self._generate_descriptions(
+                    self._picture_tagger, missing_descriptions
+                )
 
                 if self._text_embedding_worker_stop.is_set():
                     break
 
                 # 3. Store descriptions
                 if descriptions_generated:
-                    with self._db.threaded_connection as thread_conn:
-                        self._update_attributes(
-                            thread_conn, descriptions_generated, ["description"]
-                        )
+                    self._update_attributes(descriptions_generated, ["description"])
                     data_updated = True
 
                 tag_start = time.time()
                 # 4. Fetch missing tags
-                missing_tags = []
-                with self._db.threaded_connection as thread_conn:
-                    missing_tags = self._fetch_missing_tags(thread_conn)
+                missing_tags = self._fetch_pictures_missing_tags()
 
                 logger.debug(
                     "[TEXT_EMBEDDING] It took %.2f seconds to fetch missing tags."
                     % (time.time() - tag_start)
                 )
                 # 5. Generate missing tags
-                tagged_pictures = []
-                if missing_tags:
-                    logger.debug(f"Generating tags for {len(missing_tags)} pictures.")
-                    tagged_pictures = self._tag_pictures(
-                        self._picture_tagger, missing_tags
-                    )
+                tagged_pictures = self._tag_pictures(self._picture_tagger, missing_tags)
 
                 if self._text_embedding_worker_stop.is_set():
                     break
 
                 # 6. Store generated tags
                 if tagged_pictures:
-                    with self._db.threaded_connection as thread_conn:
-                        self._update_picture_tags(thread_conn, tagged_pictures)
+                    self._update_picture_tags(tagged_pictures)
                     data_updated = True
 
                 embed_start = time.time()
                 # 7. Fetch pictures to embed
-                pictures_to_embed = []
-                with self._db.threaded_connection as thread_conn:
-                    pictures_to_embed = self._fetch_missing_text_embeddings(thread_conn)
+                pictures_to_embed = self._fetch_missing_text_embeddings()
 
                 logger.debug(
                     "[TEXT_EMBEDDING] It took %.2f seconds to fetch missing text embeddings."
@@ -514,18 +499,11 @@ class Pictures:
                 )
 
                 # 8. Generate text embeddings for fetched pictures from descriptions and tags
-                embeddings_generated = []
-                if pictures_to_embed:
-                    embeddings_generated = self._generate_text_embeddings(
-                        pictures_to_embed
-                    )
+                embeddings_generated = self._generate_text_embeddings(pictures_to_embed)
 
                 # 9. Store generated embeddings
                 if embeddings_generated:
-                    with self._db.threaded_connection as thread_conn:
-                        self._update_attributes(
-                            thread_conn, embeddings_generated, ["text_embedding"]
-                        )
+                    self._update_attributes(embeddings_generated, ["text_embedding"])
                     data_updated = True
 
                 timing = time.time() - start
@@ -541,13 +519,13 @@ class Pictures:
                 break
         logger.info("Exiting text embedding worker loop.")
 
-    def _fetch_missing_tags(self, thread_conn):
+    def _fetch_pictures_missing_tags(self):
         """Return PictureModels needing tags using the provided connection."""
 
         logger.debug("Starting the optimized database fetch for missing tags.")
-        cursor = thread_conn.cursor()
-        cursor.execute(
-            """
+        pictures_missing_tags = self._db.execute_read(
+            lambda conn: conn.execute(
+                """
             SELECT p.*
             FROM pictures p
             LEFT JOIN picture_tags pt ON pt.picture_id = p.id
@@ -555,69 +533,62 @@ class Pictures:
             GROUP BY p.id
             HAVING COUNT(pt.tag) = 0
             """
+            ).fetchall()
         )
-        missing_tags = cursor.fetchall()
-        return self.from_batch_of_db_dicts(missing_tags)
+        return self.from_batch_of_db_dicts(pictures_missing_tags)
 
-    def _fetch_missing_text_embeddings(self, thread_conn):
-        """Return PictureModels needing text embeddings using the provided connection."""
+    def _update_picture_tags(self, pictures):
+        """
+        Update the tags for a picture in the database using the picture_tags table.
+        """
 
-        logger.debug("Starting the database fetch for missing text embeddings.")
-        cursor = thread_conn.cursor()
+        def bulk_update_tags(conn, pictures):
+            cursor = conn.cursor()
+            cursor.executemany(
+                "DELETE FROM picture_tags WHERE picture_id = ?",
+                [(picture.id,) for picture in pictures],
+            )
+            cursor.executemany(
+                "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+                [(picture.id, tag) for picture in pictures for tag in picture.tags],
+            )
+            conn.commit()
 
-        cursor.execute(
-            """
+        self._db.submit_write(bulk_update_tags, pictures, priority=DBPriority.LOW)
+
+    def _fetch_missing_text_embeddings(self):
+        """Return PictureModels needing text embeddings."""
+
+        rows_missing_embeddings = self._db.execute_read(
+            lambda conn: conn.execute(
+                """
             SELECT *
             FROM pictures WHERE description IS NOT NULL AND text_embedding IS NULL
             """
+            ).fetchall()
         )
-        pictures_missing_embeddings = cursor.fetchall()
-        return self.from_batch_of_db_dicts(pictures_missing_embeddings, [])
+        return self.from_batch_of_db_dicts(rows_missing_embeddings, [])
 
-    def _fetch_missing_descriptions(self, thread_conn):
+    def _fetch_missing_descriptions(self):
         logger.debug("Starting the database fetch for missing descriptions")
 
-        cursor = thread_conn.cursor()
-
-        # Find pictures missing regular descriptions
-        cursor.execute(
-            """
+        rows_missing_descriptions = self._db.execute_read(
+            lambda conn: conn.execute(
+                """
             SELECT p.*
             FROM pictures p
             WHERE p.description IS NULL
             """
+            ).fetchall()
         )
-        rows_missing_descriptions = cursor.fetchall()
-        missing_descriptions = []
-        if rows_missing_descriptions:
-            pic_ids = [row["id"] for row in rows_missing_descriptions]
-            placeholders = ",".join(["?"] * len(pic_ids))
-            cursor.execute(
-                f"SELECT picture_id, tag FROM picture_tags WHERE picture_id IN ({placeholders})",
-                pic_ids,
-            )
-            tag_rows = cursor.fetchall()
-            tag_map = {pid: [] for pid in pic_ids}
-            for tag_row in tag_rows:
-                tag_map[tag_row["picture_id"]].append({"tag": tag_row["tag"]})
 
-            tag_dicts = [
-                tag_map.get(row["id"], []) for row in rows_missing_descriptions
-            ]
-            missing_descriptions = self.from_batch_of_db_dicts(
-                rows_missing_descriptions, tag_dicts
-            )
+        return self.from_batch_of_db_dicts(rows_missing_descriptions, [])
 
-        return missing_descriptions
-
-    def _fetch_missing_facial_features(self, thread_conn):
+    def _fetch_missing_facial_features(self):
         """Return PictureModels needing facial features using the provided connection."""
-        logger.debug(
-            "Starting the optimized database fetch for missing facial features."
-        )
-        cursor = thread_conn.cursor()
-        cursor.execute(
-            """
+        rows_missing_facial_features = self._db.execute_read(
+            lambda conn: conn.execute(
+                """
             SELECT p.*
             FROM pictures p
             WHERE p.face_bbox IS NOT NULL
@@ -625,9 +596,9 @@ class Pictures:
               AND p.facial_features IS NULL
             GROUP BY p.id
             """
+            ).fetchall()
         )
-        rows = cursor.fetchall()
-        return self.from_batch_of_db_dicts(rows)
+        return self.from_batch_of_db_dicts(rows_missing_facial_features, [])
 
     def _quality_worker_loop(self, interval):
         # ...existing code...
@@ -644,16 +615,13 @@ class Pictures:
                 logger.debug(
                     "Searching for pictures needing full image quality calculation."
                 )
-                with self._db.threaded_connection as thread_conn:
-                    cursor = thread_conn.cursor()
-                    cursor.execute(
+                rows = self._db.execute_read(
+                    lambda conn: conn.execute(
                         "SELECT * FROM pictures WHERE sharpness IS NULL OR edge_density IS NULL OR noise_level IS NULL OR contrast IS NULL OR brightness IS NULL",
-                    )
-                    rows = cursor.fetchall()
-                    logger.debug(
-                        f"Quality worker found {len(rows)} pictures needing full image quality calculation."
-                    )
-                    pics_full = self.from_batch_of_db_dicts(rows)
+                    ).fetchall()
+                )
+
+                pics_full = self.from_batch_of_db_dicts(rows)
 
                 start_quality_grouping = time.time()
                 logger.debug(
@@ -682,8 +650,11 @@ class Pictures:
                         )
                         quality_updates = self._calculate_quality(batch)
                         if quality_updates:
-                            with self._db.threaded_connection as thread_conn:
-                                self._update_quality(thread_conn, quality_updates)
+                            self._db.submit_write(
+                                self._update_quality,
+                                quality_updates,
+                                priority=DBPriority.LOW,
+                            ).result()
                 start_face_quality_fetch = time.time()
                 logger.debug(
                     "[QUALITY] It took %.2f seconds to calculate full image quality."
@@ -691,16 +662,13 @@ class Pictures:
                 )
                 # 2. Face quality measures
                 logger.debug("Searching for pictures needing face quality calculation.")
-                with self._db.threaded_connection as thread_conn:
-                    cursor = thread_conn.cursor()
-                    cursor.execute(
+                face_rows = self._db.execute_read(
+                    lambda conn: conn.execute(
                         "SELECT * FROM pictures WHERE face_sharpness IS NULL OR face_edge_density IS NULL OR face_noise_level IS NULL OR face_contrast IS NULL OR face_brightness IS NULL",
-                    )
-                    rows = cursor.fetchall()
-                    logger.debug(
-                        f"Quality worker found {len(rows)} pictures needing face quality calculation."
-                    )
-                    pics_face = self.from_batch_of_db_dicts(rows)
+                    ).fetchall()
+                )
+                pics_face = self.from_batch_of_db_dicts(face_rows)
+
                 logger.debug(
                     "[QUALITY] It took %.2f seconds to fetch pictures needing face quality calculation."
                     % (time.time() - start_face_quality_fetch)
@@ -728,9 +696,11 @@ class Pictures:
                             f"Processing face batch of {len(batch)} images of bbox size {bbox_size}."
                         )
                         quality_updates = self._calculate_quality(batch, True)
-                        if quality_updates:
-                            with self._db.threaded_connection as thread_conn:
-                                self._update_face_quality(thread_conn, quality_updates)
+                        self._db.submit_write(
+                            self._update_face_quality,
+                            quality_updates,
+                            priority=DBPriority.LOW,
+                        ).result()
 
             except (sqlite3.OperationalError, OSError) as e:
                 msg = str(e)
@@ -903,8 +873,8 @@ class Pictures:
         except Exception as e:
             logger.error(f"Failed to calculate quality for batch: {e}")
 
-    def _update_quality(self, thread_conn, pics):
-        cursor = thread_conn.cursor()
+    def _update_quality(self, conn, pics):
+        cursor = conn.cursor()
         values = []
         for pic in pics:
             # Assert metrics are not bytes
@@ -946,10 +916,10 @@ class Pictures:
             "UPDATE pictures SET sharpness = ?, edge_density = ?, contrast = ?, brightness = ?, noise_level = ? WHERE id = ?",
             values,
         )
-        thread_conn.commit()
+        conn.commit()
 
-    def _update_face_quality(self, thread_conn, pics):
-        cursor = thread_conn.cursor()
+    def _update_face_quality(self, conn, pics):
+        cursor = conn.cursor()
         values = []
         for pic in pics:
             # Assert face metrics are not bytes
@@ -991,7 +961,7 @@ class Pictures:
             "UPDATE pictures SET face_sharpness = ?, face_edge_density = ?, face_contrast = ?, face_brightness = ?, face_noise_level = ? WHERE id = ?",
             values,
         )
-        thread_conn.commit()
+        conn.commit()
 
     def _tag_pictures(self, picture_tagger, missing_tags) -> int:
         """Tag all pictures missing tags."""
@@ -1035,18 +1005,13 @@ class Pictures:
 
     def _find_pics_needing_face_bbox(self):
         """Find pictures that need face bounding boxes."""
-        if not hasattr(self, "_skip_pictures"):
-            self._skip_pictures = set()
+        rows = self._db.execute_read(
+            lambda conn: conn.execute(
+                "SELECT * FROM pictures WHERE face_bbox IS NULL"
+            ).fetchall()
+        )
 
-        pics = []
-        with self._db.threaded_connection as thread_conn:
-            cursor = thread_conn.cursor()
-            cursor.execute(
-                "SELECT * FROM pictures WHERE face_bbox IS NULL OR face_bbox = ''"
-            )
-            pics = [PictureModel.from_dict(row) for row in cursor.fetchall()]
-        batch = [pic for pic in pics if pic.id not in self._skip_pictures]
-        return batch
+        return self.from_batch_of_db_dicts(rows, [])
 
     def _calculate_face_bboxes(self, pics) -> int:
         """Calculate face bounding box for pictures"""
@@ -1129,7 +1094,7 @@ class Pictures:
                     logger.warning(
                         f"No face found in {file_path} for picture {pic.id}."
                     )
-                    pic.face_bbox = bytes()
+                    pic.face_bbox = ""
                     continue
                 else:
                     logger.debug(
@@ -1203,21 +1168,10 @@ class Pictures:
                 pic.face_bbox = bytes()
         logger.debug("Done extracting face bboxes for current batch.")
 
-        NUM_RETRIES = 5
-        for i in range(NUM_RETRIES):
-            try:
-                with self._db.threaded_connection as thread_conn:
-                    logger.debug(
-                        f"Storing {bboxes_updated} updated face bboxes and thumbnails to database."
-                    )
-                    self._update_attributes(
-                        thread_conn, pics, ["face_bbox", "thumbnail"]
-                    )
-                    break
-            except Exception:
-                logger.warning(
-                    f"Database write failed. Trying again shortly. Attempt {i + 1}/{NUM_RETRIES}"
-                )
+        logger.debug(
+            f"Storing {bboxes_updated} updated face bboxes and thumbnails to database."
+        )
+        self._update_attributes(pics, ["face_bbox", "thumbnail"]).result()
 
         return True, bboxes_updated
 
@@ -1257,24 +1211,19 @@ class Pictures:
                 )
         return descriptions_generated
 
-    def _update_attributes(self, thread_conn, pictures, attributes):
+    def _update_attributes(self, pictures, attributes):
         """Update specified attributes for a list of Picture instances in the database using executemany for efficiency."""
-        with thread_conn:
-            cursor = thread_conn.cursor()
-            values = []
-            for picture in pictures:
-                row = picture.to_dict()
-                attr_values = [row[attr] for attr in attributes]
-                attr_values.append(picture.id)
-                values.append(tuple(attr_values))
-                # logger.info(f"Updating picture {picture.id} with attributes: {row}")
-            set_clause = ", ".join([f"{attr}=?" for attr in attributes])
-            query = f"UPDATE pictures SET {set_clause} WHERE id=?"
-            cursor.executemany(
-                query,
-                values,
-            )
-            thread_conn.commit()
+
+        values = []
+        for picture in pictures:
+            row = picture.to_dict()
+            attr_values = [row[attr] for attr in attributes]
+            attr_values.append(picture.id)
+            values.append(tuple(attr_values))
+            # logger.info(f"Updating picture {picture.id} with attributes: {row}")
+        set_clause = ", ".join([f"{attr}=?" for attr in attributes])
+        query = f"UPDATE pictures SET {set_clause} WHERE id=?"
+        return self._db.submit_bulk_write(query, values)
 
     def find(self, **kwargs):
         """
@@ -1302,7 +1251,9 @@ class Pictures:
             if clauses:
                 where_clause = "WHERE " + " AND ".join(clauses)
             query = f"SELECT COUNT(*) FROM pictures {where_clause}".strip()
-            rows = self._db.query(query, tuple(values))
+            rows = self._db.execute_read(
+                lambda conn: conn.execute(query, tuple(values)).fetchall()
+            )
             if rows:
                 return rows[0][0]
             else:
@@ -1332,13 +1283,17 @@ class Pictures:
             query += f" LIMIT {int(limit)}"
         if offset is not None:
             query += f" OFFSET {int(offset)}"
-        rows = self._db.query(query, tuple(values))
+        rows = self._db.execute_read(
+            lambda conn: conn.execute(query, tuple(values)).fetchall()
+        )
         result = []
         for row in rows:
             pic = PictureModel.from_dict(row)
             if not info:
-                tag_rows = self._db.query(
-                    "SELECT tag FROM picture_tags WHERE picture_id = ?", (pic.id,)
+                tag_rows = self._db.execute_read(
+                    lambda conn: conn.execute(
+                        "SELECT tag FROM picture_tags WHERE picture_id = ?", (pic.id,)
+                    ).fetchall()
                 )
                 pic.tags = [
                     tag_row["tag"] if isinstance(tag_row, dict) else tag_row[0]
@@ -1368,8 +1323,10 @@ class Pictures:
             f"Semantic search: query embedding shape: {getattr(query_emb, 'shape', None)}"
         )
         # Load all picture embeddings and ids
-        rows = self._db.query(
-            "SELECT id, text_embedding FROM pictures WHERE text_embedding IS NOT NULL"
+        rows = self._db.execute_read(
+            lambda conn: conn.execute(
+                "SELECT id, text_embedding FROM pictures WHERE text_embedding IS NOT NULL"
+            ).fetchall()
         )
         logger.debug(
             f"Semantic search: found {len(rows)} candidate images with embeddings."
@@ -1446,16 +1403,18 @@ class Pictures:
         if not isinstance(picture_ids, list):
             picture_ids = [picture_ids]
 
-        self._db.executemany(
-            "DELETE FROM pictures WHERE id = ?",
-            [(pid,) for pid in picture_ids],
-            commit=False,
-        )
-        self._db.executemany(
-            "DELETE FROM picture_tags WHERE picture_id = ?",
-            [(pid,) for pid in picture_ids],
-            commit=True,
-        )
+        def delete_pictures(conn, picture_ids=picture_ids):
+            cursor = conn.cursor()
+            cursor.executemany(
+                "DELETE FROM pictures WHERE id = ?", [(pid,) for pid in picture_ids]
+            )
+            cursor.executemany(
+                "DELETE FROM picture_tags WHERE picture_id = ?",
+                [(pid,) for pid in picture_ids],
+            )
+            conn.commit()
+
+        self._db.submit_batch_write(delete_pictures, picture_ids).result()
 
     def add(self, pictures: Union[PictureModel, List[PictureModel]]):
         """Add one or more pictures. Supports both single picture and batch operations."""
@@ -1465,57 +1424,67 @@ class Pictures:
         # Batch insert
         picture_dicts, list_of_tag_dicts = self.to_batch_of_db_dicts(pictures)
         new_picture_ids = []
-        if picture_dicts:
-            columns = ", ".join(picture_dicts[0].keys())
-            placeholders = ", ".join([f":{k}" for k in picture_dicts[0].keys()])
-            sql = f"INSERT INTO pictures ({columns}) VALUES ({placeholders})"
-            self._db.executemany(sql, picture_dicts, commit=True)
-            # Collect new picture IDs (assume 'id' is present in dict)
-            new_picture_ids = [
-                pic_dict["id"] for pic_dict in picture_dicts if "id" in pic_dict
-            ]
 
-        # Flatten tag dicts for batch insert
-        all_tag_dicts = [
-            tag_dict for tag_dicts in list_of_tag_dicts for tag_dict in tag_dicts
-        ]
-        if all_tag_dicts:
-            self._db.executemany(
-                "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
-                [
-                    (tag_dict["picture_id"], tag_dict["tag"])
-                    for tag_dict in all_tag_dicts
-                ],
-                commit=True,
-            )
+        def insert_pictures_and_tags(conn, picture_dicts, list_of_tag_dicts):
+            cursor = conn.cursor()
+            # Insert pictures
+            new_ids = []
+            for pic_dict, tag_dicts in zip(picture_dicts, list_of_tag_dicts):
+                logger.debug(f"Inserting picture: {pic_dict}")
 
-        # Insert likeness pairs into likeness_work_queue
+                try:
+                    cursor.execute(
+                        f"INSERT INTO pictures ({', '.join(pic_dict.keys())}) VALUES ({', '.join(['?' for _ in pic_dict.keys()])})",
+                        tuple(pic_dict.values()),
+                    )
+                    new_ids.append(pic_dict["id"])
+
+                except Exception as e:
+                    logger.error(f"Failed to insert picture {pic_dict}: {e}")
+
+                for tag_dict in tag_dicts:
+                    cursor.executemany(
+                        "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
+                        [
+                            (tag_dict["picture_id"], tag_dict["tag"])
+                            for tag_dict in tag_dict
+                        ],
+                    )
+            conn.commit()
+
+        new_picture_ids = self._db.submit_write(
+            lambda conn: insert_pictures_and_tags(
+                conn, picture_dicts, list_of_tag_dicts
+            ),
+            priority=DBPriority.IMMEDIATE,
+        ).result()
         if new_picture_ids:
             # Get all existing picture IDs (excluding new ones)
-            existing_ids = [
-                row["id"]
-                for row in self._db.query(
+            def append_work_queue(conn, new_picture_ids=new_picture_ids):
+                cursor = conn.cursor()
+                rows = cursor.execute(
                     f"SELECT id FROM pictures WHERE id NOT IN ({','.join(['?'] * len(new_picture_ids))})",
                     tuple(new_picture_ids),
-                )
-            ]
-            # Prepare all pairs (new_id, existing_id) and (existing_id, new_id)
-            queue_pairs = []
-            for new_id in new_picture_ids:
-                for existing_id in existing_ids:
-                    queue_pairs.append((new_id, existing_id))
-                    queue_pairs.append((existing_id, new_id))
-            # Also add (new_id, new_id) pairs for all new pictures (if needed)
-            for i in range(len(new_picture_ids)):
-                for j in range(len(new_picture_ids)):
-                    if i != j:
-                        queue_pairs.append((new_picture_ids[i], new_picture_ids[j]))
-            if queue_pairs:
-                self._db.executemany(
-                    "INSERT OR IGNORE INTO likeness_work_queue (picture_id_a, picture_id_b) VALUES (?, ?)",
-                    queue_pairs,
-                    commit=True,
-                )
+                ).fetchall()
+                existing_ids = [row["id"] for row in rows]
+                # Prepare all pairs (new_id, existing_id) and (existing_id, new_id)
+                queue_pairs = []
+                for new_id in new_picture_ids:
+                    for existing_id in existing_ids:
+                        queue_pairs.append(
+                            (min(new_id, existing_id), max(new_id, existing_id))
+                        )
+                if queue_pairs:
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO likeness_work_queue (picture_id_a, picture_id_b) VALUES (?, ?)",
+                        queue_pairs,
+                    )
+                    conn.commit()
+
+            self._db.submit_write(
+                append_work_queue, new_picture_ids, priority=DBPriority.LOW
+            ).result()
+        return new_picture_ids
 
     def update(self, pictures: Union[PictureModel, List[PictureModel]]):
         """Update one or more pictures. Supports both single picture and batch operations."""
@@ -1523,52 +1492,48 @@ class Pictures:
             pictures = [pictures]
 
         picture_dicts, list_of_tag_dicts = self.to_batch_of_db_dicts(pictures)
-        for pic_dict, tag_dicts in zip(picture_dicts, list_of_tag_dicts):
-            set_clause = ", ".join([f"{k}=:{k}" for k in pic_dict.keys()])
-            sql = f"UPDATE pictures SET {set_clause} WHERE id = :id"
-            self._db.execute(sql, pic_dict, commit=False)
+
+        def update_picture_and_tag(conn, pic_dict, tag_dicts):
+            set_clause = ", ".join([f"{k}=?" for k in pic_dict.keys()])
+            sql = f"UPDATE pictures SET {set_clause} WHERE id = ?"
+            values = list(pic_dict.values()) + [pic_dict["id"]]
+            cursor = conn.cursor()
+            cursor.execute(sql, tuple(values))
 
             # Update tags in picture_tags table
             if tag_dicts:
-                self._db.execute(
+                cursor.execute(
                     "DELETE FROM picture_tags WHERE picture_id = ?",
                     (pic_dict["id"],),
-                    commit=False,
                 )
-                self._db.executemany(
+                cursor.executemany(
                     "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
                     [
                         (tag_dict["picture_id"], tag_dict["tag"])
                         for tag_dict in tag_dicts
                     ],
-                    commit=False,
                 )
-        self._db.commit()
+            conn.commit()
+
+        for pic_dict, tag_dicts in zip(picture_dicts, list_of_tag_dicts):
+            self._db.execute_write(update_picture_and_tag, pic_dict, tag_dicts)
 
     def fetch_by_shas(self, shas: list[str]) -> list[PictureModel]:
         if not shas:
             return []
+
         placeholders = ",".join(["?"] * len(shas))
-        sql = f"SELECT * FROM pictures WHERE pixel_sha IN ({placeholders})"
-        pic_dicts = self._db.query(sql, tuple(shas))
+        sql = f"SELECT id FROM pictures WHERE pixel_sha IN ({placeholders})"
+        ids = self._db.execute_read(
+            lambda conn: conn.execute(sql, tuple(shas)).fetchall()
+        )
 
-        if not pic_dicts:
-            return []
-
-        # Collect all picture IDs
-        pic_ids = [pic_row["id"] for pic_row in pic_dicts]
-        tag_dicts_map = {pid: [] for pid in pic_ids}
-        if pic_ids:
-            tag_placeholders = ",".join(["?"] * len(pic_ids))
-            tag_sql = f"SELECT picture_id, tag FROM picture_tags WHERE picture_id IN ({tag_placeholders})"
-            tag_rows = self._db.query(tag_sql, tuple(pic_ids))
-            for row in tag_rows:
-                tag_dicts_map[row["picture_id"]].append({"tag": row["tag"]})
-
-        # Prepare tag_dicts as a list of lists of tag dicts, in the same order as pic_dicts
-        tag_dicts = [tag_dicts_map.get(pic_row["id"], []) for pic_row in pic_dicts]
-        pic_models = Pictures.from_batch_of_db_dicts(pic_dicts, tag_dicts)
-        return pic_models
+        pics = []
+        for id in ids:
+            pic = self[id["id"]]
+            if pic is not None:
+                pics.append(pic)
+        return pics
 
     @staticmethod
     def from_db_dicts(

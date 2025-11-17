@@ -81,6 +81,7 @@ def test_esmeralda_vault_character_and_logo():
                     break
             assert esmeralda is not None, "Esmeralda Vault character not found"
             char_id = esmeralda["id"]
+            logging.info(f"Found Esmeralda Vault character with ID: {char_id}")
 
             # Find picture for Esmeralda Vault
             resp2 = client.get(f"/pictures?primary_character_id={char_id}&info=true")

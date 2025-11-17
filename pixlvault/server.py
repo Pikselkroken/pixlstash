@@ -63,6 +63,7 @@ class Server:
         if not config.get("selected_image_root"):
             config["selected_image_root"] = config["image_roots"][0]
         return config
+
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
         return self
@@ -893,17 +894,6 @@ class Server:
                 raise HTTPException(status_code=404, detail="Picture not in set")
 
             return {"status": "success"}
-
-        @self.api.put("/picture_sets/{id}/pictures")
-        async def set_picture_set_pictures(id: int, payload: dict = Body(...)):
-            """Replace all pictures in a set with the given list."""
-            picture_ids = payload.get("picture_ids", [])
-
-            success = self.vault.picture_sets.set_pictures(id, picture_ids)
-            if not success:
-                raise HTTPException(status_code=404, detail="Picture set not found")
-
-            return {"status": "success", "picture_count": len(set(picture_ids))}
 
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):

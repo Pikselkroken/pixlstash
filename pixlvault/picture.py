@@ -121,7 +121,9 @@ class PictureModel:
             "facial_features": base64.b64encode(self.facial_features).decode("ascii")
             if self.facial_features is not None
             else None,
-            "face_bbox": json.dumps(self.face_bbox) if self.face_bbox else None,
+            "face_bbox": json.dumps(self.face_bbox)
+            if self.face_bbox is not None
+            else None,
             "thumbnail": base64.b64encode(self.thumbnail).decode("ascii")
             if self.thumbnail is not None
             else None,
@@ -204,7 +206,7 @@ class PictureModel:
             text_embedding=text_embedding,
             facial_features=facial_features,
             face_bbox=json.loads(row["face_bbox"])
-            if "face_bbox" in row.keys() and row["face_bbox"]
+            if "face_bbox" in row.keys() and row["face_bbox"] is not None
             else None,
             thumbnail=thumbnail,
             sharpness=sharpness,

@@ -88,8 +88,6 @@ class Vault:
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
         self.stop_background_workers()
-        if hasattr(self, "db") and self.db:
-            self.db.close()
 
     def _create_tables(self):
         self.db._create_tables()
