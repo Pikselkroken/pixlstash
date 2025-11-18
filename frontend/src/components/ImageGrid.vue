@@ -46,7 +46,22 @@
       >
         <div class="thumbnail-container">
           <template v-if="img.thumbnail">
-            <img :src="img.thumbnail" class="thumbnail-img" />
+            <img :src="img.thumbnail" class="thumbnail-img"/>
+            <div
+              class="thumbnail-index-overlay"
+              :style="{
+                position: 'absolute',
+                top: '6px',
+                left: '10px',
+                color: 'red',
+                fontWeight: 'bold',
+                fontSize: '1.2em',
+                textShadow: '0 0 2px #fff',
+                zIndex: 20,
+              }"
+            >
+              {{ idx}}
+            </div>
           </template>
           <template v-else>
             <div
@@ -472,7 +487,6 @@ async function fetchThumbnailsBatch(start, end) {
       // Insert/update images at their correct indices
       for (let i = 0; i < gridImages.length; i++) {
         const img = gridImages[i];
-        console.debug(`[ASSIGN] allGridImages[${start + i}] <- ${img.id}`);
         allGridImages.value[start + i] = img;
       }
       loadedRanges.value.push([start, end]);
@@ -480,7 +494,6 @@ async function fetchThumbnailsBatch(start, end) {
       const startVis = Math.max(0, visibleStart.value);
       const endVis = Math.min(allGridImages.value.length, visibleEnd.value);
       const visibleIds = allGridImages.value.slice(startVis, endVis).map(img => img.id);
-      console.debug(`[VISIBLE RANGE] ${startVis}-${endVis}:`, visibleIds);
     }
   } catch (err) {
     console.error('[BATCH ERROR]', err);
@@ -488,13 +501,9 @@ async function fetchThumbnailsBatch(start, end) {
 }
 
 function updateVisibleThumbnails() {
-  let midPoint = Math.min(
-    Math.max(0, Math.floor((visibleStart.value + visibleEnd.value) / 2)),
-    totalImageCount.value
-  );
-
-  let start = midPoint - LAZY_THUMB_WINDOW;
-  let end = midPoint + LAZY_THUMB_WINDOW;
+  let start = Math.max(0, visibleStart.value - LAZY_THUMB_WINDOW);
+  let end = Math.min(totalImageCount.value, visibleEnd.value + LAZY_THUMB_WINDOW);
+  console.log("Fetch range: ", start, "to", end);
 
   // Debounce fetches to avoid excessive requests
   if (thumbFetchTimeout) clearTimeout(thumbFetchTimeout);
@@ -505,34 +514,29 @@ function updateVisibleThumbnails() {
 
 // Update visible indices on scroll
 function onGridScroll(e) {
-  const el = e.target;
-  if (!el) return;
-  // Measure actual row height from the DOM
-  let cardHeight = props.thumbnailSize + 24;
-  const firstCard = gridContainer.value?.querySelector(".image-card");
-  if (firstCard) {
-    const rect = firstCard.getBoundingClientRect();
-    cardHeight = rect.height;
-  }
-  const scrollTop = el.scrollTop;
-  const gridHeight = el.clientHeight;
-  const firstVisibleRow = Math.floor(scrollTop / cardHeight);
-  const rowsVisible = Math.ceil(gridHeight / cardHeight);
-  const cols = columns.value;
-  const totalImages = totalImageCount.value;
-  visibleStart.value = firstVisibleRow * cols;
-  visibleEnd.value = visibleStart.value + rowsVisible * cols;
-  updateVisibleThumbnails();
-}
-
-onMounted(() => {
   nextTick(() => {
-    // Initial visible range
-    if (gridContainer.value) {
-      onGridScroll({ target: gridContainer.value });
+  const gridEl = gridContainer.value;
+  const gridRect = gridEl.getBoundingClientRect();
+  const cards = gridEl.querySelectorAll('.image-card');
+  let visibleIndices = [];
+  cards.forEach((card, idx) => {
+    const rect = card.getBoundingClientRect();
+    if (rect.bottom > gridRect.top && rect.top < gridRect.bottom) {
+      visibleIndices.push(idx);
     }
   });
+  if (visibleIndices.length) {
+    visibleStart.value = Math.min(...visibleIndices);
+    visibleEnd.value = Math.max(...visibleIndices) + 1;
+  } else {
+    visibleStart.value = 0;
+    visibleEnd.value = 0;
+  }
+  console.debug("Visible indices:", visibleStart.value, visibleEnd.value);
+
+  updateVisibleThumbnails();
 });
+}
 
 watch(totalImageCount, () => {
   nextTick(() => {
@@ -652,13 +656,6 @@ watch(
   }
 );
 
-watch(
-  () => props.images,
-  () => {
-    updateColumns();
-  }
-);
-
 onUnmounted(() => {
   window.removeEventListener("resize", updateColumns);
 });
@@ -671,6 +668,19 @@ onMounted(() => {
     gridContainer.value.addEventListener("scroll", onGridScroll);
   }
 });
+
+watch(
+  () => allGridImages.value.length,
+  (len) => {
+    if (len > 0 && gridContainer.value) {      
+      nextTick(() => {
+        onGridScroll({ target: gridContainer.value });
+      });
+    }
+  }
+);
+
+
 </script>
 <style scoped>
 .drag-overlay {
@@ -698,13 +708,12 @@ onMounted(() => {
   flex: 1 1 0%;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 0px 0 0px !important; /* Extra right padding for visible scrollbar */
+  padding: 2px 2px 2px 2px !important;
   overflow: auto;
   scrollbar-width: 16px !important;
   scrollbar-color: orange #ddd;
   align-content: start;
   justify-content: start;
-  padding-bottom: 24px !important;
 }
 .image-grid::-webkit-scrollbar {
   width: 8px;
@@ -724,7 +733,7 @@ onMounted(() => {
   justify-content: center;
   width: 100%;
   height: 100%;
-  padding: 0;
+  padding: 0px;
   margin: 0;
   transition: box-shadow 0.2s, border 0.2s;
   position: relative;
@@ -774,12 +783,6 @@ onMounted(() => {
 }
 .image-card {
   position: relative;
-}
-.v-card {
-  position: relative;
-  overflow: visible;
-  max-width: none;
-  min-width: none;
 }
 .thumbnail-info {
   font-size: 0.85em;
@@ -837,11 +840,16 @@ onMounted(() => {
   z-index: 2;
   transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
 }
+
 .thumbnail-card {
   width: 100%;
   height: 100%;
   max-width: none;
   min-width: none;
   position: relative;
+}
+/* Overlay for image index on thumbnail */
+.thumbnail-index-overlay {
+  pointer-events: none;
 }
 </style>
