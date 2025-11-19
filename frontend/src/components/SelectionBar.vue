@@ -1,0 +1,92 @@
+<template>
+  <div v-if="visible" class="selection-bar-overlay">
+    <div class="selection-bar-content">
+      <div class="selection-bar-left">
+        <button class="clear-btn" @click="$emit('clear-selection')">Clear</button>
+        <span class="selection-count">{{ selectedCount }} selected</span>
+      </div>
+      <div class="selection-bar-actions">
+        <button
+          v-if="selectedCharacter"
+          class="remove-btn"
+          @click="$emit('remove-from-group')"
+        >
+          {{ `Remove from ${selectedGroupName ? selectedGroupName : 'group'}` }}
+        </button>
+        <button class="delete-btn" @click="$emit('delete-selected')">Delete</button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed } from 'vue';
+const props = defineProps({
+  selectedCount: Number,
+  selectedCharacter: String,
+  selectedSet: String,
+  selectedGroupName: String,
+  visible: Boolean,
+});
+
+</script>
+
+<style scoped>
+.selection-bar-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 100;
+  background: rgba(255,255,255,0.95);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  padding: 12px 24px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+  .selection-bar-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+  .selection-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .selection-count {
+    font-weight: bold;
+    font-size: 1.1em;
+    text-align: left;
+  }
+  .selection-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-left: auto;
+  }
+  .clear-btn {
+    background: #eee;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .remove-btn {
+    background: #ffd700;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .delete-btn {
+    background: #e53935;
+    color: #fff;
+    border: none;
+    padding: 6px 18px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+</style>

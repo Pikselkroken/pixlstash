@@ -1453,7 +1453,7 @@ class Pictures:
             )
             conn.commit()
 
-        self._db.submit_batch_write(delete_pictures, picture_ids).result()
+        self._db.submit_write(delete_pictures, picture_ids).result()
 
     def add(self, pictures: Union[PictureModel, List[PictureModel]]):
         """Add one or more pictures. Supports both single picture and batch operations."""

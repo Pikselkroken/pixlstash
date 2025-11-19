@@ -15,7 +15,21 @@
     :unassignedPicturesId="'__unassigned__'"
     @import-finished="handleImagesUploaded"
   />
-    <div class="grid-scroll-wrapper" ref="scrollWrapper" @scroll="onGridScroll">
+  <div style="position: relative;">
+          <SelectionBar
+        v-if="selectedImageIds.length > 0"
+        :selectedCount="selectedImageIds.length"
+        :selectedCharacter="String(props.selectedCharacter)"
+        :selectedSet="String(props.selectedSet)"
+        :selectedGroupName="selectedGroupName"
+        :visible="selectedImageIds.length > 0"
+        @clear-selection="clearSelection"
+        @remove-from-group="removeFromGroup"
+        @delete-selected="deleteSelected"
+        style="position:absolute;top:0;left:0;width:100%;z-index:100;"
+      />
+
+    <div class="grid-scroll-wrapper" ref="scrollWrapper" @scroll="onGridScroll" style="position:relative;">
       <div
         class="image-grid"
         :style="{
@@ -121,6 +135,7 @@
 
   </div>
   </div>
+  </div>
 </template>
 
 <script setup>
@@ -134,9 +149,43 @@ import {
 } from "../utils/media.js";
 import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
+import SelectionBar from "./SelectionBar.vue";
 import { useOverlayActions } from "../utils/useOverlayActions";
 
-const emit = defineEmits(["open-overlay", "select-image", "clear-selection"]);
+const emit = defineEmits(["open-overlay"]);
+
+function clearSelection() {
+  selectedImageIds.value = [];
+}
+
+function removeFromGroup() {
+  // Trigger backend command to disconnect from either selected set or character
+}
+
+function deleteSelected() {
+  if (!selectedImageIds.value.length) return;
+  if (!confirm(`Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`)) return;
+  const backendUrl = props.backendUrl;
+  Promise.all(
+    selectedImageIds.value.map(id =>
+      fetch(`${backendUrl}/pictures/${id}`, { method: "DELETE" })
+        .then(res => {
+          if (!res.ok) throw new Error(`Failed to delete image ${id}`);
+        })
+        .catch(err => {
+          alert(`Error deleting image ${id}: ${err.message}`);
+        })
+    )
+  ).then(() => {
+    // Remove deleted images from grid and clear selection
+    allGridImages.value = allGridImages.value.filter(img => !selectedImageIds.value.includes(img.id));
+    selectedImageIds.value = [];
+    lastSelectedIndex = null;
+    fetchTotalImageCount().then(() => {
+      updateVisibleThumbnails();
+    });
+  });
+}
 
 const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
@@ -176,6 +225,49 @@ const overlayImage = ref(null);
 const dragOverlayVisible = ref(false);
 const dragOverlayMessage = ref("");
 const dragSource = ref(null);
+
+const selectedGroupName = ref("");
+
+async function updateSelectedGroupName() {
+  let name = "";
+  if (
+    props.selectedCharacter &&
+    props.selectedCharacter !== "__all__" &&
+    props.selectedCharacter !== "__unassigned__"
+  ) {
+    try {
+      const res = await fetch(`${props.backendUrl}/characters/${props.selectedCharacter}`);
+      if (res.ok) {
+        const char = await res.json();
+        name = char.name || "";
+      }
+    } catch (e) {
+      console.error("Character fetch failed:", e);
+    }
+  } else if (
+    props.selectedSet &&
+    props.selectedSet !== "__all__" &&
+    props.selectedSet !== "__unassigned__"
+  ) {
+    try {
+      const res = await fetch(`${props.backendUrl}/sets/${props.selectedSet}`);
+      if (res.ok) {
+        const set = await res.json();
+        name = set.name || "";
+      }
+    } catch (e) {
+      console.error("Set fetch failed:", e);
+    }
+  }
+  selectedGroupName.value = name;
+}
+
+watch([
+  () => props.selectedCharacter,
+  () => props.selectedSet
+], () => {
+  updateSelectedGroupName();
+}, { immediate: true });
 
 // --- Multi-selection state ---
 // Local selection state (mirrors parent prop)
@@ -263,18 +355,6 @@ async function setScore(img, n) {
   }
 }
 
-async function fetchCharacter(id) {
-  try {
-    const res = await fetch(`${props.backendUrl}/characters/${id}`);
-    if (!res.ok) throw new Error("Failed to fetch character");
-    const char = await res.json();
-    return char;
-  } catch (e) {
-    console.error("Character fetch failed:", e);
-  }
-  return null;
-}
-
 // Drag-and-drop overlay handlers
 async function handleGridDragEnter(e) {
   if (
@@ -294,9 +374,8 @@ async function handleGridDragEnter(e) {
     props.selectedCharacter !== "__all__" &&
     props.selectedCharacter !== "__unassigned__"
   ) {
-    const character = await fetchCharacter(props.selectedCharacter);
-    const characterName = character ? "for " + character.name : "";
-    dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s) ${characterName}`;
+    const groupLabel = selectedGroupName.value ? "for " + selectedGroupName.value : "";
+    dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s) ${groupLabel}`;
   } else {
     dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s)`;
   }
@@ -442,7 +521,12 @@ watch(
     // Reset loaded ranges and thumbnails when filters change
     loadedRanges.value = [];
     allGridImages.value = [];
-    fetchTotalImageCount();
+    selectedImageIds.value = [];
+    lastSelectedIndex = null;
+    updateSelectedGroupName();
+    fetchTotalImageCount().then(() => {
+      updateVisibleThumbnails();
+    });
   }
 );
 
@@ -750,7 +834,22 @@ function updateColumns() {
 onMounted(() => {
   updateColumns();
   window.addEventListener("resize", updateColumns);
+  window.addEventListener("keydown", handleKeyDown);
 });
+
+// Clear selection on ESC key
+function handleKeyDown(event) {
+  if (event.key === "Escape") {
+    selectedImageIds.value = [];
+    lastSelectedIndex = null;
+    emit("clear-selection");
+  } else if (event.key === "Delete" || event.key === "Backspace") {
+    if (selectedImageIds.value.length > 0) {
+      deleteSelected();
+    }
+  }
+}
+
 
 watch(
   () => props.thumbnailSize,
@@ -761,6 +860,7 @@ watch(
 
 onUnmounted(() => {
   window.removeEventListener("resize", updateColumns);
+  window.removeEventListener("keydown", handleKeyDown);
 });
 
 // Expose the grid DOM node to parent
