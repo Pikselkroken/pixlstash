@@ -23,7 +23,7 @@ from typing import List
 from pixlvault.character import CharacterModel
 from pixlvault.logging import get_logger, uvicorn_log_config
 from pixlvault.picture_utils import PictureUtils
-from pixlvault.pictures import get_sort_mechanisms
+from pixlvault.pictures import PictureWorker, get_sort_mechanisms
 from pixlvault.vault import Vault
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
@@ -131,7 +131,6 @@ class Server:
         )
         self._add_cors_exception_handler()
         self._setup_routes()
-        self._init_worker_pause()
 
     def run(self):
         uvicorn_kwargs = dict(
@@ -147,25 +146,8 @@ class Server:
             )
         uvicorn.run(self.api, **uvicorn_kwargs)
 
-    def _init_worker_pause(self):
-        import threading
-
-        self._worker_resume_timer = None
-        self._worker_pause_lock = threading.Lock()
-
-    def _schedule_worker_resume(self, delay=5):
-        import threading
-
-        with self._worker_pause_lock:
-            if self._worker_resume_timer is not None:
-                self._worker_resume_timer.cancel()
-            self._worker_resume_timer = threading.Timer(delay, self._resume_workers)
-            self._worker_resume_timer.start()
-
-    def _resume_workers(self):
-        with self._worker_pause_lock:
-            self._worker_resume_timer = None
-        self.vault.start_background_workers()
+    def start_workers(self, workers: set[PictureWorker] = PictureWorker.all()):
+        self.vault.start_background_workers(workers)
 
     @asynccontextmanager
     async def lifespan(self, app):

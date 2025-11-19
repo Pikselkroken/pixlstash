@@ -45,6 +45,17 @@ class SortMechanism(str, Enum):
         return sort and str(sort).startswith("ORDER BY")
 
 
+class PictureWorker(str, Enum):
+    FACIAL_FEATURES = "facial_features"
+    TAGGER = "tagger"
+    QUALITY = "quality"
+    LIKENESS = "likeness"
+
+    @staticmethod
+    def all():
+        return set(item for item in PictureWorker)
+
+
 # List of available sorting mechanisms for API
 def get_sort_mechanisms():
     """Return a list of available sort mechanisms as dicts for API consumption."""
@@ -72,6 +83,7 @@ def get_sort_mechanisms():
 
 class Pictures:
     INSIGHTFACE_CLEANUP_TIMEOUT = 20  # seconds
+    NUM_LIKENESS_THREADS = 4
 
     def __init__(self, db, characters=None, device=None):
         self._db = db
@@ -88,11 +100,14 @@ class Pictures:
         self._facial_features_worker = None
         self._facial_features_worker_stop = None
 
-        self._text_embedding_worker = None
-        self._text_embedding_worker_stop = None
+        self._tagger = None
+        self._tagger_stop = None
 
         self._quality_worker = None
         self._quality_worker_stop = None
+
+        self._likeness_worker = None
+        self._likeness_worker_stop = None
 
     def __getitem__(self, picture_id):
         logger.debug(f"Fetching picture with id={picture_id} (type={type(picture_id)})")
@@ -147,7 +162,31 @@ class Pictures:
 
         yield from self._db.execute_read(row_generator)
 
-    def start_facial_features_worker(self, interval=5):
+    def start_worker(self, worker: PictureWorker, interval=5):
+        if worker == PictureWorker.FACIAL_FEATURES:
+            self._start_facial_features_worker(interval)
+        elif worker == PictureWorker.TAGGER:
+            self._start_tagger(interval)
+        elif worker == PictureWorker.QUALITY:
+            self._start_quality_worker(interval)
+        elif worker == PictureWorker.LIKENESS:
+            self._start_likeness_worker(interval=interval)
+        else:
+            raise ValueError(f"Unknown worker type: {worker}")
+
+    def stop_worker(self, worker: PictureWorker):
+        if worker == PictureWorker.FACIAL_FEATURES:
+            self._stop_facial_features_worker()
+        elif worker == PictureWorker.TAGGER:
+            self._stop_tagger()
+        elif worker == PictureWorker.QUALITY:
+            self._stop_quality_worker()
+        elif worker == PictureWorker.LIKENESS:
+            self._stop_likeness_worker()
+        else:
+            raise ValueError(f"Unknown worker type: {worker}")
+
+    def _start_facial_features_worker(self, interval=5):
         import threading
 
         if self._facial_features_worker and self._facial_features_worker.is_alive():
@@ -158,30 +197,30 @@ class Pictures:
         )
         self._facial_features_worker.start()
 
-    def stop_facial_features_worker(self):
+    def _stop_facial_features_worker(self):
         if self._facial_features_worker_stop:
             self._facial_features_worker_stop.set()
         if self._facial_features_worker:
             self._facial_features_worker.join(timeout=10)
 
-    def start_text_embedding_worker(self, interval=5):
+    def _start_tagger(self, interval=5):
         import threading
 
-        if self._text_embedding_worker and self._text_embedding_worker.is_alive():
+        if self._tagger and self._tagger.is_alive():
             return
-        self._text_embedding_worker_stop = threading.Event()
-        self._text_embedding_worker = threading.Thread(
-            target=self._text_embedding_loop, args=(interval,), daemon=True
+        self._tagger_stop = threading.Event()
+        self._tagger = threading.Thread(
+            target=self._tagger_loop, args=(interval,), daemon=True
         )
-        self._text_embedding_worker.start()
+        self._tagger.start()
 
-    def stop_text_embedding_worker(self):
-        if self._text_embedding_worker_stop:
-            self._text_embedding_worker_stop.set()
-        if self._text_embedding_worker:
-            self._text_embedding_worker.join(timeout=10)
+    def _stop_tagger(self):
+        if self._tagger_stop:
+            self._tagger_stop.set()
+        if self._tagger:
+            self._tagger.join(timeout=10)
 
-    def start_likeness_worker(self, batch_size=200000, interval=5):
+    def _start_likeness_worker(self, batch_size=200000, interval=5):
         if (
             hasattr(self, "_likeness_worker")
             and self._likeness_worker
@@ -195,15 +234,13 @@ class Pictures:
         )
         self._likeness_worker.start()
 
-    def stop_likeness_worker(self):
+    def _stop_likeness_worker(self):
         if hasattr(self, "_likeness_worker_stop") and self._likeness_worker_stop:
             self._likeness_worker_stop.set()
         if hasattr(self, "_likeness_worker") and self._likeness_worker:
             self._likeness_worker.join(timeout=10)
 
     def _likeness_loop(self, batch_size, interval):
-        num_threads = 4
-
         while not self._likeness_worker_stop.is_set():
             data_updated = False
             likeness_score_count = 0
@@ -283,7 +320,7 @@ class Pictures:
                     pending_pairs[i * batch_size : (i + 1) * batch_size]
                     for i in range(
                         min(
-                            num_threads,
+                            Pictures.NUM_LIKENESS_THREADS,
                             (len(pending_pairs) + batch_size - 1) // batch_size,
                         )
                     )
@@ -440,9 +477,9 @@ class Pictures:
                 )
                 break
 
-    def _text_embedding_loop(self, interval):
+    def _tagger_loop(self, interval):
         # Create a new connection for this thread
-        while not self._text_embedding_worker_stop.is_set():
+        while not self._tagger_stop.is_set():
             try:
                 start = time.time()
                 logger.debug("[TEXT_EMBEDDING] Starting iteration...")
@@ -452,7 +489,7 @@ class Pictures:
                 # 1. Fetch missing descriptions
                 missing_descriptions = self._fetch_missing_descriptions()
 
-                if self._text_embedding_worker_stop.is_set():
+                if self._tagger_stop.is_set():
                     break
 
                 logger.debug(
@@ -464,7 +501,7 @@ class Pictures:
                     self._picture_tagger, missing_descriptions
                 )
 
-                if self._text_embedding_worker_stop.is_set():
+                if self._tagger_stop.is_set():
                     break
 
                 # 3. Store descriptions
@@ -483,7 +520,7 @@ class Pictures:
                 # 5. Generate missing tags
                 tagged_pictures = self._tag_pictures(self._picture_tagger, missing_tags)
 
-                if self._text_embedding_worker_stop.is_set():
+                if self._tagger_stop.is_set():
                     break
 
                 # 6. Store generated tags
@@ -512,7 +549,7 @@ class Pictures:
                 if timing > 0.5:
                     logger.info("[TEXT_EMBEDDING] Done after %.2f seconds." % timing)
                 if not data_updated:
-                    self._text_embedding_worker_stop.wait(interval)
+                    self._tagger_stop.wait(interval)
             except (sqlite3.OperationalError, OSError) as e:
                 # Database file was deleted or connection lost during shutdown
                 logger.debug(
@@ -1382,7 +1419,7 @@ class Pictures:
                 results.append(pic)
         return results
 
-    def start_quality_worker(self, interval=5):
+    def _start_quality_worker(self, interval=5):
         if self._quality_worker and self._quality_worker.is_alive():
             return
         self._quality_worker_stop = threading.Event()
@@ -1391,7 +1428,7 @@ class Pictures:
         )
         self._quality_worker.start()
 
-    def stop_quality_worker(self):
+    def _stop_quality_worker(self):
         logger.debug("Stopping quality worker...")
         if self._quality_worker_stop:
             self._quality_worker_stop.set()

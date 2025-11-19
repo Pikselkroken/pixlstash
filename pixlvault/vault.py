@@ -4,7 +4,7 @@ from typing import Optional
 
 from .logging import get_logger
 from .characters import Characters
-from .pictures import Pictures
+from .pictures import Pictures, PictureWorker
 from .picture_characters import PictureCharacters
 from .picture_sets import PictureSets
 from .picture_utils import PictureUtils
@@ -42,9 +42,9 @@ class Vault:
             description (Optional[str]): Description of the vault.
         """
         self.image_root = image_root
-        print("Image root: ", self.image_root)
+        logger.debug(f"Image root: {self.image_root}")
         assert self.image_root is not None, "image_root cannot be None"
-        logger.info(f"Using image_root: {self.image_root}")
+        logger.debug(f"Using image_root: {self.image_root}")
         os.makedirs(self.image_root, exist_ok=True)
         assert os.path.exists(self.image_root), (
             f"Image root path does not exist: {self.image_root}"
@@ -58,21 +58,15 @@ class Vault:
         self.picture_sets = PictureSets(self.db)
         self.pictures = Pictures(self.db, self.characters)
 
-        self.start_background_workers()
+    def stop_background_workers(self, workers: set[PictureWorker]):
+        logger.debug("Stopping background workers...")
+        for worker in workers:
+            self.pictures.stop_worker(worker)
 
-    def stop_background_workers(self):
-        logger.info("Stopping background workers...")
-        self.pictures.stop_quality_worker()
-        self.pictures.stop_facial_features_worker()
-        self.pictures.stop_text_embedding_worker()
-        self.pictures.stop_likeness_worker()
-
-    def start_background_workers(self):
-        logger.info("Starting background workers...")
-        self.pictures.start_facial_features_worker(interval=3)
-        self.pictures.start_quality_worker(interval=4)
-        self.pictures.start_text_embedding_worker(interval=5)
-        self.pictures.start_likeness_worker(interval=6)
+    def start_background_workers(self, workers: set[PictureWorker]):
+        logger.debug("Starting background workers...")
+        for worker in workers:
+            self.pictures.start_worker(worker)
 
     def __repr__(self):
         """
@@ -87,7 +81,7 @@ class Vault:
         """
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
-        self.stop_background_workers()
+        self.stop_background_workers(PictureWorker.all())
 
     def _create_tables(self):
         self.db._create_tables()

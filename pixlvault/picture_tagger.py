@@ -65,7 +65,7 @@ class PictureTagger:
             else:
                 self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        logger.info(f"PictureTagger initialized with device: {self._device}")
+        logger.debug(f"PictureTagger initialized with device: {self._device}")
 
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()
@@ -84,7 +84,7 @@ class PictureTagger:
         self._tag_naturaliser = TagNaturaliser()
 
         # Initialize Florence-2 for captioning
-        logger.info("Initializing Florence-2 for captioning...")
+        logger.debug("Initializing Florence-2 for captioning...")
         self._florence_model = None
         self._florence_processor = None
 
@@ -118,16 +118,16 @@ class PictureTagger:
         This will download the model on first use (~900MB).
         """
         if self._florence_model is not None:
-            logger.info("Florence-2 already loaded")
+            logger.debug("Florence-2 already loaded")
             return
 
         try:
-            logger.info("Loading Florence-2 model for captioning...")
+            logger.debug("Loading Florence-2 model for captioning...")
             import transformers
 
             # Check transformers version
             version = transformers.__version__
-            logger.info(f"Transformers version: {version}")
+            logger.debug(f"Transformers version: {version}")
 
             # Check if device was explicitly set to CPU
             device_str = str(self._device)
@@ -135,34 +135,36 @@ class PictureTagger:
 
             if use_cpu:
                 # Device explicitly set to CPU - respect that
-                logger.info("Device set to CPU, loading Florence-2 on CPU with FP32...")
+                logger.debug(
+                    "Device set to CPU, loading Florence-2 on CPU with FP32..."
+                )
                 self._load_florence_model(torch.device("cpu"), torch.float32)
-                logger.info("Florence-2 loaded successfully on CPU")
+                logger.debug("Florence-2 loaded successfully on CPU")
             elif torch.cuda.is_available():
                 try:
-                    logger.info("Attempting to load Florence-2 on GPU with FP16...")
+                    logger.debug("Attempting to load Florence-2 on GPU with FP16...")
                     self._load_florence_model(torch.device("cuda"), torch.float16)
-                    logger.info("Florence-2 loaded successfully on GPU (~500MB VRAM)")
+                    logger.debug("Florence-2 loaded successfully on GPU (~500MB VRAM)")
                 except Exception as gpu_error:
                     logger.warning(
                         f"GPU loading failed, falling back to CPU: {gpu_error}"
                     )
                     self._load_florence_model(torch.device("cpu"), torch.float32)
-                    logger.info("Florence-2 loaded successfully on CPU")
+                    logger.debug("Florence-2 loaded successfully on CPU")
             else:
                 # No GPU available, use CPU
-                logger.info("No GPU available, loading Florence-2 on CPU with FP32...")
+                logger.debug("No GPU available, loading Florence-2 on CPU with FP32...")
                 device = (
                     self._device
                     if isinstance(self._device, torch.device)
                     else torch.device(self._device)
                 )
                 self._load_florence_model(device, torch.float32)
-                logger.info("Florence-2 loaded successfully on CPU")
+                logger.debug("Florence-2 loaded successfully on CPU")
 
         except Exception as e:
             logger.error(f"Failed to load Florence-2: {e}")
-            logger.info("Try: pip install --upgrade transformers")
+            logger.error("Try: pip install --upgrade transformers")
 
     def _load_florence_model(self, device, dtype):
         from transformers import AutoProcessor, AutoModelForCausalLM
@@ -184,7 +186,7 @@ class PictureTagger:
                 attn_implementation=attn_impl,
             ).to(device)
         except (TypeError, AttributeError) as e:
-            logger.warning(f"SDPA not supported, falling back to eager attention: {e}")
+            logger.debug(f"SDPA not supported, falling back to eager attention: {e}")
             attn_impl = "eager"
             self._florence_model = AutoModelForCausalLM.from_pretrained(
                 self._florence_model_name,
@@ -194,17 +196,17 @@ class PictureTagger:
             ).to(device)
 
         self._florence_model.eval()
-        logger.info(f"Florence-2 loaded with {attn_impl} attention")
+        logger.debug(f"Florence-2 loaded with {attn_impl} attention")
 
         # Try to compile the model for better performance (PyTorch 2.0+)
         try:
             if hasattr(torch, "compile") and device.type == "cuda":
-                logger.info("Compiling Florence-2 model for better performance...")
+                logger.debug("Compiling Florence-2 model for better performance...")
                 self._florence_model = torch.compile(
                     self._florence_model,
                     mode="reduce-overhead",  # Balance compilation time and performance
                 )
-                logger.info("Model compilation successful")
+                logger.debug("Model compilation successful")
         except Exception as compile_error:
             logger.warning(f"Model compilation failed (not critical): {compile_error}")
 
@@ -221,7 +223,7 @@ class PictureTagger:
                 torch.cuda.empty_cache()
 
             self._load_florence_model(torch.device("cpu"), torch.float32)
-            logger.info("Florence-2 reloaded on CPU")
+            logger.debug("Florence-2 reloaded on CPU")
             return True
         except Exception as cpu_error:
             logger.error(
@@ -323,7 +325,7 @@ class PictureTagger:
                     if last_punct != -1:
                         caption = caption[: last_punct + 1].strip()
                     if caption:
-                        logger.info(f"Florence-2 caption (frame {idx}): {caption}")
+                        logger.debug(f"Florence-2 caption (frame {idx}): {caption}")
                         break
             else:
                 image = Image.open(image_path).convert("RGB")
@@ -386,7 +388,7 @@ class PictureTagger:
                 if last_punct != -1:
                     caption = caption[: last_punct + 1].strip()
                 if caption:
-                    logger.info(f"Florence-2 caption: {caption}")
+                    logger.debug(f"Florence-2 caption: {caption}")
             # Insert character name if provided
             if caption and character_name:
                 person_pattern = r"\b(woman|man|person|girl|boy|lady|gentleman|individual|figure|character)\b"
@@ -435,13 +437,13 @@ class PictureTagger:
 
         # Use CPU-only when device is set to "cpu" to coexist with LLMs and diffusion models
         if self._device == "cpu":
-            logger.info("Initializing WD14 tagger with CPUExecutionProvider")
+            logger.debug("Initializing WD14 tagger with CPUExecutionProvider")
             self.ort_sess = ort.InferenceSession(
                 onnx_path, providers=["CPUExecutionProvider"]
             )
         else:
             # Allow GPU providers when not explicitly set to CPU
-            logger.info(f"Initializing WD14 tagger with device: {self._device}")
+            logger.debug(f"Initializing WD14 tagger with device: {self._device}")
             if "OpenVINOExecutionProvider" in ort.get_available_providers():
                 self.ort_sess = ort.InferenceSession(
                     onnx_path,
@@ -645,13 +647,13 @@ class PictureTagger:
         undesired_tags = set(
             [tag.strip() for tag in undesired_tags if tag.strip() != ""]
         )
-        logger.info("Removing tags: " + ", ".join(undesired_tags))
+        logger.debug("Removing tags: " + ", ".join(undesired_tags))
 
         dataset = ImageLoadingDatasetPrepper(image_paths)
         worker_count = min(
             MAX_CONCURRENT_IMAGES, os.cpu_count() // 2 or 1, len(image_paths)
         )
-        logger.info(
+        logger.debug(
             "Starting tagger dataloader with worker count: "
             + str(worker_count)
             + " and dataset size: "
@@ -666,7 +668,7 @@ class PictureTagger:
             drop_last=False,
         )
 
-        logger.info(f"Got some tags: {data}")
+        logger.debug(f"Got some tags: {data}")
         b_imgs = []
         all_results = {}
 
@@ -707,7 +709,7 @@ class PictureTagger:
                 batch_result[k] = tags
             all_results.update(batch_result)
 
-        logger.info(f"Completed tagging for {len(all_results)} images.")
+        logger.debug(f"Completed tagging for {len(all_results)} images.")
         return self._merge_video_frame_tags(all_results)
 
     def generate_description(self, picture, character=None):
@@ -767,7 +769,7 @@ class PictureTagger:
         logger.debug(f"Text Embedding: tags going into description: {texts}")
         full_text = self._tag_naturaliser.tags_to_sentence(texts)
         full_text = full_text.lower()
-        logger.info(f"Text Embedding: full_text for SBERT: {full_text}")
+        logger.debug(f"Text Embedding: full_text for SBERT: {full_text}")
 
         # Generate text embedding using SBERT
         sbert_model = getattr(self, "_sbert_model", None)

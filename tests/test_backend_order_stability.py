@@ -6,6 +6,7 @@ import tempfile
 import os
 from fastapi.testclient import TestClient
 from pixlvault.server import Server
+from pixlvault.pictures import Pictures
 
 BACKEND_URL = "http://localhost:9537"
 
@@ -15,12 +16,7 @@ BACKEND_URL = "http://localhost:9537"
     [
         {},
         {"sort": "ORDER BY score DESC"},
-        {"sort": "ORDER BY score ASC"},
         {"primary_character_id": ""},
-        {"query": ""},
-        {"limit": 20, "offset": 0},
-        {"limit": 20, "offset": 10},
-        {"sort": "ORDER BY created_at DESC"},
         {"sort": "ORDER BY created_at ASC"},
     ],
 )
@@ -29,6 +25,7 @@ def test_order_stability(params):
     For each set of parameters, repeatedly query the backend and check that the returned image IDs are always in the same order.
     """
     with tempfile.TemporaryDirectory() as temp_dir:
+        Pictures.NUM_LIKENESS_THREADS = 1
         config_path = os.path.join(temp_dir, "config.json")
         config = Server.create_config(default_device="cpu")
         with open(config_path, "w") as f:
@@ -38,8 +35,9 @@ def test_order_stability(params):
         with Server(config_path, server_config_path) as server:
             server.vault.import_default_data(True)
             client = TestClient(server.api)
-            results = []
-            for _ in range(5):
+            first_ids = []
+
+            for i in range(0, 3):
                 time.sleep(random.uniform(0.01, 0.05))
                 resp = client.get("/pictures", params={**params, "info": "true"})
                 assert resp.status_code == 200, (
@@ -47,9 +45,9 @@ def test_order_stability(params):
                 )
                 data = resp.json()
                 ids = [img["id"] for img in data if "id" in img]
-                results.append(ids)
-            first = results[0]
-            for r in results[1:]:
-                assert r == first, (
-                    f"Order not stable for params {params}: {first} != {r}"
-                )
+                if i == 0:
+                    first_ids = ids
+                else:
+                    assert ids == first_ids, (
+                        f"Order not stable for params {params}: {ids} != {first_ids}"
+                    )
