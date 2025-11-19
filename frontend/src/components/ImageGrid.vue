@@ -158,7 +158,12 @@ const props = defineProps({
   showStars: Boolean,
 });
 
-const LAZY_THUMB_WINDOW = 100;
+const VIEW_WINDOW = 100;
+
+const divisibleViewWindow = computed(() => {
+  const cols = columns.value;
+  return Math.ceil(VIEW_WINDOW / cols) * cols;
+});
 
 const isLoadingThumbnails = ref(false);
 const hasMoreImages = ref(true);
@@ -455,7 +460,7 @@ const rowHeight = ref(props.thumbnailSize + 24);
 
 const renderStart = computed(() => {
   const cols = columns.value;
-  let start = Math.max(0, visibleStart.value - LAZY_THUMB_WINDOW);
+  let start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
   return start;
 });
 
@@ -463,7 +468,7 @@ const renderEnd = computed(() => {
   const cols = columns.value;
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + LAZY_THUMB_WINDOW
+    visibleEnd.value + divisibleViewWindow.value
   );
   return end;
 });
@@ -587,12 +592,12 @@ async function fetchThumbnailsBatch(start, end) {
 }
 
 function updateVisibleThumbnails() {
-  let start = Math.max(0, visibleStart.value - LAZY_THUMB_WINDOW);
+  let start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
   let end = Math.min(
     totalImageCount.value,
-    visibleEnd.value + LAZY_THUMB_WINDOW
+    visibleEnd.value + divisibleViewWindow.value
   );
-  console.log("Fetch range: ", start, "to", end);
+  console.log("Fetch range: ", start, "to", end, "Visible:", visibleStart.value, visibleEnd.value, "Total:", totalImageCount.value);
 
   // Debounce fetches to avoid excessive requests
   if (thumbFetchTimeout) clearTimeout(thumbFetchTimeout);
@@ -626,10 +631,6 @@ function onGridScroll(e) {
       visibleEnd.value = newVisibleEnd;
       console.debug("[SCROLL] visibleStart:", visibleStart.value, "visibleEnd:", visibleEnd.value, "Client Height: ", el.clientHeight);
       // Only trigger buffer expansion/fetch if user is near buffer end
-      const bufferThreshold = LAZY_THUMB_WINDOW * 0.7;
-      if (visibleEnd.value >= renderEnd.value - bufferThreshold && renderEnd.value < totalImageCount.value) {
-        updateVisibleThumbnails();
-      }
       // Always fetch thumbnails for the current visible window
       updateVisibleThumbnails();
     }
