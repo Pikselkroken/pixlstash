@@ -2,14 +2,42 @@ import dataclasses
 
 from .character import CharacterModel
 from .picture import PictureModel, PictureTagModel
-import contextlib
 import os
 import sqlite3
 import threading
-from typing import Optional, List
+from typing import Optional
 
 from .logging import get_logger
+from .picture_character import PictureCharacterModel
+from .picture_set import PictureSetModel, PictureSetMemberModel
+from .picture_likeness import PictureLikenessModel
 from .vault_upgrade import VaultUpgrade
+
+import queue
+from concurrent.futures import Future
+from enum import IntEnum
+
+
+# Priority enum for DB operations
+class DBPriority(IntEnum):
+    LOW = 30
+    MEDIUM = 20
+    HIGH = 10
+    IMMEDIATE = 0
+
+
+# Write task for the queue
+class WriteTask:
+    def __init__(self, priority, func, args=(), kwargs=None):
+        self.priority = priority
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs or {}
+        self.future = Future()
+
+    def __lt__(self, other):
+        return self.priority < other.priority
+
 
 logger = get_logger(__name__)
 
@@ -42,16 +70,8 @@ class VaultDatabase:
 
     def __init__(self, db_path: str, description: Optional[str] = None):
         self._db_path = db_path
-
         db_exists = os.path.exists(self._db_path)
         logger.info(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
-
-        self._lock = threading.Lock()
-        self._conn: Optional[sqlite3.Connection] = None
-
-        from .picture_character import PictureCharacterModel
-        from .picture_set import PictureSetModel, PictureSetMemberModel
-        from .picture_likeness import PictureLikenessModel
 
         models = [
             CharacterModel,
@@ -62,41 +82,201 @@ class VaultDatabase:
             PictureSetMemberModel,
             PictureLikenessModel,
         ]
-
         if not db_exists:
-            logger.info("Creating tables and importing default data...")
-            # Create tables from dataclasses
-            self._ensure_connection()
-            # Always create metadata table first
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS metadata (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                );
-                """
-            )
-            for model in models:
-                sql = self.create_table_sql(model)
-                logger.info(
-                    f"CREATE TABLE SQL for {getattr(model, '__tablename__', model.__name__)}: {sql}"
+            with sqlite3.connect(self._db_path, check_same_thread=False) as conn:
+                logger.info("Creating tables and importing default data...")
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS metadata (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    );
+                    """
                 )
-                self._conn.execute(sql)
-                self._create_indexes_for_model(model)
-            self._conn.commit()
+                for model in models:
+                    sql = self._create_table_sql(model)
+                    logger.info(
+                        f"CREATE TABLE SQL for {getattr(model, '__tablename__', model.__name__)}: {sql}"
+                    )
+                    conn.execute(sql)
+                    self._create_indexes_for_model(model, conn)
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS likeness_work_queue (
+                        picture_id_a TEXT NOT NULL,
+                        picture_id_b TEXT NOT NULL,
+                        UNIQUE (picture_id_a, picture_id_b)
+                    );
+                    """
+                )
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_lwq_pair ON likeness_work_queue(picture_id_a, picture_id_b)
+            """)
+                conn.commit()
         else:
             logger.debug("Using existing database, skipping default import.")
-            self._ensure_connection()
-            upgrader = VaultUpgrade(self._conn)
-            upgrader.upgrade_if_necessary()
-            for model in models:
-                self._create_indexes_for_model(model)
+            with sqlite3.connect(self._db_path, check_same_thread=False) as conn:
+                upgrader = VaultUpgrade(conn)
+                upgrader.upgrade_if_necessary()
+                for model in models:
+                    self._create_indexes_for_model(model, conn)
+
+        # Write queue and worker
+        self._write_queue = queue.PriorityQueue()
+        self._write_worker = threading.Thread(
+            target=self._write_worker_loop, daemon=True
+        )
+        self._write_worker.start()
 
         if description is not None:
             self.set_metadata("description", description)
 
+    # --- Write API ---
+    def submit_write(self, func, *args, priority=DBPriority.MEDIUM, **kwargs):
+        """
+        Submit a write operation (INSERT/UPDATE/DELETE) to be executed serially.
+        Returns a Future you can .result(timeout) on.
+
+        Examples:
+
+        # Using a lambda for a simple write
+        future = db.submit_write(lambda conn: conn.execute(
+            "UPDATE pictures SET quality = ? WHERE id = ?", (0.95, "pic123")
+        ))
+        result = future.result()
+
+        # Using a full function for more complex logic
+        def update_picture_quality(conn, pic_id, new_quality):
+            sql = "UPDATE pictures SET quality = ? WHERE id = ?"
+            return conn.execute(sql, (new_quality, pic_id))
+
+        future = db.submit_write(update_picture_quality, "pic123", 0.95)
+        result = future.result()
+        """
+        task = WriteTask(priority, func, args, kwargs)
+        self._write_queue.put(task)
+        return task.future
+
+    # --- Read API ---
+    def execute_read(self, func, *args, **kwargs):
+        """
+        Execute a read operation (SELECT) directly, using a new connection.
+        Raises if func is a write operation.
+
+        Examples:
+
+        # Using a lambda for a simple query
+        rows = db.execute_read(lambda conn: conn.execute(
+            "SELECT * FROM pictures WHERE quality > ?", (0.8,)
+        ).fetchall())
+
+        # Using a full function for more complex logic
+        def get_high_quality_pictures(conn, min_quality):
+            sql = "SELECT * FROM pictures WHERE quality > ?"
+            return conn.execute(sql, (min_quality,)).fetchall()
+
+        rows = db.execute_read(get_high_quality_pictures, 0.8)
+        """
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            # Guard: check if func is a write operation by inspecting its name or SQL
+            # If func is a function, check its name
+            if hasattr(func, "__name__") and func.__name__.lower().startswith(
+                ("insert", "update", "delete", "write", "commit")
+            ):
+                raise RuntimeError(
+                    f"execute_read called with write operation: {func.__name__}"
+                )
+            # If func is a string (SQL), check for write keywords
+            if isinstance(func, str) and func.strip().lower().startswith(
+                ("insert", "update", "delete", "create", "drop", "alter", "replace")
+            ):
+                raise RuntimeError(f"execute_read called with write SQL: {func}")
+            return func(conn, *args, **kwargs)
+        finally:
+            conn.close()
+
+    def submit_bulk_write(
+        self, sql: str, seq_of_params: list, priority=DBPriority.MEDIUM
+    ):
+        """Submit a bulk write operation using executemany via submit_write."""
+        """
+        Submit a bulk write operation using executemany via submit_write.
+
+        Examples:
+
+        # Using a lambda for a simple bulk insert
+        future = db.submit_write(lambda conn: conn.executemany(
+            "INSERT INTO pictures (id, quality) VALUES (?, ?)", [
+                ("pic1", 0.9),
+                ("pic2", 0.85),
+            ]
+        ))
+        result = future.result()
+
+        # Using bulk_write for convenience
+        result = db.submit_bulk_write(
+            "INSERT INTO pictures (id, quality) VALUES (?, ?)",
+            [
+                ("pic1", 0.9),
+                ("pic2", 0.85),
+            ]
+        )
+
+        # Using a full function for more complex logic
+        def insert_many_pictures(conn, sql, params):
+            return conn.executemany(sql, params)
+
+        future = db.submit_write(insert_many_pictures,
+            "INSERT INTO pictures (id, quality) VALUES (?, ?)",
+            [
+                ("pic1", 0.9),
+                ("pic2", 0.85),
+            ]
+        )
+        result = future.result()
+        """
+
+        def op(conn, sql, seq_of_params):
+            for params in seq_of_params:
+                _assert_no_bytes(params)
+            return conn.executemany(sql, seq_of_params)
+
+        future = self.submit_write(op, sql, seq_of_params, priority=priority)
+        return future
+
+    def bulk_read(self, sql: str, params: tuple = ()):
+        """Perform a bulk read operation using execute_read."""
+
+        def op(conn, sql, params):
+            return conn.execute(sql, params).fetchall()
+
+        return self.execute_read(op, sql, params)
+
+    def set_metadata(self, key: str, value: str):
+        self.submit_write(
+            lambda conn: conn.execute(
+                """
+            INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)
+            """,
+                (key, value),
+            )
+        ).result()
+
+    def get_metadata(self, key: str) -> Optional[str]:
+        row = self.execute_read(
+            lambda conn: conn.execute(
+                "SELECT value FROM metadata WHERE key = ?", (key,)
+            ).fetchone()
+        )
+        return row["value"] if row else None
+
+    def get_description(self) -> Optional[str]:
+        return self.get_metadata("description")
+
     @staticmethod
-    def python_type_to_sql(py_type):
+    def _python_type_to_sql(py_type):
         # Handle Optional and List types
         origin = getattr(py_type, "__origin__", None)
         if origin is list:
@@ -114,14 +294,14 @@ class VaultDatabase:
         return "TEXT"  # fallback
 
     @classmethod
-    def create_table_sql(cls, model_cls):
+    def _create_table_sql(cls, model_cls):
         table_name = getattr(model_cls, "__tablename__", model_cls.__name__.lower())
         fields = []
         primary_keys = []
         composite_keys = []
         foreign_keys = []
         for f in dataclasses.fields(model_cls):
-            sql_type = cls.python_type_to_sql(f.type)
+            sql_type = cls._python_type_to_sql(f.type)
             col_def = f"{f.name} {sql_type}"
             meta = f.metadata if hasattr(f, "metadata") else {}
             if meta.get("db_ignore", False):
@@ -147,7 +327,7 @@ class VaultDatabase:
         return f"CREATE TABLE IF NOT EXISTS {table_name} ({fields_sql});"
 
     @classmethod
-    def get_index_definitions(cls, model_cls):
+    def _get_index_definitions(cls, model_cls):
         table_name = getattr(model_cls, "__tablename__", model_cls.__name__.lower())
         indexes = []
         for f in dataclasses.fields(model_cls):
@@ -191,8 +371,8 @@ class VaultDatabase:
             )
         return indexes
 
-    def _create_indexes_for_model(self, model_cls):
-        indexes = self.get_index_definitions(model_cls)
+    def _create_indexes_for_model(self, model_cls, conn):
+        indexes = self._get_index_definitions(model_cls)
         if not indexes:
             return
         table_name = getattr(model_cls, "__tablename__", model_cls.__name__.lower())
@@ -203,111 +383,18 @@ class VaultDatabase:
             if idx.get("where"):
                 sql += f" WHERE {idx['where']}"
             logger.debug(f"Ensuring index with SQL: {sql}")
-            self._conn.execute(sql)
-        self._conn.commit()
+            conn.execute(sql)
+        conn.commit()
 
-    def close(self):
-        with self._lock:
-            if self._conn:
-                self._conn.close()
-                self._conn = None
-
-    @property
-    def threaded_connection(self):
-        """
-        Context manager for a new SQLite connection for use in a thread.
-        Handles PRAGMA journal_mode=WAL and retries on failure.
-        Usage:
-            with self.threaded_connection as conn:
-                ...
-        """
-        import time
-
-        db_path = self._db_path
-        max_retries = 5
-        delay = 0.2
-
-        @contextlib.contextmanager
-        def _conn_ctx():
-            last_exception = None
-            for attempt in range(max_retries):
-                try:
-                    conn = sqlite3.connect(db_path, check_same_thread=False)
-                    conn.row_factory = sqlite3.Row
-                    try:
-                        conn.execute("PRAGMA journal_mode=WAL;")
-                        yield conn
-                        return
-                    finally:
-                        conn.close()
-                except sqlite3.OperationalError as e:
-                    last_exception = e
-                    if "database is locked" in str(e) and attempt < max_retries - 1:
-                        time.sleep(delay)
-                        continue
-                    else:
-                        break
-            raise (
-                last_exception
-                if last_exception
-                else RuntimeError("Failed to open SQLite connection after retries.")
-            )
-
-        return _conn_ctx()
-
-    def set_metadata(self, key: str, value: str):
-        self.execute(
-            """
-            INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)
-            """,
-            (key, value),
-            commit=True,
-        )
-
-    def get_metadata(self, key: str) -> Optional[str]:
-        row = self.execute(
-            "SELECT value FROM metadata WHERE key = ?", (key,)
-        ).fetchone()
-        return row["value"] if row else None
-
-    def get_description(self) -> Optional[str]:
-        return self.get_metadata("description")
-
-    def _ensure_connection(self):
-        if self._conn is None:
-            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-
-    def execute(
-        self, sql: str, params: tuple = (), commit: bool = False
-    ) -> sqlite3.Cursor:
-        with self._lock:
-            self._ensure_connection()
-            _assert_no_bytes(params)
-            curs = self._conn.execute(sql, params)
-            if commit:
-                self._conn.commit()
-            return curs
-
-    def executemany(
-        self, sql: str, seq_of_params: list, commit: bool = False
-    ) -> sqlite3.Cursor:
-        with self._lock:
-            self._ensure_connection()
-            for params in seq_of_params:
-                _assert_no_bytes(params)
-            curs = self._conn.executemany(sql, seq_of_params)
-            if commit:
-                self._conn.commit()
-            return curs
-
-    def query(self, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
-        with self._lock:
-            self._ensure_connection()
-            curs = self._conn.execute(sql, params)
-            return curs.fetchall()
-
-    def commit(self):
-        with self._lock:
-            if self._conn:
-                self._conn.commit()
+    def _write_worker_loop(self):
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        while True:
+            task = self._write_queue.get()
+            try:
+                result = task.func(conn, *task.args, **task.kwargs)
+                conn.commit()
+                task.future.set_result(result)
+            except Exception as e:
+                conn.rollback()
+                task.future.set_exception(e)

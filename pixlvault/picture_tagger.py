@@ -32,6 +32,7 @@ MAX_CONCURRENT_IMAGES = 8
 GENERAL_THRESHOLD = 0.4
 UNDESIRED_TAGS = "solo, general, male_focus, meme, blurry, sensitive, realistic"
 CAPTION_SEPARATOR = ", "
+FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
 
 
 class PictureTagger:
@@ -65,7 +66,7 @@ class PictureTagger:
             else:
                 self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        logger.info(f"PictureTagger initialized with device: {self._device}")
+        logger.debug(f"PictureTagger initialized with device: {self._device}")
 
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()
@@ -84,14 +85,14 @@ class PictureTagger:
         self._tag_naturaliser = TagNaturaliser()
 
         # Initialize Florence-2 for captioning
-        logger.info("Initializing Florence-2 for captioning...")
+        logger.debug("initialising Florence-2 for captioning...")
         self._florence_model = None
         self._florence_processor = None
 
         self._florence_device = None
         self._florence_model_name = "microsoft/Florence-2-base"
 
-        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 60
+        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 70
 
         self._init_florence_captioning()
 
@@ -118,16 +119,16 @@ class PictureTagger:
         This will download the model on first use (~900MB).
         """
         if self._florence_model is not None:
-            logger.info("Florence-2 already loaded")
+            logger.debug("Florence-2 already loaded")
             return
 
         try:
-            logger.info("Loading Florence-2 model for captioning...")
+            logger.debug("Loading Florence-2 model for captioning...")
             import transformers
 
             # Check transformers version
             version = transformers.__version__
-            logger.info(f"Transformers version: {version}")
+            logger.debug(f"Transformers version: {version}")
 
             # Check if device was explicitly set to CPU
             device_str = str(self._device)
@@ -135,34 +136,36 @@ class PictureTagger:
 
             if use_cpu:
                 # Device explicitly set to CPU - respect that
-                logger.info("Device set to CPU, loading Florence-2 on CPU with FP32...")
+                logger.debug(
+                    "Device set to CPU, loading Florence-2 on CPU with FP32..."
+                )
                 self._load_florence_model(torch.device("cpu"), torch.float32)
-                logger.info("Florence-2 loaded successfully on CPU")
+                logger.debug("Florence-2 loaded successfully on CPU")
             elif torch.cuda.is_available():
                 try:
-                    logger.info("Attempting to load Florence-2 on GPU with FP16...")
+                    logger.debug("Attempting to load Florence-2 on GPU with FP16...")
                     self._load_florence_model(torch.device("cuda"), torch.float16)
-                    logger.info("Florence-2 loaded successfully on GPU (~500MB VRAM)")
+                    logger.debug("Florence-2 loaded successfully on GPU (~500MB VRAM)")
                 except Exception as gpu_error:
                     logger.warning(
                         f"GPU loading failed, falling back to CPU: {gpu_error}"
                     )
                     self._load_florence_model(torch.device("cpu"), torch.float32)
-                    logger.info("Florence-2 loaded successfully on CPU")
+                    logger.debug("Florence-2 loaded successfully on CPU")
             else:
                 # No GPU available, use CPU
-                logger.info("No GPU available, loading Florence-2 on CPU with FP32...")
+                logger.debug("No GPU available, loading Florence-2 on CPU with FP32...")
                 device = (
                     self._device
                     if isinstance(self._device, torch.device)
                     else torch.device(self._device)
                 )
                 self._load_florence_model(device, torch.float32)
-                logger.info("Florence-2 loaded successfully on CPU")
+                logger.debug("Florence-2 loaded successfully on CPU")
 
         except Exception as e:
             logger.error(f"Failed to load Florence-2: {e}")
-            logger.info("Try: pip install --upgrade transformers")
+            logger.error("Try: pip install --upgrade transformers")
 
     def _load_florence_model(self, device, dtype):
         from transformers import AutoProcessor, AutoModelForCausalLM
@@ -171,7 +174,9 @@ class PictureTagger:
             device = torch.device(device)
 
         self._florence_processor = AutoProcessor.from_pretrained(
-            self._florence_model_name, trust_remote_code=True
+            self._florence_model_name,
+            revision=FLORENCE_REVISION,
+            trust_remote_code=True,
         )
 
         # Try SDPA first, fall back to eager if not supported
@@ -180,31 +185,32 @@ class PictureTagger:
             self._florence_model = AutoModelForCausalLM.from_pretrained(
                 self._florence_model_name,
                 trust_remote_code=True,
+                revision=FLORENCE_REVISION,
                 dtype=dtype,
                 attn_implementation=attn_impl,
             ).to(device)
         except (TypeError, AttributeError) as e:
-            logger.warning(f"SDPA not supported, falling back to eager attention: {e}")
+            logger.debug(f"SDPA not supported, falling back to eager attention: {e}")
             attn_impl = "eager"
             self._florence_model = AutoModelForCausalLM.from_pretrained(
                 self._florence_model_name,
                 trust_remote_code=True,
+                revision=FLORENCE_REVISION,
                 dtype=dtype,
                 attn_implementation=attn_impl,
             ).to(device)
 
         self._florence_model.eval()
-        logger.info(f"Florence-2 loaded with {attn_impl} attention")
 
         # Try to compile the model for better performance (PyTorch 2.0+)
         try:
             if hasattr(torch, "compile") and device.type == "cuda":
-                logger.info("Compiling Florence-2 model for better performance...")
+                logger.debug("Compiling Florence-2 model for better performance...")
                 self._florence_model = torch.compile(
                     self._florence_model,
                     mode="reduce-overhead",  # Balance compilation time and performance
                 )
-                logger.info("Model compilation successful")
+                logger.debug("Model compilation successful")
         except Exception as compile_error:
             logger.warning(f"Model compilation failed (not critical): {compile_error}")
 
@@ -221,7 +227,7 @@ class PictureTagger:
                 torch.cuda.empty_cache()
 
             self._load_florence_model(torch.device("cpu"), torch.float32)
-            logger.info("Florence-2 reloaded on CPU")
+            logger.debug("Florence-2 reloaded on CPU")
             return True
         except Exception as cpu_error:
             logger.error(
@@ -247,87 +253,151 @@ class PictureTagger:
             return None
 
         try:
+            import os
+
+            ext = os.path.splitext(image_path)[1].lower()
+            video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
             from PIL import Image
 
-            image = Image.open(image_path).convert("RGB")
+            caption = None
+            if ext in video_exts:
+                from pixlvault.picture_utils import PictureUtils
 
-            # Resize large images to speed up processing (Florence works well with smaller images)
-            # Florence-2 uses 768px internally, so going smaller helps a lot
-            MAX_DIM = 768
-            if max(image.size) > MAX_DIM:
-                aspect_ratio = image.width / image.height
-                if image.width > image.height:
-                    new_width = MAX_DIM
-                    new_height = int(MAX_DIM / aspect_ratio)
-                else:
-                    new_height = MAX_DIM
-                    new_width = int(MAX_DIM * aspect_ratio)
-                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                logger.debug(
-                    f"Resized image to {new_width}x{new_height} for faster processing"
-                )
-
-            # Standard Florence captioning: no tag hints, just use the default prompt
-            inputs = self._florence_processor(
-                text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
-            )
-
-            # Move inputs to device (use Florence's device, not the general device)
-            florence_device = getattr(self, "_florence_device", self._device)
-
-            # Match the dtype of the model (FP16 on GPU, FP32 on CPU)
-            target_dtype = (
-                self._florence_model.dtype
-                if hasattr(self._florence_model, "dtype")
-                else None
-            )
-
-            if target_dtype and target_dtype == torch.float16:
-                inputs = {
-                    k: v.to(florence_device).half()
-                    if torch.is_tensor(v) and v.dtype == torch.float32
-                    else v.to(florence_device)
-                    if torch.is_tensor(v)
-                    else v
-                    for k, v in inputs.items()
-                }
-
+                frames = PictureUtils.extract_video_frames(image_path)
+                for idx, pil_img in enumerate(frames):
+                    # Resize large images to speed up processing
+                    MAX_DIM = 768
+                    if max(pil_img.size) > MAX_DIM:
+                        aspect_ratio = pil_img.width / pil_img.height
+                        if pil_img.width > pil_img.height:
+                            new_width = MAX_DIM
+                            new_height = int(MAX_DIM / aspect_ratio)
+                        else:
+                            new_height = MAX_DIM
+                            new_width = int(MAX_DIM * aspect_ratio)
+                        pil_img = pil_img.resize(
+                            (new_width, new_height), Image.Resampling.LANCZOS
+                        )
+                        logger.debug(
+                            f"Resized video frame to {new_width}x{new_height} for faster processing"
+                        )
+                    inputs = self._florence_processor(
+                        text="<MORE_DETAILED_CAPTION>",
+                        images=pil_img,
+                        return_tensors="pt",
+                    )
+                    florence_device = getattr(self, "_florence_device", self._device)
+                    target_dtype = (
+                        self._florence_model.dtype
+                        if hasattr(self._florence_model, "dtype")
+                        else None
+                    )
+                    if target_dtype and target_dtype == torch.float16:
+                        inputs = {
+                            k: v.to(florence_device).half()
+                            if torch.is_tensor(v) and v.dtype == torch.float32
+                            else v.to(florence_device)
+                            if torch.is_tensor(v)
+                            else v
+                            for k, v in inputs.items()
+                        }
+                    else:
+                        inputs = {
+                            k: v.to(florence_device) if torch.is_tensor(v) else v
+                            for k, v in inputs.items()
+                        }
+                    logger.debug(f"Inputs moved to {florence_device}")
+                    with torch.inference_mode():
+                        generated_ids = self._florence_model.generate(
+                            input_ids=inputs["input_ids"],
+                            pixel_values=inputs["pixel_values"],
+                            max_new_tokens=self._florence_max_tokens,
+                            early_stopping=False,
+                            do_sample=False,
+                            num_beams=1,
+                            use_cache=False,
+                            pad_token_id=self._florence_processor.tokenizer.pad_token_id,
+                        )
+                    generated_text = self._florence_processor.batch_decode(
+                        generated_ids, skip_special_tokens=False
+                    )[0]
+                    caption = (
+                        generated_text.replace("<s>", "").replace("</s>", "").strip()
+                    )
+                    # Ensure caption ends at last sentence-ending punctuation
+                    last_punct = max([caption.rfind(p) for p in [".", "!", "?"]])
+                    if last_punct != -1:
+                        caption = caption[: last_punct + 1].strip()
+                    if caption:
+                        logger.debug(f"Florence-2 caption (frame {idx}): {caption}")
+                        break
             else:
-                inputs = {
-                    k: v.to(florence_device) if torch.is_tensor(v) else v
-                    for k, v in inputs.items()
-                }
-
-            logger.debug(f"Inputs moved to {florence_device}")
-
-            with torch.inference_mode():
-                generated_ids = self._florence_model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs["pixel_values"],
-                    max_new_tokens=self._florence_max_tokens,
-                    early_stopping=False,
-                    do_sample=False,
-                    num_beams=1,
-                    use_cache=False,
-                    pad_token_id=self._florence_processor.tokenizer.pad_token_id,
+                image = Image.open(image_path).convert("RGB")
+                MAX_DIM = 768
+                if max(image.size) > MAX_DIM:
+                    aspect_ratio = image.width / image.height
+                    if image.width > image.height:
+                        new_width = MAX_DIM
+                        new_height = int(MAX_DIM / aspect_ratio)
+                    else:
+                        new_height = MAX_DIM
+                        new_width = int(MAX_DIM * aspect_ratio)
+                    image = image.resize(
+                        (new_width, new_height), Image.Resampling.LANCZOS
+                    )
+                    logger.debug(
+                        f"Resized image to {new_width}x{new_height} for faster processing"
+                    )
+                inputs = self._florence_processor(
+                    text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
                 )
-
-            generated_text = self._florence_processor.batch_decode(
-                generated_ids, skip_special_tokens=False
-            )[0]
-
-            # Florence-2 output format: "<s><MORE_DETAILED_CAPTION>caption text</s>"
-            # Extract the caption after the prompt and remove special tokens
-            caption = generated_text.replace("<s>", "").replace("</s>", "").strip()
-
+                florence_device = getattr(self, "_florence_device", self._device)
+                target_dtype = (
+                    self._florence_model.dtype
+                    if hasattr(self._florence_model, "dtype")
+                    else None
+                )
+                if target_dtype and target_dtype == torch.float16:
+                    inputs = {
+                        k: v.to(florence_device).half()
+                        if torch.is_tensor(v) and v.dtype == torch.float32
+                        else v.to(florence_device)
+                        if torch.is_tensor(v)
+                        else v
+                        for k, v in inputs.items()
+                    }
+                else:
+                    inputs = {
+                        k: v.to(florence_device) if torch.is_tensor(v) else v
+                        for k, v in inputs.items()
+                    }
+                logger.debug(f"Inputs moved to {florence_device}")
+                with torch.inference_mode():
+                    generated_ids = self._florence_model.generate(
+                        input_ids=inputs["input_ids"],
+                        pixel_values=inputs["pixel_values"],
+                        max_new_tokens=self._florence_max_tokens,
+                        early_stopping=False,
+                        do_sample=False,
+                        num_beams=1,
+                        use_cache=False,
+                        pad_token_id=self._florence_processor.tokenizer.pad_token_id,
+                    )
+                generated_text = self._florence_processor.batch_decode(
+                    generated_ids, skip_special_tokens=False
+                )[0]
+                caption = generated_text.replace("<s>", "").replace("</s>", "").strip()
+                # Ensure caption ends at last sentence-ending punctuation
+                last_punct = max([caption.rfind(p) for p in [".", "!", "?"]])
+                if last_punct != -1:
+                    caption = caption[: last_punct + 1].strip()
+                if caption:
+                    logger.debug(f"Florence-2 caption: {caption}")
             # Insert character name if provided
-            if character_name:
-                # Find first mention of person-related words and insert "named CHARACTER_NAME" after
-                # Pattern: words like "woman", "man", "person", "girl", "boy", etc.
+            if caption and character_name:
                 person_pattern = r"\b(woman|man|person|girl|boy|lady|gentleman|individual|figure|character)\b"
                 match = re.search(person_pattern, caption, re.IGNORECASE)
                 if match:
-                    # Insert "named CHARACTER_NAME" right after the person mention
                     insert_pos = match.end()
                     caption = (
                         caption[:insert_pos]
@@ -335,10 +405,7 @@ class PictureTagger:
                         + caption[insert_pos:]
                     )
                 else:
-                    # Fallback: prepend character name if no person mention found
                     caption = f"{character_name}: {caption}"
-
-            logger.info(f"Florence-2 caption: {caption}")
             return caption
 
         except Exception as e:
@@ -374,13 +441,13 @@ class PictureTagger:
 
         # Use CPU-only when device is set to "cpu" to coexist with LLMs and diffusion models
         if self._device == "cpu":
-            logger.info("Initializing WD14 tagger with CPUExecutionProvider")
+            logger.debug("initialising WD14 tagger with CPUExecutionProvider")
             self.ort_sess = ort.InferenceSession(
                 onnx_path, providers=["CPUExecutionProvider"]
             )
         else:
             # Allow GPU providers when not explicitly set to CPU
-            logger.info(f"Initializing WD14 tagger with device: {self._device}")
+            logger.debug(f"initialising WD14 tagger with device: {self._device}")
             if "OpenVINOExecutionProvider" in ort.get_available_providers():
                 self.ort_sess = ort.InferenceSession(
                     onnx_path,
@@ -584,13 +651,13 @@ class PictureTagger:
         undesired_tags = set(
             [tag.strip() for tag in undesired_tags if tag.strip() != ""]
         )
-        logger.info("Removing tags: " + ", ".join(undesired_tags))
+        logger.debug("Removing tags: " + ", ".join(undesired_tags))
 
         dataset = ImageLoadingDatasetPrepper(image_paths)
         worker_count = min(
             MAX_CONCURRENT_IMAGES, os.cpu_count() // 2 or 1, len(image_paths)
         )
-        logger.info(
+        logger.debug(
             "Starting tagger dataloader with worker count: "
             + str(worker_count)
             + " and dataset size: "
@@ -605,7 +672,7 @@ class PictureTagger:
             drop_last=False,
         )
 
-        logger.info(f"Got some tags: {data}")
+        logger.debug(f"Got some tags: {data}")
         b_imgs = []
         all_results = {}
 
@@ -646,7 +713,7 @@ class PictureTagger:
                 batch_result[k] = tags
             all_results.update(batch_result)
 
-        logger.info(f"Completed tagging for {len(all_results)} images.")
+        logger.debug(f"Completed tagging for {len(all_results)} images.")
         return self._merge_video_frame_tags(all_results)
 
     def generate_description(self, picture, character=None):
@@ -706,7 +773,7 @@ class PictureTagger:
         logger.debug(f"Text Embedding: tags going into description: {texts}")
         full_text = self._tag_naturaliser.tags_to_sentence(texts)
         full_text = full_text.lower()
-        logger.info(f"Text Embedding: full_text for SBERT: {full_text}")
+        logger.debug(f"Text Embedding: full_text for SBERT: {full_text}")
 
         # Generate text embedding using SBERT
         sbert_model = getattr(self, "_sbert_model", None)
@@ -744,21 +811,53 @@ class PictureTagger:
         ):
             try:
                 from pixlvault.picture_utils import PictureUtils
+                import os
 
-                face_crop = PictureUtils.load_and_crop_face_bbox(
-                    picture.file_path, picture.face_bbox
-                )
-                if face_crop is not None:
-                    # Preprocess for CLIP
-                    img_input = (
-                        self._clip_preprocess(face_crop)
-                        .unsqueeze(0)
-                        .to(self._clip_device)
-                    )
-                    with torch.no_grad():
-                        facial_features = (
-                            self._clip_model.encode_image(img_input).cpu().numpy()[0]
+                ext = os.path.splitext(picture.file_path)[1].lower()
+                video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+                if ext in video_exts:
+                    import cv2
+
+                    cap = cv2.VideoCapture(picture.file_path)
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    for idx in range(frame_count):
+                        ret, frame = cap.read()
+                        if not ret or frame is None:
+                            continue
+                        # Try to crop face from this frame
+                        face_crop = PictureUtils.load_and_crop_face_bbox(
+                            frame, picture.face_bbox
                         )
+                        if face_crop is not None:
+                            img_input = (
+                                self._clip_preprocess(face_crop)
+                                .unsqueeze(0)
+                                .to(self._clip_device)
+                            )
+                            with torch.no_grad():
+                                facial_features = (
+                                    self._clip_model.encode_image(img_input)
+                                    .cpu()
+                                    .numpy()[0]
+                                )
+                            break
+                    cap.release()
+                else:
+                    face_crop = PictureUtils.load_and_crop_face_bbox(
+                        picture.file_path, picture.face_bbox
+                    )
+                    if face_crop is not None:
+                        img_input = (
+                            self._clip_preprocess(face_crop)
+                            .unsqueeze(0)
+                            .to(self._clip_device)
+                        )
+                        with torch.no_grad():
+                            facial_features = (
+                                self._clip_model.encode_image(img_input)
+                                .cpu()
+                                .numpy()[0]
+                            )
             except RuntimeError as e:
                 if (
                     ("CUDA out of memory" in str(e))

@@ -1,150 +1,654 @@
 <template>
-  <div
-    class="image-grid"
-    :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }"
-    ref="gridContainer"
-    style="position: relative"
-    @dragenter.prevent="handleGridDragEnter"
-    @dragover.prevent="handleGridDragOver"
-    @dragleave.prevent="handleGridDragLeave"
-    @drop.prevent="handleGridDrop"
-    @scroll="onGridScroll"
-    @click="handleGridBackgroundClick"
-  >
-    <div v-if="images.length === 0 && !imagesLoading && !imagesError" class="empty-state">
-      No images found for this character.
-    </div>
-    <div v-if="imagesError" class="empty-state">
-      {{ imagesError }}
-    </div>
-    <div v-if="dragOverlayVisible" class="drag-overlay-grid">
-      <span>{{ dragOverlayMessage }}</span>
+  <ImageOverlay
+    :open="overlayOpen"
+    :initialImage="overlayImage"
+    :allImages="allGridImages"
+    :backendUrl="props.backendUrl"
+    @close="closeOverlay"
+    @set-score="setScore"
+  />
+  <ImageImporter
+    ref="imageImporterRef"
+    :backendUrl="props.backendUrl"
+    :selectedCharacterId="props.selectedCharacter"
+    :allPicturesId="'__all__'"
+    :unassignedPicturesId="'__unassigned__'"
+    @import-finished="handleImagesUploaded"
+  />
+    <div class="grid-scroll-wrapper" ref="scrollWrapper" @scroll="onGridScroll">
+      <div
+        class="image-grid"
+        :style="{
+          gridTemplateColumns: `repeat(${columns}, 1fr)`,
+          position: 'relative',
+        }"
+        ref="gridContainer"
+        @dragenter.prevent="handleGridDragEnter"
+        @dragover.prevent="handleGridDragOver"
+        @dragleave.prevent="handleGridDragLeave"
+        @drop.prevent="handleGridDrop"
+        @click="handleGridBackgroundClick"
+      >
+    <!-- Top spacer for virtual scroll alignment -->
+    <div
+      v-if="topSpacerHeight > 0"
+      :style="{
+        gridColumn: '1 / -1',
+        height: `${topSpacerHeight}px`,
+        border: '0px solid blue',
+      }"
+    ></div>
+    <!-- Drag overlay -->
+    <div v-if="dragOverlayVisible" class="drag-overlay">
+      <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
     </div>
     <div
-      v-for="(img, idx) in pagedImages"
-      :key="img.id"
+      v-for="(img, idx) in gridImagesToRender"
+      :key="img.id ? `img-${img.id}` : `placeholder-${img.idx}`"
       class="image-card"
-      :class="[isImageSelected(img.id) ? 'selected' : '', getSelectionBorderClasses(idx)]"
       :draggable="isImageSelected(img.id)"
       @dragstart="onImageDragStart(img, idx, $event)"
-      @click="handleGridBackgroundClick"
+      @click="handleImageCardClick(img, idx, $event)"
     >
-      <v-card class="thumbnail-card">
+      <v-card
+        class="thumbnail-card"
+        @click.stop="handleThumbnailClick(img, idx, $event)"
+      >
         <div class="thumbnail-container">
-          <div class="star-overlay" v-if="showStars && thumbLoaded[img.id]">
+          <template v-if="img.thumbnail">
+            <img :src="img.thumbnail" class="thumbnail-img" />
+            <div
+              class="thumbnail-index-overlay"
+              :style="{
+                position: 'absolute',
+                top: '6px',
+                left: '10px',
+                color: 'red',
+                fontWeight: 'bold',
+                fontSize: '1.2em',
+                textShadow: '0 0 2px #fff',
+                zIndex: 20,
+              }"
+            >
+              {{ img.idx }}
+            </div>
+          </template>
+          <template v-else>
+            <div
+              class="thumbnail-placeholder"
+              :style="{
+                width: '100%',
+                height: '100%',
+                background: '#e0e0e0',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.5em',
+                color: '#aaa',
+                position: 'absolute',
+                top: 0,
+                left: 0,
+              }"
+            >
+              <span> Image #{{ String(img.idx).padStart(5, "0") }} </span>
+            </div>
+          </template>
+          <!-- Score overlay -->
+          <div v-if="props.showStars" class="star-overlay">
             <v-icon
               v-for="n in 5"
               :key="n"
-              small
+              large
               :color="n <= (img.score || 0) ? 'orange' : 'grey darken-2'"
               style="cursor: pointer"
-              @click.stop="setImageScore(img, n)"
+              @click.stop="setScore(img, n)"
               >mdi-star</v-icon
             >
           </div>
-          <template v-if="(img.format && isSupportedVideoFile(img.format)) || (!img.format && isSupportedVideoFile((img.id || '').split('.').pop()))">
-            <img
-              :src="`${BACKEND_URL}/thumbnails/${img.id}`"
-              class="thumbnail-img video-thumb"
-              @load="thumbLoaded[img.id] = true"
-              @error="thumbLoaded[img.id] = true"
-              @click.stop="(e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) { handleImageSelect(img, idx, e); } else { openOverlay(img); } }"
-              style="cursor: pointer; border: 2px solid #2196f3"
-            />
-            <v-icon
-              class="video-icon-overlay"
-              style="position: absolute; bottom: 8px; left: 8px; color: #2196f3; background: white; border-radius: 50%;"
-              >mdi-play-circle</v-icon
-            >
-          </template>
-          <template v-else>
-            <img
-              :src="`${BACKEND_URL}/thumbnails/${img.id}`"
-              class="thumbnail-img"
-              @load="thumbLoaded[img.id] = true"
-              @error="thumbLoaded[img.id] = true"
-              @click.stop="(e) => { if (e.ctrlKey || e.metaKey || e.shiftKey) { handleImageSelect(img, idx, e); } else { openOverlay(img); } }"
-              style="cursor: pointer"
-            />
-          </template>
-        </div>
-        <div v-if="selectedSort === 'ORDER BY created_at DESC' || selectedSort === 'ORDER BY created_at ASC'" class="thumbnail-info">
-          {{ new Date(img.created_at).toLocaleString() }}
-        </div>
-        <div v-if="selectedSort === 'search_likeness'" class="thumbnail-info">
-          {{ formatLikenessScore(img.likeness_score) }}
         </div>
       </v-card>
+      <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
     </div>
+        <!-- Bottom spacer -->
+    <div
+      v-if="bottomSpacerHeight > 0"
+      :style="{
+        gridColumn: '1 / -1',
+        height: `${bottomSpacerHeight}px`,
+        border: '0px solid green'}"
+    ></div>
+
+  </div>
   </div>
 </template>
+
 <script setup>
+// Number of images before/after viewport to load thumbnails for
+import { computed, onMounted, ref, watch, nextTick, onUnmounted } from "vue";
+import {
+  isSupportedMediaFile,
+  dataTransferHasSupportedMedia,
+  isSupportedVideoFile,
+  getOverlayFormat,
+} from "../utils/media.js";
+import ImageImporter from "./ImageImporter.vue";
+import ImageOverlay from "./ImageOverlay.vue";
+import { useOverlayActions } from "../utils/useOverlayActions";
 
-import { defineEmits, computed, onMounted, ref } from 'vue';
-const emit = defineEmits(['open-overlay', 'select-image', 'clear-selection', 'infinite-scroll']);
+const emit = defineEmits(["open-overlay", "select-image", "clear-selection"]);
 
-
+const imageImporterRef = ref(null);
+// Handle images-uploaded event from ImageImporter
+async function handleImagesUploaded(newIds) {
+  await fetchTotalImageCount();
+  // Do NOT clear thumbnails; keep existing ones
+  // Reset loadedRanges so new thumbnails can be fetched
+  loadedRanges.value = [];
+}
 // Props
 const props = defineProps({
-  images: Array,
-  imagesLoading: Boolean,
-  imagesError: String,
-  thumbLoaded: Object,
   thumbnailSize: Number,
-  columns: Number,
   sidebarVisible: Boolean,
-  selectedImageIds: Array,
-  showStars: Boolean,
+  backendUrl: String,
+  selectedCharacter: { type: [String, Number, null], default: null },
+  selectedSet: { type: [String, Number, null], default: null },
+  searchQuery: String,
   selectedSort: String,
-  dragOverlayVisible: Boolean,
-  dragOverlayMessage: String,
-  BACKEND_URL: String,
-  selectedCharacterObj: Object,
-  config: Object,
-  extractKeywords: Function,
+  showStars: Boolean,
 });
 
-// Internal computed for pagedImages (for now, just use images)
-const pagedImages = computed(() => props.images);
+const LAZY_THUMB_WINDOW = 100;
+
+const isLoadingThumbnails = ref(false);
+const hasMoreImages = ref(true);
+
+// Image overlay
+const overlayOpen = ref(false);
+const overlayImage = ref(null);
+
+// Drag-and-drop overlay state
+const dragOverlayVisible = ref(false);
+const dragOverlayMessage = ref("");
+const dragSource = ref(null);
+
+// --- Multi-selection state ---
+// Local selection state (mirrors parent prop)
+const selectedImageIds = ref([]);
+let lastSelectedIndex = null;
+
+// --- Overlay ---
+async function fetchImageInfo(imageId) {
+  try {
+    const res = await fetch(
+      `${props.backendUrl}/pictures/${imageId}?info=true`
+    );
+    if (!res.ok) throw new Error("Failed to fetch tags");
+    return await res.json();
+  } catch (e) {
+    console.error("Tag fetch failed:", e);
+    return [];
+  }
+}
+
+async function openOverlay(img) {
+  if (img && img.id) {
+    const latestInfo = await fetchImageInfo(img.id);
+    // Merge all fields from latestInfo into img
+    Object.assign(img, latestInfo);
+  }
+  overlayImage.value = { ...img };
+  overlayOpen.value = true;
+}
+
+function closeOverlay() {
+  overlayOpen.value = false;
+}
+
+async function setScore(img, n) {
+  const newScore = (img.score || 0) === n ? 0 : n;
+  const imageId = img.id || (overlayImage.value && overlayImage.value.id);
+  if (!imageId) {
+    alert("Failed to set score: image id is missing.");
+    return;
+  }
+  try {
+    console.debug("PATCH /pictures/", imageId, "?score=", newScore);
+    const res = await fetch(
+      `${props.backendUrl}/pictures/${imageId}?score=${newScore}`,
+      { method: "PATCH" }
+    );
+    if (!res.ok) throw new Error(`Failed to set score for image ${imageId}`);
+    // Fetch latest info after score update
+    const latestInfo = await fetchImageInfo(imageId);
+    if (overlayImage.value && overlayImage.value.id === imageId) {
+      overlayImage.value = { ...overlayImage.value, ...latestInfo };
+    }
+    // ...existing code for sorting and updating images array...
+    if (
+      props.selectedSort.value === "score_desc" ||
+      props.selectedSort.value === "score_asc"
+    ) {
+      const idx = images.value.findIndex((i) => i.id === imageId);
+      if (idx === -1) return;
+      img.score = newScore;
+      images.value.splice(idx, 1);
+      let insertIdx = 0;
+      if (props.selectedSort.value === "score_desc") {
+        insertIdx = images.value.findIndex((i) => (i.score || 0) < newScore);
+        if (insertIdx === -1) insertIdx = images.value.length;
+      } else {
+        insertIdx = images.value.findIndex((i) => (i.score || 0) > newScore);
+        if (insertIdx === -1) insertIdx = images.value.length;
+      }
+      images.value.splice(insertIdx, 0, img);
+      nextTick(() => {
+        const grid = gridContainer.value;
+        if (!grid) return;
+        const card = grid.querySelectorAll(".image-card")[insertIdx];
+        if (card && card.scrollIntoView) {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    } else {
+      img.score = newScore;
+    }
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function fetchCharacter(id) {
+  try {
+    const res = await fetch(`${props.backendUrl}/characters/${id}`);
+    if (!res.ok) throw new Error("Failed to fetch character");
+    const char = await res.json();
+    return char;
+  } catch (e) {
+    console.error("Character fetch failed:", e);
+  }
+  return null;
+}
+
+// Drag-and-drop overlay handlers
+async function handleGridDragEnter(e) {
+  if (
+    e.relatedTarget &&
+    gridContainer.value &&
+    gridContainer.value.contains(e.relatedTarget)
+  )
+    return;
+  if (!e.dataTransfer) return;
+  const hasSupported = dataTransferHasSupportedMedia(e.dataTransfer);
+  if (!hasSupported) return;
+  dragOverlayVisible.value = true;
+
+  const itemCount = e.dataTransfer.items.length;
+  if (
+    props.selectedCharacter &&
+    props.selectedCharacter !== "__all__" &&
+    props.selectedCharacter !== "__unassigned__"
+  ) {
+    const character = await fetchCharacter(props.selectedCharacter);
+    const characterName = character ? "for " + character.name : "";
+    dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s) ${characterName}`;
+  } else {
+    dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s)`;
+  }
+  e.preventDefault();
+  console.debug("Overlay shown");
+}
+
+function handleGridDragOver(e) {
+  if (dataTransferHasSupportedMedia(e.dataTransfer)) {
+    if (!dragOverlayVisible.value) {
+      dragOverlayVisible.value = true;
+      dragOverlayMessage.value = "Drop files here to import";
+    }
+    e.preventDefault();
+  }
+}
+
+function handleGridDragLeave(e) {
+  if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+    dragOverlayVisible.value = false;
+  } else {
+    console.debug("Drag still inside grid, overlay remains");
+  }
+}
+
+function handleGridDrop(e) {
+  dragOverlayVisible.value = false;
+  if (dragSource.value === "grid") {
+    dragSource.value = null;
+    return;
+  }
+  if (!e.dataTransfer || !e.dataTransfer.files) return;
+  const files = Array.from(e.dataTransfer.files).filter(isSupportedMediaFile);
+  console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
+  console.debug("[IMPORT] Supported files after filter:", files);
+  if (!files.length) {
+    alert("No supported image files found.");
+    return;
+  }
+  dragSource.value = null;
+  // Trigger import directly in ImageGrid
+  if (imageImporterRef.value && files.length) {
+    imageImporterRef.value.startImport(files, {
+      backendUrl: props.backendUrl,
+      selectedCharacterId: props.selectedCharacter,
+      allPicturesId: "__all__",
+      unassignedPicturesId: "__unassigned__",
+    });
+  }
+}
+
+// Method to handle global key presses from App.vue
+function onGlobalKeyPress(key, event) {
+  if (scrollWrapper.value) {
+    let newScrollTop = scrollWrapper.value.scrollTop;
+    const maxScroll = scrollWrapper.value.scrollHeight - scrollWrapper.value.clientHeight;
+    if (key === "Home") {
+      newScrollTop = 0;
+    } else if (key === "End") {
+      newScrollTop = maxScroll;
+    } else if (key === "PageUp") {
+      newScrollTop = Math.max(0, newScrollTop - scrollWrapper.value.clientHeight);
+    } else if (key === "PageDown") {
+      newScrollTop = Math.min(maxScroll, newScrollTop + scrollWrapper.value.clientHeight);
+    }
+    // Only update if changed
+    if (scrollWrapper.value.scrollTop !== newScrollTop) {
+      scrollWrapper.value.scrollTop = newScrollTop;
+    }
+  }
+}
+
+// Local state for all image IDs
+// Total image count for paging and 'End' key
+const totalImageCount = ref(0);
+const imagesLoading = ref(false);
+const imagesError = ref(null);
+
+function buildPictureIdsQueryParams() {
+  const params = new URLSearchParams();
+  if (props.selectedCharacter && props.selectedCharacter !== "__all__") {
+    if (props.selectedCharacter === "__unassigned__") {
+      params.append("primary_character_id", "");
+    } else {
+      params.append("primary_character_id", props.selectedCharacter);
+    }
+  }
+
+  if (props.searchQuery && props.searchQuery.trim()) {
+    params.append("query", props.searchQuery.trim());
+  }
+  if (props.selectedSort && props.selectedSort.trim()) {
+    params.append("sort", props.selectedSort.trim());
+  }
+  return params.toString();
+}
+
+// Fetch total image count for current filters
+async function fetchTotalImageCount() {
+  imagesLoading.value = true;
+  imagesError.value = null;
+  try {
+    const params = buildPictureIdsQueryParams();
+    const url = `${props.backendUrl}/pictures?count=true&${params}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch image count");
+    const data = await res.json();
+    totalImageCount.value = data.count || 0;
+    console.debug(
+      "[IMAGE COUNT] Total images for current filters:",
+      totalImageCount.value
+    );
+    // Always fill allGridImages with placeholders up to totalImageCount
+    if (allGridImages.value.length < totalImageCount.value) {
+      for (let i = allGridImages.value.length; i < totalImageCount.value; i++) {
+        allGridImages.value[i] = { id: null, thumbnail: null, idx: i };
+      }
+    } else if (allGridImages.value.length > totalImageCount.value) {
+      allGridImages.value.length = totalImageCount.value;
+    }
+  } catch (e) {
+    imagesError.value = e.message;
+    totalImageCount.value = 0;
+  } finally {
+    imagesLoading.value = false;
+  }
+}
+
+onMounted(() => {
+  fetchTotalImageCount().then(() => {
+    updateVisibleThumbnails();
+  });
+});
+
+watch(
+  [
+    () => props.selectedCharacter,
+    () => props.selectedSet,
+    () => props.searchQuery,
+    () => props.selectedSort,
+  ],
+  () => {
+    // Reset loaded ranges and thumbnails when filters change
+    loadedRanges.value = [];
+    allGridImages.value = [];
+    fetchTotalImageCount();
+  }
+);
+
+// Track loaded batch ranges to avoid duplicate requests
+const loadedRanges = ref([]);
+// Debounce timer for scroll-triggered fetches
+let thumbFetchTimeout = null;
+
+// Track which indices are visible in the grid
+
+const visibleStart = ref(0);
+const visibleEnd = ref(0);
+
+const rowHeight = ref(props.thumbnailSize + 24);
+
+const renderStart = computed(() => {
+  const cols = columns.value;
+  let start = Math.max(0, visibleStart.value - LAZY_THUMB_WINDOW);
+  return start;
+});
+
+const renderEnd = computed(() => {
+  const cols = columns.value;
+  let end = Math.min(
+    allGridImages.value.length,
+    visibleEnd.value + LAZY_THUMB_WINDOW
+  );
+  return end;
+});
+
+const topSpacerHeight = computed(() => {
+  const cols = columns.value;
+  const rowsAbove = Math.floor(renderStart.value / cols);
+  const height = rowsAbove > 0 ? rowsAbove * rowHeight.value : 1;
+  console.log("topSpacerHeight:", height);
+  return height;
+});
+
+const bottomSpacerHeight = computed(() => {
+  const cols = columns.value;
+  const lastRenderedRow = Math.floor((renderEnd.value - 1) / cols) + 1;
+  const totalRows = Math.ceil(totalImageCount.value / cols);
+  const rowsBelow = totalRows - lastRenderedRow;
+  const height = rowsBelow > 0 ? rowsBelow * rowHeight.value : 0;
+  return height;
+});
+
+// Compute grid images (id, idx, thumbnail)
+const allGridImages = ref([]);
+
+const gridImagesToRender = computed(() => {
+  // Only render a window of placeholders/images for performance
+  console.log(
+    "Rendering images from",
+    renderStart.value,
+    "to",
+    renderEnd.value
+  );
+  // Always fill allGridImages with placeholders up to totalImageCount
+  if (allGridImages.value.length < totalImageCount.value) {
+    for (let i = allGridImages.value.length; i < totalImageCount.value; i++) {
+      allGridImages.value[i] = { id: null, thumbnail: null, idx: i };
+    }
+  }
+  // Slice the buffer window and assign a unique key for each item
+  return allGridImages.value.slice(renderStart.value, renderEnd.value);
+});
+
+// Batch fetch metadata (including thumbnail) for visible range
+async function fetchThumbnailsBatch(start, end) {
+  start = renderStart.value;
+  end = renderEnd.value;
+
+  console.debug(
+    `[BATCH REQUEST] start=${start}, end=${end}, loadedRanges=${JSON.stringify(
+      loadedRanges.value
+    )}`
+  );
+  // Check if this batch range is already loaded
+  for (const range of loadedRanges.value) {
+    if (start >= range[0] && end <= range[1]) {
+      return; // Already loaded
+    }
+  }
+  // Fetch batch metadata for visible range
+  try {
+    const params = buildPictureIdsQueryParams();
+    const url = `${props.backendUrl}/pictures?info=true&offset=${start}&limit=${
+      end - start
+    }&${params}`;
+    console.debug(`[BATCH FETCH] Requesting: ${url}`);
+    const res = await fetch(url);
+    if (res.ok) {
+      const images = await res.json();
+      console.debug(
+        `[BATCH RESPONSE] Received ${images.length} images:`,
+        images.map((img) => img.id)
+      );
+      // Prepare grid image objects
+      const gridImages = images.map((img, idx) => ({
+        ...img,
+        idx: start + idx, // Ensure idx is global index
+        thumbnail: null,
+      }));
+      // Now fetch thumbnails for these IDs
+      const ids = images.map((img) => img.id);
+      if (ids.length) {
+        const thumbRes = await fetch(`${props.backendUrl}/thumbnails`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        if (thumbRes.ok) {
+          const thumbData = await thumbRes.json();
+          for (const gridImg of gridImages) {
+            gridImg.thumbnail = thumbData[gridImg.id]
+              ? `data:image/png;base64,${thumbData[gridImg.id]}`
+              : null;
+          }
+        } else {
+          for (const gridImg of gridImages) {
+            gridImg.thumbnail = null;
+          }
+        }
+      }
+      // Ensure allGridImages.value is sized to totalImageCount
+      if (allGridImages.value.length < totalImageCount.value) {
+        for (
+          let i = allGridImages.value.length;
+          i < totalImageCount.value;
+          i++
+        ) {
+          allGridImages.value[i] = { id: null, thumbnail: null, idx: i };
+        }
+      }
+      // Insert/update images at their correct indices
+      for (let i = 0; i < gridImages.length; i++) {
+        const img = gridImages[i];
+        img.idx = start + i; // Redundant but explicit for safety
+        allGridImages.value[start + i] = img;
+      }
+      loadedRanges.value.push([start, end]);
+    }
+  } catch (err) {
+    console.error("[BATCH ERROR]", err);
+  }
+}
+
+function updateVisibleThumbnails() {
+  let start = Math.max(0, visibleStart.value - LAZY_THUMB_WINDOW);
+  let end = Math.min(
+    totalImageCount.value,
+    visibleEnd.value + LAZY_THUMB_WINDOW
+  );
+  console.log("Fetch range: ", start, "to", end);
+
+  // Debounce fetches to avoid excessive requests
+  if (thumbFetchTimeout) clearTimeout(thumbFetchTimeout);
+
+  thumbFetchTimeout = setTimeout(async () => {
+    await fetchThumbnailsBatch(start, end);
+  }, 80);
+}
+
+function onGridScroll(e) {
+  // Debounce scroll handler to prevent runaway feedback
+  if (!window._scrollDebounceTimeout) window._scrollDebounceTimeout = null;
+  if (window._scrollDebounceTimeout) clearTimeout(window._scrollDebounceTimeout);
+  window._scrollDebounceTimeout = setTimeout(() => {
+    const el = scrollWrapper.value;
+    if (!el) return;
+    let cardHeight = rowHeight.value;
+    const scrollTop = el.scrollTop;
+    const cols = columns.value;
+    // First visible row (may be partially visible)
+    const firstVisibleRow = scrollTop / cardHeight;
+    // Last visible row (may be partially visible)
+    const lastVisibleRow = (scrollTop + el.clientHeight - 1) / cardHeight;
+
+    const newVisibleStart = Math.floor(firstVisibleRow) * cols;
+    const newVisibleEnd = Math.ceil(lastVisibleRow) * cols;
+
+    // Only update if changed
+    if (visibleStart.value !== newVisibleStart || visibleEnd.value !== newVisibleEnd) {
+      visibleStart.value = newVisibleStart;
+      visibleEnd.value = newVisibleEnd;
+      console.debug("[SCROLL] visibleStart:", visibleStart.value, "visibleEnd:", visibleEnd.value, "Client Height: ", el.clientHeight);
+      // Only trigger buffer expansion/fetch if user is near buffer end
+      const bufferThreshold = LAZY_THUMB_WINDOW * 0.7;
+      if (visibleEnd.value >= renderEnd.value - bufferThreshold && renderEnd.value < totalImageCount.value) {
+        updateVisibleThumbnails();
+      }
+      // Always fetch thumbnails for the current visible window
+      updateVisibleThumbnails();
+    }
+  }, 50);
+}
+
+// Internal columns state
+const columns = ref(1);
 
 // Selection logic
-const isImageSelected = (id) => props.selectedImageIds && props.selectedImageIds.includes(id);
-
-const getSelectionBorderClasses = (idx) => {
-  const sorted = pagedImages.value;
-  if (!isImageSelected(sorted[idx]?.id)) return "";
-  const cols = props.columns;
-  const total = sorted.length;
-  const row = Math.floor(idx / cols);
-  const col = idx % cols;
-  const classes = [];
-  if (row === 0 || !isImageSelected(sorted[(row - 1) * cols + col]?.id)) {
-    classes.push("selected-border-top");
-  }
-  if (
-    row === Math.floor((total - 1) / cols) ||
-    !isImageSelected(sorted[(row + 1) * cols + col]?.id)
-  ) {
-    classes.push("selected-border-bottom");
-  }
-  if (col === 0 || !isImageSelected(sorted[row * cols + (col - 1)]?.id)) {
-    classes.push("selected-border-left");
-  }
-  if (
-    col === cols - 1 ||
-    !isImageSelected(sorted[row * cols + (col + 1)]?.id)
-  ) {
-    classes.push("selected-border-right");
-  }
-  return classes.join(" ");
-};
+const isImageSelected = (id) =>
+  selectedImageIds.value && selectedImageIds.value.includes(id);
 
 // Event handlers: these should emit events or call parent-provided functions
 const onImageDragStart = (img, idx, event) => {
-  if (props.selectedImageIds && props.selectedImageIds.includes(img.id)) {
+  if (selectedImageIds.value && selectedImageIds.value.includes(img.id)) {
     event.dataTransfer.setData(
       "application/json",
-      JSON.stringify({ imageIds: props.selectedImageIds })
+      JSON.stringify({ imageIds: selectedImageIds.value })
     );
   } else {
     event.dataTransfer.setData(
@@ -155,65 +659,158 @@ const onImageDragStart = (img, idx, event) => {
   event.dataTransfer.effectAllowed = "move";
 };
 
-const handleGridBackgroundClick = (e) => {
-  if (!e.target.closest(".thumbnail-card")) {
-    emit('clear-selection');
+function handleImageCardClick(img, idx, event) {
+  if (!img.id) return;
+  const isCtrl = event.ctrlKey || event.metaKey;
+  const isShift = event.shiftKey;
+  let newSelection = [...selectedImageIds.value];
+  if (isCtrl) {
+    // Toggle selection
+    if (newSelection.includes(img.id)) {
+      console.debug("Deselecting image ID:", img.id);
+      newSelection = newSelection.filter((id) => id !== img.id);
+    } else {
+      console.debug("Selecting image ID:", img.id);
+      newSelection.push(img.id);
+    }
+    lastSelectedIndex = idx;
+  } else if (isShift && lastSelectedIndex !== null) {
+    // Range select
+    const start = Math.min(lastSelectedIndex, idx);
+    const end = Math.max(lastSelectedIndex, idx);
+    const idsInRange = allGridImages.value
+      .slice(start, end + 1)
+      .map((i) => i.id)
+      .filter(Boolean);
+    newSelection = Array.from(new Set([...newSelection, ...idsInRange]));
+  } else {
+    // Single select
+    newSelection = [img.id];
+    lastSelectedIndex = idx;
   }
-};
+  selectedImageIds.value = newSelection;
+  console.log("New selection:", newSelection);
+  emit("select-image", newSelection);
+}
 
-const handleImageSelect = (img, idx, event) => {
-    emit('select-image', img, idx, event);
-};
-
-const openOverlay = (img) => {
-  emit('open-overlay', img);
-};
-
-const setImageScore = (img, n) => {
-  emit('set-image-score', img, n);
-};
-
-const formatLikenessScore = (score) => score !== undefined ? score.toFixed(2) : "";
-
-const isSupportedVideoFile = (format) => {
-  if (!format) return false;
-  const videoExts = ["mp4", "avi", "mov", "webm", "mkv", "flv", "wmv", "m4v"];
-  return videoExts.includes(format.toLowerCase());
-};
-
-const gridContainer = ref(null);
-
-// Expose the grid DOM node to parent
-defineExpose({ gridEl: gridContainer });
-
-onMounted(() => {
-  if (gridContainer.value) {
-    gridContainer.value.addEventListener('scroll', onGridScroll);
+function handleThumbnailClick(img, idx, event) {
+  console.debug("Thumbnail clicked. Id=", img.id, "Idx=", idx, "event=", event);
+  if (!img.id) return;
+  const isCtrl = event.ctrlKey || event.metaKey;
+  const isShift = event.shiftKey;
+  if (isCtrl || isShift) {
+    return handleImageCardClick(img, idx, event);
   }
-});
+  openOverlay(img);
+}
 
-function onGridScroll(e) {
-  const el = e.target;
-  if (props.imagesLoading) return;
-  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
-    emit('infinite-scroll');
+// Clear selection when clicking grid background
+function handleGridBackgroundClick(e) {
+  if (!e.target.closest(".image-card")) {
+    console.log("Clearing selection");
+    selectedImageIds.value = [];
+    lastSelectedIndex = null;
+    emit("clear-selection");
   }
 }
+
+// --- Text & Display Utilities ---
+function formatLikenessScore(score) {
+  if (typeof score !== "number") return "";
+  return `Likeness: ${(score * 100).toFixed(2)}%`;
+}
+
+const gridContainer = ref(null);
+const scrollWrapper = ref(null);
+
+function updateColumns() {
+  nextTick(() => {
+    function measureRowHeight(retries = 0) {
+      const firstCard = gridContainer.value?.querySelector(".image-card");
+      if (firstCard) {
+        const rect = firstCard.getBoundingClientRect();
+        rowHeight.value = rect.height;
+      } else if (retries < 5) {
+        setTimeout(() => measureRowHeight(retries + 1), 60);
+      }
+    }
+    measureRowHeight();
+
+    const el = scrollWrapper.value?.$el || scrollWrapper.value;
+    if (!el) return;
+    const containerWidth = el.offsetWidth;
+    columns.value = Math.max(
+      1,
+      Math.floor(containerWidth / (props.thumbnailSize + 32))
+    );
+  });
+}
+
+onMounted(() => {
+  updateColumns();
+  window.addEventListener("resize", updateColumns);
+});
+
+watch(
+  () => props.thumbnailSize,
+  () => {
+    updateColumns();
+  }
+);
+
+onUnmounted(() => {
+  window.removeEventListener("resize", updateColumns);
+});
+
+// Expose the grid DOM node to parent
+defineExpose({ gridEl: scrollWrapper, onGlobalKeyPress });
 </script>
 <style scoped>
+.drag-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 166, 0, 0.2);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: all;
+  border: 8px solid #ffa600; /* thick orange border */
+  border-radius: 16px; /* rounded corners */
+  box-sizing: border-box;
+  transition: border-color 0.2s, background 0.2s;
+  color: #ffffff;
+  font-size: 3em;
+  font-weight: bold;
+}
+.grid-scroll-wrapper {
+  height: 100vh; /* or calc(100vh - headerHeight) if you have a header */
+  overflow-y: auto;
+  width: 100%;
+  padding-right: 0px;
+  scrollbar-color: orange #ddd;
+  border: 0px solid red;
+}
 .image-grid {
+  height: 100%;
   display: grid;
   gap: 0;
   width: 100%;
-  height: 100%;
-  min-height: 64px;
+  box-sizing: border-box;
   flex: 1 1 0%;
-  padding: 0 12px 0 4px !important; /* Remove top/bottom padding, keep right for scrollbar */
-  overflow-y: auto;
-  background: #ddd;
+  padding: 0px 2px 2px 2px !important;
   align-content: start;
   justify-content: start;
-  padding-bottom: 72px !important;
+}
+.grid-scroll-wrapper::-webkit-scrollbar {
+  width: 8px;
+}
+.grid-scroll-wrapper::-webkit-scrollbar-thumb {
+  background: orange;
+  border-radius: 8px;
+}
+.grid-scroll-wrapper::-webkit-scrollbar-track {
+  background: #ddd;
 }
 .image-card {
   min-width: 0;
@@ -223,38 +820,19 @@ function onGridScroll(e) {
   justify-content: center;
   width: 100%;
   height: 100%;
-  padding: 0;
+  padding: 0px;
   margin: 0;
   transition: box-shadow 0.2s, border 0.2s;
   position: relative;
   z-index: 0; /* Ensure stacking context */
-  border: 3px solid transparent;
+  border: 0px solid transparent;
 }
-.image-card.selected {
-  z-index: 2;
-  position: relative;
-  border: 3px solid rgba(25, 118, 210, 0.32);
-}
-.selected-border-top {
-  border-top-color: #1976d2 !important;
-}
-.selected-border-bottom {
-  border-bottom-color: #1976d2 !important;
-}
-.selected-border-left {
-  border-left-color: #1976d2 !important;
-}
-.selected-border-right {
-  border-right-color: #1976d2 !important;
-}
-.image-card.selected::after {
-  content: "";
+.selection-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(25, 118, 210, 0.32);
-  border-radius: 0;
+  background: rgba(25, 118, 210, 0.62); /* semi-transparent blue */
   pointer-events: none;
-  z-index: 1; /* Lower than border */
+  z-index: 2;
 }
 .v-card {
   display: flex;
@@ -266,7 +844,7 @@ function onGridScroll(e) {
   width: 100%;
   max-width: 256px;
   min-width: 128px;
-  padding: 0;
+  padding: 4px;
   margin: 0;
 }
 .star-overlay {
@@ -292,10 +870,6 @@ function onGridScroll(e) {
 }
 .image-card {
   position: relative;
-}
-.v-card {
-  position: relative;
-  overflow: visible;
 }
 .thumbnail-info {
   font-size: 0.85em;
@@ -338,8 +912,12 @@ function onGridScroll(e) {
 }
 
 @keyframes spin {
-  0% { transform: translate(-50%, -50%) rotate(0deg); }
-  100% { transform: translate(-50%, -50%) rotate(360deg); }
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
 }
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {
@@ -349,9 +927,16 @@ function onGridScroll(e) {
   z-index: 2;
   transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
 }
+
 .thumbnail-card {
   width: 100%;
   height: 100%;
+  max-width: none;
+  min-width: none;
   position: relative;
+}
+/* Overlay for image index on thumbnail */
+.thumbnail-index-overlay {
+  pointer-events: none;
 }
 </style>

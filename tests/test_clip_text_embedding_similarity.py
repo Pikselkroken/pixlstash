@@ -51,6 +51,8 @@ descriptions = [
 
 @pytest.mark.parametrize("query", ["Clementine holding a black assault rifle"])
 def test_clip_text_embedding_similarity_measures(query):
+    import gc
+
     tagger = PictureTagger(device="cpu")
     query_embedding = (
         tagger._clip_model.encode_text(
@@ -61,7 +63,8 @@ def test_clip_text_embedding_similarity_measures(query):
         .numpy()[0]
     )
 
-    embeddings = []
+    print("\nCosine Similarity:")
+    cosine_scores = []
     for desc in descriptions:
         emb = (
             tagger._clip_model.encode_text(
@@ -71,62 +74,103 @@ def test_clip_text_embedding_similarity_measures(query):
             .cpu()
             .numpy()[0]
         )
-        embeddings.append((desc, emb))
-
-    print("\nCosine Similarity:")
-    scores = [
-        (desc, cosine_similarity(query_embedding, emb)) for desc, emb in embeddings
-    ]
-    for desc, score in sorted(scores, key=lambda x: -x[1]):
+        score = cosine_similarity(query_embedding, emb)
+        cosine_scores.append((desc, score))
+    for desc, score in sorted(cosine_scores, key=lambda x: -x[1]):
         print(f"Score: {score:.4f}\nDescription: {desc}\n---")
-    best = max(scores, key=lambda x: x[1])[0]
-    assert "assault rifle" in best.lower(), (
+    best_cosine = max(cosine_scores, key=lambda x: x[1])[0]
+    assert "assault rifle" in best_cosine.lower(), (
         "Most literal match should be ranked highest by cosine similarity."
     )
 
     print("\nDot Product:")
-    scores = [(desc, dot_product(query_embedding, emb)) for desc, emb in embeddings]
-    for desc, score in sorted(scores, key=lambda x: -x[1]):
+    dot_scores = []
+    for desc in descriptions:
+        emb = (
+            tagger._clip_model.encode_text(
+                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            )
+            .detach()
+            .cpu()
+            .numpy()[0]
+        )
+        score = dot_product(query_embedding, emb)
+        dot_scores.append((desc, score))
+    for desc, score in sorted(dot_scores, key=lambda x: -x[1]):
         print(f"Score: {score:.4f}\nDescription: {desc}\n---")
 
     print("\nEuclidean Distance (lower is better):")
-    scores = [
-        (desc, euclidean_distance(query_embedding, emb)) for desc, emb in embeddings
-    ]
-    for desc, score in sorted(scores, key=lambda x: x[1]):
+    euclid_scores = []
+    for desc in descriptions:
+        emb = (
+            tagger._clip_model.encode_text(
+                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            )
+            .detach()
+            .cpu()
+            .numpy()[0]
+        )
+        score = euclidean_distance(query_embedding, emb)
+        euclid_scores.append((desc, score))
+    for desc, score in sorted(euclid_scores, key=lambda x: x[1]):
         print(f"Distance: {score:.4f}\nDescription: {desc}\n---")
 
     print("\nMax Pooling Cosine Similarity (top 10 dims):")
-    scores = [
-        (desc, max_pooling_similarity(query_embedding, emb)) for desc, emb in embeddings
-    ]
-    for desc, score in sorted(scores, key=lambda x: -x[1]):
+    maxpool_scores = []
+    for desc in descriptions:
+        emb = (
+            tagger._clip_model.encode_text(
+                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            )
+            .detach()
+            .cpu()
+            .numpy()[0]
+        )
+        score = max_pooling_similarity(query_embedding, emb)
+        maxpool_scores.append((desc, score))
+    for desc, score in sorted(maxpool_scores, key=lambda x: -x[1]):
         print(f"Score: {score:.4f}\nDescription: {desc}\n---")
 
     print("\nPartial Cosine Similarity (first 32 dims):")
-    scores = [
-        (desc, partial_cosine_similarity(query_embedding, emb, idx=np.arange(32)))
-        for desc, emb in embeddings
-    ]
-    for desc, score in sorted(scores, key=lambda x: -x[1]):
+    partial_scores = []
+    for desc in descriptions:
+        emb = (
+            tagger._clip_model.encode_text(
+                tagger._clip_tokenizer([desc]).to(tagger._clip_device)
+            )
+            .detach()
+            .cpu()
+            .numpy()[0]
+        )
+        score = partial_cosine_similarity(query_embedding, emb, idx=np.arange(32))
+        partial_scores.append((desc, score))
+    for desc, score in sorted(partial_scores, key=lambda x: -x[1]):
         print(f"Score: {score:.4f}\nDescription: {desc}\n---")
+
+    del tagger, query_embedding, emb
+    gc.collect()
 
 
 @pytest.mark.parametrize("query", ["Clementine holding a black assault rifle"])
 def test_sbert_text_similarity(query):
-    model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
-    # Encode all descriptions and query
-    desc_embeddings = model.encode(descriptions, convert_to_tensor=True)
-    query_embedding = model.encode(query, convert_to_tensor=True)
+    import gc
 
-    scores = []
+    model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+    # Use numpy arrays to reduce RAM
+    desc_embeddings = model.encode(descriptions, convert_to_numpy=True)
+    query_embedding = model.encode(query, convert_to_numpy=True)
+
+    print("\nSBERT Cosine Similarity:")
+    sbert_scores = []
     for desc, emb in zip(descriptions, desc_embeddings):
         score = util.cos_sim(query_embedding, emb).item()
-        scores.append((desc, score))
-    print("\nSBERT Cosine Similarity:")
-    for desc, score in sorted(scores, key=lambda x: -x[1]):
+        sbert_scores.append((desc, score))
+    for desc, score in sorted(sbert_scores, key=lambda x: -x[1]):
         print(f"Score: {score:.4f}\nDescription: {desc}\n---")
-    best = max(scores, key=lambda x: x[1])[0]
-    assert "assault rifle" in best.lower(), (
+    best_desc = max(sbert_scores, key=lambda x: x[1])[0]
+    assert "assault rifle" in best_desc.lower(), (
         "Most literal match should be ranked highest by SBERT similarity."
     )
+
+    del model, desc_embeddings, query_embedding, emb
+    gc.collect()

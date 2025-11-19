@@ -72,13 +72,20 @@ class VaultUpgrade:
                 CREATE INDEX IF NOT EXISTS idx_pictures_facial_features_empty ON pictures(id) WHERE facial_features = '';
                 """
             )
+        if current_version < 6:
+            self.logger.info(
+                "Upgrading database schema to version 6 (likeness_work_queue)..."
+            )
+            self._upgrade_to_v6()
+            self.schema_version.set_version(6)
+            self.logger.info("Database schema upgraded to version 6")
 
     def _ensure_reference_picture_sets(self):
         self.logger.info("Ensuring reference picture sets for all characters...")
         cursor = self.connection.cursor()
         # Get all characters
         cursor.execute("SELECT id FROM characters")
-        character_ids = [row["id"] for row in cursor.fetchall()]
+        character_ids = [row[0] for row in cursor.fetchall()]
         for char_id in character_ids:
             # Check if reference picture set exists for this character
             cursor.execute(
@@ -153,9 +160,6 @@ class VaultUpgrade:
             )
         """)
         self.connection.execute("""
-            ALTER TABLE pictures ADD COLUMN facial_features BLOB
-        """)
-        self.connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_reference_picture_likeness_reference_picture_id ON reference_picture_likeness(reference_picture_id)
         """)
         self.connection.execute("""
@@ -207,14 +211,11 @@ class VaultUpgrade:
                 picture_id_b TEXT NOT NULL,
                 likeness REAL,
                 metric TEXT,
-                PRIMARY KEY (picture_id_a, picture_id_b)
+                UNIQUE (picture_id_a, picture_id_b)
             )
         """)
         self.connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_picture_likeness_picture_id_a ON picture_likeness(picture_id_a)
-        """)
-        self.connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_picture_likeness_picture_id_b ON picture_likeness(picture_id_b)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_picture_likeness_pair ON picture_likeness(picture_id_a, picture_id_b)
         """)
         # Add partial index for facial_features IS NOT NULL
         self.connection.execute("""
@@ -224,3 +225,38 @@ class VaultUpgrade:
         """)
         self.connection.commit()
         self.logger.info("picture_likeness table created successfully")
+
+    def _upgrade_to_v6(self):
+        self.logger.info("Creating likeness_work_queue table...")
+        self.connection.execute("""
+            CREATE TABLE IF NOT EXISTS likeness_work_queue (
+                picture_id_a TEXT NOT NULL,
+                picture_id_b TEXT NOT NULL,
+                UNIQUE (picture_id_a, picture_id_b)
+            )
+        """)
+        self.connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_lwq_pair ON likeness_work_queue(picture_id_a, picture_id_b)
+        """)
+        self.connection.commit()
+        self.logger.info("likeness_work_queue table created successfully")
+
+        # Populate likeness_work_queue for all existing valid pairs
+        self.logger.info(
+            "Populating likeness_work_queue for all existing picture pairs..."
+        )
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            INSERT OR IGNORE INTO likeness_work_queue (picture_id_a, picture_id_b)
+            SELECT a.id, b.id
+            FROM pictures a
+            JOIN pictures b ON a.id != b.id
+            WHERE a.facial_features IS NOT NULL
+              AND b.facial_features IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM picture_likeness pl
+                WHERE pl.picture_id_a = a.id AND pl.picture_id_b = b.id
+              )
+        """)
+        self.connection.commit()
+        self.logger.info("likeness_work_queue populated for all existing pairs.")

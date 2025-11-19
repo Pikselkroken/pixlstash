@@ -1,11 +1,31 @@
+html {
+  border: 2px solid magenta !important;
+}
+body {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 320px;
+  min-height: 100vh;
+  width: 100vw;
+  height: 100vh;
+  box-sizing: border-box;
+  border: 2px solid cyan !important;
+}
 .app-viewport {
   position: fixed;
   inset: 0;
   width: 100vw;
   height: 100vh;
-  overflow: hidden;
   z-index: 0;
+  background: rgba(255, 0, 0, 0.08);
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
 }
+/* .file-manager, .main-area, .main-content borders for debugging can be re-enabled if needed */
 
 .drag-overlay-grid {
   position: absolute;
@@ -24,11 +44,8 @@
   text-shadow: 0 2px 8px #000a;
 }
 
-body {
-  margin: 0;
-  padding: 0;
-}
-
+/* Removed duplicate body rule */
+/* Removed stray closing brace */
 .file-manager {
   display: flex;
   flex-direction: row;
@@ -48,7 +65,7 @@ body {
   flex-direction: column;
   background: #eee;
   min-width: 0;
-  min-height: 100vh;
+  height: calc(100vh - 60px);
   box-sizing: border-box;
   padding: 0;
   margin: 0;
@@ -66,8 +83,8 @@ body {
   padding: 0;
   border-left: 4px solid orange;
   transition: border-color 0.2s;
-  min-height: 0;
-  height: 100%;
+  height: calc(100vh - 60px);
+  /* No overflow property here; only .image-grid should scroll */
 }
 
 .empty-state {
@@ -117,16 +134,16 @@ body {
   padding-right: 2px;
 }
 @font-face {
-  font-family: 'PressStart2P';
-  src: url('/src/assets/fonts/PressStart2P-Regular.ttf') format('truetype');
+  font-family: "PressStart2P";
+  src: url("/src/assets/fonts/PressStart2P-Regular.ttf") format("truetype");
   font-weight: normal;
   font-style: normal;
 }
 
 .toolbar-title {
-  font-family: 'PressStart2P', monospace;
+  font-family: "PressStart2P", monospace;
   font-size: 1.5em;
-  letter-spacing: 2px;
+  letter-spacing: 0px;
   position: relative;
   color: rgb(var(--v-theme-on-primary)) !important;
 }
@@ -213,8 +230,12 @@ button[disabled] {
 }
 
 @keyframes spin {
-  0% { transform: translate(-50%, -50%) rotate(0deg); }
-  100% { transform: translate(-50%, -50%) rotate(360deg); }
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
 }
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {

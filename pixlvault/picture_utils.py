@@ -17,6 +17,36 @@ logger = get_logger(__name__)
 
 class PictureUtils:
     @staticmethod
+    def extract_video_frames(file_path, max_frames=None):
+        """
+        Extract frames from a video file and return them as PIL Images.
+        Args:
+            file_path (str): Path to video file.
+            max_frames (int, optional): Maximum number of frames to extract.
+        Returns:
+            List of PIL.Image objects.
+        """
+        import cv2
+        from PIL import Image
+
+        frames = []
+        cap = cv2.VideoCapture(file_path)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        count = 0
+        for idx in range(frame_count):
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(frame_rgb)
+            frames.append(pil_img)
+            count += 1
+            if max_frames is not None and count >= max_frames:
+                break
+        cap.release()
+        return frames
+
+    @staticmethod
     def batch_facial_likeness(facial_features_list: list[np.ndarray]) -> np.ndarray:
         """
         Given a list of facial feature arrays (all same shape), compute a likeness matrix (cosine similarity).

@@ -1,5 +1,7 @@
+import base64
 import uvicorn
 import io
+import math
 import os
 import json
 import uuid
@@ -7,6 +9,7 @@ import mimetypes
 import re
 import concurrent.futures
 import sys
+import time
 
 from dataclasses import asdict
 from contextlib import asynccontextmanager
@@ -18,9 +21,9 @@ from rapidfuzz import fuzz
 from typing import List
 
 from pixlvault.character import CharacterModel
-from pixlvault.logging import get_logger
+from pixlvault.logging import get_logger, uvicorn_log_config
 from pixlvault.picture_utils import PictureUtils
-from pixlvault.pictures import get_sort_mechanisms
+from pixlvault.pictures import PictureWorker, get_sort_mechanisms
 from pixlvault.vault import Vault
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
@@ -30,6 +33,37 @@ logger = get_logger(__name__)
 
 
 class Server:
+    @staticmethod
+    def create_config(**kwargs):
+        """
+        Create a config dict from provided keys in kwargs, using defaults for missing keys.
+        """
+        config_dir = kwargs.get("config_dir")
+        if not config_dir:
+            config_dir = os.path.expanduser("~/.pixlvault")
+        default_image_root = os.path.join(config_dir, "images")
+        defaults = {
+            "image_roots": [default_image_root],
+            "selected_image_root": default_image_root,
+            "description": DEFAULT_DESCRIPTION,
+            "sort": "ORDER BY created_at DESC",
+            "thumbnail": "default",
+            "thumbnail_size": "default",
+            "show_stars": True,
+            "openai_host": "localhost",
+            "openai_port": 8000,
+            "openai_model": "gpt-3.5-turbo",
+            "default_device": "cpu",
+        }
+        config = defaults.copy()
+        config.update({k: v for k, v in kwargs.items() if v is not None})
+        # Ensure image_roots and selected_image_root are valid
+        if not config.get("image_roots") or len(config["image_roots"]) == 0:
+            config["image_roots"] = [default_image_root]
+        if not config.get("selected_image_root"):
+            config["selected_image_root"] = config["image_roots"][0]
+        return config
+
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
         return self
@@ -58,7 +92,6 @@ class Server:
             config_path (str): Path to the image roots config file.
             server_config_path (str): Path to the server-only config file.
         """
-        print(f"Initializing PixlVault server with config: {config_path}")
         self._config_path = config_path
 
         self._config = self.init_config(config_path)
@@ -78,9 +111,6 @@ class Server:
             + str(self._config["selected_image_root"])
         )
 
-        print(
-            f"Creating Vault instance with image root: {self._config['selected_image_root']}"
-        )
         self.vault = Vault(
             image_root=self._config["selected_image_root"],
             description=self._config.get("description"),
@@ -97,12 +127,12 @@ class Server:
         )
         self._add_cors_exception_handler()
         self._setup_routes()
-        self._init_worker_pause()
 
     def run(self):
         uvicorn_kwargs = dict(
             host="0.0.0.0",
             port=self._server_config.get("port", 8000),
+            log_config=uvicorn_log_config,
         )
         if self._server_config.get("require_ssl", False):
             uvicorn_kwargs["ssl_keyfile"] = self._server_config.get("ssl_keyfile")
@@ -112,25 +142,8 @@ class Server:
             )
         uvicorn.run(self.api, **uvicorn_kwargs)
 
-    def _init_worker_pause(self):
-        import threading
-
-        self._worker_resume_timer = None
-        self._worker_pause_lock = threading.Lock()
-
-    def _schedule_worker_resume(self, delay=5):
-        import threading
-
-        with self._worker_pause_lock:
-            if self._worker_resume_timer is not None:
-                self._worker_resume_timer.cancel()
-            self._worker_resume_timer = threading.Timer(delay, self._resume_workers)
-            self._worker_resume_timer.start()
-
-    def _resume_workers(self):
-        with self._worker_pause_lock:
-            self._worker_resume_timer = None
-        self.vault.start_background_workers()
+    def start_workers(self, workers: set[PictureWorker] = PictureWorker.all()):
+        self.vault.start_background_workers(workers)
 
     @asynccontextmanager
     async def lifespan(self, app):
@@ -141,55 +154,29 @@ class Server:
             self.vault.close()
 
     @staticmethod
-    def init_config(
-        config_path,
-    ):
+    def init_config(config_path):
         """
         Initialize and load the server configuration from file, creating defaults if necessary.
-
         Returns:
             dict: Configuration dictionary.
         """
         config_dir = os.path.dirname(config_path)
         os.makedirs(config_dir, exist_ok=True)
-
-        default_image_root = os.path.join(config_dir, "images")
-
-        config = {}
         if not os.path.exists(config_path):
-            config = {
-                "image_roots": [default_image_root],
-                "selected_image_root": default_image_root,
-                "description": DEFAULT_DESCRIPTION,
-                "sort": "ORDER BY created_at DES",
-                "thumbnail": "default",
-                "show_stars": True,
-                "openai_host": "localhost",
-                "openai_port": 8000,
-                "openai_model": "gpt-3.5-turbo",
-            }
+            config = Server.create_config(config_dir=config_dir)
         else:
             with open(config_path, "r") as f:
                 config = json.load(f)
-                # Ensure new config options exist
-
-                if "sort_order" not in config:
-                    config["sort_order"] = "ORDER BY created_at DESC"
-                if "thumbnail_size" not in config:
-                    config["thumbnail_size"] = "default"
-                if "show_stars" not in config:
-                    config["show_stars"] = True
-                if "openai_host" not in config:
-                    config["openai_host"] = "localhost"
-                if "openai_port" not in config:
-                    config["openai_port"] = 8000
-                if "openai_model" not in config:
-                    config["openai_model"] = "gpt-3.5-turbo"
-                if "image_roots" not in config or len(config["image_roots"]) == 0:
-                    config["image_roots"] = [default_image_root]
-                if "selected_image_root" not in config:
-                    config["selected_image_root"] = config["image_roots"][0]
-
+            # Fill in missing keys with defaults
+            defaults = Server.create_config(config_dir=config_dir)
+            for k, v in defaults.items():
+                if k not in config:
+                    config[k] = v
+        # Ensure image_roots and selected_image_root are valid
+        if not config.get("image_roots") or len(config["image_roots"]) == 0:
+            config["image_roots"] = [os.path.join(config_dir, "images")]
+        if not config.get("selected_image_root"):
+            config["selected_image_root"] = config["image_roots"][0]
         return config
 
     @staticmethod
@@ -360,6 +347,10 @@ class Server:
 
         @self.api.patch("/config")
         async def patch_config(request: Request):
+            import time
+
+            start_time = time.time()
+            logger.info(f"[TIMING] PATCH /config called at {start_time:.3f}")
             """
             Update existing config values or append to existing lists. Does not allow adding new keys.
             Body: { key: value, ... } (value replaces or is appended to existing key)
@@ -421,6 +412,8 @@ class Server:
                     image_root=new_root,
                     description=self._config.get("description"),
                 )
+            elapsed = time.time() - start_time
+            logger.info(f"[TIMING] PATCH /config completed in {elapsed:.3f} seconds")
             return {"status": "success", "updated": updated, "config": self._config}
 
         @self.api.get("/sort_mechanisms")
@@ -430,6 +423,23 @@ class Server:
 
         @self.api.get("/face_thumbnail/{primary_character_id}")
         async def get_face_thumbnail(primary_character_id: str):
+            start_time = time.time()
+            logger.info(
+                f"[TIMING] GET /face_thumbnail/{primary_character_id} called at {start_time:.3f}"
+            )
+            query_start = time.time()
+            # Instrument: time the DB query
+            pics = self.vault.pictures.find(
+                primary_character_id=primary_character_id,
+                sort="ORDER BY score DESC, created_at DESC",
+                limit=1,
+            )
+            query_elapsed = time.time() - query_start
+            logger.info(
+                f"[TIMING] DB query for /face_thumbnail/{primary_character_id} took {query_elapsed:.3f} seconds, returned {len(pics)} rows"
+            )
+            process_start = time.time()
+            step_times = {}
             """
             Return a face-cropped thumbnail for the highest scored picture of the character.
             If no scored picture, fallback to first image. If no face bbox, fallback to normal thumbnail.
@@ -438,21 +448,9 @@ class Server:
             logger.debug(
                 f"Generating face thumbnail for primary_character_id: {primary_character_id}"
             )
-            pics = self.vault.pictures.find(primary_character_id=primary_character_id)
-            logger.debug(
-                f"Found {len(pics)} pictures for primary_character_id: {primary_character_id}"
-            )
             if not pics:
                 raise HTTPException(status_code=404, detail="No pictures for character")
 
-            # Sort by score descending, then by created_at
-            def score_key(picture):
-                return (
-                    picture.score if picture.score is not None else -1,
-                    picture.created_at,
-                )
-
-            pics.sort(key=score_key, reverse=True)
             pic = pics[0]
 
             if pic.thumbnail is None:
@@ -469,11 +467,14 @@ class Server:
             if not pic.thumbnail:
                 raise HTTPException(status_code=404, detail="No thumbnail available")
             try:
+                load_start = time.time()
                 thumb_img = Image.open(io.BytesIO(pic.thumbnail))
+                step_times["load"] = time.time() - load_start
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid thumbnail image")
             # If face_bbox is available, crop to it
             if face_bbox and len(face_bbox) == 4:
+                crop_start = time.time()
                 logger.debug(f"Cropping thumbnail to face bbox: {face_bbox}")
                 x1, y1, x2, y2 = [int(round(v)) for v in face_bbox]
                 w, h = thumb_img.size
@@ -483,15 +484,32 @@ class Server:
                 y2 = max(0, min(h, y2))
                 if x2 > x1 and y2 > y1:
                     thumb_img = thumb_img.crop((x1, y1, x2, y2))
+                step_times["crop"] = time.time() - crop_start
             # Resize so height=96px, width scaled proportionally
             target_height = 96
             w, h = thumb_img.size
             if h != target_height:
+                resize_start = time.time()
                 scale = target_height / h
                 new_w = int(round(w * scale))
                 thumb_img = thumb_img.resize((new_w, target_height), Image.LANCZOS)
+                step_times["resize"] = time.time() - resize_start
             buf = io.BytesIO()
+            save_start = time.time()
             thumb_img.save(buf, format="PNG")
+            step_times["save"] = time.time() - save_start
+            process_elapsed = time.time() - process_start
+            elapsed = time.time() - start_time
+            logger.info(
+                f"[TIMING] Processing for /face_thumbnail/{primary_character_id} (excluding DB query) took {process_elapsed:.3f} seconds"
+            )
+            for step, t in step_times.items():
+                logger.info(
+                    f"[TIMING] Step '{step}' for /face_thumbnail/{primary_character_id} took {t:.3f} seconds"
+                )
+            logger.info(
+                f"[TIMING] GET /face_thumbnail/{primary_character_id} completed in {elapsed:.3f} seconds"
+            )
             return Response(content=buf.getvalue(), media_type="image/png")
 
         @self.api.get("/search")
@@ -646,27 +664,13 @@ class Server:
                 )
             semantic_scores = {pic.id: score for pic, score in semantic_results}
 
-            # Weighting: more words = more semantic weight
-            # <=2 words: 80% fuzzy, 20% semantic
-            # 3 words: 50/50
-            # 4 words: 30% fuzzy, 70% semantic
-            # 5+ 20% fuzzy, 80% semantic
-            if n_words <= 2:
-                fuzzy_w, sem_w = 0.6, 0.4
-            elif n_words == 3:
-                fuzzy_w, sem_w = 0.5, 0.5
-            elif n_words == 4:
-                fuzzy_w, sem_w = 0.3, 0.7
-            else:
-                fuzzy_w, sem_w = 0.2, 0.8
-
             # Merge scores
             all_ids = set(fuzzy_scores.keys()) | set(semantic_scores.keys())
             combined = []
             for pic_id in all_ids:
                 fuzzy_score = fuzzy_scores.get(pic_id, 0)
                 sem_score = semantic_scores.get(pic_id, 0)
-                combined_score = fuzzy_w * fuzzy_score + sem_w * sem_score
+                combined_score = math.sqrt((fuzzy_score**2 + sem_score**2) / 2)
 
                 # Apply bonuses ONLY if base score is reasonable (>=0.3)
                 # This prevents weak matches from getting artificially boosted
@@ -763,12 +767,15 @@ class Server:
         @self.api.get("/picture_sets")
         async def get_picture_sets():
             """List all picture sets."""
+            start = time.time()
             sets = self.vault.picture_sets.list_all()
             result = []
             for s in sets:
                 set_dict = s.to_dict()
                 set_dict["picture_count"] = self.vault.picture_sets.get_set_count(s.id)
                 result.append(set_dict)
+            elapsed = time.time() - start
+            print(f"[SERVER] get_picture_sets took {elapsed:.4f} seconds")
             return result
 
         @self.api.post("/picture_sets")
@@ -866,17 +873,6 @@ class Server:
 
             return {"status": "success"}
 
-        @self.api.put("/picture_sets/{id}/pictures")
-        async def set_picture_set_pictures(id: int, payload: dict = Body(...)):
-            """Replace all pictures in a set with the given list."""
-            picture_ids = payload.get("picture_ids", [])
-
-            success = self.vault.picture_sets.set_pictures(id, picture_ids)
-            if not success:
-                raise HTTPException(status_code=404, detail="Picture set not found")
-
-            return {"status": "success", "picture_count": len(set(picture_ids))}
-
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
             """List all characters or filter by name."""
@@ -885,7 +881,9 @@ class Server:
                 if name
                 else self.vault.characters.find()
             )
-            return [c.__dict__ for c in chars]
+            dicts = [c.__dict__ for c in chars]
+            logger.info(f"Returning characters: {dicts}")
+            return dicts
 
         @self.api.post("/characters")
         async def create_character(payload: dict = Body(...)):
@@ -940,20 +938,23 @@ class Server:
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
 
-        @self.api.get("/thumbnails/{id}")
-        async def get_thumbnail(id: str):
-            try:
-                pic = self.vault.pictures[id]
-                thumbnail_bytes = pic.thumbnail
-                if not thumbnail_bytes:
-                    logger.error(f"No thumbnail available for picture id={pic.id}")
-                    raise HTTPException(
-                        status_code=404, detail="No thumbnail available"
-                    )
-                return Response(content=thumbnail_bytes, media_type="image/png")
-            except KeyError:
-                logger.error(f"Picture not found for id={id} (thumbnail request)")
-                raise HTTPException(status_code=404, detail="Picture not found")
+        @self.api.post("/thumbnails")
+        async def get_thumbnails(payload: dict = Body(...)):
+            ids = payload.get("ids", [])
+            if not isinstance(ids, list):
+                raise HTTPException(status_code=400, detail="'ids' must be a list")
+            results = {}
+            for id in ids:
+                try:
+                    pic = self.vault.pictures[id]
+                    thumbnail_bytes = pic.thumbnail
+                    results[id] = base64.b64encode(thumbnail_bytes).decode("utf-8")
+                except KeyError:
+                    logger.error(f"Picture not found for id={id} (thumbnail request)")
+                    results[id] = None
+            response = JSONResponse(results)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
 
         @self.api.patch("/pictures/{id}")
         async def patch_picture(id: str, request: Request):
@@ -1027,7 +1028,7 @@ class Server:
                 self.vault.pictures.update(pic)
             return {"status": "success", "picture": pic.to_dict()}
 
-        @self.api.get("/favicon.ico")
+        @self.api.get("/frontend/public/favicon.ico")
         def favicon():
             favicon_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
             return FileResponse(favicon_path)
@@ -1099,64 +1100,6 @@ class Server:
 
             return {"results": import_results}
 
-        @self.api.get("/picture_ids")
-        async def list_picture_ids(
-            request: Request,
-            sort: str = Query("unsorted"),
-            query: str = Query(None),
-        ):
-            """
-            Get only picture IDs for the current view (no thumbnails, embeddings, or other heavy data).
-            Much faster than /pictures endpoint for selecting all images.
-            Respects all filter parameters (primary_character_id, tags, etc.) and search.
-            """
-            from pixlvault.pictures import SortMechanism
-
-            query_params = dict(request.query_params)
-            query_params.pop("sort", None)
-            query_params.pop("query", None)
-
-            # Convert tags to list if present
-            if "tags" in query_params and isinstance(query_params["tags"], str):
-                try:
-                    query_params["tags"] = json.loads(query_params["tags"])
-                except Exception:
-                    query_params["tags"] = [query_params["tags"]]
-
-            # Handle search likeness sort (semantic search)
-            if sort == SortMechanism.SEARCH_LIKENESS.value and query:
-                pics = self.vault.pictures.find_by_text(query, top_n=sys.maxsize)
-            else:
-                pics = self.vault.pictures.find(**query_params)
-
-                if sort in [
-                    SortMechanism.SCORE_DESC.value,
-                    SortMechanism.SCORE_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.SCORE_DESC.value
-                    pics.sort(
-                        key=lambda p: p.score if p.score is not None else -1,
-                        reverse=reverse,
-                    )
-                elif sort in [
-                    SortMechanism.DATE_DESC.value,
-                    SortMechanism.DATE_ASC.value,
-                ]:
-                    reverse = sort == SortMechanism.DATE_DESC.value
-                    pics.sort(key=lambda p: p.created_at or "", reverse=reverse)
-                elif sort in [
-                    SortMechanism.FORMAT_ASC.value,
-                    SortMechanism.FORMAT_DESC.value,
-                ]:
-                    reverse = sort == SortMechanism.FORMAT_DESC.value
-                    pics.sort(
-                        key=lambda p: p.format.lower() if p.format else "zzz",
-                        reverse=reverse,
-                    )
-
-            # Return only IDs - much faster than full to_dict()
-            return [pic.id for pic in pics]
-
         @self.api.get("/pictures")
         async def list_pictures(
             request: Request,
@@ -1174,6 +1117,7 @@ class Server:
             query_params.pop("offset", None)
             query_params.pop("limit", None)
             query_params.pop("query", None)
+            count = query_params.pop("count", None)
             # Convert tags to list if present
             if "tags" in query_params and isinstance(query_params["tags"], str):
                 try:
@@ -1185,15 +1129,27 @@ class Server:
             if sort == SortMechanism.SEARCH_LIKENESS.value and query:
                 # Use semantic search, return top-N (limit) results
                 if limit == sys.maxsize:
-                    pics = self.vault.pictures.find_by_text(query, top_n=sys.maxsize)
+                    pics = self.vault.pictures.find_by_text(
+                        query, count=count, top_n=sys.maxsize
+                    )
                 else:
-                    pics = self.vault.pictures.find_by_text(query, top_n=offset + limit)
+                    pics = self.vault.pictures.find_by_text(
+                        query, count=count, top_n=offset + limit
+                    )
                     pics = pics[offset : offset + limit]
             else:
                 pics = self.vault.pictures.find(
-                    sort=sort, offset=offset, limit=limit, **query_params
+                    sort=sort,
+                    offset=offset,
+                    limit=limit,
+                    info=info,
+                    count=count,
+                    **query_params,
                 )
-            return [pic.to_dict() for pic in pics]
+            if count:
+                return {"count": pics}
+            dicts = [pic.to_dict() for pic in pics]
+            return dicts
 
         @self.api.get("/export/zip")
         async def export_pictures_zip(
@@ -1308,27 +1264,24 @@ class Server:
             - If primary_character_id is null/None/empty: unassigned pictures
             - If primary_character_id is set: that character's pictures
             """
-
+            start = time.time()
             # Determine which set to query
             if primary_character_id is None:
                 # All
-                pics = self.vault.pictures.find()
+                image_count = self.vault.pictures.find(count=True)
                 char_id = None
             elif primary_character_id == "null":
                 # Unassigned
-                pics = self.vault.pictures.find(primary_character_id="null")
+                image_count = self.vault.pictures.find(
+                    primary_character_id="null", count=True
+                )
                 char_id = None
             else:
-                pics = self.vault.pictures.find(
-                    primary_character_id=primary_character_id
+                image_count = self.vault.pictures.find(
+                    primary_character_id=primary_character_id, count=True
                 )
                 char_id = primary_character_id
 
-            image_count = len(pics)
-
-            last_updated = max(
-                (p.created_at for p in pics if p.created_at), default=None
-            )
             # Thumbnail URL (reuse existing endpoint)
             thumb_url = None
             if char_id not in (None, "", "null"):
@@ -1355,10 +1308,12 @@ class Server:
             summary = {
                 "primary_character_id": char_id,
                 "image_count": image_count,
-                "last_updated": last_updated,
                 "thumbnail_url": thumb_url,
                 "reference_picture_set_id": reference_set_id,
             }
+            elapsed = time.time() - start
+            logger.info(f"Category summary computed in {elapsed:.4f} seconds")
+            logger.info(f"Category summary: {summary}")
             return summary
 
     def create_picture_imports(self, uploaded_files, dest_folder, primary_character_id):

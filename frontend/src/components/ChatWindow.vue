@@ -9,9 +9,16 @@ const props = defineProps({
   title: { type: String, default: "" },
   selectedCharacter: { type: Object, default: null },
   config: { type: Object, default: () => ({}) },
-  extractKeywords: { type: Function, required: true },
   backendUrl: { type: String, required: true },
 });
+
+function extractKeywords(text) {
+  const doc = nlp(text);
+  const nouns = doc.nouns().out("array");
+  const adjectives = doc.adjectives().out("array");
+  const keywords = Array.from(new Set([...nouns, ...adjectives]));
+  return keywords.join(" ");
+}
 
 const emit = defineEmits(["close"]);
 
@@ -208,72 +215,68 @@ async function sendChatMessageAndFocus() {
         if (searchRes.ok) {
           const searchData = await searchRes.json();
           console.log("Search query:", searchQuery);
-            if (Array.isArray(searchData) && searchData.length > 0) {
-              // Filter out pictures in the FIFO queue
-              const filteredResults = searchData.filter(
-                (pic) => !displayedPictureQueue.value.includes(pic.id)
-              );
-              if (filteredResults.length === 0) {
-                chatMessages.value.push({
-                  role: "system",
-                  content: `🔍 All top results have already been shown in chat.`,
-                  isDebug: true,
-                });
-                await nextTick();
-                scrollToBottom();
-                return;
-              }
-              // Always use the best result (highest likeness_score) not in FIFO
-              const bestResult = filteredResults[0];
-              // Get top 3 results for display (not in FIFO)
-              const top3Results = filteredResults.slice(0, 3);
-              console.log(
-                "Search results (top 3, not in FIFO):",
-                top3Results.map((r) => ({
-                  id: r.id,
-                  score: r.likeness_score,
-                  description: r.description,
-                }))
-              );
-              // Build compact debug info with descriptions
-              let debugInfo = `🔍 ${filteredResults.length} results | Selected: #1\n\n`;
-              for (let i = 0; i < top3Results.length; i++) {
-                const pic = top3Results[i];
-                const score = (pic.likeness_score * 100).toFixed(0);
-                const desc = pic.description
-                  ? pic.description.length > 250
-                    ? pic.description.substring(0, 250) + "..."
-                    : pic.description
-                  : "No description";
-                debugInfo += `${i + 1}. ${score}% - ${desc}\n`;
-              }
-              // Add debug info as a system message with top 3 picture IDs
+          if (Array.isArray(searchData) && searchData.length > 0) {
+            // Filter out pictures in the FIFO queue
+            const filteredResults = searchData.filter(
+              (pic) => !displayedPictureQueue.value.includes(pic.id)
+            );
+            if (filteredResults.length === 0) {
               chatMessages.value.push({
                 role: "system",
-                content: debugInfo,
+                content: `🔍 All top results have already been shown in chat.`,
                 isDebug: true,
-                searchResults: top3Results.map((r) => ({
-                  id: r.id,
-                  score: r.likeness_score,
-                })),
               });
-              // Add bestResult.id to FIFO queue
-              displayedPictureQueue.value.push(bestResult.id);
-              if (displayedPictureQueue.value.length > 20) {
-                displayedPictureQueue.value.shift(); // Remove oldest
-              }
-              const imageUrl = `${props.backendUrl}/pictures/${bestResult.id}`;
-              for (let i = chatMessages.value.length - 1; i >= 0; i--) {
-                const msg = chatMessages.value[i];
-                if (msg.role === "assistant" && !msg.pictureUrl && !msg.isDebug) {
-                  chatMessages.value[i] = { ...msg, pictureUrl: imageUrl };
-                  break;
-                }
-              }
-              // Scroll after adding debug and image
               await nextTick();
               scrollToBottom();
-            } else {
+              return;
+            }
+            // Always use the best result (highest likeness_score) not in FIFO
+            const bestResult = filteredResults[0];
+            // Get top 3 results for display (not in FIFO)
+            const top3Results = filteredResults.slice(0, 3);
+            console.log(
+              "Search results (top 3, not in FIFO):",
+              top3Results.map((r) => ({
+                id: r.id,
+                score: r.likeness_score,
+                description: r.description,
+              }))
+            );
+            // Build compact debug info with descriptions
+            let debugInfo = `🔍 ${filteredResults.length} results | Selected: #1\n\n`;
+            for (let i = 0; i < top3Results.length; i++) {
+              const pic = top3Results[i];
+              const score = (pic.likeness_score * 100).toFixed(0);
+              const desc = pic.description || "No description";
+              debugInfo += `${i + 1}. ${score}% - ${desc}\n`;
+            }
+            // Add debug info as a system message with top 3 picture IDs
+            chatMessages.value.push({
+              role: "system",
+              content: debugInfo,
+              isDebug: true,
+              searchResults: top3Results.map((r) => ({
+                id: r.id,
+                score: r.likeness_score,
+              })),
+            });
+            // Add bestResult.id to FIFO queue
+            displayedPictureQueue.value.push(bestResult.id);
+            if (displayedPictureQueue.value.length > 20) {
+              displayedPictureQueue.value.shift(); // Remove oldest
+            }
+            const imageUrl = `${props.backendUrl}/pictures/${bestResult.id}`;
+            for (let i = chatMessages.value.length - 1; i >= 0; i--) {
+              const msg = chatMessages.value[i];
+              if (msg.role === "assistant" && !msg.pictureUrl && !msg.isDebug) {
+                chatMessages.value[i] = { ...msg, pictureUrl: imageUrl };
+                break;
+              }
+            }
+            // Scroll after adding debug and image
+            await nextTick();
+            scrollToBottom();
+          } else {
             // No results found
             chatMessages.value.push({
               role: "system",

@@ -15,10 +15,12 @@ class Characters:
         self._db = db
 
     def __getitem__(self, character_id: int) -> CharacterModel:
-        row = self._db.execute(
-            "SELECT id, name, original_seed, original_prompt, loras, description FROM characters WHERE id = ?",
-            (character_id,),
-        ).fetchone()
+        row = self._db.execute_read(
+            lambda conn: conn.execute(
+                "SELECT id, name, original_seed, original_prompt, loras, description FROM characters WHERE id = ?",
+                (character_id,),
+            ).fetchone()
+        )
         if not row:
             raise KeyError(f"Character {character_id} not found")
 
@@ -48,10 +50,14 @@ class Characters:
 
         if len(params_list) == 1:
             logger.info(f"INSERT INTO characters SQL: {sql} | params: {params_list[0]}")
-            cur = self._db.execute(sql, params_list[0], commit=True)
+            cur = self._db.submit_write(
+                lambda conn: conn.execute(sql, params_list[0])
+            ).result()
             characters[0].id = cur.lastrowid
         else:
-            self._db.executemany(sql, params_list, commit=True)
+            self._db.submit_bulk_write(
+                lambda conn: conn.executemany(sql, params_list)
+            ).result()
 
     def update(self, characters: Union[CharacterModel, List[CharacterModel]]):
         """Update one or more characters. Supports both single character and batch operations."""
@@ -74,30 +80,39 @@ class Characters:
             params_list.append(params)
 
         if len(params_list) == 1:
-            self._db.execute(sql, params_list[0], commit=True)
+            self._db.submit_write(
+                lambda conn: conn.execute(sql, params_list[0])
+            ).result()
         else:
-            self._db.executemany(sql, params_list, commit=True)
+            self._db.submit_bulk_write(
+                lambda conn: conn.executemany(sql, params_list)
+            ).result()
 
     def delete(self, character_ids: Union[int, List[int]]):
         """Delete one or more characters. Supports both single ID and batch operations."""
         if not isinstance(character_ids, list):
             character_ids = [character_ids]
 
-        self._db.executemany(
-            "DELETE FROM characters WHERE id = ?",
-            [(cid,) for cid in character_ids],
-            commit=True,
-        )
+        self._db.submit_bulk_write(
+            lambda conn: conn.executemany(
+                "DELETE FROM characters WHERE id = ?",
+                [(cid,) for cid in character_ids],
+            )
+        ).result()
 
     def find(self, name: Optional[str] = None) -> List[CharacterModel]:
         if name:
-            rows = self._db.query(
-                "SELECT id, name, original_seed, original_prompt, loras, description FROM characters WHERE name = ?",
-                (name,),
+            rows = self._db.execute_read(
+                lambda conn: conn.execute(
+                    "SELECT id, name, original_seed, original_prompt, loras, description FROM characters WHERE name = ?",
+                    (name,),
+                ).fetchall()
             )
         else:
-            rows = self._db.query(
-                "SELECT id, name, original_seed, original_prompt, loras, description FROM characters"
+            rows = self._db.execute_read(
+                lambda conn: conn.execute(
+                    "SELECT id, name, original_seed, original_prompt, loras, description FROM characters"
+                ).fetchall()
             )
         result = []
         for row in rows:

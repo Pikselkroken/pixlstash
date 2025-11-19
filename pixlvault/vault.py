@@ -4,7 +4,7 @@ from typing import Optional
 
 from .logging import get_logger
 from .characters import Characters
-from .pictures import Pictures
+from .pictures import Pictures, PictureWorker
 from .picture_characters import PictureCharacters
 from .picture_sets import PictureSets
 from .picture_utils import PictureUtils
@@ -42,9 +42,9 @@ class Vault:
             description (Optional[str]): Description of the vault.
         """
         self.image_root = image_root
-        print("Image root: ", self.image_root)
+        logger.debug(f"Image root: {self.image_root}")
         assert self.image_root is not None, "image_root cannot be None"
-        logger.info(f"Using image_root: {self.image_root}")
+        logger.debug(f"Using image_root: {self.image_root}")
         os.makedirs(self.image_root, exist_ok=True)
         assert os.path.exists(self.image_root), (
             f"Image root path does not exist: {self.image_root}"
@@ -58,21 +58,15 @@ class Vault:
         self.picture_sets = PictureSets(self.db)
         self.pictures = Pictures(self.db, self.characters)
 
-        self.start_background_workers()
+    def stop_background_workers(self, workers: set[PictureWorker]):
+        logger.debug("Stopping background workers...")
+        for worker in workers:
+            self.pictures.stop_worker(worker)
 
-    def stop_background_workers(self):
-        logger.info("Stopping background workers...")
-        self.pictures.stop_quality_worker()
-        self.pictures.stop_facial_features_worker()
-        self.pictures.stop_text_embedding_worker()
-        self.pictures.stop_likeness_worker()
-
-    def start_background_workers(self):
-        logger.info("Starting background workers...")
-        self.pictures.start_facial_features_worker(interval=3)
-        self.pictures.start_quality_worker(interval=4)
-        self.pictures.start_text_embedding_worker(interval=5)
-        self.pictures.start_likeness_worker(interval=6)
+    def start_background_workers(self, workers: set[PictureWorker]):
+        logger.debug("Starting background workers...")
+        for worker in workers:
+            self.pictures.start_worker(worker)
 
     def __repr__(self):
         """
@@ -87,9 +81,7 @@ class Vault:
         """
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
-        self.stop_background_workers()
-        if hasattr(self, "db") and self.db:
-            self.db.close()
+        self.stop_background_workers(PictureWorker.all())
 
     def _create_tables(self):
         self.db._create_tables()
@@ -103,7 +95,7 @@ class Vault:
     def get_description(self) -> Optional[str]:
         return self.db.get_description()
 
-    def import_default_data(self):
+    def import_default_data(self, add_tagger_test_images: bool = False):
         """
         Import default data into the vault.
         Extend this method to add default pictures or metadata as needed.
@@ -124,6 +116,26 @@ class Vault:
             source_file_path=logo_src,
             character_id=character.id,
         )
+        if add_tagger_test_images:
+            # Add all pictures/TaggerTest*.png
+            for file in os.listdir(
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), "pictures")
+            ):
+                if file.startswith("TaggerTest") and file.endswith(".png"):
+                    src_path = os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)),
+                        "pictures",
+                        file,
+                    )
+                    pic = PictureUtils.create_picture_from_file(
+                        image_root_path=logo_dest_folder,
+                        source_file_path=src_path,
+                        character_id=character.id,
+                    )
+                    assert pic.file_path
+                    self.pictures.add(pic)
+                    logger.debug(f"Imported default picture: {pic.file_path}")
+
         assert picture.file_path
         self.pictures.add(picture)
         logger.info("Imported default data into the vault.")

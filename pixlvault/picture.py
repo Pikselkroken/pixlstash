@@ -57,7 +57,7 @@ class PictureModel:
     face_contrast: float = field(default=None)
     face_brightness: float = field(default=None)
     face_noise_level: float = field(default=None)
-    score: int = field(default=None)
+    score: int = field(default=None, metadata={"index": True})
     character_likeness: float = field(default=None)
     facial_features: bytes = field(default=None)
     pixel_sha: str = field(
@@ -77,6 +77,17 @@ class PictureModel:
     character_ids: list[int] = field(default_factory=list, metadata={"db_ignore": True})
 
     __indexes__ = []
+
+    @classmethod
+    def metadata(cls):
+        """
+        Return a list of field names that are not type bytes (for lightweight/bulk queries).
+        """
+        return [
+            f.name
+            for f in cls.__dataclass_fields__.values()
+            if f.type is not bytes and f.metadata.get("db_ignore") is not True
+        ]
 
     def to_dict(self, include=None, exclude=None) -> dict:
         # Ensure no raw bytes are returned for any field
@@ -110,7 +121,9 @@ class PictureModel:
             "facial_features": base64.b64encode(self.facial_features).decode("ascii")
             if self.facial_features is not None
             else None,
-            "face_bbox": json.dumps(self.face_bbox) if self.face_bbox else None,
+            "face_bbox": json.dumps(self.face_bbox)
+            if self.face_bbox is not None
+            else None,
             "thumbnail": base64.b64encode(self.thumbnail).decode("ascii")
             if self.thumbnail is not None
             else None,
@@ -193,7 +206,7 @@ class PictureModel:
             text_embedding=text_embedding,
             facial_features=facial_features,
             face_bbox=json.loads(row["face_bbox"])
-            if "face_bbox" in row.keys() and row["face_bbox"]
+            if "face_bbox" in row.keys() and row["face_bbox"] is not None
             else None,
             thumbnail=thumbnail,
             sharpness=sharpness,

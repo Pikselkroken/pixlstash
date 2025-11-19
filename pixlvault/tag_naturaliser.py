@@ -3,6 +3,36 @@ from .logging import get_logger
 logger = get_logger(__name__)
 
 
+def pipeline_call(*args, **kwargs):
+    from transformers import pipeline
+
+    return pipeline("text2text-generation", model="google/flan-t5-base", device=-1)
+
+
+def capture_fd_stderr(callable, *args, **kwargs):
+    import os
+
+    # Create a pipe for stderr
+    r, w = os.pipe()
+    old_stderr = os.dup(2)
+    os.dup2(w, 2)  # Redirect stderr to pipe
+    os.close(w)
+    try:
+        result = callable(*args, **kwargs)
+    finally:
+        os.dup2(old_stderr, 2)
+        os.close(old_stderr)
+    # Read all output from the pipe
+    output = b""
+    while True:
+        chunk = os.read(r, 4096)
+        if not chunk:
+            break
+        output += chunk
+    os.close(r)
+    return result, output.decode(errors="replace")
+
+
 class TagNaturaliser:
     TAG_MAP = {
         "doily": "doily",
@@ -8660,14 +8690,13 @@ class TagNaturaliser:
         "inkling": "inkling",
     }
 
-    def __init__(self):
+    def __init__(self, device="cpu"):
+        self._device = device
         try:
-            from transformers import pipeline
-
-            self._tag_to_sentence_pipeline = pipeline(
-                "text2text-generation", model="google/flan-t5-base", device=-1
-            )
-
+            self._tag_to_sentence_pipeline, error = capture_fd_stderr(pipeline_call)
+            error = error.replace("Device set to use cpu\n", "")
+            if len(error) > 0:
+                logger.error("Received error in transformer pipeline: '" + error + "'")
         except ImportError:
             self._tag_to_sentence_pipeline = None
 

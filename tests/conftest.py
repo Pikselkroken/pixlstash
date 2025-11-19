@@ -11,7 +11,7 @@ def pytest_addoption(parser):
         "--force-cpu",
         action="store_true",
         default=False,
-        help="Force CPU inference for Florence-2 (for benchmarking)",
+        help="Force CPU inference for all models (disable GPU usage)",
     )
     parser.addoption(
         "--fast-captions",
