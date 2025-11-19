@@ -35,7 +35,7 @@
       :style="{
         gridColumn: '1 / -1',
         height: `${topSpacerHeight}px`,
-        border: '2px solid blue',
+        border: '0px solid blue',
       }"
     ></div>
     <!-- Drag overlay -->
@@ -116,8 +116,7 @@
       :style="{
         gridColumn: '1 / -1',
         height: `${bottomSpacerHeight}px`,
-        border: '2px solid green',
-      }"
+        border: '0px solid green'}"
     ></div>
 
   </div>
@@ -422,7 +421,9 @@ async function fetchTotalImageCount() {
 }
 
 onMounted(() => {
-  fetchTotalImageCount();
+  fetchTotalImageCount().then(() => {
+    updateVisibleThumbnails();
+  });
 });
 
 watch(
@@ -476,15 +477,11 @@ const topSpacerHeight = computed(() => {
 });
 
 const bottomSpacerHeight = computed(() => {
-  // rowsBelow = total rows - last rendered row
   const cols = columns.value;
-  const lastRenderedRow = Math.ceil(renderEnd.value / cols);
-  console.log("lastRenderedRow:", lastRenderedRow);
+  const lastRenderedRow = Math.floor((renderEnd.value - 1) / cols) + 1;
   const totalRows = Math.ceil(totalImageCount.value / cols);
   const rowsBelow = totalRows - lastRenderedRow;
-  console.log("Row height", rowHeight.value);
-  const height = rowsBelow > 0 ? rowsBelow * rowHeight.value /2 : 0;
-  console.log("bottomSpacerHeight:", height);
+  const height = rowsBelow > 0 ? rowsBelow * rowHeight.value : 0;
   return height;
 });
 
@@ -633,6 +630,8 @@ function onGridScroll(e) {
       if (visibleEnd.value >= renderEnd.value - bufferThreshold && renderEnd.value < totalImageCount.value) {
         updateVisibleThumbnails();
       }
+      // Always fetch thumbnails for the current visible window
+      updateVisibleThumbnails();
     }
   }, 50);
 }
@@ -788,9 +787,9 @@ defineExpose({ gridEl: scrollWrapper, onGlobalKeyPress });
   height: 100vh; /* or calc(100vh - headerHeight) if you have a header */
   overflow-y: auto;
   width: 100%;
-  scrollbar-width: 16px !important;
+  padding-right: 0px;
   scrollbar-color: orange #ddd;
-  border: 5px solid red;
+  border: 0px solid red;
 }
 .image-grid {
   height: 100%;
@@ -799,7 +798,7 @@ defineExpose({ gridEl: scrollWrapper, onGlobalKeyPress });
   width: 100%;
   box-sizing: border-box;
   flex: 1 1 0%;
-  padding: 2px 2px 2px 2px !important;
+  padding: 0px 2px 2px 2px !important;
   align-content: start;
   justify-content: start;
 }
