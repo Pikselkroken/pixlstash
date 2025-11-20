@@ -633,6 +633,8 @@ onMounted(() => {
   <CharacterEditor
     :open="characterEditorOpen"
     :character="characterEditorCharacter"
+    :backendUrl="props.backendUrl"
+    @close="closeCharacterEditor"
   />
   <PictureSetEditor :open="setEditorOpen" :set="setEditorSet" />
 

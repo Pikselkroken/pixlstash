@@ -110,9 +110,10 @@ import { computed, ref, watch, nextTick } from "vue";
 const props = defineProps({
   open: { type: Boolean, default: false },
   character: { type: Object, default: null },
+  backendUrl: { type: String, required: true },
 });
 
-const emit = defineEmits(["close", "save"]);
+const emit = defineEmits(["close"]);
 
 const localCharacter = ref({
   id: null,
@@ -184,14 +185,21 @@ function removeLora(index) {
 }
 
 function save() {
-  if (!isValid.value) return;
+  if (!isValid.value) {
+    console.error("Character data is not valid. Cannot save.");
+    return;
+  }
 
   // Clean up loras - remove empty entries
   const cleanedLoras = localCharacter.value.loras.filter(
     (lora) => lora[0] && lora[0].trim().length > 0
   );
 
-  emit("save", {
+  console.log("Saving character:", {
+    ...localCharacter.value,
+    loras: cleanedLoras,
+  });
+  saveCharacter({
     ...localCharacter.value,
     loras: cleanedLoras,
   });
@@ -208,13 +216,15 @@ function handleKeydown(event) {
   }
 }
 
-async function saveCharacterFromEditor(charData) {
+async function saveCharacter(charData) {
   try {
     const isNew = !charData.id;
     const method = isNew ? "POST" : "PATCH";
     const url = isNew
-      ? `${BACKEND_URL}/characters`
-      : `${BACKEND_URL}/characters/${charData.id}`;
+      ? `${props.backendUrl}/characters`
+      : `${props.backendUrl}/characters/${charData.id}`;
+
+    console.log("URL: ", url);
 
     const res = await fetch(url, {
       method,
@@ -227,45 +237,7 @@ async function saveCharacterFromEditor(charData) {
       throw new Error(errorText || "Failed to save character");
     }
 
-    const data = await res.json();
-
-    if (isNew && data.character) {
-      // New character - add to list
-      await fetchCharacters();
-      selectedCharacter.value = data.character.id;
-
-      // If pictures are selected, assign them to the new character
-      if (selectedImageIds.value.length > 0) {
-        const updatePromises = selectedImageIds.value.map((pictureId) =>
-          fetch(`${BACKEND_URL}/pictures/${pictureId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ primary_character_id: data.character.id }),
-          })
-        );
-        await Promise.all(updatePromises);
-
-        // Clear selection
-        selectedImageIds.value = [];
-
-        // Refresh the character thumbnail
-        await fetchCharacterThumbnail(data.character.id);
-        // Reload pictures by re-selecting the character
-        const tempChar = selectedCharacter.value;
-        selectedCharacter.value = null;
-        await nextTick();
-        selectedCharacter.value = tempChar;
-      }
-    } else if (data.character) {
-      // Updated character - refresh the character in the list
-      const idx = characters.value.findIndex((c) => c.id === data.character.id);
-      if (idx !== -1) {
-        characters.value[idx] = data.character;
-      }
-      await fetchCharacters();
-    }
-
-    closeCharacterEditor();
+    emit("refresh-sidebar");
   } catch (e) {
     alert("Failed to save character: " + (e.message || e));
   }

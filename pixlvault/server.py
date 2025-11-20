@@ -821,7 +821,7 @@ class Server:
 
         @self.api.patch("/picture_sets/{id}")
         async def update_picture_set(id: int, payload: dict = Body(...)):
-            """Update a picture set's name and/or description."""
+            """Update a picture set's name and/or description. Or add/remove pictures."""
             name = payload.get("name")
             description = payload.get("description")
 
@@ -842,36 +842,6 @@ class Server:
 
             return {"status": "success", "deleted_id": id}
 
-        @self.api.get("/picture_sets/{id}/pictures")
-        async def get_picture_set_pictures(id: int):
-            """Get all picture ids in a set."""
-            picture_set = self.vault.picture_sets.get(id)
-            if not picture_set:
-                raise HTTPException(status_code=404, detail="Picture set not found")
-
-            picture_ids = self.vault.picture_sets.get_pictures_in_set(id)
-            return {"picture_ids": picture_ids}
-
-        @self.api.post("/picture_sets/{id}/pictures/{picture_id}")
-        async def add_picture_to_set(id: int, picture_id: str):
-            """Add a picture to a set."""
-            success = self.vault.picture_sets.add_picture(id, picture_id)
-            if not success:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Failed to add picture to set (set may not exist or picture already in set)",
-                )
-
-            return {"status": "success"}
-
-        @self.api.delete("/picture_sets/{id}/pictures/{picture_id}")
-        async def remove_picture_from_set(id: int, picture_id: str):
-            """Remove a picture from a set."""
-            success = self.vault.picture_sets.remove_picture(id, picture_id)
-            if not success:
-                raise HTTPException(status_code=404, detail="Picture not in set")
-
-            return {"status": "success"}
 
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
