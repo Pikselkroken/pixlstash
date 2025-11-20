@@ -152,7 +152,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
 import { useOverlayActions } from "../utils/useOverlayActions";
 
-const emit = defineEmits(["open-overlay"]);
+const emit = defineEmits(["open-overlay", "refresh-sidebar"]);
 
 function clearSelection() {
   selectedImageIds.value = [];
@@ -188,6 +188,7 @@ function removeFromGroup() {
       lastSelectedIndex = null;
       fetchTotalImageCount().then(() => {
         updateVisibleThumbnails();
+        emit("refresh-sidebar");
       });
     });
     return;
@@ -244,6 +245,7 @@ function deleteSelected() {
     lastSelectedIndex = null;
     fetchTotalImageCount().then(() => {
       updateVisibleThumbnails();
+      emit("refresh-sidebar");
     });
   });
 }
@@ -411,6 +413,7 @@ async function setScore(img, n) {
     } else {
       img.score = newScore;
     }
+    emit("refresh-sidebar");
   } catch (e) {
     alert(e.message);
   }
