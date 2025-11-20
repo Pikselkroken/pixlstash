@@ -7,7 +7,7 @@
       </div>
       <div class="selection-bar-actions">
         <button
-          v-if="selectedCharacter"
+          v-if="selectedCharacter && selectedCharacter !== '__all__' && selectedCharacter !== '__unassigned__'"
           class="remove-btn"
           @click="$emit('remove-from-group')"
         >
@@ -38,7 +38,7 @@ const props = defineProps({
   left: 0;
   width: 100%;
   z-index: 100;
-  background: rgba(255,255,255,0.95);
+  background: rgba(195,205,210,0.95);
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   padding: 12px 24px;
   display: flex;

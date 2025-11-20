@@ -159,7 +159,68 @@ function clearSelection() {
 }
 
 function removeFromGroup() {
-  // Trigger backend command to disconnect from either selected set or character
+  if (!selectedImageIds.value.length) return;
+  const backendUrl = props.backendUrl;
+  // Remove from character
+  if (
+    props.selectedCharacter &&
+    props.selectedCharacter !== "__all__" &&
+    props.selectedCharacter !== "__unassigned__"
+  ) {
+    Promise.all(
+      selectedImageIds.value.map(id =>
+        fetch(`${backendUrl}/pictures/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ primary_character_id: null })
+        })
+        .then(res => {
+          if (!res.ok) throw new Error(`Failed to unassign character for image ${id}`);
+        })
+        .catch(err => {
+          alert(`Error unassigning character for image ${id}: ${err.message}`);
+        })
+      )
+    ).then(() => {
+      // Remove affected images from grid immediately
+      allGridImages.value = allGridImages.value.filter(img => !selectedImageIds.value.includes(img.id));
+      selectedImageIds.value = [];
+      lastSelectedIndex = null;
+      fetchTotalImageCount().then(() => {
+        updateVisibleThumbnails();
+      });
+    });
+    return;
+  }
+  // Remove from set
+  if (
+    props.selectedSet &&
+    props.selectedSet !== "__all__" &&
+    props.selectedSet !== "__unassigned__"
+  ) {
+    Promise.all(
+      selectedImageIds.value.map(id =>
+        fetch(`${backendUrl}/picture_sets/${props.selectedSet}/pictures/${id}`, {
+          method: "DELETE"
+        })
+        .then(res => {
+          if (!res.ok) throw new Error(`Failed to remove image ${id} from set`);
+        })
+        .catch(err => {
+          alert(`Error removing image ${id} from set: ${err.message}`);
+        })
+      )
+    ).then(() => {
+      // Remove affected images from grid immediately
+      allGridImages.value = allGridImages.value.filter(img => !selectedImageIds.value.includes(img.id));
+      selectedImageIds.value = [];
+      lastSelectedIndex = null;
+      fetchTotalImageCount().then(() => {
+        updateVisibleThumbnails();
+      });
+    });
+    return;
+  }
 }
 
 function deleteSelected() {
