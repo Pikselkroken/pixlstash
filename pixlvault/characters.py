@@ -55,7 +55,7 @@ class Characters:
             ).result()
             characters[0].id = cur.lastrowid
         else:
-            self._db.submit_bulk_write(
+            self._db.submit_write(
                 lambda conn: conn.executemany(sql, params_list)
             ).result()
 
@@ -84,7 +84,7 @@ class Characters:
                 lambda conn: conn.execute(sql, params_list[0])
             ).result()
         else:
-            self._db.submit_bulk_write(
+            self._db.submit_write(
                 lambda conn: conn.executemany(sql, params_list)
             ).result()
 
@@ -93,7 +93,7 @@ class Characters:
         if not isinstance(character_ids, list):
             character_ids = [character_ids]
 
-        self._db.submit_bulk_write(
+        self._db.submit_write(
             lambda conn: conn.executemany(
                 "DELETE FROM characters WHERE id = ?",
                 [(cid,) for cid in character_ids],

@@ -402,7 +402,7 @@ class Pictures:
             if timing > 0.5:
                 logger.info(
                     "[LIKENESS] Calculated and updated %d likeness scores in %.2f seconds."
-                    % (len(likeness_score_count), time.time() - start)
+                    % (likeness_score_count, time.time() - start)
                 )
             if not data_updated:
                 self._likeness_worker_stop.wait(interval)
@@ -1262,7 +1262,9 @@ class Pictures:
             # logger.info(f"Updating picture {picture.id} with attributes: {row}")
         set_clause = ", ".join([f"{attr}=?" for attr in attributes])
         query = f"UPDATE pictures SET {set_clause} WHERE id=?"
-        return self._db.submit_bulk_write(query, values)
+        return self._db.submit_write(
+            lambda conn: conn.execute(query, values), priority=DBPriority.LOW
+        )
 
     def find(self, **kwargs):
         """

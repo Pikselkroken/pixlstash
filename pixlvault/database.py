@@ -197,55 +197,6 @@ class VaultDatabase:
         finally:
             conn.close()
 
-    def submit_bulk_write(
-        self, sql: str, seq_of_params: list, priority=DBPriority.MEDIUM
-    ):
-        """Submit a bulk write operation using executemany via submit_write."""
-        """
-        Submit a bulk write operation using executemany via submit_write.
-
-        Examples:
-
-        # Using a lambda for a simple bulk insert
-        future = db.submit_write(lambda conn: conn.executemany(
-            "INSERT INTO pictures (id, quality) VALUES (?, ?)", [
-                ("pic1", 0.9),
-                ("pic2", 0.85),
-            ]
-        ))
-        result = future.result()
-
-        # Using bulk_write for convenience
-        result = db.submit_bulk_write(
-            "INSERT INTO pictures (id, quality) VALUES (?, ?)",
-            [
-                ("pic1", 0.9),
-                ("pic2", 0.85),
-            ]
-        )
-
-        # Using a full function for more complex logic
-        def insert_many_pictures(conn, sql, params):
-            return conn.executemany(sql, params)
-
-        future = db.submit_write(insert_many_pictures,
-            "INSERT INTO pictures (id, quality) VALUES (?, ?)",
-            [
-                ("pic1", 0.9),
-                ("pic2", 0.85),
-            ]
-        )
-        result = future.result()
-        """
-
-        def op(conn, sql, seq_of_params):
-            for params in seq_of_params:
-                _assert_no_bytes(params)
-            return conn.executemany(sql, seq_of_params)
-
-        future = self.submit_write(op, sql, seq_of_params, priority=priority)
-        return future
-
     def bulk_read(self, sql: str, params: tuple = ()):
         """Perform a bulk read operation using execute_read."""
 

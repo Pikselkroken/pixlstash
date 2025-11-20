@@ -733,27 +733,20 @@ class Server:
                 char = self.vault.characters[id]
             except KeyError:
                 raise HTTPException(status_code=404, detail="Character not found")
-
             updated = False
-
-            if (
-                name is not None
-                and name != char.name
-                or description is not None
-                and description != char.description
-            ):
+            if name is not None and name != char.name:
+                char.name = name
+                updated = True
                 # Drop embeddings for all pictures with this primary_character_id
                 pics = self.vault.pictures.find(primary_character_id=id)
                 for pic in pics:
                     pic.description = None
                     pic.text_embedding = None
+
                 self.vault.pictures.update(pics)
-
-            for key, value in data.items():
-                if hasattr(char, key) and value != getattr(char, key):
-                    setattr(char, key, value)
-                    updated = True
-
+            if description is not None and description != char.description:
+                char.description = description
+                updated = True
             if updated:
                 self.vault.characters.update(char)
             return {"status": "success", "character": char.__dict__}
@@ -848,6 +841,37 @@ class Server:
                 raise HTTPException(status_code=404, detail="Picture set not found")
 
             return {"status": "success", "deleted_id": id}
+
+        @self.api.get("/picture_sets/{id}/pictures")
+        async def get_picture_set_pictures(id: int):
+            """Get all picture ids in a set."""
+            picture_set = self.vault.picture_sets.get(id)
+            if not picture_set:
+                raise HTTPException(status_code=404, detail="Picture set not found")
+
+            picture_ids = self.vault.picture_sets.get_pictures_in_set(id)
+            return {"picture_ids": picture_ids}
+
+        @self.api.post("/picture_sets/{id}/pictures/{picture_id}")
+        async def add_picture_to_set(id: int, picture_id: str):
+            """Add a picture to a set."""
+            success = self.vault.picture_sets.add_picture(id, picture_id)
+            if not success:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Failed to add picture to set (set may not exist or picture already in set)",
+                )
+
+            return {"status": "success"}
+
+        @self.api.delete("/picture_sets/{id}/pictures/{picture_id}")
+        async def remove_picture_from_set(id: int, picture_id: str):
+            """Remove a picture from a set."""
+            success = self.vault.picture_sets.remove_picture(id, picture_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="Picture not in set")
+
+            return {"status": "success"}
 
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):

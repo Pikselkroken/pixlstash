@@ -203,7 +203,6 @@ function save() {
     ...localCharacter.value,
     loras: cleanedLoras,
   });
-  emit("saved");
 }
 
 // Keyboard shortcuts
@@ -238,7 +237,7 @@ async function saveCharacter(charData) {
       throw new Error(errorText || "Failed to save character");
     }
 
-    emit("refresh-sidebar");
+    emit("saved");
   } catch (e) {
     alert("Failed to save character: " + (e.message || e));
   }

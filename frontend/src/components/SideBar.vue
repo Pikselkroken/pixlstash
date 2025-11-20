@@ -143,6 +143,7 @@ function openSetEditor(set = null) {
 }
 
 function closeSetEditor() {
+  console.log("Closing set editor");
   setEditorOpen.value = false;
   setEditorSet.value = null;
 }
@@ -220,11 +221,6 @@ function dragOverSetItem(setId) {
 
 function dragLeaveSetItem() {
   dragOverSet.value = null;
-}
-
-function dropOnSetItem(setId, event) {
-  dragOverSet.value = null;
-  emit("drop-on-set", { setId, event });
 }
 
 // Watch sortedCharacters and initialize collapse state for all characters
@@ -326,7 +322,6 @@ function refreshSidebar() {
   fetchPictureSets();
   fetchSidebarCounts();
 }
-defineExpose({ refreshSidebar });
 
 async function fetchCharacterThumbnail(characterId) {
   try {
@@ -380,9 +375,11 @@ async function fetchPictureSets() {
   try {
     const res = await fetch(`${props.backendUrl}/picture_sets`);
     if (!res.ok) throw new Error("Failed to fetch picture sets");
-    pictureSets.value = await res.json();
+    const sets = await res.json();
+    pictureSets.value = Array.isArray(sets) ? [...sets] : [];
   } catch (e) {
     console.error("Error fetching picture sets:", e);
+    pictureSets.value = [...pictureSets.value]; // force reactivity on error
   }
 }
 
@@ -391,31 +388,30 @@ function handleCreateSet() {
 }
 
 async function handleDeleteSet() {
-  if (!selectedSet.value) return;
+  if (!props.selectedSet) return;
 
-  const setToDelete = pictureSets.value.find((s) => s.id === selectedSet.value);
+  const setToDelete = pictureSets.value.find((s) => s.id === props.selectedSet);
   if (!setToDelete) return;
 
-  if (!confirm(`Delete picture set "${setToDelete.name}"?`)) return;
+  if (!window.confirm(`Delete picture set "${setToDelete.name}"? This will unassign all their images.`)) return;
 
   try {
     const res = await fetch(
-      `${props.backendUrl}/picture_sets/${selectedSet.value}`,
+      `${props.backendUrl}/picture_sets/${props.selectedSet}`,
       {
         method: "DELETE",
       }
     );
-
     if (!res.ok) throw new Error("Failed to delete set");
-
-    selectedSet.value = null;
+    emit("select-set", null);
     await fetchPictureSets();
+    await fetchSidebarCounts();
   } catch (e) {
     alert("Failed to delete set: " + (e.message || e));
   }
 }
 
-async function handleDropOnSet({ setId, event }) {
+async function handleDropOnSet(setId, event) {
   // Get the dragged image IDs from the drag event
   let draggedIds = [];
   try {
@@ -543,28 +539,6 @@ function addNewCharacter() {
   });
 }
 
-function confirmDeleteCharacter() {
-  const char = characters.value.find((c) => c.id === props.selectedCharacter);
-  if (!char) return;
-  if (
-    window.confirm(
-      `Delete character '${char.name}'? This will unassign all their images.`
-    )
-  ) {
-    fetch(`${props.backendUrl}/characters/${char.id}`, { method: "DELETE" })
-      .then(async (res) => {
-        if (!res.ok) throw new Error("Failed to delete character");
-        characters.value = characters.value.filter((c) => c.id !== char.id);
-        selectCharacter(props.allPicturesId);
-        images.value = [];
-        await fetchCharacters();
-      })
-      .catch((e) => {
-        alert("Failed to delete character: " + (e.message || e));
-      });
-  }
-}
-
 async function characterSaved() {
   if (characterEditorCharacter.value && !characterEditorCharacter.value.id) {
     characters.value.push(characterEditorCharacter.value);
@@ -583,8 +557,12 @@ async function pictureSetSaved(setData) {
     !pictureSets.value.some((s) => s.id === setData.id)
   ) {
     pictureSets.value.push(setData);
+    pictureSets.value = [...pictureSets.value]; // force reactivity
+    emit("select-set", setData.id);
   }
   await fetchPictureSets();
+  pictureSets.value = [...pictureSets.value]; // force reactivity
+  await fetchSidebarCounts();
   closeSetEditor();
 }
 
@@ -593,6 +571,9 @@ onMounted(() => {
   fetchCharacters();
   fetchPictureSets();
 });
+
+defineExpose({ refreshSidebar });
+
 </script>
 
 <template>
@@ -615,8 +596,8 @@ onMounted(() => {
     :open="setEditorOpen"
     :set="setEditorSet"
     :backendUrl="props.backendUrl"
-    @close="setEditorOpen = false"
-    @save="pictureSetSaved"
+    @close="closeSetEditor"
+    @refresh-sidebar="refreshSidebar"
   />
 
   <aside class="sidebar">
@@ -794,7 +775,7 @@ onMounted(() => {
                     "
                     @dragleave="dragLeaveSetItem"
                     @drop.prevent="
-                      dropOnSetItem(
+                      handleDropOnSet(
                         referenceSetInfoByCharacter[char.id].id,
                         $event
                       )
@@ -830,7 +811,7 @@ onMounted(() => {
           v-if="selectedSet"
           class="delete-character-inline"
           color="white"
-          @click.stop="deleteSet"
+          @click.stop="handleDeleteSet"
           title="Delete selected set"
         >
           mdi-trash-can-outline
@@ -866,7 +847,7 @@ onMounted(() => {
             @click="selectSet(pset.id)"
             @dragover.prevent="dragOverSetItem(pset.id)"
             @dragleave="dragLeaveSetItem"
-            @drop.prevent="dropOnSetItem(pset.id, $event)"
+            @drop.prevent="handleDropOnSet(pset.id, $event)"
           >
             <span class="sidebar-list-icon">
               <v-icon size="44">mdi-layers</v-icon>

@@ -55,7 +55,7 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
 });
 
-const emit = defineEmits(["close", "save"]);
+const emit = defineEmits(["close", "saved", "refresh-sidebar"]);
 
 const localSet = ref({
   id: null,
@@ -132,10 +132,8 @@ async function saveSetFromEditor(setData) {
       const errorText = await res.text();
       throw new Error(errorText || "Failed to save picture set");
     }
-
-    const data = await res.json();
-    emit("saved", data.picture_set || setData);
     emit("close");
+    emit("refresh-sidebar");
   } catch (e) {
     alert("Failed to save picture set: " + (e.message || e));
   }

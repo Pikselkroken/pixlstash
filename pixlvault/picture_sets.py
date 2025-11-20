@@ -37,9 +37,7 @@ class PictureSets:
             conn.commit()
             return cursor.lastrowid
 
-        picture_set.id = self._db.submit_write(
-            insert_picture_set, picture_set
-        ).result()
+        picture_set.id = self._db.submit_write(insert_picture_set, picture_set).result()
         logger.info(f"Created picture set: {picture_set.name} (id={picture_set.id})")
         return picture_set
 
