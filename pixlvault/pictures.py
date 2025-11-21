@@ -463,7 +463,7 @@ class Pictures:
                     )
                     self._update_attributes(
                         missing_facial_features, ["facial_features"]
-                    ).result()
+                    )
                     data_updated |= features_updated
 
                 timing = time.time() - start
@@ -1220,7 +1220,7 @@ class Pictures:
         logger.debug(
             f"Storing {bboxes_updated} updated face bboxes and thumbnails to database."
         )
-        self._update_attributes(pics, ["face_bbox", "thumbnail"]).result()
+        self._update_attributes(pics, ["face_bbox", "thumbnail"])
 
         return True, bboxes_updated
 
@@ -1353,7 +1353,9 @@ class Pictures:
             result.append(pic)
         return result
 
-    def find_by_text(self, text, top_n=5, include_scores=False, threshold=0.5):
+    def find_by_text(
+        self, text, top_n=5, include_scores=False, threshold=0.5, count=False
+    ):
         """
         Find the top N pictures whose embeddings best match the input text.
         Returns a list of Picture objects (and optionally similarity scores).
@@ -1429,6 +1431,9 @@ class Pictures:
                 results.append((pic, sim))
             else:
                 results.append(pic)
+
+        if count:
+            return len(results)
         return results
 
     def _start_quality_worker(self, interval=5):

@@ -125,6 +125,16 @@
                   >mdi-star</v-icon
                 >
               </div>
+              <!-- Info row absolutely positioned below thumbnail -->
+              <div class="thumbnail-info-row" style="position: absolute; left: 0; right: 0; bottom: -1.6em; width: 100%; text-align: center;">
+                <div v-if="props.selectedSort === 'search_likeness' && img.likeness_score !== undefined" class="likeness-score">
+                  Likeness: {{ img.likeness_score.toFixed(2) }}
+                </div>
+                <div v-else-if="props.selectedSort.includes('created_at') && img.created_at" class="date-label">
+                  {{ new Date(img.created_at).toLocaleString() }}
+                </div>
+                <div v-else style="height: 1.2em;">asdasasdasd</div>
+              </div>
             </div>
           </v-card>
           <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
@@ -627,6 +637,12 @@ async function fetchTotalImageCount() {
       if (!res.ok) throw new Error("Failed to fetch images for set");
       const data = await res.json();
       images = data.pictures || [];
+    } else if (props.searchQuery && props.searchQuery.trim()) {
+      // Use /search endpoint for text search
+      const url = `${props.backendUrl}/search?query=${encodeURIComponent(props.searchQuery.trim())}&top_n=10000`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch search results");
+      images = await res.json();
     } else {
       const params = buildPictureIdsQueryParams();
       const url = `${props.backendUrl}/pictures?info=true&offset=0&limit=10000&${params}`;
@@ -779,14 +795,27 @@ async function fetchThumbnailsBatch(start, end) {
         ids = images.map((img) => img.id);
       }
     } else {
-      const params = buildPictureIdsQueryParams();
-      const url = `${
-        props.backendUrl
-      }/pictures?info=true&offset=${start}&limit=${end - start}&${params}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        images = await res.json();
-        ids = images.map((img) => img.id);
+      // Only fetch if we don't already have metadata for this range
+      images = allGridImages.value.slice(start, end);
+      ids = images.map((img) => img.id);
+      // If not enough images, fetch missing ones
+      if (images.length < end - start) {
+        const params = buildPictureIdsQueryParams();
+        const url = `${props.backendUrl}/pictures?offset=${start}&limit=${end - start}&${params}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const fetched = await res.json();
+          // Fill in missing slots
+          for (let i = 0; i < fetched.length; i++) {
+            allGridImages.value[start + i] = {
+              ...fetched[i],
+              idx: start + i,
+              thumbnail: null,
+            };
+          }
+          images = allGridImages.value.slice(start, end);
+          ids = images.map((img) => img.id);
+        }
       }
     }
     console.debug(

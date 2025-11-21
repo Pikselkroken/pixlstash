@@ -1,4 +1,12 @@
 <template>
+  <ImageOverlay
+    :open="overlayOpen"
+    :initialImage="overlayImage"
+    :allImages="overlayImages"
+    :backendUrl="props.backendUrl"
+    @close="closeOverlay"
+    @apply-score="applyScore"
+  />
   <div class="likeness-rows" ref="likenessRowsContainer">
     <div v-for="(row, rowIdx) in visibleRows" :key="rowIdx" class="likeness-row">
       <div v-for="img in row" :key="img.id" class="likeness-image-card">
@@ -6,11 +14,12 @@
           :src="`${backendUrl}/pictures/${img.id}`"
           class="likeness-img"
           :style="{ width: `${thumbnailSize}px`, height: `${thumbnailSize}px` }"
+          @click="openOverlay(img, row)"
         />
         <div class="likeness-metrics">
-          <span>Res: {{ img.resolution }}</span>
-          <span>Sharp: {{ img.sharpness }}</span>
-          <span>Noise: {{ img.noisiness }}</span>
+          <span v-if="img.width && img.height" style="margin-right: 1em;">Resolution: {{ img.width }} x {{ img.height }}</span>
+          <span v-if="img.sharpness" style="margin-right: 1em;">Sharp: {{ typeof img.sharpness === 'number' ? img.sharpness.toFixed(2) : img.sharpness }}</span>
+          <span v-if="img.noise_level">Noise: {{ typeof img.noise_level === 'number' ? img.noise_level.toFixed(2) : img.noise_level }}</span>
         </div>
         <div v-if="props.showStars" class="star-overlay" style="margin-top: 2px;">
           <v-icon
@@ -22,6 +31,15 @@
             @click.stop="setScore(img, n)"
           >mdi-star</v-icon>
         </div>
+        <div class="likeness-toggle" style="margin-top: 8px;">
+          <v-switch
+            v-model="toggleStates[rowIdx][img.id]"
+            :label="toggleStates[rowIdx][img.id] ? 'keep' : 'delete'"
+            :color="toggleStates[rowIdx][img.id] ? 'success' : 'red'"
+            inset
+            hide-details
+          />
+        </div>
       </div>
     </div>
     <div v-if="loading" class="loading-indicator">Loading...</div>
@@ -29,13 +47,31 @@
 </template>
 
 <script setup>
+import { reactive, watchEffect } from 'vue';
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import ImageOverlay from './ImageOverlay.vue';
 
 const props = defineProps({
   backendUrl: String,
   thumbnailSize: Number,
   showStars: Boolean,
 });
+
+// Overlay state
+const overlayOpen = ref(false);
+const overlayImage = ref(null);
+const overlayImages = ref([]);
+
+function openOverlay(img, row) {
+  overlayImage.value = img;
+  overlayImages.value = row;
+  overlayOpen.value = true;
+}
+
+function closeOverlay() {
+  overlayOpen.value = false;
+}
+
 const thumbnailSize = computed(() => props.thumbnailSize);
 const visibleRows = ref([]);
 const loading = ref(false);
@@ -43,6 +79,21 @@ const pageSize = 10;
 let pageOffset = 0;
 const likenessRowsContainer = ref(null);
 const allRows = ref([]);
+
+// Track toggle state for each image in each row
+const toggleStates = reactive({});
+
+watchEffect(() => {
+  visibleRows.value.forEach((row, rowIdx) => {
+    if (!toggleStates[rowIdx]) toggleStates[rowIdx] = {};
+    row.forEach((img, imgIdx) => {
+      if (!(img.id in toggleStates[rowIdx])) {
+        // Leftmost image defaults to keep, others to delete
+        toggleStates[rowIdx][img.id] = imgIdx === 0;
+      }
+    });
+  });
+});
 
 async function fetchLikenessRows() {
   loading.value = true;

@@ -302,27 +302,15 @@ class Server:
                 if len(stack) >= min_group_size:
                     groups.append(list(stack))
             # For each group, fetch picture info and select best
+            from pixlvault.picture_stack_utils import order_stack_pictures
+
             stacks = []
             for group in groups:
                 pics = [self.vault.pictures[pid] for pid in group]
-
-                # Preselect: highest resolution, sharpness, lowest noise
-                def preselect_key(pic):
-                    res = PictureUtils.load_metadata(pic.file_path)
-                    sharp = getattr(pic, "sharpness", -1)
-                    noise = getattr(pic, "noise_level", 1e9)
-                    # Prefer higher resolution, sharpness, lower noise
-                    return (
-                        (res[0] * res[1]) if res else 0,
-                        sharp,
-                        -noise,
-                    )
-
-                best_idx = max(range(len(pics)), key=lambda i: preselect_key(pics[i]))
+                ordered = order_stack_pictures(pics)
                 stacks.append(
                     {
-                        "pictures": [pic.to_dict() for pic in pics],
-                        "preselected_index": best_idx,
+                        "pictures": [pic.to_dict() for pic in ordered],
                     }
                 )
             return {
@@ -529,6 +517,7 @@ class Server:
 
             q = query.strip().lower()
             if not q:
+                logger.warning("Empty search query received")
                 return []
 
             # Split on any whitespace or punctuation
@@ -713,6 +702,7 @@ class Server:
 
             # Optionally, include fuzzy/semantic scores for debugging:
             # return [{**pic_to_dict(pic), "score": score, "fuzzy": fuzzy, "semantic": sem} for pic, score, fuzzy, sem in combined[:top_n]]
+            logger.warning("Got total of {} search results".format(len(combined)))
             return [
                 pic_to_dict(pic, likeness_score=score)
                 for pic, score, _, _ in combined[:top_n]

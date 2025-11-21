@@ -26,6 +26,7 @@ const emit = defineEmits([
   "set-error",
   "set-loading",
   "images-assigned-to-character",
+  "search-images",
 ]);
 
 const dragOverSet = ref(null);
