@@ -13,6 +13,7 @@
     "compromise": "^14.14.4",
     "marked": "^16.4.1",
     "vue": "^3.5.22",
+    "vuedraggable": "^4.1.0",
     "vuetify": "^3.6.7"
   },
   "devDependencies": {

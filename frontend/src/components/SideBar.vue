@@ -394,7 +394,12 @@ async function handleDeleteSet() {
   const setToDelete = pictureSets.value.find((s) => s.id === props.selectedSet);
   if (!setToDelete) return;
 
-  if (!window.confirm(`Delete picture set "${setToDelete.name}"? This will unassign all their images.`)) return;
+  if (
+    !window.confirm(
+      `Delete picture set "${setToDelete.name}"? This will unassign all their images.`
+    )
+  )
+    return;
 
   try {
     const res = await fetch(
@@ -574,7 +579,6 @@ onMounted(() => {
 });
 
 defineExpose({ refreshSidebar });
-
 </script>
 
 <template>
@@ -878,24 +882,6 @@ defineExpose({ refreshSidebar });
       </div>
     </transition>
 
-    <div class="sidebar-section-header" @click="toggleSection('analysis')">
-      <v-icon small style="margin-right: 8px">
-        {{ sections.analysis ? "mdi-chevron-down" : "mdi-chevron-right" }}
-      </v-icon>
-      Analysis
-      <span style="flex: 1 1 auto"></span>
-    </div>
-    <transition name="fade">
-      <div v-show="sections.analysis">
-        <div class="sidebar-list-item" @click="$emit('switch-to-likeness')">
-          <span class="sidebar-list-icon">
-            <v-icon size="44">mdi-account-group</v-icon>
-          </span>
-          <span class="sidebar-list-label">Likeness View</span>
-        </div>
-      </div>
-    </transition>
-
     <div class="sidebar-section-header" @click="toggleSection('search')">
       <v-icon small style="margin-right: 8px">
         {{ sections.search ? "mdi-chevron-down" : "mdi-chevron-right" }}
@@ -903,6 +889,7 @@ defineExpose({ refreshSidebar });
       Search &amp; Sorting
       <span style="flex: 1 1 auto"></span>
     </div>
+
     <transition name="fade">
       <div class="search-and-sort" v-show="sections.search">
         <div class="sidebar-searchbar-wrapper">
@@ -924,6 +911,23 @@ defineExpose({ refreshSidebar });
             dense
             hide-details
           />
+        </div>
+      </div>
+    </transition>
+    <div class="sidebar-section-header" @click="toggleSection('analysis')">
+      <v-icon small style="margin-right: 8px">
+        {{ sections.analysis ? "mdi-chevron-down" : "mdi-chevron-right" }}
+      </v-icon>
+      Analysis
+      <span style="flex: 1 1 auto"></span>
+    </div>
+    <transition name="fade">
+      <div v-show="sections.analysis">
+        <div class="sidebar-list-item" @click="$emit('switch-to-likeness')">
+          <span class="sidebar-list-icon">
+            <v-icon size="44">mdi-account-group</v-icon>
+          </span>
+          <span class="sidebar-list-label">Likeness View</span>
         </div>
       </div>
     </transition>

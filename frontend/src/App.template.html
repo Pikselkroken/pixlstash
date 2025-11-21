@@ -66,14 +66,15 @@
           <v-icon>mdi-robot</v-icon>
         </v-btn>
 
-          <v-btn v-if="currentView === 'grid'"
-            icon
-            @click="handleExportZip"
-            title="Export current grid to zip"
-            style="margin-left: 4px"
-          >
-            <v-icon>mdi-download</v-icon>
-          </v-btn>
+        <v-btn
+          v-if="currentView === 'grid'"
+          icon
+          @click="handleExportZip"
+          title="Export current grid to zip"
+          style="margin-left: 4px"
+        >
+          <v-icon>mdi-download</v-icon>
+        </v-btn>
 
         <!-- Settings Dialog -->
         <v-dialog v-model="settingsDialog" max-width="70vw">
@@ -268,10 +269,14 @@
           style="margin-top: 0; padding-top: 0"
         >
           <template v-if="currentView === 'likeness'">
-            <LikenessRows ref="likenessRowsRef" :backendUrl="BACKEND_URL" :thumbnailSize="thumbnailSize" :showStars="showStars" />
-            <v-btn style="margin-top: 16px" @click="handleSwitchToGrid"
-              >Back to Grid View</v-btn
-            >
+            <LikenessRows
+              ref="likenessRowsRef"
+              :backendUrl="BACKEND_URL"
+              :thumbnailSize="thumbnailSize"
+              :showStars="showStars"
+              :storedLikenessThreshold="config.likeness_threshold"
+              @update:likeness-threshold="val => config.likeness_threshold = val"
+            />
           </template>
           <template v-else-if="selectedCharacter || selectedSet !== null">
             <ImageGrid

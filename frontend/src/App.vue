@@ -58,6 +58,7 @@ const config = reactive({
   sort: "",
   thumbnail: 256,
   show_stars: true,
+  likeness_threshold: 0.97,
   openai_host: "localhost",
   openai_port: 8000,
   openai_model: "",
@@ -71,14 +72,15 @@ const newImageRoot = ref("");
 const loading = ref(false);
 const error = ref(null);
 
-
 function refreshSidebar() {
   sidebarRef.value?.refreshSidebar();
 }
 
 function handleSwitchToLikeness() {
+  console.log("[App.vue] handleSwitchToLikeness called");
   currentView.value = "likeness";
   nextTick(() => {
+    console.log("[App.vue] Calling likenessRowsRef.refreshLikeness()");
     likenessRowsRef.value?.refreshLikeness();
   });
 }
@@ -142,6 +144,9 @@ async function fetchConfig() {
     const data = await res.json();
     config.image_roots = data.image_roots || [];
     config.selected_image_root = data.selected_image_root || "";
+    if (typeof data.likeness_threshold === "number") {
+      config.likeness_threshold = data.likeness_threshold;
+    }
     const sortValue = data.sort_order ?? data.sort;
     if (typeof sortValue === "string" && sortValue) {
       selectedSort.value = sortValue;
@@ -216,6 +221,7 @@ async function patchConfigUIOptions(opts = {}) {
     sort: selectedSort.value,
     thumbnail: thumbnailSize.value,
     show_stars: showStars.value,
+    likeness_threshold: config.likeness_threshold,
     openai_host: config.openai_host,
     openai_port: config.openai_port,
     openai_model: config.openai_model,
@@ -312,6 +318,20 @@ watch(searchQuery, (newVal, oldVal) => {
   }
 });
 
+watch(currentView, (val) => {
+  if (val === "likeness") {
+    console.log(
+      "[App.vue] currentView watcher: switched to likeness, refreshing..."
+    );
+    nextTick(() => {
+      console.log(
+        "[App.vue] currentView watcher: calling likenessRowsRef.refreshLikeness()"
+      );
+      likenessRowsRef.value?.refreshLikeness();
+    });
+  }
+});
+
 watch(settingsDialog, (val) => {
   if (val) fetchConfig();
 });
@@ -323,6 +343,13 @@ watch(selectedSort, (val) => {
 watch(thumbnailSize, (val) => {
   patchConfigUIOptions({ thumbnail: val });
 });
+
+watch(
+  () => config.likeness_threshold,
+  (val) => {
+    patchConfigUIOptions({ likeness_threshold: val });
+  }
+);
 
 watch(showStars, (val) => {
   patchConfigUIOptions({ show_stars: val });
