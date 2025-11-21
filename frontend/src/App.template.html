@@ -59,13 +59,21 @@
         </v-btn>
         <v-btn
           icon
-          :color="chatOpen ? 'primary' : 'grey'"
           @click="openChatOverlay"
           title="Open AI chat"
           style="margin-left: 4px"
         >
           <v-icon>mdi-robot</v-icon>
         </v-btn>
+
+          <v-btn v-if="currentView === 'grid'"
+            icon
+            @click="handleExportZip"
+            title="Export current grid to zip"
+            style="margin-left: 4px"
+          >
+            <v-icon>mdi-download</v-icon>
+          </v-btn>
 
         <!-- Settings Dialog -->
         <v-dialog v-model="settingsDialog" max-width="70vw">

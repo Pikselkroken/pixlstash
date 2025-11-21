@@ -1053,6 +1053,23 @@ watch(
   () => props.thumbnailSize,
   () => {
     updateColumns();
+    // Recalculate visibleStart and visibleEnd after columns/rowHeight update
+    nextTick(() => {
+      const el = scrollWrapper.value;
+      if (!el) return;
+      let cardHeight = rowHeight.value;
+      const scrollTop = el.scrollTop;
+      const cols = columns.value;
+      // First visible row (may be partially visible)
+      const firstVisibleRow = scrollTop / cardHeight;
+      // Last visible row (may be partially visible)
+      const lastVisibleRow = (scrollTop + el.clientHeight - 1) / cardHeight;
+      const newVisibleStart = Math.floor(firstVisibleRow) * cols;
+      const newVisibleEnd = Math.ceil(lastVisibleRow) * cols;
+      visibleStart.value = newVisibleStart;
+      visibleEnd.value = newVisibleEnd;
+      updateVisibleThumbnails();
+    });
   }
 );
 
@@ -1066,7 +1083,42 @@ defineExpose({
   gridEl: scrollWrapper,
   onGlobalKeyPress,
   updateVisibleThumbnails,
+  exportCurrentViewToZip,
 });
+
+// --- Export to Zip ---
+async function exportCurrentViewToZip() {
+  // Build query params for current view
+  let url = `${props.backendUrl}/export/zip`;
+  const params = buildPictureIdsQueryParams();
+  if (params) {
+    url += `?${params}`;
+  }
+  // If viewing a set, send set_id as param
+  if (
+    props.selectedSet &&
+    props.selectedSet !== "__all__" &&
+    props.selectedSet !== "__unassigned__"
+  ) {
+    url += params ? `&set_id=${props.selectedSet}` : `?set_id=${props.selectedSet}`;
+  }
+  try {
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) throw new Error("Failed to export zip");
+    const blob = await res.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "pixlvault_export.zip";
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(link.href);
+      document.body.removeChild(link);
+    }, 2000);
+  } catch (e) {
+    alert("Export failed: " + (e.message || e));
+  }
+}
 </script>
 <style scoped>
 .drag-overlay {

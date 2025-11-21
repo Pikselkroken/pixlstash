@@ -282,6 +282,17 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
   refreshGridVersion();
 }
 
+// --- Export to Zip ---
+function handleExportZip() {
+  // Forward export event to ImageGrid via ref
+  console.log("Exporting current view to zip...");
+  if (currentView.value !== "grid") {
+    console.warn("Export to zip is only available in grid view.");
+    return;
+  }
+  gridContainer.value?.exportCurrentViewToZip();
+}
+
 // --- Watchers ---
 // Scroll to bottom after END loads last page
 // (Removed watch on images)
