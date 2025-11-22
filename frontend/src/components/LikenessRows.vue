@@ -45,9 +45,9 @@
       </Draggable>
       <div style="font-size: 0.9em; color: #aaa">Drag to reorder</div>
     </div>
-    <v-btn color="red" variant="outlined" style="width: 100%"
-      >Delete All Duplicates</v-btn
-    >
+    <v-btn color="orange" variant="outlined" style="width: 100%" @click="selectAllDuplicates">
+      Select All Duplicates
+    </v-btn>
   </Toolbox>
   <ImageOverlay
     :open="overlayOpen"
@@ -58,7 +58,7 @@
     @apply-score="applyScore"
   />
   <div style="position: relative; min-height: 100%; width: 100%">
-    <div class="likeness-rows" ref="likenessRowsContainer">
+    <div class="likeness-rows" ref="likenessRowsContainer" @click="onBackgroundClick">
       <div
         v-if="loggedVisibleRows.length === 0 && !loading"
         class="empty-message"
@@ -299,6 +299,12 @@ watchEffect(() => {
   });
 });
 
+
+// Clear selection when clicking background (not on image card)
+function onBackgroundClick(e) {
+  clearSelection();
+}
+
 async function fetchLikenessRows() {
   console.log(
     `[LikenessRows.vue] fetchLikenessRows called, threshold=${likenessThreshold.value}`
@@ -325,9 +331,9 @@ async function fetchLikenessRows() {
     }
     console.log(`[LikenessRows.vue] Parsed rows count: ${rows.length}`);
     allRows.value = rows;
-    // Always reset pagination and visibleRows
-    pageOffset = 0;
+    // Always reset pagination and visibleRows before loading
     visibleRows.value = [];
+    pageOffset = 0;
     loading.value = false;
     loadMoreRows();
   } catch (e) {
@@ -420,10 +426,30 @@ function onThumbnailClick(img, row, event) {
 }
 
 
-function deleteSelected() {
+async function deleteSelected() {
   if (!selectedImageIds.value.length) return;
   if (!confirm(`Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`)) return;
   const backendUrl = props.backendUrl;
+  // For each row, if a deleted image has a higher score than the main image, transfer it
+  const toDelete = new Set(selectedImageIds.value);
+  visibleRows.value.forEach(row => {
+    if (!row.length) return;
+    const mainImg = row[0];
+    let maxScore = mainImg.score || 0;
+    let transferScore = null;
+    row.forEach(img => {
+      if (toDelete.has(img.id) && (img.score || 0) > maxScore) {
+        maxScore = img.score;
+        transferScore = img.score;
+      }
+    });
+    if (transferScore !== null && transferScore > (mainImg.score || 0)) {
+      // Transfer score to main image
+      mainImg.score = transferScore;
+      fetch(`${backendUrl}/pictures/${mainImg.id}?score=${transferScore}`, { method: "PATCH" });
+    }
+  });
+  // Now delete as before
   Promise.all(
     selectedImageIds.value.map((id) =>
       fetch(`${backendUrl}/pictures/${id}`, { method: "DELETE" })
@@ -435,26 +461,37 @@ function deleteSelected() {
         })
     )
   ).then(() => {
-  // Mark deleted images as deleted (greyed out) until next manual refresh
-  const toDelete = new Set(selectedImageIds.value);
-  visibleRows.value.forEach(row => {
-    row.forEach(img => {
-      if (toDelete.has(img.id)) img._deleted = true;
+    // Mark deleted images as deleted (greyed out) until next manual refresh
+    visibleRows.value.forEach(row => {
+      row.forEach(img => {
+        if (toDelete.has(img.id)) img._deleted = true;
+      });
     });
-  });
-  allRows.value.forEach(row => {
-    row.forEach(img => {
-      if (toDelete.has(img.id)) img._deleted = true;
+    allRows.value.forEach(row => {
+      row.forEach(img => {
+        if (toDelete.has(img.id)) img._deleted = true;
+      });
     });
+    selectedImageIds.value = [];
+    pageOffset = 0;
+    // Do not call fetchLikenessRows();
   });
-  selectedImageIds.value = [];
-  pageOffset = 0;
-  // Do not call fetchLikenessRows();
-});
 }
 
 function clearSelection() {
   selectedImageIds.value = [];
+}
+
+// Select all duplicate images (excluding main images in each row)
+function selectAllDuplicates() {
+  const ids = [];
+  visibleRows.value.forEach(row => {
+    // Skip main image (first in row)
+    row.slice(1).forEach(img => {
+      if (!img._deleted) ids.push(img.id);
+    });
+  });
+  selectedImageIds.value = ids;
 }
 
 // ESC key handler to clear selection
@@ -467,6 +504,12 @@ onBeforeUnmount(() => {
 function onKeyDown(e) {
   if (e.key === "Escape") {
     clearSelection();
+  } else if ((e.key === "Delete" || e.key === "Del") && selectedImageIds.value.length > 0) {
+    // Only trigger if not in an input/textarea
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+    if (tag !== "input" && tag !== "textarea") {
+      deleteSelected();
+    }
   }
 }
 </script>
