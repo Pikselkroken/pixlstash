@@ -290,11 +290,8 @@ function deleteSelected() {
     );
     selectedImageIds.value = [];
     lastSelectedIndex = null;
-    fetchTotalImageCount().then(() => {
-      loadedRanges.value = [];
-      updateVisibleThumbnails();
-      emit("refresh-sidebar");
-    });
+    updateVisibleThumbnails();
+    emit("refresh-sidebar");
   });
 }
 
