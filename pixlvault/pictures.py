@@ -1468,6 +1468,11 @@ class Pictures:
                 "DELETE FROM picture_tags WHERE picture_id = ?",
                 [(pid,) for pid in picture_ids],
             )
+            # Also delete from picture_likeness where either side matches
+            cursor.executemany(
+                "DELETE FROM picture_likeness WHERE picture_id_a = ? OR picture_id_b = ?",
+                [(pid, pid) for pid in picture_ids],
+            )
             conn.commit()
 
         self._db.submit_write(delete_pictures, picture_ids).result()

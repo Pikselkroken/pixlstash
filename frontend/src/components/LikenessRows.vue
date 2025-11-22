@@ -71,16 +71,19 @@
           :key="rowIdx"
           class="likeness-row"
         >
-          <div
-            v-for="img in row"
-            :key="img.id"
-            class="likeness-image-card"
-            :class="{ selected: selectedImageIds.includes(img.id) }"
-            @click="onThumbnailClick(img, row, $event)"
-            :draggable="selectedImageIds.includes(img.id)"
-            @dragstart="onImageDragStart(img, $event)"
-            style="position: relative"
-          >
+            <div
+              v-for="img in row"
+              :key="img.id"
+              class="likeness-image-card"
+              :class="{
+                selected: selectedImageIds.includes(img.id),
+                deleted: img._deleted
+              }"
+              @click="!img._deleted && onThumbnailClick(img, row, $event)"
+              :draggable="selectedImageIds.includes(img.id) && !img._deleted"
+              @dragstart="onImageDragStart(img, $event)"
+              style="position: relative"
+            >
             <div
               v-if="selectedImageIds.includes(img.id)"
               class="selection-overlay"
@@ -159,7 +162,7 @@
         :visible="selectedImageIds.length > 0"
         @clear-selection="clearSelection"
         @remove-from-group="() => {}"
-        @delete-selected="() => {}"
+        @delete-selected="deleteSelected"
       />
     </div>
   </div>
@@ -416,7 +419,40 @@ function onThumbnailClick(img, row, event) {
   openOverlay(img, row);
 }
 
-// PATCH: JAVASCRIPT CODE GOES BELOW THE FOLLOWING LINE
+
+function deleteSelected() {
+  if (!selectedImageIds.value.length) return;
+  if (!confirm(`Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`)) return;
+  const backendUrl = props.backendUrl;
+  Promise.all(
+    selectedImageIds.value.map((id) =>
+      fetch(`${backendUrl}/pictures/${id}`, { method: "DELETE" })
+        .then((res) => {
+          if (!res.ok) throw new Error(`Failed to delete image ${id}`);
+        })
+        .catch((err) => {
+          alert(`Error deleting image ${id}: ${err.message}`);
+        })
+    )
+  ).then(() => {
+  // Mark deleted images as deleted (greyed out) until next manual refresh
+  const toDelete = new Set(selectedImageIds.value);
+  visibleRows.value.forEach(row => {
+    row.forEach(img => {
+      if (toDelete.has(img.id)) img._deleted = true;
+    });
+  });
+  allRows.value.forEach(row => {
+    row.forEach(img => {
+      if (toDelete.has(img.id)) img._deleted = true;
+    });
+  });
+  selectedImageIds.value = [];
+  pageOffset = 0;
+  // Do not call fetchLikenessRows();
+});
+}
+
 function clearSelection() {
   selectedImageIds.value = [];
 }
@@ -572,6 +608,11 @@ function onKeyDown(e) {
   background: rgba(25, 118, 210, 0.62);
   pointer-events: none;
   z-index: 2;
+}
+.likeness-image-card.deleted {
+  opacity: 0.45;
+  filter: grayscale(1);
+  pointer-events: none;
 }
 </style>
 <!--- CSS CODE GOES ABOVE THE PREVIOUS LINE -->
