@@ -9,8 +9,8 @@ from pixlvault.database import DBPriority
 class WorkerType(str, Enum):
     FACIAL_FEATURES = "FacialFeaturesWorker"
     TAGGER = "TagWorker"
-    #    QUALITY = "QualityWorker"
-    #    LIKENESS = "LikenessWorker"
+    QUALITY = "QualityWorker"
+    LIKENESS = "LikenessWorker"
 
     @staticmethod
     def all():
