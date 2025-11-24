@@ -126,7 +126,7 @@ class TagWorker(BaseWorker):
     def _fetch_missing_descriptions(self):
         logger.debug("Starting the database fetch for missing descriptions")
 
-        rows_missing_descriptions = self._db.execute_read(
+        rows_missing_descriptions = self._db.submit_task(
             lambda conn: conn.execute(
                 """
             SELECT p.*
@@ -134,7 +134,7 @@ class TagWorker(BaseWorker):
             WHERE p.description IS NULL
             """
             ).fetchall()
-        )
+        ).result()
 
         return db_tools.from_batch_of_db_dicts(rows_missing_descriptions, [])
 
@@ -178,7 +178,7 @@ class TagWorker(BaseWorker):
         """Return PictureModels needing tags using the provided connection."""
 
         logger.debug("Starting the optimized database fetch for missing tags.")
-        pictures_missing_tags = self._db.execute_read(
+        pictures_missing_tags = self._db.submit_task(
             lambda conn: conn.execute(
                 """
             SELECT p.*
@@ -189,7 +189,7 @@ class TagWorker(BaseWorker):
             HAVING COUNT(pt.tag) = 0
             """
             ).fetchall()
-        )
+        ).result()
         return db_tools.from_batch_of_db_dicts(pictures_missing_tags)
 
     def _update_picture_tags(self, pictures):
@@ -256,14 +256,14 @@ class TagWorker(BaseWorker):
     def _fetch_missing_text_embeddings(self):
         """Return PictureModels needing text embeddings."""
 
-        rows_missing_embeddings = self._db.execute_read(
+        rows_missing_embeddings = self._db.submit_task(
             lambda conn: conn.execute(
                 """
                 SELECT *
                 FROM pictures WHERE description IS NOT NULL AND text_embedding IS NULL
                 """
             ).fetchall()
-        )
+        ).result()
         return db_tools.from_batch_of_db_dicts(rows_missing_embeddings, [])
 
     def _generate_text_embeddings(self, pictures_to_embed):

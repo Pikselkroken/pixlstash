@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 
 class LikenessWorker(BaseWorker):
-    BATCH_SIZE = 100000
+    BATCH_SIZE = 50000
     NUM_THREADS = 4
 
     def __init__(
@@ -36,11 +36,11 @@ class LikenessWorker(BaseWorker):
             logger.debug("LikenessWorker: Starting iteration...")
             pending_pairs = []
 
-            total_pending = self._db.execute_read(
+            total_pending = self._db.submit_task(
                 lambda conn: conn.execute(
                     "SELECT COUNT(*) FROM likeness_work_queue"
                 ).fetchone()
-            )[0]
+            ).result()[0]
             logger.debug(
                 "Got %d pending likeness pairs to process from work queue."
                 % (total_pending)
@@ -72,18 +72,18 @@ class LikenessWorker(BaseWorker):
                 f"LikenessWorker: DELETING existing items from likeness_work_queue took {time_after_cleanup - start:.2f} seconds."
             )
 
-            rows = self._db.execute_read(
+            rows = self._db.submit_task(
                 lambda conn: conn.execute(
                     "SELECT picture_id_a, picture_id_b FROM likeness_work_queue ORDER BY rowid LIMIT ?",
                     (self.BATCH_SIZE,),
                 ).fetchall()
-            )
+            ).result()
 
-            total_pending = self._db.execute_read(
+            total_pending = self._db.submit_task(
                 lambda conn: conn.execute(
                     "SELECT COUNT(*) FROM likeness_work_queue"
                 ).fetchone()
-            )[0]
+            ).result()[0]
             logger.info(
                 f"LikenessWorker: Fetched {len(rows)} rows from likeness_work_queue out of {total_pending}."
             )
@@ -94,12 +94,12 @@ class LikenessWorker(BaseWorker):
                 all_ids.add(row[1])
             if all_ids:
                 placeholders = ",".join(["?"] * len(all_ids))
-                pic_rows = self._db.execute_read(
+                pic_rows = self._db.submit_task(
                     lambda conn: conn.execute(
                         f"SELECT * FROM pictures WHERE id IN ({placeholders})",
                         tuple(all_ids),
                     ).fetchall()
-                )
+                ).result()
                 logger.info(
                     "Got %d pictures for likeness calculation." % (len(pic_rows))
                 )

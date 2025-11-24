@@ -45,11 +45,11 @@ class QualityWorker(BaseWorker):
                 logger.debug(
                     "Searching for pictures needing full image quality calculation."
                 )
-                rows = self._db.execute_read(
+                rows = self._db.submit_task(
                     lambda conn: conn.execute(
                         "SELECT * FROM pictures WHERE sharpness IS NULL OR edge_density IS NULL OR noise_level IS NULL OR contrast IS NULL OR brightness IS NULL",
                     ).fetchall()
-                )
+                ).result()
                 pics_full = db_tools.from_batch_of_db_dicts(rows)
                 grouped_full = self._group_pictures_by_size(pics_full, region="full")
 
@@ -67,11 +67,11 @@ class QualityWorker(BaseWorker):
                                 did_work = True
 
                 # 2. Face quality measures
-                face_rows = self._db.execute_read(
+                face_rows = self._db.submit_task(
                     lambda conn: conn.execute(
                         "SELECT * FROM pictures WHERE face_sharpness IS NULL OR face_edge_density IS NULL OR face_noise_level IS NULL OR face_contrast IS NULL OR face_brightness IS NULL",
                     ).fetchall()
-                )
+                ).result()
                 pics_face = db_tools.from_batch_of_db_dicts(face_rows)
                 grouped_face = self._group_pictures_by_size(pics_face, region="face")
 

@@ -93,7 +93,7 @@ class PictureTagger:
         self._florence_device = None
         self._florence_model_name = "microsoft/Florence-2-base"
 
-        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 70
+        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 60
 
         self._init_florence_captioning()
 
@@ -273,7 +273,7 @@ class PictureTagger:
                 frames = PictureUtils.extract_video_frames(image_path)
                 for idx, pil_img in enumerate(frames):
                     # Resize large images to speed up processing
-                    MAX_DIM = 768
+                    MAX_DIM = 640
                     if max(pil_img.size) > MAX_DIM:
                         aspect_ratio = pil_img.width / pil_img.height
                         if pil_img.width > pil_img.height:
@@ -340,7 +340,7 @@ class PictureTagger:
                         break
             else:
                 image = Image.open(image_path).convert("RGB")
-                MAX_DIM = 768
+                MAX_DIM = 640
                 if max(image.size) > MAX_DIM:
                     aspect_ratio = image.width / image.height
                     if image.width > image.height:

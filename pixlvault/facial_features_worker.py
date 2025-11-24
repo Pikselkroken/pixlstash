@@ -181,7 +181,7 @@ class FacialFeaturesWorker(BaseWorker):
 
     def _fetch_missing_facial_features(self):
         """Return PictureModels needing facial features using the provided connection."""
-        rows_missing_facial_features = self._db.execute_read(
+        rows_missing_facial_features = self._db.submit_task(
             lambda conn: conn.execute(
                 """
             SELECT p.*
@@ -192,17 +192,16 @@ class FacialFeaturesWorker(BaseWorker):
             GROUP BY p.id
             """
             ).fetchall()
-        )
+        ).result()
         return db_tools.from_batch_of_db_dicts(rows_missing_facial_features, [])
 
     def _find_pics_needing_face_bbox(self):
         """Find pictures that need face bounding boxes."""
-        rows = self._db.execute_read(
+        rows = self._db.submit_task(
             lambda conn: conn.execute(
                 "SELECT * FROM pictures WHERE face_bbox IS NULL"
             ).fetchall()
-        )
-
+        ).result()
         return db_tools.from_batch_of_db_dicts(rows, [])
 
     def _calculate_face_bboxes(self, pics) -> int:
