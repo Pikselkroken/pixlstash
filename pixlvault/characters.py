@@ -50,12 +50,12 @@ class Characters:
 
         if len(params_list) == 1:
             logger.info(f"INSERT INTO characters SQL: {sql} | params: {params_list[0]}")
-            cur = self._db.submit_write(
+            cur = self._db.submit_task(
                 lambda conn: conn.execute(sql, params_list[0])
             ).result()
             characters[0].id = cur.lastrowid
         else:
-            self._db.submit_write(
+            self._db.submit_task(
                 lambda conn: conn.executemany(sql, params_list)
             ).result()
 
@@ -80,11 +80,11 @@ class Characters:
             params_list.append(params)
 
         if len(params_list) == 1:
-            self._db.submit_write(
+            self._db.submit_task(
                 lambda conn: conn.execute(sql, params_list[0])
             ).result()
         else:
-            self._db.submit_write(
+            self._db.submit_task(
                 lambda conn: conn.executemany(sql, params_list)
             ).result()
 
@@ -93,7 +93,7 @@ class Characters:
         if not isinstance(character_ids, list):
             character_ids = [character_ids]
 
-        self._db.submit_write(
+        self._db.submit_task(
             lambda conn: conn.executemany(
                 "DELETE FROM characters WHERE id = ?",
                 [(cid,) for cid in character_ids],

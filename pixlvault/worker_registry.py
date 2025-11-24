@@ -1,4 +1,6 @@
+import random
 import threading
+import time
 
 from abc import ABC, ABCMeta, abstractmethod
 from enum import Enum
@@ -45,7 +47,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
     Class representing different types of picture processing workers.
     """
 
-    INTERVAL = 2.0  # Default interval between worker runs in seconds
+    INTERVAL = 5.0  # Default interval between worker runs in seconds
 
     def __init__(self, db_connection, picture_tagger, characters):
         self._db = db_connection
@@ -97,6 +99,13 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         return self.worker_type().value
 
+    def _wait(self):
+        """
+        Wait for a random short duration to stagger working time
+        """
+        wait_time = random.uniform(self.INTERVAL - 1.0, self.INTERVAL + 1.0)
+        time.sleep(wait_time)
+
     @abstractmethod
     def _run(self):
         """
@@ -116,6 +125,6 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
             # logger.info(f"Updating picture {picture.id} with attributes: {row}")
         set_clause = ", ".join([f"{attr}=?" for attr in attributes])
         query = f"UPDATE pictures SET {set_clause} WHERE id=?"
-        return self._db.submit_write(
+        return self._db.submit_task(
             lambda conn: conn.executemany(query, values), priority=DBPriority.LOW
         ).result()

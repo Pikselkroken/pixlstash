@@ -3,8 +3,7 @@ import os
 from typing import List
 import cv2
 import numpy as np
-
-from time import time
+import time
 
 from pixlvault.characters import Characters
 from pixlvault.database import DBPriority
@@ -21,24 +20,27 @@ logger = get_logger(__name__)
 
 class QualityWorker(BaseWorker):
     def __init__(
-        self, db_connection, picture_tagger: PictureTagger, characters: Characters
+        self,
+        db_connection,
+        picture_tagger: PictureTagger,
+        characters: Characters,
+        position: int = 1,
     ):
         super().__init__(db_connection, picture_tagger, characters)
+        self._progress_position = position
 
     def worker_type(self) -> WorkerType:
         return WorkerType.QUALITY
 
     def _run(self):
-        # ...existing code...
-        # Efficiently group pictures by size before batch quality calculation
-        # (inside the main loop, after fetching pics)
         BATCH_SIZE = 8
+        time.sleep(0.75)
         while not self._stop.is_set():
             start = time.time()
             logger.debug("[QUALITY] Starting iteration...")
             quality_updates = 0
+            did_work = False
             try:
-                start_quality_fetch = time.time()
                 # 1. Full image quality measures
                 logger.debug(
                     "Searching for pictures needing full image quality calculation."
@@ -48,88 +50,43 @@ class QualityWorker(BaseWorker):
                         "SELECT * FROM pictures WHERE sharpness IS NULL OR edge_density IS NULL OR noise_level IS NULL OR contrast IS NULL OR brightness IS NULL",
                     ).fetchall()
                 )
-
                 pics_full = db_tools.from_batch_of_db_dicts(rows)
-
-                start_quality_grouping = time.time()
-                logger.debug(
-                    "[QUALITY] It took %.2f seconds to fetch pictures needing quality calculation."
-                    % (start_quality_grouping - start_quality_fetch)
-                )
-                logger.debug(
-                    f"Read metadata for {len(pics_full)} pictures needing full image quality."
-                )
                 grouped_full = self._group_pictures_by_size(pics_full, region="full")
-                logger.debug(
-                    f"Grouped {len(grouped_full)} full image batches by size. Will calculate quality now."
-                )
-                start_quality_calculation = time.time()
-                logger.debug(
-                    "[QUALITY] It took %.2f seconds to group pictures by size."
-                    % (start_quality_calculation - start_quality_grouping)
-                )
 
-                for group in grouped_full.values():
-                    batch = group[:BATCH_SIZE]
-                    if batch:
-                        size = PictureUtils.load_metadata(batch[0].file_path)
-                        logger.debug(
-                            f"Processing batch of {len(batch)} images of size {size} out of a total of {len(group)}."
-                        )
-                        quality_updates = self._calculate_quality(batch)
-                        if quality_updates:
-                            self._db.submit_write(
-                                self._update_quality,
-                                quality_updates,
-                                priority=DBPriority.LOW,
-                            ).result()
-                start_face_quality_fetch = time.time()
-                logger.debug(
-                    "[QUALITY] It took %.2f seconds to calculate full image quality."
-                    % (start_face_quality_fetch - start_quality_calculation)
-                )
+                if grouped_full:
+                    for group in grouped_full.values():
+                        batch = group[:BATCH_SIZE]
+                        if batch:
+                            quality_updates = self._calculate_quality(batch)
+                            if quality_updates:
+                                self._db.submit_task(
+                                    self._update_quality,
+                                    quality_updates,
+                                    priority=DBPriority.LOW,
+                                ).result()
+                                did_work = True
+
                 # 2. Face quality measures
-                logger.debug("Searching for pictures needing face quality calculation.")
                 face_rows = self._db.execute_read(
                     lambda conn: conn.execute(
                         "SELECT * FROM pictures WHERE face_sharpness IS NULL OR face_edge_density IS NULL OR face_noise_level IS NULL OR face_contrast IS NULL OR face_brightness IS NULL",
                     ).fetchall()
                 )
                 pics_face = db_tools.from_batch_of_db_dicts(face_rows)
-
-                logger.debug(
-                    "[QUALITY] It took %.2f seconds to fetch pictures needing face quality calculation."
-                    % (time.time() - start_face_quality_fetch)
-                )
-                logger.debug(
-                    f"Read metadata for {len(pics_face)} pictures needing face quality."
-                )
                 grouped_face = self._group_pictures_by_size(pics_face, region="face")
-                logger.debug(
-                    f"Grouped {len(grouped_face)} face crop batches by bbox size. Will calculate face quality now."
-                )
-                for group in grouped_face.values():
-                    batch = group[:BATCH_SIZE]
-                    if batch:
-                        bbox_size = None
-                        if (
-                            batch[0].face_bbox is not None
-                            and len(batch[0].face_bbox) == 4
-                        ):
-                            x1, y1, x2, y2 = batch[0].face_bbox
-                            w = int(round((x2 - x1) / 64.0) * 64)
-                            h = int(round((y2 - y1) / 64.0) * 64)
-                            bbox_size = (h, w, 3)
-                        logger.debug(
-                            f"Processing face batch of {len(batch)} images of bbox size {bbox_size}."
-                        )
-                        quality_updates = self._calculate_quality(batch, True)
-                        self._db.submit_write(
-                            self._update_face_quality,
-                            quality_updates,
-                            priority=DBPriority.LOW,
-                        ).result()
 
+                if grouped_face:
+                    for group in grouped_face.values():
+                        batch = group[:BATCH_SIZE]
+                        if batch:
+                            quality_updates = self._calculate_quality(batch, True)
+                            if quality_updates:
+                                self._db.submit_task(
+                                    self._update_face_quality,
+                                    quality_updates,
+                                    priority=DBPriority.LOW,
+                                ).result()
+                                did_work = True
             except (sqlite3.OperationalError, OSError) as e:
                 msg = str(e)
                 if "no such column" in msg:
@@ -143,12 +100,15 @@ class QualityWorker(BaseWorker):
                 break
             except Exception as e:
                 logger.error(f"Quality worker error: {e}")
-
             timing = time.time() - start
-            if timing > 0.5:
-                logger.info("[QUALITY] Done after %.2f seconds." % timing)
-            if quality_updates == 0:
-                self._stop.wait(QualityWorker.INTERVAL)
+            if did_work and timing > 0.5:
+                logger.info("QualityWorker: Done after %.2f seconds." % timing)
+            if not did_work:
+                logger.info(
+                    "QualityWorker: Sleeping after %.2f seconds, no updates made."
+                    % timing
+                )
+                self._wait()
 
     def _group_pictures_by_size(self, pics: List[PictureModel], region: str = "full"):
         """

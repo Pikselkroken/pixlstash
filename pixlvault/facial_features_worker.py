@@ -30,18 +30,19 @@ class FacialFeaturesWorker(BaseWorker):
         return WorkerType.FACIAL_FEATURES
 
     def _run(self):
+        time.sleep(1.25)  # Stagger start times for multiple workers
         while not self._stop.is_set():
             try:
                 data_updated = False
 
                 start = time.time()
                 # 1. Calculate face bboxes
-                logger.debug("[FACIAL_FEATURES] Starting iteration...")
+                logger.debug("FacialFeaturesWorker: Starting iteration...")
                 pics_needing_face_bboxes = self._find_pics_needing_face_bbox()
                 time_after_fetch = time.time()
 
                 logger.debug(
-                    "[FACIAL_FEATURES] It took %.2f seconds to fetch %d pictures needing face bboxes."
+                    "FacialFeaturesWorker: It took %.2f seconds to fetch %d pictures needing face bboxes."
                     % (time_after_fetch - start, len(pics_needing_face_bboxes))
                 )
                 logger.debug(
@@ -54,7 +55,7 @@ class FacialFeaturesWorker(BaseWorker):
                 )
                 time_after_calculate = time.time()
                 logger.debug(
-                    "[FACIAL_FEATURES] It took %.2f seconds to calculate face bboxes."
+                    "FacialFeaturesWorker: It took %.2f seconds to calculate face bboxes."
                     % (time_after_calculate - time_after_fetch)
                 )
                 if not insightface_ok:
@@ -71,7 +72,7 @@ class FacialFeaturesWorker(BaseWorker):
                 # 2. Generate facial features for pictures missing them
                 missing_facial_features = self._fetch_missing_facial_features()
                 logger.debug(
-                    "[FACIAL_FEATURES] It took %.2f seconds to fetch %d pictures needing facial features."
+                    "FacialFeaturesWorker: It took %.2f seconds to fetch %d pictures needing facial features."
                     % (time.time() - time_after_calculate, len(missing_facial_features))
                 )
                 if missing_facial_features:
@@ -153,7 +154,7 @@ class FacialFeaturesWorker(BaseWorker):
                                     f"likeness_work_queue now contains {count} rows after insertion."
                                 )
 
-                        self._db.submit_write(
+                        self._db.submit_task(
                             insert_likeness_work_queue, new_ids, priority=DBPriority.LOW
                         ).result()
                     data_updated |= features_updated
@@ -161,10 +162,16 @@ class FacialFeaturesWorker(BaseWorker):
                 timing = time.time() - start
 
                 if timing > 0.5:
-                    logger.info("[FACIAL_FEATURES] Done after %.2f seconds." % timing)
+                    logger.info(
+                        "FacialFeaturesWorker: Done after %.2f seconds." % timing
+                    )
                 if not data_updated:
                     # Wait for the specified interval before checking again
-                    self._stop.wait(FacialFeaturesWorker.INTERVAL)
+                    logger.info(
+                        "FacialFeaturesWorker: Sleeping after %.2f seconds. No work needed."
+                        % timing
+                    )
+                    self._wait()
             except (sqlite3.OperationalError, OSError) as e:
                 # Database file was deleted or connection lost during shutdown
                 logger.debug(

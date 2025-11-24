@@ -1,8 +1,5 @@
 import numpy as np
-import time
-import threading
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from enum import Enum
 from typing import Union, List
@@ -11,9 +8,9 @@ import pixlvault.picture_db_tools as db_tools
 
 from pixlvault.logging import get_logger
 from pixlvault.picture import PictureModel
-from pixlvault.picture_quality import PictureQuality
 from pixlvault.picture_tagger import PictureTagger
 from pixlvault.database import DBPriority
+from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.quality_worker import QualityWorker  # noqa: F401
 from pixlvault.facial_features_worker import FacialFeaturesWorker  # noqa: F401
 from pixlvault.tag_worker import TagWorker  # noqa: F401
@@ -72,8 +69,6 @@ def get_sort_mechanisms():
 
 
 class Pictures:
-    NUM_LIKENESS_THREADS = 4
-
     def __init__(self, db, characters=None, device=None):
         self._db = db
         self._skip_pictures = set()
@@ -88,14 +83,9 @@ class Pictures:
         self._workers = {}
 
         for worker_type in WorkerType.all():
-            if worker_type == WorkerType.LIKENESS:
-                continue
             self._workers[worker_type] = WorkerRegistry.create_worker(
                 worker_type, self._db, self._picture_tagger, self._characters
             )
-
-        self._likeness_worker = None
-        self._likeness_worker_stop = None
 
     def __getitem__(self, picture_id):
         logger.debug(f"Fetching picture with id={picture_id} (type={type(picture_id)})")
@@ -120,7 +110,7 @@ class Pictures:
         self.import_picture(picture)
 
     def __delitem__(self, picture_id):
-        self._db.submit_write(
+        self._db.submit_task(
             lambda conn: conn.execute(
                 "DELETE FROM picture_tags WHERE picture_id = ?", (picture_id,)
             ),
@@ -153,233 +143,14 @@ class Pictures:
     def start_worker(self, worker: WorkerType):
         if worker in self._workers:
             self._workers[worker].start()
-        elif worker == WorkerType.LIKENESS:
-            self._start_likeness_worker()
         else:
             raise ValueError(f"Unknown worker type: {worker}")
 
     def stop_worker(self, worker: WorkerType):
         if worker in self._workers:
             self._workers[worker].stop()
-        elif worker == WorkerType.LIKENESS:
-            self._stop_likeness_worker()
         else:
             raise ValueError(f"Unknown worker type: {worker}")
-
-    def _start_likeness_worker(self, batch_size=200000, interval=5):
-        if (
-            hasattr(self, "_likeness_worker")
-            and self._likeness_worker
-            and self._likeness_worker.is_alive()
-        ):
-            logger.info("Likeness worker already running.")
-            return
-        self._likeness_worker_stop = threading.Event()
-        self._likeness_worker = threading.Thread(
-            target=self._likeness_loop, args=(batch_size, interval), daemon=True
-        )
-        self._likeness_worker.start()
-
-    def _stop_likeness_worker(self):
-        if hasattr(self, "_likeness_worker_stop") and self._likeness_worker_stop:
-            self._likeness_worker_stop.set()
-        if hasattr(self, "_likeness_worker") and self._likeness_worker:
-            self._likeness_worker.join(timeout=10)
-
-    def _likeness_loop(self, batch_size, interval):
-        while not self._likeness_worker_stop.is_set():
-            data_updated = False
-            likeness_score_count = 0
-            start = time.time()
-            logger.debug("[LIKENESS] Starting iteration...")
-            pending_pairs = []
-
-            total_pending = self._db.execute_read(
-                lambda conn: conn.execute(
-                    "SELECT COUNT(*) FROM likeness_work_queue"
-                ).fetchone()
-            )[0]
-            logger.info(
-                "Got %d pending likeness pairs to process from work queue."
-                % (total_pending)
-            )
-            if total_pending == 0:
-                logger.info(
-                    "[LIKENESS] No pending pairs, sleeping and skipping any deletion..."
-                )
-                time.sleep(interval)
-                continue
-
-            self._db.submit_write(
-                lambda conn: conn.execute(
-                    """
-                DELETE FROM likeness_work_queue
-                WHERE EXISTS (
-                    SELECT 1 FROM picture_likeness
-                    WHERE picture_likeness.picture_id_a = likeness_work_queue.picture_id_a
-                        AND picture_likeness.picture_id_b = likeness_work_queue.picture_id_b
-                )
-            """
-                ),
-                priority=DBPriority.LOW,
-            ).result()
-            time_after_cleanup = time.time()
-            logger.debug(
-                f"[LIKENESS] DELETING existing items from likeness_work_queue took {time_after_cleanup - start:.2f} seconds."
-            )
-
-            rows = self._db.execute_read(
-                lambda conn: conn.execute(
-                    "SELECT picture_id_a, picture_id_b FROM likeness_work_queue ORDER BY rowid LIMIT ?",
-                    (batch_size,),
-                ).fetchall()
-            )
-
-            total_pending = self._db.execute_read(
-                lambda conn: conn.execute(
-                    "SELECT COUNT(*) FROM likeness_work_queue"
-                ).fetchone()
-            )[0]
-            logger.info(
-                f"[LIKENESS] Fetched {len(rows)} rows from likeness_work_queue out of {total_pending}."
-            )
-            # Batch fetch all required pictures
-            all_ids = set()
-            for row in rows:
-                all_ids.add(row[0])
-                all_ids.add(row[1])
-            if all_ids:
-                placeholders = ",".join(["?"] * len(all_ids))
-                pic_rows = self._db.execute_read(
-                    lambda conn: conn.execute(
-                        f"SELECT * FROM pictures WHERE id IN ({placeholders})",
-                        tuple(all_ids),
-                    ).fetchall()
-                )
-                logger.info(
-                    "Got %d pictures for likeness calculation." % (len(pic_rows))
-                )
-                pic_dict = {
-                    row["id"]
-                    if isinstance(row, dict)
-                    else row[0]: PictureModel.from_dict(row)
-                    for row in pic_rows
-                }
-                for row in rows:
-                    pic_a_id, pic_b_id = row[0], row[1]
-                    pic_a = pic_dict.get(pic_a_id)
-                    pic_b = pic_dict.get(pic_b_id)
-                    if not pic_a or not pic_b:
-                        continue
-                    # Only process if both have facial features
-                    if not pic_a.facial_features:
-                        logger.warning(
-                            f"[LIKENESS] Picture id={pic_a_id} missing facial features, skipping pair."
-                        )
-                    if not pic_b.facial_features:
-                        logger.warning(
-                            f"[LIKENESS] Picture id={pic_b_id} missing facial features, skipping pair."
-                        )
-                    if not pic_a.facial_features or not pic_b.facial_features:
-                        continue
-                    pending_pairs.append((pic_a_id, pic_b_id, pic_a, pic_b))
-
-            logger.info(
-                "[LIKENESS] Got %d pending likeness pairs to process from work queue."
-                % (len(pending_pairs))
-            )
-            if pending_pairs:
-                batches = [
-                    pending_pairs[i * batch_size : (i + 1) * batch_size]
-                    for i in range(
-                        min(
-                            Pictures.NUM_LIKENESS_THREADS,
-                            (len(pending_pairs) + batch_size - 1) // batch_size,
-                        )
-                    )
-                ]
-
-                def process_batch(batch):
-                    pic_a_list = [item[2] for item in batch]
-                    pic_b_list = [item[3] for item in batch]
-                    features_a = [
-                        np.frombuffer(pic.facial_features, dtype=np.float32)
-                        for pic in pic_a_list
-                    ]
-                    features_b = [
-                        np.frombuffer(pic.facial_features, dtype=np.float32)
-                        for pic in pic_b_list
-                    ]
-                    likeness_values = PictureQuality.batch_likeness_scores(
-                        features_a, features_b
-                    )
-                    likeness_scores = [
-                        (item[0], item[1], float(likeness), "cosine")
-                        for item, likeness in zip(batch, likeness_values)
-                    ]
-                    # Remove processed pairs from work queue
-                    queue_pairs = [(item[0], item[1]) for item in batch]
-                    return likeness_scores, queue_pairs
-
-                # Run batches in thread pool and join
-                processed_total = 0
-                all_likeness_scores = []
-                all_processed_pairs = []
-                with ThreadPoolExecutor(max_workers=len(batches)) as executor:
-                    futures = [
-                        executor.submit(process_batch, batch)
-                        for batch in batches
-                        if batch
-                    ]
-                    for future in as_completed(futures):
-                        batch_scores, processed_pairs = future.result()
-                        all_likeness_scores.extend(batch_scores)
-                        all_processed_pairs.extend(processed_pairs)
-                        processed_total += len(batch_scores)
-
-                logger.debug(
-                    f"[LIKENESS] Processed {processed_total} likeness scores in this iteration."
-                )
-                # Bulk insert all likeness scores and remove processed pairs
-                if all_likeness_scores:
-
-                    def insert_likeness_scores(conn, all_likeness_scores):
-                        cursor = conn.cursor()
-                        cursor.executemany(
-                            """
-                            INSERT OR IGNORE INTO picture_likeness (
-                                picture_id_a, picture_id_b, likeness, metric
-                            ) VALUES (?, ?, ?, ?)
-                            """,
-                            all_likeness_scores,
-                        )
-                        # Remove processed pairs from work queue
-                        cursor.executemany(
-                            "DELETE FROM likeness_work_queue WHERE picture_id_a = ? AND picture_id_b = ?",
-                            all_processed_pairs,
-                        )
-                        conn.commit()
-
-                    self._db.submit_write(
-                        insert_likeness_scores,
-                        all_likeness_scores,
-                        priority=DBPriority.LOW,
-                    )
-                    logger.debug(
-                        f"[LIKENESS] Bulk inserted {len(all_likeness_scores)} likeness scores and removed {len(all_processed_pairs)} processed pairs from work queue."
-                    )
-                    likeness_score_count = len(all_likeness_scores)
-                    data_updated = True
-
-            timing = time.time() - start
-            if timing > 0.5:
-                logger.info(
-                    "[LIKENESS] Calculated and updated %d likeness scores in %.2f seconds."
-                    % (likeness_score_count, time.time() - start)
-                )
-            if not data_updated:
-                self._likeness_worker_stop.wait(interval)
-        logger.info("[LIKENESS] Likeness worker stopped.")
 
     def find(self, **kwargs):
         """
@@ -562,7 +333,7 @@ class Pictures:
             )
             conn.commit()
 
-        self._db.submit_write(delete_pictures, picture_ids).result()
+        self._db.submit_task(delete_pictures, picture_ids).result()
 
     def likeness_query(self, treshold: float):
         """Return pairs of picture IDs with a likeness score above threshold."""
@@ -613,7 +384,7 @@ class Pictures:
                     )
             conn.commit()
 
-        new_picture_ids = self._db.submit_write(
+        new_picture_ids = self._db.submit_task(
             lambda conn: insert_pictures_and_tags(
                 conn, picture_dicts, list_of_tag_dicts
             ),
@@ -642,7 +413,7 @@ class Pictures:
                     )
                     conn.commit()
 
-            self._db.submit_write(
+            self._db.submit_task(
                 append_work_queue, new_picture_ids, priority=DBPriority.LOW
             ).result()
         return new_picture_ids
@@ -677,7 +448,7 @@ class Pictures:
             conn.commit()
 
         for pic_dict, tag_dicts in zip(picture_dicts, list_of_tag_dicts):
-            self._db.submit_write(update_picture_and_tag, pic_dict, tag_dicts)
+            self._db.submit_task(update_picture_and_tag, pic_dict, tag_dicts)
 
     def fetch_by_shas(self, shas: list[str]) -> list[PictureModel]:
         if not shas:

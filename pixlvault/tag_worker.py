@@ -18,32 +18,40 @@ class TagWorker(BaseWorker):
     """
 
     def __init__(
-        self, db_connection, picture_tagger: PictureTagger, characters: Characters
+        self,
+        db_connection,
+        picture_tagger: PictureTagger,
+        characters: Characters,
+        position: int = 0,
     ):
         super().__init__(db_connection, picture_tagger, characters)
+        self._progress_position = position
 
     def worker_type(self) -> WorkerType:
         return WorkerType.TAGGER
 
     def _run(self):
+        time.sleep(0.5)  # Stagger start times for multiple workers
+
         while not self._stop.is_set():
             try:
                 start = time.time()
-                logger.debug("%s Starting iteration...", self.name())
+                logger.debug("Tagger: Starting iteration...")
 
                 data_updated = False
 
                 # 1. Fetch missing descriptions
                 missing_descriptions = self._fetch_missing_descriptions()
                 logger.debug(
-                    "Got %d pictures needing descriptions." % len(missing_descriptions)
+                    "Tagger: Got %d pictures needing descriptions."
+                    % len(missing_descriptions)
                 )
 
                 if self._stop.is_set():
                     break
 
                 logger.debug(
-                    "[TEXT_EMBEDDING] It took %.2f seconds to fetch missing descriptions."
+                    "Tagger: It took %.2f seconds to fetch missing descriptions."
                     % (time.time() - start)
                 )
                 # 2. Generate descriptions
@@ -68,7 +76,7 @@ class TagWorker(BaseWorker):
                 missing_tags = self._fetch_pictures_missing_tags()
 
                 logger.debug(
-                    "[TEXT_EMBEDDING] It took %.2f seconds to fetch missing tags."
+                    "Tagger: It took %.2f seconds to fetch missing tags."
                     % (time.time() - tag_start)
                 )
                 # 5. Generate missing tags
@@ -87,7 +95,7 @@ class TagWorker(BaseWorker):
                 pictures_to_embed = self._fetch_missing_text_embeddings()
 
                 logger.debug(
-                    "[TEXT_EMBEDDING] It took %.2f seconds to fetch missing text embeddings."
+                    "Tagger: It took %.2f seconds to fetch missing text embeddings."
                     % (time.time() - embed_start)
                 )
 
@@ -101,9 +109,12 @@ class TagWorker(BaseWorker):
 
                 timing = time.time() - start
                 if timing > 0.5:
-                    logger.info("[TEXT_EMBEDDING] Done after %.2f seconds." % timing)
+                    logger.info(f"Tagger: Done after {timing:.2f} seconds.")
                 if not data_updated:
-                    self._stop.wait(self.INTERVAL)
+                    logger.info(
+                        f"Tagger: Sleeping after {timing:.2f} seconds. No work needed."
+                    )
+                    self._wait()
             except (sqlite3.OperationalError, OSError) as e:
                 # Database file was deleted or connection lost during shutdown
                 logger.debug(
@@ -198,7 +209,7 @@ class TagWorker(BaseWorker):
             )
             conn.commit()
 
-        self._db.submit_write(bulk_update_tags, pictures, priority=DBPriority.LOW)
+        self._db.submit_task(bulk_update_tags, pictures, priority=DBPriority.LOW)
 
     def _tag_pictures(self, missing_tags) -> int:
         """Tag all pictures missing tags."""
