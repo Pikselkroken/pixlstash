@@ -13,7 +13,7 @@ from pixlvault.database import DBPriority
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.quality_worker import QualityWorker  # noqa: F401
 from pixlvault.facial_features_worker import FacialFeaturesWorker  # noqa: F401
-from pixlvault.tag_worker import TagWorker  # noqa: F401
+from pixlvault.tag_worker import TagWorker, EmbeddingWorker, DescriptionWorker  # noqa: F401
 from pixlvault.worker_registry import WorkerType, WorkerRegistry
 
 logger = get_logger(__name__)
@@ -83,6 +83,7 @@ class Pictures:
         self._workers = {}
 
         for worker_type in WorkerType.all():
+            logger.warning(f"Creating worker of type: {worker_type}")
             self._workers[worker_type] = WorkerRegistry.create_worker(
                 worker_type, self._db, self._picture_tagger, self._characters
             )

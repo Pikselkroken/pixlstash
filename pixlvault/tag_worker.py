@@ -12,9 +12,9 @@ from .worker_registry import BaseWorker, WorkerType
 logger = get_logger(__name__)
 
 
-class TagWorker(BaseWorker):
+class DescriptionWorker(BaseWorker):
     """
-    Worker for generating picture descriptions and tags.
+    Worker for generating picture descriptions only.
     """
 
     def __init__(
@@ -28,100 +28,45 @@ class TagWorker(BaseWorker):
         self._progress_position = position
 
     def worker_type(self) -> WorkerType:
-        return WorkerType.TAGGER
+        return WorkerType.DESCRIPTION
 
     def _run(self):
-        time.sleep(0.5)  # Stagger start times for multiple workers
-
         while not self._stop.is_set():
             try:
                 start = time.time()
-                logger.debug("Tagger: Starting iteration...")
-
+                logger.debug("DescriptionWorker: Starting iteration...")
                 data_updated = False
-
-                # 1. Fetch missing descriptions
                 missing_descriptions = self._fetch_missing_descriptions()
                 logger.debug(
-                    "Tagger: Got %d pictures needing descriptions."
-                    % len(missing_descriptions)
+                    f"DescriptionWorker: Got {len(missing_descriptions)} pictures needing descriptions."
                 )
-
                 if self._stop.is_set():
                     break
-
-                logger.debug(
-                    "Tagger: It took %.2f seconds to fetch missing descriptions."
-                    % (time.time() - start)
-                )
-                # 2. Generate descriptions
                 descriptions_generated = self._generate_descriptions(
                     self._picture_tagger, missing_descriptions
                 )
-
                 logger.debug(
-                    "Generated descriptions for %d pictures."
-                    % len(descriptions_generated)
+                    f"DescriptionWorker: Generated {len(descriptions_generated)} descriptions."
                 )
                 if self._stop.is_set():
                     break
-
-                # 3. Store descriptions
                 if descriptions_generated:
                     self._update_attributes(descriptions_generated, ["description"])
                     data_updated = True
-
-                tag_start = time.time()
-                # 4. Fetch missing tags
-                missing_tags = self._fetch_pictures_missing_tags()
-
-                logger.debug(
-                    "Tagger: It took %.2f seconds to fetch missing tags."
-                    % (time.time() - tag_start)
-                )
-                # 5. Generate missing tags
-                tagged_pictures = self._tag_pictures(missing_tags)
-
-                if self._stop.is_set():
-                    break
-
-                # 6. Store generated tags
-                if tagged_pictures:
-                    self._update_picture_tags(tagged_pictures)
-                    data_updated = True
-
-                embed_start = time.time()
-                # 7. Fetch pictures to embed
-                pictures_to_embed = self._fetch_missing_text_embeddings()
-
-                logger.debug(
-                    "Tagger: It took %.2f seconds to fetch missing text embeddings."
-                    % (time.time() - embed_start)
-                )
-
-                # 8. Generate text embeddings for fetched pictures from descriptions and tags
-                embeddings_generated = self._generate_text_embeddings(pictures_to_embed)
-
-                # 9. Store generated embeddings
-                if embeddings_generated:
-                    self._update_attributes(embeddings_generated, ["text_embedding"])
-                    data_updated = True
-
                 timing = time.time() - start
                 if timing > 0.5:
-                    logger.info(f"Tagger: Done after {timing:.2f} seconds.")
+                    logger.info(f"DescriptionWorker: Done after {timing:.2f} seconds.")
                 if not data_updated:
                     logger.info(
-                        f"Tagger: Sleeping after {timing:.2f} seconds. No work needed."
+                        f"DescriptionWorker: Sleeping after {timing:.2f} seconds. No work needed."
                     )
                     self._wait()
             except (sqlite3.OperationalError, OSError) as e:
-                # Database file was deleted or connection lost during shutdown
                 logger.debug(
-                    f"Worker thread exiting due to DB error (likely shutdown): {e}"
+                    f"DescriptionWorker thread exiting due to DB error (likely shutdown): {e}"
                 )
                 break
-        logger.info("Exiting text embedding worker loop.")
+        logger.info("Exiting DescriptionWorker loop.")
 
     def _fetch_missing_descriptions(self):
         logger.debug("Starting the database fetch for missing descriptions")
@@ -173,6 +118,59 @@ class TagWorker(BaseWorker):
                     f"Failed to generate/store description for picture {pic.id}: {e}"
                 )
         return descriptions_generated
+
+
+class TagWorker(BaseWorker):
+    """
+    Worker for generating tags for pictures with descriptions.
+    """
+
+    def __init__(
+        self,
+        db_connection,
+        picture_tagger: PictureTagger,
+        characters: Characters,
+        position: int = 0,
+    ):
+        super().__init__(db_connection, picture_tagger, characters)
+        self._progress_position = position
+
+    def worker_type(self) -> WorkerType:
+        return WorkerType.TAGGER  # Or define a new WorkerType if desired
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                start = time.time()
+                logger.debug("TaggingWorker: Starting iteration...")
+                data_updated = False
+                missing_tags = self._fetch_pictures_missing_tags()
+                logger.debug(
+                    f"TaggingWorker: Got {len(missing_tags)} pictures needing tags."
+                )
+                if self._stop.is_set():
+                    break
+                tagged_pictures = self._tag_pictures(missing_tags)
+                logger.debug(f"TaggingWorker: Tagged {len(tagged_pictures)} pictures.")
+                if self._stop.is_set():
+                    break
+                if tagged_pictures:
+                    self._update_picture_tags(tagged_pictures)
+                    data_updated = True
+                timing = time.time() - start
+                if timing > 0.5:
+                    logger.info(f"TaggingWorker: Done after {timing:.2f} seconds.")
+                if not data_updated:
+                    logger.info(
+                        f"TaggingWorker: Sleeping after {timing:.2f} seconds. No work needed."
+                    )
+                    self._wait()
+            except (sqlite3.OperationalError, OSError) as e:
+                logger.debug(
+                    f"TaggingWorker thread exiting due to DB error (likely shutdown): {e}"
+                )
+                break
+        logger.info("Exiting TaggingWorker loop.")
 
     def _fetch_pictures_missing_tags(self):
         """Return PictureModels needing tags using the provided connection."""
@@ -252,6 +250,61 @@ class TagWorker(BaseWorker):
                         tagged_pictures.append(pic)
 
         return tagged_pictures
+
+
+class EmbeddingWorker(BaseWorker):
+    """
+    Worker for generating text embeddings for pictures with descriptions.
+    """
+
+    def __init__(
+        self,
+        db_connection,
+        picture_tagger: PictureTagger,
+        characters: Characters,
+        position: int = 0,
+    ):
+        super().__init__(db_connection, picture_tagger, characters)
+        self._progress_position = position
+
+    def worker_type(self) -> WorkerType:
+        return WorkerType.TEXT_EMBEDDING
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                start = time.time()
+                logger.debug("EmbeddingWorker: Starting iteration...")
+                data_updated = False
+                pictures_to_embed = self._fetch_missing_text_embeddings()
+                logger.debug(
+                    f"EmbeddingWorker: Got {len(pictures_to_embed)} pictures needing embeddings."
+                )
+                if self._stop.is_set():
+                    break
+                embeddings_generated = self._generate_text_embeddings(pictures_to_embed)
+                logger.debug(
+                    f"EmbeddingWorker: Generated {len(embeddings_generated)} embeddings."
+                )
+                if self._stop.is_set():
+                    break
+                if embeddings_generated:
+                    self._update_attributes(embeddings_generated, ["text_embedding"])
+                    data_updated = True
+                timing = time.time() - start
+                if timing > 0.5:
+                    logger.info(f"EmbeddingWorker: Done after {timing:.2f} seconds.")
+                if not data_updated:
+                    logger.info(
+                        f"EmbeddingWorker: Sleeping after {timing:.2f} seconds. No work needed."
+                    )
+                    self._wait()
+            except (sqlite3.OperationalError, OSError) as e:
+                logger.debug(
+                    f"EmbeddingWorker thread exiting due to DB error (likely shutdown): {e}"
+                )
+                break
+        logger.info("Exiting EmbeddingWorker loop.")
 
     def _fetch_missing_text_embeddings(self):
         """Return PictureModels needing text embeddings."""

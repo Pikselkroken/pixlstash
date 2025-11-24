@@ -13,6 +13,8 @@ class WorkerType(str, Enum):
     TAGGER = "TagWorker"
     QUALITY = "QualityWorker"
     LIKENESS = "LikenessWorker"
+    DESCRIPTION = "DescriptionWorker"
+    TEXT_EMBEDDING = "EmbeddingWorker"
 
     @staticmethod
     def all():
