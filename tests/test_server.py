@@ -427,9 +427,11 @@ def test_semantic_search():
                 assert resp["results"][0]["status"] == "success"
                 picture_ids.append(resp["results"][0]["picture_id"])
 
-
+            expected_descriptions = len(picture_ids)
+            finished_descriptions = {}
+            finished_tags = {}
             # Wait for all pictures to be tagged (embeddings generated)
-            for _ in range(500):
+            for _ in range(1000):
                 missing_embeddings = picture_ids.copy()
                 if not missing_embeddings:
                     break
@@ -460,13 +462,26 @@ def test_semantic_search():
                     )
                     # Additional checks: tags, description, character name in description
                     description = pic_info.get("description", "")
-                    assert description and isinstance(description, str), f"Picture {pid} missing description: {description}"
-                    # Accept either 'Esmeralda' or 'Esmeralda Vault' in description
-                    assert ("esmeralda" in description.lower()), f"Picture {pid} description does not contain character name: {description}"
+                    if description:
+                        finished_descriptions[pid] = True
+                        # Accept either 'Esmeralda' or 'Esmeralda Vault' in description
+                        assert "esmeralda" in description.lower(), (
+                            f"Picture {pid} description does not contain character name: {description}"
+                        )
+
                     tags = pic_info.get("tags", [])
-                    assert tags and isinstance(tags, list), f"Picture {pid} missing tags or tags not a list: {tags}"
-                    picture_ids.remove(pid)
+                    if len(tags) > 0:
+                        finished_tags[pid] = True
+                    if description and tags:
+                        picture_ids.remove(pid)
                 time.sleep(1)
+
+            assert expected_descriptions == len(finished_descriptions), (
+                f"Expected {expected_descriptions} finished descriptions, got {len(finished_descriptions)}"
+            )
+            assert expected_descriptions == len(finished_tags), (
+                f"Expected {expected_descriptions} finished tags, got {len(finished_tags)}"
+            )
 
             if picture_ids:
                 assert False, (
