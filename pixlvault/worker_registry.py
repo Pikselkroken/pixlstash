@@ -49,7 +49,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
     Class representing different types of picture processing workers.
     """
 
-    INTERVAL = 3.0  # Default interval between worker runs in seconds
+    INTERVAL = 2.5  # Default interval between worker runs in seconds
 
     def __init__(self, db_connection, picture_tagger, characters):
         self._db = db_connection
