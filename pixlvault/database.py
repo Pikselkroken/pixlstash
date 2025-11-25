@@ -26,8 +26,8 @@ class DBPriority(IntEnum):
     IMMEDIATE = 0
 
 
-# Write task for the queue
-class WriteTask:
+# Database task for the queue
+class DatabaseTask:
     def __init__(self, priority, func, args=(), kwargs=None):
         self.priority = priority
         self.func = func
@@ -131,16 +131,16 @@ class VaultDatabase:
         if description is not None:
             self.set_metadata("description", description)
 
-    # --- Write API ---
-    def submit_write(self, func, *args, priority=DBPriority.MEDIUM, **kwargs):
+    # --- Queued API ---
+    def submit_task(self, func, *args, priority=DBPriority.MEDIUM, **kwargs):
         """
-        Submit a write operation (INSERT/UPDATE/DELETE) to be executed serially.
+        Submit a database operation (INSERT/UPDATE/DELETE) to be executed serially.
         Returns a Future you can .result(timeout) on.
 
         Examples:
 
         # Using a lambda for a simple write
-        future = db.submit_write(lambda conn: conn.execute(
+        future = db.submit_task(lambda conn: conn.execute(
             "UPDATE pictures SET quality = ? WHERE id = ?", (0.95, "pic123")
         ))
         result = future.result()
@@ -150,10 +150,10 @@ class VaultDatabase:
             sql = "UPDATE pictures SET quality = ? WHERE id = ?"
             return conn.execute(sql, (new_quality, pic_id))
 
-        future = db.submit_write(update_picture_quality, "pic123", 0.95)
+        future = db.submit_task(update_picture_quality, "pic123", 0.95)
         result = future.result()
         """
-        task = WriteTask(priority, func, args, kwargs)
+        task = DatabaseTask(priority, func, args, kwargs)
         self._write_queue.put(task)
         return task.future
 
@@ -197,55 +197,6 @@ class VaultDatabase:
         finally:
             conn.close()
 
-    def submit_bulk_write(
-        self, sql: str, seq_of_params: list, priority=DBPriority.MEDIUM
-    ):
-        """Submit a bulk write operation using executemany via submit_write."""
-        """
-        Submit a bulk write operation using executemany via submit_write.
-
-        Examples:
-
-        # Using a lambda for a simple bulk insert
-        future = db.submit_write(lambda conn: conn.executemany(
-            "INSERT INTO pictures (id, quality) VALUES (?, ?)", [
-                ("pic1", 0.9),
-                ("pic2", 0.85),
-            ]
-        ))
-        result = future.result()
-
-        # Using bulk_write for convenience
-        result = db.submit_bulk_write(
-            "INSERT INTO pictures (id, quality) VALUES (?, ?)",
-            [
-                ("pic1", 0.9),
-                ("pic2", 0.85),
-            ]
-        )
-
-        # Using a full function for more complex logic
-        def insert_many_pictures(conn, sql, params):
-            return conn.executemany(sql, params)
-
-        future = db.submit_write(insert_many_pictures,
-            "INSERT INTO pictures (id, quality) VALUES (?, ?)",
-            [
-                ("pic1", 0.9),
-                ("pic2", 0.85),
-            ]
-        )
-        result = future.result()
-        """
-
-        def op(conn, sql, seq_of_params):
-            for params in seq_of_params:
-                _assert_no_bytes(params)
-            return conn.executemany(sql, seq_of_params)
-
-        future = self.submit_write(op, sql, seq_of_params, priority=priority)
-        return future
-
     def bulk_read(self, sql: str, params: tuple = ()):
         """Perform a bulk read operation using execute_read."""
 
@@ -255,7 +206,7 @@ class VaultDatabase:
         return self.execute_read(op, sql, params)
 
     def set_metadata(self, key: str, value: str):
-        self.submit_write(
+        self.submit_task(
             lambda conn: conn.execute(
                 """
             INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)

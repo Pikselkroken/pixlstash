@@ -17,6 +17,27 @@ logger = get_logger(__name__)
 
 class PictureUtils:
     @staticmethod
+    def crop_face_from_frame(frame, bbox):
+        """
+        Crop a face region from a video frame (numpy array) using bbox [x1, y1, x2, y2].
+        Clamps bbox to frame bounds. Returns cropped region or None if invalid.
+        """
+        if frame is None or bbox is None or len(bbox) != 4:
+            return None
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = bbox
+        x1 = int(max(0, min(w - 1, round(x1))))
+        y1 = int(max(0, min(h - 1, round(y1))))
+        x2 = int(max(0, min(w, round(x2))))
+        y2 = int(max(0, min(h, round(y2))))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
+            return None
+        return crop
+
+    @staticmethod
     def extract_video_frames(file_path, max_frames=None):
         """
         Extract frames from a video file and return them as PIL Images.

@@ -356,3 +356,22 @@ button:focus:not(:focus-visible) {
 .delete-button:hover {
   background-color: #f75c5c;
 }
+
+.media-type-toggle {
+  border-radius: 14px;
+  margin-left: 4px;
+  display: inline-flex;
+}
+
+.media-type-toggle .v-btn {
+  color: rgb(var(--v-theme-on-primary)) !important;
+  height: 48px;
+  width: 48px;
+  align-items: center;
+}
+
+.media-type-toggle .v-btn--active
+{
+  background-color: orange !important;
+  color: white !important;
+}

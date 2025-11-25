@@ -11,7 +11,7 @@ import gc
 
 from PIL import Image
 from fastapi.testclient import TestClient
-from pixlvault.pictures import PictureWorker
+from pixlvault.pictures import WorkerType
 from pixlvault.server import Server
 from io import BytesIO
 from urllib.parse import quote
@@ -337,7 +337,7 @@ def test_tagger_worker_adds_tags():
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
-            server.start_workers({PictureWorker.TAGGER})
+            server.start_workers({WorkerType.TAGGER, WorkerType.DESCRIPTION})
             client = TestClient(server.api)
 
             # Create a character first
@@ -378,7 +378,7 @@ def test_tagger_worker_adds_tags():
     gc.collect()
 
 
-def test_semantic_search_on_all_pictures():
+def test_semantic_search():
     """Test: Add all images from pictures folder, wait for tagging, perform semantic search, print results, assert count."""
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -396,7 +396,9 @@ def test_semantic_search_on_all_pictures():
             config_path=config_path,
             server_config_path=server_config_path,
         ) as server:
-            server.start_workers({PictureWorker.TAGGER})
+            server.start_workers(
+                {WorkerType.DESCRIPTION, WorkerType.TAGGER, WorkerType.TEXT_EMBEDDING}
+            )
             server.vault.import_default_data()
             client = TestClient(server.api)
 
@@ -425,9 +427,11 @@ def test_semantic_search_on_all_pictures():
                 assert resp["results"][0]["status"] == "success"
                 picture_ids.append(resp["results"][0]["picture_id"])
 
+            expected_descriptions = len(picture_ids)
+            finished_descriptions = {}
+            finished_tags = {}
             # Wait for all pictures to be tagged (embeddings generated)
-
-            for _ in range(360):
+            for _ in range(1000):
                 missing_embeddings = picture_ids.copy()
                 if not missing_embeddings:
                     break
@@ -456,8 +460,28 @@ def test_semantic_search_on_all_pictures():
                     print(
                         f"Picture {pid} has embedding of length {len(embedding_b64)} and norm {np.linalg.norm(emb):.4f}."
                     )
-                    picture_ids.remove(pid)
+                    # Additional checks: tags, description, character name in description
+                    description = pic_info.get("description", "")
+                    if description:
+                        finished_descriptions[pid] = True
+                        # Accept either 'Esmeralda' or 'Esmeralda Vault' in description
+                        assert "esmeralda" in description.lower(), (
+                            f"Picture {pid} description does not contain character name: {description}"
+                        )
+
+                    tags = pic_info.get("tags", [])
+                    if len(tags) > 0:
+                        finished_tags[pid] = True
+                    if description and tags:
+                        picture_ids.remove(pid)
                 time.sleep(1)
+
+            assert expected_descriptions == len(finished_descriptions), (
+                f"Expected {expected_descriptions} finished descriptions, got {len(finished_descriptions)}"
+            )
+            assert expected_descriptions == len(finished_tags), (
+                f"Expected {expected_descriptions} finished tags, got {len(finished_tags)}"
+            )
 
             if picture_ids:
                 assert False, (

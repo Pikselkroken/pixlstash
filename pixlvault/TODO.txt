@@ -1,7 +1,7 @@
-* Authentication
-* Picture similarity checks
+* Save Likeness threshold
+* Make Prioritisation work
 * Automatic assignment to characters
+* Clean up code
 * Export data sets for LoRA training
 * Monitoring of T2I output folders
-* Support for videos
-* Clean up code
+* Authentication

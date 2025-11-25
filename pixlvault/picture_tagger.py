@@ -28,7 +28,8 @@ SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
 MODEL_DIR = "wd14_tagger_model"
 BATCH_SIZE = 1
-MAX_CONCURRENT_IMAGES = 8
+MAX_CONCURRENT_IMAGES_GPU = 32
+MAX_CONCURRENT_IMAGES_CPU = 8
 GENERAL_THRESHOLD = 0.4
 UNDESIRED_TAGS = "solo, general, male_focus, meme, blurry, sensitive, realistic"
 CAPTION_SEPARATOR = ", "
@@ -92,7 +93,7 @@ class PictureTagger:
         self._florence_device = None
         self._florence_model_name = "microsoft/Florence-2-base"
 
-        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 70
+        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 60
 
         self._init_florence_captioning()
 
@@ -112,6 +113,12 @@ class PictureTagger:
 
         gc.collect()
         logger.debug("PictureTagger.exit called, resources released.")
+
+    def max_concurrent_images(self):
+        if self._device == "cpu":
+            return MAX_CONCURRENT_IMAGES_CPU
+        else:
+            return MAX_CONCURRENT_IMAGES_GPU
 
     def _init_florence_captioning(self):
         """
@@ -266,7 +273,7 @@ class PictureTagger:
                 frames = PictureUtils.extract_video_frames(image_path)
                 for idx, pil_img in enumerate(frames):
                     # Resize large images to speed up processing
-                    MAX_DIM = 768
+                    MAX_DIM = 640
                     if max(pil_img.size) > MAX_DIM:
                         aspect_ratio = pil_img.width / pil_img.height
                         if pil_img.width > pil_img.height:
@@ -333,7 +340,7 @@ class PictureTagger:
                         break
             else:
                 image = Image.open(image_path).convert("RGB")
-                MAX_DIM = 768
+                MAX_DIM = 640
                 if max(image.size) > MAX_DIM:
                     aspect_ratio = image.width / image.height
                     if image.width > image.height:
@@ -654,9 +661,11 @@ class PictureTagger:
         logger.debug("Removing tags: " + ", ".join(undesired_tags))
 
         dataset = ImageLoadingDatasetPrepper(image_paths)
-        worker_count = min(
-            MAX_CONCURRENT_IMAGES, os.cpu_count() // 2 or 1, len(image_paths)
-        )
+        if self._device == "cpu":
+            max_concurrent = MAX_CONCURRENT_IMAGES_CPU
+        else:
+            max_concurrent = MAX_CONCURRENT_IMAGES_GPU
+        worker_count = min(max_concurrent, os.cpu_count() // 2 or 1, len(image_paths))
         logger.debug(
             "Starting tagger dataloader with worker count: "
             + str(worker_count)
@@ -824,11 +833,16 @@ class PictureTagger:
                         ret, frame = cap.read()
                         if not ret or frame is None:
                             continue
-                        # Try to crop face from this frame
-                        face_crop = PictureUtils.load_and_crop_face_bbox(
+                        face_crop = PictureUtils.crop_face_from_frame(
                             frame, picture.face_bbox
                         )
                         if face_crop is not None:
+                            if isinstance(face_crop, np.ndarray):
+                                from PIL import Image
+
+                                face_crop = Image.fromarray(
+                                    cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+                                )
                             img_input = (
                                 self._clip_preprocess(face_crop)
                                 .unsqueeze(0)
@@ -864,9 +878,6 @@ class PictureTagger:
                     or ("not compatible" in str(e))
                     or ("CUDA error" in str(e))
                 ):
-                    logger.warning(
-                        f"Facial feature extraction failed on CUDA: {e}. Falling back to CPU."
-                    )
                     self._clip_device = "cpu"
                     self._clip_model = self._clip_model.to(self._clip_device)
                     try:
@@ -882,17 +893,10 @@ class PictureTagger:
                                     .cpu()
                                     .numpy()[0]
                                 )
-                    except Exception as e2:
-                        logger.error(
-                            f"Failed to generate facial features on CPU for {getattr(picture, 'file_path', None)}: {e2}"
-                        )
+                    except Exception:
                         facial_features = None
                 else:
-                    logger.error(
-                        f"Failed to generate facial features for {getattr(picture, 'file_path', None)}: {e}"
-                    )
                     facial_features = None
-
         return facial_features
 
     def correct_tags_with_florence(self, florence_desc, current_tags=None):

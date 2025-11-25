@@ -25,7 +25,7 @@
         <v-slider
           v-model="thumbnailSize"
           :min="128"
-          :max="256"
+          :max="currentView === 'likeness' ? 384 : 256"
           :step="32"
           class="toolbar-slider"
           hide-details
@@ -49,6 +49,22 @@
         >
           <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
         </v-btn>
+        <v-btn-toggle
+          v-model="mediaTypeFilter"
+          mandatory
+          class="media-type-toggle"
+          dense
+        >
+          <v-btn value="all" title="Show all media">
+            <v-icon>mdi-image-multiple</v-icon>
+          </v-btn>
+          <v-btn value="images" title="Show images only">
+            <v-icon>mdi-image</v-icon>
+          </v-btn>
+          <v-btn value="videos" title="Show videos only">
+            <v-icon>mdi-video</v-icon>
+          </v-btn>
+        </v-btn-toggle>
         <v-btn
           icon
           @click="settingsDialog = true"
@@ -59,12 +75,21 @@
         </v-btn>
         <v-btn
           icon
-          :color="chatOpen ? 'primary' : 'grey'"
           @click="openChatOverlay"
           title="Open AI chat"
           style="margin-left: 4px"
         >
           <v-icon>mdi-robot</v-icon>
+        </v-btn>
+
+        <v-btn
+          v-if="currentView === 'grid'"
+          icon
+          @click="handleExportZip"
+          title="Export current grid to zip"
+          style="margin-left: 4px"
+        >
+          <v-icon>mdi-download</v-icon>
         </v-btn>
 
         <!-- Settings Dialog -->
@@ -248,6 +273,7 @@
         @select-character="handleSelectCharacter"
         @select-set="handleSelectSet"
         @switch-to-likeness="handleSwitchToLikeness"
+        @images-assigned-to-character="handleImagesAssignedToCharacter"
         @update:selected-sort="handleUpdateSelectedSort"
         @update:search-query="handleUpdateSearchQuery"
         @update:set-error="error = $event"
@@ -258,44 +284,46 @@
           :class="['main-content', selectedCharacter ? 'accent-border' : '']"
           style="margin-top: 0; padding-top: 0"
         >
-          <template v-if="selectedCharacter || selectedSet !== null">
-            <template v-if="currentView === 'likeness'">
-              <LikenessRows :backendUrl="BACKEND_URL" :likenessRows="[]" />
-              <v-btn style="margin-top: 16px" @click="handleSwitchToGrid"
-                >Back to Grid View</v-btn
-              >
-            </template>
-            <template v-else>
-              <ImageGrid
-                ref="gridContainer"
-                :thumbnailSize="thumbnailSize"
-                :sidebarVisible="sidebarVisible"
-                :backendUrl="BACKEND_URL"
-                :selectedCharacter="selectedCharacter"
-                :selectedSet="selectedSet"
-                :searchQuery="searchQuery"
-                :selectedSort="selectedSort"
-                :showStars="showStars"
-                @refresh-sidebar="refreshSidebar"
-              />
-            </template>
-
-            <ChatWindow
-              v-if="chatOpen"
-              ref="chatWindowRef"
-              :open="chatOpen"
-              :title="selectedCharacterObj ? `Chat with ${selectedCharacterObj.name}` : 'AI Chat'"
-              :selected-character="selectedCharacterObj"
-              :config="config"
-              :extract-keywords="extractKeywords"
-              :backend-url="BACKEND_URL"
-              @close="closeChatOverlay"
+          <template v-if="currentView === 'likeness'">
+            <LikenessRows
+              ref="likenessRowsRef"
+              :backendUrl="BACKEND_URL"
+              :thumbnailSize="thumbnailSize"
+              :showStars="showStars"
+              :storedLikenessThreshold="config.likeness_threshold"
+              :mediaTypeFilter="mediaTypeFilter"
+              @update:likeness-threshold="val => config.likeness_threshold = val"
+            />
+          </template>
+          <template v-else-if="selectedCharacter || selectedSet !== null">
+            <ImageGrid
+              ref="gridContainer"
+              :thumbnailSize="thumbnailSize"
+              :sidebarVisible="sidebarVisible"
+              :backendUrl="BACKEND_URL"
+              :selectedCharacter="selectedCharacter"
+              :selectedSet="selectedSet"
+              :searchQuery="searchQuery"
+              :selectedSort="selectedSort"
+              :showStars="showStars"
+              :gridVersion="gridVersion"
+              :mediaTypeFilter="mediaTypeFilter"
+              @refresh-sidebar="refreshSidebar"
             />
           </template>
           <template v-else>
             <!--  -->
             <div class="empty-state">Nothing to see here.</div>
           </template>
+          <ChatWindow
+            v-if="chatOpen"
+            ref="chatWindowRef"
+            :open="chatOpen"
+            :selected-character="String(selectedCharacter)"
+            :config="config"
+            :backend-url="BACKEND_URL"
+            @close="closeChatOverlay"
+          />
         </div>
       </main>
     </div>

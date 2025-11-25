@@ -1,4 +1,6 @@
 from typing import List, Optional
+
+from pixlvault.database import DBPriority
 from .picture_set import PictureSetModel, PictureSetMemberModel
 from .logging import get_logger
 
@@ -37,8 +39,8 @@ class PictureSets:
             conn.commit()
             return cursor.lastrowid
 
-        picture_set.id = self._db.execute_write(
-            insert_picture_set, picture_set
+        picture_set.id = self._db.submit_task(
+            insert_picture_set, picture_set, priority=DBPriority.IMMEDIATE
         ).result()
         logger.info(f"Created picture set: {picture_set.name} (id={picture_set.id})")
         return picture_set
@@ -86,7 +88,9 @@ class PictureSets:
             conn.commit()
             return cursor.rowcount
 
-        updated_rows = self._db.execute_write(update_picture_set, picture_set).result()
+        updated_rows = self._db.submit_task(
+            update_picture_set, picture_set, priority=DBPriority.IMMEDIATE
+        ).result()
         if updated_rows == 0:
             return False
 
@@ -113,7 +117,7 @@ class PictureSets:
             cursor.execute("DELETE FROM picture_sets WHERE id = ?", (set_id,))
             conn.commit()
 
-        self._db.execute_write(delete_set, set_id).result()
+        self._db.submit_task(delete_set, set_id, priority=DBPriority.IMMEDIATE).result()
         logger.info(f"Deleted picture set id={set_id}")
         return True
 
@@ -151,7 +155,9 @@ class PictureSets:
             conn.execute(sql, member.to_dict())
             logger.info(f"Added picture {picture_id} to set {set_id}")
 
-        self._db.submit_write(addmember, set_id, picture_id).result()
+        self._db.submit_task(
+            addmember, set_id, picture_id, priority=DBPriority.IMMEDIATE
+        ).result()
         return True
 
     def remove_picture(self, set_id: int, picture_id: str) -> bool:
@@ -161,11 +167,12 @@ class PictureSets:
         Returns:
             True if removed, False if not in set
         """
-        result = self._db.submit_write(
+        result = self._db.submit_task(
             lambda conn: conn.execute(
                 "DELETE FROM picture_set_members WHERE set_id = ? AND picture_id = ?",
                 (set_id, picture_id),
-            )
+            ),
+            priority=DBPriority.IMMEDIATE,
         ).result()
         removed = result.rowcount > 0
         if removed:

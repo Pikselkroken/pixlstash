@@ -1,15 +1,36 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
 // FIFO queue for last 20 displayed pictures
-const displayedPictureQueue = ref([]);
 import { marked } from "marked";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  title: { type: String, default: "" },
-  selectedCharacter: { type: Object, default: null },
+  selectedCharacter: { type: String, default: null },
   config: { type: Object, default: () => ({}) },
   backendUrl: { type: String, required: true },
+});
+
+const displayedPictureQueue = ref([]);
+
+const selectedCharacterObj = ref(null);
+
+watch(
+  () => props.selectedCharacter,
+  async (newId) => {
+    if (newId) {
+      selectedCharacterObj.value = await fetchCharacterById(newId);
+    } else {
+      selectedCharacterObj.value = null;
+    }
+  },
+  { immediate: true }
+);
+
+const title = computed(() => {
+  if (selectedCharacterObj.value && selectedCharacterObj.value.name) {
+    return `Chat with ${selectedCharacterObj.value.name}`;
+  }
+  return "AI Chat";
 });
 
 function extractKeywords(text) {
@@ -90,7 +111,6 @@ watch(
   (isOpen) => {
     if (isOpen) {
       nextTick(() => {
-        scrollToBottom();
         focusInput();
       });
     } else {
@@ -100,11 +120,29 @@ watch(
   }
 );
 
+async function fetchCharacterById(characterId) {
+  if (!props.backendUrl || !characterId) return null;
+  try {
+    const res = await fetch(
+      `${props.backendUrl}/characters/${encodeURIComponent(characterId)}`
+    );
+    if (!res.ok) throw new Error("Failed to fetch character");
+    const data = await res.json();
+    console.log("Fetched character data:", data);
+    return data;
+  } catch (error) {
+    console.error("Error fetching character:", error);
+    return null;
+  }
+}
+
 async function sendChatMessageAndFocus() {
   const input = chatInput.value.trim();
   if (!input || chatLoading.value) return;
 
-  const character = props.selectedCharacter;
+  const characterId = props.selectedCharacter;
+  const character = await fetchCharacterById(characterId);
+
   let systemMessage =
     "You should always respond as the character you are playing. Stay in character and don't break it. Let me speak for myself. Do not repeat yourself.\n\nIMPORTANT: Your response must have TWO parts:\n1. First, your normal character dialogue/response\n2. Then on a new line at the END, add: [SEARCH: character at location in outfit, mood, action]\n\nExample format:\n*giggles and points at the ocean* Look at that!\n[SEARCH: Clementine at beach in white bikini, smiling, pointing at ocean]\n\nThe search line should be concise (under 50 words) with visual details: character name, location, clothing, mood, and current action.";
 
@@ -193,11 +231,7 @@ async function sendChatMessageAndFocus() {
 
     // Fallback: if no search query was extracted, use the reply text
     if (!searchQuery) {
-      const keywordFn =
-        typeof props.extractKeywords === "function"
-          ? props.extractKeywords
-          : (text) => text;
-      searchQuery = keywordFn(reply);
+      searchQuery = extractKeywords(reply);
 
       // Add character name for better matching
       if (character && character.name) {
@@ -309,7 +343,8 @@ async function sendChatMessageAndFocus() {
   }
 }
 
-defineExpose({ focusInput, scrollToBottom });
+// Expose focusInput for parent access
+defineExpose({ focusInput });
 </script>
 
 <template>

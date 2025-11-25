@@ -23,7 +23,7 @@ from typing import List
 from pixlvault.character import CharacterModel
 from pixlvault.logging import get_logger, uvicorn_log_config
 from pixlvault.picture_utils import PictureUtils
-from pixlvault.pictures import PictureWorker, get_sort_mechanisms
+from pixlvault.pictures import WorkerType, get_sort_mechanisms
 from pixlvault.vault import Vault
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
@@ -142,7 +142,7 @@ class Server:
             )
         uvicorn.run(self.api, **uvicorn_kwargs)
 
-    def start_workers(self, workers: set[PictureWorker] = PictureWorker.all()):
+    def start_workers(self, workers: set[WorkerType] = WorkerType.all()):
         self.vault.start_background_workers(workers)
 
     @asynccontextmanager
@@ -273,21 +273,15 @@ class Server:
             Return groups (stacks) of near-identical pictures based on likeness threshold.
             Each stack contains picture dicts and preselection info.
             """
-            # Query all likeness pairs above threshold
-            db = self.vault.pictures._db
-            rows = db.query(
-                "SELECT picture_id_a, picture_id_b, likeness FROM picture_likeness WHERE likeness >= ?",
-                (threshold,),
-            )
-            # Build undirected graph of connections
             from collections import defaultdict, deque
 
+            # Query all likeness pairs above threshold
+            rows = self.vault.pictures.likeness_query(treshold=threshold)
+
             neighbors = defaultdict(set)
-            for row in rows:
-                a = row["picture_id_a"] if isinstance(row, dict) else row[0]
-                b = row["picture_id_b"] if isinstance(row, dict) else row[1]
-                neighbors[a].add(b)
-                neighbors[b].add(a)
+            for picture_id_a, picture_id_b, _ in rows:
+                neighbors[picture_id_a].add(picture_id_b)
+                neighbors[picture_id_b].add(picture_id_a)
             # Find connected components (groups)
             visited = set()
             groups = []
@@ -308,27 +302,15 @@ class Server:
                 if len(stack) >= min_group_size:
                     groups.append(list(stack))
             # For each group, fetch picture info and select best
+            from pixlvault.picture_stack_utils import order_stack_pictures
+
             stacks = []
             for group in groups:
                 pics = [self.vault.pictures[pid] for pid in group]
-
-                # Preselect: highest resolution, sharpness, lowest noise
-                def preselect_key(pic):
-                    res = PictureUtils.load_metadata(pic.file_path)
-                    sharp = getattr(pic, "sharpness", -1)
-                    noise = getattr(pic, "noise_level", 1e9)
-                    # Prefer higher resolution, sharpness, lower noise
-                    return (
-                        (res[0] * res[1]) if res else 0,
-                        sharp,
-                        -noise,
-                    )
-
-                best_idx = max(range(len(pics)), key=lambda i: preselect_key(pics[i]))
+                ordered = order_stack_pictures(pics)
                 stacks.append(
                     {
-                        "pictures": [pic.to_dict() for pic in pics],
-                        "preselected_index": best_idx,
+                        "pictures": [pic.to_dict() for pic in ordered],
                     }
                 )
             return {
@@ -535,6 +517,7 @@ class Server:
 
             q = query.strip().lower()
             if not q:
+                logger.warning("Empty search query received")
                 return []
 
             # Split on any whitespace or punctuation
@@ -719,6 +702,7 @@ class Server:
 
             # Optionally, include fuzzy/semantic scores for debugging:
             # return [{**pic_to_dict(pic), "score": score, "fuzzy": fuzzy, "semantic": sem} for pic, score, fuzzy, sem in combined[:top_n]]
+            logger.warning("Got total of {} search results".format(len(combined)))
             return [
                 pic_to_dict(pic, likeness_score=score)
                 for pic, score, _, _ in combined[:top_n]
@@ -821,7 +805,7 @@ class Server:
 
         @self.api.patch("/picture_sets/{id}")
         async def update_picture_set(id: int, payload: dict = Body(...)):
-            """Update a picture set's name and/or description."""
+            """Update a picture set's name and/or description. Or add/remove pictures."""
             name = payload.get("name")
             description = payload.get("description")
 

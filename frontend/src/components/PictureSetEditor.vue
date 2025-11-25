@@ -52,9 +52,10 @@ import { computed, ref, watch, nextTick } from "vue";
 const props = defineProps({
   open: { type: Boolean, default: false },
   set: { type: Object, default: null },
+  backendUrl: { type: String, required: true },
 });
 
-const emit = defineEmits(["close", "save"]);
+const emit = defineEmits(["close", "saved", "refresh-sidebar"]);
 
 const localSet = ref({
   id: null,
@@ -118,8 +119,8 @@ async function saveSetFromEditor(setData) {
     const isNew = !setData.id;
     const method = isNew ? "POST" : "PATCH";
     const url = isNew
-      ? `${BACKEND_URL}/picture_sets`
-      : `${BACKEND_URL}/picture_sets/${setData.id}`;
+      ? `${props.backendUrl}/picture_sets`
+      : `${props.backendUrl}/picture_sets/${setData.id}`;
 
     const res = await fetch(url, {
       method,
@@ -131,35 +132,8 @@ async function saveSetFromEditor(setData) {
       const errorText = await res.text();
       throw new Error(errorText || "Failed to save picture set");
     }
-
-    const data = await res.json();
-
-    // Refresh picture sets list
-    await fetchPictureSets();
-
-    if (isNew && data.picture_set) {
-      const setId = data.picture_set.id;
-      // If pictures are selected, add them to the new set
-      if (selectedImageIds.value.length > 0) {
-        const addPromises = selectedImageIds.value.map((pictureId) =>
-          fetch(`${BACKEND_URL}/picture_sets/${setId}/pictures/${pictureId}`, {
-            method: "POST",
-          })
-        );
-        await Promise.all(addPromises);
-
-        // Clear selection
-        selectedImageIds.value = [];
-
-        // Refresh picture sets list to update counts
-        await fetchPictureSets();
-      }
-
-      // Select the set (this will load its pictures)
-      await handleSelectSet(setId);
-    }
-
-    closeSetEditor();
+    emit("close");
+    emit("refresh-sidebar");
   } catch (e) {
     alert("Failed to save picture set: " + (e.message || e));
   }

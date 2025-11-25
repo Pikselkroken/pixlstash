@@ -4,7 +4,7 @@ from typing import Optional
 
 from .logging import get_logger
 from .characters import Characters
-from .pictures import Pictures, PictureWorker
+from .pictures import Pictures, WorkerType
 from .picture_characters import PictureCharacters
 from .picture_sets import PictureSets
 from .picture_utils import PictureUtils
@@ -58,12 +58,12 @@ class Vault:
         self.picture_sets = PictureSets(self.db)
         self.pictures = Pictures(self.db, self.characters)
 
-    def stop_background_workers(self, workers: set[PictureWorker]):
+    def stop_background_workers(self, workers: set[WorkerType]):
         logger.debug("Stopping background workers...")
         for worker in workers:
             self.pictures.stop_worker(worker)
 
-    def start_background_workers(self, workers: set[PictureWorker]):
+    def start_background_workers(self, workers: set[WorkerType]):
         logger.debug("Starting background workers...")
         for worker in workers:
             self.pictures.start_worker(worker)
@@ -81,7 +81,7 @@ class Vault:
         """
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
-        self.stop_background_workers(PictureWorker.all())
+        self.stop_background_workers(WorkerType.all())
 
     def _create_tables(self):
         self.db._create_tables()

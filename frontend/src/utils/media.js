@@ -17,13 +17,9 @@ export function isSupportedImageFile(file) {
 }
 
 export function isSupportedVideoFile(file) {
-  console.log("Checking video file:", file);
-  let ext = '';
-  if (typeof file === 'string') {
-    ext = file.toLowerCase();
-  } else if (file && file.name) {
-    ext = file.name.split('.').pop().toLowerCase();
-  }
+  const filename = typeof file === 'string' ? file : file.name || '';
+
+  const ext = filename.split('.').pop().toLowerCase();
   return VIDEO_EXTENSIONS.includes(ext);
 }
 
