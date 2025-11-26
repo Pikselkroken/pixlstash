@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import time
 
@@ -65,12 +66,16 @@ class LikenessWorker(BaseWorker):
             if self._stop.is_set():
                 break
             if pending_pairs:
-                all_likeness_scores, all_processed_pairs, processed_total = self._process_batches(pending_pairs)
+                all_likeness_scores, all_processed_pairs, processed_total = (
+                    self._process_batches_for_combined_likeness(pending_pairs)
+                )
                 logger.debug(
                     f"LikenessWorker: Processed {processed_total} likeness scores in this iteration."
                 )
                 if all_likeness_scores:
-                    self._insert_likeness_scores(all_likeness_scores, all_processed_pairs)
+                    self._insert_likeness_scores(
+                        all_likeness_scores, all_processed_pairs
+                    )
                     logger.debug(
                         f"LikenessWorker: Bulk inserted {len(all_likeness_scores)} likeness scores and removed {len(all_processed_pairs)} processed pairs from work queue."
                     )
@@ -93,6 +98,75 @@ class LikenessWorker(BaseWorker):
                 )
                 self._wait()
         logger.info("LikenessWorker: Likeness worker stopped.")
+
+    def _process_batches_for_combined_likeness(self, pending_pairs, bins=32):
+        """
+        Batch process both facial and color histogram likeness, average them, and return for DB insert.
+        Returns (likeness_scores, processed_pairs, processed_total)
+        """
+        batches = [
+            pending_pairs[i * self.BATCH_SIZE : (i + 1) * self.BATCH_SIZE]
+            for i in range(
+                min(
+                    self.NUM_THREADS,
+                    (len(pending_pairs) + self.BATCH_SIZE - 1) // self.BATCH_SIZE,
+                )
+            )
+        ]
+
+        def process_batch(batch):
+            likeness_scores = []
+            queue_pairs = []
+            for item in batch:
+                pic_a_id, pic_b_id, pic_a, pic_b = item
+                try:
+                    # Facial likeness
+                    features_a = np.frombuffer(pic_a.facial_features, dtype=np.float32)
+                    features_b = np.frombuffer(pic_b.facial_features, dtype=np.float32)
+                    facial_likeness = PictureQuality.likeness_score(
+                        features_a, features_b
+                    )
+                    # Color histogram likeness
+                    img_a = (
+                        pic_a.get_image()
+                        if hasattr(pic_a, "get_image")
+                        else getattr(pic_a, "image_data", None)
+                    )
+                    img_b = (
+                        pic_b.get_image()
+                        if hasattr(pic_b, "get_image")
+                        else getattr(pic_b, "image_data", None)
+                    )
+                    if img_a is None or img_b is None:
+                        logger.warning(
+                            f"Missing image data for pair ({pic_a_id}, {pic_b_id}), skipping."
+                        )
+                        continue
+                    color_likeness = self._color_histogram_likeness(img_a, img_b, bins)
+                    avg_likeness = float((facial_likeness + color_likeness) / 2.0)
+                    likeness_scores.append(
+                        (pic_a_id, pic_b_id, avg_likeness, "avg_facial_colorhist")
+                    )
+                    queue_pairs.append((pic_a_id, pic_b_id))
+                except Exception as e:
+                    logger.warning(
+                        f"Combined likeness failed for pair ({pic_a_id}, {pic_b_id}): {e}"
+                    )
+            return likeness_scores, queue_pairs
+
+        processed_total = 0
+        all_likeness_scores = []
+        all_processed_pairs = []
+        with ThreadPoolExecutor(max_workers=len(batches)) as executor:
+            futures = [
+                executor.submit(process_batch, batch) for batch in batches if batch
+            ]
+            for future in as_completed(futures):
+                batch_scores, processed_pairs = future.result()
+                all_likeness_scores.extend(batch_scores)
+                all_processed_pairs.extend(processed_pairs)
+                processed_total += len(batch_scores)
+        return all_likeness_scores, all_processed_pairs, processed_total
 
     def _get_total_pending(self):
         return self._db.submit_task(
@@ -143,13 +217,11 @@ class LikenessWorker(BaseWorker):
                     tuple(all_ids),
                 ).fetchall()
             ).result()
-            logger.info(
-                "Got %d pictures for likeness calculation." % (len(pic_rows))
-            )
+            logger.info("Got %d pictures for likeness calculation." % (len(pic_rows)))
             pic_dict = {
-                row["id"]
-                if isinstance(row, dict)
-                else row[0]: PictureModel.from_dict(row)
+                row["id"] if isinstance(row, dict) else row[0]: PictureModel.from_dict(
+                    row
+                )
                 for row in pic_rows
             }
             for row in rows:
@@ -183,14 +255,13 @@ class LikenessWorker(BaseWorker):
         logger.info(f"Pending pairs to process this batch: {[(p[0], p[1]) for p in pending_pairs]}")
         return pending_pairs
 
-    def _process_batches(self, pending_pairs):
+    def _process_batches_for_facial_likeness(self, pending_pairs):
         batches = [
             pending_pairs[i * self.BATCH_SIZE : (i + 1) * self.BATCH_SIZE]
             for i in range(
                 min(
                     self.NUM_THREADS,
-                    (len(pending_pairs) + self.BATCH_SIZE - 1)
-                    // self.BATCH_SIZE,
+                    (len(pending_pairs) + self.BATCH_SIZE - 1) // self.BATCH_SIZE,
                 )
             )
         ]
@@ -222,9 +293,7 @@ class LikenessWorker(BaseWorker):
         all_processed_pairs = []
         with ThreadPoolExecutor(max_workers=len(batches)) as executor:
             futures = [
-                executor.submit(process_batch, batch)
-                for batch in batches
-                if batch
+                executor.submit(process_batch, batch) for batch in batches if batch
             ]
             for future in as_completed(futures):
                 batch_scores, processed_pairs = future.result()
@@ -251,8 +320,92 @@ class LikenessWorker(BaseWorker):
             )
             logger.info(f"Removed processed pairs from work queue: {all_processed_pairs}")
             conn.commit()
+
         self._db.submit_task(
             insert_likeness_scores,
             all_likeness_scores,
             priority=DBPriority.LOW,
         )
+
+    def _color_histogram_likeness(self, img_a, img_b, bins=32):
+        """
+        Compute a simple color histogram likeness measure between two images.
+        Returns a float in [0, 1], where 1 means identical histograms.
+        Uses normalized L1 distance between concatenated RGB histograms.
+        """
+
+        def get_hist(img):
+            # img: numpy array, shape (H, W, 3), dtype uint8
+            chans = cv2.split(img)
+            hist = [
+                cv2.calcHist([c], [0], None, [bins], [0, 256]).flatten() for c in chans
+            ]
+            hist = np.concatenate(hist)
+            hist = hist / (np.sum(hist) + 1e-8)
+            return hist
+
+        hist_a = get_hist(img_a)
+        hist_b = get_hist(img_b)
+        l1 = np.sum(np.abs(hist_a - hist_b))
+        # Normalize: max possible L1 is 2 (if histograms are disjoint and sum to 1)
+        likeness = 1.0 - (l1 / 2.0)
+        return float(np.clip(likeness, 0.0, 1.0))
+
+    def _process_batches_for_color_histogram_likeness(self, pending_pairs, bins=32):
+        """
+        Batch process color histogram likeness for all pending pairs.
+        Returns (likeness_scores, processed_pairs, processed_total)
+        """
+        batches = [
+            pending_pairs[i * self.BATCH_SIZE : (i + 1) * self.BATCH_SIZE]
+            for i in range(
+                min(
+                    self.NUM_THREADS,
+                    (len(pending_pairs) + self.BATCH_SIZE - 1) // self.BATCH_SIZE,
+                )
+            )
+        ]
+
+        def process_batch(batch):
+            likeness_scores = []
+            queue_pairs = []
+            for item in batch:
+                pic_a_id, pic_b_id, pic_a, pic_b = item
+                # Assume PictureModel has .image_data or .get_image() returning np.ndarray (H,W,3)
+                try:
+                    img_a = (
+                        pic_a.get_image()
+                        if hasattr(pic_a, "get_image")
+                        else pic_a.image_data
+                    )
+                    img_b = (
+                        pic_b.get_image()
+                        if hasattr(pic_b, "get_image")
+                        else pic_b.image_data
+                    )
+                    if img_a is None or img_b is None:
+                        continue
+                    likeness = self._color_histogram_likeness(img_a, img_b, bins)
+                    likeness_scores.append(
+                        (pic_a_id, pic_b_id, float(likeness), "color_hist")
+                    )
+                    queue_pairs.append((pic_a_id, pic_b_id))
+                except Exception as e:
+                    logger.warning(
+                        f"Color histogram likeness failed for pair ({pic_a_id}, {pic_b_id}): {e}"
+                    )
+            return likeness_scores, queue_pairs
+
+        processed_total = 0
+        all_likeness_scores = []
+        all_processed_pairs = []
+        with ThreadPoolExecutor(max_workers=len(batches)) as executor:
+            futures = [
+                executor.submit(process_batch, batch) for batch in batches if batch
+            ]
+            for future in as_completed(futures):
+                batch_scores, processed_pairs = future.result()
+                all_likeness_scores.extend(batch_scores)
+                all_processed_pairs.extend(processed_pairs)
+                processed_total += len(batch_scores)
+        return all_likeness_scores, all_processed_pairs, processed_total
