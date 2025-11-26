@@ -68,23 +68,83 @@
           :draggable="isImageSelected(img.id)"
           @dragstart="onImageDragStart(img, img.idx, $event)"
           @click="handleImageCardClick(img, img.idx, $event)"
+          @mouseenter="img._showRes = true"
+          @mouseleave="img._showRes = false"
         >
           <v-card
             class="thumbnail-card"
             @click.stop="handleThumbnailClick(img, img.idx, $event)"
           >
             <div class="thumbnail-container">
+              <!-- Movie icon overlay for videos -->
+              <div
+                v-if="isVideo(img)"
+                class="movie-icon-overlay"
+                :style="{
+                  position: 'absolute',
+                  bottom: '8px',
+                  left: '10px',
+                  background: 'rgba(0, 0, 0, 0.6)', // semi-transparent orange
+                  color: '#ff9800', // orange for border/outline
+                  padding: '2px 5px',
+                  borderRadius: '4px',
+                  fontSize: '1.0em',
+                  zIndex: 30,
+                  display: 'flex',
+                  alignItems: 'center',
+                  pointerEvents: 'none',
+                }"
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#ff9800"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="display: inline-block; vertical-align: middle"
+                >
+                  <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
+                  <polygon points="10 9 16 12 10 15 10 9" fill="#ff9800" />
+                </svg>
+              </div>
+              <!-- Resolution hover overlay -->
+              <div
+                v-if="img._showRes && img.width && img.height"
+                class="resolution-hover-overlay"
+                :style="{
+                  position: 'absolute',
+                  bottom: '8px',
+                  right: '10px',
+                  background: 'rgba(0,0,0,0.5)',
+                  color: '#fff',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  fontSize: '0.8em',
+                  zIndex: 30,
+                  pointerEvents: 'none',
+                }"
+              >
+                {{ img.width }}×{{ img.height }}
+              </div>
               <template v-if="img.thumbnail && isVideo(img)">
                 <video
                   class="thumbnail-img"
                   :src="`${props.backendUrl}/pictures/${img.id}`"
-                  :ref="el => setVideoRef(img.id, el)"
+                  :ref="(el) => setVideoRef(img.id, el)"
                   muted
                   loop
                   playsinline
                   @mouseenter="playVideo(img.id)"
                   @mouseleave="pauseVideo(img.id)"
-                  style="object-fit: cover; width: 100%; height: 100%; border-radius: 8px;"
+                  style="
+                    object-fit: cover;
+                    width: 100%;
+                    height: 100%;
+                    border-radius: 8px;
+                  "
                 ></video>
                 <div
                   class="thumbnail-index-overlay"
@@ -154,14 +214,35 @@
                 >
               </div>
               <!-- Info row absolutely positioned below thumbnail -->
-              <div class="thumbnail-info-row" style="position: absolute; left: 0; right: 0; bottom: -1.6em; width: 100%; text-align: center;">
-                <div v-if="props.selectedSort === 'search_likeness' && img.likeness_score !== undefined" class="likeness-score">
+              <div
+                class="thumbnail-info-row"
+                style="
+                  position: absolute;
+                  left: 0;
+                  right: 0;
+                  bottom: -1.6em;
+                  width: 100%;
+                  text-align: center;
+                "
+              >
+                <div
+                  v-if="
+                    props.selectedSort === 'search_likeness' &&
+                    img.likeness_score !== undefined
+                  "
+                  class="likeness-score"
+                >
                   Likeness: {{ img.likeness_score.toFixed(2) }}
                 </div>
-                <div v-else-if="props.selectedSort.includes('created_at') && img.created_at" class="date-label">
+                <div
+                  v-else-if="
+                    props.selectedSort.includes('created_at') && img.created_at
+                  "
+                  class="date-label"
+                >
                   {{ new Date(img.created_at).toLocaleString() }}
                 </div>
-                <div v-else style="height: 1.2em;">asdasasdasd</div>
+                <div v-else style="height: 1.2em">asdasasdasd</div>
               </div>
             </div>
           </v-card>
@@ -224,7 +305,7 @@ function pauseVideo(id) {
 }
 function isVideo(img) {
   if (!img) return false;
-  let name = '';
+  let name = "";
   if (img.filename) {
     name = img.filename;
   } else if (img.id) {
@@ -232,7 +313,6 @@ function isVideo(img) {
   }
   return isSupportedVideoFile(name);
 }
-
 
 function removeFromGroup() {
   if (!selectedImageIds.value.length) return;
@@ -375,7 +455,7 @@ const props = defineProps({
   selectedSort: String,
   showStars: Boolean,
   gridVersion: { type: Number, default: 0 },
-  mediaTypeFilter: { type: String, default: 'all' },
+  mediaTypeFilter: { type: String, default: "all" },
 });
 
 watch(
@@ -682,10 +762,10 @@ function buildPictureIdsQueryParams() {
     params.append("sort", props.selectedSort.trim());
   }
   // Add format filter for backend media type filtering
-  if (props.mediaTypeFilter === 'images') {
-    params.append('format', 'PNG');
-  } else if (props.mediaTypeFilter === 'videos') {
-    params.append('format', 'MP4');
+  if (props.mediaTypeFilter === "images") {
+    params.append("format", "PNG");
+  } else if (props.mediaTypeFilter === "videos") {
+    params.append("format", "MP4");
   }
   return params.toString();
 }
@@ -825,18 +905,18 @@ const gridImagesToRender = computed(() => {
   console.log("Filtering images for mediaTypeFilter:", props.mediaTypeFilter);
   // Accept both 'all' and 'both' as showing all media
   let filtered = allGridImages.value;
-  if (props.mediaTypeFilter === 'images') {
-    filtered = filtered.filter(img => {
+  if (props.mediaTypeFilter === "images") {
+    filtered = filtered.filter((img) => {
       if (!img) return false;
-      const name = img.filename || img.name || img.id || '';
-      const format = (img.format || '').toLowerCase();
+      const name = img.filename || img.name || img.id || "";
+      const format = (img.format || "").toLowerCase();
       return isSupportedImageFile(name) || isSupportedImageFile(format);
     });
-  } else if (props.mediaTypeFilter === 'videos') {
-    filtered = filtered.filter(img => {
+  } else if (props.mediaTypeFilter === "videos") {
+    filtered = filtered.filter((img) => {
       if (!img) return false;
-      const name = img.filename || img.name || img.id || '';
-      const format = (img.format || '').toLowerCase();
+      const name = img.filename || img.name || img.id || "";
+      const format = (img.format || "").toLowerCase();
       return isSupportedVideoFile(name) || isSupportedVideoFile(format);
     });
   } // else 'all' or 'both' shows everything
