@@ -213,17 +213,12 @@
                   >mdi-star</v-icon
                 >
               </div>
-              <!-- Info row absolutely positioned below thumbnail -->
+            </div>
+          </v-card>
+          <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
+                        <!-- Info row absolutely positioned below thumbnail -->
               <div
                 class="thumbnail-info-row"
-                style="
-                  position: absolute;
-                  left: 0;
-                  right: 0;
-                  bottom: -1.6em;
-                  width: 100%;
-                  text-align: center;
-                "
               >
                 <div
                   v-if="
@@ -238,15 +233,12 @@
                   v-else-if="
                     props.selectedSort.includes('created_at') && img.created_at
                   "
-                  class="date-label"
+                  class="thumbnail-info"
                 >
-                  {{ new Date(img.created_at).toLocaleString() }}
+                  {{ formatIsoDate(img.created_at) }}
                 </div>
-                <div v-else style="height: 1.2em">asdasasdasd</div>
               </div>
-            </div>
-          </v-card>
-          <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
+
         </div>
         <!-- Bottom spacer -->
         <div
@@ -264,6 +256,14 @@
 
 <script setup>
 // Number of images before/after viewport to load thumbnails for
+// Format date to ISO (YYYY-MM-DD HH:mm:ss)
+function formatIsoDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 import { computed, onMounted, ref, watch, nextTick, onUnmounted } from "vue";
 import {
   isSupportedMediaFile,
@@ -1369,7 +1369,7 @@ async function exportCurrentViewToZip() {
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 100%;
+  margin-bottom: 2.2em;
   padding: 0px;
   margin: 0;
   transition: box-shadow 0.2s, border 0.2s;
@@ -1418,13 +1418,16 @@ async function exportCurrentViewToZip() {
   width: 20px;
   height: 20px;
 }
-.image-card {
-  position: relative;
+.thumbnail-info-row {
+  margin-top: 2px;
+  text-align: center;
+  min-height: 1.2em;
+  background: none;
+  
 }
 .thumbnail-info {
-  font-size: 0.85em;
-  color: #666;
-  margin-top: 2px;
+  font-size: 1.0em;
+  color: #222;
   text-align: center;
   word-break: break-all;
 }
@@ -1436,7 +1439,6 @@ async function exportCurrentViewToZip() {
 }
 .thumbnail-img {
   width: 100%;
-  height: 100%;
   aspect-ratio: 1 / 1;
   object-fit: cover;
   display: block;
@@ -1480,7 +1482,6 @@ async function exportCurrentViewToZip() {
 
 .thumbnail-card {
   width: 100%;
-  height: 100%;
   max-width: none;
   min-width: none;
   position: relative;
