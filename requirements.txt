@@ -27,3 +27,5 @@ einops
 spacy
 sentence_transformers
 pillow-heif
+sqlmodel
+nltk

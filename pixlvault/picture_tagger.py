@@ -15,6 +15,7 @@ from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 
 from .logging import get_logger
+from pixlvault.db_models.picture import Picture
 from pixlvault.tag_naturaliser import TagNaturaliser
 from pixlvault.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
 
@@ -67,6 +68,13 @@ class PictureTagger:
             else:
                 self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        if self._device == "cuda":
+            providers = ort.get_available_providers()
+            if "CUDAExecutionProvider" not in providers:
+                logger.debug(
+                    "No GPU ort providers available, forcing CPUExecutionProvider"
+                )
+                self._device = "cpu"
         logger.debug(f"PictureTagger initialized with device: {self._device}")
 
         self._ensure_model_files(force_download=force_download)
@@ -255,6 +263,9 @@ class PictureTagger:
         Returns:
             str: Natural language caption
         """
+        logger.debug(
+            f"_generate_florence_caption called: image_path={image_path}, character_name={character_name}, _retry_on_cpu={_retry_on_cpu}"
+        )
         if self._florence_model is None:
             logger.error("Florence-2 model is not initialized")
             return None
@@ -402,8 +413,12 @@ class PictureTagger:
                     logger.debug(f"Florence-2 caption: {caption}")
             # Insert character name if provided
             if caption and character_name:
-                person_pattern = r"\b(woman|man|person|girl|boy|lady|gentleman|individual|figure|character)\b"
+                # Match phrases like 'a young woman', 'the young woman', 'young woman', etc.
+                person_pattern = r"\b((?:a|the)? ?(?:young|old|middle-aged|elderly)? ?(?:woman|man|person|girl|boy|lady|gentleman|individual|figure|character))\b"
                 match = re.search(person_pattern, caption, re.IGNORECASE)
+                logger.debug(
+                    f"Florence caption instrumentation: caption before: '{caption}', character_name: '{character_name}', regex: '{person_pattern}', match: '{match.group(0) if match else None}'"
+                )
                 if match:
                     insert_pos = match.end()
                     caption = (
@@ -411,8 +426,15 @@ class PictureTagger:
                         + f" named {character_name}"
                         + caption[insert_pos:]
                     )
+                    logger.debug(
+                        f"Florence caption instrumentation: caption after injection: '{caption}'"
+                    )
                 else:
                     caption = f"{character_name}: {caption}"
+                    logger.debug(
+                        f"Florence caption instrumentation: caption after prepend: '{caption}'"
+                    )
+            logger.debug(f"Final Florence-2 caption returned: {caption}")
             return caption
 
         except Exception as e:
@@ -607,43 +629,6 @@ class PictureTagger:
         ]
         return texts
 
-    @classmethod
-    def _collect_text(cls, obj, visited=None):
-        if visited is None:
-            visited = set()
-        texts = []
-        obj_id = id(obj)
-        if obj is None or obj_id in visited:
-            return texts
-        visited.add(obj_id)
-        if isinstance(obj, str):
-            if obj.strip():
-                texts.append(obj.strip())
-        elif isinstance(obj, dict):
-            for k, v in obj.items():
-                if k == "tags" and isinstance(v, (list, tuple, set)):
-                    texts.extend([t for t in v if t])
-                else:
-                    texts.extend(cls._collect_text(v, visited))
-        elif isinstance(obj, (list, tuple, set)):
-            for item in obj:
-                texts.extend(cls._collect_text(item, visited))
-        elif hasattr(obj, "__dict__"):
-            # Only process dataclasses with explicit include_in_text_embedding metadata
-            import dataclasses
-
-            if dataclasses.is_dataclass(obj):
-                for field in dataclasses.fields(obj):
-                    if field.metadata.get("include_in_text_embedding", False):
-                        value = getattr(obj, field.name)
-                        if field.name == "tags" and isinstance(
-                            value, (list, tuple, set)
-                        ):
-                            texts.extend([t for t in value if t])
-                        else:
-                            texts.extend(cls._collect_text(value, visited))
-        return texts
-
     def tag_images(self, image_paths):
         """
         Tag images using the WD14 tagger model.
@@ -725,29 +710,24 @@ class PictureTagger:
         logger.debug(f"Completed tagging for {len(all_results)} images.")
         return self._merge_video_frame_tags(all_results)
 
-    def generate_description(self, picture, character=None):
-        florence_caption = self._generate_florence_caption(picture.file_path)
+    def generate_description(self, picture, character_names=[]):
+        # Compose prefix
+        prefix = ""
+        if character_names:
+            if len(character_names) == 1:
+                prefix = f"A picture of {character_names[0]}. "
+            else:
+                prefix = "A picture of "
+                prefix += ", ".join(character_names[:-1])
+                prefix += f" and {character_names[-1]}. "
+        logger.debug(
+            f"generate_description: picture.file_path={getattr(picture, 'file_path', None)}, character_names={character_names}"
+        )
+        florence_caption = self._generate_florence_caption(
+            picture.file_path,
+            character_name=character_names[0] if character_names else None,
+        )
         if florence_caption:
-            character_name_capitalized = None
-            if character and hasattr(character, "name") and character.name:
-                character_name_capitalized = " ".join(
-                    word.capitalize() for word in character.name.split()
-                )
-                import re
-
-                person_pattern = r"\b(a young woman|a woman|the woman|a young man|a man|the man|a person|the person)\b"
-                match = re.search(person_pattern, florence_caption, re.IGNORECASE)
-                if match:
-                    insert_pos = match.end()
-                    florence_caption = (
-                        florence_caption[:insert_pos]
-                        + f" named {character_name_capitalized}"
-                        + florence_caption[insert_pos:]
-                    )
-                else:
-                    florence_caption = (
-                        f"{character_name_capitalized}. {florence_caption}"
-                    )
             logger.debug(
                 f"Text embedding: using Florence-2 caption: {florence_caption}"
             )
@@ -757,37 +737,176 @@ class PictureTagger:
                 getattr(picture, "file_path", None),
             )
             raise RuntimeError("Florence captioning failed.")
-        return florence_caption
+        return prefix + florence_caption
 
-    def generate_text_embedding(self, picture, character=None):
+    @staticmethod
+    def build_embedding_sentence(data: dict) -> str:
+        """
+        Build a general, natural language sentence from a dict with keys: description, tags, characters.
+        Prioritizes 'description' and 'original prompt' for natural output.
+        Also: removes unnecessary parentheses, capitalizes sentences, and avoids double periods.
+        """
+        desc = data.get("description") or ""
+        tags = data.get("tags") or []
+        characters = data.get("characters") or []
+
+        # Avoid redundancy: remove tags already present in description
+        desc_lower = desc.lower()
+        tags_used = [tag for tag in tags if tag.lower() not in desc_lower]
+
+        # Contextual tag integration: weave tags into description
+        if tags_used:
+            if desc:
+                desc = desc.rstrip(".") + ", " + ", ".join(tags_used) + "."
+            else:
+                desc = ", ".join(tags_used).capitalize() + "."
+
+        # Prioritize original prompts for characters
+        char_sentences = []
+        for char in characters:
+            name = char.get("name")
+            char_desc = char.get("description")
+            prompt = char.get("original_prompt")
+            if prompt:
+                if name and char_desc:
+                    char_sentences.append(f"{name}, {char_desc}, {prompt}")
+                elif name:
+                    char_sentences.append(f"{name}, {prompt}")
+                else:
+                    char_sentences.append(prompt)
+            elif name and char_desc:
+                char_sentences.append(f"{name}, {char_desc}")
+            elif name:
+                char_sentences.append(f"{name}")
+
+        # Merge character sentences
+        char_sentence = ""
+        if char_sentences:
+            if len(char_sentences) == 1:
+                char_sentence = char_sentences[0]
+            elif len(char_sentences) == 2:
+                char_sentence = f"{char_sentences[0]} and {char_sentences[1]}"
+            else:
+                char_sentence = (
+                    ", ".join(char_sentences[:-1]) + f", and {char_sentences[-1]}"
+                )
+
+        # Compose the final sentence, avoid double periods and capitalize
+        def clean_sentence(s):
+            import re
+
+            s = s.strip()
+            # Remove double periods
+            while ".." in s:
+                s = s.replace("..", ".")
+            # Capitalize first letter
+            if s:
+                s = s[0].upper() + s[1:]
+
+            # Lowercase single- and two-letter words not at start
+            def lower_short_words(match):
+                word = match.group(0)
+                # Only lowercase if not at start of sentence
+                if word.lower() in [
+                    "a",
+                    "i",
+                    "an",
+                    "as",
+                    "at",
+                    "by",
+                    "do",
+                    "go",
+                    "he",
+                    "if",
+                    "in",
+                    "is",
+                    "it",
+                    "me",
+                    "my",
+                    "no",
+                    "of",
+                    "on",
+                    "or",
+                    "so",
+                    "to",
+                    "up",
+                    "us",
+                    "we",
+                ]:
+                    return word.lower()
+                return word
+
+            # Use regex to find single- and two-letter words not at start
+            s = re.sub(
+                r"(?<!^)(?<=\s)([A-Za-z]{1,2})(?=\s|\.|,|;|:|!|\?)",
+                lower_short_words,
+                s,
+            )
+            # Ensure single period at end
+            if s and not s.endswith("."):
+                s += "."
+            return s
+
+        # Prioritize description first, then character actions
+        if desc and char_sentence:
+            return clean_sentence(f"{desc} {char_sentence}")
+        elif desc:
+            return clean_sentence(desc)
+        elif char_sentence:
+            return clean_sentence(char_sentence)
+        else:
+            return ""
+
+    # Naive flatten
+    @classmethod
+    def naive_flatten(cls, texts):
+        flat = []
+        if texts.get("description"):
+            flat.append(str(texts["description"]))
+        # flat.extend([str(tag) for tag in texts.get("tags") or [] if tag])
+        for char in texts.get("characters") or []:
+            for v in char.values():
+                if v:
+                    flat.append(str(v))
+        return flat
+
+    def generate_text_embedding(self, picture: Picture = None, query: str = None):
         """
         Generate a SBERT embedding from all text found in character and picture objects (recursively), avoiding cycles.
         Returns text_embedding and full_text.
         """
+        if picture is None and query is None:
+            raise ValueError("Either picture or query_string must be provided.")
 
-        texts = []
-        if character:
-            texts.extend(self._collect_text(character))
         if picture:
-            texts.extend(self._collect_text(picture))
-        texts = self._filter_texts(texts)
-        logger.debug(f"Text Embedding: texts used for embedding (filtered): {texts}")
-        if not texts:
-            logger.error(
-                "Text Embedding: No text data for embedding. character=%s, picture=%s",
-                character,
-                picture,
+            texts = picture.text_embedding_data()
+            flat_texts = PictureTagger.naive_flatten(texts)
+            filtered_texts = self._filter_texts(flat_texts)
+            logger.debug(
+                f"Text Embedding: texts used for embedding (filtered): {filtered_texts}"
             )
-            raise ValueError("No text data for embedding.")
-        logger.debug(f"Text Embedding: tags going into description: {texts}")
-        full_text = self._tag_naturaliser.tags_to_sentence(texts)
+            if not filtered_texts:
+                logger.error(
+                    "Text Embedding: No text data for embedding. picture=%s",
+                    picture,
+                )
+                raise ValueError("No text data for embedding.")
+            logger.debug(
+                f"Text Embedding: tags going into description: {filtered_texts}"
+            )
+            full_text = ". ".join(filtered_texts)
+        else:
+            full_text = query
+            logger.debug(
+                f"Text Embedding: using query_string for embedding: {full_text}"
+            )
+
         full_text = full_text.lower()
-        logger.debug(f"Text Embedding: full_text for SBERT: {full_text}")
 
         # Generate text embedding using SBERT
         sbert_model = getattr(self, "_sbert_model", None)
         if sbert_model is None:
-            sbert_model = SentenceTransformer("all-MiniLM-L6-v2")
+            sbert_model = SentenceTransformer("all-MiniLM-L6-v2", device=self._device)
             self._sbert_model = sbert_model
 
         text_embedding = None
@@ -806,134 +925,160 @@ class PictureTagger:
                 raise
         return text_embedding, full_text
 
-    def generate_facial_features(self, picture):
+    def generate_facial_features(self, picture, face_bboxes):
         """
-        Generate facial features from picture object if face_bbox is present.
-        Returns facial_features or None.
+        Generate facial features for a list of face_bboxes in a picture.
+        Returns a list of facial_features (np.ndarray or None) for each bbox.
         """
-        facial_features = None
-        if (
-            picture
-            and hasattr(picture, "file_path")
-            and hasattr(picture, "face_bbox")
-            and picture.face_bbox
-        ):
-            try:
-                from pixlvault.picture_utils import PictureUtils
-                import os
+        from pixlvault.picture_utils import PictureUtils
+        import os
+        import torch
+        from PIL import Image
 
-                ext = os.path.splitext(picture.file_path)[1].lower()
-                video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
-                if ext in video_exts:
-                    import cv2
+        file_path = (
+            picture.file_path if hasattr(picture, "file_path") else picture["file_path"]
+        )
+        ext = os.path.splitext(file_path)[1].lower()
+        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+        facial_features_list = []
+        face_crops = []
 
-                    cap = cv2.VideoCapture(picture.file_path)
-                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    for idx in range(frame_count):
-                        ret, frame = cap.read()
-                        if not ret or frame is None:
-                            continue
-                        face_crop = PictureUtils.crop_face_from_frame(
-                            frame, picture.face_bbox
-                        )
-                        if face_crop is not None:
-                            if isinstance(face_crop, np.ndarray):
-                                from PIL import Image
+        # Load image or first frame for all crops
+        if ext in video_exts:
+            import cv2
 
-                                face_crop = Image.fromarray(
-                                    cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-                                )
-                            img_input = (
-                                self._clip_preprocess(face_crop)
-                                .unsqueeze(0)
-                                .to(self._clip_device)
-                            )
-                            with torch.no_grad():
-                                facial_features = (
-                                    self._clip_model.encode_image(img_input)
-                                    .cpu()
-                                    .numpy()[0]
-                                )
-                            break
-                    cap.release()
+            cap = cv2.VideoCapture(file_path)
+            ret, frame = cap.read()
+            cap.release()
+            if not ret or frame is None:
+                frame = None
+            for bbox in face_bboxes:
+                if frame is not None:
+                    crop = PictureUtils.crop_face_from_frame(frame, bbox)
+                    if crop is not None and isinstance(crop, np.ndarray):
+                        crop = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                    face_crops.append(crop)
                 else:
-                    face_crop = PictureUtils.load_and_crop_face_bbox(
-                        picture.file_path, picture.face_bbox
+                    face_crops.append(None)
+        else:
+            for bbox in face_bboxes:
+                crop = PictureUtils.load_and_crop_face_bbox(file_path, bbox)
+                face_crops.append(crop)
+
+        for crop in face_crops:
+            if crop is not None:
+                try:
+                    img_input = (
+                        self._clip_preprocess(crop).unsqueeze(0).to(self._clip_device)
                     )
-                    if face_crop is not None:
-                        img_input = (
-                            self._clip_preprocess(face_crop)
-                            .unsqueeze(0)
-                            .to(self._clip_device)
+                    with torch.no_grad():
+                        features = (
+                            self._clip_model.encode_image(img_input).cpu().numpy()[0]
                         )
-                        with torch.no_grad():
-                            facial_features = (
-                                self._clip_model.encode_image(img_input)
-                                .cpu()
-                                .numpy()[0]
-                            )
-            except RuntimeError as e:
-                if (
-                    ("CUDA out of memory" in str(e))
-                    or ("not compatible" in str(e))
-                    or ("CUDA error" in str(e))
-                ):
-                    self._clip_device = "cpu"
-                    self._clip_model = self._clip_model.to(self._clip_device)
-                    try:
-                        if face_crop is not None:
+                    facial_features_list.append(features)
+                except RuntimeError as e:
+                    if (
+                        ("CUDA out of memory" in str(e))
+                        or ("not compatible" in str(e))
+                        or ("CUDA error" in str(e))
+                    ):
+                        self._clip_device = "cpu"
+                        self._clip_model = self._clip_model.to(self._clip_device)
+                        try:
                             img_input = (
-                                self._clip_preprocess(face_crop)
+                                self._clip_preprocess(crop)
                                 .unsqueeze(0)
                                 .to(self._clip_device)
                             )
                             with torch.no_grad():
-                                facial_features = (
+                                features = (
                                     self._clip_model.encode_image(img_input)
                                     .cpu()
                                     .numpy()[0]
                                 )
-                    except Exception:
-                        facial_features = None
-                else:
-                    facial_features = None
-        return facial_features
+                            facial_features_list.append(features)
+                        except Exception:
+                            facial_features_list.append(None)
+                    else:
+                        facial_features_list.append(None)
+                except Exception:
+                    facial_features_list.append(None)
+            else:
+                facial_features_list.append(None)
+        return facial_features_list
 
-    def correct_tags_with_florence(self, florence_desc, current_tags=None):
+    def preprocess_query_words(self, words, top_k=3):
         """
-        Use Florence-2 description to extract candidate tags and update image tags.
-        Returns corrected tag list.
+        Preprocess a list of query words for semantic search:
+        - Expand with up to top_k ranked synonyms for each word (≥4 letters, single-word only)
+        - Add 'woman' if 'she' or 'her' is present, 'man' if 'he' or 'him' is present
+        Returns a list of deduplicated, relevant words.
         """
-        try:
-            import spacy
+        # Remove prepositions and filter words
+        prepositions = {
+            "about",
+            "above",
+            "across",
+            "after",
+            "against",
+            "along",
+            "among",
+            "around",
+            "at",
+            "before",
+            "behind",
+            "below",
+            "beneath",
+            "beside",
+            "between",
+            "beyond",
+            "but",
+            "by",
+            "concerning",
+            "despite",
+            "down",
+            "during",
+            "except",
+            "for",
+            "from",
+            "in",
+            "inside",
+            "into",
+            "like",
+            "near",
+            "of",
+            "off",
+            "on",
+            "onto",
+            "out",
+            "outside",
+            "over",
+            "past",
+            "regarding",
+            "since",
+            "through",
+            "throughout",
+            "to",
+            "toward",
+            "under",
+            "underneath",
+            "until",
+            "up",
+            "upon",
+            "with",
+            "within",
+            "without",
+            "have",
+            "were",
+        }
+        cleaned = []
+        lower_words = [w.lower() for w in words]
+        for word in lower_words:
+            if word == "she" or word == "her":
+                cleaned.append("woman")
+            elif word == "he" or word == "him":
+                cleaned.append("man")
+            elif len(word) > 3 and word not in prepositions:
+                cleaned.append(word)
 
-            nlp = None
-            try:
-                nlp = spacy.load("en_core_web_sm")
-            except OSError:
-                import spacy.cli
-
-                spacy.cli.download("en_core_web_sm")
-            assert nlp is not None, "Failed to load spaCy model"
-            doc = nlp(florence_desc)
-            candidates = set()
-            for token in doc:
-                if token.pos_ in ("NOUN", "PROPN", "ADJ") and len(token.text) > 2:
-                    candidates.add(token.lemma_.lower())
-            # Map candidates to known tags using tag_naturaliser
-            mapped_tags = []
-            for cand in candidates:
-                nat_tag = TagNaturaliser.get_natural_tag(cand)
-                if nat_tag:
-                    mapped_tags.append(nat_tag)
-                else:
-                    mapped_tags.append(cand)
-            # Optionally merge with current tags
-            if current_tags:
-                # Keep tags that are in both or add new ones
-                merged = set(current_tags) | set(mapped_tags)
-                return sorted(merged)
-            return sorted(mapped_tags)
-        except Exception as e:
-            logger.error(f"Failed to extract tags from Florence description: {e}")
-            return current_tags or []
+        return cleaned

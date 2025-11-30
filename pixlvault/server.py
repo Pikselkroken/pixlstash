@@ -1,30 +1,27 @@
 import base64
 import uvicorn
 import io
-import math
 import os
 import json
 import uuid
 import mimetypes
-import re
 import concurrent.futures
 import sys
 import time
 
-from dataclasses import asdict
+from sqlmodel import Session, select
+
 from contextlib import asynccontextmanager
-from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPException
+from fastapi import Body, FastAPI, File, Request, UploadFile, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pillow_heif import register_heif_opener
 from PIL import Image
-from rapidfuzz import fuzz
 from typing import List
 
-from pixlvault.character import CharacterModel
-from pixlvault.logging import get_logger, uvicorn_log_config
+from pixlvault.db_models import Character, Face, Conversation, Message, Picture, SortMechanism
 from pixlvault.picture_utils import PictureUtils
-from pixlvault.pictures import WorkerType, get_sort_mechanisms
+from pixlvault.logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
@@ -144,9 +141,6 @@ class Server:
                 f"[SSL] Running with SSL: keyfile={self._server_config.get('ssl_keyfile')}, certfile={self._server_config.get('ssl_certfile')}"
             )
         uvicorn.run(self.api, **uvicorn_kwargs)
-
-    def start_workers(self, workers: set[WorkerType] = WorkerType.all()):
-        self.vault.start_background_workers(workers)
 
     @asynccontextmanager
     async def lifespan(self, app):
@@ -270,33 +264,168 @@ class Server:
             )
 
     def _setup_routes(self):
-        @self.api.get("/chat/history")
-        async def get_chat_history(character_id: str, session_id: str, limit: int = 100):
+        @self.api.post("/faces/{face_id}/character")
+        async def set_character_for_face(face_id: int, payload: dict = Body(...)):
+            """Set the character for a specific face. Payload: { character_id: int }"""
+            character_id = payload.get("character_id")
+            if not isinstance(character_id, int):
+                raise HTTPException(
+                    status_code=400, detail="character_id must be an integer"
+                )
+
+            def set_character(session: Session, face_id: int, character_id: int):
+                face = session.get(Face, face_id)
+                if not face:
+                    raise HTTPException(
+                        status_code=404, detail=f"Face {face_id} not found"
+                    )
+                face.character_id = character_id
+                session.add(face)
+                session.commit()
+                session.refresh(face)
+                return face
+
+            face = self.vault.db.run_task(set_character, face_id, character_id)
+            if face.id != face_id or face.character_id != character_id:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to set character {character_id} for face {face_id}",
+                )
+            return {
+                "status": "success",
+                "face_id": face_id,
+                "character_id": character_id,
+            }
+
+        @self.api.delete("/faces/{face_id}/character")
+        async def remove_character_from_face(face_id: int):
+            """Remove the character association from a specific face."""
+            self.vault.picture_faces.remove_character(face_id)
+            return {"status": "success", "face_id": face_id}
+
+        @self.api.delete("/chat/{id}")
+        async def delete_chat(id: int):
+            """Delete all chat messages for a character/session."""
+
+            def delete_query(session, id: int):
+                conversation = session.get(Conversation, id)
+                session.delete(conversation)
+                session.commit()
+
+            future = self.vault.db.submit_task(delete_query, id)
+            if future.exception():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to delete conversation {id}",
+                )
+
+            return {"status": "ok"}
+
+        @self.api.get("/chat/{id}")
+        async def get_chat(id: int, limit: int = 100):
             """Return chat history for a character/session."""
-            rows = self.vault.db.load_chat_history(character_id, session_id, limit)
-            # Convert sqlite3.Row to dict
-            messages = [dict(row) for row in rows]
-            for msg in messages:
-                logger.info(f"[Chat] Loaded message: role={msg.get('role')}, picture_id={msg.get('picture_id')}")
-            return {"messages": messages}
+            future = self.vault.db.submit_task(
+                lambda session: session.get(Conversation, id)
+            )
+            if future.exception():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to load conversation {id}",
+                )
+            conversation = future.result()
+            if conversation is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Conversation {id} not found"
+                )
+            future = self.vault.db.submit_task(
+                lambda session: session.exec(
+                    select(Message)
+                    .where(Message.conversation_id == id)
+                    .order_by(Message.timestamp.asc())
+                    .limit(limit)
+                ).all()
+            )
+            if future.exception():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to load chat messages for conversation {id}",
+                )
+
+            messages = future.result()
+            return {"conversation": conversation, "messages": messages}
+
+        @self.api.post("/chat")
+        async def create_chat(character_id: int = Query(None)):
+            """Create a new chat session for a character. Returns conversation_id."""
+            if character_id is None:
+                raise HTTPException(status_code=400, detail="character_id is required")
+
+            def create_conversation(session: Session, character_id: int):
+                conversation = Conversation(character_id=character_id)
+                session.add(conversation)
+                session.commit()
+                session.refresh(conversation)
+                return conversation
+
+            future = self.vault.db.submit_task(create_conversation, character_id)
+            if future.exception():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to create chat session. Exception occurred: {future.exception()}",
+                )
+            conversation = future.result()
+            if conversation is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to create chat session. The resulting conversation is None.",
+                )
+
+            logger.info(
+                "Created new conversation with ID: {}. Now trying to load it again.".format(
+                    conversation.id
+                )
+            )
+
+            future = self.vault.db.submit_task(
+                lambda session: session.get(Conversation, conversation.id)
+            )
+            if future.exception():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to load created chat session due to exception {future.exception()}.",
+                )
+            return {"conversation_id": conversation.id}
 
         @self.api.post("/chat/message")
         async def post_chat_message(payload: dict):
-            """Save a chat message. Expects character_id, session_id, timestamp, role, content, picture_id (optional)."""
-            required = ["character_id", "session_id", "timestamp", "role", "content"]
+            """Save a chat message. Expects conversation_id, timestamp, role, content, picture_id (optional)."""
+            required = ["conversation_id", "timestamp", "role", "content"]
             for key in required:
                 if key not in payload:
-                    return JSONResponse(status_code=400, content={"error": f"Missing required field: {key}"})
-            logger.info(f"[Chat] Saving message: character_id={payload.get('character_id')}, session_id={payload.get('session_id')}, role={payload.get('role')}, picture_id={payload.get('picture_id')}")
-            self.vault.db.save_chat_message(
-                character_id=payload["character_id"],
-                session_id=payload["session_id"],
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": f"Missing required field: {key}"},
+                    )
+            logger.info(
+                f"[Chat] Saving message: conversation_id={payload.get('conversation_id')}, role={payload.get('role')}, picture_id={payload.get('picture_id')}"
+            )
+
+            def save_message(session: Session, message: str):
+                session.add(message)
+                session.commit()
+
+            message = Message(
+                conversation_id=payload["conversation_id"],
                 timestamp=payload["timestamp"],
                 role=payload["role"],
                 content=payload["content"],
-                picture_id=payload.get("picture_id")
+                picture_id=payload.get("picture_id"),
             )
+            future = self.vault.db.submit_task(save_message, message)
+            if future.exception():
+                raise HTTPException(status_code=500, detail="Failed to save message")
             return {"status": "ok"}
+
         @self.api.get("/picture_stacks")
         async def get_picture_stacks(threshold: float = 0.98, min_group_size: int = 2):
             """
@@ -435,35 +564,28 @@ class Server:
         @self.api.get("/sort_mechanisms")
         async def get_pictures_sort_mechanisms():
             """Return available sorting mechanisms for pictures."""
-            return get_sort_mechanisms()
+            return SortMechanism.all()
 
-        @self.api.get("/face_thumbnail/{primary_character_id}")
-        async def get_face_thumbnail(primary_character_id: str):
+        @self.api.get("/face_thumbnail/{character_id}")
+        async def get_face_thumbnail(character_id: str):
             start_time = time.time()
             logger.info(
-                f"[TIMING] GET /face_thumbnail/{primary_character_id} called at {start_time:.3f}"
+                f"[TIMING] GET /face_thumbnail/{character_id} called at {start_time:.3f}"
             )
             query_start = time.time()
             # Instrument: time the DB query
             pics = self.vault.pictures.find(
-                primary_character_id=primary_character_id,
+                character_id=character_id,
                 sort="ORDER BY score DESC, created_at DESC",
                 limit=1,
             )
             query_elapsed = time.time() - query_start
             logger.info(
-                f"[TIMING] DB query for /face_thumbnail/{primary_character_id} took {query_elapsed:.3f} seconds, returned {len(pics)} rows"
+                f"[TIMING] DB query for /face_thumbnail/{character_id} took {query_elapsed:.3f} seconds, returned {len(pics)} rows"
             )
             process_start = time.time()
             step_times = {}
-            """
-            Return a face-cropped thumbnail for the highest scored picture of the character.
-            If no scored picture, fallback to first image. If no face bbox, fallback to normal thumbnail.
-            Cropped region is resized to fit within 96x96, preserving aspect ratio.
-            """
-            logger.debug(
-                f"Generating face thumbnail for primary_character_id: {primary_character_id}"
-            )
+            logger.debug(f"Generating face thumbnail for character_id: {character_id}")
             if not pics:
                 raise HTTPException(status_code=404, detail="No pictures for character")
 
@@ -474,10 +596,24 @@ class Server:
             else:
                 logger.debug(f"Thumbnail available for picture_id: {pic.id}")
 
-            face_bbox = pic.face_bbox
+            # Get face_bbox from picture_faces (many-to-many)
+            face_data = self.vault.picture_faces.get_face_data(
+                pic.id, int(character_id)
+            )
+            face_bbox = face_data.get("bbox")
+            if face_bbox:
+                try:
+                    # If stored as JSON string, parse it
+                    if isinstance(face_bbox, str):
+                        face_bbox = json.loads(face_bbox)
+                except Exception:
+                    logger.warning(
+                        f"Could not parse face_bbox for picture {pic.id} and character {character_id}: {face_bbox}"
+                    )
+                    face_bbox = None
             if not face_bbox:
                 logger.debug(
-                    f"No face_bbox attribute on picture for primary_character_id: {primary_character_id}"
+                    f"No face_bbox attribute on picture for character_id: {character_id}"
                 )
             # Load thumbnail image
             if not pic.thumbnail:
@@ -489,7 +625,7 @@ class Server:
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid thumbnail image")
             # If face_bbox is available, crop to it
-            if face_bbox and len(face_bbox) == 4:
+            if face_bbox and isinstance(face_bbox, list) and len(face_bbox) == 4:
                 crop_start = time.time()
                 logger.debug(f"Cropping thumbnail to face bbox: {face_bbox}")
                 x1, y1, x2, y2 = [int(round(v)) for v in face_bbox]
@@ -517,266 +653,106 @@ class Server:
             process_elapsed = time.time() - process_start
             elapsed = time.time() - start_time
             logger.info(
-                f"[TIMING] Processing for /face_thumbnail/{primary_character_id} (excluding DB query) took {process_elapsed:.3f} seconds"
+                f"[TIMING] Processing for /face_thumbnail/{character_id} (excluding DB query) took {process_elapsed:.3f} seconds"
             )
             for step, t in step_times.items():
                 logger.info(
-                    f"[TIMING] Step '{step}' for /face_thumbnail/{primary_character_id} took {t:.3f} seconds"
+                    f"[TIMING] Step '{step}' for /face_thumbnail/{character_id} took {t:.3f} seconds"
                 )
             logger.info(
-                f"[TIMING] GET /face_thumbnail/{primary_character_id} completed in {elapsed:.3f} seconds"
+                f"[TIMING] GET /face_thumbnail/{character_id} completed in {elapsed:.3f} seconds"
             )
             return Response(content=buf.getvalue(), media_type="image/png")
-
-        @self.api.get("/search")
-        async def search_pictures(
-            query: str = Query(""), top_n: int = Query(5), threshold: float = Query(0.3)
-        ):
-            """
-            Combined hybrid search: fuzzy tag/description and embedding, weighted by query length.
-            Query params: ?query=...&top_n=...&threshold=...
-            """
-
-            def pic_to_dict(pic, likeness_score=None):
-                d = {
-                    "id": pic.id,
-                    "primary_character_id": pic.primary_character_id,
-                    "description": pic.description,
-                    "tags": pic.tags,
-                    "created_at": pic.created_at,
-                }
-                if likeness_score is not None:
-                    d["likeness_score"] = likeness_score
-                return d
-
-            q = query.strip().lower()
-            if not q:
-                logger.warning("Empty search query received")
-                return []
-
-            # Split on any whitespace or punctuation
-            q_split = re.split(r"[\s\W]+", q)
-            q_split = [w for w in q_split if w]
-            n_words = len(q_split)
-
-            # Fuzzy search (tag/description/character name)
-            all_pics = self.vault.pictures.find()
-            fuzzy_scores = {}
-            character_match_bonus = {}
-            strong_tag_match_bonus = {}
-
-            for pic in all_pics:
-                tag_scores = []
-                char_name_match = False
-                strong_tag_matches = 0
-
-                tags_and_name = list(pic.tags)
-                char_name = None
-                char_id = getattr(pic, "primary_character_id", None)
-                if char_id is not None:
-                    try:
-                        char_obj = self.vault.characters[int(char_id)]
-                        if getattr(char_obj, "name", None):
-                            char_name = char_obj.name
-                    except Exception:
-                        char_name = None
-
-                char_name_words = []
-                if char_name:
-                    names = char_name.split(" ")
-                    char_name_words = [n.lower() for n in names]
-                    for name in names:
-                        tags_and_name.append(name)
-
-                # --- Multi-word tag matching ---
-                # First, try to match the full query against tags
-                full_tag_scores = []
-                for tag in tags_and_name:
-                    tag_lower = str(tag).lower()
-                    score = fuzz.ratio(q, tag_lower) / 100
-                    score *= min(len(q), len(tag_lower)) / max(
-                        len(q), len(tag_lower), 1
-                    )
-                    full_tag_scores.append(score)
-                    if score >= 0.8:
-                        strong_tag_matches += 1
-
-                # Also match full query against character name
-                for name_word in char_name_words:
-                    score = fuzz.ratio(q, name_word) / 100
-                    score *= min(len(q), len(name_word)) / max(
-                        len(q), len(name_word), 1
-                    )
-                    if score >= 0.8:
-                        char_name_match = True
-
-                # Now, match each query word against tags and character name as before
-                for q_word in q_split:
-                    max_score = 0
-                    # Character name
-                    for name_word in char_name_words:
-                        score = fuzz.ratio(q_word, name_word) / 100
-                        score *= min(len(q_word), len(name_word)) / max(
-                            len(q_word), len(name_word), 1
-                        )
-                        if score > max_score:
-                            max_score = score
-                        if score >= 0.8:
-                            char_name_match = True
-                    # Tags
-                    for tag in tags_and_name:
-                        tag_lower = str(tag).lower()
-                        score = fuzz.ratio(q_word, tag_lower) / 100
-                        score *= min(len(q_word), len(tag_lower)) / max(
-                            len(q_word), len(tag_lower), 1
-                        )
-                        if score > max_score:
-                            max_score = score
-                        if score >= 0.8:
-                            strong_tag_matches += 1
-                    tag_scores.append(max_score)
-                # Description
-                desc_score = fuzz.ratio(q, (pic.description or "").lower()) / 100.0
-
-                # Combine scores: prioritize full tag matches if multi-word query
-                if n_words > 1:
-                    # Use max of full tag match and average word match
-                    avg_score = sum(tag_scores) / len(tag_scores) if tag_scores else 0
-                    max_full_tag_score = max(full_tag_scores) if full_tag_scores else 0
-                    max_score = max(max_full_tag_score, avg_score)
-                else:
-                    max_score = max(tag_scores) if tag_scores else 0
-
-                # Coverage penalty as before
-                decent_matches = sum(1 for s in tag_scores if s > 0.5)
-                match_coverage = decent_matches / len(tag_scores) if tag_scores else 0
-                coverage_penalty = 1.0 if match_coverage >= 0.5 else match_coverage * 2
-
-                total_score = (
-                    max(0.4 * max_score + 0.6 * max_score, desc_score)
-                    * coverage_penalty
-                )
-
-                fuzzy_scores[pic.id] = total_score
-                character_match_bonus[pic.id] = 0.15 if char_name_match else 0
-                strong_tag_match_bonus[pic.id] = min(0.20, strong_tag_matches * 0.05)
-
-            # Embedding search
-            # For 1-2 words, expand query for better semantic results
-            if n_words <= 3:
-                expanded = f"A photo of {q}" if n_words >= 1 else q
-                semantic_results = self.vault.pictures.find_by_text(
-                    expanded,
-                    top_n=top_n * 3,
-                    include_scores=True,
-                    threshold=threshold / 2,
-                )
-                if not semantic_results:
-                    semantic_results = self.vault.pictures.find_by_text(
-                        q, top_n=top_n * 3, include_scores=True, threshold=threshold / 2
-                    )
-            else:
-                semantic_results = self.vault.pictures.find_by_text(
-                    q, top_n=top_n * 3, include_scores=True, threshold=threshold / 2
-                )
-            semantic_scores = {pic.id: score for pic, score in semantic_results}
-
-            # Merge scores
-            all_ids = set(fuzzy_scores.keys()) | set(semantic_scores.keys())
-            combined = []
-            for pic_id in all_ids:
-                fuzzy_score = fuzzy_scores.get(pic_id, 0)
-                sem_score = semantic_scores.get(pic_id, 0)
-                combined_score = math.sqrt((fuzzy_score**2 + sem_score**2) / 2)
-
-                # Apply bonuses ONLY if base score is reasonable (>=0.3)
-                # This prevents weak matches from getting artificially boosted
-                char_bonus = character_match_bonus.get(pic_id, 0)
-                tag_bonus = strong_tag_match_bonus.get(pic_id, 0)
-
-                if combined_score >= 0.3:
-                    # Good match: apply full bonuses
-                    combined_score = min(1.0, combined_score + char_bonus + tag_bonus)
-                elif combined_score >= 0.15:
-                    # Weak match: apply reduced bonuses (50%)
-                    combined_score = min(
-                        1.0, combined_score + (char_bonus + tag_bonus) * 0.5
-                    )
-                # else: very weak match (<0.15): no bonuses applied
-
-                pic = next((p for p in all_pics if p.id == pic_id), None)
-                if pic:
-                    if combined_score < threshold:
-                        continue
-                    # Diagnostics: log why this picture matched
-                    tags_and_name = list(pic.tags)
-                    char_name = None
-                    char_id = getattr(pic, "primary_character_id", None)
-                    if char_id is not None:
-                        try:
-                            char_obj = self.vault.characters[int(char_id)]
-                            if getattr(char_obj, "name", None):
-                                char_name = char_obj.name
-                        except Exception:
-                            char_name = None
-                    if char_name:
-                        tags_and_name.append(char_name)
-                    logger.debug(
-                        f"[SEARCH DIAG] Query='{q}' | PicID={pic.id} | Tags+Name={tags_and_name} | Desc='{pic.description}' | Fuzzy={fuzzy_score:.2f} | Embedding={sem_score:.2f} | Combined={combined_score:.2f}"
-                    )
-                    combined.append((pic, combined_score, fuzzy_score, sem_score))
-
-            # Sort by combined score, then by created_at
-            combined.sort(key=lambda x: (-x[1], x[0].created_at or ""))
-
-            for pic, combined_score, fuzzy_score, sem_score in combined:
-                logger.info(
-                    f"Got combined score of {combined_score} for PicID={pic.id} (Fuzzy={fuzzy_score}, Semantic={sem_score}, CharBonus={char_bonus}, TagBonus={tag_bonus})"
-                )
-
-            # Optionally, include fuzzy/semantic scores for debugging:
-            # return [{**pic_to_dict(pic), "score": score, "fuzzy": fuzzy, "semantic": sem} for pic, score, fuzzy, sem in combined[:top_n]]
-            logger.warning("Got total of {} search results".format(len(combined)))
-            return [
-                pic_to_dict(pic, likeness_score=score)
-                for pic, score, _, _ in combined[:top_n]
-            ]
 
         @self.api.patch("/characters/{id}")
         async def patch_character(id: int, request: Request):
             data = await request.json()
             name = data.get("name")
             description = data.get("description")
+            char = None
             try:
-                char = self.vault.characters[id]
+
+                def alter_char(session: Session, id: int, name: str, description: str):
+                    character = session.get(Character, id)
+                    if character is None:
+                        raise KeyError("Character not found")
+                    updated = False
+                    if name is not None and name != character.name:
+                        character.name = name
+                        updated = True
+                    if description is not None and description != character.description:
+                        character.description = description
+                        updated = True
+                    if updated:
+                        session.add(character)
+
+                        pictures = Picture.find(character_id=id)
+                        for pic in pictures:
+                            pic.description = None
+                            pic.text_embedding = None
+                            session.add(pic)
+
+                        session.commit()
+                    return character
+
+                char = self.vault.db.run_task(
+                    lambda session: alter_char(session, id, name, description)
+                )
+
             except KeyError:
                 raise HTTPException(status_code=404, detail="Character not found")
-            updated = False
-            if name is not None and name != char.name:
-                char.name = name
-                updated = True
-                # Drop embeddings for all pictures with this primary_character_id
-                pics = self.vault.pictures.find(primary_character_id=id)
-                for pic in pics:
-                    pic.description = None
-                    pic.text_embedding = None
 
-                self.vault.pictures.update(pics)
-            if description is not None and description != char.description:
-                char.description = description
-                updated = True
-            if updated:
-                self.vault.characters.update(char)
-            return {"status": "success", "character": char.__dict__}
+            return {"status": "success", "character": char}
 
         @self.api.delete("/characters/{id}")
         async def delete_character(id: int):
             # Delete the character
             try:
-                self.vault.characters.delete(id)
+                self.vault.db.run_task(
+                    lambda session: (
+                        session.delete(session.get(Character, id)),
+                        session.commit(),
+                    )
+                )
                 return {"status": "success", "deleted_id": id}
             except KeyError:
                 raise HTTPException(status_code=404, detail="Character not found")
+
+        @self.api.get("/characters/{id}")
+        async def get_character_by_id(id: int):
+            try:
+                char = self.vault.db.run_task(
+                    lambda session: session.get(Character, id)
+                )
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Character not found")
+            return char
+
+        @self.api.get("/characters")
+        async def get_characters(name: str = Query(None)):
+            try:
+                characters = self.vault.db.run_task(
+                    lambda session: Character.find(session, name=name)
+                )
+                return characters
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Character not found")
+
+        @self.api.post("/characters")
+        async def create_character(payload: dict = Body(...)):
+            try:
+                character = Character(**payload)
+                self.vault.db.run_task(
+                    lambda session: (
+                        session.add(character),
+                        session.commit(),
+                        session.refresh(character),
+                    )
+                )
+                return {"status": "success", "character": character}
+            except Exception as e:
+                logger.error(f"Error creating character: {e}")
+                raise HTTPException(status_code=400, detail="Invalid character data")
 
         # =====================
         # Picture Sets Endpoints
@@ -891,58 +867,23 @@ class Server:
 
             return {"status": "success"}
 
-        @self.api.get("/characters")
-        async def get_characters(name: str = Query(None)):
-            """List all characters or filter by name."""
-            chars = (
-                self.vault.characters.find(name=name)
-                if name
-                else self.vault.characters.find()
-            )
-            dicts = [c.__dict__ for c in chars]
-            logger.info(f"Returning characters: {dicts}")
-            return dicts
-
-        @self.api.post("/characters")
-        async def create_character(payload: dict = Body(...)):
-            try:
-                character = CharacterModel(**payload)
-                self.vault.characters.add(character)
-
-                return {"status": "success", "character": asdict(character)}
-            except Exception as e:
-                logger.error(f"Error creating character: {e}")
-                raise HTTPException(status_code=400, detail="Invalid character data")
-
-        @self.api.get("/characters/{id}")
-        async def get_character_by_id(id: int):
-            try:
-                char = self.vault.characters[id]
-            except KeyError:
-                raise HTTPException(status_code=404, detail="Character not found")
-            return char.__dict__
-
         @self.api.get("/")
         async def read_root():
             version = self.get_version()
             return {"message": "PixlVault REST API", "version": version}
 
         @self.api.get("/pictures/{id}")
-        async def get_picture(
-            id: str, info: bool = Query(False), embedding: bool = Query(False)
-        ):
+        async def get_picture(id: str):
             if not isinstance(id, str):
                 logger.error(f"Invalid id type: {type(id)} value: {id}")
                 raise HTTPException(status_code=400, detail="Invalid picture id type")
-            try:
-                pic = self.vault.pictures[id]
-            except KeyError:
+
+            pics = self.vault.db.run_task(lambda session: Picture.find(session, id=id))
+            if not pics:
                 logger.error(f"Picture not found for id={id}")
                 raise HTTPException(status_code=404, detail="Picture not found")
-            if info:
-                # Return metadata only
-                result = pic.to_dict(exclude=["file_path", "thumbnail"])
-                return result
+            pic = pics[0]
+
             # Otherwise, deliver picture file as bytes
             if not pic.file_path or not os.path.isfile(pic.file_path):
                 logger.error(
@@ -951,28 +892,50 @@ class Server:
                 raise HTTPException(
                     status_code=404, detail=f"File not found for picture id={pic.id}"
                 )
+
             # Return the image file with CORS headers
             response = FileResponse(pic.file_path)
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response
 
-        @self.api.post("/thumbnails")
-        async def get_thumbnails(payload: dict = Body(...)):
-            ids = payload.get("ids", [])
-            if not isinstance(ids, list):
-                raise HTTPException(status_code=400, detail="'ids' must be a list")
-            results = {}
-            for id in ids:
-                try:
-                    pic = self.vault.pictures[id]
-                    thumbnail_bytes = pic.thumbnail
-                    results[id] = base64.b64encode(thumbnail_bytes).decode("utf-8")
-                except KeyError:
-                    logger.error(f"Picture not found for id={id} (thumbnail request)")
-                    results[id] = None
-            response = JSONResponse(results)
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
+        @self.api.get("/pictures/{id}/metadata")
+        async def get_picture_metadata(id: str):
+            """Return all simple metadata for a picture"""
+            metadata_fields = Picture.metadata_fields()
+            pics = self.vault.db.run_task(
+                lambda session: Picture.find(
+                    session, id=id, select_fields=metadata_fields
+                )
+            )
+            if not pics:
+                logger.error(f"Picture not found for id={id}")
+                raise HTTPException(status_code=404, detail="Picture not found")
+            pic = pics[0]
+
+            return pic.dict()
+
+        @self.api.get("/pictures/{id}/{field}")
+        async def get_picture_field(id: str, field: str):
+            """Return single field for a picture"""
+            logger.warning(
+                "Searching for picture field: " + field + " for picture id: " + id
+            )
+            pics = self.vault.db.run_task(
+                lambda session: Picture.find(session, id=id, select_fields=[field])
+            )
+            if not pics:
+                logger.error(f"Picture not found for id={id}")
+                raise HTTPException(status_code=404, detail="Picture not found")
+            pic = pics[0]
+
+            if field == "thumbnail":
+                # Return as image, not JSON
+                return Response(content=pic.thumbnail, media_type="image/png")
+            elif field in Picture.large_binary_fields():
+                # Return as bytes
+                return {field: base64.b64encode(getattr(pic, field)).decode("utf-8")}
+            else:
+                return {field: getattr(pic, field)}
 
         @self.api.patch("/pictures/{id}")
         async def patch_picture(id: str, request: Request):
@@ -1026,19 +989,14 @@ class Server:
                         "contrast",
                         "brightness",
                         "noise_level",
-                        "face_sharpness",
-                        "face_edge_density",
-                        "face_contrast",
-                        "face_brightness",
-                        "face_noise_level",
                     ]:
                         assert not isinstance(cast_val, bytes), (
                             f"PATCH attempted to set metric '{key}' to bytes for picture {id}: {cast_val!r}"
                         )
                     old_val = getattr(pic, key)
                     setattr(pic, key, cast_val)
-                    # Drop embedding if primary_character_id changes
-                    if key == "primary_character_id" and old_val != cast_val:
+                    # Drop embedding if character_id changes
+                    if key == "character_id" and old_val != cast_val:
                         pic.description = None
                         pic.text_embedding = None
                     updated = True
@@ -1054,7 +1012,6 @@ class Server:
         @self.api.post("/pictures")
         async def import_pictures(
             file: List[UploadFile] = File(None),
-            primary_character_id: str = Form(None),
         ):
             """
             Import new pictures. Accepts:
@@ -1099,7 +1056,7 @@ class Server:
                 raise HTTPException(status_code=400, detail="No image provided")
 
             import_results, new_pictures = self.create_picture_imports(
-                uploaded_files, dest_folder, primary_character_id
+                uploaded_files, dest_folder
             )
 
             logger.info(
@@ -1108,9 +1065,10 @@ class Server:
 
             # Import all at once
             if new_pictures:
-                self.vault.pictures.add(new_pictures)
-
-            if not new_pictures:
+                self.vault.db.run_task(
+                    lambda session: (session.add_all(new_pictures), session.commit())
+                )
+            else:
                 logger.error("No new pictures to import; all are duplicates.")
                 raise HTTPException(
                     status_code=400, detail="All pictures are duplicates"
@@ -1121,53 +1079,80 @@ class Server:
         @self.api.get("/pictures")
         async def list_pictures(
             request: Request,
-            info: bool = Query(False),
-            sort: str = Query("unsorted"),
+            query: str = Query(None),
+            sort: str = Query(None),
             offset: int = Query(0),
             limit: int = Query(sys.maxsize),
-            query: str = Query(None),
+            threshold: float = Query(0.5),
         ):
-            from pixlvault.pictures import SortMechanism
+            from pixlvault.db_models import SortMechanism
 
-            query_params = dict(request.query_params)
-            query_params.pop("info", None)
-            query_params.pop("sort", None)
-            query_params.pop("offset", None)
-            query_params.pop("limit", None)
-            query_params.pop("query", None)
-            count = query_params.pop("count", None)
-            # Convert tags to list if present
-            if "tags" in query_params and isinstance(query_params["tags"], str):
-                try:
-                    query_params["tags"] = json.loads(query_params["tags"])
-                except Exception:
-                    query_params["tags"] = [query_params["tags"]]
+            query_params = {}
+            if request.query_params:
+                query_params = dict(request.query_params)
+                query = query_params.pop("query", query)
+                sort = query_params.pop("sort", sort)
+                offset = query_params.pop("offset", offset)
+                limit = query_params.pop("limit", limit)
 
-            # Handle search likeness sort (semantic search)
+            # Handle semantic search
             if sort == SortMechanism.SEARCH_LIKENESS.value and query:
-                # Use semantic search, return top-N (limit) results
-                if limit == sys.maxsize:
-                    pics = self.vault.pictures.find_by_text(
-                        query, count=count, top_n=sys.maxsize
+                import re
+
+                def find_by_text(session, query, offset, limit):
+                    # Use regex to extract words, removing punctuation
+                    words = re.findall(r"\b\w+\b", query.lower())
+                    preprocessed_query_words = self.vault.preprocess_query_words(words)
+                    query = "A photo of " + query
+                    return Picture.semantic_search(
+                        session,
+                        query,
+                        preprocessed_query_words,
+                        text_to_embedding=self.vault.generate_text_embedding,
+                        offset=offset,
+                        limit=limit,
+                        threshold=threshold,
+                        select_fields=Picture.metadata_fields(),
                     )
-                else:
-                    pics = self.vault.pictures.find_by_text(
-                        query, count=count, top_n=offset + limit
-                    )
-                    pics = pics[offset : offset + limit]
+
+                results = self.vault.db.run_task(find_by_text, query, offset, limit)
+                # Each result is (pic, likeness_score)
+                return [Picture.serialize_with_likeness(r) for r in results]
             else:
-                pics = self.vault.pictures.find(
-                    sort=sort,
+                pics = self.vault.db.run_task(
+                    Picture.find,
+                    sort=SortMechanism(sort.lower()) if sort else None,
                     offset=offset,
                     limit=limit,
-                    info=info,
-                    count=count,
+                    select_fields=Picture.metadata_fields(),
                     **query_params,
                 )
-            if count:
-                return {"count": pics}
-            dicts = [pic.to_dict() for pic in pics]
-            return dicts
+                return [pic.to_serializable_dict() for pic in pics]
+
+        @self.api.post("/thumbnails")
+        async def get_thumbnails(payload: dict = Body(...)):
+            ids = payload.get("ids", [])
+            if not isinstance(ids, list):
+                raise HTTPException(status_code=400, detail="'ids' must be a list")
+
+            pics = self.vault.db.run_task(
+                lambda session: Picture.find(
+                    session, id=ids, select_fields=["id", "thumbnail"]
+                )
+            )
+            results = {}
+            for pic in pics:
+                try:
+                    thumbnail_bytes = pic.thumbnail
+                    results[pic.id] = base64.b64encode(thumbnail_bytes).decode("utf-8")
+                except KeyError:
+                    logger.error(
+                        f"Picture not found for id={pic.id} (thumbnail request)"
+                    )
+                    results[pic.id] = None
+            response = JSONResponse(results)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
 
         @self.api.get("/export/zip")
         async def export_pictures_zip(
@@ -1216,15 +1201,7 @@ class Server:
 
             char_groups = defaultdict(list)
             for pic in pics:
-                if pic.primary_character_id:
-                    try:
-                        char = self.vault.characters[pic.primary_character_id]
-                        char_name = char.name.replace(" ", "_")
-                    except KeyError:
-                        char_name = "image"
-                else:
-                    char_name = "image"
-                char_groups[char_name].append(pic)
+                char_groups["image"].append(pic)
 
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for char_name, group in char_groups.items():
@@ -1244,14 +1221,6 @@ class Server:
                     filename_parts.append(picture_set.name.replace(" ", "_"))
             if query:
                 filename_parts.append(f"search_{query[:20]}")
-            if "primary_character_id" in query_params:
-                char_id = query_params["primary_character_id"]
-                if char_id and char_id != "null":
-                    try:
-                        char = self.vault.characters[int(char_id)]
-                        filename_parts.append(char.name.replace(" ", "_"))
-                    except (KeyError, ValueError):
-                        pass
             if "tags" in query_params:
                 filename_parts.append("tagged")
 
@@ -1275,30 +1244,28 @@ class Server:
             }
 
         @self.api.get("/category/summary")
-        async def get_category_summary(primary_character_id: str = Query(None)):
+        async def get_category_summary(character_id: str = Query(None)):
             """
             Return summary statistics for a single category:
-            - If primary_character_id is omitted: all pictures
-            - If primary_character_id is null/None/empty: unassigned pictures
-            - If primary_character_id is set: that character's pictures
+            - If character_id is omitted: all pictures
+            - If character_id is null/None/empty: unassigned pictures
+            - If character_id is set: that character's pictures
             """
             start = time.time()
             # Determine which set to query
-            if primary_character_id is None:
+            if character_id is None:
                 # All
                 image_count = self.vault.pictures.find(count=True)
                 char_id = None
-            elif primary_character_id == "null":
+            elif character_id == "null":
                 # Unassigned
-                image_count = self.vault.pictures.find(
-                    primary_character_id="null", count=True
-                )
+                image_count = self.vault.pictures.find(character_id="null", count=True)
                 char_id = None
             else:
                 image_count = self.vault.pictures.find(
-                    primary_character_id=primary_character_id, count=True
+                    character_id=character_id, count=True
                 )
-                char_id = primary_character_id
+                char_id = character_id
 
             # Thumbnail URL (reuse existing endpoint)
             thumb_url = None
@@ -1324,7 +1291,7 @@ class Server:
                     reference_set_id = reference_set.id
 
             summary = {
-                "primary_character_id": char_id,
+                "character_id": char_id,
                 "image_count": image_count,
                 "thumbnail_url": thumb_url,
                 "reference_picture_set_id": reference_set_id,
@@ -1334,7 +1301,7 @@ class Server:
             logger.info(f"Category summary: {summary}")
             return summary
 
-    def create_picture_imports(self, uploaded_files, dest_folder, primary_character_id):
+    def create_picture_imports(self, uploaded_files, dest_folder):
         """
         Given a list of (img_bytes, src_path, ext), create Picture objects for new images,
         skipping duplicates based on pixel_sha hash.
@@ -1349,7 +1316,9 @@ class Server:
                 executor.map(create_sha, (img_bytes for img_bytes, _ in uploaded_files))
             )
 
-        existing_pictures = self.vault.pictures.fetch_by_shas(shas)
+        existing_pictures = self.vault.db.run_task(
+            lambda session: Picture.find(session, pixel_shas=shas)
+        )
 
         logger.info(
             "Got "
@@ -1377,7 +1346,6 @@ class Server:
                     image_root_path=dest_folder,
                     image_bytes=img_bytes,
                     picture_id=pic_id,
-                    character_id=primary_character_id,
                     pixel_sha=sha,
                 )
 

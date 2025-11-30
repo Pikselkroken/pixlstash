@@ -2,16 +2,40 @@ import cv2
 import numpy as np
 import time
 
+from sqlmodel import Column, ForeignKey, Integer, SQLModel, Field, Relationship
+from typing import List, Optional, TYPE_CHECKING
 
 from scipy.ndimage import median_filter
-from typing import Optional
 
 from pixlvault.logging import get_logger
+
+if TYPE_CHECKING:
+    from .face import Face
+    from .picture import Picture
 
 logger = get_logger(__name__)
 
 
-class PictureQuality:
+class Quality(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+    picture_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("picture.id", ondelete="CASCADE")),
+        default=None,
+    )
+    face_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("face.id", ondelete="CASCADE")),
+        default=None,
+    )
+    sharpness: Optional[float] = Field(default=None, index=True)
+    edge_density: Optional[float] = Field(default=None, index=True)
+    contrast: Optional[float] = Field(default=None, index=True)
+    brightness: Optional[float] = Field(default=None, index=True)
+    noise_level: Optional[float] = Field(default=None, index=True)
+
+    # Relationships
+    picture: Optional["Picture"] = Relationship(back_populates="quality")
+    face: Optional["Face"] = Relationship(back_populates="quality")
+
     @staticmethod
     def batch_likeness_scores(features_a, features_b):
         """
@@ -30,7 +54,7 @@ class PictureQuality:
         return likeness_values
 
     @staticmethod
-    def calculate_quality_batch(images: np.ndarray) -> list:
+    def calculate_quality_batch(images: np.ndarray) -> List["Quality"]:
         """
         Calculate quality metrics for a batch of images.
         Accepts a 4D np.ndarray (batch, height, width, channels) and returns a list of PictureQuality instances.
@@ -75,12 +99,12 @@ class PictureQuality:
         results = []
         for i in range(batch_size):
             results.append(
-                PictureQuality(
-                    sharpness=sharpness[i],
-                    edge_density=edge_density[i],
-                    contrast=contrast[i],
-                    brightness=brightness[i],
-                    noise_level=noise_level[i],
+                Quality(
+                    sharpness=float(sharpness[i]),
+                    edge_density=float(edge_density[i]),
+                    contrast=float(contrast[i]),
+                    brightness=float(brightness[i]),
+                    noise_level=float(noise_level[i]),
                 )
             )
         return results
@@ -92,59 +116,26 @@ class PictureQuality:
 
     def __init__(
         self,
+        picture_id: Optional[int] = None,
+        face_id: Optional[int] = None,
         sharpness: Optional[float] = None,
         edge_density: Optional[float] = None,
         contrast: Optional[float] = None,
         brightness: Optional[float] = None,
         noise_level: Optional[float] = None,
     ):
+        self.picture_id = picture_id
+        self.face_id = face_id
         self.sharpness = sharpness  # Objective sharpness metric (0.0-1.0)
         self.edge_density = edge_density  # Fraction of edge pixels (0.0-1.0)
         self.contrast = contrast  # Normalized contrast (0.0-1.0)
         self.brightness = brightness  # Normalized brightness (0.0-1.0)
         self.noise_level = noise_level  # Estimated noise (0.0-1.0)
 
-    def to_dict(self):
-        """Convert PictureQuality instance to dictionary."""
-        return {
-            "sharpness": self.sharpness,
-            "edge_density": self.edge_density,
-            "contrast": self.contrast,
-            "brightness": self.brightness,
-            "noise_level": self.noise_level,
-        }
-
-    @staticmethod
-    def from_db_columns(
-        sharpness=None,
-        edge_density=None,
-        contrast=None,
-        brightness=None,
-        noise_level=None,
-    ):
-        return PictureQuality(
-            sharpness=sharpness,
-            edge_density=edge_density,
-            contrast=contrast,
-            brightness=brightness,
-            noise_level=noise_level,
-        )
-
-    @staticmethod
-    def from_dict(data: dict) -> "PictureQuality":
-        """Create PictureQuality instance from dictionary."""
-        return PictureQuality(
-            sharpness=data.get("sharpness"),
-            edge_density=data.get("edge_density"),
-            contrast=data.get("contrast"),
-            brightness=data.get("brightness"),
-            noise_level=data.get("noise_level"),
-        )
-
     @staticmethod
     def calculate_quality(
         image: np.ndarray, face_crop: Optional[np.ndarray] = None
-    ) -> "PictureQuality":
+    ) -> "Quality":
         """
         Calculate objective metrics from a NumPy image array.
         Logs timing for each metric calculation.
@@ -152,19 +143,19 @@ class PictureQuality:
         """
         timings = {}
         t0 = time.time()
-        sharpness = PictureQuality._calculate_sharpness(image)
+        sharpness = Quality._calculate_sharpness(image)
         timings["sharpness"] = time.time() - t0
         t0 = time.time()
-        edge_density = PictureQuality._calculate_edge_density(image)
+        edge_density = Quality._calculate_edge_density(image)
         timings["edge_density"] = time.time() - t0
         t0 = time.time()
-        contrast = PictureQuality._calculate_contrast(image)
+        contrast = Quality._calculate_contrast(image)
         timings["contrast"] = time.time() - t0
         t0 = time.time()
-        brightness = PictureQuality._calculate_brightness(image)
+        brightness = Quality._calculate_brightness(image)
         timings["brightness"] = time.time() - t0
         t0 = time.time()
-        noise_level = PictureQuality._calculate_noise_level(image)
+        noise_level = Quality._calculate_noise_level(image)
         timings["noise_level"] = time.time() - t0
         # Post-calc None checks
         sharpness = -1.0 if sharpness is None else sharpness
@@ -172,20 +163,20 @@ class PictureQuality:
         contrast = -1.0 if contrast is None else contrast
         brightness = -1.0 if brightness is None else brightness
         noise_level = -1.0 if noise_level is None else noise_level
-        return PictureQuality(
-            sharpness=sharpness,
-            edge_density=edge_density,
-            contrast=contrast,
-            brightness=brightness,
-            noise_level=noise_level,
+        return Quality(
+            sharpness=float(sharpness),
+            edge_density=float(edge_density),
+            contrast=float(contrast),
+            brightness=float(brightness),
+            noise_level=float(noise_level),
         )
 
     @staticmethod
-    def calculate_face_quality(image_np, face_bbox):
+    def calculate_face_quality(image_np, bbox):
         """
         Calculate the quality score for the face region in the image.
         """
-        x1, y1, x2, y2 = [int(round(v)) for v in face_bbox]
+        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
         h, w = image_np.shape[:2]
         # Clamp bbox to image bounds
         x1_clamped = max(0, min(w, x1))
@@ -196,14 +187,14 @@ class PictureQuality:
             face_crop = image_np[y1_clamped:y2_clamped, x1_clamped:x2_clamped]
             if face_crop.size == 0:
                 logger.error(
-                    f"Face crop is empty after clamping bbox: {face_bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
+                    f"Face crop is empty after clamping bbox: {bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
                 )
                 return None
             else:
-                return PictureQuality.calculate_quality(face_crop)
+                return Quality.calculate_quality(face_crop)
 
         logger.error(
-            f"Invalid bbox after clamping: {face_bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
+            f"Invalid bbox after clamping: {bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
         )
         return None
 
@@ -251,3 +242,16 @@ class PictureQuality:
         diff = np.abs(gray_small - filtered)
         noise = diff.mean() / 255.0
         return min(noise, 1.0)
+
+    @classmethod
+    def quality_metric_fields(cls) -> set[str]:
+        """
+        Return list of quality metric field names common for pictures and picture faces
+        """
+        return [
+            "sharpness",
+            "edge_density",
+            "contrast",
+            "brightness",
+            "noise_level",
+        ]

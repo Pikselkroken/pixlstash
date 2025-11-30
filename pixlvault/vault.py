@@ -1,15 +1,22 @@
+import concurrent
 import os
+import numpy as np
 
 from typing import Optional
 
+from sqlmodel import Session, select
+
+from .database import DBPriority, VaultDatabase
+from .db_models import MetaData, Character, Picture
 from .logging import get_logger
-from .characters import Characters
-from .pictures import Pictures, WorkerType
-from .picture_characters import PictureCharacters
-from .picture_sets import PictureSets
+from .picture_tagger import PictureTagger
 from .picture_utils import PictureUtils
-from .character import Character
-from .database import VaultDatabase
+from .worker_registry import WorkerRegistry, WorkerType
+
+from pixlvault.tag_worker import TagWorker, DescriptionWorker, EmbeddingWorker  # noqa: F401
+from pixlvault.facial_features_worker import FacialFeaturesWorker  # noqa: F401
+from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
+
 
 logger = get_logger(__name__)
 
@@ -19,7 +26,7 @@ class Vault:
         # Allow use as a context manager for robust cleanup
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, _, __, ___):
         self.close()
 
     """
@@ -51,22 +58,35 @@ class Vault:
         )
 
         self._db_path = os.path.join(self.image_root, "vault.db")
-        self.db = VaultDatabase(self._db_path, description=description)
+        self.db = VaultDatabase(self._db_path)
+        self.set_description(description or "")
 
-        self.characters = Characters(self.db)
-        self.picture_characters = PictureCharacters(self.db)
-        self.picture_sets = PictureSets(self.db)
-        self.pictures = Pictures(self.db, self.characters)
+        self._picture_tagger = PictureTagger()
+        self._workers = {}
 
-    def stop_background_workers(self, workers: set[WorkerType]):
+        for worker_type in WorkerType.all():
+            logger.debug(f"Creating worker of type: {worker_type}")
+            self._workers[worker_type] = WorkerRegistry.create_worker(
+                worker_type, self.db, self._picture_tagger
+            )
+
+    def stop_workers(self, workers: set[WorkerType] = WorkerType.all()):
         logger.debug("Stopping background workers...")
         for worker in workers:
-            self.pictures.stop_worker(worker)
+            if worker in self._workers:
+                logger.debug(f"Stopping worker: {worker}")
+                self._workers[worker].stop()
+            else:
+                logger.warning(f"Worker {worker} not found in vault workers.")
 
-    def start_background_workers(self, workers: set[WorkerType]):
+    def start_workers(self, workers: set[WorkerType] = WorkerType.all()):
         logger.debug("Starting background workers...")
         for worker in workers:
-            self.pictures.start_worker(worker)
+            if worker in self._workers:
+                logger.debug(f"Starting worker: {worker}")
+                self._workers[worker].start()
+            else:
+                logger.warning(f"Worker {worker} not found in vault workers.")
 
     def __repr__(self):
         """
@@ -81,19 +101,80 @@ class Vault:
         """
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
-        self.stop_background_workers(WorkerType.all())
+        self.stop_workers(WorkerType.all())
 
-    def _create_tables(self):
-        self.db._create_tables()
+    def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
+        """
+        Generate a text embedding using the EmbeddingWorker.
 
-    def set_metadata(self, key: str, value: str):
-        self.db.set_metadata(key, value)
+        Args:
+            text (str): Input text to generate embedding for.
 
-    def get_metadata(self, key: str) -> Optional[str]:
-        return self.db.get_metadata(key)
+        Returns:
+            Optional[np.ndarray]: Generated text embedding or None if failed.
+        """
+        embedding, _ = self._picture_tagger.generate_text_embedding(query=query)
+        return embedding
+
+    def preprocess_query_words(self, words: list[str]) -> list[str]:
+        """
+        Preprocess a list of words using the PictureTagger.
+
+        Args:
+            words (list[str]): List of input words to preprocess.
+
+        Returns:
+            list[str]: Preprocessed list of words.
+        """
+        preprocessed_words = self._picture_tagger.preprocess_query_words(words=words)
+        return preprocessed_words
+
+    def set_description(self, description: str):
+        def op(session: Session):
+            metadata = session.exec(
+                select(MetaData).where(
+                    MetaData.schema_version == MetaData.CURRENT_SCHEMA_VERSION
+                )
+            ).first()
+            if metadata is None:
+                metadata = MetaData(
+                    schema_version=MetaData.CURRENT_SCHEMA_VERSION,
+                    description=description,
+                )
+            else:
+                metadata.description = description
+            session.add(metadata)
+            session.commit()
+
+        self.db.submit_task(op, priority=DBPriority.IMMEDIATE)
 
     def get_description(self) -> Optional[str]:
-        return self.db.get_description()
+        return self.db.submit_task(
+            lambda session: session.exec(
+                select(MetaData).where(
+                    MetaData.schema_version == MetaData.CURRENT_SCHEMA_VERSION
+                )
+            )
+            .first()
+            .description
+        ).result()
+
+    def get_worker_future(
+        self, worker_type: WorkerType, cls: type, object_id: int, attr: str
+    ) -> "concurrent.futures.Future":
+        """
+        Returns a Future that will be set when the specified worker has processed the given object ID.
+        Args:
+            worker_type (WorkerType): The type of worker to wait for.
+        Returns:
+            concurrent.futures.Future: Future set to True when completed.
+        """
+
+        worker = self._workers.get(worker_type)
+        if worker is None:
+            raise ValueError(f"Worker {worker_type} not found in vault.")
+
+        return worker.watch_id(cls, object_id, attr)
 
     def import_default_data(self, add_tagger_test_images: bool = False):
         """
@@ -109,13 +190,37 @@ class Vault:
         character = Character(
             name="Esmeralda Vault", description="Built-in vault character"
         )
-        self.characters.add(character)
+
+        def add_character(session: Session, character: Character):
+            session.add(character)
+            session.commit()
+            session.refresh(character)
+            return character
+
+        character = self.db.run_task(
+            lambda session: add_character(session, character),
+            priority=DBPriority.IMMEDIATE,
+        )
 
         picture = PictureUtils.create_picture_from_file(
             image_root_path=logo_dest_folder,
             source_file_path=logo_src,
-            character_id=character.id,
+            primary_character_id=character.id,
         )
+
+        assert picture.file_path
+
+        def add_picture(session: Session, picture: Picture):
+            session.add(picture)
+            session.commit()
+            session.refresh(picture)
+            return picture
+
+        picture = self.db.run_task(
+            lambda session: add_picture(session, picture),
+            priority=DBPriority.IMMEDIATE,
+        )
+
         if add_tagger_test_images:
             # Add all pictures/TaggerTest*.png
             for file in os.listdir(
@@ -130,12 +235,13 @@ class Vault:
                     pic = PictureUtils.create_picture_from_file(
                         image_root_path=logo_dest_folder,
                         source_file_path=src_path,
-                        character_id=character.id,
+                        primary_character_id=character.id,
                     )
+                    pic.description = os.path.basename(src_path)
                     assert pic.file_path
-                    self.pictures.add(pic)
+                    self.db.submit_task(
+                        lambda session: (session.add(pic), session.commit()),
+                        priority=DBPriority.IMMEDIATE,
+                    )
                     logger.debug(f"Imported default picture: {pic.file_path}")
-
-        assert picture.file_path
-        self.pictures.add(picture)
         logger.info("Imported default data into the vault.")

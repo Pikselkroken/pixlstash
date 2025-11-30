@@ -1,18 +1,19 @@
 import gc
 import cv2
-import math
 import os
-import sqlite3
 import time
 
-from .characters import Characters
-from .picture_tagger import PictureTagger
+from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
 
-from .database import DBPriority
-from .logging import get_logger
-from .picture_utils import PictureUtils
-import pixlvault.picture_db_tools as db_tools
-from .worker_registry import BaseWorker, WorkerType
+from pixlvault.database import DBPriority
+from pixlvault.picture_tagger import PictureTagger
+from pixlvault.logging import get_logger
+from pixlvault.worker_registry import BaseWorker, WorkerType
+
+from pixlvault.db_models.face import Face
+from pixlvault.db_models.picture import Picture
+
 
 logger = get_logger(__name__)
 
@@ -20,10 +21,8 @@ logger = get_logger(__name__)
 class FacialFeaturesWorker(BaseWorker):
     INSIGHTFACE_CLEANUP_TIMEOUT = 20  # seconds
 
-    def __init__(
-        self, db_connection, picture_tagger: PictureTagger, characters: Characters
-    ):
-        super().__init__(db_connection, picture_tagger, characters)
+    def __init__(self, db_connection, picture_tagger: PictureTagger):
+        super().__init__(db_connection, picture_tagger)
         self._skip_pictures = set()
         self._last_time_insightface_was_needed = None
 
@@ -31,6 +30,7 @@ class FacialFeaturesWorker(BaseWorker):
         return WorkerType.FACIAL_FEATURES
 
     def _run(self):
+        logger.info("FacialFeaturesWorker: Worker thread started and running.")
         time.sleep(1.25)  # Stagger start times for multiple workers
         while not self._stop.is_set():
             try:
@@ -39,7 +39,11 @@ class FacialFeaturesWorker(BaseWorker):
                 start = time.time()
                 # 1. Calculate face bboxes
                 logger.debug("FacialFeaturesWorker: Starting iteration...")
-                pics_needing_face_bboxes = self._find_pics_needing_face_bbox()
+
+                pics_needing_face_bboxes = self._find_pics_needing_face_extraction()
+                logger.debug(
+                    f"FacialFeaturesWorker: Found {len(pics_needing_face_bboxes)} pictures needing face bboxes: {[getattr(pic, 'file_path', pic.id) for pic in pics_needing_face_bboxes]}"
+                )
                 time_after_fetch = time.time()
 
                 logger.debug(
@@ -49,7 +53,7 @@ class FacialFeaturesWorker(BaseWorker):
                 logger.debug(
                     f"Found {len(pics_needing_face_bboxes)} pictures needing face bboxes. Doing {self._picture_tagger.max_concurrent_images()} at a time."
                 )
-                insightface_ok, bboxes_updated = self._calculate_face_bboxes(
+                insightface_ok, bboxes_updated = self._extract_faces(
                     pics_needing_face_bboxes[
                         : self._picture_tagger.max_concurrent_images()
                     ]
@@ -65,148 +69,76 @@ class FacialFeaturesWorker(BaseWorker):
                     )
                     break
 
-                data_updated |= bboxes_updated
+                data_updated |= bboxes_updated > 0
 
                 if self._stop.is_set():
                     break
 
                 # 2. Generate facial features for pictures missing them
-                missing_facial_features = self._fetch_missing_facial_features()
+                faces_missing_features = self._fetch_faces_missing_features()
+                pictures_missing_facial_features = (
+                    self._fetch_pics_missing_facial_features(faces_missing_features)
+                )
+
                 logger.debug(
                     "FacialFeaturesWorker: It took %.2f seconds to fetch %d pictures needing facial features."
-                    % (time.time() - time_after_calculate, len(missing_facial_features))
+                    % (
+                        time.time() - time_after_calculate,
+                        len(pictures_missing_facial_features),
+                    )
                 )
-                if missing_facial_features:
-                    logger.info(
-                        f"Generating facial features for {len(missing_facial_features)} pictures."
+                if pictures_missing_facial_features:
+                    logger.debug(
+                        f"Generating facial features for {len(pictures_missing_facial_features)} pictures."
                     )
                     features_updated = self._generate_facial_features(
-                        missing_facial_features
+                        pictures_missing_facial_features
                     )
-                    self._update_attributes(
-                        missing_facial_features, ["facial_features"]
+                    logger.debug(
+                        f"Updated facial features for {len(pictures_missing_facial_features)} pictures."
                     )
-                    # Add new likeness work queue entries for all pairs involving these pictures
-                    new_ids = [
-                        pic.id
-                        for pic in missing_facial_features
-                        if pic.facial_features is not None
-                    ]
-                    logger.info(
-                        "Adding %d new pictures to likeness work queue."
-                        % (len(new_ids))
-                    )
-                    if new_ids:
-
-                        def insert_likeness_work_queue(conn, new_ids):
-                            cursor = conn.cursor()
-                            placeholders = ",".join(["?"] * len(new_ids))
-                            other_rows = cursor.execute(
-                                f"SELECT id FROM pictures WHERE facial_features IS NOT NULL AND facial_features !='' AND id NOT IN ({placeholders})",
-                                tuple(new_ids),
-                            ).fetchall()
-                            other_ids = [
-                                row[0] if isinstance(row, tuple) else row["id"]
-                                for row in other_rows
-                            ]
-                            # Always enforce sorted order for all pairs
-                            pairs = set()
-                            for new_id in new_ids:
-                                for other_id in other_ids:
-                                    a, b = (new_id, other_id)
-                                    if a != b:
-                                        pair = (min(a, b), max(a, b))
-                                        pairs.add(pair)
-                            # Also insert all pairs among new_ids themselves
-                            for i in range(len(new_ids)):
-                                for j in range(i + 1, len(new_ids)):
-                                    a, b = new_ids[i], new_ids[j]
-                                    pair = (min(a, b), max(a, b))
-                                    pairs.add(pair)
-                            logger.info(
-                                "Adding %d new picture pairs to likeness work queue."
-                                % (len(pairs))
-                            )
-                            # Log a sample of the pairs and their IDs
-                            sample_pairs = list(pairs)[:10]
-                            logger.info(f"Sample pairs to insert: {sample_pairs}")
-                            if pairs:
-                                for item in pairs:
-                                    logger.debug(f"Pair to insert: {item}")
-                                    # First delete any existing entries for these pairs to avoid duplicates
-                                    cursor.execute(
-                                        "DELETE FROM picture_likeness WHERE (picture_id_a = ? AND picture_id_b = ?)",
-                                        (item[0], item[1]),
-                                    )
-                                logger.info(
-                                    "Deleted existing entries for new pairs to avoid duplicates."
-                                )
-                                cursor.executemany(
-                                    "INSERT OR IGNORE INTO likeness_work_queue (picture_id_a, picture_id_b) VALUES (?, ?)",
-                                    list(pairs),
-                                )
-                                conn.commit()
-                                # Log the number of rows in likeness_work_queue after insertion
-                                cursor.execute(
-                                    "SELECT COUNT(*) FROM likeness_work_queue"
-                                )
-                                count = cursor.fetchone()[0]
-                                logger.info(
-                                    f"likeness_work_queue now contains {count} rows after insertion."
-                                )
-
-                        self._db.submit_task(
-                            insert_likeness_work_queue, new_ids, priority=DBPriority.LOW
-                        ).result()
-                    data_updated |= features_updated
+                    data_updated |= features_updated > 0
 
                 timing = time.time() - start
 
                 if timing > 0.5:
-                    logger.info(
+                    logger.debug(
                         "FacialFeaturesWorker: Done after %.2f seconds." % timing
                     )
                 if not data_updated:
-                    # Wait for the specified interval before checking again
-                    logger.debug(
-                        "FacialFeaturesWorker: Sleeping after %.2f seconds. No work needed."
-                        % timing
-                    )
-                    self._wait()
-            except (sqlite3.OperationalError, OSError) as e:
-                # Database file was deleted or connection lost during shutdown
-                logger.debug(
-                    f"Worker thread exiting due to DB error (likely shutdown): {e}"
+                    if (
+                        not pics_needing_face_bboxes
+                        and not pictures_missing_facial_features
+                    ):
+                        logger.debug(
+                            "FacialFeaturesWorker: Sleeping after %.2f seconds. No work needed."
+                            % timing
+                        )
+                        self._wait()
+            except Exception as e:
+                import traceback
+
+                logger.error(
+                    "Worker thread exiting due to error: %s\n%s",
+                    e,
+                    traceback.format_exc(),
                 )
                 break
+        logger.info("FacialFeaturesWorker: Worker thread exiting.")
 
-    def _fetch_missing_facial_features(self):
-        """Return PictureModels needing facial features using the provided connection."""
-        rows_missing_facial_features = self._db.submit_task(
-            lambda conn: conn.execute(
-                """
-            SELECT p.*
-            FROM pictures p
-            WHERE p.face_bbox IS NOT NULL
-              AND p.face_bbox != ''
-              AND p.facial_features IS NULL
-            GROUP BY p.id
-            """
-            ).fetchall()
-        ).result()
-        return db_tools.from_batch_of_db_dicts(rows_missing_facial_features, [])
+    def _find_pics_needing_face_extraction(self):
+        """
+        Find pictures that do not have any face records in picture_faces (including sentinel records).
+        Only select pictures that have no entry at all in picture_faces.
+        """
+        return self._db.run_task(
+            lambda session: session.exec(
+                select(Picture).where(~Picture.faces.any())
+            ).all()
+        )
 
-    def _find_pics_needing_face_bbox(self):
-        """Find pictures that need face bounding boxes."""
-        rows = self._db.submit_task(
-            lambda conn: conn.execute(
-                "SELECT * FROM pictures WHERE face_bbox IS NULL"
-            ).fetchall()
-        ).result()
-        return db_tools.from_batch_of_db_dicts(rows, [])
-
-    def _calculate_face_bboxes(self, pics) -> int:
-        """Calculate face bounding box for pictures"""
+    def _extract_faces(self, pics) -> int:
+        """Extract faces with bounding boxes for all faces in each picture or video"""
 
         bboxes_updated = 0
         if not pics:
@@ -216,206 +148,239 @@ class FacialFeaturesWorker(BaseWorker):
                     if hasattr(self, "_insightface_app"):
                         del self._insightface_app
                         gc.collect()
-                        logger.info("Unloaded InsightFace app due to inactivity.")
+                        logger.warning("Unloaded InsightFace app due to inactivity.")
                     self._last_time_insightface_was_needed = None
-            return True, bboxes_updated  # Keep going even if if there's nothing to do
+            return True, bboxes_updated
 
-        logger.debug(f"Have {len(pics)} pictures needing facial featuress.")
+        logger.debug(f"Have {len(pics)} pictures needing facial features.")
         try:
             from insightface.app import FaceAnalysis
         except ImportError:
             logger.error(
                 "InsightFace is not installed. Skipping facial features extraction."
             )
-            return False, bboxes_updated  # Without InsightFace, we cannot proceed
+            return False, bboxes_updated
 
-        # Initialize InsightFace only once
         if not hasattr(self, "_insightface_app"):
             logger.debug("initialising InsightFace with CPU only (ctx_id=-1)")
             self._insightface_app = FaceAnalysis()
-            self._insightface_app.prepare(ctx_id=-1, det_thresh=0.25)  # -1 = CPU only
+            self._insightface_app.prepare(ctx_id=-1, det_thresh=0.25)
 
         self._last_time_insightface_was_needed = time.time()
 
         for pic in pics:
-            logger.debug("Looking for faces in picture %s", pic.id)
-
-            # Skip it regardless of whether we succeed or fail
+            logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
             self._skip_pictures.add(pic.id)
 
             if self._stop.is_set():
+                logger.debug("Stopping facial features extraction as requested.")
                 return False, bboxes_updated
 
-            try:
-                file_path = pic.file_path
-                ext = os.path.splitext(file_path)[1].lower()
-                faces = []
-                if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"]:
-                    img = cv2.imread(file_path)
-                    if img is not None:
-                        faces = self._insightface_app.get(img)
-                elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
-                    cap = cv2.VideoCapture(file_path)
-                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    if frame_count < 1:
-                        logger.warning(f"No frames found in video: {file_path}")
-                        cap.release()
-                    else:
-                        step = max(1, frame_count // 10)
-                        found = False
-                        for idx in range(0, frame_count, step):
-                            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                            ret, frame = cap.read()
-                            if not ret or frame is None:
-                                logger.warning(
-                                    f"Could not read frame {idx} from video: {file_path}"
-                                )
-                                continue
-                            # Upscale frame by 2x using LANCZOS
-                            upscaled = cv2.resize(
-                                frame,
-                                (frame.shape[1] * 2, frame.shape[0] * 2),
-                                interpolation=cv2.INTER_LANCZOS4,
+            file_path = pic.file_path
+            ext = os.path.splitext(file_path)[1].lower()
+            face_objects = []
+            if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"]:
+                img = cv2.imread(file_path)
+                if img is not None:
+                    faces = self._insightface_app.get(img)
+                    logger.debug("Found %d faces in image %s", len(faces), file_path)
+                    for i, face in enumerate(faces):
+                        expanded_bbox = Face.expand_face_bbox(
+                            face.bbox, img.shape[1], img.shape[0], 0.1
+                        )
+                        face_objects.append(
+                            Face(
+                                picture_id=pic.id,
+                                face_index=i,
+                                bbox=expanded_bbox,
+                                character_id=None,
+                                frame_index=0,
                             )
-                            frame_faces = self._insightface_app.get(upscaled)
-                            if frame_faces:
-                                # Use the largest face in this frame
-                                def face_area(f):
-                                    x1, y1, x2, y2 = f.bbox
-                                    return max(0, x2 - x1) * max(0, y2 - y1)
+                        )
 
-                                face = max(frame_faces, key=face_area)
-                                # Scale bbox back to original frame coordinates
-                                x1, y1, x2, y2 = [float(v) / 2.0 for v in face.bbox]
-                                w = x2 - x1
-                                h = y2 - y1
-                                # Sensible size threshold (e.g., 32x32 in original scale)
-                                if w >= 32 and h >= 32:
-                                    # Store the scaled-down bbox in the face object for downstream use
-                                    face.bbox = [x1, y1, x2, y2]
-                                    faces = [face]
-                                    found = True
-                                    logger.info(
-                                        f"Selected frame {idx} for face bbox in video {file_path} (w={w}, h={h}) after upscaling"
-                                    )
-                                    break
-                        cap.release()
-                        if not found:
-                            logger.warning(
-                                f"No suitable face found in any sampled frame for video: {file_path}"
-                            )
-                else:
-                    logger.warning(
-                        f"Unsupported file extension for facial features: {file_path}"
-                    )
-                if not faces:
-                    logger.warning(
-                        f"No face found in {file_path} for picture {pic.id}."
-                    )
-                    pic.face_bbox = ""
-                    continue
-                else:
-                    logger.debug(
-                        f"Found {len(faces)} face(s) in {file_path} for picture {pic.id}."
-                    )
-
-                # Always use the largest face (by area)
-                def face_area(f):
-                    x1, y1, x2, y2 = f.bbox
-                    return max(0, x2 - x1) * max(0, y2 - y1)
-
-                face = max(faces, key=face_area)
-                x1, y1, x2, y2 = [float(v) for v in face.bbox]
-
-                # Expand bbox by 10% on all sides
-                x1 -= 0.1 * (x2 - x1)
-                y1 -= 0.1 * (y2 - y1)
-                x2 += 0.1 * (x2 - x1)
-                y2 += 0.1 * (y2 - y1)
-
-                # Round width and height to nearest multiple of 64
-                w = x2 - x1
-                h = y2 - y1
-
-                def round64(val):
-                    return int(math.ceil(val / 64.0) * 64)
-
-                w_rounded = round64(w)
-                h_rounded = round64(h)
-                # Center the bbox after rounding
-                cx = x1 + w / 2.0
-                cy = y1 + h / 2.0
-                x1_new = cx - w_rounded / 2.0
-                y1_new = cy - h_rounded / 2.0
-                x2_new = cx + w_rounded / 2.0
-                y2_new = cy + h_rounded / 2.0
-
-                # Clamp to image edges
-                img_h, img_w = None, None
-                if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
-                    img = cv2.imread(file_path)
-                    if img is not None:
-                        img_h, img_w = img.shape[0], img.shape[1]
-                elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
-                    cap = cv2.VideoCapture(file_path)
-                    ret, frame = cap.read()
-                    if ret and frame is not None:
-                        img_h, img_w = frame.shape[0], frame.shape[1]
+            elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
+                cap = cv2.VideoCapture(file_path)
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                if frame_count < 1:
+                    logger.warning(f"No frames found in video: {file_path}")
                     cap.release()
-                if img_w is not None and img_h is not None:
-                    x1_new = max(0, min(x1_new, img_w - 1))
-                    y1_new = max(0, min(y1_new, img_h - 1))
-                    x2_new = max(0, min(x2_new, img_w - 1))
-                    y2_new = max(0, min(y2_new, img_h - 1))
-                bbox_rounded = [x1_new, y1_new, x2_new, y2_new]
-                pic.face_bbox = bbox_rounded
+                else:
+                    step = max(1, frame_count // 10)
+                    for frame_index in range(0, frame_count, step):
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                        ret, frame = cap.read()
+                        if not ret or frame is None:
+                            logger.warning(
+                                f"Could not read frame {frame_index} from video: {file_path}"
+                            )
+                            continue
+                        frame_faces = self._insightface_app.get(frame)
+                        for i, face in enumerate(frame_faces):
+                            expanded_bbox = Face.expand_face_bbox(
+                                face.bbox, frame.shape[1], frame.shape[0], 0.1
+                            )
+                            face_objects.append(
+                                Face(
+                                    picture_id=pic.id,
+                                    face_index=i,
+                                    bbox=expanded_bbox,
+                                    character_id=None,
+                                    frame_index=frame_index,
+                                )
+                            )
+                cap.release()
 
-                logger.debug(f"Calculated largest face bbox for picture {pic.id}.")
-                bboxes_updated += 1
-
-                # Regenerate thumbnails using face_bbox
-                try:
-                    cropped = PictureUtils.load_and_crop_face_bbox(
-                        pic.file_path, face.bbox
-                    )
-                    if cropped is not None:
-                        thumb = PictureUtils.generate_thumbnail_bytes(cropped)
-                        if thumb is not None:
-                            pic.thumbnail = thumb
-
-                except Exception as e:
-                    logger.error(
-                        f"Failed to regenerate face-aware thumbnails for picture {pic.id}: {e}"
-                    )
-            except Exception as e:
-                logger.error(
-                    f"Failed to extract/store face bbox for picture {pic.id}: {e}"
+            else:
+                logger.warning(
+                    f"Unsupported file extension for facial features: {file_path}"
                 )
-                pic.face_bbox = bytes()
-        logger.debug("Done extracting face bboxes for current batch.")
 
-        logger.debug(
-            f"Storing {bboxes_updated} updated face bboxes and thumbnails to database."
-        )
-        self._update_attributes(pics, ["face_bbox", "thumbnail"])
+            assert isinstance(face_objects, list), (
+                f"face_objects is not a list: {type(face_objects)}"
+            )
+            if not face_objects:
+                logger.warning(
+                    f"No face found in {file_path} for picture {pic.id}. Inserting sentinel record."
+                )
 
+                # Insert sentinel record to indicate no faces found
+                def insert_sentinel(session):
+                    session.add(
+                        Face(
+                            picture_id=pic.id,
+                            face_index=-1,
+                            character_id=None,
+                            bbox=None,
+                        )
+                    )
+                    session.commit()
+
+                self._db.run_task(insert_sentinel, priority=DBPriority.LOW)
+            else:
+                # Assign primary_character_id to largest face if set
+                if (
+                    getattr(pic, "primary_character_id", None) is not None
+                    and len(face_objects) > 0
+                ):
+
+                    def face_area(face):
+                        bbox = face.bbox
+                        if bbox and len(bbox) == 4:
+                            return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+                        return 0
+
+                    largest_face = max(face_objects, key=face_area)
+                    largest_face.character_id = pic.primary_character_id
+
+                def insert_faces(session, faces_to_insert):
+                    changed = []
+                    for face in faces_to_insert:
+                        session.add(face)
+                        changed.append((Face, face.id))
+                    session.commit()
+                    return changed
+
+                self._db.run_task(insert_faces, face_objects, priority=DBPriority.LOW)
+            # Processed the picture even if no faces found
+            self._notify_ids_processed([(Picture, pic.id, "faces")])
+
+        logger.debug(f"Stored {bboxes_updated} updated face bboxes")
         return True, bboxes_updated
 
-    def _generate_facial_features(self, missing_facial_features):
+    def _fetch_faces_missing_features(self):
         """
-        Generate facial features for a batch of PictureModel objects using PictureTagger.
-        Returns the number of pictures updated.
+        Return a list of faces needing features (features IS NULL and index != -1)
         """
-        updated = 0
-        for pic in missing_facial_features:
+
+        def find_faces(session: Session):
+            column = getattr(Face, "features")
+
+            return session.exec(
+                select(Face)
+                .where((Face.face_index >= 0) & (column.is_(None)))
+                .options(selectinload(Face.picture))
+            ).all()
+
+        return self._db.run_task(find_faces, priority=DBPriority.LOW)
+
+    def _fetch_pics_missing_facial_features(
+        self, faces_missing_features: list[Face]
+    ) -> dict[Picture, list[Face]]:
+        """
+        Return a dict of pictures and their corresponding faces needing facial features (features IS NULL and index != -1)
+        """
+        pictures_dict = {}
+        for face in faces_missing_features:
+            pic = face.picture
+            pictures_dict.setdefault(pic.id, (pic, []))[1].append(face)
+        return pictures_dict
+
+    def _generate_facial_features(
+        self, pics_missing_facial_features: dict[Picture, list[Face]]
+    ) -> int:
+        """
+        Generate facial features for a batch of face records using PictureTagger.
+        Each item in missing_facial_features is a dict with keys: picture_id, face_index, bbox, file_path, etc.
+        Groups by picture, calls tagger once per picture, and updates each face.
+        Returns the number of faces updated.
+        """
+
+        updates = 0
+
+        for picture_id, (picture, faces) in pics_missing_facial_features.items():
+            assert picture_id == picture.id, "Picture ID mismatch"
+            if self._stop.is_set():
+                logger.debug("Stopping facial features generation as requested.")
+                return updates
+            logger.debug(
+                f"Generating facial features for picture {picture_id} with {len(faces)} faces."
+            )
+            # Collect bboxes for all faces in this picture
+            bboxes = [f.bbox for f in faces]
+            # Convert bbox from string if needed
+            import ast
+
+            bboxes = [ast.literal_eval(b) if isinstance(b, str) else b for b in bboxes]
+            frame_indices = [f.frame_index for f in faces]
             try:
-                features = self._picture_tagger.generate_facial_features(pic)
-                if features is not None:
-                    logger.info("Got facial features for picture %s", pic.id)
-                    pic.facial_features = features
-                    updated += 1
-                else:
-                    pic.facial_features = bytes()
+                features_list = self._picture_tagger.generate_facial_features(
+                    picture, bboxes
+                )
+                for face, features, frame_index in zip(
+                    faces, features_list, frame_indices
+                ):
+                    if features is not None:
+                        logger.debug(
+                            f"Got facial features for picture {face.picture_id} face_index {face.face_index} frame_index {frame_index}"
+                        )
+                        # Convert numpy array to bytes for DB storage
+                        features_bytes = (
+                            features.tobytes()
+                            if hasattr(features, "tobytes")
+                            else features
+                        )
+                        face.features = features_bytes
+                    else:
+                        logger.warning(
+                            f"No facial features for picture {face.picture_id} face_index {face.face_index} frame_index {frame_index}"
+                        )
+
+                def update_faces(session, faces_to_update):
+                    changed = []
+                    for face in faces_to_update:
+                        session.add(face)
+                        changed.append((Face, face.id, "features"))
+                    session.commit()
+                    return changed
+
+                faces_updated = self._db.run_task(
+                    update_faces, faces, priority=DBPriority.LOW
+                )
+                self._notify_ids_processed(faces_updated)
+                updates += len(faces_updated)
             except Exception as e:
-                logger.error(f"Failed to generate facial features for {pic.id}: {e}")
-        return updated
+                logger.error(
+                    f"Failed to generate facial features for picture {face.picture_id}: {e}"
+                )
+        logger.debug("Generated facial features for %d faces", updates)
+        return updates

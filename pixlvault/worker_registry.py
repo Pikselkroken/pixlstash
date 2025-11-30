@@ -1,24 +1,29 @@
 import random
 import threading
 import time
-
+from typing import List, Tuple, Type
+from concurrent.futures import Future
 from abc import ABC, ABCMeta, abstractmethod
 from enum import Enum
 
-from pixlvault.database import DBPriority
+from .logging import get_logger
 
 
 class WorkerType(str, Enum):
     FACIAL_FEATURES = "FacialFeaturesWorker"
     TAGGER = "TagWorker"
     QUALITY = "QualityWorker"
-    LIKENESS = "LikenessWorker"
+    FACE_QUALITY = "FaceQualityWorker"
+    #    LIKENESS = "LikenessWorker"
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
 
     @staticmethod
     def all():
         return set(item for item in WorkerType)
+
+
+logger = get_logger(__name__)
 
 
 class WorkerRegistry(ABCMeta):
@@ -51,12 +56,15 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
 
     INTERVAL = 2.5  # Default interval between worker runs in seconds
 
-    def __init__(self, db_connection, picture_tagger, characters):
-        self._db = db_connection
+    def __init__(self, database, picture_tagger):
+        self._db = database
         self._picture_tagger = picture_tagger
-        self._characters = characters
+
         self._stop = threading.Event()
         self._thread = None
+
+        self._watched_ids = {}
+        self._watched_ids_lock = threading.Lock()
 
     @abstractmethod
     def worker_type(self) -> WorkerType:
@@ -101,6 +109,32 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         return self.worker_type().value
 
+    def watch_id(self, cls: type, object_id, attr: str):
+        """
+        Add an object ID to the watch list.
+        """
+        future = Future()
+        with self._watched_ids_lock:
+            self._watched_ids[(cls, object_id, attr)] = future
+        return future
+
+    def _notify_ids_processed(self, object_ids: List[Tuple[Type, object, str]]):
+        """
+        Notify that an object ID has been processed.
+        """
+        with self._watched_ids_lock:
+            for cls, object_id, attr in object_ids:
+                logger.info(
+                    f"Trying to notify processed ID: {cls.__name__} id={object_id} attr={attr}"
+                )
+
+                future = self._watched_ids.pop((cls, object_id, attr), None)
+                if future:
+                    logger.info(
+                        f"Worker {self.name()} processed {cls.__name__} id={object_id} attr={attr}"
+                    )
+                    future.set_result(object_id)
+
     def _wait(self):
         """
         Wait for a random short duration to stagger working time
@@ -114,19 +148,3 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         The main logic of the worker.
         """
         pass
-
-    def _update_attributes(self, pictures, attributes):
-        """Update specified attributes for a list of Picture instances in the database using executemany for efficiency."""
-
-        values = []
-        for picture in pictures:
-            row = picture.to_dict()
-            attr_values = [row[attr] for attr in attributes]
-            attr_values.append(picture.id)
-            values.append(tuple(attr_values))
-            # logger.info(f"Updating picture {picture.id} with attributes: {row}")
-        set_clause = ", ".join([f"{attr}=?" for attr in attributes])
-        query = f"UPDATE pictures SET {set_clause} WHERE id=?"
-        return self._db.submit_task(
-            lambda conn: conn.executemany(query, values), priority=DBPriority.LOW
-        ).result()

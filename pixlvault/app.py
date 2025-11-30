@@ -63,7 +63,7 @@ def main():
     setup_logging(log_file=log_file, log_level=log_level)
 
     server = Server(config_path=args.config, server_config_path=args.server_config)
-    server.start_workers()
+    server.vault.start_workers()
     server.run()
 
 

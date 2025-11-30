@@ -1,19 +1,18 @@
-import sqlite3
-import os
-from typing import List
-import cv2
+from typing import List, Tuple
 import numpy as np
 import time
 
-from pixlvault.characters import Characters
+from sqlmodel import Session, select
+
 from pixlvault.database import DBPriority
 from pixlvault.logging import get_logger
-import pixlvault.picture_db_tools as db_tools
-from pixlvault.picture import PictureModel
-from pixlvault.picture_quality import PictureQuality
-from pixlvault.picture_tagger import PictureTagger
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.worker_registry import BaseWorker, WorkerType
+
+from pixlvault.db_models.picture import Picture
+from pixlvault.db_models.face import Face
+from pixlvault.db_models.quality import Quality
+
 
 logger = get_logger(__name__)
 
@@ -21,331 +20,354 @@ logger = get_logger(__name__)
 class QualityWorker(BaseWorker):
     def __init__(
         self,
-        db_connection,
-        picture_tagger: PictureTagger,
-        characters: Characters,
-        position: int = 1,
+        database,
+        picture_tagger,
     ):
-        super().__init__(db_connection, picture_tagger, characters)
-        self._progress_position = position
+        super().__init__(database, picture_tagger)
 
     def worker_type(self) -> WorkerType:
         return WorkerType.QUALITY
 
     def _run(self):
+        logger.info("Starting QualityWorker...")
         BATCH_SIZE = 8
         time.sleep(0.75)
         while not self._stop.is_set():
             start = time.time()
             logger.debug("[QUALITY] Starting iteration...")
             quality_updates = 0
-            did_work = False
             try:
                 # 1. Full image quality measures
                 logger.debug(
                     "Searching for pictures needing full image quality calculation."
                 )
-                rows = self._db.submit_task(
-                    lambda conn: conn.execute(
-                        "SELECT * FROM pictures WHERE sharpness IS NULL OR edge_density IS NULL OR noise_level IS NULL OR contrast IS NULL OR brightness IS NULL",
-                    ).fetchall()
-                ).result()
-                pics_full = db_tools.from_batch_of_db_dicts(rows)
-                grouped_full = self._group_pictures_by_size(pics_full, region="full")
 
-                if grouped_full:
-                    for group in grouped_full.values():
-                        batch = group[:BATCH_SIZE]
-                        if batch:
-                            quality_updates = self._calculate_quality(batch)
-                            if quality_updates:
-                                self._db.submit_task(
-                                    self._update_quality,
-                                    quality_updates,
-                                    priority=DBPriority.LOW,
-                                ).result()
-                                did_work = True
-
-                # 2. Face quality measures
-                face_rows = self._db.submit_task(
-                    lambda conn: conn.execute(
-                        "SELECT * FROM pictures WHERE face_sharpness IS NULL OR face_edge_density IS NULL OR face_noise_level IS NULL OR face_contrast IS NULL OR face_brightness IS NULL",
-                    ).fetchall()
-                ).result()
-                pics_face = db_tools.from_batch_of_db_dicts(face_rows)
-                grouped_face = self._group_pictures_by_size(pics_face, region="face")
-
-                if grouped_face:
-                    for group in grouped_face.values():
-                        batch = group[:BATCH_SIZE]
-                        if batch:
-                            quality_updates = self._calculate_quality(batch, True)
-                            if quality_updates:
-                                self._db.submit_task(
-                                    self._update_face_quality,
-                                    quality_updates,
-                                    priority=DBPriority.LOW,
-                                ).result()
-                                did_work = True
-            except (sqlite3.OperationalError, OSError) as e:
-                msg = str(e)
-                if "no such column" in msg:
-                    logger.error(
-                        f"Quality worker exiting due to schema error (missing column): {e}"
+                def find_pictures_missing_quality(session: Session):
+                    result = session.exec(
+                        select(Picture)
+                        .outerjoin(Quality, Quality.picture_id == Picture.id)
+                        .where(Quality.id is None)
+                        .order_by(Picture.format, Picture.width, Picture.height)
                     )
-                else:
-                    logger.error(
-                        f"Quality worker exiting due to DB error (likely shutdown): {e}"
+                    pics = result.all()
+                    return pics
+
+                pics_missing_quality = self._db.run_task(find_pictures_missing_quality)
+                logger.info(
+                    f"Found {len(pics_missing_quality)} pictures missing quality metrics."
+                )
+
+                grouped_full = self._group_pictures_by_format_and_size(
+                    pics_missing_quality
+                )
+
+                if self._stop.is_set():
+                    break
+
+                for group in grouped_full.values():
+                    if self._stop.is_set():
+                        break
+
+                    batch = group[:BATCH_SIZE]
+                    logger.info(
+                        "Processing quality for batch of %d pictures." % len(batch)
                     )
-                break
+                    if len(batch) > 0:
+                        qualities = self._calculate_quality(batch)
+                        if qualities:
+                            result = self._db.run_task(
+                                self._update_quality,
+                                batch,
+                                qualities,
+                                priority=DBPriority.LOW,
+                            )
+                            self._notify_ids_processed(result)
+                            quality_updates += len(result)
+                        else:
+                            logger.warning("[QUALITY] No quality updates calculated.")
+
             except Exception as e:
-                logger.error(f"Quality worker error: {e}")
+                import traceback
+
+                logger.error(
+                    "Quality Worker thread exiting due to error: %s\n%s",
+                    e,
+                    traceback.format_exc(),
+                )
+                break
             timing = time.time() - start
-            if did_work and timing > 0.5:
+            if quality_updates > 0:
                 logger.info("QualityWorker: Done after %.2f seconds." % timing)
-            if not did_work:
-                logger.debug(
+            else:
+                logger.info(
                     "QualityWorker: Sleeping after %.2f seconds, no updates made."
                     % timing
                 )
                 self._wait()
+        logger.info("QualityWorker: Stopped.")
 
-    def _group_pictures_by_size(self, pics: List[PictureModel], region: str = "full"):
+    def _group_pictures_by_format_and_size(self, pics: List[Picture]):
         """
-        Group pictures by region size (full image or face bbox).
-        region: "full" for full image, "face" for face bbox.
-        Returns a dict: {key: [PictureModel, ...]}, where key is (h, w, c) for images, or (h, w) for face crops, or file_path for videos.
+        Group pre-sorted pictures by (format, width, height).
+        Returns: dict with (format, width, height) as keys and lists of pictures as values.
         """
-        from collections import defaultdict
+        groups = {}
+        current_key = None
+        current_group = []
 
-        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
-        sizes = []
-        pic_groups = []
-        video_groups = defaultdict(list)
         for pic in pics:
-            ext = os.path.splitext(pic.file_path)[1].lower()
-            if ext in video_exts:
-                video_groups[pic.file_path].append(pic)
-            else:
-                try:
-                    if region == "full":
-                        size = PictureUtils.load_metadata(pic.file_path)
-                    elif (
-                        region == "face"
-                        and pic.face_bbox is not None
-                        and len(pic.face_bbox) == 4
-                    ):
-                        x1, y1, x2, y2 = pic.face_bbox
-                        w = int(round((x2 - x1) / 64.0) * 64)
-                        h = int(round((y2 - y1) / 64.0) * 64)
-                        # Assume 3 channels for face crops
-                        size = (h, w, 3)
-                    else:
-                        size = None
-                    if size:
-                        sizes.append(size)
-                        pic_groups.append((size, pic))
-                except Exception as e:
-                    logger.error(
-                        f"Failed to read metadata for grouping: {pic.file_path}, error: {e}"
-                    )
-        all_groups = dict(video_groups)
-        if sizes:
-            unique_sizes = set(sizes)
-            logger.debug(
-                f"Read metadata for {len(pic_groups)} images. Found {len(unique_sizes)} unique sizes."
-            )
-            if len(unique_sizes) == 1:
-                batch_size = len(pic_groups)
-                logger.debug(
-                    f"All images same size: batching {batch_size} images together."
-                )
-                all_groups[list(unique_sizes)[0]] = [pic for _, pic in pic_groups]
-            else:
-                image_groups = defaultdict(list)
-                for size, pic in pic_groups:
-                    image_groups[size].append(pic)
-                for size, group in image_groups.items():
-                    if region == "face":
-                        logger.debug(
-                            f"Face batch for bbox size {size}: {len(group)} images."
-                        )
-                    else:
-                        logger.debug(f"Batch for size {size}: {len(group)} images.")
-                all_groups.update(image_groups)
-        if video_groups:
-            for vkey, vgroup in video_groups.items():
-                logger.debug(f"Video batch for {vkey}: {len(vgroup)} video(s).")
-        return all_groups
+            pic_format = pic.format.lower()
+            width = pic.width
+            height = pic.height
+            key = (pic_format, width, height)
 
-    def _calculate_quality(
-        self, pics: List[PictureModel], is_face: bool = False
-    ) -> List[PictureModel]:
+            if key != current_key:
+                if current_key is not None:
+                    groups[current_key] = current_group
+                current_key = key
+                current_group = [pic]
+            else:
+                current_group.append(pic)
+
+        if current_group:
+            groups[current_key] = current_group
+        return groups
+
+    def _calculate_quality(self, pics: List[Picture]) -> List["Quality"]:
+        """
+        Calculate quality metrics for a batch of images.
+        Takes a list of pictures
+
+        Returns:
+          A list of qualities per picture with None-entries where the calculation failed.
+        """
         try:
-            images = []
-            if not is_face:
-                # Full image quality
-                for pic in pics:
-                    images.append(PictureUtils.load_image_or_video(pic.file_path))
-                batch_array = np.stack(images, axis=0)
-                qualities = PictureQuality.calculate_quality_batch(batch_array)
-                for pic, q in zip(pics, qualities):
-                    logger.debug(
-                        "[QUALITY] Picture id %s calculated sharpness: %s edge_density: %s contrast: %s brightness: %s noise_level: %s",
-                        pic.id,
-                        q.sharpness,
-                        q.edge_density,
-                        q.contrast,
-                        q.brightness,
-                        q.noise_level,
-                    )
-                    pic.sharpness = q.sharpness
-                    pic.edge_density = q.edge_density
-                    pic.contrast = q.contrast
-                    pic.brightness = q.brightness
-                    pic.noise_level = q.noise_level
-            else:
-                # Face crop quality
-                h, w, _ = None, None, None
-                if (
-                    pics
-                    and pics[0].face_bbox is not None
-                    and len(pics[0].face_bbox) == 4
-                ):
-                    x1, y1, x2, y2 = pics[0].face_bbox
-                    w = int(round((x2 - x1) / 64.0) * 64)
-                    h = int(round((y2 - y1) / 64.0) * 64)
-                valid_images = []
-                valid_pics = []
-                for pic in pics:
-                    # Only check if bbox is present and well-formed
-                    if pic.face_bbox is not None and len(pic.face_bbox) == 4:
-                        x1, y1, x2, y2 = pic.face_bbox
-                        # Check for zero area or malformed bbox
-                        if x2 > x1 and y2 > y1:
-                            img = PictureUtils.load_image_or_video(pic.file_path)
-                            if img is not None:
-                                crop = img[int(y1) : int(y2), int(x1) : int(x2)]
-                                if (
-                                    h is not None
-                                    and w is not None
-                                    and (crop.shape[0] != h or crop.shape[1] != w)
-                                ):
-                                    try:
-                                        crop = cv2.resize(crop, (w, h))
-                                    except Exception:
-                                        # Silently drop this bbox and skip picture
-                                        pic.face_bbox = None
-                                        continue
-                                if crop.size > 0:
-                                    valid_images.append(crop)
-                                    valid_pics.append(pic)
-                                    continue
-                        # If bbox is present but invalid, set metrics to -1.0
-                        pic.face_sharpness = -1.0
-                        pic.face_edge_density = -1.0
-                        pic.face_noise_level = -1.0
-                        pic.face_contrast = -1.0
-                        pic.face_brightness = -1.0
-                if valid_images:
-                    batch_array = np.stack(valid_images, axis=0)
-                    qualities = PictureQuality.calculate_quality_batch(batch_array)
-                    for pic, fq in zip(valid_pics, qualities):
-                        pic.face_sharpness = fq.sharpness
-                        pic.face_edge_density = fq.edge_density
-                        pic.face_contrast = fq.contrast
-                        pic.face_brightness = fq.brightness
-                        pic.face_noise_level = fq.noise_level
-            return pics
+            all_qualities = []
+
+            loaded_pics = []
+            for pic in pics:
+                img = PictureUtils.load_image_or_video(pic.file_path)
+                loaded_pics.append(img)
+
+            # Remove None images for batch processing, keep index mapping
+            valid_indices = [i for i, img in enumerate(loaded_pics) if img is not None]
+            valid_pics = [img for img in loaded_pics if img is not None]
+            qualities = []
+            if valid_pics:
+                batch_array = np.stack(valid_pics, axis=0)
+                qualities = Quality.calculate_quality_batch(batch_array)
+
+            # Assign metrics
+            for i in range(len(pics)):
+                if i in valid_indices:
+                    q = qualities[valid_indices.index(i)]
+                    all_qualities.append(q)
+                else:
+                    all_qualities.append(None)
+            return all_qualities
         except Exception as e:
-            logger.error(f"Failed to calculate quality for batch: {e}")
+            import traceback
 
-    def _update_quality(self, conn, pics):
-        cursor = conn.cursor()
-        values = []
-        for pic in pics:
-            # Assert metrics are not bytes
-            for metric_name in [
-                "sharpness",
-                "edge_density",
-                "contrast",
-                "brightness",
-                "noise_level",
-            ]:
-                metric_value = getattr(pic, metric_name)
-                assert not isinstance(metric_value, bytes), (
-                    f"Corrupt metric: {metric_name} for picture {pic.id} is bytes: {metric_value!r}"
-                )
-            logger.debug(
-                "[UPDATE] Picture id %s sharpness: %s edge_density: %s contrast: %s brightness: %s noise_level: %s",
-                pic.id,
-                pic.sharpness,
-                pic.edge_density,
-                pic.contrast,
-                pic.brightness,
-                pic.noise_level,
-            )
-            values.append(
-                (
-                    pic.sharpness,
-                    pic.edge_density,
-                    pic.contrast,
-                    pic.brightness,
-                    pic.noise_level,
-                    pic.id,
-                )
+            logger.error(
+                "Failed to calculate quality for batch: %s\n%s",
+                e,
+                traceback.format_exc(),
             )
 
-        logger.debug(
-            f"[UPDATE] Committing {len(values)} full image quality updates to database."
-        )
-        cursor.executemany(
-            "UPDATE pictures SET sharpness = ?, edge_density = ?, contrast = ?, brightness = ?, noise_level = ? WHERE id = ?",
-            values,
-        )
-        conn.commit()
+    def _update_quality(
+        self, session, pics: List[Picture], qualities: List["Quality"]
+    ) -> List[Tuple[type, object, str]]:
+        changed = []
+        for pic, quality in zip(pics, qualities):
+            session.add(quality)
+            pic.quality = quality
+            session.add(pic)
+            changed.append((Picture, pic.id, "quality"))
+        session.commit()
+        return changed
 
-    def _update_face_quality(self, conn, pics):
-        cursor = conn.cursor()
-        values = []
-        for pic in pics:
-            # Assert face metrics are not bytes
-            for metric_name in [
-                "face_sharpness",
-                "face_edge_density",
-                "face_contrast",
-                "face_brightness",
-                "face_noise_level",
-            ]:
-                metric_value = getattr(pic, metric_name)
-                assert not isinstance(metric_value, bytes), (
-                    f"Corrupt face metric: {metric_name} for picture {pic.id} is bytes: {metric_value!r}"
+
+class FaceQualityWorker(BaseWorker):
+    def __init__(
+        self,
+        database,
+        picture_tagger,
+    ):
+        super().__init__(database, picture_tagger)
+
+    def worker_type(self) -> WorkerType:
+        return WorkerType.FACE_QUALITY
+
+    def _run(self):
+        logger.info("Starting FaceQualityWorker...")
+        BATCH_SIZE = 8
+        time.sleep(0.75)
+        while not self._stop.is_set():
+            start = time.time()
+            logger.debug("[FACE QUALITY] Starting iteration...")
+            quality_update_count = 0
+            try:
+                logger.debug(
+                    "Searching for picture faces needing face quality calculation."
                 )
-            logger.debug(
-                "[UPDATE] Picture id %s face_sharpness: %s face_edge_density: %s face_contrast: %s face_brightness: %s face_noise_level: %s",
-                pic.id,
-                pic.face_sharpness,
-                pic.face_edge_density,
-                pic.face_contrast,
-                pic.face_brightness,
-                pic.face_noise_level,
-            )
-            values.append(
-                (
-                    pic.face_sharpness,
-                    pic.face_edge_density,
-                    pic.face_contrast,
-                    pic.face_brightness,
-                    pic.face_noise_level,
-                    pic.id,
+
+                def find_faces_missing_quality(session: Session):
+                    statement = (
+                        select(Face, Picture)
+                        .join(Picture, Face.picture_id == Picture.id)
+                        .outerjoin(Quality, Quality.picture_id == Picture.id)
+                        .where(Quality.id is None)
+                        .order_by(Picture.format, Picture.width, Picture.height)
+                    )
+                    result = session.exec(statement)
+                    return result.all()
+
+                faces_missing_quality = self._db.run_task(find_faces_missing_quality)
+
+                logger.info(
+                    f"Found {len(faces_missing_quality)} faces missing face quality metrics."
                 )
+
+                grouped_faces = self._group_faces_by_format_and_size(
+                    faces_missing_quality
+                )
+
+                for group in grouped_faces.values():
+                    batch = group[:BATCH_SIZE]
+                    logger.info(
+                        "Processing face quality for batch of %d faces." % len(batch)
+                    )
+                    if len(batch) > 0:
+                        qualities = self._calculate_face_quality(batch)
+                        if qualities:
+                            faces = [face for _, face in batch]
+                            result = self._db.run_task(
+                                self._update_face_quality,
+                                faces,
+                                qualities,
+                                priority=DBPriority.LOW,
+                            )
+                            self._notify_ids_processed(result)
+                            quality_update_count += len(result)
+                        else:
+                            logger.warning(
+                                "[FACE QUALITY] No quality updates calculated."
+                            )
+
+                else:
+                    logger.info("[FACE QUALITY] No face quality updates needed.")
+            except Exception as e:
+                import traceback
+
+                logger.error(
+                    "FaceQualityWorker thread exiting due to error: %s\n%s",
+                    e,
+                    traceback.format_exc(),
+                )
+                break
+            timing = time.time() - start
+            if quality_update_count > 0:
+                logger.info("FaceQualityWorker: Done after %.2f seconds." % timing)
+            else:
+                logger.info(
+                    "FaceQualityWorker: Sleeping after %.2f seconds, no updates made."
+                    % timing
+                )
+                self._wait()
+        logger.info("FaceQualityWorker: Stopped.")
+
+    def _group_faces_by_format_and_size(self, faces: List[Tuple[Face, Picture]]):
+        """
+        Group pre-sorted pictures by (format, bbox_width, bbox_height).
+        Input must be sorted by format, bbox_width, bbox_height.
+        Returns: dict with (format, bbox_width, bbox_height) as keys and lists of pictures as values.
+        """
+        groups = {}
+        current_key = None
+        current_group = []
+
+        for face, pic in faces:
+            pic_format = pic.format.lower()
+            assert face.bbox is not None, "Face bbox is None."
+            assert len(face.bbox) == 4, "Face bbox is invalid."
+
+            x1, y1, x2, y2 = face.bbox
+            bbox_width = int(round((x2 - x1) / 64.0) * 64)
+            bbox_height = int(round((y2 - y1) / 64.0) * 64)
+            key = (pic_format, bbox_width, bbox_height)
+
+            if key != current_key:
+                if current_key is not None:
+                    groups[current_key] = current_group
+                current_key = key
+                current_group = [(pic, face)]
+            else:
+                current_group.append((pic, face))
+
+        if current_group:
+            groups[current_key] = current_group
+        return groups
+
+    def _calculate_face_quality(
+        self, pics_and_faces: List[Tuple[Picture, Face]]
+    ) -> List["Quality"]:
+        """
+        Calculate quality metrics for a batch of faces.
+        Takes a list of pictures.
+
+        Returns:
+          A list of qualities per face with None-entries where the calculation failed.
+        """
+        try:
+            all_qualities = []
+            cropped_pics = []
+
+            for pic, face in pics_and_faces:
+                if face.bbox is not None and len(face.bbox) == 4:
+                    x1, y1, x2, y2 = face.bbox
+                    img = PictureUtils.load_image_or_video(pic.file_path)
+                    if img is not None:
+                        crop = img[int(y1) : int(y2), int(x1) : int(x2)]
+                        if crop.size > 0:
+                            cropped_pics.append(crop)
+                        else:
+                            cropped_pics.append(None)
+                    else:
+                        cropped_pics.append(None)
+
+            # Remove None images for batch processing, keep index mapping
+            valid_indices = [i for i, img in enumerate(cropped_pics) if img is not None]
+            valid_pics = [img for img in cropped_pics if img is not None]
+            qualities = []
+            if valid_pics:
+                batch_array = np.stack(valid_pics, axis=0)
+                qualities = Quality.calculate_quality_batch(batch_array)
+
+            # Assign metrics
+            for i in range(len(pics_and_faces)):
+                if i in valid_indices:
+                    q = qualities[valid_indices.index(i)]
+                    all_qualities.append(q)
+                else:
+                    all_qualities.append(None)
+            return all_qualities
+        except Exception as e:
+            import traceback
+
+            logger.error(
+                "Failed to calculate quality for batch: %s\n%s",
+                e,
+                traceback.format_exc(),
             )
 
-        logger.debug(
-            f"[UPDATE] Committing {len(values)} face quality updates to database."
-        )
-        cursor.executemany(
-            "UPDATE pictures SET face_sharpness = ?, face_edge_density = ?, face_contrast = ?, face_brightness = ?, face_noise_level = ? WHERE id = ?",
-            values,
-        )
-        conn.commit()
+    def _update_face_quality(
+        self, session, faces: List[Face], qualities: List["Quality"]
+    ) -> List[Tuple[type, object, str]]:
+        changed = []
+        for face, quality in zip(faces, qualities):
+            session.add(quality)
+            face.quality = quality
+            session.add(face)
+            changed.append((Face, face.id, "quality"))
+        session.commit()
+        return changed

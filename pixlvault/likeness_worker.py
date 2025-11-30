@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pixlvault.characters import Characters
 from pixlvault.database import DBPriority
 from pixlvault.logging import get_logger
-from pixlvault.picture import PictureModel
-from pixlvault.picture_quality import PictureQuality
+from pixlvault.picture import Picture
+from pixlvault.quality import Quality
 from pixlvault.picture_tagger import PictureTagger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 
@@ -123,9 +123,7 @@ class LikenessWorker(BaseWorker):
                     # Facial likeness
                     features_a = np.frombuffer(pic_a.facial_features, dtype=np.float32)
                     features_b = np.frombuffer(pic_b.facial_features, dtype=np.float32)
-                    facial_likeness = PictureQuality.likeness_score(
-                        features_a, features_b
-                    )
+                    facial_likeness = Quality.likeness_score(features_a, features_b)
                     # Color histogram likeness
                     img_a = (
                         pic_a.get_image()
@@ -219,9 +217,7 @@ class LikenessWorker(BaseWorker):
             ).result()
             logger.info("Got %d pictures for likeness calculation." % (len(pic_rows)))
             pic_dict = {
-                row["id"] if isinstance(row, dict) else row[0]: PictureModel.from_dict(
-                    row
-                )
+                row["id"] if isinstance(row, dict) else row[0]: Picture.from_dict(row)
                 for row in pic_rows
             }
             for row in rows:
@@ -229,17 +225,27 @@ class LikenessWorker(BaseWorker):
                 pic_a = pic_dict.get(pic_a_id)
                 pic_b = pic_dict.get(pic_b_id)
                 if not pic_a or not pic_b:
-                    logger.warning(f"Skipping pair ({pic_a_id}, {pic_b_id}): picture(s) missing from DB.")
+                    logger.warning(
+                        f"Skipping pair ({pic_a_id}, {pic_b_id}): picture(s) missing from DB."
+                    )
                     pairs_to_remove.append((pic_a_id, pic_b_id))
                     continue
+
                 # Only process if both have facial features
                 def is_empty_features(f):
                     return isinstance(f, (bytes, str)) and len(f) == 0
+
                 if pic_a.facial_features is None or pic_b.facial_features is None:
-                    logger.info(f"Retrying pair ({pic_a_id}, {pic_b_id}): facial_features not yet calculated.")
+                    logger.info(
+                        f"Retrying pair ({pic_a_id}, {pic_b_id}): facial_features not yet calculated."
+                    )
                     continue  # retry later
-                if is_empty_features(pic_a.facial_features) or is_empty_features(pic_b.facial_features):
-                    logger.info(f"Skipping and removing pair ({pic_a_id}, {pic_b_id}): facial_features is empty string (no face found).")
+                if is_empty_features(pic_a.facial_features) or is_empty_features(
+                    pic_b.facial_features
+                ):
+                    logger.info(
+                        f"Skipping and removing pair ({pic_a_id}, {pic_b_id}): facial_features is empty string (no face found)."
+                    )
                     pairs_to_remove.append((pic_a_id, pic_b_id))
                     continue
                 pending_pairs.append((pic_a_id, pic_b_id, pic_a, pic_b))
@@ -251,8 +257,12 @@ class LikenessWorker(BaseWorker):
                     pairs_to_remove,
                 )
             ).result()
-            logger.info(f"Removed pairs from work queue (no face found): {pairs_to_remove}")
-        logger.info(f"Pending pairs to process this batch: {[(p[0], p[1]) for p in pending_pairs]}")
+            logger.info(
+                f"Removed pairs from work queue (no face found): {pairs_to_remove}"
+            )
+        logger.info(
+            f"Pending pairs to process this batch: {[(p[0], p[1]) for p in pending_pairs]}"
+        )
         return pending_pairs
 
     def _process_batches_for_facial_likeness(self, pending_pairs):
@@ -277,9 +287,7 @@ class LikenessWorker(BaseWorker):
                 np.frombuffer(pic.facial_features, dtype=np.float32)
                 for pic in pic_b_list
             ]
-            likeness_values = PictureQuality.batch_likeness_scores(
-                features_a, features_b
-            )
+            likeness_values = Quality.batch_likeness_scores(features_a, features_b)
             likeness_scores = [
                 (item[0], item[1], float(likeness), "cosine")
                 for item, likeness in zip(batch, likeness_values)
@@ -318,7 +326,9 @@ class LikenessWorker(BaseWorker):
                 "DELETE FROM likeness_work_queue WHERE picture_id_a = ? AND picture_id_b = ?",
                 all_processed_pairs,
             )
-            logger.info(f"Removed processed pairs from work queue: {all_processed_pairs}")
+            logger.info(
+                f"Removed processed pairs from work queue: {all_processed_pairs}"
+            )
             conn.commit()
 
         self._db.submit_task(

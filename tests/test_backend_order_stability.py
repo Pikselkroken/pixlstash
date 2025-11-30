@@ -7,7 +7,6 @@ import tempfile
 import os
 from fastapi.testclient import TestClient
 from pixlvault.server import Server
-from pixlvault.pictures import Pictures
 
 BACKEND_URL = "http://localhost:9537"
 
@@ -16,9 +15,8 @@ BACKEND_URL = "http://localhost:9537"
     "params",
     [
         {},
-        {"sort": "ORDER BY score DESC"},
-        {"primary_character_id": ""},
-        {"sort": "ORDER BY created_at ASC"},
+        {"sort": "score DESC"},
+        {"sort": "created_at asc"},
     ],
 )
 def test_order_stability(params):
@@ -26,9 +24,14 @@ def test_order_stability(params):
     For each set of parameters, repeatedly query the backend and check that the returned image IDs are always in the same order.
     """
     with tempfile.TemporaryDirectory() as temp_dir:
-        Pictures.NUM_LIKENESS_THREADS = 1
+        image_root = os.path.join(temp_dir, "images")
+        os.makedirs(image_root, exist_ok=True)
         config_path = os.path.join(temp_dir, "config.json")
-        config = Server.create_config(default_device="cpu")
+        config = Server.create_config(
+            default_device="cpu",
+            image_roots=[image_root],
+            selected_image_root=image_root,
+        )
         with open(config_path, "w") as f:
             f.write(json.dumps(config, indent=2))
         server_config_path = os.path.join(temp_dir, "server-config.json")
@@ -40,7 +43,7 @@ def test_order_stability(params):
 
             for i in range(0, 3):
                 time.sleep(random.uniform(0.01, 0.05))
-                resp = client.get("/pictures", params={**params, "info": "true"})
+                resp = client.get("/pictures", params={**params})
                 assert resp.status_code == 200, (
                     f"Backend returned {resp.status_code} for params {params}"
                 )

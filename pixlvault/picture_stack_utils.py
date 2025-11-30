@@ -1,9 +1,9 @@
 from typing import List
-from pixlvault.picture import PictureModel
+from pixlvault.db_models import Picture
 from pixlvault.picture_utils import PictureUtils
 
 
-def picture_order_key(pic: PictureModel):
+def picture_order_key(pic: Picture):
     """
     Key for ordering pictures in a likeness stack:
     - Higher resolution (width*height) first
@@ -13,18 +13,15 @@ def picture_order_key(pic: PictureModel):
     if not pic.height or not pic.width:
         pic.width, pic.height, _ = PictureUtils.load_metadata(pic.file_path)
     resolution = (pic.width * pic.height) if pic.width and pic.height else 0
-    sharp = getattr(pic, "sharpness", -1)
-    if isinstance(sharp, bytes):
-        try:
-            sharp = float(sharp.decode())
-        except Exception:
-            sharp = -1.0
-    noise = getattr(pic, "noise_level", 1e9)
-    # Sort by highest resolution, highest sharpness, lowest noise
+
+    quality = pic.quality
+    sharp = quality.sharpness if quality and quality.sharpness is not None else 0.0
+    noise = quality.noise_level if quality and quality.noise_level is not None else 1.0
+
     return (-resolution, -sharp, noise)
 
 
-def order_stack_pictures(pictures: List[PictureModel]) -> List[PictureModel]:
+def order_stack_pictures(pictures: List[Picture]) -> List[Picture]:
     """
     Return pictures sorted by best-to-worst (resolution, sharpness, noise).
     """
