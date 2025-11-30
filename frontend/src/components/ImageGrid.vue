@@ -833,7 +833,6 @@ watch(
     () => props.selectedSet,
     () => props.searchQuery,
     () => props.selectedSort,
-    () => props.mediaTypeFilter,
   ],
   () => {
     // Reset loaded ranges and thumbnails when filters change
@@ -845,6 +844,18 @@ watch(
     fetchTotalImageCount().then(() => {
       updateVisibleThumbnails();
     });
+  }
+);
+
+watch(
+  [
+    () => props.mediaTypeFilter,
+  ],
+  () => {
+    // Reset loaded ranges and thumbnails when filters change
+    loadedRanges.value = [];
+    selectedImageIds.value = [];
+    lastSelectedIndex = null;
   }
 );
 
@@ -910,7 +921,8 @@ const gridImagesToRender = computed(() => {
       if (!img) return false;
       const name = img.filename || img.name || img.id || "";
       const format = (img.format || "").toLowerCase();
-      return isSupportedImageFile(name) || isSupportedImageFile(format);
+      const result = isSupportedImageFile(name) || isSupportedImageFile(format);
+      return result;
     });
   } else if (props.mediaTypeFilter === "videos") {
     filtered = filtered.filter((img) => {
