@@ -7,7 +7,7 @@ from platformdirs import user_config_dir
 from pixlvault.logging import setup_logging
 from pixlvault.server import Server
 
-APP_NAME = "pixelurgy-vault"
+APP_NAME = "pixlvault"
 CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "config.json")
 SERVER_CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "server-config.json")
 
