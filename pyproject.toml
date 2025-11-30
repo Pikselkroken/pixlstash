@@ -32,7 +32,8 @@ dependencies = [
     "tqdm",
     "einops",
     "sentence_transformers",
-    "spacy"
+    "spacy",
+    "pillow-heif"
 ]
 
 [project.optional-dependencies]

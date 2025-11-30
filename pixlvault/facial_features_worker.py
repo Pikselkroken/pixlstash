@@ -24,6 +24,7 @@ class FacialFeaturesWorker(BaseWorker):
         self, db_connection, picture_tagger: PictureTagger, characters: Characters
     ):
         super().__init__(db_connection, picture_tagger, characters)
+        self._skip_pictures = set()
         self._last_time_insightface_was_needed = None
 
     def worker_type(self) -> WorkerType:
@@ -242,14 +243,14 @@ class FacialFeaturesWorker(BaseWorker):
             # Skip it regardless of whether we succeed or fail
             self._skip_pictures.add(pic.id)
 
-            if self._facial_features_worker_stop.is_set():
+            if self._stop.is_set():
                 return False, bboxes_updated
 
             try:
                 file_path = pic.file_path
                 ext = os.path.splitext(file_path)[1].lower()
                 faces = []
-                if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+                if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"]:
                     img = cv2.imread(file_path)
                     if img is not None:
                         faces = self._insightface_app.get(img)

@@ -21,7 +21,7 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_path = str(self.images[idx])
         ext = os.path.splitext(img_path)[1].lower()
-        if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+        if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"]:
             try:
                 image = Image.open(img_path).convert("RGB")
                 image = self._preprocess_image(image)

@@ -71,7 +71,6 @@ def get_sort_mechanisms():
 class Pictures:
     def __init__(self, db, characters=None, device=None):
         self._db = db
-        self._skip_pictures = set()
         self._characters = characters  # Should be a Characters manager or None
         # Pass device to PictureTagger (default: None lets PictureTagger auto-detect)
         self._device = device
@@ -83,7 +82,7 @@ class Pictures:
         self._workers = {}
 
         for worker_type in WorkerType.all():
-            logger.warning(f"Creating worker of type: {worker_type}")
+            logger.debug(f"Creating worker of type: {worker_type}")
             self._workers[worker_type] = WorkerRegistry.create_worker(
                 worker_type, self._db, self._picture_tagger, self._characters
             )

@@ -1,3 +1,5 @@
+# For EXIF extraction in picture_utils.py
+piexif
 # For testing (used by test_server.py etc)
 httpx
 open_clip_torch
@@ -24,3 +26,4 @@ tqdm
 einops
 spacy
 sentence_transformers
+pillow-heif

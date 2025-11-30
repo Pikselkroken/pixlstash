@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import Body, FastAPI, File, Form, Request, UploadFile, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pillow_heif import register_heif_opener
 from PIL import Image
 from rapidfuzz import fuzz
 from typing import List
@@ -110,6 +111,8 @@ class Server:
             "Creating Vault instance with image root: "
             + str(self._config["selected_image_root"])
         )
+
+        register_heif_opener()
 
         self.vault = Vault(
             image_root=self._config["selected_image_root"],
