@@ -45,11 +45,12 @@ class SortMechanism(str, Enum):
     FORMAT_ASC = "format asc"
 
     # List of available sorting mechanisms for API
-    def all():
+    @classmethod
+    def all(cls):
         """Return a list of available sort mechanisms as dicts for API consumption."""
         return [
             {"name": sort.name, "field": sort.value[0], "descending": sort.value[1]}
-            for sort in SortMechanism
+            for sort in cls
         ]
 
 

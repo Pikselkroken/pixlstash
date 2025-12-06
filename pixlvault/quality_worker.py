@@ -46,7 +46,7 @@ class QualityWorker(BaseWorker):
                     result = session.exec(
                         select(Picture)
                         .outerjoin(Quality, Quality.picture_id == Picture.id)
-                        .where(Quality.id is None)
+                            .where(Quality.id.is_(None))
                         .order_by(Picture.format, Picture.width, Picture.height)
                     )
                     pics = result.all()
@@ -216,7 +216,7 @@ class FaceQualityWorker(BaseWorker):
                         select(Face, Picture)
                         .join(Picture, Face.picture_id == Picture.id)
                         .outerjoin(Quality, Quality.picture_id == Picture.id)
-                        .where(Quality.id is None)
+                        .where(Quality.id.is_(None))
                         .order_by(Picture.format, Picture.width, Picture.height)
                     )
                     result = session.exec(statement)
@@ -253,9 +253,6 @@ class FaceQualityWorker(BaseWorker):
                             logger.warning(
                                 "[FACE QUALITY] No quality updates calculated."
                             )
-
-                else:
-                    logger.info("[FACE QUALITY] No face quality updates needed.")
             except Exception as e:
                 import traceback
 

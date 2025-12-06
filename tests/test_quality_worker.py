@@ -85,7 +85,7 @@ def test_quality_worker_face_metrics():
 
 def test_quality_worker_end_to_end():
     """
-    End-to-end: QualityWorker should update face quality metrics in picture_faces (expected to fail until worker is fixed).
+    End-to-end: QualityWorker should update face quality metrics in picture_faces
     """
     with tempfile.TemporaryDirectory() as temp_dir:
         image_root = os.path.join(temp_dir, "images")
