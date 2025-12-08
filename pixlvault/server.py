@@ -1203,6 +1203,158 @@ class Server:
                 "min_group_size": min_group_size,
             }
 
+        @self.api.post("/pictures/thumbnails")
+        async def get_thumbnails(payload: dict = Body(...)):
+            ids = payload.get("ids", [])
+            if not isinstance(ids, list):
+                raise HTTPException(status_code=400, detail="'ids' must be a list")
+
+            pics = self.vault.db.run_task(
+                lambda session: Picture.find(
+                    session, id=ids, select_fields=["id", "thumbnail"]
+                )
+            )
+            results = {}
+            for pic in pics:
+                try:
+                    thumbnail_bytes = pic.thumbnail
+                    results[pic.id] = base64.b64encode(thumbnail_bytes).decode("utf-8")
+                except KeyError:
+                    logger.error(
+                        f"Picture not found for id={pic.id} (thumbnail request)"
+                    )
+                    results[pic.id] = None
+            response = JSONResponse(results)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+
+        @self.api.get("/pictures/export")
+        async def export_pictures_zip(
+            request: Request,
+            query: str = Query(None),
+            set_id: int = Query(None),
+            sort: str = Query(None),
+            threshold: float = Query(0.0),
+        ):
+            """
+            Export pictures matching the filters as a zip file.
+            Uses same filter logic as /pictures endpoint, but returns a zip.
+            """
+            import zipfile
+            from fastapi.responses import StreamingResponse
+            from collections import defaultdict
+            from pixlvault.db_models import (
+                Picture,
+                PictureSet,
+                PictureSetMember,
+                SortMechanism,
+            )
+
+            query_params = dict(request.query_params)
+            query_params.pop("query", None)
+            query_params.pop("set_id", None)
+            query_params.pop("sort", None)
+            query_params.pop("threshold", None)
+
+            # Convert tags to list if present
+            if "tags" in query_params and isinstance(query_params["tags"], str):
+                try:
+                    query_params["tags"] = json.loads(query_params["tags"])
+                except Exception:
+                    query_params["tags"] = [query_params["tags"]]
+
+            pics = []
+            if set_id is not None:
+                # Fetch picture IDs in set, then fetch Picture objects
+                def fetch_members(session, set_id):
+                    members = session.exec(
+                        select(PictureSetMember).where(
+                            PictureSetMember.set_id == set_id
+                        )
+                    ).all()
+                    picture_ids = [m.picture_id for m in members]
+                    if not picture_ids:
+                        return []
+                    return Picture.find(session, id=picture_ids)
+
+                pics = self.vault.db.run_task(fetch_members, set_id)
+            elif query:
+                import re
+
+                def find_by_text(session, query):
+                    words = re.findall(r"\b\w+\b", query.lower())
+                    preprocessed_query_words = self.vault.preprocess_query_words(words)
+                    query_full = "A photo of " + query
+                    return [
+                        r[0]
+                        for r in Picture.semantic_search(
+                            session,
+                            query_full,
+                            preprocessed_query_words,
+                            text_to_embedding=self.vault.generate_text_embedding,
+                            offset=0,
+                            limit=sys.maxsize,
+                            threshold=threshold,
+                            select_fields=Picture.metadata_fields(),
+                        )
+                    ]
+
+                pics = self.vault.db.run_task(find_by_text, query)
+            else:
+                # Fallback to filter-based search
+                pics = self.vault.db.run_task(
+                    Picture.find,
+                    sort=SortMechanism(sort.lower()) if sort else None,
+                    offset=0,
+                    limit=sys.maxsize,
+                    select_fields=Picture.metadata_fields(),
+                    **query_params,
+                )
+
+            # Create zip file in memory
+            zip_buffer = io.BytesIO()
+            char_groups = defaultdict(list)
+            for pic in pics:
+                char_groups["image"].append(pic)
+
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for char_name, group in char_groups.items():
+                    for idx, pic in enumerate(group, start=1):
+                        if (
+                            hasattr(pic, "file_path")
+                            and pic.file_path
+                            and os.path.exists(pic.file_path)
+                        ):
+                            ext = os.path.splitext(pic.file_path)[1]
+                            arcname = f"{char_name}_{idx:05d}{ext}"
+                            zip_file.write(pic.file_path, arcname=arcname)
+
+            zip_buffer.seek(0)
+
+            # Generate filename based on filters
+            filename_parts = []
+            if set_id is not None:
+
+                def get_set(session, set_id):
+                    return session.get(PictureSet, set_id)
+
+                picture_set = self.vault.db.run_task(get_set, set_id)
+                if picture_set:
+                    filename_parts.append(picture_set.name.replace(" ", "_"))
+            if query:
+                filename_parts.append(f"search_{query[:20]}")
+            if "tags" in query_params:
+                filename_parts.append("tagged")
+
+            filename = "_".join(filename_parts) if filename_parts else "pictures"
+            filename = f"{filename}_{len(pics)}_images.zip"
+
+            return StreamingResponse(
+                io.BytesIO(zip_buffer.getvalue()),
+                media_type="application/zip",
+                headers={"Content-Disposition": f"attachment; filename={filename}"},
+            )
+
         @self.api.get("/pictures/{id}")
         async def get_picture(id: str):
             if not isinstance(id, str):
@@ -1459,106 +1611,3 @@ class Server:
                     **query_params,
                 )
                 return [pic.to_serializable_dict() for pic in pics]
-
-        @self.api.post("/pictures/thumbnails")
-        async def get_thumbnails(payload: dict = Body(...)):
-            ids = payload.get("ids", [])
-            if not isinstance(ids, list):
-                raise HTTPException(status_code=400, detail="'ids' must be a list")
-
-            pics = self.vault.db.run_task(
-                lambda session: Picture.find(
-                    session, id=ids, select_fields=["id", "thumbnail"]
-                )
-            )
-            results = {}
-            for pic in pics:
-                try:
-                    thumbnail_bytes = pic.thumbnail
-                    results[pic.id] = base64.b64encode(thumbnail_bytes).decode("utf-8")
-                except KeyError:
-                    logger.error(
-                        f"Picture not found for id={pic.id} (thumbnail request)"
-                    )
-                    results[pic.id] = None
-            response = JSONResponse(results)
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
-
-        @self.api.get("/pictures/export")
-        async def export_pictures_zip(
-            request: Request,
-            query: str = Query(None),
-            set_id: int = Query(None),
-        ):
-            """
-            Export pictures matching the filters as a zip file.
-            Uses same filter logic as /pictures endpoint.
-            """
-            import zipfile
-            from fastapi.responses import StreamingResponse
-
-            query_params = dict(request.query_params)
-            query_params.pop("query", None)
-            query_params.pop("set_id", None)
-
-            # Convert tags to list if present
-            if "tags" in query_params and isinstance(query_params["tags"], str):
-                try:
-                    query_params["tags"] = json.loads(query_params["tags"])
-                except Exception:
-                    query_params["tags"] = [query_params["tags"]]
-
-            # Handle picture set
-            if set_id is not None:
-                picture_ids = self.vault.picture_sets.get_pictures_in_set(set_id)
-                pics = []
-                for pid in picture_ids:
-                    try:
-                        pics.append(self.vault.pictures[pid])
-                    except KeyError:
-                        pass
-            # Handle semantic search
-            elif query:
-                pics = self.vault.pictures.find_by_text(query, top_n=sys.maxsize)
-            else:
-                pics = self.vault.pictures.find(**query_params)
-
-            # Create zip file in memory
-            zip_buffer = io.BytesIO()
-            # Group pictures by character name (or 'image' for unassigned)
-            from collections import defaultdict
-
-            char_groups = defaultdict(list)
-            for pic in pics:
-                char_groups["image"].append(pic)
-
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                for char_name, group in char_groups.items():
-                    for idx, pic in enumerate(group, start=1):
-                        if os.path.exists(pic.file_path):
-                            ext = os.path.splitext(pic.file_path)[1]
-                            arcname = f"{char_name}_{idx:05d}{ext}"
-                            zip_file.write(pic.file_path, arcname=arcname)
-
-            zip_buffer.seek(0)
-
-            # Generate filename based on filters
-            filename_parts = []
-            if set_id is not None:
-                picture_set = self.vault.picture_sets.get(set_id)
-                if picture_set:
-                    filename_parts.append(picture_set.name.replace(" ", "_"))
-            if query:
-                filename_parts.append(f"search_{query[:20]}")
-            if "tags" in query_params:
-                filename_parts.append("tagged")
-
-            filename = "_".join(filename_parts) if filename_parts else "pictures"
-            filename = f"{filename}_{len(pics)}_images.zip"
-
-            return StreamingResponse(
-                io.BytesIO(zip_buffer.getvalue()),
-                media_type="application/zip",
-                headers={"Content-Disposition": f"attachment; filename={filename}"},
-            )

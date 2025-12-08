@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 from pixlvault.db_models.picture import Picture
 from pixlvault.logging import get_logger
+from pixlvault.picture_utils import PictureUtils
 from pixlvault.worker_registry import WorkerType
 from pixlvault.server import Server
 
@@ -379,15 +380,58 @@ def test_pictures_thumbnails():
 
 def test_pictures_export():
     """Test /pictures/export endpoint returns 200 and zip content."""
+    import zipfile
+
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path, server_config_path) as server:
+            server.vault.import_default_data(add_tagger_test_images=True)
             client = TestClient(server.api)
             resp = client.get("/pictures/export")
-            assert resp.status_code == 200
+            assert resp.status_code == 200, f"Error: {resp.text}"
             assert resp.headers["content-type"] == "application/zip"
             assert resp.content[:2] == b"PK"  # ZIP file signature
+
+            # Extract zip and compare SHA, file size, format, width, height
+            with zipfile.ZipFile(BytesIO(resp.content)) as zf:
+                zip_names = set(zf.namelist())
+                # Get expected metadata from the database
+                pictures = server.vault.db.run_task(Picture.find)
+
+                assert len(pictures) == len(zip_names), (
+                    f"Expected {len(pictures)} pictures in export, found {len(zip_names)} in zip"
+                )
+                for fname in zip_names:
+                    found = False
+                    data = None
+                    with zf.open(fname) as f:
+                        data = f.read()
+                        sha = PictureUtils.calculate_hash_from_bytes(data)
+
+                    # For file in the zip find a matching picture by SHA
+                    for pic in pictures:
+                        if sha == pic.pixel_sha:
+                            found = True
+                            # Compare file size
+                            assert len(data) == pic.size_bytes, (
+                                f"Size mismatch for {fname}: {len(data)} != {pic.size_bytes}"
+                            )
+                            # Compare format, width, height
+                            img = Image.open(BytesIO(data))
+                            assert img.format.lower() == (pic.format or "").lower(), (
+                                f"Format mismatch for {fname}: {img.format} != {pic.format}"
+                            )
+                            assert img.width == pic.width, (
+                                f"Width mismatch for {fname}: {img.width} != {pic.width}"
+                            )
+                            assert img.height == pic.height, (
+                                f"Height mismatch for {fname}: {img.height} != {pic.height}"
+                            )
+                            break
+                    assert found, (
+                        f"No database picture matches exported SHA for picture {fname}"
+                    )
     gc.collect()
 
 
