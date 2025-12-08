@@ -53,7 +53,7 @@ def main():
     )
     args = parser.parse_args()
 
-    server_config = Server.init_server_config(args.server_config)
+    server_config = Server._init_server_config(args.server_config)
     log_file = server_config.get("log_file")
     if log_file:
         log_dir = os.path.dirname(log_file)

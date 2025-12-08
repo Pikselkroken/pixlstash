@@ -74,9 +74,7 @@ class Picture(SQLModel, table=True):
     )
     score: Optional[int] = None
     pixel_sha: Optional[str] = Field(default=None, index=True)
-    reference_picture_set_id: Optional[int] = Field(
-        default=None, foreign_key="pictureset.id"
-    )
+
     # Relationships
     primary_character: Optional["Character"] = Relationship()
     quality: Optional["Quality"] = Relationship(back_populates="picture")
@@ -89,8 +87,8 @@ class Picture(SQLModel, table=True):
         link_model=Face,
         sa_relationship_kwargs={"overlaps": "faces,picture,character"},
     )
-    reference_picture_set: Optional["PictureSet"] = Relationship(
-        back_populates="reference_pictures", link_model=PictureSetMember
+    picture_sets: List["PictureSet"] = Relationship(
+        back_populates="members", link_model=PictureSetMember
     )
 
     class Config:
@@ -243,6 +241,7 @@ class Picture(SQLModel, table=True):
     def find(
         cls,
         session,
+        *,
         sort: Optional[SortMechanism] = None,
         offset: int = 0,
         limit: int = sys.maxsize,
@@ -329,7 +328,7 @@ class Picture(SQLModel, table=True):
         """
         Returns a dict suitable for JSON serialization, encoding all large binary fields as base64 if present.
         """
-        d = self.dict() if hasattr(self, "dict") else dict(self)
+        d = self.model_dump()
         for field in self.large_binary_fields():
             val = d.get(field, None)
             if val is not None:

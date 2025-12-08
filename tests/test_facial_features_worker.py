@@ -1,3 +1,6 @@
+from PIL import Image
+import io
+
 import gc
 import logging
 import sys
@@ -5,7 +8,7 @@ import time
 import tempfile
 import os
 
-from pixlvault.db_models import Face, Picture
+from pixlvault.db_models import Character, Face, Picture
 from pixlvault.server import Server
 from pixlvault.logging import get_logger
 from pixlvault.worker_registry import WorkerType
@@ -26,7 +29,7 @@ def wait_for_worker_completion(worker, timeout=60):
     return False
 
 
-def test_facial_features_worker_tagging():
+def test_facial_features():
     with tempfile.TemporaryDirectory() as temp_dir:
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
@@ -55,15 +58,15 @@ def test_facial_features_worker_tagging():
                 )
                 futures.append(
                     server.vault.get_worker_future(
-                        WorkerType.FACIAL_FEATURES, Picture, pic.id, "faces"
+                        WorkerType.FACE, Picture, pic.id, "faces"
                     )
                 )
 
-            server.vault.start_workers({WorkerType.FACIAL_FEATURES})
-
+            server.vault.start_workers({WorkerType.FACE})
             # Wait for all face detection futures to complete
             results = [future.result(timeout=60) for future in futures]
             assert all(results), "Not all pictures were processed in time"
+            server.vault.stop_workers({WorkerType.FACE})
 
             # Now, for each TaggerTest* picture, issue and wait for facial feature futures for each face
             feature_futures = []
@@ -82,25 +85,29 @@ def test_facial_features_worker_tagging():
                                 WorkerType.FACIAL_FEATURES, Face, face.id, "features"
                             )
                         )
-                        feature_future_info.append((pic.description, face.face_index, face.id))
-            logger.info("Waiting for features for the following faces:")
-            for desc, idx, fid in feature_future_info:
-                logger.info(f"  Picture: {desc}, face_index: {idx}, face_id: {fid}")
-            # Wait for all feature futures to complete
+                        feature_future_info.append(
+                            (pic.description, face.face_index, face.id)
+                        )
+
+            server.vault.start_workers({WorkerType.FACIAL_FEATURES})
+
+            # Print only essential diagnostics
             for (desc, idx, fid), future in zip(feature_future_info, feature_futures):
-                logger.info(f"#### Waiting for features: Picture '{desc}', face_index {idx}, face_id {fid}")
+                print(
+                    f"Waiting for features: Picture '{desc}', face_index {idx}, face_id {fid}"
+                )
                 result = future.result(timeout=60)
-                logger.info(f"#### Done: Picture '{desc}', face_index {idx}, face_id {fid}, result: {result}")
+                # Only print if result is not True (for debugging)
+                if not result:
+                    print(
+                        f"FAILED: Picture '{desc}', face_index {idx}, face_id {fid}, result: {result}"
+                    )
 
             # Now run assertions as before
             pics = server.vault.db.run_task(lambda session: Picture.find(session))
             assert len(pics) > 0, "No pictures found in vault"
             for pic in pics:
                 if pic.description and pic.description.startswith("TaggerTest"):
-                    logger.info(
-                        "Checking picture %s with description %s"
-                        % (pic.file_path, pic.description)
-                    )
                     faces = server.vault.db.run_task(
                         lambda session: Face.find(session, picture_id=pic.id)
                     )
@@ -129,7 +136,7 @@ def test_facial_features_worker_tagging():
                         logger.info(
                             f"{pic.description} face_index={face.face_index} has bbox: {face.bbox}"
                         )
-                        assert face.face_index >= 0 , (
+                        assert face.face_index >= 0, (
                             f"Face index should be non-negative for {pic.description} face_index={face.face_index}"
                         )
 
@@ -141,3 +148,111 @@ def test_facial_features_worker_tagging():
                         )
             server.vault.stop_workers({WorkerType.FACIAL_FEATURES})
     gc.collect()
+
+
+def test_character_thumbnail_endpoint():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        image_root = os.path.join(temp_dir, "images")
+        os.makedirs(image_root, exist_ok=True)
+        config_path = os.path.join(temp_dir, "config.json")
+        config = Server.create_config(
+            default_device="cpu",
+            image_roots=[image_root],
+            selected_image_root=image_root,
+        )
+        with open(config_path, "w") as f:
+            import json
+
+            f.write(json.dumps(config, indent=2))
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(config_path, server_config_path) as server:
+            server.vault.import_default_data(add_tagger_test_images=True)
+
+            # Check face counts for TaggerTest*.png
+            pics = server.vault.db.run_task(lambda session: Picture.find(session))
+
+            futures = []
+            for pic in pics:
+                logger.info(
+                    "Scheduling watch for picture %s with description %s"
+                    % (pic.file_path, pic.description)
+                )
+                futures.append(
+                    server.vault.get_worker_future(
+                        WorkerType.FACE, Picture, pic.id, "faces"
+                    )
+                )
+
+            server.vault.start_workers({WorkerType.FACE, WorkerType.FACIAL_FEATURES})
+            # Wait for all face detection futures to complete
+            results = [future.result(timeout=60) for future in futures]
+            assert all(results), "Not all pictures were processed in time"
+            server.vault.stop_workers({WorkerType.FACE, WorkerType.FACIAL_FEATURES})
+            # Assign the default character to the largest face in each picture
+            chars = server.vault.db.run_task(lambda session: Character.find(session))
+            char = chars[0]
+            pics = server.vault.db.run_task(lambda session: Picture.find(session))
+            for pic in pics:
+                faces = server.vault.db.run_task(
+                    lambda session: Face.find(session, picture_id=pic.id)
+                )
+                if not faces:
+                    continue
+                # Find the largest face by area
+                largest_face = max(
+                    faces, key=lambda f: (f.width or 0) * (f.height or 0)
+                )
+
+                def assign_char(session, face_id, char_id):
+                    face = session.get(Face, face_id)
+                    face.character_id = char_id
+                    session.add(face)
+                    session.commit()
+
+                server.vault.db.run_task(assign_char, largest_face.id, char.id)
+
+            # Now get the character with faces
+            chars = server.vault.db.run_task(
+                lambda session: Character.find(session, select_fields=["faces"])
+            )
+            char = None
+            for c in chars:
+                if c.faces:
+                    char = c
+                    break
+            assert char is not None, "No character with faces found"
+
+            # Get the thumbnail via the endpoint
+            from fastapi.testclient import TestClient
+
+            client = TestClient(server.api)
+            response = client.get(f"/characters/{char.id}/thumbnail")
+            assert response.status_code == 200, (
+                f"Thumbnail endpoint failed: {response.status_code}"
+            )
+            assert response.headers["content-type"] == "image/png"
+
+            # Load the image from response
+            thumb_img = Image.open(io.BytesIO(response.content))
+            # Get the best face and crop from the database
+            best_face = sorted(
+                char.faces, key=lambda f: (f.likeness or 0), reverse=True
+            )[0]
+            # Query the picture for this face (avoid DetachedInstanceError)
+            best_pic = server.vault.db.run_task(
+                lambda session: session.get(Picture, best_face.picture_id)
+            )
+            from pixlvault.picture_utils import PictureUtils
+
+            bbox = best_face.bbox
+            crop_img = PictureUtils.crop_face_bbox_exact(best_pic.file_path, bbox)
+            assert crop_img.size == thumb_img.size, (
+                f"Thumbnail size {thumb_img.size} does not match crop size {crop_img.size}"
+            )
+            # Save both images for manual inspection
+            outdir = os.path.join(
+                os.path.dirname(__file__), "..", "tmp", "face_thumbnails"
+            )
+            os.makedirs(outdir, exist_ok=True)
+            thumb_img.save(os.path.join(outdir, f"character_{char.id}_endpoint.png"))
+            crop_img.save(os.path.join(outdir, f"character_{char.id}_dbcrop.png"))

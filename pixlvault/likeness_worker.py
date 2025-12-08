@@ -92,11 +92,11 @@ class LikenessWorker(BaseWorker):
             def write_results(session):
                 if likeness_results:
                     session.add_all(likeness_results)
-                    logger.info(f"Inserted {len(likeness_results)} likeness scores.")
+                    logger.debug(f"Inserted {len(likeness_results)} likeness scores.")
                 if to_remove:
                     for pair in to_remove:
                         session.delete(pair)
-                    logger.info(
+                    logger.debug(
                         f"Removed {len(to_remove)} processed pairs from work queue."
                     )
                 session.commit()

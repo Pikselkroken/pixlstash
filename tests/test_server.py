@@ -83,12 +83,11 @@ def test_esmeralda_vault_character_and_logo():
             futures = []
             for pic in pics:
                 future = server.vault.get_worker_future(
-                    WorkerType.FACIAL_FEATURES, Picture, pic.id, "faces"
+                    WorkerType.FACE, Picture, pic.id, "faces"
                 )
                 futures.append(future)
 
-            server.vault.start_workers({WorkerType.FACIAL_FEATURES})
-
+            server.vault.start_workers({WorkerType.FACE})
             for future in futures:
                 result_id = future.result(timeout=60)
                 logging.info(f"Processed picture ID: {result_id}")
@@ -160,6 +159,7 @@ def test_create_and_get_default_character():
             assert resp.status_code == 200
             data = resp.json()
             assert data["status"] == "success"
+            logger.info("Created character: {}".format(data["character"]))
             char_id = data["character"]["id"]
             assert data["character"]["name"] == char_name
             assert data["character"]["description"] == char_desc
@@ -168,6 +168,7 @@ def test_create_and_get_default_character():
             resp2 = client.get(f"/characters/{char_id}")
             assert resp2.status_code == 200
             char = resp2.json()
+            logger.info("List object?? " + str(char))
             assert char["id"] == char_id
             assert char["name"] == char_name
             assert char["description"] == char_desc
@@ -214,6 +215,7 @@ def test_upload_existing_picture():
             fetch_r2 = client.get(f"/pictures/{picture_id_2}/metadata")
             assert 200 == fetch_r2.status_code, "Error: " + fetch_r2.text
             fetched_picture_2 = fetch_r2.json()
+            logger.info(f"Fetched picture 2 metadata: {fetched_picture_2}")
             assert fetched_picture_2["id"] == picture_id_2
 
             # Upload the first picture again. Should get a 400
@@ -235,6 +237,157 @@ def test_upload_existing_picture():
                 else:
                     assert result["status"] == "success"  # New picture
 
+    gc.collect()
+
+
+def test_favicon():
+    """Test /favicon.ico endpoint returns 200 and PNG content."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(config_path, server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.get("/favicon.ico")
+            assert resp.status_code == 200
+            assert resp.headers["content-type"] == "image/vnd.microsoft.icon"
+            assert resp.content[:4] == b"\x00\x00\x01\x00"  # ICO file signature
+    gc.collect()
+
+
+def test_characters_summary():
+    """Test /characters/summary endpoint returns 200 and valid structure."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
+        image_files = [
+            f
+            for f in os.listdir(src_dir)
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        ]
+
+        with Server(config_path, server_config_path) as server:
+            server.vault.import_default_data()
+            client = TestClient(server.api)
+
+            # Get Esmeralda Vault character ID
+            resp = client.get("/characters")
+            assert resp.status_code == 200
+            chars = resp.json()
+            esmeralda_id = None
+            for c in chars:
+                if c.get("name") == "Esmeralda Vault":
+                    esmeralda_id = c["id"]
+                    break
+            assert esmeralda_id is not None, "Esmeralda Vault character not found"
+
+            # Upload all images as new pictures
+            picture_ids = []
+            face_futures = []
+            for fname in image_files:
+                with open(os.path.join(src_dir, fname), "rb") as f:
+                    files = [("file", (fname, f.read(), "image/png"))]
+                    r = client.post("/pictures", files=files)
+                assert r.status_code == 200
+                resp = r.json()
+                assert resp["results"][0]["status"] == "success"
+                picture_ids.append(resp["results"][0]["picture_id"])
+                face_futures.append(
+                    server.vault.get_worker_future(
+                        WorkerType.FACE, Picture, picture_ids[-1], "faces"
+                    )
+                )
+
+            server.vault.start_workers({WorkerType.FACE})
+
+            # Wait for facial features to be processed and associate Esmeralda Vault with largest face in each picture
+            for idx, future in enumerate(face_futures):
+                result_id = future.result(timeout=120)
+                assert result_id == picture_ids[idx], (
+                    f"Facial features processing returned unexpected picture ID {result_id}, expected {picture_ids[idx]}"
+                )
+                pid = picture_ids[idx]
+                faces_resp = client.get(f"/pictures/{pid}/faces")
+                assert faces_resp.status_code == 200
+                faces_data = faces_resp.json().get("faces", [])
+                if not faces_data:
+                    continue
+
+                def face_area(face):
+                    bbox = face.get("bbox")
+                    if bbox and len(bbox) == 4:
+                        return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+                    return 0
+
+                largest_face = max(faces_data, key=face_area)
+                face_id = largest_face.get("id")
+                assert face_id is not None
+                assoc_resp = client.post(
+                    f"/characters/{esmeralda_id}/faces",
+                    json={"face_id": face_id},
+                )
+                assert assoc_resp.status_code == 200
+                assoc_data = assoc_resp.json()
+                assert assoc_data["status"] == "success"
+
+            # Call /characters/summary and check count
+            summary_resp = client.get(f"/characters/{str(esmeralda_id)}/summary")
+            assert summary_resp.status_code == 200
+            summary = summary_resp.json()
+            # Accept dict or list, but check count
+            if isinstance(summary, dict):
+                count = summary.get("image_count")
+            elif isinstance(summary, list):
+                count = len(summary)
+            else:
+                count = None
+            assert count is not None and count >= len(picture_ids), (
+                f"Expected at least {len(picture_ids)} pictures for Esmeralda Vault, got {count}"
+            )
+    gc.collect()
+
+
+def test_pictures_stacks():
+    """Test /pictures/stacks endpoint returns 200 and valid structure."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(config_path, server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.get("/pictures/stacks")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert isinstance(data, dict)
+            assert "stacks" in data
+            assert isinstance(data["stacks"], list)
+    gc.collect()
+
+
+def test_pictures_thumbnails():
+    """Test /pictures/thumbnails endpoint returns 200 and valid structure."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(config_path, server_config_path) as server:
+            client = TestClient(server.api)
+            # Send empty payload for basic test
+            resp = client.post("/pictures/thumbnails", json={"ids": []})
+            assert resp.status_code == 200
+            assert isinstance(resp.json(), dict)
+    gc.collect()
+
+
+def test_pictures_export():
+    """Test /pictures/export endpoint returns 200 and zip content."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = os.path.join(temp_dir, "config.json")
+        server_config_path = os.path.join(temp_dir, "server-config.json")
+        with Server(config_path, server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.get("/pictures/export")
+            assert resp.status_code == 200
+            assert resp.headers["content-type"] == "application/zip"
+            assert resp.content[:2] == b"PK"  # ZIP file signature
     gc.collect()
 
 
@@ -391,7 +544,7 @@ def test_semantic_search():
                 picture_ids.append(resp["results"][0]["picture_id"])
                 face_futures.append(
                     server.vault.get_worker_future(
-                        WorkerType.FACIAL_FEATURES, Picture, picture_ids[-1], "faces"
+                        WorkerType.FACE, Picture, picture_ids[-1], "faces"
                     )
                 )
                 embeddings_futures.append(
@@ -405,6 +558,7 @@ def test_semantic_search():
 
             server.vault.start_workers(
                 {
+                    WorkerType.FACE,
                     WorkerType.DESCRIPTION,
                     WorkerType.TAGGER,
                     WorkerType.TEXT_EMBEDDING,
@@ -444,8 +598,8 @@ def test_semantic_search():
                 )
                 # Associate Esmeralda Vault with this face
                 assoc_resp = client.post(
-                    f"/faces/{face_id}/character",
-                    json={"character_id": esmeralda_id},
+                    f"/characters/{esmeralda_id}/faces",
+                    json={"face_id": face_id},
                 )
                 assert assoc_resp.status_code == 200, (
                     f"Failed to associate face {face_id} with Esmeralda Vault: {assoc_resp.text}"

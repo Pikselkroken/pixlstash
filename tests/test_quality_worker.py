@@ -116,16 +116,16 @@ def test_quality_worker_end_to_end():
             pic_id = r.json()["results"][0]["picture_id"]
 
             future = server.vault.get_worker_future(
-                WorkerType.FACIAL_FEATURES, Picture, pic_id, "faces"
+                WorkerType.FACE, Picture, pic_id, "faces"
             )
 
             # Start facial features worker to detect faces and create bboxes
-            server.vault.start_workers({WorkerType.FACIAL_FEATURES})
+            server.vault.start_workers({WorkerType.FACE})
             (
                 future.result(timeout=60),
                 "FacialFeaturesWorker did not process picture in time",
             )
-            server.vault.stop_workers({WorkerType.FACIAL_FEATURES})
+            server.vault.stop_workers({WorkerType.FACE})
 
             # Debug dump of picture_faces table after face detection
             print("\n--- DEBUG DUMP: picture_faces after face detection ---")

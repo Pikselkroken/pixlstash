@@ -960,7 +960,9 @@ class PictureTagger:
                     face_crops.append(None)
         else:
             for bbox in face_bboxes:
-                crop = PictureUtils.load_and_crop_face_bbox(file_path, bbox)
+                crop = PictureUtils.load_and_crop_square_image_with_face(
+                    file_path, bbox
+                )
                 face_crops.append(crop)
 
         # Try to get a human-friendly description for logging
@@ -970,24 +972,30 @@ class PictureTagger:
 
         for i, crop in enumerate(face_crops):
             if crop is None:
-                logger.warning(f"Face crop is None for picture '{pic_desc}', bbox={face_bboxes[i]}")
+                logger.warning(
+                    f"Face crop is None for picture '{pic_desc}', bbox={face_bboxes[i]}"
+                )
                 facial_features_list.append(None)
                 continue
-            logger.debug(f"Face crop type for picture '{pic_desc}', bbox={face_bboxes[i]}: {type(crop)}")
-            if hasattr(crop, 'size'):
+            logger.debug(
+                f"Face crop type for picture '{pic_desc}', bbox={face_bboxes[i]}: {type(crop)}"
+            )
+            if hasattr(crop, "size"):
                 logger.debug(f"Face crop size: {crop.size}")
             try:
                 img_input = (
                     self._clip_preprocess(crop).unsqueeze(0).to(self._clip_device)
                 )
                 with torch.no_grad():
-                    features = (
-                        self._clip_model.encode_image(img_input).cpu().numpy()[0]
-                    )
-                logger.debug(f"Extracted features for picture '{pic_desc}', bbox={face_bboxes[i]}: {features[:5]}... (shape: {features.shape})")
+                    features = self._clip_model.encode_image(img_input).cpu().numpy()[0]
+                logger.debug(
+                    f"Extracted features for picture '{pic_desc}', bbox={face_bboxes[i]}: {features[:5]}... (shape: {features.shape})"
+                )
                 facial_features_list.append(features)
             except RuntimeError as e:
-                logger.error(f"RuntimeError for picture '{pic_desc}', bbox={face_bboxes[i]}: {e}")
+                logger.error(
+                    f"RuntimeError for picture '{pic_desc}', bbox={face_bboxes[i]}: {e}"
+                )
                 if (
                     ("CUDA out of memory" in str(e))
                     or ("not compatible" in str(e))
@@ -1007,15 +1015,21 @@ class PictureTagger:
                                 .cpu()
                                 .numpy()[0]
                             )
-                        logger.debug(f"Extracted features (CPU fallback) for picture '{pic_desc}', bbox={face_bboxes[i]}: {features[:5]}... (shape: {features.shape})")
+                        logger.debug(
+                            f"Extracted features (CPU fallback) for picture '{pic_desc}', bbox={face_bboxes[i]}: {features[:5]}... (shape: {features.shape})"
+                        )
                         facial_features_list.append(features)
                     except Exception as e2:
-                        logger.error(f"CPU fallback failed for picture '{pic_desc}', bbox={face_bboxes[i]}: {e2}")
+                        logger.error(
+                            f"CPU fallback failed for picture '{pic_desc}', bbox={face_bboxes[i]}: {e2}"
+                        )
                         facial_features_list.append(None)
                 else:
                     facial_features_list.append(None)
             except Exception as e:
-                logger.error(f"Exception for picture '{pic_desc}', bbox={face_bboxes[i]}: {e}")
+                logger.error(
+                    f"Exception for picture '{pic_desc}', bbox={face_bboxes[i]}: {e}"
+                )
                 facial_features_list.append(None)
         return facial_features_list
 

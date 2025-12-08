@@ -1,9 +1,10 @@
 from sqlmodel import Column, ForeignKey, Integer, Relationship, SQLModel, Field
 
-from typing import List, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 
 
 if TYPE_CHECKING:
+    from pixlvault.db_models.character import Character
     from pixlvault.db_models.picture import Picture
 
 
@@ -42,7 +43,11 @@ class PictureSet(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     name: str = Field(default=None, index=True)
     description: str = Field(default=None)
-    reference_pictures: List["Picture"] = Relationship(
-        back_populates="reference_picture_set",
-        link_model=PictureSetMember,
+
+    # Relationships
+    members: List["Picture"] = Relationship(
+        back_populates="picture_sets", link_model=PictureSetMember
+    )
+    reference_character: Optional["Character"] = Relationship(
+        back_populates="reference_picture_set"
     )

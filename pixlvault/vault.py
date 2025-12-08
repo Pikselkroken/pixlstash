@@ -7,14 +7,15 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from .database import DBPriority, VaultDatabase
-from .db_models import MetaData, Character, Picture
+from .db_models import MetaData, Character, Picture, PictureSet
 from .logging import get_logger
 from .picture_tagger import PictureTagger
 from .picture_utils import PictureUtils
 from .worker_registry import WorkerRegistry, WorkerType
 
-# These three import lines are all necessary to register the workers with the WorkerRegistry
+# These import lines are all necessary to register the workers with the WorkerRegistry
 from pixlvault.tag_worker import TagWorker, DescriptionWorker, EmbeddingWorker  # noqa: F401
+from pixlvault.face_extraction_worker import FaceExtractionWorker  # noqa: F401
 from pixlvault.facial_features_worker import FacialFeaturesWorker  # noqa: F401
 from pixlvault.face_likeness_worker import FaceLikenessWorker  # noqa: F401
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
@@ -112,7 +113,9 @@ class Vault:
             face_id_a (int): ID of the first face.
             face_id_b (int): ID of the second face.
         """
-        likeness_worker: FaceLikenessWorker = self._workers.get(WorkerType.FACE_LIKENESS)
+        likeness_worker: FaceLikenessWorker = self._workers.get(
+            WorkerType.FACE_LIKENESS
+        )
         if likeness_worker is None:
             raise ValueError("FaceLikenessWorker is not available in this vault.")
         likeness_worker.queue_pair(face_id_a, face_id_b)
@@ -224,9 +227,18 @@ class Vault:
             session.add(character)
             session.commit()
             session.refresh(character)
-            return character
+            char_id = character.id
+            char_name = character.name
+            # Create reference picture set for this character, using character name
+            reference_set = PictureSet(
+                name="reference_pictures", description=str(char_name)
+            )
+            session.add(reference_set)
+            session.commit()
+            session.refresh(reference_set)
+            return char_id, char_name
 
-        character = self.db.run_task(
+        char_id, char_name = self.db.run_task(
             lambda session: add_character(session, character),
             priority=DBPriority.IMMEDIATE,
         )
@@ -234,7 +246,7 @@ class Vault:
         picture = PictureUtils.create_picture_from_file(
             image_root_path=logo_dest_folder,
             source_file_path=logo_src,
-            primary_character_id=character.id,
+            primary_character_id=char_id,
         )
 
         assert picture.file_path
@@ -264,7 +276,7 @@ class Vault:
                     pic = PictureUtils.create_picture_from_file(
                         image_root_path=logo_dest_folder,
                         source_file_path=src_path,
-                        primary_character_id=character.id,
+                        primary_character_id=char_id,
                     )
                     pic.description = os.path.basename(src_path)
                     assert pic.file_path

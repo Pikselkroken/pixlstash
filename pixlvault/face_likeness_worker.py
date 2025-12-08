@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import time
 from sqlmodel import select
@@ -10,6 +9,7 @@ from pixlvault.db_models.face_likeness_work_queue import FaceLikenessWorkQueue
 from pixlvault.db_models.face_likeness import FaceLikeness
 
 logger = get_logger(__name__)
+
 
 class FaceLikenessWorker(BaseWorker):
     BATCH_SIZE = 5000
@@ -33,23 +33,19 @@ class FaceLikenessWorker(BaseWorker):
                 for pair in pairs:
                     face_ids.add(pair.face_id_a)
                     face_ids.add(pair.face_id_b)
-                faces = session.exec(
-                    select(Face).where(Face.id.in_(face_ids))
-                ).all()
+                faces = session.exec(select(Face).where(Face.id.in_(face_ids))).all()
                 # Filter out sentinel records (face_index == -1)
                 valid_faces = [face for face in faces if face.face_index != -1]
                 face_dict = {face.id: face for face in valid_faces}
-                for fid, face in face_dict.items():
-                    logger.info(f"Face {fid}: features is {'set' if face.features else 'None'}; face_index={face.face_index}")
                 return pairs, face_dict
 
             pending_pairs, face_dict = self._db.run_task(fetch_pending_pairs)
             if not pending_pairs:
-                logger.info("FaceLikenessWorker: No pending pairs. Sleeping...")
+                logger.debug("FaceLikenessWorker: No pending pairs. Sleeping...")
                 self._stop.wait(self.INTERVAL)
                 continue
 
-            logger.info(f"FaceLikenessWorker: Processing {len(pending_pairs)} pairs.")
+            logger.debug(f"FaceLikenessWorker: Processing {len(pending_pairs)} pairs.")
 
             # 2. Do likeness computation outside the session
             likeness_results = []
@@ -73,6 +69,21 @@ class FaceLikenessWorker(BaseWorker):
                     )
                     to_remove.append(pair)
                     continue
+
+                # Fetch and log picture descriptions for both faces before similarity
+                def get_picture_desc(session, pic_id):
+                    from pixlvault.db_models.picture import Picture
+
+                    pics = Picture.find(session, id=pic_id)
+                    if pics and hasattr(pics[0], "description"):
+                        return pics[0].description
+                    return str(pic_id)
+
+                desc_a = self._db.run_task(get_picture_desc, face_a.picture_id)
+                desc_b = self._db.run_task(get_picture_desc, face_b.picture_id)
+                logger.debug(
+                    f"Comparing faces from pictures: A='{desc_a}', B='{desc_b}'"
+                )
                 likeness = self._cosine_similarity(features_a, features_b)
                 likeness_results.append(
                     FaceLikeness(
@@ -91,11 +102,13 @@ class FaceLikenessWorker(BaseWorker):
             def write_results(session):
                 if likeness_results:
                     session.add_all(likeness_results)
-                    logger.info(f"Inserted {len(likeness_results)} face likeness scores.")
+                    logger.debug(
+                        f"Inserted {len(likeness_results)} face likeness scores."
+                    )
                 if to_remove:
                     for pair in to_remove:
                         session.delete(pair)
-                    logger.info(
+                    logger.debug(
                         f"Removed {len(to_remove)} processed pairs from work queue."
                     )
                 session.commit()
@@ -115,6 +128,7 @@ class FaceLikenessWorker(BaseWorker):
         Public method to queue a pair for likeness computation.
         """
         self._db.run_task(FaceLikenessWorker._add_pair_to_queue, face_id_a, face_id_b)
+
     @staticmethod
     def _add_pair_to_queue(session, face_id_a: int, face_id_b: int):
         """
@@ -135,8 +149,7 @@ class FaceLikenessWorker(BaseWorker):
             return
         exists = session.exec(
             select(FaceLikeness).where(
-                (FaceLikeness.face_id_a == a)
-                & (FaceLikeness.face_id_b == b)
+                (FaceLikeness.face_id_a == a) & (FaceLikeness.face_id_b == b)
             )
         ).first()
         if exists:
@@ -148,9 +161,13 @@ class FaceLikenessWorker(BaseWorker):
         # Assume features are bytes representing np.ndarray
         arr_a = np.frombuffer(features_a, dtype=np.float32)
         arr_b = np.frombuffer(features_b, dtype=np.float32)
+        # Print more of the feature vectors for diagnostics
         norm_a = np.linalg.norm(arr_a)
         norm_b = np.linalg.norm(arr_b)
         if norm_a == 0 or norm_b == 0:
+            logger.warning(
+                "One of the feature vectors has zero norm; returning 0.0 similarity."
+            )
             return 0.0
         similarity = float(np.dot(arr_a, arr_b) / (norm_a * norm_b))
         return similarity

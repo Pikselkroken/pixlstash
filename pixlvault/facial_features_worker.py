@@ -1,6 +1,3 @@
-import gc
-import cv2
-import os
 import time
 
 from sqlmodel import Session, select
@@ -34,87 +31,35 @@ class FacialFeaturesWorker(BaseWorker):
         time.sleep(1.25)  # Stagger start times for multiple workers
         while not self._stop.is_set():
             try:
-                data_updated = False
-
                 start = time.time()
-                # 1. Calculate face bboxes
                 logger.debug("FacialFeaturesWorker: Starting iteration...")
-
-                pics_needing_face_bboxes = self._find_pics_needing_face_extraction()
-                logger.info(
-                    f"FacialFeaturesWorker: Found {len(pics_needing_face_bboxes)} pictures needing face bboxes: {[getattr(pic, 'file_path', pic.id) for pic in pics_needing_face_bboxes]}"
-                )
-                time_after_fetch = time.time()
-
-                logger.debug(
-                    "FacialFeaturesWorker: It took %.2f seconds to fetch %d pictures needing face bboxes."
-                    % (time_after_fetch - start, len(pics_needing_face_bboxes))
-                )
-                logger.debug(
-                    f"Found {len(pics_needing_face_bboxes)} pictures needing face bboxes. Doing {self._picture_tagger.max_concurrent_images()} at a time."
-                )
-                insightface_ok, bboxes_updated = self._extract_faces(
-                    pics_needing_face_bboxes[
-                        : self._picture_tagger.max_concurrent_images()
-                    ]
-                )
-                time_after_calculate = time.time()
-                logger.info(
-                    "FacialFeaturesWorker: It took %.2f seconds to calculate face bboxes."
-                    % (time_after_calculate - time_after_fetch)
-                )
-                if not insightface_ok:
-                    logger.warning(
-                        "InsightFace model not available, skipping facial feature generation."
-                    )
-                    break
-
-                data_updated |= bboxes_updated > 0
-
-                if self._stop.is_set():
-                    break
-
-                # 2. Generate facial features for pictures missing them
+                # Only process faces that already exist and need features
                 faces_missing_features = self._fetch_faces_missing_features()
                 pictures_missing_facial_features = (
                     self._fetch_pics_missing_facial_features(faces_missing_features)
                 )
-
-                logger.info(
+                logger.debug(
                     "FacialFeaturesWorker: It took %.2f seconds to fetch %d pictures needing facial features."
                     % (
-                        time.time() - time_after_calculate,
+                        time.time() - start,
                         len(pictures_missing_facial_features),
                     )
                 )
                 if pictures_missing_facial_features:
-                    logger.info(
+                    logger.debug(
                         f"Generating facial features for {len(pictures_missing_facial_features)} pictures."
                     )
                     features_updated = self._generate_facial_features(
                         pictures_missing_facial_features
                     )
-                    logger.info(
-                        f"Updated facial features for {len(pictures_missing_facial_features)} pictures."
+                    logger.debug(
+                        f"Updated facial features for {len(features_updated)} pictures."
                     )
-                    data_updated |= features_updated > 0
-
-                timing = time.time() - start
-
-                if timing > 0.5:
-                    logger.info(
-                        "FacialFeaturesWorker: Done after %.2f seconds." % timing
+                else:
+                    logger.debug(
+                        "FacialFeaturesWorker: No pictures need facial features. Sleeping."
                     )
-                if not data_updated:
-                    if (
-                        not pics_needing_face_bboxes
-                        and not pictures_missing_facial_features
-                    ):
-                        logger.debug(
-                            "FacialFeaturesWorker: Sleeping after %.2f seconds. No work needed."
-                            % timing
-                        )
-                        self._wait()
+                    self._wait()
             except Exception as e:
                 import traceback
 
@@ -125,167 +70,6 @@ class FacialFeaturesWorker(BaseWorker):
                 )
                 break
         logger.info("FacialFeaturesWorker: Worker thread exiting.")
-
-    def _find_pics_needing_face_extraction(self):
-        """
-        Find pictures that do not have any face records in picture_faces (including sentinel records).
-        Only select pictures that have no entry at all in picture_faces.
-        """
-        return self._db.run_task(
-            lambda session: session.exec(
-                select(Picture).where(~Picture.faces.any())
-            ).all()
-        )
-
-    def _extract_faces(self, pics) -> int:
-        """Extract faces with bounding boxes for all faces in each picture or video"""
-
-        bboxes_updated = 0
-        if not pics:
-            if self._last_time_insightface_was_needed is not None:
-                elapsed = time.time() - self._last_time_insightface_was_needed
-                if elapsed > FacialFeaturesWorker.INSIGHTFACE_CLEANUP_TIMEOUT:
-                    if hasattr(self, "_insightface_app"):
-                        del self._insightface_app
-                        gc.collect()
-                        logger.warning("Unloaded InsightFace app due to inactivity.")
-                    self._last_time_insightface_was_needed = None
-            return True, bboxes_updated
-
-        logger.debug(f"Have {len(pics)} pictures needing facial features.")
-        try:
-            from insightface.app import FaceAnalysis
-        except ImportError:
-            logger.error(
-                "InsightFace is not installed. Skipping facial features extraction."
-            )
-            return False, bboxes_updated
-
-        if not hasattr(self, "_insightface_app"):
-            logger.debug("initialising InsightFace with CPU only (ctx_id=-1)")
-            self._insightface_app = FaceAnalysis()
-            self._insightface_app.prepare(ctx_id=-1, det_thresh=0.25)
-
-        self._last_time_insightface_was_needed = time.time()
-
-        for pic in pics:
-            logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
-            self._skip_pictures.add(pic.id)
-
-            if self._stop.is_set():
-                logger.debug("Stopping facial features extraction as requested.")
-                return False, bboxes_updated
-
-            file_path = pic.file_path
-            ext = os.path.splitext(file_path)[1].lower()
-            face_objects = []
-            if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"]:
-                img = cv2.imread(file_path)
-                if img is not None:
-                    faces = self._insightface_app.get(img)
-                    logger.debug("Found %d faces in image %s", len(faces), file_path)
-                    for i, face in enumerate(faces):
-                        expanded_bbox = Face.expand_face_bbox(
-                            face.bbox, img.shape[1], img.shape[0], 0.1
-                        )
-                        face_objects.append(
-                            Face(
-                                picture_id=pic.id,
-                                face_index=i,
-                                bbox=expanded_bbox,
-                                character_id=None,
-                                frame_index=0,
-                            )
-                        )
-
-            elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
-                cap = cv2.VideoCapture(file_path)
-                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                if frame_count < 1:
-                    logger.warning(f"No frames found in video: {file_path}")
-                    cap.release()
-                else:
-                    step = max(1, frame_count // 10)
-                    for frame_index in range(0, frame_count, step):
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-                        ret, frame = cap.read()
-                        if not ret or frame is None:
-                            logger.warning(
-                                f"Could not read frame {frame_index} from video: {file_path}"
-                            )
-                            continue
-                        frame_faces = self._insightface_app.get(frame)
-                        for i, face in enumerate(frame_faces):
-                            expanded_bbox = Face.expand_face_bbox(
-                                face.bbox, frame.shape[1], frame.shape[0], 0.1
-                            )
-                            face_objects.append(
-                                Face(
-                                    picture_id=pic.id,
-                                    face_index=i,
-                                    bbox=expanded_bbox,
-                                    character_id=None,
-                                    frame_index=frame_index,
-                                )
-                            )
-                cap.release()
-
-            else:
-                logger.warning(
-                    f"Unsupported file extension for facial features: {file_path}"
-                )
-
-            assert isinstance(face_objects, list), (
-                f"face_objects is not a list: {type(face_objects)}"
-            )
-            if not face_objects:
-                logger.warning(
-                    f"No face found in {file_path} for picture {pic.id}. Inserting sentinel record."
-                )
-
-                # Insert sentinel record to indicate no faces found
-                def insert_sentinel(session):
-                    session.add(
-                        Face(
-                            picture_id=pic.id,
-                            face_index=-1,
-                            character_id=None,
-                            bbox=None,
-                        )
-                    )
-                    session.commit()
-
-                self._db.run_task(insert_sentinel, priority=DBPriority.LOW)
-            else:
-                # Assign primary_character_id to largest face if set
-                if (
-                    getattr(pic, "primary_character_id", None) is not None
-                    and len(face_objects) > 0
-                ):
-
-                    def face_area(face):
-                        bbox = face.bbox
-                        if bbox and len(bbox) == 4:
-                            return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-                        return 0
-
-                    largest_face = max(face_objects, key=face_area)
-                    largest_face.character_id = pic.primary_character_id
-
-                def insert_faces(session, faces_to_insert):
-                    changed = []
-                    for face in faces_to_insert:
-                        session.add(face)
-                        changed.append((Face, face.id))
-                    session.commit()
-                    return changed
-
-                self._db.run_task(insert_faces, face_objects, priority=DBPriority.LOW)
-            # Processed the picture even if no faces found
-            self._notify_ids_processed([(Picture, pic.id, "faces")])
-
-        logger.debug(f"Stored {bboxes_updated} updated face bboxes")
-        return True, bboxes_updated
 
     def _fetch_faces_missing_features(self):
         """
@@ -325,6 +109,11 @@ class FacialFeaturesWorker(BaseWorker):
         Returns the number of faces updated.
         """
 
+        import os
+        import ast
+        from PIL import Image
+        import numpy as np
+
         updates = 0
 
         for picture_id, (picture, faces) in pics_missing_facial_features.items():
@@ -332,17 +121,19 @@ class FacialFeaturesWorker(BaseWorker):
             if self._stop.is_set():
                 logger.debug("Stopping facial features generation as requested.")
                 return updates
-            logger.info(
+            logger.debug(
                 f"Generating facial features for picture {picture.description} with {len(faces)} faces."
             )
             # Collect bboxes for all faces in this picture
             bboxes = [f.bbox for f in faces]
-            # Convert bbox from string if needed
-            import ast
-
             bboxes = [ast.literal_eval(b) if isinstance(b, str) else b for b in bboxes]
             frame_indices = [f.frame_index for f in faces]
             try:
+                # Load the image for cropping
+                img_path = (
+                    picture.file_path if hasattr(picture, "file_path") else picture.path
+                )
+                img = Image.open(img_path)
                 features_list = self._picture_tagger.generate_facial_features(
                     picture, bboxes
                 )
@@ -351,12 +142,34 @@ class FacialFeaturesWorker(BaseWorker):
                         f"Number of features returned ({len(features_list)}) does not match number of faces ({len(faces)}) for picture {picture.description}."
                     )
                     continue
-                for face, features, frame_index in zip(
-                    faces, features_list, frame_indices
+                for idx, (face, features, frame_index, bbox) in enumerate(
+                    zip(faces, features_list, frame_indices, bboxes)
                 ):
+                    # Save face crop for diagnostics
+                    try:
+                        crop = img.crop((bbox[0], bbox[1], bbox[2], bbox[3]))
+                        crops_dir = os.path.join(
+                            "tmp",
+                            "face_crops",
+                            os.path.splitext(os.path.basename(img_path))[0],
+                        )
+                        os.makedirs(crops_dir, exist_ok=True)
+                        crop_path = os.path.join(
+                            crops_dir, f"face_{face.face_index}.png"
+                        )
+                        crop.save(crop_path)
+                        logger.debug(f"Saved face crop to {crop_path}")
+                    except Exception as crop_exc:
+                        logger.warning(
+                            f"Failed to save face crop for face_index {face.face_index}: {crop_exc}"
+                        )
+                    # Print feature vector for diagnostics
                     if features is not None:
-                        logger.info(
+                        logger.debug(
                             f"Got facial features for picture {picture.description} face_index {face.face_index} frame_index {frame_index}"
+                        )
+                        logger.debug(
+                            f"Feature vector (first 8 values) for face_index {face.face_index}: {np.array2string(np.asarray(features)[:8], precision=4, separator=', ') if hasattr(features, '__len__') else features}"
                         )
                         # Convert numpy array to bytes for DB storage
                         features_bytes = (

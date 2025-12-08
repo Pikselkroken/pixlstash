@@ -81,15 +81,11 @@ def test_likeness_worker():
                 # Print table of likeness scores with descriptions
                 pic_map = {pic.id: pic for pic in pictures}
                 logger.info("\nLikeness Table:")
-                logger.info(
-                    f"{'Desc A':<30} | {'Desc B':<30} | {'Likeness':<10}"
-                )
+                logger.info(f"{'Desc A':<30} | {'Desc B':<30} | {'Likeness':<10}")
                 logger.info("-" * 110)
                 for r in likeness_results:
                     pic_a = pic_map.get(r.picture_id_a)
                     pic_b = pic_map.get(r.picture_id_b)
                     desc_a = (pic_a.description or "") if pic_a else "?"
                     desc_b = (pic_b.description or "") if pic_b else "?"
-                    logger.info(
-                        f"{desc_a:<30} | {desc_b:<30} | {r.likeness:<10.4f}"
-                    )
+                    logger.info(f"{desc_a:<30} | {desc_b:<30} | {r.likeness:<10.4f}")

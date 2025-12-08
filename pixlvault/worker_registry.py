@@ -10,6 +10,7 @@ from .logging import get_logger
 
 
 class WorkerType(str, Enum):
+    FACE = "FaceExtractionWorker"
     FACIAL_FEATURES = "FacialFeaturesWorker"
     TAGGER = "TagWorker"
     QUALITY = "QualityWorker"

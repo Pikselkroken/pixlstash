@@ -7,6 +7,7 @@ class LikenessWorkQueue(SQLModel, table=True):
     Work queue for pending likeness calculations between picture pairs.
     Each row represents a pair of pictures to process.
     """
+
     id: Optional[int] = Field(default=None, primary_key=True)
     picture_id_a: str = Field(index=True, nullable=False)
     picture_id_b: str = Field(index=True, nullable=False)

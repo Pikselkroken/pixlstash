@@ -226,7 +226,7 @@ class PictureUtils:
             return None
 
     @staticmethod
-    def load_and_crop_face_bbox(file_path, bbox):
+    def load_and_crop_square_image_with_face(file_path, bbox):
         """
         Loads an image or video file, returns a square crop (as large as possible) that always includes the face bbox.
         The crop is not tight to the face, but always contains it.
@@ -517,3 +517,56 @@ class PictureUtils:
         except Exception as e:
             logger.warning(f"cosine_similarity error: {e}")
             return 0.0
+
+    @staticmethod
+    def crop_face_bbox_exact(file_path, bbox):
+        """
+        Loads an image or video file, returns a crop exactly matching the face bbox.
+        Args:
+            file_path: Path to image or video file.
+            bbox: [x1, y1, x2, y2]
+        Returns:
+            Cropped PIL Image or numpy array (OpenCV), or None on error.
+        """
+        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+        img = None
+        # Try image first
+        try:
+            from PIL import Image
+
+            img = Image.open(file_path)
+        except Exception:
+            img = None
+        # If not an image, try as video (extract first frame)
+        if img is None:
+            try:
+                import cv2
+
+                cap = cv2.VideoCapture(file_path)
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame is not None:
+                    img = frame
+            except Exception:
+                img = None
+        if img is None:
+            return None
+        # PIL branch
+        if hasattr(img, "size") and callable(getattr(img, "crop", None)):
+            w, h = img.size
+            # Clamp bbox to image
+            x1c = max(0, min(w, x1))
+            x2c = max(0, min(w, x2))
+            y1c = max(0, min(h, y1))
+            y2c = max(0, min(h, y2))
+            crop_img = img.crop((x1c, y1c, x2c, y2c))
+            return crop_img
+        else:
+            # numpy array (OpenCV)
+            h, w = img.shape[:2]
+            x1c = max(0, min(w, x1))
+            x2c = max(0, min(w, x2))
+            y1c = max(0, min(h, y1))
+            y2c = max(0, min(h, y2))
+            crop_img = img[y1c:y2c, x1c:x2c]
+            return crop_img
