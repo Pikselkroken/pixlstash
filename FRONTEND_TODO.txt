@@ -31,8 +31,6 @@ DONE:
    - Remove member: `/picture_sets/{id}/members/{picture_id}` (DELETE)
    - Action: Ensure frontend uses new member endpoints for add/remove, and supports metadata-only fetch with `info=true`.
 
-REMAINING:
-
 5. `/characters` endpoints:
    - List: `/characters` (GET)
    - Create: `/characters` (POST)
@@ -58,6 +56,8 @@ REMAINING:
    - Get: `/config` (GET)
    - Patch: `/config` (PATCH)
    - Action: Update frontend config logic to support patching and new keys.
+
+REMAINING:
 
 8. `/pictures/{id}` endpoints:
    - Get: `/pictures/{id}` (GET, returns image file)
