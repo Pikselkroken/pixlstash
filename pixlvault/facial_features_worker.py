@@ -18,8 +18,10 @@ logger = get_logger(__name__)
 class FacialFeaturesWorker(BaseWorker):
     INSIGHTFACE_CLEANUP_TIMEOUT = 20  # seconds
 
-    def __init__(self, db_connection, picture_tagger: PictureTagger):
-        super().__init__(db_connection, picture_tagger)
+    def __init__(
+        self, db_connection, picture_tagger: PictureTagger, event_callback: callable
+    ):
+        super().__init__(db_connection, picture_tagger, event_callback=event_callback)
         self._skip_pictures = set()
         self._last_time_insightface_was_needed = None
 

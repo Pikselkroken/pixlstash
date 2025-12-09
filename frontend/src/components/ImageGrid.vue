@@ -1024,7 +1024,7 @@ async function fetchThumbnailsBatch(start, end) {
     }));
     // Now fetch thumbnails for these IDs
     if (ids.length) {
-      const thumbRes = await fetch(`${props.backendUrl}/thumbnails`, {
+      const thumbRes = await fetch(`${props.backendUrl}/pictures/thumbnails`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),

@@ -1,4 +1,5 @@
-from sqlmodel import SQLModel, Field, ForeignKey, select
+from sqlalchemy import Column, ForeignKey
+from sqlmodel import SQLModel, Field, select
 
 
 class PictureLikeness(SQLModel, table=True):
@@ -9,12 +10,18 @@ class PictureLikeness(SQLModel, table=True):
     """
 
     picture_id_a: str = Field(
-        foreign_key=ForeignKey("picture.id", ondelete="CASCADE"),
-        primary_key=True,
+        sa_column=Column(
+            "picture_id_a",
+            ForeignKey("picture.id", ondelete="CASCADE"),
+            primary_key=True,
+        )
     )
     picture_id_b: str = Field(
-        foreign_key=ForeignKey("picture.id", ondelete="CASCADE"),
-        primary_key=True,
+        sa_column=Column(
+            "picture_id_b",
+            ForeignKey("picture.id", ondelete="CASCADE"),
+            primary_key=True,
+        )
     )
     likeness: float = Field(default=None)
     metric: str = Field(default=None)

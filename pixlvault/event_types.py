@@ -1,7 +1,7 @@
 from enum import auto, Enum
 
 
-class EventTypes(Enum):
+class EventType(Enum):
     CHANGED_PICTURES = auto()
     CHANGED_TAGS = auto()
     CHANGED_CHARACTERS = auto()

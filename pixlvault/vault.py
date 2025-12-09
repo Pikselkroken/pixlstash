@@ -15,7 +15,7 @@ from .picture_utils import PictureUtils
 from .worker_registry import WorkerRegistry, WorkerType
 
 # These import lines are all necessary to register the workers with the WorkerRegistry
-from pixlvault.event_types import EventTypes
+from pixlvault.event_types import EventType
 from pixlvault.tag_worker import TagWorker, DescriptionWorker, EmbeddingWorker  # noqa: F401
 from pixlvault.face_extraction_worker import FaceExtractionWorker  # noqa: F401
 from pixlvault.facial_features_worker import FacialFeaturesWorker  # noqa: F401
@@ -30,14 +30,16 @@ logger = get_logger(__name__)
 class Vault:
     # Map event type to list of worker types
     _event_worker_map = {
-        EventTypes.CHANGED_PICTURES: [
+        EventType.CHANGED_PICTURES: [
             WorkerType.FACE,
             WorkerType.TAGGER,
             WorkerType.QUALITY,
+            WorkerType.DESCRIPTION,
         ],
-        EventTypes.CHANGED_TAGS: [WorkerType.TAGGER],
-        EventTypes.CHANGED_CHARACTERS: [WorkerType.DESCRIPTION],
-        # Extend as needed
+        EventType.CHANGED_TAGS: [],
+        EventType.CHANGED_FACES: [WorkerType.FACIAL_FEATURES, WorkerType.FACE_QUALITY],
+        EventType.CHANGED_CHARACTERS: [WorkerType.DESCRIPTION],
+        EventType.CHANGED_DESCRIPTIONS: [WorkerType.TEXT_EMBEDDING],
     }
 
     def __enter__(self):
@@ -86,7 +88,10 @@ class Vault:
         for worker_type in WorkerType.all():
             logger.debug(f"Creating worker of type: {worker_type}")
             self._workers[worker_type] = WorkerRegistry.create_worker(
-                worker_type, self.db, self._picture_tagger, lambda et: self.notify(et)
+                worker_type,
+                self.db,
+                self._picture_tagger,
+                event_callback=lambda et: self.notify(et),
             )
 
     def stop_workers(self, workers: set[WorkerType] = WorkerType.all()):
@@ -107,7 +112,7 @@ class Vault:
             else:
                 logger.warning(f"Worker {worker} not found in vault workers.")
 
-    def notify(self, event_type: "Vault.VaultEventType"):
+    def notify(self, event_type: EventType):
         """
         Notify all relevant workers for a given event type.
 

@@ -2,7 +2,6 @@ import numpy as np
 import time
 from sqlmodel import select
 
-from pixlvault.event_types import EventTypes
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.face import Face

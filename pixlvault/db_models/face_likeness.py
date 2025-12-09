@@ -1,8 +1,12 @@
-from sqlmodel import SQLModel, ForeignKey, Field, Relationship
+from sqlalchemy import Column, ForeignKey
+from sqlmodel import SQLModel, Field, Relationship
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .face import Face
+
+
+from sqlalchemy import Integer
 
 
 class FaceLikeness(SQLModel, table=True):
@@ -13,12 +17,14 @@ class FaceLikeness(SQLModel, table=True):
     """
 
     face_id_a: int = Field(
-        foreign_key=ForeignKey("face.id", ondelete="CASCADE"),
-        primary_key=True,
+        sa_column=Column(
+            Integer, ForeignKey("face.id", ondelete="CASCADE"), primary_key=True
+        )
     )
     face_id_b: int = Field(
-        foreign_key=ForeignKey("face.id", ondelete="CASCADE"),
-        primary_key=True,
+        sa_column=Column(
+            Integer, ForeignKey("face.id", ondelete="CASCADE"), primary_key=True
+        )
     )
     likeness: float = Field(default=None)
     metric: str = Field(default=None)

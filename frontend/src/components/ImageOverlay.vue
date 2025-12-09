@@ -32,45 +32,26 @@
                 class="overlay-img"
                 @load="updateOverlayDims"
               />
-              <!-- Face bbox overlay -->
-              <template v-if="showFaceBbox && parsedFaceBbox">
+              <!-- Multiple face bbox overlays -->
+              <template v-if="showFaceBbox && faceBboxes.length">
                 <div
+                  v-for="(bbox, idx) in faceBboxes"
+                  :key="idx"
                   class="face-bbox-overlay"
                   :style="{
                     position: 'absolute',
                     border: '2px solid #ff5252',
                     background: 'rgba(255, 82, 82, 0.15)',
-                    left: `${(parsedFaceBbox[0] * overlayDims.width / overlayDims.naturalWidth) || 0}px`,
-                    top: `${(parsedFaceBbox[1] * overlayDims.height / overlayDims.naturalHeight) || 0}px`,
-                    width: `${((parsedFaceBbox[2] - parsedFaceBbox[0]) * overlayDims.width / overlayDims.naturalWidth) || 0}px`,
-                    height: `${((parsedFaceBbox[3] - parsedFaceBbox[1]) * overlayDims.height / overlayDims.naturalHeight) || 0}px`,
+                    left: `${(bbox[0] * overlayDims.width / overlayDims.naturalWidth) || 0}px`,
+                    top: `${(bbox[1] * overlayDims.height / overlayDims.naturalHeight) || 0}px`,
+                    width: `${((bbox[2] - bbox[0]) * overlayDims.width / overlayDims.naturalWidth) || 0}px`,
+                    height: `${((bbox[3] - bbox[1]) * overlayDims.height / overlayDims.naturalHeight) || 0}px`,
                     pointerEvents: 'auto',
                     zIndex: 1000,
                     display: 'block',
                   }"
                 ></div>
               </template>
-              <!-- Facial features overlay -->
-              <template v-if="showFacialFeatures && parsedFacialFeatures && parsedFacialFeatures.length">
-                <div v-for="pt in transformedFacialFeatures" :key="pt.idx"
-                  class="facial-feature-point"
-                  :style="{
-                    position: 'absolute',
-                    left: `${pt.px || 0}px`,
-                    top: `${pt.py || 0}px`,
-                    width: '6px',
-                    height: '6px',
-                    background: pt.inRange ? '#42a5f5' : '#ff5252',
-                    borderRadius: '50%',
-                    zIndex: 21,
-                    pointerEvents: 'none',
-                    border: pt.inRange ? 'none' : '2px solid #fff',
-                  }"
-                  :title="`idx=${pt.idx} norm=(${pt.norm[0]},${pt.norm[1]}) inRange=${pt.inRange}`"
-                ></div>
-              </template>
-              <!-- No overlay if features not available -->
-              <template v-else></template>
             </template>
             <div class="star-overlay" v-if="image">
               <v-icon
@@ -86,7 +67,6 @@
             <!-- Toggle buttons -->
             <div style="position: absolute; left: 8px; top: 8px; z-index: 30; display: flex; flex-direction: column; gap: 4px;">
               <button @click.stop="toggleFaceBbox" style="background: #fff2; color: #ff5252; border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.95em;">BBox</button>
-              <button @click.stop="toggleFacialFeatures" style="background: #fff2; color: #42a5f5; border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.95em;">Features</button>
             </div>
           </div>
         </div>
@@ -282,18 +262,10 @@ function handleKeydown(e) {
 }
 
 const showFaceBbox = ref(false);
-const showFacialFeatures = ref(false);
 
 function toggleFaceBbox() {
   showFaceBbox.value = !showFaceBbox.value;
-  // Instrumentation
-  console.log('[ImageOverlay] Toggled showFaceBbox:', showFaceBbox.value, image.value?.face_bbox);
-  image.value = image.value ? { ...image.value } : null;
-}
-function toggleFacialFeatures() {
-  showFacialFeatures.value = !showFacialFeatures.value;
-  // Instrumentation
-  console.log('[ImageOverlay] Toggled showFacialFeatures:', showFacialFeatures.value, image.value?.facial_features);
+  console.log('[ImageOverlay] Toggled showFaceBbox:', showFaceBbox.value, 'faceBboxes:', faceBboxes.value);
   image.value = image.value ? { ...image.value } : null;
 }
 
@@ -324,75 +296,40 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown);
 });
 
-const parsedFaceBbox = computed(() => {
-  if (!image.value || !image.value.face_bbox) return null;
-  if (Array.isArray(image.value.face_bbox) && image.value.face_bbox.length === 4) {
-    return image.value.face_bbox;
-  }
-  // Try to parse if it's a string
-  if (typeof image.value.face_bbox === 'string') {
-    try {
-      const arr = JSON.parse(image.value.face_bbox);
-      if (Array.isArray(arr) && arr.length === 4) return arr;
-    } catch (e) {}
-  }
-  return null;
-});
+// Store multiple face bounding boxes
+const faceBboxes = ref([]);
 
-const parsedFacialFeatures = computed(() => {
-  if (!image.value || !image.value.facial_features) return null;
-  // If already an array of arrays (points)
-  if (Array.isArray(image.value.facial_features) && Array.isArray(image.value.facial_features[0])) {
-    console.log('[ImageOverlay] facial_features is array of points', image.value.facial_features);
-    return image.value.facial_features;
+// Fetch face bounding boxes for the current image
+async function fetchFaceBboxes(imageId) {
+  if (!imageId || !backendUrl.value) {
+    faceBboxes.value = [];
+    console.log('[ImageOverlay] fetchFaceBboxes: No imageId or backendUrl');
+    return;
   }
-  // Try to parse if it's a string
-  if (typeof image.value.facial_features === 'string') {
-    try {
-      const arr = JSON.parse(image.value.facial_features);
-      if (Array.isArray(arr) && Array.isArray(arr[0])) {
-        console.log('[ImageOverlay] facial_features parsed from string', arr);
-        return arr;
-      }
-      console.log('[ImageOverlay] facial_features string parsed but not array of points', arr);
-    } catch (e) {
-      console.log('[ImageOverlay] facial_features string parse error', e, image.value.facial_features);
-    }
+  try {
+    const res = await fetch(`${backendUrl.value}/pictures/${imageId}/faces`);
+    if (!res.ok) throw new Error("Failed to fetch face bboxes");
+    const faces = await res.json();
+    const faceArray = Array.isArray(faces) ? faces : faces.faces;
+    faceBboxes.value = Array.isArray(faceArray)
+      ? faceArray.map(f => Array.isArray(f.bbox) && f.bbox.length === 4 ? f.bbox : null).filter(Boolean)
+      : [];
+    console.log('[ImageOverlay] fetchFaceBboxes: faceBboxes', faceBboxes.value);
+  } catch (e) {
+    console.error('[ImageOverlay] fetchFaceBboxes error:', e);
+    faceBboxes.value = [];
   }
-  console.log('[ImageOverlay] facial_features not usable', image.value.facial_features);
-  return null;
-});
+}
 
-// Transform facial feature points from normalized face_bbox coordinates to overlay pixel coordinates
-const transformedFacialFeatures = computed(() => {
-  const features = parsedFacialFeatures.value;
-  const { width, height, naturalWidth, naturalHeight } = overlayDims.value;
-  const bbox = parsedFaceBbox.value;
-  if (!features || !naturalWidth || !naturalHeight || !width || !height || !bbox) return [];
-  // bbox: [x0, y0, x1, y1] in natural image coordinates
-  const [x0, y0, x1, y1] = bbox;
-  const bboxW = x1 - x0;
-  const bboxH = y1 - y0;
-  // Detect range: if any x or y < 0, assume [-1,1], else [0,1]
-  const isMinusOneToOne = features.some(pt => pt[0] < 0 || pt[1] < 0);
-  return features.map(([x, y], idx) => {
-    let fx, fy, inRange = true;
-    if (isMinusOneToOne) {
-      inRange = x >= -1 && x <= 1 && y >= -1 && y <= 1;
-      fx = x0 + ((x + 1) / 2) * bboxW;
-      fy = y0 + ((y + 1) / 2) * bboxH;
-    } else {
-      inRange = x >= 0 && x <= 1 && y >= 0 && y <= 1;
-      fx = x0 + x * bboxW;
-      fy = y0 + y * bboxH;
-    }
-    const px = fx * (width / naturalWidth);
-    const py = fy * (height / naturalHeight);
-    // Console debug
-    console.log(`[FacialFeature] idx=${idx} norm=(${x},${y}) inRange=${inRange} mapped=(${px},${py})`);
-    return { px, py, inRange, norm: [x, y], idx };
-  });
-});
+// Watch for image changes and fetch bboxes
+watch(
+  () => image.value?.id,
+  (newId) => {
+    if (newId) fetchFaceBboxes(newId);
+    else faceBboxes.value = [];
+  },
+  { immediate: true }
+);
 </script>
 
 <style scoped>
@@ -727,8 +664,5 @@ const transformedFacialFeatures = computed(() => {
   pointer-events: none;
   background: rgba(255, 82, 82, 0.15); /* semi-transparent red */
   z-index: 1000 !important;
-}
-.facial-feature-point {
-  pointer-events: none;
 }
 </style>

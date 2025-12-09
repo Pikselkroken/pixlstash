@@ -1,12 +1,12 @@
 import random
 import threading
 
-from event_types import EventTypes
 from typing import List, Tuple, Type
 from concurrent.futures import Future
 from abc import ABC, ABCMeta, abstractmethod
 from enum import Enum
 
+from .event_types import EventType
 from .pixl_logging import get_logger
 
 
@@ -57,7 +57,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
     Class representing different types of picture processing workers.
     """
 
-    INTERVAL = 10  # Default interval between worker runs in seconds
+    INTERVAL = 60  # Default interval between worker runs in seconds
 
     def __init__(self, database, picture_tagger, event_callback):
         self._db = database
@@ -115,6 +115,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         Notify the worker that it needs to wake.
         """
+        logger.info("Worker {} woken up.".format(self.name()))
         self._event.set()
 
     def name(self):
@@ -132,7 +133,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
             self._watched_ids[(cls, object_id, attr)] = future
         return future
 
-    def _notify_others(self, event_type: EventTypes):
+    def _notify_others(self, event_type: EventType):
         """
         Notify other components of an event.
         """
@@ -158,6 +159,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         wait_time = random.uniform(self.INTERVAL - 1.0, self.INTERVAL + 1.0)
         self._event.wait(wait_time)
+        self._event.clear()
 
     @abstractmethod
     def _run(self):

@@ -1,10 +1,11 @@
+from typing import List
 import cv2
 import os
 import time
 
 from sqlmodel import select
 from pixlvault.database import DBPriority
-from pixlvault.event_types import EventTypes
+from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.face import Face
@@ -26,14 +27,21 @@ class FaceExtractionWorker(BaseWorker):
             try:
                 logger.debug("FaceExtractionWorker: Starting iteration...")
                 pics_needing_face_bboxes = self._find_pics_needing_face_extraction()
-                logger.debug(
+                logger.info(
                     f"FaceExtractionWorker: Found {len(pics_needing_face_bboxes)} pictures needing face bboxes: {[getattr(pic, 'file_path', pic.id) for pic in pics_needing_face_bboxes]}"
                 )
                 if not pics_needing_face_bboxes:
                     self._wait()
                     continue
-                self._extract_faces(pics_needing_face_bboxes)
-                logger.info("FaceExtractionWorker: Done with iteration.")
+                updates = self._extract_faces(pics_needing_face_bboxes)
+                if updates:
+                    self._notify_ids_processed(updates)
+                    self._notify_others(EventType.CHANGED_FACES)
+
+                logger.info(
+                    "FaceExtractionWorker: Done with iteration having processed %d pictures.",
+                    len(updates),
+                )
             except Exception as e:
                 import traceback
 
@@ -52,7 +60,7 @@ class FaceExtractionWorker(BaseWorker):
             ).all()
         )
 
-    def _extract_faces(self, pics):
+    def _extract_faces(self, pics) -> List[tuple]:
         try:
             from insightface.app import FaceAnalysis
         except ImportError:
@@ -62,6 +70,7 @@ class FaceExtractionWorker(BaseWorker):
             logger.debug("initialising InsightFace with CPU only (ctx_id=-1)")
             self._insightface_app = FaceAnalysis()
             self._insightface_app.prepare(ctx_id=-1, det_thresh=0.25)
+        updates = []
         for pic in pics:
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
             file_path = pic.file_path
@@ -148,5 +157,5 @@ class FaceExtractionWorker(BaseWorker):
                     return changed
 
                 self._db.run_task(insert_faces, face_objects, priority=DBPriority.LOW)
-            self._notify_ids_processed([(Picture, pic.id, "faces")])
-            self._notify_others(EventTypes.NEW_FACES)
+            updates.append((Picture, pic.id, "faces"))
+        return updates

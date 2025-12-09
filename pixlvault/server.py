@@ -27,6 +27,8 @@ from pixlvault.db_models import (
     Picture,
     SortMechanism,
 )
+from pixlvault.db_models.picture_set import PictureSet
+from pixlvault.event_types import EventType
 from pixlvault.utils import safe_model_dict
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
@@ -658,10 +660,10 @@ class Server:
                     character = Character.find(
                         session,
                         id=character_id,
-                        select_fields=["reference_picture_set"],
+                        select_fields=["reference_picture_set_id"],
                     )
                     return (
-                        character[0].reference_picture_set
+                        character[0].reference_picture_set_id
                         if len(character) > 0
                         else None
                     )
@@ -716,6 +718,7 @@ class Server:
                 char = self.vault.db.run_task(
                     lambda session: alter_char(session, id, name, description)
                 )
+                self.vault.notify(EventType.CHANGED_CHARACTERS)
 
             except KeyError:
                 raise HTTPException(status_code=404, detail="Character not found")
@@ -732,6 +735,7 @@ class Server:
                         session.commit(),
                     )
                 )
+                self.vault.notify(EventType.CHANGED_CHARACTERS)
                 return {"status": "success", "deleted_id": id}
             except KeyError:
                 raise HTTPException(status_code=404, detail="Character not found")
@@ -753,7 +757,7 @@ class Server:
                 # Find character and relationships
                 char = self.vault.db.run_task(
                     Character.find,
-                    select_fields=["reference_picture_set", "faces"],
+                    select_fields=["reference_picture_set_id", "faces"],
                     id=id,
                 )
                 if not char:
@@ -762,10 +766,22 @@ class Server:
                 # Try reference picture set first
                 best_pic = None
                 best_face = None
-                if char.reference_picture_set and char.reference_picture_set.members:
+
+                def get_reference_set_and_members(session, reference_picture_set_id):
+                    ref_set = session.get(PictureSet, reference_picture_set_id)
+                    if ref_set:
+                        session.refresh(ref_set)
+                        members = list(ref_set.members)
+                        return ref_set, members
+                    return None, []
+
+                ref_set, members = self.vault.db.run_task(
+                    get_reference_set_and_members, char.reference_picture_set_id
+                )
+                if ref_set and ref_set.members:
                     # Query all pictures in the reference set
                     pics = sorted(
-                        char.reference_picture_set.members,
+                        members,
                         key=lambda p: (p.score or 0),
                         reverse=True,
                     )
@@ -863,6 +879,8 @@ class Server:
                     session.commit()
                     session.refresh(reference_set)
                     character.reference_picture_set_id = reference_set.id
+                    session.add(character)
+                    session.commit()
                     session.refresh(character)
                     return character.model_dump(exclude_unset=False)
 
@@ -870,6 +888,7 @@ class Server:
                     create_character_and_reference_set, payload
                 )
                 logger.info("Created character: {}".format(char_dict))
+                self.vault.notify(EventType.CHANGED_CHARACTERS)
                 return {"status": "success", "character": char_dict}
             except Exception as e:
                 logger.error(f"Error creating character: {e}")
@@ -907,6 +926,8 @@ class Server:
                         status_code=500,
                         detail=f"Failed to set character {character_id} for face {face_ids}",
                     )
+            self.vault.notify(EventType.CHANGED_CHARACTERS)
+            self.vault.notify(EventType.CHANGED_FACES)
             return {
                 "status": "success",
                 "face_ids": face_ids,
@@ -938,6 +959,8 @@ class Server:
                 return faces
 
             self.vault.db.run_task(remove_faces_from_character, character_id, face_ids)
+            self.vault.notify(EventType.CHANGED_CHARACTERS)
+            self.vault.notify(EventType.CHANGED_FACES)
             return {
                 "status": "success",
                 "face_ids": face_ids,
@@ -1386,8 +1409,8 @@ class Server:
                 query_params = dict(request.query_params)
                 query = query_params.pop("query", query)
                 sort = query_params.pop("sort", sort)
-                offset = query_params.pop("offset", offset)
-                limit = query_params.pop("limit", limit)
+                offset = int(query_params.pop("offset", offset))
+                limit = int(query_params.pop("limit", limit))
 
             if not query:
                 raise HTTPException(
@@ -1473,7 +1496,7 @@ class Server:
                 # Return as bytes
                 return {field: base64.b64encode(getattr(pic, field)).decode("utf-8")}
             else:
-                return {field: getattr(pic, field)}
+                return {field: safe_model_dict(getattr(pic, field))}
 
         @self.api.patch("/pictures/{id}")
         async def patch_picture(id: str, request: Request):
@@ -1540,6 +1563,7 @@ class Server:
                     updated = True
             if updated:
                 self.vault.pictures.update(pic)
+                self.vault.notify(EventType.CHANGED_PICTURES)
             return {"status": "success", "picture": pic.to_dict()}
 
         @self.api.post("/pictures")
@@ -1606,7 +1630,7 @@ class Server:
                 raise HTTPException(
                     status_code=400, detail="All pictures are duplicates"
                 )
-
+            self.vault.notify(EventType.CHANGED_PICTURES)
             return {"results": import_results}
 
         @self.api.delete("/pictures/{id}")
@@ -1630,8 +1654,8 @@ class Server:
             if request.query_params:
                 query_params = dict(request.query_params)
                 sort = query_params.pop("sort", sort)
-                offset = query_params.pop("offset", offset)
-                limit = query_params.pop("limit", limit)
+                offset = int(query_params.pop("offset", offset))
+                limit = int(query_params.pop("limit", limit))
 
             pics = self.vault.db.run_task(
                 Picture.find,

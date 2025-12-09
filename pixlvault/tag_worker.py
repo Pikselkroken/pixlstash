@@ -3,7 +3,7 @@ import time
 from sqlmodel import select, Session
 from sqlalchemy.orm import load_only, selectinload
 
-from pixlvault.event_types import EventTypes
+from pixlvault.event_types import EventType
 from pixlvault.picture_tagger import PictureTagger
 from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
@@ -19,13 +19,6 @@ class DescriptionWorker(BaseWorker):
     """
     Worker for generating picture descriptions only.
     """
-
-    def __init__(
-        self,
-        database: VaultDatabase,
-        picture_tagger: PictureTagger,
-    ):
-        super().__init__(database, picture_tagger)
 
     def worker_type(self) -> WorkerType:
         return WorkerType.DESCRIPTION
@@ -71,7 +64,7 @@ class DescriptionWorker(BaseWorker):
                     )
                     data_updated = len(changed) > 0
                     self._notify_ids_processed(changed)
-                    self._notify_others(EventTypes.CHANGED_DESCRIPTIONS)
+                    self._notify_others(EventType.CHANGED_DESCRIPTIONS)
                 timing = time.time() - start
                 if data_updated:
                     logger.debug(f"DescriptionWorker: Done after {timing:.2f} seconds.")
@@ -152,13 +145,6 @@ class TagWorker(BaseWorker):
     Worker for generating tags for pictures with descriptions.
     """
 
-    def __init__(
-        self,
-        database: VaultDatabase,
-        picture_tagger: PictureTagger,
-    ):
-        super().__init__(database, picture_tagger)
-
     def worker_type(self) -> WorkerType:
         return WorkerType.TAGGER  # Or define a new WorkerType if desired
 
@@ -175,10 +161,10 @@ class TagWorker(BaseWorker):
                     break
                 tagged_pictures = self._tag_pictures(missing_tags)
                 self._notify_ids_processed(tagged_pictures)
-                self._notify_others(EventTypes.CHANGED_TAGS)
                 logger.debug(f"TaggingWorker: Tagged {len(tagged_pictures)} pictures.")
                 timing = time.time() - start
                 if tagged_pictures:
+                    self._notify_others(EventType.CHANGED_TAGS)
                     logger.debug(
                         f"TaggingWorker: Done after {timing:.2f} seconds. Having updated {len(tagged_pictures)} pictures."
                     )
@@ -254,13 +240,6 @@ class EmbeddingWorker(BaseWorker):
     Worker for generating text embeddings for pictures with descriptions.
     """
 
-    def __init__(
-        self,
-        database: VaultDatabase,
-        picture_tagger: PictureTagger,
-    ):
-        super().__init__(database, picture_tagger)
-
     def worker_type(self) -> WorkerType:
         return WorkerType.TEXT_EMBEDDING
 
@@ -310,6 +289,7 @@ class EmbeddingWorker(BaseWorker):
             query = select(Picture)
             query = query.options(
                 load_only(Picture.id, Picture.description, Picture.text_embedding),
+                selectinload(Picture.tags),
                 selectinload(Picture.characters).load_only(
                     Character.id,
                     Character.name,

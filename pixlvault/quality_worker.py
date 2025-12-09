@@ -18,13 +18,6 @@ logger = get_logger(__name__)
 
 
 class QualityWorker(BaseWorker):
-    def __init__(
-        self,
-        database,
-        picture_tagger,
-    ):
-        super().__init__(database, picture_tagger)
-
     def worker_type(self) -> WorkerType:
         return WorkerType.QUALITY
 
@@ -189,13 +182,6 @@ class QualityWorker(BaseWorker):
 
 
 class FaceQualityWorker(BaseWorker):
-    def __init__(
-        self,
-        database,
-        picture_tagger,
-    ):
-        super().__init__(database, picture_tagger)
-
     def worker_type(self) -> WorkerType:
         return WorkerType.FACE_QUALITY
 
