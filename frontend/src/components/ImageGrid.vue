@@ -448,9 +448,12 @@ const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
 async function handleImagesUploaded(newIds) {
   await fetchTotalImageCount();
-  // Do NOT clear thumbnails; keep existing ones
-  // Reset loadedRanges so new thumbnails can be fetched
   loadedRanges.value = [];
+  allGridImages.value = [];
+  selectedImageIds.value = [];
+  lastSelectedIndex = null;
+  await fetchTotalImageCount();
+  updateVisibleThumbnails();
 }
 // Props
 const props = defineProps({

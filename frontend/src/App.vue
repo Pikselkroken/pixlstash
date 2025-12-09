@@ -35,6 +35,7 @@ const selectedSort = ref("");
 // --- Search & Filtering State ---
 const searchQuery = ref("");
 const showStars = ref(true);
+const showFaceBboxes = ref(false);
 
 const chatWindowRef = ref(null);
 
@@ -298,6 +299,12 @@ function handleGlobalKeydown(e) {
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
   refreshGridVersion();
+}
+
+function handleImagesUploaded() {
+  // Called when images are imported
+  refreshGridVersion(); // Force grid and thumbnails to refresh
+  refreshSidebar(); // Optionally refresh sidebar counts
 }
 
 // --- Export to Zip ---

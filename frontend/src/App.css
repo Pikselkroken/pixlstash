@@ -375,3 +375,14 @@ button:focus:not(:focus-visible) {
   background-color: orange !important;
   color: white !important;
 }
+.face-bbox-toggle-btn .face-bbox-icon-wrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed ;
+  border-radius: 4px;
+  width: 32px;
+  height: 32px;
+  box-sizing: border-box;
+  background: transparent;
+}

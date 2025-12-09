@@ -49,6 +49,18 @@
         >
           <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
         </v-btn>
+        <v-btn
+          icon
+          :color="showFaceBboxes ? '#ff5252' : 'grey'"
+          @click="showFaceBboxes = !showFaceBboxes"
+          title="Toggle face bounding boxes"
+          class="face-bbox-toggle-btn"
+          style="margin-left: 4px"
+        >
+          <span class="face-bbox-icon-wrapper">
+            <v-icon>{{ showFaceBboxes ? 'mdi-account' : 'mdi-account-outline' }}</v-icon>
+          </span>
+        </v-btn>
         <v-btn-toggle
           v-model="mediaTypeFilter"
           mandatory
