@@ -22,7 +22,7 @@ def test_server():
 def test_chat_history_save_and_load(test_server):
     client = test_server
 
-    resp = client.post("/chat", params={"character_id": 0})
+    resp = client.post("/conversations", params={"character_id": 0})
     assert resp.status_code == 200, f"Failed to create chat: {resp.text}"
     conversation_id = resp.json().get("conversation_id")
     assert conversation_id == 1
@@ -35,11 +35,11 @@ def test_chat_history_save_and_load(test_server):
         "picture_id": 42,
     }
     # Save a message
-    resp = client.post("/chat/message", json=payload)
+    resp = client.post("/conversations/message", json=payload)
     assert resp.status_code == 200, f"Failed to save message: {resp.text}"
     assert resp.json()["status"] == "ok"
     # Load history
-    resp = client.get(f"/chat/{conversation_id}")
+    resp = client.get(f"/conversations/{conversation_id}")
     assert resp.status_code == 200, f"Failed to load history: {resp.text}"
     messages = resp.json()["messages"]
     assert len(messages) == 1
@@ -50,7 +50,7 @@ def test_chat_history_save_and_load(test_server):
 def test_chat_history_clear(test_server):
     client = test_server
 
-    resp = client.post("/chat", params={"character_id": 0})
+    resp = client.post("/conversations", params={"character_id": 0})
     assert resp.status_code == 200, f"Failed to create chat: {resp.text}"
     conversation_id = resp.json().get("conversation_id")
     assert conversation_id == 1
@@ -62,25 +62,25 @@ def test_chat_history_clear(test_server):
         "content": "To be deleted",
     }
     # Save a message
-    resp = client.post("/chat/message", json=payload)
+    resp = client.post("/conversations/message", json=payload)
     assert resp.status_code == 200
     # Clear history
-    resp = client.delete(f"/chat/{conversation_id}")
+    resp = client.delete(f"/conversations/{conversation_id}")
     assert resp.status_code == 200, f"Failed to clear history: {resp.text}"
     # Load history, should be empty
-    resp = client.get(f"/chat/{conversation_id}")
+    resp = client.get(f"/conversations/{conversation_id}")
     assert resp.status_code == 404
 
 
 def test_chat_history_multiple_sessions(test_server):
     client = test_server
 
-    resp = client.post("/chat", params={"character_id": 0})
+    resp = client.post("/conversations", params={"character_id": 0})
     assert resp.status_code == 200, f"Failed to create chat: {resp.text}"
     conversation_id_1 = resp.json().get("conversation_id")
     assert conversation_id_1 == 1
 
-    resp = client.post("/chat", params={"character_id": 0})
+    resp = client.post("/conversations", params={"character_id": 0})
     assert resp.status_code == 200, f"Failed to create chat: {resp.text}"
     conversation_id_2 = resp.json().get("conversation_id")
     assert conversation_id_2 == 2
@@ -98,15 +98,15 @@ def test_chat_history_multiple_sessions(test_server):
         "role": "user",
         "content": "Session B",
     }
-    client.post("/chat/message", json=payload1)
-    client.post("/chat/message", json=payload2)
+    client.post("/conversations/message", json=payload1)
+    client.post("/conversations/message", json=payload2)
     # Clear only session A
-    client.delete(f"/chat/{conversation_id_1}")
+    client.delete(f"/conversations/{conversation_id_1}")
     # Session A should be empty
-    resp = client.get(f"/chat/{conversation_id_1}")
+    resp = client.get(f"/conversations/{conversation_id_1}")
     assert resp.status_code == 404
     # Session B should still exist
-    resp = client.get(f"/chat/{conversation_id_2}")
+    resp = client.get(f"/conversations/{conversation_id_2}")
     assert resp.status_code == 200
     messages = resp.json()["messages"]
     assert len(messages) == 1

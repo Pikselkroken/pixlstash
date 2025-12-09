@@ -377,8 +377,8 @@ class Server:
         ###############################
         # Chat endpoints              #
         ###############################
-        @self.api.delete("/chat/{id}")
-        async def delete_chat(id: int):
+        @self.api.delete("/conversations/{id}")
+        async def delete_conversation(id: int):
             """Delete all chat messages for a character/session."""
 
             def delete_query(session, id: int):
@@ -395,8 +395,8 @@ class Server:
 
             return {"status": "ok"}
 
-        @self.api.get("/chat/{id}")
-        async def get_chat(id: int, limit: int = 100):
+        @self.api.get("/conversations/{id}")
+        async def get_conversation(id: int, limit: int = 100):
             """Return chat history for a character/session."""
             future = self.vault.db.submit_task(
                 lambda session: session.get(Conversation, id)
@@ -428,8 +428,8 @@ class Server:
             messages = future.result()
             return {"conversation": conversation, "messages": messages}
 
-        @self.api.post("/chat")
-        async def create_chat(character_id: int = Query(None)):
+        @self.api.post("/conversations")
+        async def create_conversation(character_id: int = Query(None)):
             """Create a new chat session for a character. Returns conversation_id."""
             if character_id is None:
                 raise HTTPException(status_code=400, detail="character_id is required")
@@ -470,8 +470,8 @@ class Server:
                 )
             return {"conversation_id": conversation.id}
 
-        @self.api.post("/chat/message")
-        async def post_chat_message(payload: dict):
+        @self.api.post("/conversations/message")
+        async def post_conversation_message(payload: dict):
             """Save a chat message. Expects conversation_id, timestamp, role, content, picture_id (optional)."""
             required = ["conversation_id", "timestamp", "role", "content"]
             for key in required:
