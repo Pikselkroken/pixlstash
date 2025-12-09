@@ -148,24 +148,6 @@ def test_florence_caption_content(tagger, image_files):
         )
 
 
-def test_florence_with_character_name(tagger, image_files):
-    """Test that character names are properly integrated into captions."""
-    test_image = image_files[0]
-    test_character_name = "Esmeralda"
-
-    caption = tagger._generate_florence_caption(
-        test_image, character_name=test_character_name
-    )
-
-    # Caption should contain the character name
-    assert test_character_name in caption, (
-        f"Caption doesn't contain character name: {caption}"
-    )
-
-    # Character name should appear after "named"
-    assert "named" in caption.lower(), f"Caption doesn't use 'named' pattern: {caption}"
-
-
 def test_florence_handles_missing_file(tagger):
     """Test that Florence-2 handles missing files gracefully."""
     caption = tagger._generate_florence_caption("/nonexistent/file.jpg")

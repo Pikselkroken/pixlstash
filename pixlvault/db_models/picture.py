@@ -67,9 +67,6 @@ class Picture(SQLModel, table=True):
     created_at: Optional[datetime] = Field(
         default=None, sa_column=Column("created_at", type_=DateTime, nullable=True)
     )
-    primary_character_id: Optional[int] = Field(
-        default=None, index=True, foreign_key="character.id", nullable=True
-    )
     text_embedding: Optional[np.ndarray] = Field(
         sa_column=Column("text_embedding", LargeBinary, default=None, nullable=True)
     )
@@ -80,7 +77,6 @@ class Picture(SQLModel, table=True):
     pixel_sha: Optional[str] = Field(default=None, index=True)
 
     # Relationships
-    primary_character: Optional["Character"] = Relationship()
     quality: Optional["Quality"] = Relationship(back_populates="picture")
     faces: List["Face"] = Relationship(
         back_populates="picture", sa_relationship_kwargs={"overlaps": "characters"}

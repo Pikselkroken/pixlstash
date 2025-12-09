@@ -27,6 +27,7 @@ from pixlvault.db_models import (
     Picture,
     SortMechanism,
 )
+from pixlvault.utils import safe_model_dict
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
@@ -815,13 +816,23 @@ class Server:
                 char = self.vault.db.run_task(
                     Character.find, select_fields=[field], id=id
                 )
+                if not char:
+                    raise KeyError("Character not found")
+                char = char[0]
+                logger.info(
+                    "Data type for Character field {}: {}".format(field, type(char))
+                )
+                if not hasattr(char, field):
+                    raise HTTPException(
+                        status_code=404, detail=f"Field {field} not found in Character"
+                    )
+                returnValue = {field: safe_model_dict(getattr(char, field))}
+                logger.info(
+                    f"Returning character id={id} field={field} value={returnValue}"
+                )
+                return returnValue
             except KeyError:
                 raise HTTPException(status_code=404, detail="Character not found")
-            if not hasattr(char, field):
-                raise HTTPException(
-                    status_code=404, detail=f"Field {field} not found in Character"
-                )
-            return {field: getattr(char, field)}
 
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
@@ -883,8 +894,10 @@ class Server:
                         )
                     face.character_id = character_id
                     session.add(face)
+                    faces.append(face)
                 session.commit()
-                session.refresh(face)
+                for face in faces:
+                    session.refresh(face)
                 return faces
 
             faces = self.vault.db.run_task(assign_faces, face_ids, character_id)

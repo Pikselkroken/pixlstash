@@ -354,7 +354,6 @@ class PictureUtils:
         image_root_path: str,
         source_file_path: str,
         picture_id: Optional[str] = None,
-        primary_character_id: Optional[str] = None,
         pixel_sha: Optional[str] = None,
     ) -> Picture:
         """
@@ -371,7 +370,6 @@ class PictureUtils:
             image_root_path=image_root_path,
             image_bytes=image_bytes,
             picture_id=picture_id,
-            primary_character_id=primary_character_id,
             pixel_sha=pixel_sha,
             created_at=created_at,
         )
@@ -381,7 +379,6 @@ class PictureUtils:
         image_root_path: str,
         image_bytes: bytes,
         picture_id: Optional[str] = None,
-        primary_character_id: Optional[str] = None,
         pixel_sha: Optional[str] = None,
         created_at: Optional[str] = None,
     ) -> Picture:
@@ -449,7 +446,6 @@ class PictureUtils:
             created_at=created_at,
             thumbnail=thumbnail_bytes,
             pixel_sha=pixel_sha,
-            primary_character_id=primary_character_id,
         )
         return pic
 

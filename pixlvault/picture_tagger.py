@@ -104,7 +104,7 @@ class PictureTagger:
         self._florence_device = None
         self._florence_model_name = "microsoft/Florence-2-base"
 
-        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 60
+        self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 120
 
         self._init_florence_captioning()
 
@@ -253,21 +253,18 @@ class PictureTagger:
             )
             return False
 
-    def _generate_florence_caption(
-        self, image_path, character_name=None, _retry_on_cpu=True
-    ):
+    def _generate_florence_caption(self, image_path, _retry_on_cpu=True):
         """
         Generate a natural language caption for an image using Florence-2.
 
         Args:
             image_path (str): Path to the image file
-            character_name (str, optional): Name of the character to include as context
 
         Returns:
             str: Natural language caption
         """
         logger.debug(
-            f"_generate_florence_caption called: image_path={image_path}, character_name={character_name}, _retry_on_cpu={_retry_on_cpu}"
+            f"_generate_florence_caption called: image_path={image_path}, _retry_on_cpu={_retry_on_cpu}"
         )
         if self._florence_model is None:
             logger.error("Florence-2 model is not initialized")
@@ -414,29 +411,7 @@ class PictureTagger:
                     caption = caption[: last_punct + 1].strip()
                 if caption:
                     logger.debug(f"Florence-2 caption: {caption}")
-            # Insert character name if provided
-            if caption and character_name:
-                # Match phrases like 'a young woman', 'the young woman', 'young woman', etc.
-                person_pattern = r"\b((?:a|the)? ?(?:young|old|middle-aged|elderly)? ?(?:woman|man|person|girl|boy|lady|gentleman|individual|figure|character))\b"
-                match = re.search(person_pattern, caption, re.IGNORECASE)
-                logger.debug(
-                    f"Florence caption instrumentation: caption before: '{caption}', character_name: '{character_name}', regex: '{person_pattern}', match: '{match.group(0) if match else None}'"
-                )
-                if match:
-                    insert_pos = match.end()
-                    caption = (
-                        caption[:insert_pos]
-                        + f" named {character_name}"
-                        + caption[insert_pos:]
-                    )
-                    logger.debug(
-                        f"Florence caption instrumentation: caption after injection: '{caption}'"
-                    )
-                else:
-                    caption = f"{character_name}: {caption}"
-                    logger.debug(
-                        f"Florence caption instrumentation: caption after prepend: '{caption}'"
-                    )
+
             logger.debug(f"Final Florence-2 caption returned: {caption}")
             return caption
 
@@ -455,7 +430,7 @@ class PictureTagger:
                 )
                 if self._reload_florence_on_cpu():
                     return self._generate_florence_caption(
-                        image_path, character_name, _retry_on_cpu=False
+                        image_path, _retry_on_cpu=False
                     )
 
             logger.error(f"Florence-2 captioning failed for {image_path}: {e}")
@@ -728,7 +703,7 @@ class PictureTagger:
         )
         florence_caption = self._generate_florence_caption(
             picture.file_path,
-            character_name=character_names[0] if character_names else None,
+            _retry_on_cpu=False,
         )
         if florence_caption:
             logger.debug(

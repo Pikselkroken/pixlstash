@@ -219,9 +219,12 @@ class Vault:
         logo_dest_folder = self.image_root
         logger.debug(f"logo_dest_folder in _import_default_data: {logo_dest_folder}")
 
-        character = Character(
-            name="Esmeralda Vault", description="Built-in vault character"
-        )
+        characters = [
+            "Esmeralda Vault",
+            "Barbara Vault",
+            "Barry Vault",
+            "Cassandra Vault",
+        ]
 
         def add_character(session: Session, character: Character):
             session.add(character)
@@ -238,15 +241,20 @@ class Vault:
             session.refresh(reference_set)
             return char_id, char_name
 
-        char_id, char_name = self.db.run_task(
-            lambda session: add_character(session, character),
-            priority=DBPriority.IMMEDIATE,
-        )
+        for character_name in characters:
+            self.db.run_task(
+                lambda session: add_character(
+                    session,
+                    Character(
+                        name=character_name, description="Built-in vault character"
+                    ),
+                ),
+                priority=DBPriority.IMMEDIATE,
+            )
 
         picture = PictureUtils.create_picture_from_file(
             image_root_path=logo_dest_folder,
             source_file_path=logo_src,
-            primary_character_id=char_id,
         )
 
         assert picture.file_path
@@ -276,7 +284,6 @@ class Vault:
                     pic = PictureUtils.create_picture_from_file(
                         image_root_path=logo_dest_folder,
                         source_file_path=src_path,
-                        primary_character_id=char_id,
                     )
                     pic.description = os.path.basename(src_path)
                     assert pic.file_path

@@ -333,6 +333,20 @@ def test_characters_summary():
                 assoc_data = assoc_resp.json()
                 assert assoc_data["status"] == "success"
 
+                # Query the character-face association to verify
+                check_assoc_resp = client.get(f"/characters/{esmeralda_id}/faces")
+                assert check_assoc_resp.status_code == 200, (
+                    f"Failed to fetch faces for character {esmeralda_id} after association"
+                )
+                faces_data = check_assoc_resp.json().get("faces", [])
+                face_ids = [f.get("id") for f in faces_data]
+                assert face_id in face_ids, (
+                    f"Face ID {face_id} not found in Esmeralda Vault character association: {face_ids}"
+                )
+                logging.debug(
+                    f"Verified Esmeralda Vault character association for face {face_id}"
+                )
+
             # Call /characters/summary and check count
             summary_resp = client.get(f"/characters/{str(esmeralda_id)}/summary")
             assert summary_resp.status_code == 200
@@ -570,11 +584,23 @@ def test_semantic_search():
             assert resp.status_code == 200
             chars = resp.json()
             esmeralda_id = None
+            barbara_id = None
+            barry_id = None
+            cassandra_id = None
             for c in chars:
                 if c.get("name") == "Esmeralda Vault":
                     esmeralda_id = c["id"]
-                    break
+                elif c.get("name") == "Barbara Vault":
+                    barbara_id = c["id"]
+                elif c.get("name") == "Barry Vault":
+                    barry_id = c["id"]
+                elif c.get("name") == "Cassandra Vault":
+                    cassandra_id = c["id"]
+
             assert esmeralda_id is not None, "Esmeralda Vault character not found"
+            assert barbara_id is not None, "Barbara Vault character not found"
+            assert barry_id is not None, "Barry Vault character not found"
+            assert cassandra_id is not None, "Cassandra Vault character not found"
 
             # Upload all images as new pictures
             picture_ids = []
@@ -605,9 +631,6 @@ def test_semantic_search():
             server.vault.start_workers(
                 {
                     WorkerType.FACE,
-                    WorkerType.DESCRIPTION,
-                    WorkerType.TAGGER,
-                    WorkerType.TEXT_EMBEDDING,
                     WorkerType.FACIAL_FEATURES,
                 }
             )
@@ -630,31 +653,77 @@ def test_semantic_search():
                 if not faces_data:
                     continue  # No faces detected
 
-                # Find largest face by area
-                def face_area(face):
-                    bbox = face.get("bbox")
-                    if bbox and len(bbox) == 4:
-                        return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-                    return 0
+                # Order faces left to right
+                faces_ordered = sorted(
+                    faces_data, key=lambda f: f.get("bbox", [0, 0, 0, 0])[0]
+                )
+                if len(faces_ordered) == 1:
+                    face_id = faces_ordered[0].get("id")
+                    assert face_id is not None, (
+                        f"No face id found for largest face in picture {pid}"
+                    )
+                    # Associate Esmeralda Vault with this face
+                    assoc_resp = client.post(
+                        f"/characters/{esmeralda_id}/faces",
+                        json={"face_ids": [face_id]},
+                    )
+                    assert assoc_resp.status_code == 200, (
+                        f"Failed to associate face {face_id} with Esmeralda Vault: {assoc_resp.text}"
+                    )
+                    assoc_data = assoc_resp.json()
+                    assert assoc_data["status"] == "success"
+                    logging.debug(
+                        f"Associated face ID {face_id} in picture {pid} with Esmeralda Vault character ID {esmeralda_id}"
+                    )
 
-                largest_face = max(faces_data, key=face_area)
-                face_id = largest_face.get("id")
-                assert face_id is not None, (
-                    f"No face id found for largest face in picture {pid}"
-                )
-                # Associate Esmeralda Vault with this face
-                assoc_resp = client.post(
-                    f"/characters/{esmeralda_id}/faces",
-                    json={"face_ids": [face_id]},
-                )
-                assert assoc_resp.status_code == 200, (
-                    f"Failed to associate face {face_id} with Esmeralda Vault: {assoc_resp.text}"
-                )
-                assoc_data = assoc_resp.json()
-                assert assoc_data["status"] == "success"
-                logging.debug(
-                    f"Associated face ID {face_id} in picture {pid} with Esmeralda Vault character ID {esmeralda_id}"
-                )
+                    # Query the character-face association to verify
+                    check_assoc_resp = client.get(f"/characters/{esmeralda_id}/faces")
+                    assert check_assoc_resp.status_code == 200, (
+                        f"Failed to fetch faces for character {esmeralda_id} after association due to {check_assoc_resp.text}"
+                    )
+                    faces_data = check_assoc_resp.json().get("faces", [])
+                    assert len(faces_data) > 0, (
+                        f"No faces found for character {esmeralda_id} after association"
+                    )
+                    face_ids = [f.get("id") for f in faces_data]
+                    assert face_id in face_ids, (
+                        f"Face ID {face_id} not found in Esmeralda Vault character association: {face_ids} and {faces_data}"
+                    )
+                    logging.debug(
+                        f"Verified Esmeralda Vault character association for face {face_id}"
+                    )
+                elif len(faces_ordered) >= 3:
+                    # Associate Barbara, Barry, Cassandra with left, center, right faces
+                    face_ids = [
+                        faces_ordered[0].get("id"),
+                        faces_ordered[len(faces_ordered) // 2].get("id"),
+                        faces_ordered[-1].get("id"),
+                    ]
+                    char_ids = [barbara_id, barry_id, cassandra_id]
+                    for face_id, char_id in zip(face_ids, char_ids):
+                        assert face_id is not None, (
+                            f"No face id found for face in picture {pid} for character {char_id}"
+                        )
+                        assoc_resp = client.post(
+                            f"/characters/{char_id}/faces",
+                            json={"face_ids": [face_id]},
+                        )
+                        assert assoc_resp.status_code == 200, (
+                            f"Failed to associate face {face_id} with character {char_id}: {assoc_resp.text}"
+                        )
+                        assoc_data = assoc_resp.json()
+                        assert assoc_data["status"] == "success"
+                        logging.debug(
+                            f"Associated face ID {face_id} in picture {pid} with character ID {char_id}"
+                        )
+
+            server.vault.start_workers(
+                {
+                    WorkerType.DESCRIPTION,
+                    WorkerType.TAGGER,
+                    WorkerType.TEXT_EMBEDDING,
+                }
+            )
 
             # Wait for all text embeddings to be processed
             for future in embeddings_futures:
