@@ -16,7 +16,7 @@ from .picture_set import PictureSet, PictureSetMember
 from .quality import Quality
 from .tag import Tag
 
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 
 if TYPE_CHECKING:
     from .character import Character

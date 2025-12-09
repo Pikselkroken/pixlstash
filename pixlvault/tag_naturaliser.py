@@ -1,4 +1,4 @@
-from .logging import get_logger
+from .pixl_logging import get_logger
 
 logger = get_logger(__name__)
 

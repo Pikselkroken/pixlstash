@@ -5,7 +5,7 @@ from sqlalchemy.orm import load_only, selectinload
 
 from pixlvault.picture_tagger import PictureTagger
 from pixlvault.database import DBPriority
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.database import VaultDatabase
 from pixlvault.worker_registry import BaseWorker, WorkerType
 
@@ -33,7 +33,7 @@ class DescriptionWorker(BaseWorker):
         while not self._stop.is_set():
             try:
                 start = time.time()
-                logger.debug("DescriptionWorker: Starting iteration...")
+                logger.info("DescriptionWorker: Starting iteration...")
                 data_updated = False
                 missing_descriptions = self._fetch_missing_descriptions()
 

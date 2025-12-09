@@ -14,7 +14,7 @@ import torch
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 
-from .logging import get_logger
+from .pixl_logging import get_logger
 from pixlvault.db_models.picture import Picture
 from pixlvault.tag_naturaliser import TagNaturaliser
 from pixlvault.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
@@ -56,11 +56,13 @@ class PictureTagger:
         silent=True,
         device=None,
     ):
+        logger.info("Initializing PictureTagger...")
         self._model_location = model_location
         self._silent = silent
 
         # Store device for both CLIP and ONNX
         if PictureTagger.FORCE_CPU:
+            logger.warning("Forcing CPU inference for PictureTagger.")
             self._device = "cpu"
         else:
             if device is not None:
@@ -71,11 +73,12 @@ class PictureTagger:
         if self._device == "cuda":
             providers = ort.get_available_providers()
             if "CUDAExecutionProvider" not in providers:
-                logger.debug(
+                logger.warning(
                     "No GPU ort providers available, forcing CPUExecutionProvider"
                 )
                 self._device = "cpu"
-        logger.debug(f"PictureTagger initialized with device: {self._device}")
+
+        logger.info(f"PictureTagger initialized with device: {self._device}")
 
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()

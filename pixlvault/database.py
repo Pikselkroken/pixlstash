@@ -8,7 +8,7 @@ from sqlalchemy import event
 from sqlmodel import SQLModel, create_engine, Session
 from rapidfuzz.distance import Levenshtein
 
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_utils import PictureUtils
 
 # These imports are necessary to register the models with SQLModel

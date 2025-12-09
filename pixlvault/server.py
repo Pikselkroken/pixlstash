@@ -28,7 +28,7 @@ from pixlvault.db_models import (
     SortMechanism,
 )
 from pixlvault.picture_utils import PictureUtils
-from pixlvault.logging import get_logger, uvicorn_log_config
+from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
@@ -850,71 +850,63 @@ class Server:
         async def assign_face_to_character(
             character_id: int, payload: dict = Body(...)
         ):
-            """Assigns a face to a character. Payload: { face_id: int }"""
-            face_id = payload.get("face_id")
-            if not isinstance(face_id, int):
-                raise HTTPException(
-                    status_code=400, detail="face_id must be an integer"
-                )
+            """Assigns a face to a character. Payload: { face_id: list[int] }"""
+            face_ids = payload.get("face_ids")
+            if not isinstance(face_ids, list):
+                raise HTTPException(status_code=400, detail="face_id must be a list")
 
-            def assign_face(session: Session, face_id: int, character_id: int):
-                face = session.get(Face, face_id)
-                if not face:
-                    raise HTTPException(
-                        status_code=404, detail=f"Face {face_id} not found"
-                    )
-                face.character_id = character_id
-                session.add(face)
+            def assign_faces(session: Session, face_ids: list[int], character_id: int):
+                for face_id in face_ids:
+                    face = session.get(Face, face_id)
+                    if not face:
+                        raise HTTPException(
+                            status_code=404, detail=f"Face {face_id} not found"
+                        )
+                    face.character_id = character_id
+                    session.add(face)
                 session.commit()
                 session.refresh(face)
                 return face
 
-            face = self.vault.db.run_task(assign_face, face_id, character_id)
-            if face.id != face_id or face.character_id != character_id:
+            face = self.vault.db.run_task(assign_faces, face_ids, character_id)
+            if face.id != face_ids or face.character_id != character_id:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to set character {character_id} for face {face_id}",
+                    detail=f"Failed to set character {character_id} for face {face_ids}",
                 )
             return {
                 "status": "success",
-                "face_id": face_id,
+                "face_ids": face_ids,
                 "character_id": character_id,
             }
 
         @self.api.delete("/characters/{character_id}/faces")
-        async def remove_character_from_face(
+        async def remove_character_from_faces(
             character_id: int, payload: dict = Body(...)
         ):
-            face_id = payload.get("face_id")
-            if not isinstance(face_id, int):
+            face_ids = payload.get("face_ids")
+            if not isinstance(face_ids, list):
                 raise HTTPException(
                     status_code=400, detail="face_id must be an integer"
                 )
             """Remove the character association from a specific face."""
 
-            def remove_face_from_character(
-                session: Session, character_id: int, face_id: int
+            def remove_faces_from_character(
+                session: Session, character_id: int, face_ids: list[int]
             ):
-                face = session.get(Face, face_id)
-                if not face:
-                    raise HTTPException(
-                        status_code=404, detail=f"Face {face_id} not found"
-                    )
-                if face.character_id != character_id:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Face {face_id} is not associated with character {character_id}",
-                    )
-                face.character_id = None
-                session.add(face)
+                for face_id in face_ids:
+                    face = session.get(Face, face_id)
+                    if face and face.character_id == character_id:
+                        face.character_id = None
+                        session.add(face)
                 session.commit()
                 session.refresh(face)
                 return face
 
-            self.vault.db.run_task(remove_face_from_character, character_id, face_id)
+            self.vault.db.run_task(remove_faces_from_character, character_id, face_ids)
             return {
                 "status": "success",
-                "face_id": face_id,
+                "face_ids": face_ids,
                 "character_id": character_id,
             }
 
@@ -1273,6 +1265,7 @@ class Server:
 
                 pics = self.vault.db.run_task(fetch_members, set_id)
             elif query:
+
                 def find_by_text(session, query):
                     words = re.findall(r"\b\w+\b", query.lower())
                     preprocessed_query_words = self.vault.preprocess_query_words(words)
@@ -1345,7 +1338,6 @@ class Server:
                 headers={"Content-Disposition": f"attachment; filename={filename}"},
             )
 
-
         @self.api.get("/pictures/search")
         async def search_pictures(
             request: Request,
@@ -1355,8 +1347,6 @@ class Server:
             limit: int = Query(sys.maxsize),
             threshold: float = Query(0.5),
         ):
-            from pixlvault.db_models import SortMechanism
-
             query_params = {}
             if request.query_params:
                 query_params = dict(request.query_params)
@@ -1366,7 +1356,9 @@ class Server:
                 limit = query_params.pop("limit", limit)
 
             if not query:
-                raise HTTPException(status_code=400, detail="Query parameter is required for search")
+                raise HTTPException(
+                    status_code=400, detail="Query parameter is required for search"
+                )
 
             # Handle semantic search
             def find_by_text(session, query, offset, limit):
@@ -1600,8 +1592,6 @@ class Server:
             offset: int = Query(0),
             limit: int = Query(sys.maxsize),
         ):
-            from pixlvault.db_models import SortMechanism
-
             query_params = {}
             if request.query_params:
                 query_params = dict(request.query_params)

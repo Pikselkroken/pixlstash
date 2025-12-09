@@ -10,7 +10,7 @@ import os
 
 from pixlvault.db_models import Character, Face, Picture
 from pixlvault.server import Server
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import WorkerType
 
 

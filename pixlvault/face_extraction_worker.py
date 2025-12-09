@@ -4,7 +4,7 @@ import time
 
 from sqlmodel import select
 from pixlvault.database import DBPriority
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.face import Face
 from pixlvault.db_models.picture import Picture

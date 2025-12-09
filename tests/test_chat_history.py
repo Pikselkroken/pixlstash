@@ -5,13 +5,11 @@ import tempfile
 import os
 import shutil
 import time
-from pixlvault.picture_tagger import PictureTagger
 
 
 @pytest.fixture
 def test_server():
     # Force CPU for all models during test
-    PictureTagger.FORCE_CPU = True
     tmpdir = tempfile.mkdtemp()
     config_path = os.path.join(tmpdir, "config.json")
     server_config_path = os.path.join(tmpdir, "server_config.json")

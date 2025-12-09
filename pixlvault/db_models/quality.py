@@ -7,7 +7,7 @@ from typing import List, Optional, TYPE_CHECKING
 
 from scipy.ndimage import median_filter
 
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 
 if TYPE_CHECKING:
     from .face import Face

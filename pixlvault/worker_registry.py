@@ -6,7 +6,7 @@ from concurrent.futures import Future
 from abc import ABC, ABCMeta, abstractmethod
 from enum import Enum
 
-from .logging import get_logger
+from .pixl_logging import get_logger
 
 
 class WorkerType(str, Enum):

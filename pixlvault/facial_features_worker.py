@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 
 from pixlvault.database import DBPriority
 from pixlvault.picture_tagger import PictureTagger
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 
 from pixlvault.db_models.face import Face

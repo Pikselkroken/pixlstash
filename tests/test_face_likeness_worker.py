@@ -3,7 +3,7 @@ import tempfile
 import os
 import time
 
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
 from pixlvault.worker_registry import WorkerType
 from pixlvault.db_models.picture import Picture

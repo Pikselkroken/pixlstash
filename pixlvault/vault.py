@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 
 from .database import DBPriority, VaultDatabase
 from .db_models import MetaData, Character, Picture, PictureSet
-from .logging import get_logger
+from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
 from .picture_utils import PictureUtils
 from .worker_registry import WorkerRegistry, WorkerType
@@ -87,7 +87,7 @@ class Vault:
         logger.debug("Starting background workers...")
         for worker in workers:
             if worker in self._workers:
-                logger.debug(f"Starting worker: {worker}")
+                logger.info(f"Starting worker: {worker}")
                 self._workers[worker].start()
             else:
                 logger.warning(f"Worker {worker} not found in vault workers.")

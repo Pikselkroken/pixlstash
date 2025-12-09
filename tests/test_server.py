@@ -15,7 +15,7 @@ from io import BytesIO
 from urllib.parse import quote
 
 from pixlvault.db_models.picture import Picture
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.worker_registry import WorkerType
 from pixlvault.server import Server

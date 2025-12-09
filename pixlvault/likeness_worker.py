@@ -4,7 +4,7 @@ import numpy as np
 import time
 from sqlmodel import select
 
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.likeness_work_queue import LikenessWorkQueue

@@ -9,7 +9,7 @@ from io import BytesIO
 from typing import Optional
 from PIL import Image
 
-from pixlvault.logging import get_logger
+from pixlvault.pixl_logging import get_logger
 from pixlvault.db_models.picture import Picture
 
 logger = get_logger(__name__)

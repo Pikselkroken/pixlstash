@@ -4,8 +4,11 @@ import logging
 
 from platformdirs import user_config_dir
 
-from pixlvault.logging import setup_logging
+
+from pixlvault.pixl_logging import setup_logging, get_logger
 from pixlvault.server import Server
+
+logger = get_logger(__name__)
 
 APP_NAME = "pixlvault"
 CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "config.json")
@@ -54,13 +57,16 @@ def main():
     args = parser.parse_args()
 
     server_config = Server._init_server_config(args.server_config)
+
+    log_level = _resolve_log_level(server_config.get("log_level"))
     log_file = server_config.get("log_file")
-    if log_file:
+    if log_file and log_level != logging.INFO:
         log_dir = os.path.dirname(log_file)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-    log_level = _resolve_log_level(server_config.get("log_level"))
-    setup_logging(log_file=log_file, log_level=log_level)
+        setup_logging(log_file=log_file, log_level=log_level)
+    else:
+        setup_logging(log_level=log_level)
 
     server = Server(config_path=args.config, server_config_path=args.server_config)
     server.vault.start_workers()
