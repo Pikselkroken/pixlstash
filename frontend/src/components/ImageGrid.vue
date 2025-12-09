@@ -376,12 +376,9 @@ function removeFromGroup() {
   ) {
     Promise.all(
       selectedImageIds.value.map((id) =>
-        fetch(
-          `${backendUrl}/picture_sets/${props.selectedSet}/pictures/${id}`,
-          {
-            method: "DELETE",
-          }
-        )
+        fetch(`${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`, {
+          method: "DELETE",
+        })
           .then((res) => {
             if (!res.ok)
               throw new Error(`Failed to remove image ${id} from set`);
@@ -806,16 +803,22 @@ async function fetchTotalImageCount() {
       const data = await res.json();
       images = data.pictures || [];
     } else if (props.searchQuery && props.searchQuery.trim()) {
-      // Use /search endpoint for text search
-      const url = `${props.backendUrl}/search?query=${encodeURIComponent(
+      // Use /pictures/search endpoint for text search
+      const params = buildPictureIdsQueryParams();
+      const url = `${
+        props.backendUrl
+      }/pictures/search?query=${encodeURIComponent(
         props.searchQuery.trim()
-      )}&top_n=10000`;
+      )}&top_n=10000${params ? `&${params}` : ""}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch search results");
       images = await res.json();
     } else {
       const params = buildPictureIdsQueryParams();
-      const url = `${props.backendUrl}/pictures?info=true&offset=0&limit=10000&${params}`;
+      // Only use allowed parameters: sort, offset, limit, threshold
+      const url = `${props.backendUrl}/pictures?offset=0&limit=10000${
+        params ? `&${params}` : ""
+      }`;
       const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch image info for all images");
       images = await res.json();
@@ -988,9 +991,10 @@ async function fetchThumbnailsBatch(start, end) {
       // If not enough images, fetch missing ones
       if (images.length < end - start) {
         const params = buildPictureIdsQueryParams();
+        // Only use allowed parameters: sort, offset, limit, threshold
         const url = `${props.backendUrl}/pictures?offset=${start}&limit=${
           end - start
-        }&${params}`;
+        }${params ? `&${params}` : ""}`;
         const res = await fetch(url);
         if (res.ok) {
           const fetched = await res.json();

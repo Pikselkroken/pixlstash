@@ -10,10 +10,10 @@ DONE:
    - Response: Zip file with images, filename now includes set name, query, and tag info.
    - Action: Ensure frontend zip export logic matches new filename and query param handling.
 
-REMAINING:
 2. `/search` endpoint:
     - Path: Changed from `/search` to `/pictures/search`
     - Now takes the same parameters as `/pictures` plus a query string
+
 3. `/pictures` endpoint:
    - Path: `/pictures` (unchanged)
    - Query params: `sort`, `offset`, `limit`, `threshold` (all optional)
@@ -31,6 +31,8 @@ REMAINING:
    - Remove member: `/picture_sets/{id}/members/{picture_id}` (DELETE)
    - Action: Ensure frontend uses new member endpoints for add/remove, and supports metadata-only fetch with `info=true`.
 
+REMAINING:
+
 5. `/characters` endpoints:
    - List: `/characters` (GET)
    - Create: `/characters` (POST)
@@ -42,6 +44,8 @@ REMAINING:
    - Assign face: `/characters/{character_id}/faces` (POST)
    - Remove face: `/characters/{character_id}/faces` (DELETE)
    - Action: Update frontend to use new endpoints for face assignment/removal and summary fetch.
+     this also means migrating the old POST and DELETE /face/{face_id} to use the opposite assignment using
+     /characters/{character_id}/faces instead (we assign faces to characters instead of characters to faces now)
 
 6. `/chat` endpoints:
    - Create: `/chat` (POST)

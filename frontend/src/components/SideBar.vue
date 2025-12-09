@@ -256,7 +256,8 @@ function toggleCharacterCollapse(charId) {
 async function fetchSidebarCounts() {
   // Fetch total image count for END key logic
   try {
-    const resAll = await fetch(`${props.backendUrl}/category/summary`);
+    // All images summary
+    const resAll = await fetch(`${props.backendUrl}/characters/null/summary`);
     if (resAll.ok) {
       const data = await resAll.json();
       totalImages.value = data.image_count || 0;
@@ -264,15 +265,9 @@ async function fetchSidebarCounts() {
     }
   } catch {}
   try {
-    const resAll = await fetch(`${props.backendUrl}/category/summary`);
-    if (resAll.ok) {
-      const data = await resAll.json();
-      categoryCounts.value[props.allPicturesId] = data.image_count;
-    }
-  } catch {}
-  try {
+    // Unassigned images summary
     const resUnassigned = await fetch(
-      `${props.backendUrl}/category/summary?primary_character_id=null`
+      `${props.backendUrl}/characters/null/summary`
     );
     if (resUnassigned.ok) {
       const data = await resUnassigned.json();
@@ -283,11 +278,7 @@ async function fetchSidebarCounts() {
     characters.value.map(async (char) => {
       try {
         const res = await fetch(
-          `${
-            props.backendUrl
-          }/category/summary?primary_character_id=${encodeURIComponent(
-            char.id
-          )}`
+          `${props.backendUrl}/characters/${char.id}/summary`
         );
         if (res.ok) {
           const data = await res.json();
@@ -442,7 +433,7 @@ async function handleDropOnSet(setId, event) {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
       const res = await fetch(
-        `${props.backendUrl}/picture_sets/${setId}/pictures/${picId}`,
+        `${props.backendUrl}/picture_sets/${setId}/members/${picId}`,
         { method: "POST" }
       );
       // 400 error might mean it's already in the set, which is ok
@@ -491,29 +482,54 @@ async function onCharacterDrop(characterId, event) {
   }
 
   try {
-    // PATCH each image to assign primary_character_id
-    const patchPromises = draggedIds.map(async (picId) => {
-      const res = await fetch(`${props.backendUrl}/pictures/${picId}`, {
-        method: "PATCH",
+    // Batch assign faces to character
+    const res = await fetch(
+      `${props.backendUrl}/characters/${characterId}/faces`,
+      {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ primary_character_id: characterId }),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to assign image ${picId} to character`);
+        body: JSON.stringify({ face_ids: draggedIds }),
       }
-    });
-    await Promise.all(patchPromises);
+    );
+    if (!res.ok) {
+      throw new Error("Failed to assign faces to character");
+    }
     // Optionally refresh sidebar counts
     await fetchSidebarCounts();
     // Refresh the character's thumbnail
     await fetchCharacterThumbnail(characterId);
     // Emit signal to App.vue to trigger ImageGrid refresh
-    emit("images-assigned-to-character", { characterId, imageIds: draggedIds });
+    emit("faces-assigned-to-character", { characterId, faceIds: draggedIds });
     console.log(
-      `Assigned ${draggedIds.length} image(s) to character ${characterId}`
+      `Assigned ${draggedIds.length} face(s) to character ${characterId}`
     );
   } catch (e) {
-    alert("Failed to assign images to character: " + (e.message || e));
+    alert("Failed to assign faces to character: " + (e.message || e));
+  }
+}
+
+// Batched face removal
+async function removeFacesFromCharacter(characterId, faceIds) {
+  try {
+    const res = await fetch(
+      `${props.backendUrl}/characters/${characterId}/faces`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ face_ids: faceIds }),
+      }
+    );
+    if (!res.ok) {
+      throw new Error("Failed to remove faces from character");
+    }
+    await fetchSidebarCounts();
+    await fetchCharacterThumbnail(characterId);
+    emit("faces-removed-from-character", { characterId, faceIds });
+    console.log(
+      `Removed ${faceIds.length} face(s) from character ${characterId}`
+    );
+  } catch (e) {
+    alert("Failed to remove faces from character: " + (e.message || e));
   }
 }
 

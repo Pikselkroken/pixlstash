@@ -1,9 +1,16 @@
 <script setup>
-import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import {
+  computed,
+  nextTick,
+  ref,
+  watch,
+  onMounted,
+  onBeforeUnmount,
+} from "vue";
 import nlp from "compromise";
 // FIFO queue for last 20 displayed pictures
 import { marked } from "marked";
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from "uuid";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -12,8 +19,8 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
 });
 
-const sessionId = ref(localStorage.getItem('chatSessionId') || uuidv4());
-localStorage.setItem('chatSessionId', sessionId.value);
+const sessionId = ref(localStorage.getItem("chatSessionId") || uuidv4());
+localStorage.setItem("chatSessionId", sessionId.value);
 
 const displayedPictureQueue = ref([]);
 
@@ -29,7 +36,9 @@ async function loadChatHistory() {
   if (!props.backendUrl || !props.selectedCharacter) return;
   try {
     const res = await fetch(
-      `${props.backendUrl}/chat/history?character_id=${encodeURIComponent(props.selectedCharacter)}&session_id=${encodeURIComponent(sessionId.value)}&limit=100`
+      `${props.backendUrl}/chat/history?character_id=${encodeURIComponent(
+        props.selectedCharacter
+      )}&session_id=${encodeURIComponent(sessionId.value)}&limit=100`
     );
     if (res.ok) {
       const data = await res.json();
@@ -38,7 +47,12 @@ async function loadChatHistory() {
       messages = messages.map((msg) => {
         if (msg.picture_id) {
           const pictureUrl = `${props.backendUrl}/pictures/${msg.picture_id}`;
-          console.log('[ChatHistory] Loaded message with picture_id:', msg.picture_id, 'pictureUrl:', pictureUrl);
+          console.log(
+            "[ChatHistory] Loaded message with picture_id:",
+            msg.picture_id,
+            "pictureUrl:",
+            pictureUrl
+          );
           return {
             ...msg,
             pictureUrl,
@@ -301,11 +315,10 @@ async function sendChatMessageAndFocus() {
 
     if (props.backendUrl) {
       try {
-        const searchRes = await fetch(
-          `${props.backendUrl}/search?query=${encodeURIComponent(
-            searchQuery
-          )}&top_n=50`
-        );
+        const url = `${
+          props.backendUrl
+        }/pictures/search?query=${encodeURIComponent(searchQuery)}&top_n=50`;
+        const searchRes = await fetch(url);
         if (searchRes.ok) {
           const searchData = await searchRes.json();
           console.log("Search query:", searchQuery);
@@ -372,9 +385,17 @@ async function sendChatMessageAndFocus() {
             // Save the assistant message with picture_id if found, else fallback
             if (assistantMsgIdx !== -1) {
               const msg = chatMessages.value[assistantMsgIdx];
-              await saveChatMessage({ role: msg.role, content: msg.content, picture_id: bestResult.id });
+              await saveChatMessage({
+                role: msg.role,
+                content: msg.content,
+                picture_id: bestResult.id,
+              });
             } else {
-              await saveChatMessage({ role: "assistant", content: reply, picture_id: bestResult.id });
+              await saveChatMessage({
+                role: "assistant",
+                content: reply,
+                picture_id: bestResult.id,
+              });
             }
 
             // Scroll after adding debug and image
@@ -406,7 +427,10 @@ async function sendChatMessageAndFocus() {
       role: "assistant",
       content: "Error: " + (error.message || error),
     });
-    await saveChatMessage({ role: "assistant", content: "Error: " + (error.message || error) });
+    await saveChatMessage({
+      role: "assistant",
+      content: "Error: " + (error.message || error),
+    });
   } finally {
     chatLoading.value = false;
     await nextTick();
@@ -416,7 +440,7 @@ async function sendChatMessageAndFocus() {
 
 async function saveChatMessage(msg) {
   if (!props.backendUrl || !props.selectedCharacter) return;
-  if (!['user', 'assistant', 'system'].includes(msg.role)) return;
+  if (!["user", "assistant", "system"].includes(msg.role)) return;
   const payload = {
     character_id: props.selectedCharacter,
     session_id: sessionId.value,
@@ -428,17 +452,19 @@ async function saveChatMessage(msg) {
     payload.picture_id = msg.picture_id;
   }
   await fetch(`${props.backendUrl}/chat/message`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 }
 
 async function clearChatHistory() {
   if (!props.backendUrl || !props.selectedCharacter) return;
   await fetch(
-    `${props.backendUrl}/chat/history?character_id=${encodeURIComponent(props.selectedCharacter)}&session_id=${encodeURIComponent(sessionId.value)}`,
-    { method: 'DELETE' }
+    `${props.backendUrl}/chat/history?character_id=${encodeURIComponent(
+      props.selectedCharacter
+    )}&session_id=${encodeURIComponent(sessionId.value)}`,
+    { method: "DELETE" }
   );
   chatMessages.value = [];
 }
@@ -547,7 +573,14 @@ defineExpose({ focusInput });
           >
             <v-icon>mdi-send</v-icon>
           </v-btn>
-            <button class="chat-clear-btn" @click="clearChatHistory" title="Clear chat history" style="margin-left:1em;font-size:0.9em;">🗑️</button>
+          <button
+            class="chat-clear-btn"
+            @click="clearChatHistory"
+            title="Clear chat history"
+            style="margin-left: 1em; font-size: 0.9em"
+          >
+            🗑️
+          </button>
         </form>
       </div>
     </div>
