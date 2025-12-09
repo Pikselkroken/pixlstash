@@ -33,15 +33,18 @@
                 @load="updateOverlayDims"
               />
               <!-- Multiple face bbox overlays -->
-              <template v-if="showFaceBbox && faceBboxes.length">
+              <template v-if="showFaceBbox">
+                <div v-if="faceBboxes.length === 0" style="position: absolute; left: 8px; top: 8px; color: #ff5252; background: #fff2; z-index: 1001; font-size: 0.95em; padding: 2px 8px; border-radius: 4px;">
+                  No face bboxes found
+                </div>
                 <div
                   v-for="(bbox, idx) in faceBboxes"
                   :key="idx"
                   class="face-bbox-overlay"
                   :style="{
                     position: 'absolute',
-                    border: '2px solid #ff5252',
-                    background: 'rgba(255, 82, 82, 0.15)',
+                    border: `2px solid ${faceBoxColor(idx)}`,
+                    background: `${faceBoxColor(idx)}22`,
                     left: `${(bbox[0] * overlayDims.width / overlayDims.naturalWidth) || 0}px`,
                     top: `${(bbox[1] * overlayDims.height / overlayDims.naturalHeight) || 0}px`,
                     width: `${((bbox[2] - bbox[0]) * overlayDims.width / overlayDims.naturalWidth) || 0}px`,
@@ -50,7 +53,9 @@
                     zIndex: 1000,
                     display: 'block',
                   }"
-                ></div>
+                >
+                  <span style="position: absolute; left: 0; top: 0; background: #222c; color: #fff; font-size: 0.8em; padding: 1px 4px; border-bottom-right-radius: 6px;">Face {{ idx + 1 }}</span>
+                </div>
               </template>
             </template>
             <div class="star-overlay" v-if="image">
@@ -66,7 +71,9 @@
             </div>
             <!-- Toggle buttons -->
             <div style="position: absolute; left: 8px; top: 8px; z-index: 30; display: flex; flex-direction: column; gap: 4px;">
-              <button @click.stop="toggleFaceBbox" style="background: #fff2; color: #ff5252; border: none; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.95em;">BBox</button>
+              <button @click.stop="toggleFaceBbox" style="background: #fff2; color: #ff5252; border: 1px dashed red; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 1.2em; display: flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px;">
+                <v-icon size="24" style="color: white;">mdi-account</v-icon>
+              </button>
             </div>
           </div>
         </div>
@@ -330,6 +337,24 @@ watch(
   },
   { immediate: true }
 );
+
+// Add this helper below your script setup imports
+function faceBoxColor(idx) {
+  // Pick from a palette, cycle if more faces than colors
+  const palette = [
+    '#ff5252', // red
+    '#40c4ff', // blue
+    '#ffd740', // yellow
+    '#69f0ae', // green
+    '#d500f9', // purple
+    '#ffab40', // orange
+    '#00e676', // teal
+    '#ff4081', // pink
+    '#8d6e63', // brown
+    '#7c4dff', // indigo
+  ];
+  return palette[idx % palette.length];
+}
 </script>
 
 <style scoped>
