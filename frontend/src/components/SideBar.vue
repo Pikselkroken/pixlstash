@@ -40,6 +40,7 @@ const categoryCounts = ref({
   [props.allPicturesId]: 0,
   [props.unassignedPicturesId]: 0,
 });
+
 const characterThumbnails = ref({});
 const expandedCharacters = ref({});
 
@@ -257,23 +258,32 @@ async function fetchSidebarCounts() {
   // Fetch total image count for END key logic
   try {
     // All images summary
-    const resAll = await fetch(`${props.backendUrl}/characters/null/summary`);
+    const resAll = await fetch(
+      `${props.backendUrl}/characters/${props.allPicturesId}/summary`
+    );
     if (resAll.ok) {
       const data = await resAll.json();
-      totalImages.value = data.image_count || 0;
       categoryCounts.value[props.allPicturesId] = data.image_count;
+    } else {
+      console.warn("Failed to fetch all images summary");
     }
-  } catch {}
+  } catch (e) {
+    console.warn("Error fetching all images summary:", e);
+  }
   try {
     // Unassigned images summary
     const resUnassigned = await fetch(
-      `${props.backendUrl}/characters/null/summary`
+      `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`
     );
     if (resUnassigned.ok) {
       const data = await resUnassigned.json();
       categoryCounts.value[props.unassignedPicturesId] = data.image_count;
+    } else {
+      console.warn("Failed to fetch unassigned images summary");
     }
-  } catch {}
+  } catch (e) {
+    console.warn("Error fetching unassigned images summary:", e);
+  }
   await Promise.all(
     characters.value.map(async (char) => {
       try {
@@ -510,7 +520,7 @@ async function onCharacterDrop(characterId, event) {
       }
       await fetchSidebarCounts();
       await fetchCharacterThumbnail(characterId);
-      emit("faces-assigned-to-character", { characterId, faceIds });
+      //emit("faces-assigned-to-character", { characterId, faceIds});
       console.log(
         `Assigned ${faceIds.length} face(s) to character ${characterId}`
       );

@@ -616,21 +616,22 @@ class Server:
         async def get_characters_summary(id: str = None):
             """
             Return summary statistics for a single category:
-            - If character_id is omitted: all pictures
-            - If character_id is null/None/empty: unassigned pictures
+            - If character_id is ALL: all pictures
+            - If character_id is UNASSIGNED: unassigned pictures
             - If character_id is set: that character's pictures
             """
             start = time.time()
             # Determine which set to query
-            if id is None:
+            if id == "ALL":
                 # All
                 metadata_fields = Picture.metadata_fields()
                 pics = self.vault.db.run_task(
                     Picture.find, select_fields=metadata_fields
                 )
                 image_count = len(pics)
+                logger.info("ALL pics count: {}".format(image_count))
                 char_id = None
-            elif id == "null":
+            elif id == "UNASSIGNED":
                 # Unassigned
                 def find_unassigned(session: Session):
                     pics = Picture.find(session, select_fields=["characters"])
@@ -638,6 +639,7 @@ class Server:
 
                 pics = self.vault.db.run_task(find_unassigned)
                 image_count = len(pics)
+                logger.info("UNASSIGNED pics count: {}".format(image_count))
                 char_id = None
             else:
 
@@ -1337,19 +1339,27 @@ class Server:
                         except Exception:
                             bbox = None
                         if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                            character = self.vault.db.run_task(
-                                lambda session: Character.find(
-                                    session,
-                                    id=face.character_id,
-                                    select_fields=["name"],
+                            character = (
+                                self.vault.db.run_task(
+                                    lambda session: Character.find(
+                                        session,
+                                        id=face.character_id,
+                                        select_fields=["name"],
+                                    )
                                 )
-                            ) if face.character_id else None
+                                if face.character_id
+                                else None
+                            )
                             face_data.append(
                                 {
                                     "id": face.id,
                                     "bbox": bbox,
                                     "character_id": face.character_id,
-                                    "character_name": getattr(character[0], "name", None) if character else None,
+                                    "character_name": getattr(
+                                        character[0], "name", None
+                                    )
+                                    if character
+                                    else None,
                                     "frame_index": getattr(face, "frame_index", None),
                                 }
                             )
@@ -1591,13 +1601,17 @@ class Server:
         @self.api.patch("/pictures/{id}")
         async def patch_picture(id: str, request: Request):
             """
-            Update fields of a picture using query parameters, e.g., /pictures/{id}?score=5
+            Update fields of a picture using query parameters, e.g., /pictures/{id}
             Also supports JSON body with fields to update, e.g., { "tags": ["tag1", "tag2"] }.
             """
             params = dict(request.query_params)
 
+            logger.info("Got a PATCH request for picture id={}".format(id))
+
             # If PATCH is called with a JSON body, use it
             content_type = request.headers.get("content-type", "")
+
+            logger.info("Content type: {}".format(content_type))
             json_body = None
             if "application/json" in content_type:
                 try:
@@ -1620,7 +1634,9 @@ class Server:
             if json_body and isinstance(json_body, dict):
                 params = json_body | params
 
-            logger.debug(f"Updating picture id={id}")
+            logger.info(
+                f"Updating picture id={id} with params: {params} and json_body: {json_body}"
+            )
             updated = False
             # Update fields
             for key, value in params.items():
@@ -1664,7 +1680,9 @@ class Server:
                     session.refresh(pic)
                     return pic
 
-                self.vault.notify(EventType.CHANGED_PICTURES)
+                result = self.vault.db.run_task(update_picture, pic)
+                if result.id == id:
+                    self.vault.notify(EventType.CHANGED_PICTURES)
             return {"status": "success", "picture": safe_model_dict(pic)}
 
         @self.api.post("/pictures")
@@ -1782,9 +1800,32 @@ class Server:
                 sort = query_params.pop("sort", sort)
                 offset = int(query_params.pop("offset", offset))
                 limit = int(query_params.pop("limit", limit))
+            character_id = query_params.pop("character_id", None)
 
-            if "character_id" in query_params and query_params["character_id"]:
-                character_id = int(query_params.pop("character_id"))
+            if character_id == "UNASSIGNED":
+
+                def find_unassigned(session: Session):
+                    pics = Picture.find(session, select_fields=["characters"])
+                    return [pic.id for pic in pics if not pic.characters]
+
+                picture_ids = self.vault.db.run_task(find_unassigned)
+                if not picture_ids:
+                    return []
+                pics = self.vault.db.run_task(
+                    Picture.find,
+                    id=picture_ids,
+                    sort=SortMechanism(sort.lower()) if sort else None,
+                    offset=offset,
+                    limit=limit,
+                    select_fields=Picture.metadata_fields(),
+                )
+                return [safe_model_dict(pic) for pic in pics]
+
+            if character_id == "ALL":
+                character_id = None
+
+            if character_id is not None and character_id != "":
+                character_id = int(character_id)
 
                 # Find all faces for this character
                 def get_picture_ids_for_character(session, character_id):

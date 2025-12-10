@@ -18,8 +18,8 @@ const likenessRowsRef = ref(null);
 
 // --- Backend Constants & Identifiers ---
 const BACKEND_URL = "http://localhost:9537";
-const ALL_PICTURES_ID = "__all__";
-const UNASSIGNED_PICTURES_ID = "__unassigned__";
+const ALL_PICTURES_ID = "ALL";
+const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
 
 // --- Template & Component Refs ---
 const gridContainer = ref(null);

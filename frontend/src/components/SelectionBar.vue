@@ -11,8 +11,8 @@
         <button
           v-if="
             selectedCharacter &&
-            selectedCharacter !== '__all__' &&
-            selectedCharacter !== '__unassigned__'
+            selectedCharacter !== $props.allPicturesId &&
+            selectedCharacter !== $props.unassignedPicturesId
           "
           class="remove-btn"
           @click="$emit('remove-from-group')"

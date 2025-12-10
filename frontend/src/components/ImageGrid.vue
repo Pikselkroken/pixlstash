@@ -11,8 +11,8 @@
     ref="imageImporterRef"
     :backendUrl="props.backendUrl"
     :selectedCharacterId="props.selectedCharacter"
-    :allPicturesId="'__all__'"
-    :unassignedPicturesId="'__unassigned__'"
+    :allPicturesId="props.allPicturesId"
+    :unassignedPicturesId="props.unassignedPicturesId"
     @import-finished="handleImagesUploaded"
   />
   <div style="position: relative">
@@ -341,6 +341,8 @@ const props = defineProps({
   selectedSort: String,
   showStars: Boolean,
   showFaceBboxes: Boolean,
+  allPicturesId: String,
+  unassignedPicturesId: String,
   gridVersion: { type: Number, default: 0 },
   mediaTypeFilter: { type: String, default: "all" },
 });
@@ -566,8 +568,8 @@ function removeFromGroup() {
   // Remove from character
   if (
     props.selectedCharacter &&
-    props.selectedCharacter !== "__all__" &&
-    props.selectedCharacter !== "__unassigned__"
+    props.selectedCharacter !== props.allPicturesId &&
+    props.selectedCharacter !== props.unassignedPicturesId
   ) {
     fetch(`${backendUrl}/characters/${props.selectedCharacter}/faces`, {
       method: "DELETE",
@@ -599,8 +601,8 @@ function removeFromGroup() {
   // Remove from set
   if (
     props.selectedSet &&
-    props.selectedSet !== "__all__" &&
-    props.selectedSet !== "__unassigned__"
+    props.selectedSet !== props.allPicturesId &&
+    props.selectedSet !== props.unassignedPicturesId
   ) {
     Promise.all(
       selectedImageIds.value.map((id) =>
@@ -722,10 +724,16 @@ const selectedGroupName = ref("");
 
 async function updateSelectedGroupName() {
   let name = "";
+  console.log(
+    "Updating selected group name: ",
+    props.selectedCharacter,
+    props.selectedSet,
+    props.allPicturesId
+  );
   if (
     props.selectedCharacter &&
-    props.selectedCharacter !== "__all__" &&
-    props.selectedCharacter !== "__unassigned__"
+    props.selectedCharacter !== `${props.allPicturesId}` &&
+    props.selectedCharacter !== `${props.unassignedPicturesId}`
   ) {
     try {
       const res = await fetch(
@@ -740,8 +748,8 @@ async function updateSelectedGroupName() {
     }
   } else if (
     props.selectedSet &&
-    props.selectedSet !== "__all__" &&
-    props.selectedSet !== "__unassigned__"
+    props.selectedSet !== `${props.allPicturesId}` &&
+    props.selectedSet !== `${props.unassignedPicturesId}`
   ) {
     try {
       const res = await fetch(`${props.backendUrl}/sets/${props.selectedSet}`);
@@ -808,11 +816,18 @@ async function applyScore(img, newScore) {
     return;
   }
   try {
-    console.debug("PATCH /pictures/", imageId, "?score=", newScore);
-    const res = await fetch(
-      `${props.backendUrl}/pictures/${imageId}?score=${newScore}`,
-      { method: "PATCH" }
+    console.debug(
+      "PATCH /pictures/",
+      imageId,
+      " body: { score:",
+      newScore,
+      "}"
     );
+    const res = await fetch(`${props.backendUrl}/pictures/${imageId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ score: newScore }),
+    });
     if (!res.ok) throw new Error(`Failed to set score for image ${imageId}`);
 
     // Update score in allGridImages
@@ -877,8 +892,8 @@ async function handleGridDragEnter(e) {
   const itemCount = e.dataTransfer.items.length;
   if (
     props.selectedCharacter &&
-    props.selectedCharacter !== "__all__" &&
-    props.selectedCharacter !== "__unassigned__"
+    props.selectedCharacter !== props.allPicturesId &&
+    props.selectedCharacter !== props.unassignedPicturesId
   ) {
     const groupLabel = selectedGroupName.value
       ? "for " + selectedGroupName.value
@@ -929,8 +944,8 @@ function handleGridDrop(e) {
     imageImporterRef.value.startImport(files, {
       backendUrl: props.backendUrl,
       selectedCharacterId: props.selectedCharacter,
-      allPicturesId: "__all__",
-      unassignedPicturesId: "__unassigned__",
+      allPicturesId: "ALL",
+      unassignedPicturesId: "UNASSIGNED",
     });
   }
 }
@@ -974,16 +989,17 @@ function buildPictureIdsQueryParams() {
   // If a set is selected, filter by set
   if (
     props.selectedSet &&
-    props.selectedSet !== "__all__" &&
-    props.selectedSet !== "__unassigned__"
+    props.selectedSet !== props.allPicturesId &&
+    props.selectedSet !== props.unassignedPicturesId
   ) {
     params.append("set_id", props.selectedSet);
-  } else if (props.selectedCharacter && props.selectedCharacter !== "__all__") {
-    if (props.selectedCharacter === "__unassigned__") {
-      params.append("character_id", "");
-    } else {
+  } else if (
+    props.selectedCharacter !== undefined &&
+    props.selectedCharacter !== null &&
+    props.selectedCharacter !== "" &&
+    props.selectedCharacter !== props.allPicturesId
+  ) {
       params.append("character_id", props.selectedCharacter);
-    }
   }
 
   if (props.searchQuery && props.searchQuery.trim()) {
@@ -1010,8 +1026,8 @@ async function fetchTotalImageCount() {
     // If a set is selected, use /picture_sets/{id}
     if (
       props.selectedSet &&
-      props.selectedSet !== "__all__" &&
-      props.selectedSet !== "__unassigned__"
+      props.selectedSet !== props.allPicturesId &&
+      props.selectedSet !== props.unassignedPicturesId
     ) {
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
       const res = await fetch(url);
@@ -1188,8 +1204,8 @@ async function fetchThumbnailsBatch(start, end) {
     // If a set is selected, use /picture_sets/{id}
     if (
       props.selectedSet &&
-      props.selectedSet !== "__all__" &&
-      props.selectedSet !== "__unassigned__"
+      props.selectedSet !== props.allPicturesId &&
+      props.selectedSet !== props.unassignedPicturesId
     ) {
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
       const res = await fetch(url);
