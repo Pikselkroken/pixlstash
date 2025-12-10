@@ -34,7 +34,20 @@
               />
               <!-- Multiple face bbox overlays -->
               <template v-if="showFaceBbox">
-                <div v-if="faceBboxes.length === 0" style="position: absolute; left: 8px; top: 8px; color: #ff5252; background: #fff2; z-index: 1001; font-size: 0.95em; padding: 2px 8px; border-radius: 4px;">
+                <div
+                  v-if="faceBboxes.length === 0"
+                  style="
+                    position: absolute;
+                    left: 8px;
+                    top: 8px;
+                    color: #ff5252;
+                    background: #fff2;
+                    z-index: 1001;
+                    font-size: 0.95em;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                  "
+                >
                   No face bboxes found
                 </div>
                 <div
@@ -43,18 +56,42 @@
                   class="face-bbox-overlay"
                   :style="{
                     position: 'absolute',
-                    border: `2px solid ${faceBoxColor(idx)}`,
+                    border: `1px solid ${faceBoxColor(idx)}`,
                     background: `${faceBoxColor(idx)}22`,
-                    left: `${(bbox[0] * overlayDims.width / overlayDims.naturalWidth) || 0}px`,
-                    top: `${(bbox[1] * overlayDims.height / overlayDims.naturalHeight) || 0}px`,
-                    width: `${((bbox[2] - bbox[0]) * overlayDims.width / overlayDims.naturalWidth) || 0}px`,
-                    height: `${((bbox[3] - bbox[1]) * overlayDims.height / overlayDims.naturalHeight) || 0}px`,
+                    left: `${
+                      (bbox[0] * overlayDims.width) /
+                        overlayDims.naturalWidth || 0
+                    }px`,
+                    top: `${
+                      (bbox[1] * overlayDims.height) /
+                        overlayDims.naturalHeight || 0
+                    }px`,
+                    width: `${
+                      ((bbox[2] - bbox[0]) * overlayDims.width) /
+                        overlayDims.naturalWidth || 0
+                    }px`,
+                    height: `${
+                      ((bbox[3] - bbox[1]) * overlayDims.height) /
+                        overlayDims.naturalHeight || 0
+                    }px`,
                     pointerEvents: 'auto',
                     zIndex: 1000,
                     display: 'block',
                   }"
                 >
-                  <span style="position: absolute; left: 0; top: 0; background: #222c; color: #fff; font-size: 0.8em; padding: 1px 4px; border-bottom-right-radius: 6px;">Face {{ idx + 1 }}</span>
+                  <span
+                    style="
+                      position: absolute;
+                      left: 0;
+                      top: 0;
+                      background: #222c;
+                      color: #fff;
+                      font-size: 0.8em;
+                      padding: 1px 4px;
+                      border-bottom-right-radius: 6px;
+                    "
+                    >Face {{ idx + 1 }}</span
+                  >
                 </div>
               </template>
             </template>
@@ -70,9 +107,35 @@
               >
             </div>
             <!-- Toggle buttons -->
-            <div style="position: absolute; left: 8px; top: 8px; z-index: 30; display: flex; flex-direction: column; gap: 4px;">
-              <button @click.stop="toggleFaceBbox" style="background: #fff2; color: #ff5252; border: 1px dashed red; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 1.2em; display: flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px;">
-                <v-icon size="24" style="color: white;">mdi-account</v-icon>
+            <div
+              style="
+                position: absolute;
+                left: 8px;
+                top: 8px;
+                z-index: 30;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+              "
+            >
+              <button
+                @click.stop="toggleFaceBbox"
+                style="
+                  background: #fff2;
+                  color: #ff5252;
+                  border: 1px dashed red;
+                  border-radius: 4px;
+                  padding: 2px 8px;
+                  cursor: pointer;
+                  font-size: 1.2em;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  min-width: 32px;
+                  min-height: 32px;
+                "
+              >
+                <v-icon size="24" style="color: white">mdi-account</v-icon>
               </button>
             </div>
           </div>
@@ -138,7 +201,15 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref, computed, nextTick, toRefs, watch } from "vue";
+import {
+  onMounted,
+  onUnmounted,
+  ref,
+  computed,
+  nextTick,
+  toRefs,
+  watch,
+} from "vue";
 import { isSupportedVideoFile, getOverlayFormat } from "../utils/media.js";
 
 const props = defineProps({
@@ -272,12 +343,22 @@ const showFaceBbox = ref(false);
 
 function toggleFaceBbox() {
   showFaceBbox.value = !showFaceBbox.value;
-  console.log('[ImageOverlay] Toggled showFaceBbox:', showFaceBbox.value, 'faceBboxes:', faceBboxes.value);
+  console.log(
+    "[ImageOverlay] Toggled showFaceBbox:",
+    showFaceBbox.value,
+    "faceBboxes:",
+    faceBboxes.value
+  );
   image.value = image.value ? { ...image.value } : null;
 }
 
 const imgRef = ref(null);
-const overlayDims = ref({ width: 1, height: 1, naturalWidth: 1, naturalHeight: 1 });
+const overlayDims = ref({
+  width: 1,
+  height: 1,
+  naturalWidth: 1,
+  naturalHeight: 1,
+});
 
 function updateOverlayDims() {
   if (imgRef.value) {
@@ -285,7 +366,7 @@ function updateOverlayDims() {
     overlayDims.value.height = imgRef.value.clientHeight;
     overlayDims.value.naturalWidth = imgRef.value.naturalWidth;
     overlayDims.value.naturalHeight = imgRef.value.naturalHeight;
-    console.log('[ImageOverlay] updateOverlayDims', {
+    console.log("[ImageOverlay] updateOverlayDims", {
       width: overlayDims.value.width,
       height: overlayDims.value.height,
       naturalWidth: overlayDims.value.naturalWidth,
@@ -310,7 +391,7 @@ const faceBboxes = ref([]);
 async function fetchFaceBboxes(imageId) {
   if (!imageId || !backendUrl.value) {
     faceBboxes.value = [];
-    console.log('[ImageOverlay] fetchFaceBboxes: No imageId or backendUrl');
+    console.log("[ImageOverlay] fetchFaceBboxes: No imageId or backendUrl");
     return;
   }
   try {
@@ -319,11 +400,15 @@ async function fetchFaceBboxes(imageId) {
     const faces = await res.json();
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
     faceBboxes.value = Array.isArray(faceArray)
-      ? faceArray.map(f => Array.isArray(f.bbox) && f.bbox.length === 4 ? f.bbox : null).filter(Boolean)
+      ? faceArray
+          .map((f) =>
+            Array.isArray(f.bbox) && f.bbox.length === 4 ? f.bbox : null
+          )
+          .filter(Boolean)
       : [];
-    console.log('[ImageOverlay] fetchFaceBboxes: faceBboxes', faceBboxes.value);
+    console.log("[ImageOverlay] fetchFaceBboxes: faceBboxes", faceBboxes.value);
   } catch (e) {
-    console.error('[ImageOverlay] fetchFaceBboxes error:', e);
+    console.error("[ImageOverlay] fetchFaceBboxes error:", e);
     faceBboxes.value = [];
   }
 }
@@ -342,16 +427,16 @@ watch(
 function faceBoxColor(idx) {
   // Pick from a palette, cycle if more faces than colors
   const palette = [
-    '#ff5252', // red
-    '#40c4ff', // blue
-    '#ffd740', // yellow
-    '#69f0ae', // green
-    '#d500f9', // purple
-    '#ffab40', // orange
-    '#00e676', // teal
-    '#ff4081', // pink
-    '#8d6e63', // brown
-    '#7c4dff', // indigo
+    "#ff5252", // red
+    "#40c4ff", // blue
+    "#ffd740", // yellow
+    "#69f0ae", // green
+    "#d500f9", // purple
+    "#ffab40", // orange
+    "#00e676", // teal
+    "#ff4081", // pink
+    "#8d6e63", // brown
+    "#7c4dff", // indigo
   ];
   return palette[idx % palette.length];
 }

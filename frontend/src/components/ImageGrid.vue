@@ -252,6 +252,35 @@
 </template>
 
 <script setup>
+import { computed, onMounted, ref, watch, nextTick, onUnmounted } from "vue";
+import {
+  isSupportedMediaFile,
+  isSupportedImageFile,
+  dataTransferHasSupportedMedia,
+  isSupportedVideoFile,
+  getOverlayFormat,
+} from "../utils/media.js";
+import ImageImporter from "./ImageImporter.vue";
+import ImageOverlay from "./ImageOverlay.vue";
+import SelectionBar from "./SelectionBar.vue";
+import { useOverlayActions } from "../utils/useOverlayActions";
+
+const emit = defineEmits(["open-overlay", "refresh-sidebar"]);
+
+// Props
+const props = defineProps({
+  thumbnailSize: Number,
+  sidebarVisible: Boolean,
+  backendUrl: String,
+  selectedCharacter: { type: [String, Number, null], default: null },
+  selectedSet: { type: [Number, String, null], default: null },
+  searchQuery: String,
+  selectedSort: String,
+  showStars: Boolean,
+  gridVersion: { type: Number, default: 0 },
+  mediaTypeFilter: { type: String, default: "all" },
+});
+
 // Track which image is currently hovered
 const hoveredImageIdx = ref(null);
 
@@ -275,20 +304,6 @@ function formatIsoDate(dateStr) {
     d.getHours()
   )}:${pad(d.getMinutes())}`;
 }
-import { computed, onMounted, ref, watch, nextTick, onUnmounted } from "vue";
-import {
-  isSupportedMediaFile,
-  isSupportedImageFile,
-  dataTransferHasSupportedMedia,
-  isSupportedVideoFile,
-  getOverlayFormat,
-} from "../utils/media.js";
-import ImageImporter from "./ImageImporter.vue";
-import ImageOverlay from "./ImageOverlay.vue";
-import SelectionBar from "./SelectionBar.vue";
-import { useOverlayActions } from "../utils/useOverlayActions";
-
-const emit = defineEmits(["open-overlay", "refresh-sidebar"]);
 
 function clearSelection() {
   selectedImageIds.value = [];
@@ -455,19 +470,6 @@ async function handleImagesUploaded(newIds) {
   await fetchTotalImageCount();
   updateVisibleThumbnails();
 }
-// Props
-const props = defineProps({
-  thumbnailSize: Number,
-  sidebarVisible: Boolean,
-  backendUrl: String,
-  selectedCharacter: { type: [String, Number, null], default: null },
-  selectedSet: { type: [Number, String, null], default: null },
-  searchQuery: String,
-  selectedSort: String,
-  showStars: Boolean,
-  gridVersion: { type: Number, default: 0 },
-  mediaTypeFilter: { type: String, default: "all" },
-});
 
 watch(
   () => props.gridVersion,
@@ -557,9 +559,7 @@ let lastSelectedIndex = null;
 // --- Overlay ---
 async function fetchImageInfo(imageId) {
   try {
-    const res = await fetch(
-      `${props.backendUrl}/pictures/${imageId}?info=true`
-    );
+    const res = await fetch(`${props.backendUrl}/pictures/${imageId}/metadata`);
     if (!res.ok) throw new Error("Failed to fetch tags");
     return await res.json();
   } catch (e) {
@@ -1035,13 +1035,18 @@ async function fetchThumbnailsBatch(start, end) {
       if (thumbRes.ok) {
         const thumbData = await thumbRes.json();
         for (const gridImg of gridImages) {
-          gridImg.thumbnail = thumbData[gridImg.id]
-            ? `data:image/png;base64,${thumbData[gridImg.id]}`
-            : null;
+          const thumbObj = thumbData[gridImg.id];
+          gridImg.thumbnail =
+            thumbObj && thumbObj.thumbnail
+              ? `data:image/png;base64,${thumbObj.thumbnail}`
+              : null;
+          gridImg.faces =
+            thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
         }
       } else {
         for (const gridImg of gridImages) {
           gridImg.thumbnail = null;
+          gridImg.faces = [];
         }
       }
     }
@@ -1476,12 +1481,13 @@ async function exportCurrentViewToZip() {
 }
 .thumbnail-container {
   width: 100%;
+  height: 100%;
   position: relative;
-  display: block;
   aspect-ratio: 1 / 1;
 }
 .thumbnail-img {
   width: 100%;
+  height: 100%;
   aspect-ratio: 1 / 1;
   object-fit: cover;
   display: block;
