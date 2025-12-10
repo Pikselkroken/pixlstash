@@ -973,27 +973,44 @@ class Server:
         async def remove_character_from_faces(
             character_id: int, payload: dict = Body(...)
         ):
-            face_ids = payload.get("face_ids")
-            if not isinstance(face_ids, list):
-                raise HTTPException(
-                    status_code=400, detail="face_id must be an integer"
-                )
             """Remove the character association from a specific face."""
 
+            face_ids = payload.get("face_ids", None)
+            picture_ids = payload.get("picture_ids", None)
+            if not isinstance(face_ids, list) and not isinstance(picture_ids, list):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Must send a list of picture_ids or face_ids",
+                )
+
             def remove_faces_from_character(
-                session: Session, character_id: int, face_ids: list[int]
+                session: Session,
+                character_id: int,
+                face_ids: list[int] = None,
+                picture_ids: list[str] = None,
             ):
                 faces = []
-                for face_id in face_ids:
-                    face = session.get(Face, face_id)
-                    if face and face.character_id == character_id:
-                        face.character_id = None
-                        session.add(face)
+                if picture_ids:
+                    for pic_id in picture_ids:
+                        pic_faces = Face.find(session, picture_id=pic_id)
+                        for face in pic_faces:
+                            if face.character_id == character_id:
+                                face.character_id = None
+                                session.add(face)
+                                faces.append(face)
+                elif face_ids:
+                    for face_id in face_ids:
+                        face = session.get(Face, face_id)
+                        if face and face.character_id == character_id:
+                            face.character_id = None
+                            session.add(face)
                 session.commit()
                 session.refresh(face)
                 return faces
 
-            self.vault.db.run_task(remove_faces_from_character, character_id, face_ids)
+            self.vault.db.run_task(
+                remove_faces_from_character, character_id, face_ids, picture_ids
+            )
             self.vault.notify(EventType.CHANGED_CHARACTERS)
             self.vault.notify(EventType.CHANGED_FACES)
             return {
@@ -1296,21 +1313,49 @@ class Server:
             if not isinstance(ids, list):
                 raise HTTPException(status_code=400, detail="'ids' must be a list")
 
+            # Fetch pictures and their faces
             pics = self.vault.db.run_task(
                 lambda session: Picture.find(
-                    session, id=ids, select_fields=["id", "thumbnail"]
+                    session, id=ids, select_fields=["id", "thumbnail", "faces"]
                 )
             )
             results = {}
             for pic in pics:
                 try:
                     thumbnail_bytes = pic.thumbnail
-                    results[pic.id] = base64.b64encode(thumbnail_bytes).decode("utf-8")
-                except KeyError:
+                    # Gather face bboxes and ids
+                    face_data = []
+                    for face in getattr(pic, "faces", []):
+                        # Defensive: ensure bbox is a list of 4 ints
+                        bbox = None
+                        try:
+                            bbox = face.bbox if hasattr(face, "bbox") else None
+                            if bbox and isinstance(bbox, str):
+                                import ast
+
+                                bbox = ast.literal_eval(bbox)
+                        except Exception:
+                            bbox = None
+                        if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                            face_data.append(
+                                {
+                                    "id": face.id,
+                                    "bbox": bbox,
+                                    "character_id": face.character_id,
+                                    "frame_index": getattr(face, "frame_index", None),
+                                }
+                            )
+                    results[pic.id] = {
+                        "thumbnail": base64.b64encode(thumbnail_bytes).decode("utf-8")
+                        if thumbnail_bytes
+                        else None,
+                        "faces": face_data,
+                    }
+                except Exception as exc:
                     logger.error(
-                        f"Picture not found for id={pic.id} (thumbnail request)"
+                        f"Picture not found or error for id={pic.id} (thumbnail request): {exc}"
                     )
-                    results[pic.id] = None
+                    results[pic.id] = {"thumbnail": None, "faces": []}
             response = JSONResponse(results)
             response.headers["Access-Control-Allow-Origin"] = "*"
             return response

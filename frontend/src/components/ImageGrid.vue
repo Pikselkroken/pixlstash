@@ -189,6 +189,8 @@
                     :key="overlay.idx + '-' + thumbnailLoadedMap[img.id]"
                     class="face-bbox-overlay"
                     :style="overlay.style"
+                    draggable="true"
+                    @dragstart="onFaceBboxDragStart($event, img, overlay.idx)"
                   >
                     <span
                       style="
@@ -347,6 +349,20 @@ function setThumbnailRef(id, el) {
   }
 }
 
+function onFaceBboxDragStart(event, img, faceIdx) {
+  const face = img.faces[faceIdx];
+  event.dataTransfer.setData(
+    "application/json",
+    JSON.stringify({
+      type: "face-bbox",
+      imageId: img.id,
+      faceIdx,
+      face,
+    })
+  );
+  event.dataTransfer.effectAllowed = "move";
+}
+
 // Helper to calculate face bbox overlay style using object-fit: cover logic
 function getFaceBboxStyle(bbox, idx, img, el) {
   if (!el) return { display: "none" };
@@ -491,38 +507,32 @@ function removeFromGroup() {
     props.selectedCharacter !== "__all__" &&
     props.selectedCharacter !== "__unassigned__"
   ) {
-    Promise.all(
-      selectedImageIds.value.map((id) =>
-        fetch(`${backendUrl}/pictures/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ character_id: null }),
-        })
-          .then((res) => {
-            if (!res.ok)
-              throw new Error(`Failed to unassign character for image ${id}`);
-          })
-          .catch((err) => {
-            alert(
-              `Error unassigning character for image ${id}: ${err.message}`
-            );
-          })
-      )
-    ).then(() => {
-      // Remove affected images from grid immediately
-      allGridImages.value = allGridImages.value.filter(
-        (img) => !selectedImageIds.value.includes(img.id)
-      );
-      selectedImageIds.value = [];
-      lastSelectedIndex = null;
-      fetchTotalImageCount().then(() => {
-        loadedRanges.value = [];
+    fetch(`${backendUrl}/characters/${props.selectedCharacter}/faces`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ picture_ids: selectedImageIds.value }),
+    })
+      .then((res) => {
+        if (!res.ok)
+          throw new Error(`Failed to remove images from character`);
+      })
+      .catch((err) => {
+        alert(`Error removing images from character: ${err.message}`);
+      })
+      .finally(() => {
+        // Remove affected images from grid immediately
+        allGridImages.value = allGridImages.value.filter(
+          (img) => !selectedImageIds.value.includes(img.id)
+        );
+        selectedImageIds.value = [];
+        lastSelectedIndex = null;
+        fetchTotalImageCount().then(() => {
+          loadedRanges.value = [];
+          updateVisibleThumbnails();
+          emit("refresh-sidebar");
+        });
         updateVisibleThumbnails();
-        emit("refresh-sidebar");
       });
-      // Ensure thumbnails are refetched for new visible range
-      updateVisibleThumbnails();
-    });
     return;
   }
   // Remove from set

@@ -502,7 +502,7 @@ async function onCharacterDrop(characterId, event) {
     // Refresh the character's thumbnail
     await fetchCharacterThumbnail(characterId);
     // Emit signal to App.vue to trigger ImageGrid refresh
-    emit("faces-assigned-to-character", { characterId, faceIds: draggedIds });
+    //emit("faces-assigned-to-character", { characterId, faceIds: draggedIds });
     console.log(
       `Assigned ${draggedIds.length} face(s) to character ${characterId}`
     );
