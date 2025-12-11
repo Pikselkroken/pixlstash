@@ -40,6 +40,7 @@ const categoryCounts = ref({
   [props.allPicturesId]: 0,
   [props.unassignedPicturesId]: 0,
 });
+
 const characterThumbnails = ref({});
 const expandedCharacters = ref({});
 
@@ -58,6 +59,7 @@ const nextCharacterNumber = ref(1);
 
 // --- Picture Sets State ---
 const pictureSets = ref([]);
+const referencePictureSetsByCharacter = ref({});
 
 // --- Character Editor State ---
 const characterEditorOpen = ref(false);
@@ -98,22 +100,6 @@ const selectedCharacterObj = computed(() => {
     return char;
   }
   return null;
-});
-
-// Use reference_picture_set_id from categoryCounts (populated from backend /category/summary)
-const referenceSetInfoByCharacter = computed(() => {
-  const map = {};
-  sortedCharacters.value.forEach((char) => {
-    // Find the reference set for this character by matching name and description
-    const set = pictureSets.value.find(
-      (s) =>
-        s.name === "reference_pictures" && s.description === String(char.id)
-    );
-    if (set) {
-      map[char.id] = set;
-    }
-  });
-  return map;
 });
 
 const sortModel = computed({
@@ -253,41 +239,41 @@ function toggleCharacterCollapse(charId) {
 }
 
 // --- Sidebar & Character Data ---
-async function fetchSidebarCounts() {
+async function fetchSidebarData() {
   // Fetch total image count for END key logic
   try {
-    const resAll = await fetch(`${props.backendUrl}/category/summary`);
-    if (resAll.ok) {
-      const data = await resAll.json();
-      totalImages.value = data.image_count || 0;
-      categoryCounts.value[props.allPicturesId] = data.image_count;
-    }
-  } catch {}
-  try {
-    const resAll = await fetch(`${props.backendUrl}/category/summary`);
+    // All images summary
+    const resAll = await fetch(
+      `${props.backendUrl}/characters/${props.allPicturesId}/summary`
+    );
     if (resAll.ok) {
       const data = await resAll.json();
       categoryCounts.value[props.allPicturesId] = data.image_count;
+    } else {
+      console.warn("Failed to fetch all images summary");
     }
-  } catch {}
+  } catch (e) {
+    console.warn("Error fetching all images summary:", e);
+  }
   try {
+    // Unassigned images summary
     const resUnassigned = await fetch(
-      `${props.backendUrl}/category/summary?primary_character_id=null`
+      `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`
     );
     if (resUnassigned.ok) {
       const data = await resUnassigned.json();
       categoryCounts.value[props.unassignedPicturesId] = data.image_count;
+    } else {
+      console.warn("Failed to fetch unassigned images summary");
     }
-  } catch {}
+  } catch (e) {
+    console.warn("Error fetching unassigned images summary:", e);
+  }
   await Promise.all(
     characters.value.map(async (char) => {
       try {
         const res = await fetch(
-          `${
-            props.backendUrl
-          }/category/summary?primary_character_id=${encodeURIComponent(
-            char.id
-          )}`
+          `${props.backendUrl}/characters/${char.id}/summary`
         );
         if (res.ok) {
           const data = await res.json();
@@ -321,13 +307,13 @@ function refreshSidebar() {
   console.log("Refreshing sidebar");
   fetchCharacters();
   fetchPictureSets();
-  fetchSidebarCounts();
+  fetchSidebarData();
 }
 
 async function fetchCharacterThumbnail(characterId) {
   try {
     const cacheBuster = Date.now();
-    const thumbUrl = `${props.backendUrl}/face_thumbnail/${characterId}?cb=${cacheBuster}`;
+    const thumbUrl = `${props.backendUrl}/characters/${characterId}/thumbnail?cb=${cacheBuster}`;
     const res = await fetch(thumbUrl);
     if (res.ok && res.headers.get("content-type")?.includes("image/png")) {
       characterThumbnails.value[characterId] = thumbUrl;
@@ -350,14 +336,17 @@ async function fetchSortOptions() {
     const res = await fetch(`${props.backendUrl}/sort_mechanisms`);
     if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
     const options = await res.json();
+    console.log("Fetched sort options:", options);
+    sortOptions.value = options;
+
     // Use backend-provided values directly
-    sortOptions.value = options.map((opt) => ({
+    /* sortOptions.value = options.map((opt) => ({
       label: opt.label,
       value: opt.id,
     }));
     if (!sortModel.value && sortOptions.value.length) {
       sortModel.value = sortOptions.value[0].value;
-    }
+    } */
   } catch (e) {
     // Fallback to hardcoded options only if backend fails
     sortOptions.value = [
@@ -378,6 +367,17 @@ async function fetchPictureSets() {
     if (!res.ok) throw new Error("Failed to fetch picture sets");
     const sets = await res.json();
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
+    console.log("Found picture sets:", pictureSets.value);
+    referencePictureSetsByCharacter.value = pictureSets.value.reduce(
+      (acc, set) => {
+        if (set.reference_character) {
+          acc[set.reference_character.id] = set;
+        }
+        return acc;
+      },
+      {}
+    );
+
   } catch (e) {
     console.error("Error fetching picture sets:", e);
     pictureSets.value = [...pictureSets.value]; // force reactivity on error
@@ -411,7 +411,7 @@ async function handleDeleteSet() {
     if (!res.ok) throw new Error("Failed to delete set");
     emit("select-set", null);
     await fetchPictureSets();
-    await fetchSidebarCounts();
+    await fetchSidebarData();
   } catch (e) {
     alert("Failed to delete set: " + (e.message || e));
   }
@@ -442,7 +442,7 @@ async function handleDropOnSet(setId, event) {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
       const res = await fetch(
-        `${props.backendUrl}/picture_sets/${setId}/pictures/${picId}`,
+        `${props.backendUrl}/picture_sets/${setId}/members/${picId}`,
         { method: "POST" }
       );
       // 400 error might mean it's already in the set, which is ok
@@ -473,47 +473,112 @@ function handleDragLeaveCharacter() {
 }
 
 async function onCharacterDrop(characterId, event) {
-  // Get the dragged image IDs from the drag event
-  let draggedIds = [];
+  // Accept faceIds or imageIds from drag event
+  let faceIds = [];
+  let imageIds = [];
+  let dragType = null;
   try {
-    const data = JSON.parse(event.dataTransfer.getData("application/json"));
+    const rawDataStr = event.dataTransfer.getData("application/json");
+    console.log("[DROP] raw drag data string:", rawDataStr);
+    const data = JSON.parse(rawDataStr);
+    console.log("onCharacterDrop data:", data);
+    dragType = data.type || null;
+    if (
+      dragType === "face-bbox" &&
+      data.faceIds &&
+      Array.isArray(data.faceIds)
+    ) {
+      faceIds = data.faceIds;
+    }
     if (data.imageIds && Array.isArray(data.imageIds)) {
-      draggedIds = data.imageIds;
+      imageIds = data.imageIds;
     }
   } catch (e) {
     console.error("Could not parse drag data:", e);
     return;
   }
 
-  if (draggedIds.length === 0) {
+  if (dragType === "face-bbox" && faceIds.length > 0) {
+    // Assign faces to character
+    try {
+      const body = { face_ids: faceIds };
+      console.log("Assigning faces to character:", characterId, body);
+      const res = await fetch(
+        `${props.backendUrl}/characters/${characterId}/faces`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      );
+      if (!res.ok) {
+        throw new Error("Failed to assign faces to character");
+      }
+      await fetchSidebarData();
+      await fetchCharacterThumbnail(characterId);
+      //emit("faces-assigned-to-character", { characterId, faceIds});
+      console.log(
+        `Assigned ${faceIds.length} face(s) to character ${characterId}`
+      );
+    } catch (e) {
+      alert("Failed to assign faces to character: " + (e.message || e));
+    }
+    return;
+  }
+
+  if (imageIds.length === 0) {
     console.log("No images found in drag data");
     return;
   }
 
   try {
-    // PATCH each image to assign primary_character_id
-    const patchPromises = draggedIds.map(async (picId) => {
-      const res = await fetch(`${props.backendUrl}/pictures/${picId}`, {
-        method: "PATCH",
+    // Fallback: assign images to character
+    const body = { picture_ids: imageIds };
+    console.log("Assigning images to character:", characterId, body);
+    const res = await fetch(
+      `${props.backendUrl}/characters/${characterId}/faces`,
+      {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ primary_character_id: characterId }),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to assign image ${picId} to character`);
+        body: JSON.stringify(body),
       }
-    });
-    await Promise.all(patchPromises);
-    // Optionally refresh sidebar counts
-    await fetchSidebarCounts();
-    // Refresh the character's thumbnail
+    );
+    if (!res.ok) {
+      throw new Error("Failed to assign images to character");
+    }
+    await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
-    // Emit signal to App.vue to trigger ImageGrid refresh
-    emit("images-assigned-to-character", { characterId, imageIds: draggedIds });
+    //emit("faces-assigned-to-character", { characterId, imageIds });
     console.log(
-      `Assigned ${draggedIds.length} image(s) to character ${characterId}`
+      `Assigned ${imageIds.length} image(s) to character ${characterId}`
     );
   } catch (e) {
     alert("Failed to assign images to character: " + (e.message || e));
+  }
+}
+
+// Batched face removal
+async function removeFacesFromCharacter(characterId, faceIds) {
+  try {
+    const res = await fetch(
+      `${props.backendUrl}/characters/${characterId}/faces`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ face_ids: faceIds }),
+      }
+    );
+    if (!res.ok) {
+      throw new Error("Failed to remove faces from character");
+    }
+    await fetchSidebarData();
+    await fetchCharacterThumbnail(characterId);
+    emit("faces-removed-from-character", { characterId, faceIds });
+    console.log(
+      `Removed ${faceIds.length} face(s) from character ${characterId}`
+    );
+  } catch (e) {
+    alert("Failed to remove faces from character: " + (e.message || e));
   }
 }
 
@@ -568,7 +633,7 @@ async function pictureSetSaved(setData) {
   }
   await fetchPictureSets();
   pictureSets.value = [...pictureSets.value]; // force reactivity
-  await fetchSidebarCounts();
+  await fetchSidebarData();
   closeSetEditor();
 }
 
@@ -760,7 +825,7 @@ defineExpose({ refreshSidebar });
               class="sidebar-character-details"
             >
               <div class="sidebar-reference-pictures">
-                <template v-if="referenceSetInfoByCharacter[char.id]">
+                <template v-if="referencePictureSetsByCharacter[char.id]">
                   <div
                     :class="[
                       'sidebar-list-item',
@@ -768,20 +833,20 @@ defineExpose({ refreshSidebar });
                       {
                         active:
                           selectedSet ===
-                          referenceSetInfoByCharacter[char.id].id,
+                          referencePictureSetsByCharacter[char.id].id,
                         droppable:
                           dragOverSet ===
-                          referenceSetInfoByCharacter[char.id].id,
+                          referencePictureSetsByCharacter[char.id].id,
                       },
                     ]"
-                    @click="selectSet(referenceSetInfoByCharacter[char.id].id)"
+                    @click="selectSet(referencePictureSetsByCharacter[char.id].id)"
                     @dragover.prevent="
-                      dragOverSetItem(referenceSetInfoByCharacter[char.id].id)
+                      dragOverSetItem(referencePictureSetsByCharacter[char.id].id)
                     "
                     @dragleave="dragLeaveSetItem"
                     @drop.prevent="
                       handleDropOnSet(
-                        referenceSetInfoByCharacter[char.id].id,
+                        referencePictureSetsByCharacter[char.id].id,
                         $event
                       )
                     "
@@ -837,7 +902,7 @@ defineExpose({ refreshSidebar });
         </div>
         <template
           v-for="(pset, idx) in pictureSets.filter(
-            (pset) => pset.name !== 'reference_pictures'
+            (pset) => pset.reference_character == null
           )"
           :key="pset.id"
         >

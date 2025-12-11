@@ -1,5 +1,13 @@
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  ref,
+  watch,
+  onMounted,
+  onBeforeUnmount,
+} from "vue";
+import nlp from "compromise";
 // FIFO queue for last 20 displayed pictures
 import { marked } from "marked";
 
@@ -10,9 +18,79 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
 });
 
+// Conversation state
+const conversationId = ref(null); // integer conversation_id from backend
+
 const displayedPictureQueue = ref([]);
 
 const selectedCharacterObj = ref(null);
+
+function handleGlobalKeydown(e) {
+  if (e.key === "Escape" && props.open) {
+    handleClose();
+  }
+}
+
+// Get or create a conversation for the selected character
+async function ensureConversation() {
+  if (!props.backendUrl || !props.selectedCharacter) return null;
+  try {
+    const res = await fetch(`${props.backendUrl}/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ character_id: props.selectedCharacter }),
+    });
+    if (!res.ok) throw new Error("Failed to get/create conversation");
+    const data = await res.json();
+    conversationId.value = data.conversation_id;
+    return data.conversation_id;
+  } catch (e) {
+    conversationId.value = null;
+    return null;
+  }
+}
+
+async function loadChatHistory() {
+  if (!props.backendUrl || !props.selectedCharacter) return;
+  const convId = await ensureConversation();
+  if (!convId) return;
+  try {
+    const res = await fetch(
+      `${props.backendUrl}/conversations/${convId}/messages?limit=100`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      let messages = Array.isArray(data.messages) ? data.messages : [];
+      messages = messages.map((msg) => {
+        if (msg.picture_id) {
+          const pictureUrl = `${props.backendUrl}/pictures/${msg.picture_id}`;
+          return { ...msg, pictureUrl };
+        }
+        return msg;
+      });
+      chatMessages.value = messages;
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (isOpen) {
+      window.addEventListener("keydown", handleGlobalKeydown);
+      loadChatHistory();
+    } else {
+      window.removeEventListener("keydown", handleGlobalKeydown);
+    }
+  },
+  { immediate: true }
+);
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleGlobalKeydown);
+});
 
 watch(
   () => props.selectedCharacter,
@@ -140,6 +218,10 @@ async function sendChatMessageAndFocus() {
   const input = chatInput.value.trim();
   if (!input || chatLoading.value) return;
 
+  // Ensure conversation exists and get its id
+  const convId = await ensureConversation();
+  if (!convId) return;
+
   const characterId = props.selectedCharacter;
   const character = await fetchCharacterById(characterId);
 
@@ -164,8 +246,12 @@ async function sendChatMessageAndFocus() {
       { role: "user", content: input },
       { role: "system", content: systemMessage }
     );
+    // Save both user and system messages
+    await saveChatMessage({ role: "user", content: input });
+    await saveChatMessage({ role: "system", content: systemMessage });
   } else {
     chatMessages.value.push({ role: "user", content: input });
+    await saveChatMessage({ role: "user", content: input });
   }
 
   chatInput.value = "";
@@ -241,11 +327,10 @@ async function sendChatMessageAndFocus() {
 
     if (props.backendUrl) {
       try {
-        const searchRes = await fetch(
-          `${props.backendUrl}/search?query=${encodeURIComponent(
-            searchQuery
-          )}&top_n=50`
-        );
+        const url = `${
+          props.backendUrl
+        }/pictures/search?query=${encodeURIComponent(searchQuery)}&top_n=50`;
+        const searchRes = await fetch(url);
         if (searchRes.ok) {
           const searchData = await searchRes.json();
           console.log("Search query:", searchQuery);
@@ -300,13 +385,31 @@ async function sendChatMessageAndFocus() {
               displayedPictureQueue.value.shift(); // Remove oldest
             }
             const imageUrl = `${props.backendUrl}/pictures/${bestResult.id}`;
+            let assistantMsgIdx = -1;
             for (let i = chatMessages.value.length - 1; i >= 0; i--) {
               const msg = chatMessages.value[i];
               if (msg.role === "assistant" && !msg.pictureUrl && !msg.isDebug) {
                 chatMessages.value[i] = { ...msg, pictureUrl: imageUrl };
+                assistantMsgIdx = i;
                 break;
               }
             }
+            // Save the assistant message with picture_id if found, else fallback
+            if (assistantMsgIdx !== -1) {
+              const msg = chatMessages.value[assistantMsgIdx];
+              await saveChatMessage({
+                role: msg.role,
+                content: msg.content,
+                picture_id: bestResult.id,
+              });
+            } else {
+              await saveChatMessage({
+                role: "assistant",
+                content: reply,
+                picture_id: bestResult.id,
+              });
+            }
+
             // Scroll after adding debug and image
             await nextTick();
             scrollToBottom();
@@ -336,11 +439,43 @@ async function sendChatMessageAndFocus() {
       role: "assistant",
       content: "Error: " + (error.message || error),
     });
+    await saveChatMessage({
+      role: "assistant",
+      content: "Error: " + (error.message || error),
+    });
   } finally {
     chatLoading.value = false;
     await nextTick();
     focusInput();
   }
+}
+
+async function saveChatMessage(msg) {
+  if (!props.backendUrl || !conversationId.value) return;
+  if (!["user", "assistant", "system"].includes(msg.role)) return;
+  const payload = {
+    conversation_id: conversationId.value,
+    timestamp: Date.now(),
+    role: msg.role,
+    content: msg.content,
+  };
+  if (msg.picture_id) {
+    payload.picture_id = msg.picture_id;
+  }
+  await fetch(`${props.backendUrl}/conversations/message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function clearChatHistory() {
+  if (!props.backendUrl || !conversationId.value) return;
+  await fetch(
+    `${props.backendUrl}/conversations/${conversationId.value}/messages`,
+    { method: "DELETE" }
+  );
+  chatMessages.value = [];
 }
 
 // Expose focusInput for parent access
@@ -447,6 +582,14 @@ defineExpose({ focusInput });
           >
             <v-icon>mdi-send</v-icon>
           </v-btn>
+          <button
+            class="chat-clear-btn"
+            @click="clearChatHistory"
+            title="Clear chat history"
+            style="margin-left: 1em; font-size: 0.9em"
+          >
+            🗑️
+          </button>
         </form>
       </div>
     </div>

@@ -1,13 +1,16 @@
-import sqlite3
 import time
 
-from pixlvault.picture_tagger import PictureTagger
-import pixlvault.picture_db_tools as db_tools
+from sqlmodel import select, Session
+from sqlalchemy.orm import load_only, selectinload
 
-from .characters import Characters
-from .database import DBPriority
-from .logging import get_logger
-from .worker_registry import BaseWorker, WorkerType
+from pixlvault.event_types import EventType
+from pixlvault.picture_tagger import PictureTagger
+from pixlvault.database import DBPriority
+from pixlvault.pixl_logging import get_logger
+from pixlvault.database import VaultDatabase
+from pixlvault.worker_registry import BaseWorker, WorkerType
+
+from pixlvault.db_models import Character, Picture, Tag
 
 logger = get_logger(__name__)
 
@@ -17,16 +20,6 @@ class DescriptionWorker(BaseWorker):
     Worker for generating picture descriptions only.
     """
 
-    def __init__(
-        self,
-        db_connection,
-        picture_tagger: PictureTagger,
-        characters: Characters,
-        position: int = 0,
-    ):
-        super().__init__(db_connection, picture_tagger, characters)
-        self._progress_position = position
-
     def worker_type(self) -> WorkerType:
         return WorkerType.DESCRIPTION
 
@@ -34,9 +27,10 @@ class DescriptionWorker(BaseWorker):
         while not self._stop.is_set():
             try:
                 start = time.time()
-                logger.debug("DescriptionWorker: Starting iteration...")
+                logger.info("DescriptionWorker: Starting iteration...")
                 data_updated = False
                 missing_descriptions = self._fetch_missing_descriptions()
+
                 logger.debug(
                     f"DescriptionWorker: Got {len(missing_descriptions)} pictures needing descriptions."
                 )
@@ -51,19 +45,41 @@ class DescriptionWorker(BaseWorker):
                 if self._stop.is_set():
                     break
                 if descriptions_generated:
-                    self._update_attributes(descriptions_generated, ["description"])
-                    data_updated = True
+
+                    def update_descriptions(session: Session, pics):
+                        changed = []
+                        for pic in pics:
+                            db_pic = session.get(Picture, pic.id)
+                            if db_pic is not None:
+                                db_pic.description = pic.description
+                                session.add(db_pic)
+                                changed.append((Picture, pic.id, "description"))
+                        session.commit()
+                        return changed
+
+                    changed = self._db.run_task(
+                        update_descriptions,
+                        descriptions_generated,
+                        priority=DBPriority.LOW,
+                    )
+                    data_updated = len(changed) > 0
+                    self._notify_ids_processed(changed)
+                    self._notify_others(EventType.CHANGED_DESCRIPTIONS)
                 timing = time.time() - start
-                if timing > 0.5:
-                    logger.info(f"DescriptionWorker: Done after {timing:.2f} seconds.")
-                if not data_updated:
-                    logger.info(
+                if data_updated:
+                    logger.debug(f"DescriptionWorker: Done after {timing:.2f} seconds.")
+                else:
+                    logger.debug(
                         f"DescriptionWorker: Sleeping after {timing:.2f} seconds. No work needed."
                     )
                     self._wait()
-            except (sqlite3.OperationalError, OSError) as e:
-                logger.debug(
-                    f"DescriptionWorker thread exiting due to DB error (likely shutdown): {e}"
+            except Exception as e:
+                import traceback
+
+                logger.error(
+                    "DescriptionWorker thread exiting due to error: %s\n%s",
+                    e,
+                    traceback.format_exc(),
                 )
                 break
         logger.info("Exiting DescriptionWorker loop.")
@@ -71,19 +87,19 @@ class DescriptionWorker(BaseWorker):
     def _fetch_missing_descriptions(self):
         logger.debug("Starting the database fetch for missing descriptions")
 
-        rows_missing_descriptions = self._db.submit_task(
-            lambda conn: conn.execute(
-                """
-            SELECT p.*
-            FROM pictures p
-            WHERE p.description IS NULL
-            """
-            ).fetchall()
-        ).result()
+        return VaultDatabase.result_or_throw(
+            self._db.submit_task(
+                lambda session: session.exec(
+                    select(Picture)
+                    .where(Picture.description.is_(None))
+                    .options(selectinload(Picture.characters))
+                ).all()
+            )
+        )
 
-        return db_tools.from_batch_of_db_dicts(rows_missing_descriptions, [])
-
-    def _generate_descriptions(self, picture_tagger, missing_descriptions) -> int:
+    def _generate_descriptions(
+        self, picture_tagger: PictureTagger, missing_descriptions: list[Picture]
+    ) -> int:
         """Generate descriptions for pictures using PictureTagger."""
         assert missing_descriptions is not None
         batch = missing_descriptions[: picture_tagger.max_concurrent_images()]
@@ -91,26 +107,30 @@ class DescriptionWorker(BaseWorker):
         descriptions_generated = []
         for pic in batch:
             try:
-                # Look up full Character object if available
-                character_obj = None
-                char_id = getattr(pic, "primary_character_id", None)
-                assert self._characters is not None, "Characters manager is not set."
-                if char_id is not None and self._characters is not None:
-                    try:
-                        character_obj = self._characters[int(char_id)]
-                        if hasattr(character_obj, "name"):
-                            logger.debug(f"Character name value: {character_obj.name}")
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to fetch character {char_id}: {e}", exc_info=True
-                        )
-                        character_obj = None
-                logger.debug(
-                    f"Generating embedding for picture {pic.id} with character {char_id} and character name {getattr(character_obj, 'name', None)}"
+                characters = pic.characters
+                character_names = [c.name for c in characters if c.name]
+                description = picture_tagger.generate_description(
+                    picture=pic, character_names=character_names
                 )
-                pic.description = picture_tagger.generate_description(
-                    picture=pic, character=character_obj
+                logger.debug("[DESCRIPTION WORKER] Got description: " + description)
+
+                def set_description(session: Session, pic_id, description):
+                    pic = session.exec(
+                        select(Picture)
+                        .where(Picture.id == pic_id)
+                        .options(selectinload(Picture.characters))
+                    ).one()
+                    pic.description = description
+                    session.add(pic)
+                    session.commit()
+                    session.refresh(pic)
+                    return pic
+
+                pic = self._db.run_task(
+                    set_description, pic.id, description, priority=DBPriority.LOW
                 )
+                assert pic.description == description
+
                 descriptions_generated.append(pic)
 
             except Exception as e:
@@ -125,16 +145,6 @@ class TagWorker(BaseWorker):
     Worker for generating tags for pictures with descriptions.
     """
 
-    def __init__(
-        self,
-        db_connection,
-        picture_tagger: PictureTagger,
-        characters: Characters,
-        position: int = 0,
-    ):
-        super().__init__(db_connection, picture_tagger, characters)
-        self._progress_position = position
-
     def worker_type(self) -> WorkerType:
         return WorkerType.TAGGER  # Or define a new WorkerType if desired
 
@@ -143,71 +153,50 @@ class TagWorker(BaseWorker):
             try:
                 start = time.time()
                 logger.debug("TaggingWorker: Starting iteration...")
-                data_updated = False
-                missing_tags = self._fetch_pictures_missing_tags()
+                missing_tags = self._fetch_missing_tags()
                 logger.debug(
                     f"TaggingWorker: Got {len(missing_tags)} pictures needing tags."
                 )
                 if self._stop.is_set():
                     break
                 tagged_pictures = self._tag_pictures(missing_tags)
+                self._notify_ids_processed(tagged_pictures)
                 logger.debug(f"TaggingWorker: Tagged {len(tagged_pictures)} pictures.")
-                if self._stop.is_set():
-                    break
-                if tagged_pictures:
-                    self._update_picture_tags(tagged_pictures)
-                    data_updated = True
                 timing = time.time() - start
-                if timing > 0.5:
-                    logger.info(f"TaggingWorker: Done after {timing:.2f} seconds.")
-                if not data_updated:
-                    logger.info(
+                if tagged_pictures:
+                    self._notify_others(EventType.CHANGED_TAGS)
+                    logger.debug(
+                        f"TaggingWorker: Done after {timing:.2f} seconds. Having updated {len(tagged_pictures)} pictures."
+                    )
+                else:
+                    logger.debug(
                         f"TaggingWorker: Sleeping after {timing:.2f} seconds. No work needed."
                     )
                     self._wait()
-            except (sqlite3.OperationalError, OSError) as e:
-                logger.debug(
-                    f"TaggingWorker thread exiting due to DB error (likely shutdown): {e}"
+            except Exception as e:
+                import traceback
+
+                logger.error(
+                    "TaggingWorker thread exiting due to error: %s\n%s",
+                    e,
+                    traceback.format_exc(),
                 )
                 break
         logger.info("Exiting TaggingWorker loop.")
 
-    def _fetch_pictures_missing_tags(self):
-        """Return PictureModels needing tags using the provided connection."""
+    def _fetch_missing_tags(self):
+        logger.debug("Starting the database fetch for missing tags")
 
-        logger.debug("Starting the optimized database fetch for missing tags.")
-        pictures_missing_tags = self._db.submit_task(
-            lambda conn: conn.execute(
-                """
-            SELECT p.*
-            FROM pictures p
-            LEFT JOIN picture_tags pt ON pt.picture_id = p.id
-            WHERE p.description IS NOT NULL
-            GROUP BY p.id
-            HAVING COUNT(pt.tag) = 0
-            """
-            ).fetchall()
-        ).result()
-        return db_tools.from_batch_of_db_dicts(pictures_missing_tags)
-
-    def _update_picture_tags(self, pictures):
-        """
-        Update the tags for a picture in the database using the picture_tags table.
-        """
-
-        def bulk_update_tags(conn, pictures):
-            cursor = conn.cursor()
-            cursor.executemany(
-                "DELETE FROM picture_tags WHERE picture_id = ?",
-                [(picture.id,) for picture in pictures],
+        def fetch_tags(session: Session):
+            statement = (
+                select(Picture)
+                .where(~Picture.tags.any())
+                .options(selectinload(Picture.tags))
             )
-            cursor.executemany(
-                "INSERT INTO picture_tags (picture_id, tag) VALUES (?, ?)",
-                [(picture.id, tag) for picture in pictures for tag in picture.tags],
-            )
-            conn.commit()
+            result = session.exec(statement)
+            return result.all()
 
-        self._db.submit_task(bulk_update_tags, pictures, priority=DBPriority.LOW)
+        return VaultDatabase.result_or_throw(self._db.submit_task(fetch_tags))
 
     def _tag_pictures(self, missing_tags) -> int:
         """Tag all pictures missing tags."""
@@ -227,27 +216,21 @@ class TagWorker(BaseWorker):
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
                 logger.debug(f"Processing tags for image at path: {path}: {tags}")
-                if pic is not None:
-                    # Remove character tag from tags if present
-                    char_tag = getattr(pic, "primary_character_id", None)
-                    if char_tag and char_tag in tags:
-                        tags = [t for t in tags if t != char_tag]
-                    # Use Florence description to correct tags
-                    try:
-                        corrected_tags = (
-                            self._picture_tagger.correct_tags_with_florence(
-                                pic.description, tags
-                            )
-                        )
-                        if corrected_tags:
-                            tags = corrected_tags
-                    except Exception as e:
-                        logger.error(
-                            f"Florence tag correction failed for {pic.file_path}: {e}"
-                        )
-                    if tags:
-                        pic.tags = tags
-                        tagged_pictures.append(pic)
+                if tags:
+
+                    def add_tags(session: Session, pic_id, tags):
+                        pic = Picture.find(session, id=pic_id)
+                        session.add_all([Tag(picture_id=pic_id, tag=t) for t in tags])
+                        session.commit()
+                        if pic:
+                            session.refresh(pic[0])
+                            return pic[0]
+                        return None
+
+                    pic = self._db.run_task(
+                        add_tags, pic.id, tags, priority=DBPriority.LOW
+                    )
+                    tagged_pictures.append((Picture, pic.id, "tags"))
 
         return tagged_pictures
 
@@ -257,16 +240,6 @@ class EmbeddingWorker(BaseWorker):
     Worker for generating text embeddings for pictures with descriptions.
     """
 
-    def __init__(
-        self,
-        db_connection,
-        picture_tagger: PictureTagger,
-        characters: Characters,
-        position: int = 0,
-    ):
-        super().__init__(db_connection, picture_tagger, characters)
-        self._progress_position = position
-
     def worker_type(self) -> WorkerType:
         return WorkerType.TEXT_EMBEDDING
 
@@ -274,32 +247,34 @@ class EmbeddingWorker(BaseWorker):
         while not self._stop.is_set():
             try:
                 start = time.time()
-                logger.debug("EmbeddingWorker: Starting iteration...")
-                data_updated = False
+                logger.debug("[EMBEDDING WORKER]  Starting iteration...")
+                embeddings_updated = 0
                 pictures_to_embed = self._fetch_missing_text_embeddings()
                 logger.debug(
-                    f"EmbeddingWorker: Got {len(pictures_to_embed)} pictures needing embeddings."
+                    f"[EMBEDDING WORKER]  Got {len(pictures_to_embed)} pictures needing embeddings."
                 )
                 if self._stop.is_set():
                     break
                 embeddings_generated = self._generate_text_embeddings(pictures_to_embed)
                 logger.debug(
-                    f"EmbeddingWorker: Generated {len(embeddings_generated)} embeddings."
+                    f"[EMBEDDING WORKER]  Generated {len(embeddings_generated)} embeddings."
                 )
                 if self._stop.is_set():
                     break
                 if embeddings_generated:
-                    self._update_attributes(embeddings_generated, ["text_embedding"])
-                    data_updated = True
+                    changed = self._update_text_embeddings(embeddings_generated)
+                    embeddings_updated = len(changed)
                 timing = time.time() - start
-                if timing > 0.5:
-                    logger.info(f"EmbeddingWorker: Done after {timing:.2f} seconds.")
-                if not data_updated:
-                    logger.info(
-                        f"EmbeddingWorker: Sleeping after {timing:.2f} seconds. No work needed."
+                if embeddings_updated > 0:
+                    logger.debug(
+                        f"[EMBEDDING WORKER]  Done after {timing:.2f} seconds. Having updated {embeddings_updated} pictures."
+                    )
+                else:
+                    logger.debug(
+                        f"[EMBEDDING WORKER]  Sleeping after {timing:.2f} seconds. No work needed."
                     )
                     self._wait()
-            except (sqlite3.OperationalError, OSError) as e:
+            except Exception as e:
                 logger.debug(
                     f"EmbeddingWorker thread exiting due to DB error (likely shutdown): {e}"
                 )
@@ -307,17 +282,29 @@ class EmbeddingWorker(BaseWorker):
         logger.info("Exiting EmbeddingWorker loop.")
 
     def _fetch_missing_text_embeddings(self):
-        """Return PictureModels needing text embeddings."""
+        """Return Pictures needing text embeddings."""
 
-        rows_missing_embeddings = self._db.submit_task(
-            lambda conn: conn.execute(
-                """
-                SELECT *
-                FROM pictures WHERE description IS NOT NULL AND text_embedding IS NULL
-                """
-            ).fetchall()
-        ).result()
-        return db_tools.from_batch_of_db_dicts(rows_missing_embeddings, [])
+        def find_pictures_without_embeddings(session: Session):
+            # Only load fields needed for text embedding
+            query = select(Picture)
+            query = query.options(
+                load_only(Picture.id, Picture.description, Picture.text_embedding),
+                selectinload(Picture.tags),
+                selectinload(Picture.characters).load_only(
+                    Character.id,
+                    Character.name,
+                    Character.description,
+                    Character.original_prompt,
+                ),
+            )
+            query = query.where(Picture.text_embedding.is_(None))
+            query = query.where(Picture.description.is_not(None))
+            results = session.exec(query)
+            return results.all()
+
+        return VaultDatabase.result_or_throw(
+            self._db.submit_task(find_pictures_without_embeddings)
+        )
 
     def _generate_text_embeddings(self, pictures_to_embed):
         """
@@ -327,10 +314,36 @@ class EmbeddingWorker(BaseWorker):
         updated = []
         for pic in pictures_to_embed:
             try:
-                embedding, _ = self._picture_tagger.generate_text_embedding(pic)
+                logger.debug(
+                    f"[EMBEDDING WORKER]  Generating embedding for picture {pic.id} of type {type(pic)}"
+                )
+                embedding, _ = self._picture_tagger.generate_text_embedding(picture=pic)
                 if embedding is not None:
-                    pic.text_embedding = embedding
+                    pic.text_embedding = embedding.tobytes()
                     updated.append(pic)
             except Exception as e:
                 logger.error(f"Failed to generate text embedding for {pic.id}: {e}")
         return updated
+
+    def _update_text_embeddings(self, pictures: list[Picture]):
+        """
+        Update the text embeddings for a picture in the database, with detailed logging.
+        """
+
+        def update_pictures(session: Session, pics):
+            changed = []
+            for pic in pics:
+                db_pic = session.get(Picture, pic.id)
+                if db_pic:
+                    db_pic.text_embedding = pic.text_embedding
+                    session.add(db_pic)
+                    changed.append((Picture, pic.id, "text_embedding"))
+            session.commit()
+            logger.debug(
+                f"[EMBEDDING WORKER] Committed {len(changed)} embedding updates to DB."
+            )
+            return changed
+
+        changed = self._db.run_task(update_pictures, pictures, priority=DBPriority.LOW)
+        self._notify_ids_processed(changed)
+        return changed

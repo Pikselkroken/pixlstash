@@ -11,7 +11,9 @@
   "dependencies": {
     "@mdi/font": "^7.4.47",
     "compromise": "^14.14.4",
+    "lodash-es": "^4.17.21",
     "marked": "^16.4.1",
+    "uuid": "^13.0.0",
     "vue": "^3.5.22",
     "vuedraggable": "^4.1.0",
     "vuetify": "^3.6.7"

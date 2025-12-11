@@ -1,5 +1,4 @@
 * Save Likeness threshold
-* Make Prioritisation work
 * Automatic assignment to characters
 * Clean up code
 * Export data sets for LoRA training

@@ -1,0 +1,80 @@
+FRONTEND_TODO:
+
+- Review all endpoints in `server.py` for path, parameter, and response changes.
+- Update frontend API calls to match new endpoint paths and parameter requirements:
+
+DONE:
+1. `/pictures/export` endpoint:
+   - Path: `/pictures/export` (unchanged)
+   - Query params: `query`, `set_id`, `sort`, `threshold` (all optional)
+   - Response: Zip file with images, filename now includes set name, query, and tag info.
+   - Action: Ensure frontend zip export logic matches new filename and query param handling.
+
+2. `/search` endpoint:
+    - Path: Changed from `/search` to `/pictures/search`
+    - Now takes the same parameters as `/pictures` plus a query string
+
+3. `/pictures` endpoint:
+   - Path: `/pictures` (unchanged)
+   - Query params: `sort`, `offset`, `limit`, `threshold` (all optional)
+   - Response: List of picture dicts.'
+   - Action: Check all parameters and change if necessary.
+
+4. `/picture_sets` endpoints:
+   - List: `/picture_sets` (GET)
+   - Create: `/picture_sets` (POST)
+   - Get by ID: `/picture_sets/{id}` (GET, supports `info=true` for metadata only)
+   - Update: `/picture_sets/{id}` (PATCH)
+   - Delete: `/picture_sets/{id}` (DELETE)
+   - Members: `/picture_sets/{id}/members` (GET)
+   - Add member: `/picture_sets/{id}/members/{picture_id}` (POST)
+   - Remove member: `/picture_sets/{id}/members/{picture_id}` (DELETE)
+   - Action: Ensure frontend uses new member endpoints for add/remove, and supports metadata-only fetch with `info=true`.
+
+5. `/characters` endpoints:
+   - List: `/characters` (GET)
+   - Create: `/characters` (POST)
+   - Get by ID: `/characters/{id}` (GET)
+   - Update: `/characters/{id}` (PATCH)
+   - Delete: `/characters/{id}` (DELETE)
+   - Summary: `/characters/{id}/summary` (GET)
+   - Field: `/characters/{id}/{field}` (GET, e.g. thumbnail)
+   - Assign face: `/characters/{character_id}/faces` (POST)
+   - Remove face: `/characters/{character_id}/faces` (DELETE)
+   - Action: Update frontend to use new endpoints for face assignment/removal and summary fetch.
+     this also means migrating the old POST and DELETE /face/{face_id} to use the opposite assignment using
+     /characters/{character_id}/faces instead (we assign faces to characters instead of characters to faces now)
+
+6. `/chat` endpoints:
+   - Create: `/chat` (POST)
+   - Get: `/chat/{id}` (GET)
+   - Delete: `/chat/{id}` (DELETE)
+   - Post message: `/chat/message` (POST)
+   - Action: Ensure frontend chat logic matches new endpoints and payload requirements.
+
+7. `/config` endpoints:
+   - Get: `/config` (GET)
+   - Patch: `/config` (PATCH)
+   - Action: Update frontend config logic to support patching and new keys.
+
+REMAINING:
+
+8. `/pictures/{id}` endpoints:
+   - Get: `/pictures/{id}` (GET, returns image file)
+   - Metadata: `/pictures/{id}/metadata` (GET)
+   - Field: `/pictures/{id}/{field}` (GET)
+   - Patch: `/pictures/{id}` (PATCH)
+   - Delete: `/pictures/{id}` (DELETE)
+   - Action: Ensure frontend uses correct endpoints for image, metadata, and field fetches.
+
+9. `/pictures/thumbnails` (POST):
+   - Action: Update frontend thumbnail fetch logic to use batch endpoint.
+
+10. `/pictures/stacks` (GET):
+   - Action: Update frontend to support stack/group display if needed.
+
+General Actions:
+- Review all API calls for parameter and response changes.
+- Update error handling to match new HTTP status codes and error messages.
+- Test all endpoints from frontend to ensure compatibility.
+- Update documentation and comments in frontend code to reflect new backend API structure.

@@ -33,13 +33,15 @@ dependencies = [
     "einops",
     "sentence_transformers",
     "spacy",
-    "pillow-heif"
+    "pillow-heif",
+    "sqlmodel"
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest",
-    "pytest-cov"
+    "pytest-cov",
+    "psutil"
 ]
 dev = [
     "ruff"

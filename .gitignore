@@ -12,3 +12,4 @@ cpu
 !.vscode/extensions.json
 !.vscode/launch.json
 frontend/.vite
+tmp

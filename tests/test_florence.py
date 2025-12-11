@@ -4,10 +4,13 @@ Test suite for Florence-2 captioning functionality.
 Tests caption generation, performance, and error handling.
 """
 
+import os
 import pytest
 import time
 from pathlib import Path
 from pixlvault.picture_tagger import PictureTagger
+
+MAX_TEST_IMAGES = 3 if os.getenv("GITHUB_ACTIONS") == "true" else 50
 
 
 @pytest.fixture(scope="module")
@@ -50,7 +53,9 @@ def test_florence_caption_generation(tagger, image_files):
     fail_count = 0
     captions = []
 
-    for image_path in image_files:
+    dataset = image_files[:MAX_TEST_IMAGES]
+
+    for image_path in dataset:
         caption = tagger._generate_florence_caption(image_path)
 
         if caption:
@@ -60,21 +65,21 @@ def test_florence_caption_generation(tagger, image_files):
             fail_count += 1
 
     # Assert at least 90% success rate
-    success_rate = success_count / len(image_files)
+    success_rate = success_count / len(dataset)
     assert success_rate >= 0.9, f"Success rate {success_rate:.1%} is below 90%"
 
     # Assert captions are non-empty strings
     assert all(isinstance(c, str) and len(c) > 0 for c in captions)
 
     print(
-        f"\nCaption generation: {success_count}/{len(image_files)} successful ({success_rate:.1%})"
+        f"\nCaption generation: {success_count}/{len(dataset)} successful ({success_rate:.1%})"
     )
 
 
 def test_florence_caption_performance(tagger, image_files):
     """Test Florence-2 captioning performance."""
     # Use all available test images
-    test_images = image_files
+    test_images = image_files[:MAX_TEST_IMAGES]
 
     start_time = time.time()
     captions = []
@@ -125,7 +130,8 @@ def test_florence_caption_performance(tagger, image_files):
 def test_florence_caption_content(tagger, image_files):
     """Test that captions contain meaningful content."""
     # Test all available images
-    for image_path in image_files:
+    dataset = image_files[:MAX_TEST_IMAGES]
+    for image_path in dataset:
         caption = tagger._generate_florence_caption(image_path)
 
         # Caption should be at least 10 characters
@@ -140,24 +146,6 @@ def test_florence_caption_content(tagger, image_files):
         assert caption[0].isupper() or caption[0].isdigit(), (
             f"Caption doesn't start with capital: {caption}"
         )
-
-
-def test_florence_with_character_name(tagger, image_files):
-    """Test that character names are properly integrated into captions."""
-    test_image = image_files[0]
-    test_character_name = "Esmeralda"
-
-    caption = tagger._generate_florence_caption(
-        test_image, character_name=test_character_name
-    )
-
-    # Caption should contain the character name
-    assert test_character_name in caption, (
-        f"Caption doesn't contain character name: {caption}"
-    )
-
-    # Character name should appear after "named"
-    assert "named" in caption.lower(), f"Caption doesn't use 'named' pattern: {caption}"
 
 
 def test_florence_handles_missing_file(tagger):

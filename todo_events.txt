@@ -1,0 +1,22 @@
+TODO: Insert self.vault.notify calls after database changes in server.py
+
+1. After creating, updating, or deleting a character:
+   from pixlvault.event_types import EventTypes
+   self.vault.notify(EventTypes.CHANGED_CHARACTERS)
+
+2. After updating a character’s description:
+   self.vault.notify(EventTypes.CHANGED_DESCRIPTIONS)
+
+3. After assigning or removing faces to/from a character:
+   self.vault.notify(EventTypes.CHANGED_FACES)
+
+4. After creating a new picture set (or adding/removing pictures):
+   self.vault.notify(EventTypes.CHANGED_PICTURES)
+
+5. After adding, updating, or deleting a tag:
+   self.vault.notify(EventTypes.CHANGED_TAGS)
+
+6. After adding, updating, or deleting a picture:
+   self.vault.notify(EventTypes.CHANGED_PICTURES)
+
+Review all endpoints in server.py that modify the database and insert the appropriate notify call for each event type.

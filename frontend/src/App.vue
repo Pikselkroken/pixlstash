@@ -18,8 +18,8 @@ const likenessRowsRef = ref(null);
 
 // --- Backend Constants & Identifiers ---
 const BACKEND_URL = "http://localhost:9537";
-const ALL_PICTURES_ID = "__all__";
-const UNASSIGNED_PICTURES_ID = "__unassigned__";
+const ALL_PICTURES_ID = "ALL";
+const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
 
 // --- Template & Component Refs ---
 const gridContainer = ref(null);
@@ -35,7 +35,7 @@ const selectedSort = ref("");
 // --- Search & Filtering State ---
 const searchQuery = ref("");
 const showStars = ref(true);
-
+const showFaceBboxes = ref(false);
 
 const chatWindowRef = ref(null);
 
@@ -43,7 +43,7 @@ const thumbnailSize = ref(256);
 const sidebarVisible = ref(true);
 
 // --- Media Type Filter State ---
-const mediaTypeFilter = ref('all'); // 'all', 'images', 'videos'
+const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
 
 // --- Chat Overlay State ---
 const chatOpen = ref(false);
@@ -220,19 +220,24 @@ async function updateSelectedRoot() {
   }
 }
 
-async function patchConfigUIOptions(opts = {}) {
-  const patch = {
-    sort: selectedSort.value,
-    thumbnail: thumbnailSize.value,
-    show_stars: showStars.value,
-    likeness_threshold: config.likeness_threshold,
-    openai_host: config.openai_host,
-    openai_port: config.openai_port,
-    openai_model: config.openai_model,
-    default_device: config.default_device,
-    ...opts,
-  };
-  Object.assign(config, patch);
+async function patchConfigUIOptions() {
+  // Only include fields the backend expects and that are not undefined/null/empty
+  const patch = {};
+  if (selectedSort.value) patch.sort = selectedSort.value;
+  if (thumbnailSize.value) patch.thumbnail = thumbnailSize.value;
+  if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
+  if (typeof config.likeness_threshold === "number")
+    patch.likeness_threshold = config.likeness_threshold;
+  if (config.openai_host) patch.openai_host = config.openai_host;
+  if (config.openai_port) patch.openai_port = config.openai_port;
+  if (config.openai_model) patch.openai_model = config.openai_model;
+  if (config.default_device) patch.default_device = config.default_device;
+  // Only send image_roots and selected_image_root if present
+  if (Array.isArray(config.image_roots) && config.image_roots.length > 0)
+    patch.image_roots = config.image_roots;
+  if (config.selected_image_root)
+    patch.selected_image_root = config.selected_image_root;
+  console.log("PATCH /config payload:", patch);
   await fetch(`${BACKEND_URL}/config`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -248,8 +253,8 @@ function selectImageRoot(root) {
 }
 
 async function saveConfig() {
-  await fetch(`/${BACKEND_URL}/config`, {
-    method: "POST",
+  await fetch(`${BACKEND_URL}/config`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       image_roots: config.image_roots,
@@ -296,6 +301,12 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
   refreshGridVersion();
 }
 
+function handleImagesUploaded() {
+  // Called when images are imported
+  refreshGridVersion(); // Force grid and thumbnails to refresh
+  refreshSidebar(); // Optionally refresh sidebar counts
+}
+
 // --- Export to Zip ---
 function handleExportZip() {
   // Forward export event to ImageGrid via ref
@@ -340,48 +351,39 @@ watch(settingsDialog, (val) => {
   if (val) fetchConfig();
 });
 
-watch(selectedSort, (val) => {
-  patchConfigUIOptions({ sort: val });
+watch(selectedSort, () => {
+  patchConfigUIOptions();
 });
 
-watch(thumbnailSize, (val) => {
-  patchConfigUIOptions({ thumbnail: val });
+watch(thumbnailSize, () => {
+  patchConfigUIOptions();
 });
 
 watch(
   () => config.likeness_threshold,
-  (val) => {
-    patchConfigUIOptions({ likeness_threshold: val });
+  () => {
+    patchConfigUIOptions();
   }
 );
 
-watch(showStars, (val) => {
-  patchConfigUIOptions({ show_stars: val });
+watch(showStars, () => {
+  patchConfigUIOptions();
 });
 
+// Watch all AI chat config fields together and PATCH all at once
 watch(
-  () => config.openai_host,
-  (val) => {
-    patchConfigUIOptions({ openai_host: val });
-  }
-);
-watch(
-  () => config.openai_port,
-  (val) => {
-    patchConfigUIOptions({ openai_port: val });
-  }
-);
-watch(
-  () => config.openai_model,
-  (val) => {
-    patchConfigUIOptions({ openai_model: val });
+  () => [config.openai_host, config.openai_port, config.openai_model],
+  ([host, port, model], [oldHost, oldPort, oldModel]) => {
+    if (host !== oldHost || port !== oldPort || model !== oldModel) {
+      patchConfigUIOptions();
+    }
   }
 );
 // Watch for default_device changes
 watch(
   () => config.default_device,
-  (val) => {
-    patchConfigUIOptions({ default_device: val });
+  () => {
+    patchConfigUIOptions();
   }
 );
 

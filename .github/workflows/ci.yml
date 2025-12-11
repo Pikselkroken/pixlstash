@@ -30,6 +30,33 @@ jobs:
       - name: Check formatting with ruff
         run: |
           ruff check pixlvault
-      - name: Run tests
-        run: |
-          python -m pytest -s -vvv --fast-captions --force-cpu
+
+      # Individual test steps for each test file
+      - name: Test Picture Tagger Embeddings
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_tagger.py
+      - name: Test Tag Worker and Tagging
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_tag_worker.py
+      - name: Test Picture Likeness Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_likeness_worker.py
+      - name: Test Chat History API
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_chat_history.py
+      - name: Test Florence-2 Captioning
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_florence.py
+      - name: Test Face Likeness Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_face_likeness_worker.py
+      - name: Test Picture Stack Utilities
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_stack_utils.py
+      - name: Test Picture Set Management
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_sets.py
+      - name: Test Quality Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_quality_worker.py
+      - name: Test Server Endpoints and Integration
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_server.py
+      - name: Test CLIP Text Embedding Similarity
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_clip_text_embedding_similarity.py
+      - name: Test Backend Order Stability
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_backend_order_stability.py
+      - name: Test Facial Features Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_facial_features_worker.py
+      - name: Test Many-to-Many Face Data
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_many_to_many_face_data.py

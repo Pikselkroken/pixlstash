@@ -9,21 +9,32 @@ from io import BytesIO
 from typing import Optional
 from PIL import Image
 
-from pixlvault.logging import get_logger
-from pixlvault.picture import PictureModel
+from pixlvault.pixl_logging import get_logger
+from pixlvault.db_models.picture import Picture
 
 logger = get_logger(__name__)
 
 
 class PictureUtils:
     @staticmethod
-    def extract_created_at_from_metadata(image_bytes: bytes, fallback_file_path: str = None) -> str:
+    def is_video_file(file_path: str) -> bool:
+        """
+        Returns True if the file is a supported video format.
+        """
+        ext = os.path.splitext(file_path)[1].lower()
+        return ext in [".mp4", ".webm", ".avi", ".mov", ".mkv"]
+
+    @staticmethod
+    def extract_created_at_from_metadata(
+        image_bytes: bytes, fallback_file_path: str = None
+    ) -> Optional[datetime]:
         """
         Try to extract the creation datetime from EXIF (for images), or from file metadata (for videos/filesystem).
-        Returns ISO 8601 string in UTC (Z), or None if not found.
+        Returns a timezone-aware datetime in UTC, or None if not found.
         """
         from datetime import datetime, timezone
         import os
+
         try:
             from PIL import Image
             import piexif
@@ -32,20 +43,22 @@ class PictureUtils:
         # Try EXIF for images
         try:
             with Image.open(BytesIO(image_bytes)) as img:
-                exif_data = img.info.get('exif')
+                exif_data = img.info.get("exif")
                 if exif_data and piexif:
                     exif_dict = piexif.load(exif_data)
                     date_str = None
-                    for tag in ('DateTimeOriginal', 'DateTime', 'DateTimeDigitized'):
-                        val = exif_dict['0th'].get(piexif.ImageIFD.__dict__.get(tag)) or exif_dict['Exif'].get(piexif.ExifIFD.__dict__.get(tag))
+                    for tag in ("DateTimeOriginal", "DateTime", "DateTimeDigitized"):
+                        val = exif_dict["0th"].get(
+                            piexif.ImageIFD.__dict__.get(tag)
+                        ) or exif_dict["Exif"].get(piexif.ExifIFD.__dict__.get(tag))
                         if val:
                             date_str = val.decode() if isinstance(val, bytes) else val
                             break
                     if date_str:
                         # EXIF format: 'YYYY:MM:DD HH:MM:SS'
                         try:
-                            dt = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S')
-                            return dt.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+                            dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+                            return dt.replace(tzinfo=timezone.utc)
                         except Exception:
                             pass
         except Exception:
@@ -55,11 +68,12 @@ class PictureUtils:
             try:
                 ts = os.path.getmtime(fallback_file_path)
                 dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-                return dt.isoformat().replace('+00:00', 'Z')
+                return dt
             except Exception:
                 pass
         # Could add video metadata extraction here if needed
         return None
+
     @staticmethod
     def crop_face_from_frame(frame, bbox):
         """
@@ -82,14 +96,15 @@ class PictureUtils:
         return crop
 
     @staticmethod
-    def extract_video_frames(file_path, max_frames=None):
+    def extract_video_frames(file_path, max_frames=None, specific_frame=None):
         """
         Extract frames from a video file and return them as PIL Images.
         Args:
             file_path (str): Path to video file.
             max_frames (int, optional): Maximum number of frames to extract.
+            specific_frame (int, optional): If set, only extract this frame index (0-based).
         Returns:
-            List of PIL.Image objects.
+            List of PIL.Image objects (or single image if specific_frame is set).
         """
         import cv2
         from PIL import Image
@@ -97,6 +112,16 @@ class PictureUtils:
         frames = []
         cap = cv2.VideoCapture(file_path)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if specific_frame is not None:
+            # Seek to specific frame
+            cap.set(cv2.CAP_PROP_POS_FRAMES, specific_frame)
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(frame_rgb)
+                frames.append(pil_img)
+            cap.release()
+            return frames
         count = 0
         for idx in range(frame_count):
             ret, frame = cap.read()
@@ -216,7 +241,7 @@ class PictureUtils:
             return None
 
     @staticmethod
-    def load_and_crop_face_bbox(file_path, bbox):
+    def load_and_crop_square_image_with_face(file_path, bbox):
         """
         Loads an image or video file, returns a square crop (as large as possible) that always includes the face bbox.
         The crop is not tight to the face, but always contains it.
@@ -348,9 +373,8 @@ class PictureUtils:
         image_root_path: str,
         source_file_path: str,
         picture_id: Optional[str] = None,
-        character_id: Optional[str] = None,
         pixel_sha: Optional[str] = None,
-    ) -> PictureModel:
+    ) -> Picture:
         """
         Create a Picture from a file path, using metadata for created_at if available.
         """
@@ -358,12 +382,13 @@ class PictureUtils:
             raise ValueError(f"Source file path does not exist: {source_file_path}")
         with open(source_file_path, "rb") as f:
             image_bytes = f.read()
-        created_at = PictureUtils.extract_created_at_from_metadata(image_bytes, fallback_file_path=source_file_path)
+        created_at = PictureUtils.extract_created_at_from_metadata(
+            image_bytes, fallback_file_path=source_file_path
+        )
         return PictureUtils.create_picture_from_bytes(
             image_root_path=image_root_path,
             image_bytes=image_bytes,
             picture_id=picture_id,
-            character_id=character_id,
             pixel_sha=pixel_sha,
             created_at=created_at,
         )
@@ -373,10 +398,9 @@ class PictureUtils:
         image_root_path: str,
         image_bytes: bytes,
         picture_id: Optional[str] = None,
-        character_id: Optional[str] = None,
         pixel_sha: Optional[str] = None,
         created_at: Optional[str] = None,
-    ) -> PictureModel:
+    ) -> Picture:
         """
         Create a Picture from raw bytes. Uses created_at from metadata if provided, else falls back to now.
         """
@@ -397,6 +421,7 @@ class PictureUtils:
             is_video = True
         if is_video:
             import tempfile
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
                 tmp.write(image_bytes)
                 tmp_path = tmp.name
@@ -424,11 +449,13 @@ class PictureUtils:
             size_bytes = len(image_bytes)
 
         if not created_at:
-            created_at = PictureUtils.extract_created_at_from_metadata(image_bytes, fallback_file_path=file_path)
+            created_at = PictureUtils.extract_created_at_from_metadata(
+                image_bytes, fallback_file_path=file_path
+            )
         if not created_at:
-            created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            created_at = datetime.now(timezone.utc)
 
-        pic = PictureModel(
+        pic = Picture(
             id=picture_id,
             file_path=file_path,
             format=img_format,
@@ -437,7 +464,6 @@ class PictureUtils:
             size_bytes=size_bytes,
             created_at=created_at,
             thumbnail=thumbnail_bytes,
-            primary_character_id=character_id,
             pixel_sha=pixel_sha,
         )
         return pic
@@ -475,3 +501,83 @@ class PictureUtils:
                     ]
                     likeness_matrix[i, j] = max(sims) if sims else 0.0
         return likeness_matrix
+
+    @staticmethod
+    def cosine_similarity(a: bytes, b: bytes) -> float:
+        try:
+            if a is None or b is None:
+                return 0.0
+            arr_a = (
+                np.frombuffer(a, dtype=np.float32)
+                if isinstance(a, bytes)
+                else np.array(a, dtype=np.float32)
+            )
+            arr_b = (
+                np.frombuffer(b, dtype=np.float32)
+                if isinstance(b, bytes)
+                else np.array(b, dtype=np.float32)
+            )
+            if arr_a.shape != arr_b.shape or arr_a.size == 0:
+                return 0.0
+            dot = np.dot(arr_a, arr_b)
+            norm_a = np.linalg.norm(arr_a)
+            norm_b = np.linalg.norm(arr_b)
+            if norm_a == 0 or norm_b == 0:
+                return 0.0
+            return float(dot / (norm_a * norm_b))
+        except Exception as e:
+            logger.warning(f"cosine_similarity error: {e}")
+            return 0.0
+
+    @staticmethod
+    def crop_face_bbox_exact(file_path, bbox):
+        """
+        Loads an image or video file, returns a crop exactly matching the face bbox.
+        Args:
+            file_path: Path to image or video file.
+            bbox: [x1, y1, x2, y2]
+        Returns:
+            Cropped PIL Image or numpy array (OpenCV), or None on error.
+        """
+        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+        img = None
+        # Try image first
+        try:
+            from PIL import Image
+
+            img = Image.open(file_path)
+        except Exception:
+            img = None
+        # If not an image, try as video (extract first frame)
+        if img is None:
+            try:
+                import cv2
+
+                cap = cv2.VideoCapture(file_path)
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame is not None:
+                    img = frame
+            except Exception:
+                img = None
+        if img is None:
+            return None
+        # PIL branch
+        if hasattr(img, "size") and callable(getattr(img, "crop", None)):
+            w, h = img.size
+            # Clamp bbox to image
+            x1c = max(0, min(w, x1))
+            x2c = max(0, min(w, x2))
+            y1c = max(0, min(h, y1))
+            y2c = max(0, min(h, y2))
+            crop_img = img.crop((x1c, y1c, x2c, y2c))
+            return crop_img
+        else:
+            # numpy array (OpenCV)
+            h, w = img.shape[:2]
+            x1c = max(0, min(w, x1))
+            x2c = max(0, min(w, x2))
+            y1c = max(0, min(h, y1))
+            y2c = max(0, min(h, y2))
+            crop_img = img[y1c:y2c, x1c:x2c]
+            return crop_img

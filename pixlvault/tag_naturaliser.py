@@ -1,4 +1,4 @@
-from .logging import get_logger
+from .pixl_logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -8690,16 +8690,6 @@ class TagNaturaliser:
         "inkling": "inkling",
     }
 
-    def __init__(self, device="cpu"):
-        self._device = device
-        try:
-            self._tag_to_sentence_pipeline, error = capture_fd_stderr(pipeline_call)
-            error = error.replace("Device set to use cpu\n", "")
-            if len(error) > 0:
-                logger.error("Received error in transformer pipeline: '" + error + "'")
-        except ImportError:
-            self._tag_to_sentence_pipeline = None
-
     @classmethod
     def get_natural_tag(cls, tag):
         """Return the natural name for a tag using TAG_MAP, or sanitise if not found."""
@@ -8709,7 +8699,8 @@ class TagNaturaliser:
         # Sanitise: replace underscores, strip, collapse spaces, and lowercase
         return " ".join(tag.replace("_", " ").strip().split()).lower()
 
-    def tags_to_sentence(self, tags):
+    @classmethod
+    def tags_to_sentence(cls, tags):
         """
         Convert tags to a simple, readable description.
         Uses a basic template approach since LM generation is unreliable for this task.

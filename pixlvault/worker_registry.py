@@ -1,17 +1,22 @@
 import random
 import threading
-import time
 
+from typing import List, Tuple, Type
+from concurrent.futures import Future
 from abc import ABC, ABCMeta, abstractmethod
 from enum import Enum
 
-from pixlvault.database import DBPriority
+from .event_types import EventType
+from .pixl_logging import get_logger
 
 
 class WorkerType(str, Enum):
+    FACE = "FaceExtractionWorker"
     FACIAL_FEATURES = "FacialFeaturesWorker"
     TAGGER = "TagWorker"
     QUALITY = "QualityWorker"
+    FACE_QUALITY = "FaceQualityWorker"
+    FACE_LIKENESS = "FaceLikenessWorker"
     LIKENESS = "LikenessWorker"
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
@@ -19,6 +24,9 @@ class WorkerType(str, Enum):
     @staticmethod
     def all():
         return set(item for item in WorkerType)
+
+
+logger = get_logger(__name__)
 
 
 class WorkerRegistry(ABCMeta):
@@ -49,14 +57,20 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
     Class representing different types of picture processing workers.
     """
 
-    INTERVAL = 2.5  # Default interval between worker runs in seconds
+    INTERVAL = 60  # Default interval between worker runs in seconds
 
-    def __init__(self, db_connection, picture_tagger, characters):
-        self._db = db_connection
+    def __init__(self, database, picture_tagger, event_callback):
+        self._db = database
         self._picture_tagger = picture_tagger
-        self._characters = characters
+
         self._stop = threading.Event()
+        self._event = threading.Event()
         self._thread = None
+
+        self._watched_ids = {}
+        self._watched_ids_lock = threading.Lock()
+
+        self._event_callback = event_callback
 
     @abstractmethod
     def worker_type(self) -> WorkerType:
@@ -69,6 +83,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         Start the worker process.
         """
+        self._event.clear()
         self._stop.clear()
         if self._thread is not None and self._thread.is_alive():
             return
@@ -80,6 +95,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         Stop the worker process.
         """
         self._stop.set()
+        self._event.set()
         if self._thread is not None:
             self._thread.join()
 
@@ -95,18 +111,55 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         return self._stop.is_set()
 
+    def notify(self):
+        """
+        Notify the worker that it needs to wake.
+        """
+        logger.debug("Worker {} woken up.".format(self.name()))
+        self._event.set()
+
     def name(self):
         """
         Return the name of the worker.
         """
         return self.worker_type().value
 
+    def watch_id(self, cls: type, object_id, attr: str):
+        """
+        Add an object ID to the watch list.
+        """
+        future = Future()
+        with self._watched_ids_lock:
+            self._watched_ids[(cls, object_id, attr)] = future
+        return future
+
+    def _notify_others(self, event_type: EventType):
+        """
+        Notify other components of an event.
+        """
+        if self._event_callback:
+            self._event_callback(event_type)
+
+    def _notify_ids_processed(self, object_ids: List[Tuple[Type, object, str]]):
+        """
+        Notify that an object ID has been processed.
+        """
+        with self._watched_ids_lock:
+            for cls, object_id, attr in object_ids:
+                future = self._watched_ids.pop((cls, object_id, attr), None)
+                if future:
+                    logger.debug(
+                        f"Worker {self.name()} processed {cls.__name__} id={object_id} attr={attr}"
+                    )
+                    future.set_result(object_id)
+
     def _wait(self):
         """
         Wait for a random short duration to stagger working time
         """
         wait_time = random.uniform(self.INTERVAL - 1.0, self.INTERVAL + 1.0)
-        time.sleep(wait_time)
+        self._event.wait(wait_time)
+        self._event.clear()
 
     @abstractmethod
     def _run(self):
@@ -114,19 +167,3 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         The main logic of the worker.
         """
         pass
-
-    def _update_attributes(self, pictures, attributes):
-        """Update specified attributes for a list of Picture instances in the database using executemany for efficiency."""
-
-        values = []
-        for picture in pictures:
-            row = picture.to_dict()
-            attr_values = [row[attr] for attr in attributes]
-            attr_values.append(picture.id)
-            values.append(tuple(attr_values))
-            # logger.info(f"Updating picture {picture.id} with attributes: {row}")
-        set_clause = ", ".join([f"{attr}=?" for attr in attributes])
-        query = f"UPDATE pictures SET {set_clause} WHERE id=?"
-        return self._db.submit_task(
-            lambda conn: conn.executemany(query, values), priority=DBPriority.LOW
-        ).result()
