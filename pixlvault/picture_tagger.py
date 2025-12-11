@@ -113,17 +113,59 @@ class PictureTagger:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
         # Release ONNX/PyTorch resources here
         # For ONNX: self.session = None
         # For PyTorch: del self.model; torch.cuda.empty_cache()
         import gc
 
-        del self._clip_model
-        self.ort_sess = None
-        torch.cuda.empty_cache()
+        logger.warning("PictureTagger.close() called, releasing resources...")
+        # Explicitly delete all large model objects and set to None
+        try:
+            if hasattr(self, "_clip_model"):
+                del self._clip_model
+                self._clip_model = None
+                logger.debug("Deleted _clip_model.")
+            if hasattr(self, "ort_sess"):
+                del self.ort_sess
+                self.ort_sess = None
+                logger.debug("Deleted ort_sess.")
+            if hasattr(self, "_florence_model"):
+                del self._florence_model
+                self._florence_model = None
+                logger.debug("Deleted _florence_model.")
+            if hasattr(self, "_florence_processor"):
+                del self._florence_processor
+                self._florence_processor = None
+                logger.debug("Deleted _florence_processor.")
+            if hasattr(self, "_florence_device"):
+                del self._florence_device
+                self._florence_device = None
+                logger.debug("Deleted _florence_device.")
+            if hasattr(self, "_sbert_model"):
+                del self._sbert_model
+                self._sbert_model = None
+                logger.debug("Deleted _sbert_model.")
+            if hasattr(self, "_tag_naturaliser"):
+                del self._tag_naturaliser
+                self._tag_naturaliser = None
+                logger.debug("Deleted _tag_naturaliser.")
+            if hasattr(self, "_clip_preprocess"):
+                del self._clip_preprocess
+                self._clip_preprocess = None
+                logger.debug("Deleted _clip_preprocess.")
+            if hasattr(self, "_clip_tokenizer"):
+                del self._clip_tokenizer
+                self._clip_tokenizer = None
+                logger.debug("Deleted _clip_tokenizer.")
+        except Exception as cleanup_error:
+            logger.warning(f"Exception during PictureTagger cleanup: {cleanup_error}")
 
+        torch.cuda.empty_cache()
         gc.collect()
-        logger.debug("PictureTagger.exit called, resources released.")
+        logger.debug("PictureTagger.__exit__ called, all resources released.")
 
     def max_concurrent_images(self):
         if self._device == "cpu":

@@ -167,6 +167,14 @@ class Vault:
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
         self.stop_workers(WorkerType.all())
+        if self._picture_tagger:
+            self._picture_tagger.close()
+            del self._picture_tagger
+            self._picture_tagger = None
+        if self.db:
+            self.db.close()
+            del self.db
+            self.db = None
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """

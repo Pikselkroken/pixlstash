@@ -8,6 +8,9 @@ import time
 import tomllib
 
 import gc
+import psutil
+import tracemalloc
+import collections
 
 from PIL import Image
 from fastapi.testclient import TestClient
@@ -63,9 +66,24 @@ def get_project_version():
     return data["project"]["version"]
 
 
+def log_resources(label):
+    process = psutil.Process()
+    rss = process.memory_info().rss / (1024 * 1024)
+    logger.info(f"[RESOURCE] {label}: RSS={rss:.2f}MB, Threads={process.num_threads()}")
+    logger.info(f"[RESOURCE] {label}: gc objects={len(gc.get_objects())}")
+    counter = collections.Counter(type(obj) for obj in gc.get_objects())
+    logger.info(f"[RESOURCE] {label}: Top object types: {counter.most_common(5)}")
+    if tracemalloc.is_tracing():
+        logger.info(
+            f"[RESOURCE] {label}: Tracemalloc current={tracemalloc.get_traced_memory()[0] / (1024 * 1024):.2f}MB, peak={tracemalloc.get_traced_memory()[1] / (1024 * 1024):.2f}MB"
+        )
+
+
 def test_esmeralda_vault_character_and_logo():
     """Test that Esmeralda Vault exists and that the Logo is not associated with any character."""
 
+    tracemalloc.start()
+    log_resources("START test_esmeralda_vault_character_and_logo")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
@@ -138,13 +156,16 @@ def test_esmeralda_vault_character_and_logo():
                 "Esmeralda Vault's picture does not match Logo.png"
             )
     gc.collect()
+    log_resources("END test_esmeralda_vault_character_and_logo")
 
 
 def test_create_and_get_default_character():
     """Test creating and fetching the default character 'Esmeralda'."""
+    log_resources("START test_create_and_get_default_character")
+
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
@@ -174,14 +195,16 @@ def test_create_and_get_default_character():
             assert char["name"] == char_name
             assert char["description"] == char_desc
     gc.collect()
+    log_resources("END test_create_and_get_default_character")
 
 
 def test_upload_existing_picture():
     """Test uploading an existing picture."""
 
+    log_resources("START test_upload_existing_picture")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
@@ -239,13 +262,15 @@ def test_upload_existing_picture():
                     assert result["status"] == "success"  # New picture
 
     gc.collect()
+    log_resources("END test_upload_existing_picture")
 
 
 def test_favicon():
     """Test /favicon.ico endpoint returns 200 and PNG content."""
+    log_resources("START test_favicon")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
             resp = client.get("/favicon.ico")
@@ -253,13 +278,15 @@ def test_favicon():
             assert resp.headers["content-type"] == "image/vnd.microsoft.icon"
             assert resp.content[:4] == b"\x00\x00\x01\x00"  # ICO file signature
     gc.collect()
+    log_resources("END test_favicon")
 
 
 def test_characters_summary():
     """Test /characters/summary endpoint returns 200 and valid structure."""
+    log_resources("START test_characters_summary")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
         image_files = [
             f
@@ -362,13 +389,15 @@ def test_characters_summary():
                 f"Expected at least {len(picture_ids)} pictures for Esmeralda Vault, got {count}"
             )
     gc.collect()
+    log_resources("END test_characters_summary")
 
 
 def test_pictures_stacks():
     """Test /pictures/stacks endpoint returns 200 and valid structure."""
+    log_resources("START test_pictures_stacks")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
             resp = client.get("/pictures/stacks")
@@ -378,13 +407,15 @@ def test_pictures_stacks():
             assert "stacks" in data
             assert isinstance(data["stacks"], list)
     gc.collect()
+    log_resources("END test_pictures_stacks")
 
 
 def test_pictures_thumbnails():
     """Test /pictures/thumbnails endpoint returns 200 and valid structure."""
+    log_resources("START test_pictures_thumbnails")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
             # Send empty payload for basic test
@@ -392,15 +423,17 @@ def test_pictures_thumbnails():
             assert resp.status_code == 200
             assert isinstance(resp.json(), dict)
     gc.collect()
+    log_resources("END test_pictures_thumbnails")
 
 
 def test_pictures_export():
     """Test /pictures/export endpoint returns 200 and zip content."""
     import zipfile
 
+    log_resources("START test_pictures_export")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(config_path, server_config_path) as server:
             server.vault.import_default_data(add_tagger_test_images=True)
             client = TestClient(server.api)
@@ -449,12 +482,14 @@ def test_pictures_export():
                         f"No database picture matches exported SHA for picture {fname}"
                     )
     gc.collect()
+    log_resources("END test_pictures_export")
 
 
 def test_post_logo_identical_upload():
+    log_resources("START test_post_logo_identical_upload")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
@@ -467,12 +502,14 @@ def test_post_logo_identical_upload():
             r = client.post("/pictures", files=files)
             assert r.status_code == 400
     gc.collect()
+    log_resources("END test_post_logo_identical_upload")
 
 
 def test_post_logo_altered_pixel_upload():
+    log_resources("START test_post_logo_altered_pixel_upload")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
@@ -497,12 +534,14 @@ def test_post_logo_altered_pixel_upload():
             assert resp["results"][0]["picture_id"]
             os.remove(tmp_path)
     gc.collect()
+    log_resources("END test_post_logo_altered_pixel_upload")
 
 
 def test_read_root():
+    log_resources("START test_read_root")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
@@ -515,12 +554,14 @@ def test_read_root():
                 "version": expected_version,
             }
     gc.collect()
+    log_resources("END test_read_root")
 
 
 def test_benchmark_add_images_by_binary_upload():
+    log_resources("START test_benchmark_add_images_by_binary_upload")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
@@ -556,14 +597,16 @@ def test_benchmark_add_images_by_binary_upload():
                 assert img_resp.status_code == 200
                 assert img_resp.content[:1024] == random_images[check_idx][:1024]
     gc.collect()
+    log_resources("END test_benchmark_add_images_by_binary_upload")
 
 
 def test_semantic_search():
     """Test: Add all images from pictures folder, wait for tagging, perform semantic search, print results, assert count."""
 
+    log_resources("START test_semantic_search")
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
+        server_config_path = os.path.join(temp_dir, "server_config.json")
 
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
         image_files = [
@@ -770,3 +813,4 @@ def test_semantic_search():
                     print(f"Match: {r['description']}")
                     print(f"Similarity: {r['likeness_score']:.4f}.")
     gc.collect()
+    log_resources("END test_semantic_search")

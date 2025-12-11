@@ -84,8 +84,34 @@ class VaultDatabase:
 
         # Write queue and worker
         self._task_queue = queue.PriorityQueue()
+        self._task_worker_stop_event = threading.Event()
         self._task_worker = threading.Thread(target=self._task_worker_loop, daemon=True)
         self._task_worker.start()
+
+    def close(self):
+        """
+        Cleanly close the database engine and stop the worker thread.
+        """
+        import gc
+
+        try:
+            self._task_worker_stop_event.set()
+            if self._task_worker:
+                self._task_worker.join(timeout=5)
+                self._task_worker = None
+        except Exception as e:
+            logger.warning(f"VaultDatabase: Exception during worker thread stop: {e}")
+        # Attempt to close SQLAlchemy engine
+        if hasattr(self, "_engine") and self._engine:
+            try:
+                self._engine.dispose()
+                self._engine = None
+                logger.info("VaultDatabase: SQLAlchemy engine disposed.")
+            except Exception as e:
+                logger.warning(f"VaultDatabase: Exception during engine dispose: {e}")
+
+        gc.collect()
+        logger.info("VaultDatabase.close called, resources released.")
 
     # --- Queued API ---
     def submit_task(self, func, *args, priority=DBPriority.MEDIUM, **kwargs):
@@ -154,7 +180,7 @@ class VaultDatabase:
             raise
 
     def _task_worker_loop(self):
-        while True:
+        while not self._task_worker_stop_event.is_set():
             task = self._task_queue.get()
             with Session(self._engine) as session:
                 try:

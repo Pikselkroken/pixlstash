@@ -113,7 +113,9 @@ class Server:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if hasattr(self, "vault"):
+            logger.warning("Closing the vault and cleaning up resources")
             self.vault.close()
+        gc.collect()
 
     def run(self):
         uvicorn_kwargs = dict(
