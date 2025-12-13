@@ -66,25 +66,7 @@ def test_face_extraction_speed_gpu():
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
-        def slightly_modify_and_save_temp(img, idx=0):
-            draw = ImageDraw.Draw(img)
-            # Draw a small dot in a unique position
-            x, y = 5 + idx, 5 + idx
-            draw.ellipse((x, y, x + 3, y + 3), fill=(255, 0, 0))
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
-                img.save(temp_file, format="PNG")
-                return temp_file.name
-
-        tmp_files = []
-        image_files = []
-        for file in original_image_files:
-            img = Image.open(os.path.join(src_dir, file)).convert("RGB")
-            img = img.resize((512, 512))
-
-            for idx in range(10):  # Adjust multiplier as needed for testing
-                tmp_file = slightly_modify_and_save_temp(img.copy(), idx)
-                image_files.append(tmp_file)
-                tmp_files.append(tmp_file)
+        image_files = original_image_files * 10  # Adjust multiplier as needed for testing
 
         with Server(
             config_path=config_path,
@@ -109,7 +91,7 @@ def test_face_extraction_speed_gpu():
             worker._insightface_app = insightface.app.FaceAnalysis(
                 providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
             )
-            worker._insightface_app.prepare(ctx_id=0, det_thresh=0.25)
+            worker._insightface_app.prepare(ctx_id=0, det_thresh=0.25, det_size=(480, 480))
 
             start = time()
             faces = worker._extract_faces(pictures)
@@ -131,44 +113,23 @@ def test_face_extraction_speed_gpu_batch():
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
-        def slightly_modify_and_save_temp(img, idx=0):
-            draw = ImageDraw.Draw(img)
-            # Draw a small dot in a unique position
-            x, y = 5 + idx, 5 + idx
-            draw.ellipse((x, y, x + 3, y + 3), fill=(255, 0, 0))
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
-                img.save(temp_file, format="PNG")
-                return temp_file.name
-
-        tmp_files = []
-        image_files = []
-        for file in original_image_files:
-            img = Image.open(os.path.join(src_dir, file)).convert("RGB")
-            img = img.resize((512, 512))
-
-            for idx in range(10):  # Adjust multiplier as needed for testing
-                tmp_file = slightly_modify_and_save_temp(img.copy(), idx)
-                image_files.append(tmp_file)
-                tmp_files.append(tmp_file)
+        image_files = original_image_files * 10  # Adjust multiplier as needed for testing
 
         with Server(
             config_path=config_path,
             server_config_path=server_config_path,
         ) as server:
 
-            def notify(event_type) -> None:
-                pass
-
             from batch_face import RetinaFace
 
             images = []
             detector = RetinaFace()
-            for _image_file in image_files:
-                img = cv2.imread(_image_file)
+            for image_file in image_files:
+                img = cv2.imread(os.path.join(src_dir, image_file))
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 images.append(img)
 
-            max_size = 640
+            max_size = 480
             threshold = 0.25  # confidence threshold for detection
             batch_size = len(images)
 
@@ -210,9 +171,8 @@ def test_face_extraction_speed_server():
         image_files = []
         for file in original_image_files:
             img = Image.open(os.path.join(src_dir, file)).convert("RGB")
-            img = img.resize((512, 512))
 
-            for idx in range(10):  # Adjust multiplier as needed for testing
+            for idx in range(3):  # Adjust multiplier as needed for testing
                 tmp_file = slightly_modify_and_save_temp(img.copy(), idx)
                 image_files.append(tmp_file)
                 tmp_files.append(tmp_file)

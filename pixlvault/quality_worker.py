@@ -5,6 +5,7 @@ import time
 from sqlmodel import Session, select
 
 from pixlvault.database import DBPriority
+from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.worker_registry import BaseWorker, WorkerType
@@ -57,20 +58,31 @@ class QualityWorker(BaseWorker):
                 if self._stop.is_set():
                     break
 
-                for group in grouped_full.values():
+                for group_key, group in grouped_full.items():
                     if self._stop.is_set():
                         break
 
-                    batch = group[:BATCH_SIZE]
-                    logger.info(
-                        "Processing quality for batch of %d pictures." % len(batch)
-                    )
-                    if len(batch) > 0:
-                        qualities = self._calculate_quality(batch)
+                    batch = group[:min(len(group), BATCH_SIZE)]
+                    # Determine expected shape from group key
+                    expected_shape = (group_key[2], group_key[1], 3)  # (height, width, channels)
+                    valid_batch = []
+                    skipped = []
+                    batch_shapes = []
+                    for pic in batch:
+                        img = PictureUtils.load_image_or_video(pic.file_path)
+                        shape = img.shape if img is not None else None
+                        batch_shapes.append(shape)
+                        if shape == expected_shape:
+                            valid_batch.append(pic)
+                        else:
+                            logger.warning(f"Skipping image {pic.id}: expected shape {expected_shape}, got {shape}")
+                            skipped.append(pic)
+                    if len(valid_batch) > 0:
+                        qualities = self._calculate_quality(valid_batch)
                         if qualities:
                             result = self._db.run_task(
                                 self._update_quality,
-                                batch,
+                                valid_batch,
                                 qualities,
                                 priority=DBPriority.LOW,
                             )
@@ -89,8 +101,9 @@ class QualityWorker(BaseWorker):
                 )
                 break
             timing = time.time() - start
-            if quality_updates > 0:
+            if quality_updates > 0:                
                 logger.info("QualityWorker: Done after %.2f seconds." % timing)
+                self._notify_others(EventType.QUALITY_UPDATED)
             else:
                 logger.info(
                     "QualityWorker: Sleeping after %.2f seconds, no updates made."
@@ -124,6 +137,7 @@ class QualityWorker(BaseWorker):
 
         if current_group:
             groups[current_key] = current_group
+
         return groups
 
     def _calculate_quality(self, pics: List[Picture]) -> List["Quality"]:
@@ -140,15 +154,26 @@ class QualityWorker(BaseWorker):
             loaded_pics = []
             for pic in pics:
                 img = PictureUtils.load_image_or_video(pic.file_path)
+                if img is None:
+                    logger.warning(f"Could not load image for picture_id={pic.id}, file_path={pic.file_path}")
                 loaded_pics.append(img)
 
             # Remove None images for batch processing, keep index mapping
             valid_indices = [i for i, img in enumerate(loaded_pics) if img is not None]
             valid_pics = [img for img in loaded_pics if img is not None]
-            qualities = []
             if valid_pics:
-                batch_array = np.stack(valid_pics, axis=0)
+                shapes = [img.shape for img in valid_pics]
+                shape_set = set(shapes)
+                if len(shape_set) > 1:
+                    logger.error(f"Shape mismatch in batch: {[str(s) for s in shapes]}")
+                try:
+                    batch_array = np.stack(valid_pics, axis=0)
+                except Exception as stack_exc:
+                    logger.error(f"np.stack failed: {stack_exc}")
+                    return [None] * len(pics)
                 qualities = Quality.calculate_quality_batch(batch_array)
+            else:
+                qualities = []
 
             # Assign metrics
             for i in range(len(pics)):
@@ -156,11 +181,11 @@ class QualityWorker(BaseWorker):
                     q = qualities[valid_indices.index(i)]
                     all_qualities.append(q)
                 else:
+                    logger.warning(f"No quality calculated for picture_id={pics[i].id}")
                     all_qualities.append(None)
             return all_qualities
         except Exception as e:
             import traceback
-
             logger.error(
                 "Failed to calculate quality for batch: %s\n%s",
                 e,
@@ -176,7 +201,7 @@ class QualityWorker(BaseWorker):
             session.add(quality)
             pic.quality = quality
             session.add(pic)
-            changed.append((Picture, pic.id, "quality"))
+            changed.append((Picture, pic.id, "quality", quality))
         session.commit()
         return changed
 
@@ -221,9 +246,6 @@ class FaceQualityWorker(BaseWorker):
 
                 for group in grouped_faces.values():
                     batch = group[:BATCH_SIZE]
-                    logger.info(
-                        "Processing face quality for batch of %d faces." % len(batch)
-                    )
                     if len(batch) > 0:
                         qualities = self._calculate_face_quality(batch)
                         if qualities:
@@ -325,7 +347,7 @@ class FaceQualityWorker(BaseWorker):
             qualities = []
             if valid_pics:
                 batch_array = np.stack(valid_pics, axis=0)
-                qualities = Quality.calculate_quality_batch(batch_array)
+                qualities = Quality.calculate_quality_batch(batch_array, False)
 
             # Assign metrics
             for i in range(len(pics_and_faces)):
@@ -347,12 +369,12 @@ class FaceQualityWorker(BaseWorker):
 
     def _update_face_quality(
         self, session, faces: List[Face], qualities: List["Quality"]
-    ) -> List[Tuple[type, object, str]]:
+    ) -> List[Tuple[type, object, str, object]]:
         changed = []
         for face, quality in zip(faces, qualities):
             session.add(quality)
             face.quality = quality
             session.add(face)
-            changed.append((Face, face.id, "quality"))
+            changed.append((Face, face.id, "quality", quality))
         session.commit()
         return changed

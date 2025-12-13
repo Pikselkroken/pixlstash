@@ -330,7 +330,7 @@ def test_characters_summary():
 
             # Wait for facial features to be processed and associate Esmeralda Vault with largest face in each picture
             for idx, future in enumerate(face_futures):
-                result_id = future.result(timeout=120)
+                result_id, _ = future.result(timeout=120)
                 assert result_id == picture_ids[idx], (
                     f"Facial features processing returned unexpected picture ID {result_id}, expected {picture_ids[idx]}"
                 )

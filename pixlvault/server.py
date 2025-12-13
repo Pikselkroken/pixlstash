@@ -307,7 +307,7 @@ class Server:
             )
 
         existing_pictures = self.vault.db.run_task(
-            lambda session: Picture.find(session, pixel_shas=shas)
+            lambda session: Picture.find(session, pixel_shas=shas), priority=DBPriority.IMMEDIATE
         )
 
         existing_map = {pic.pixel_sha: pic for pic in existing_pictures}
@@ -636,7 +636,7 @@ class Server:
                 # All
                 metadata_fields = Picture.metadata_fields()
                 pics = self.vault.db.run_task(
-                    Picture.find, select_fields=metadata_fields
+                    Picture.find, select_fields=metadata_fields, priority=DBPriority.IMMEDIATE
                 )
                 image_count = len(pics)
                 logger.info("ALL pics count: {}".format(image_count))
@@ -647,7 +647,7 @@ class Server:
                     pics = Picture.find(session, select_fields=["characters"])
                     return [pic for pic in pics if not pic.characters]
 
-                pics = self.vault.db.run_task(find_unassigned)
+                pics = self.vault.db.run_task(find_unassigned, priority=DBPriority.IMMEDIATE)
                 image_count = len(pics)
                 logger.info("UNASSIGNED pics count: {}".format(image_count))
                 char_id = None
@@ -659,7 +659,7 @@ class Server:
                     ).all()
                     return set(face.picture_id for face in faces)
 
-                faces = self.vault.db.run_task(find_assigned, character_id=int(id))
+                faces = self.vault.db.run_task(find_assigned, character_id=int(id), priority=DBPriority.IMMEDIATE)
                 image_count = len(faces)
                 char_id = int(id)
 
@@ -730,7 +730,7 @@ class Server:
                     return character
 
                 char = self.vault.db.run_task(
-                    lambda session: alter_char(session, id, name, description)
+                    lambda session: alter_char(session, id, name, description, priority=DBPriority.IMMEDIATE)
                 )
                 self.vault.notify(EventType.CHANGED_CHARACTERS)
 
@@ -747,7 +747,8 @@ class Server:
                     lambda session: (
                         session.delete(session.get(Character, id)),
                         session.commit(),
-                    )
+                    ),
+                    priority=DBPriority.IMMEDIATE
                 )
                 self.vault.notify(EventType.CHANGED_CHARACTERS)
                 return {"status": "success", "deleted_id": id}
@@ -758,7 +759,8 @@ class Server:
         async def get_character_by_id(id: int):
             try:
                 char = self.vault.db.run_task(
-                    lambda session: Character.find(session, id=id)
+                    lambda session: Character.find(session, id=id),
+                    priority=DBPriority.IMMEDIATE
                 )
                 return char[0] if char else None
             except KeyError:
@@ -773,6 +775,7 @@ class Server:
                     Character.find,
                     select_fields=["reference_picture_set_id", "faces"],
                     id=id,
+                    priority=DBPriority.IMMEDIATE
                 )
                 if not char:
                     raise HTTPException(status_code=404, detail="Character not found")
@@ -794,7 +797,7 @@ class Server:
                     return None, []
 
                 ref_set, members = self.vault.db.run_task(
-                    get_reference_set_and_members, char.reference_picture_set_id
+                    get_reference_set_and_members, char.reference_picture_set_id, priority=DBPriority.IMMEDIATE
                 )
                 if ref_set and ref_set.members:
                     # Query all pictures in the reference set
@@ -806,7 +809,8 @@ class Server:
                     for pic in pics:
                         # Query faces for this picture
                         faces = self.vault.db.run_task(
-                            lambda session: Face.find(session, picture_id=pic.id)
+                            lambda session: Face.find(session, picture_id=pic.id),
+                            priority=DBPriority.IMMEDIATE
                         )
                         # Find face with character_id == char.id
                         for face in faces:
@@ -821,7 +825,8 @@ class Server:
                     for face in char.faces:
                         # Query picture for this face
                         pic = self.vault.db.run_task(
-                            lambda session: session.get(Picture, face.picture_id)
+                            lambda session: session.get(Picture, face.picture_id),
+                            priority=DBPriority.IMMEDIATE
                         )
                         if pic:
                             best_pic = pic
@@ -848,7 +853,8 @@ class Server:
             # Default: return field value
             try:
                 char = self.vault.db.run_task(
-                    Character.find, select_fields=[field], id=id
+                    Character.find, select_fields=[field], id=id,
+                    priority=DBPriority.IMMEDIATE
                 )
                 if not char:
                     raise KeyError("Character not found")
@@ -872,7 +878,8 @@ class Server:
         async def get_characters(name: str = Query(None)):
             try:
                 characters = self.vault.db.run_task(
-                    lambda session: Character.find(session, name=name)
+                    lambda session: Character.find(session, name=name),
+                    priority=DBPriority.IMMEDIATE
                 )
                 return characters
             except KeyError:
@@ -903,7 +910,8 @@ class Server:
                     return character.model_dump(exclude_unset=False)
 
                 char_dict = self.vault.db.run_task(
-                    create_character_and_reference_set, payload
+                    create_character_and_reference_set, payload,
+                    priority=DBPriority.IMMEDIATE
                 )
                 logger.debug("Created character: {}".format(char_dict))
                 self.vault.notify(EventType.CHANGED_CHARACTERS)
@@ -969,7 +977,7 @@ class Server:
                 return list(unique_faces)
 
             faces = self.vault.db.run_task(
-                assign_faces, face_ids, picture_ids, character_id
+                assign_faces, face_ids, picture_ids, character_id, priority=DBPriority.IMMEDIATE
             )
             for face in faces:
                 if face.character_id != character_id:
@@ -1025,7 +1033,7 @@ class Server:
                 return faces
 
             self.vault.db.run_task(
-                remove_faces_from_character, character_id, face_ids, picture_ids
+                remove_faces_from_character, character_id, face_ids, picture_ids, priority=DBPriority.IMMEDIATE
             )
             self.vault.notify(EventType.CHANGED_CHARACTERS)
             self.vault.notify(EventType.CHANGED_FACES)
@@ -1800,7 +1808,6 @@ class Server:
                 logger.debug(
                     f"Queuing likeness calculation for {len(new_pictures)} new pictures."
                 )
-                self.vault.queue_likeness_calculation(new_pictures)
             else:
                 logger.error("No new pictures to import; all are duplicates.")
                 raise HTTPException(
@@ -1914,7 +1921,7 @@ class Server:
 
                     # 1. Get reference faces (use set of face IDs for uniqueness)
                     reference_faces = self.vault.db.run_task(
-                        get_character_reference_faces, character_id
+                        get_character_reference_faces, character_id, priority=DBPriority.IMMEDIATE
                     )
 
                     if not reference_faces:
@@ -1967,7 +1974,7 @@ class Server:
                             if likeness is not None:
                                 scores.append(likeness)
                         character_likeness_map[face.id] = (
-                            PictureUtils.softmax_weighted_average(scores)
+                            PictureUtils.softmax_weighted_average(scores, alpha=1.0)
                             if scores
                             else 0.0
                         )

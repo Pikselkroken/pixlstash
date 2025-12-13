@@ -7,6 +7,8 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
+from pixlvault.db_models.face import Face
+
 from .database import DBPriority, VaultDatabase
 from .db_models import MetaData, Character, Picture, PictureSet
 from .pixl_logging import get_logger
@@ -18,7 +20,6 @@ from .worker_registry import WorkerRegistry, WorkerType
 from pixlvault.event_types import EventType
 from pixlvault.tag_worker import TagWorker, DescriptionWorker, EmbeddingWorker  # noqa: F401
 from pixlvault.face_extraction_worker import FaceExtractionWorker  # noqa: F401
-from pixlvault.facial_features_worker import FacialFeaturesWorker  # noqa: F401
 from pixlvault.face_likeness_worker import FaceLikenessWorker  # noqa: F401
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
@@ -37,9 +38,10 @@ class Vault:
             WorkerType.DESCRIPTION,
         ],
         EventType.CHANGED_TAGS: [],
-        EventType.CHANGED_FACES: [WorkerType.FACIAL_FEATURES, WorkerType.FACE_QUALITY],
+        EventType.CHANGED_FACES: [WorkerType.FACE_QUALITY, WorkerType.FACE_LIKENESS],
         EventType.CHANGED_CHARACTERS: [WorkerType.DESCRIPTION],
         EventType.CHANGED_DESCRIPTIONS: [WorkerType.TEXT_EMBEDDING],
+        EventType.QUALITY_UPDATED: [WorkerType.LIKENESS],
     }
 
     def __enter__(self):
@@ -123,51 +125,6 @@ class Vault:
                 worker.notify()
             else:
                 logger.debug(f"Worker {worker_type} not found for event {event_type}")
-
-    def queue_likeness_pair_calculation(self, picture_id_a: str, picture_id_b: str):
-        """
-        Queue a pair of pictures for likeness calculation.
-
-        Args:
-            picture_id_a (str): ID of the first picture.
-            picture_id_b (str): ID of the second picture.
-        """
-        likeness_worker: LikenessWorker = self._workers.get(WorkerType.LIKENESS)
-        if likeness_worker:
-            likeness_worker.queue_pair(picture_id_a, picture_id_b)
-
-    def queue_likeness_calculation(self, pictures: list[Picture]):
-        """
-        Queue all unique pairs of pictures for likeness calculation.
-
-        Args:
-            pictures (list[Picture]): List of Picture objects to queue for likeness calculation.
-        """
-        likeness_worker: LikenessWorker = self._workers.get(WorkerType.LIKENESS)
-        if likeness_worker:
-            picture_ids = sorted([pic.id for pic in pictures])
-            # Query for all existing picture ids
-            existing_picture_ids = set(
-                self.db.run_task(lambda session: session.exec(select(Picture.id)).all())
-            )
-            for pic_id_a in picture_ids:
-                for pic_id_b in existing_picture_ids:
-                    likeness_worker.queue_pair(pic_id_a, pic_id_b)
-
-    def queue_face_likeness_pair_calculation(self, face_id_a: int, face_id_b: int):
-        """
-        Queue a pair of faces for likeness calculation.
-
-        Args:
-            face_id_a (int): ID of the first face.
-            face_id_b (int): ID of the second face.
-        """
-        likeness_worker: FaceLikenessWorker = self._workers.get(
-            WorkerType.FACE_LIKENESS
-        )
-        if likeness_worker is None:
-            raise ValueError("FaceLikenessWorker is not available in this vault.")
-        likeness_worker.queue_pair(face_id_a, face_id_b)
 
     def __repr__(self):
         """

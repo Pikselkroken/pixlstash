@@ -76,15 +76,17 @@ class FaceExtractionWorker(BaseWorker):
                 providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
             )
             self._insightface_app.prepare(
-                ctx_id=0 if not PictureTagger.FORCE_CPU else -1, det_thresh=0.25
+                ctx_id=0 if not PictureTagger.FORCE_CPU else -1, det_thresh=0.25, det_size=(480, 480)
             )
 
     def _extract_faces(self, pics) -> List[tuple]:
         self._init_insightface_app()
 
         updates = []
+        all_face_ids = []
 
         for pic in pics:
+            pic_face_ids = []
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
             file_path = pic.file_path
             ext = os.path.splitext(file_path)[1].lower()
@@ -98,6 +100,9 @@ class FaceExtractionWorker(BaseWorker):
                         expanded_bbox = Face.expand_face_bbox(
                             face.bbox, img.shape[1], img.shape[0], 0.1
                         )
+                        features_bytes = None
+                        if hasattr(face, 'embedding') and face.embedding is not None:
+                            features_bytes = face.embedding.astype('float32').tobytes()
                         face_objects.append(
                             Face(
                                 picture_id=pic.id,
@@ -105,6 +110,7 @@ class FaceExtractionWorker(BaseWorker):
                                 bbox=expanded_bbox,
                                 character_id=None,
                                 frame_index=0,
+                                features=features_bytes,
                             )
                         )
             elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
@@ -128,6 +134,9 @@ class FaceExtractionWorker(BaseWorker):
                             expanded_bbox = Face.expand_face_bbox(
                                 face.bbox, frame.shape[1], frame.shape[0], 0.1
                             )
+                            features_bytes = None
+                            if hasattr(face, 'embedding') and face.embedding is not None:
+                                features_bytes = face.embedding.astype('float32').tobytes()
                             face_objects.append(
                                 Face(
                                     picture_id=pic.id,
@@ -135,6 +144,7 @@ class FaceExtractionWorker(BaseWorker):
                                     bbox=expanded_bbox,
                                     character_id=None,
                                     frame_index=frame_index,
+                                    features=features_bytes,
                                 )
                             )
                 cap.release()
@@ -157,27 +167,35 @@ class FaceExtractionWorker(BaseWorker):
                 )
 
                 def insert_sentinel(session):
-                    session.add(
-                        Face(
+                    face = Face(
                             picture_id=pic.id,
                             face_index=-1,
                             character_id=None,
                             bbox=None,
                         )
-                    )
+                    session.add(face)
                     session.commit()
+                    session.refresh(face)
+                    return face.id
 
-                self._db.run_task(insert_sentinel, priority=DBPriority.LOW)
+                face_id = self._db.run_task(insert_sentinel, priority=DBPriority.LOW)
+                pic_face_ids.append(face_id)
             else:
 
                 def insert_faces(session, faces_to_insert):
-                    changed = []
+                    face_ids = []
                     for face in faces_to_insert:
                         session.add(face)
-                        changed.append((Face, face.id))
                     session.commit()
-                    return changed
+                    for face in faces_to_insert:
+                        session.refresh(face)
+                        face_ids.append(face.id)
+                    return face_ids
 
-                self._db.run_task(insert_faces, face_objects, priority=DBPriority.LOW)
-            updates.append((Picture, pic.id, "faces"))
+                face_ids = self._db.run_task(insert_faces, face_objects, priority=DBPriority.LOW)
+                pic_face_ids.extend(face_ids)
+
+            all_face_ids.extend(pic_face_ids)
+            updates.append((Picture, pic.id, "faces", pic_face_ids))
+
         return updates

@@ -14,6 +14,7 @@ class PictureLikeness(SQLModel, table=True):
             "picture_id_a",
             ForeignKey("picture.id", ondelete="CASCADE"),
             primary_key=True,
+            index=True,
         )
     )
     picture_id_b: str = Field(
@@ -21,6 +22,7 @@ class PictureLikeness(SQLModel, table=True):
             "picture_id_b",
             ForeignKey("picture.id", ondelete="CASCADE"),
             primary_key=True,
+            index=True,
         )
     )
     likeness: float = Field(default=None)

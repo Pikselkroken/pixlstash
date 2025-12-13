@@ -48,70 +48,25 @@ def test_face_likeness_worker():
 
             server.vault.start_workers({WorkerType.FACE})
             timeout = time.time() + 60
+
+            all_face_ids = []
+
             for face_future in face_futures:
-                face_future.result(timeout=timeout - time.time())
+                pic_id, face_ids = face_future.result(timeout=timeout - time.time())
+                print(
+                    f"Face extraction completed for picture ID {pic_id}, extracted face IDs: {face_ids}"
+                )
+                all_face_ids.extend(face_ids)
 
             server.vault.stop_workers({WorkerType.FACE})
 
-            # Now, for each TaggerTest* picture, issue and wait for facial feature futures for each face
-            feature_futures = []
-            feature_future_info = []
-            pics = server.vault.db.run_task(lambda session: Picture.find(session))
-            for pic in pics:
-                if pic.description and pic.description.startswith("TaggerTest"):
-                    faces = server.vault.db.run_task(
-                        lambda session: Face.find(session, picture_id=pic.id)
-                    )
-                    for face in faces:
-                        if face.face_index < 0:
-                            continue  # Skip sentinels
-                        feature_futures.append(
-                            server.vault.get_worker_future(
-                                WorkerType.FACIAL_FEATURES, Face, face.id, "features"
-                            )
-                        )
-                        feature_future_info.append(
-                            (pic.description, face.face_index, face.id)
-                        )
 
-            server.vault.start_workers({WorkerType.FACIAL_FEATURES})
-
-            logger.info("Waiting for features for the following faces:")
-            for desc, idx, fid in feature_future_info:
-                logger.info(f"  Picture: {desc}, face_index: {idx}, face_id: {fid}")
-            # Wait for all feature futures to complete
-            for (desc, idx, fid), future in zip(feature_future_info, feature_futures):
-                logger.info(
-                    f"#### Waiting for features: Picture '{desc}', face_index {idx}, face_id {fid}"
-                )
-                result = future.result(timeout=60)
-                logger.info(
-                    f"#### Done: Picture '{desc}', face_index {idx}, face_id {fid}, result: {result}"
-                )
-
-            server.vault.stop_workers({WorkerType.FACIAL_FEATURES})
-
-            logger.info(
-                "All faces extracted. Gathering pairs for likeness computation."
-            )
-
-            # Get all faces
-            faces = server.vault.db.run_task(lambda session: Face.find(session))
-            assert faces and len(faces) >= 2, (
-                "No faces found in the database. Test requires at least two faces."
-            )
-            # Get all unique face pairs (a < b)
             pairs = []
-            ids = sorted([face.id for face in faces])
+            ids = sorted(all_face_ids)
             for i, a in enumerate(ids):
                 for b in ids[i + 1 :]:
-                    if (
-                        faces[i].features is not None
-                        and faces[ids.index(b)].features is not None
-                    ):
-                        pairs.append((a, b))
-                    else:
-                        logger.warning(f"Skipping pair ({a}, {b}): missing features.")
+                    pairs.append((a, b))
+
             # Get future objects for each pair
             futures = {}
             for a, b in pairs:
@@ -119,7 +74,6 @@ def test_face_likeness_worker():
                     WorkerType.FACE_LIKENESS, FaceLikeness, (a, b), "pair"
                 )
                 futures[(a, b)] = future
-                server.vault.queue_face_likeness_pair_calculation(a, b)
 
             logger.info(f"Queued {len(futures)} face likeness pairs for processing.")
             server.vault.start_workers({WorkerType.FACE_LIKENESS})
@@ -127,8 +81,9 @@ def test_face_likeness_worker():
             # Wait for all futures to complete
             timeout = time.time() + 60
             for key, future in futures.items():
-                result = future.result(timeout=timeout - time.time())
-                assert result == key
+                pair, result = future.result(timeout=timeout - time.time())
+                assert pair == key
+                assert result >= 0.0
             server.vault.stop_workers({WorkerType.FACE_LIKENESS})
 
             # Check that all face likeness results are present
@@ -146,6 +101,7 @@ def test_face_likeness_worker():
                 )
 
             # Print table of face likeness scores with picture descriptions and face indices
+            faces = server.vault.db.run_task(lambda session: session.exec(Face.__table__.select()).all())
             face_map = {face.id: face for face in faces}
             pic_map = {
                 pic.id: pic

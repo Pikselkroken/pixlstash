@@ -68,41 +68,6 @@ def test_facial_features():
             assert all(results), "Not all pictures were processed in time"
             server.vault.stop_workers({WorkerType.FACE})
 
-            # Now, for each TaggerTest* picture, issue and wait for facial feature futures for each face
-            feature_futures = []
-            feature_future_info = []
-            pics = server.vault.db.run_task(lambda session: Picture.find(session))
-            for pic in pics:
-                if pic.description and pic.description.startswith("TaggerTest"):
-                    faces = server.vault.db.run_task(
-                        lambda session: Face.find(session, picture_id=pic.id)
-                    )
-                    for face in faces:
-                        if face.face_index < 0:
-                            continue  # Skip sentinels
-                        feature_futures.append(
-                            server.vault.get_worker_future(
-                                WorkerType.FACIAL_FEATURES, Face, face.id, "features"
-                            )
-                        )
-                        feature_future_info.append(
-                            (pic.description, face.face_index, face.id)
-                        )
-
-            server.vault.start_workers({WorkerType.FACIAL_FEATURES})
-
-            # Print only essential diagnostics
-            for (desc, idx, fid), future in zip(feature_future_info, feature_futures):
-                print(
-                    f"Waiting for features: Picture '{desc}', face_index {idx}, face_id {fid}"
-                )
-                result = future.result(timeout=60)
-                # Only print if result is not True (for debugging)
-                if not result:
-                    print(
-                        f"FAILED: Picture '{desc}', face_index {idx}, face_id {fid}, result: {result}"
-                    )
-
             # Now run assertions as before
             pics = server.vault.db.run_task(lambda session: Picture.find(session))
             assert len(pics) > 0, "No pictures found in vault"
@@ -146,7 +111,6 @@ def test_facial_features():
                         logger.info(
                             f"{pic.description} face_index={face.face_index} has features: {face.features is not None}"
                         )
-            server.vault.stop_workers({WorkerType.FACIAL_FEATURES})
     gc.collect()
 
 
@@ -183,11 +147,10 @@ def test_character_thumbnail_endpoint():
                     )
                 )
 
-            server.vault.start_workers({WorkerType.FACE, WorkerType.FACIAL_FEATURES})
+            server.vault.start_workers({WorkerType.FACE})
             # Wait for all face detection futures to complete
             results = [future.result(timeout=60) for future in futures]
-            assert all(results), "Not all pictures were processed in time"
-            server.vault.stop_workers({WorkerType.FACE, WorkerType.FACIAL_FEATURES})
+
             # Assign the default character to the largest face in each picture
             chars = server.vault.db.run_task(lambda session: Character.find(session))
             char = chars[0]

@@ -40,6 +40,24 @@ def test_likeness_worker():
             assert pictures and len(pictures) >= 2, (
                 "No pictures found in the database. Test requires at least two pictures."
             )
+            quality_futures = []
+            for pic in pictures:
+                future = server.vault.get_worker_future(
+                    WorkerType.QUALITY, Picture, pic.id, "quality"
+                )
+                quality_futures.append(future)
+            logger.info(f"Queued {len(quality_futures)} quality computations.")
+            # Start the quality worker
+            server.vault.start_workers({WorkerType.QUALITY})
+            # Wait for all quality computations to complete
+            timeout = time.time() + 120
+            for future in quality_futures:
+                future.result(timeout=timeout - time.time())
+
+            logger.info("All picture quality computations completed.")
+
+            server.vault.stop_workers({WorkerType.QUALITY})
+
             # Get all unique pairs (a < b)
             pairs = []
             ids = sorted([pic.id for pic in pictures])
@@ -53,17 +71,17 @@ def test_likeness_worker():
                     WorkerType.LIKENESS, PictureLikeness, (a, b), "pair"
                 )
                 futures[(a, b)] = future
-                server.vault.queue_likeness_pair_calculation(a, b)
 
-            print(f"Queued {len(futures)} likeness pairs for processing.")
+            logger.info(f"Queued {len(futures)} likeness pairs for processing.")
             # Start the likeness worker
             server.vault.start_workers({WorkerType.LIKENESS})
 
             # Wait for all futures to complete
             timeout = time.time() + 60
             for key, future in futures.items():
-                result = future.result(timeout=timeout - time.time())
-                assert result == key
+                key, result = future.result(timeout=timeout - time.time())
+                result == key
+                assert result >= 0.0, f"Likeness score for pair {key} is negative."
             server.vault.stop_workers({WorkerType.LIKENESS})
             # Check that all likeness results are present
             likeness_results = server.vault.db.run_task(
@@ -78,14 +96,14 @@ def test_likeness_worker():
             for a, b in pairs:
                 assert (a, b) in result_pairs
 
-                # Print table of likeness scores with descriptions
-                pic_map = {pic.id: pic for pic in pictures}
-                logger.info("\nLikeness Table:")
-                logger.info(f"{'Desc A':<30} | {'Desc B':<30} | {'Likeness':<10}")
-                logger.info("-" * 110)
-                for r in likeness_results:
-                    pic_a = pic_map.get(r.picture_id_a)
-                    pic_b = pic_map.get(r.picture_id_b)
-                    desc_a = (pic_a.description or "") if pic_a else "?"
-                    desc_b = (pic_b.description or "") if pic_b else "?"
-                    logger.info(f"{desc_a:<30} | {desc_b:<30} | {r.likeness:<10.4f}")
+            # Print table of likeness scores with descriptions
+            pic_map = {pic.id: pic for pic in pictures}
+            logger.info("\nLikeness Table:")
+            logger.info(f"{'Desc A':<30} | {'Desc B':<30} | {'Likeness':<10}")
+            logger.info("-" * 110)
+            for r in likeness_results:
+                pic_a = pic_map.get(r.picture_id_a)
+                pic_b = pic_map.get(r.picture_id_b)
+                desc_a = (pic_a.description or "") if pic_a else "?"
+                desc_b = (pic_b.description or "") if pic_b else "?"
+                logger.info(f"{desc_a:<30} | {desc_b:<30} | {r.likeness:<10.4f}")

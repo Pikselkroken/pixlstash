@@ -3,6 +3,7 @@ import os
 import tempfile
 
 import gc
+from time import time
 
 from fastapi.testclient import TestClient
 
@@ -40,7 +41,7 @@ def test_picture_stacking():
 
             server.vault.start_workers(
                 {
-                    WorkerType.LIKENESS,
+                    WorkerType.QUALITY,
                 }
             )
 
@@ -78,17 +79,15 @@ def test_picture_stacking():
 
             server.vault.start_workers(
                 {
+                    WorkerType.LIKENESS,
                     WorkerType.FACE,
-                    WorkerType.FACIAL_FEATURES,
                 }
             )
 
             # Wait for facial features to be processed
-            facial_features_futures = []
-
             all_face_ids = set()
             for idx, future in enumerate(face_futures):
-                pid = future.result(timeout=120)
+                pid, _ = future.result(timeout=120)
                 logging.debug(f"Facial features processed for picture ID: {pid}")
 
                 # Fetch faces for this picture
@@ -105,27 +104,19 @@ def test_picture_stacking():
                     continue  # No faces detected
 
                 for face in faces_data:
-                    facial_features_futures.append(
-                        server.vault.get_worker_future(
-                            WorkerType.FACIAL_FEATURES,
-                            Face,
-                            face["id"],
-                            "facial_features",
-                        )
-                    )
                     all_face_ids.add(face["id"])
 
             face_likeness_futures = []
             for face_id1 in all_face_ids:
                 for face_id2 in all_face_ids:
                     if face_id2 > face_id1:
-                        face_likeness_futures.append(
+                        face_likeness_futures.append((face_id1, face_id2,
                             server.vault.get_worker_future(
                                 WorkerType.FACE_LIKENESS,
                                 FaceLikeness,
                                 (face_id1, face_id2),
                                 "pair",
-                            )
+                            ))
                         )
 
             server.vault.start_workers({WorkerType.FACE_LIKENESS})
@@ -141,7 +132,8 @@ def test_picture_stacking():
 
             logger.info("Waiting for facial likeness to be processed...")
             face_likeness_pairs = []
-            for future in face_likeness_futures:
+            for face_id1, face_id2, future in face_likeness_futures:
+                logger.debug("Waiting for facial likeness pair: (%s, %s)", face_id1, face_id2)
                 result = future.result(timeout=60)
                 assert result is not None, "FaceLikenessWorker timed out"
                 face_likeness_pairs.append(result)
@@ -258,15 +250,12 @@ def test_character_likeness():
             server.vault.start_workers(
                 {
                     WorkerType.FACE,
-                    WorkerType.FACIAL_FEATURES,
                 }
             )
 
-            # Wait for facial features to be processed
-            facial_features_futures = []
-
+            all_face_ids = set()
             for idx, future in enumerate(face_futures):
-                pid = future.result(timeout=120)
+                pid, faces = future.result(timeout=120)
                 logging.debug(f"Facial features processed for picture ID: {pid}")
 
                 # Fetch faces for this picture
@@ -274,48 +263,36 @@ def test_character_likeness():
                 assert faces_resp.status_code == 200, (
                     f"Failed to get picture info for {pid}"
                 )
-                logging.info(
+                logging.debug(
                     f"Received face data for picture ID {pid}: {faces_resp.json().get('faces', [])}"
                 )
                 faces_data = faces_resp.json().get("faces", [])
-                logging.info(f"Picture ID {pid} has {len(faces_data)} faces detected")
+                logging.debug(f"Picture ID {pid} has {len(faces_data)} faces detected")
                 if not faces_data:
                     continue  # No faces detected
 
                 for face in faces_data:
-                    facial_features_futures.append(
-                        server.vault.get_worker_future(
-                            WorkerType.FACIAL_FEATURES,
-                            Face,
-                            face["id"],
-                            "features",
-                        )
-                    )
-
-            all_face_ids = set()
-
-            for facial_features_future in facial_features_futures:
-                face_id = facial_features_future.result(timeout=60)
-                all_face_ids.add(face_id)
+                    all_face_ids.add(face["id"])
 
             face_likeness_futures = []
             for face_id1 in all_face_ids:
                 for face_id2 in all_face_ids:
                     if face_id2 > face_id1:
-                        face_likeness_futures.append(
+                        face_likeness_futures.append((face_id1, face_id2,
                             server.vault.get_worker_future(
                                 WorkerType.FACE_LIKENESS,
                                 FaceLikeness,
                                 (face_id1, face_id2),
                                 "pair",
-                            )
+                            ))
                         )
 
             server.vault.start_workers({WorkerType.FACE_LIKENESS})
 
             logger.info("Waiting for facial likeness to be processed...")
             face_likeness_pairs = []
-            for future in face_likeness_futures:
+            for face_id1, face_id2, future in face_likeness_futures:
+                logger.debug("Waiting for facial likeness pair: (%s, %s)", face_id1, face_id2)
                 result = future.result(timeout=240)
                 assert result is not None, "FaceLikenessWorker timed out"
                 face_likeness_pairs.append(result)
@@ -386,12 +363,17 @@ def test_character_likeness():
                 )
 
             # 4. Call the GET /pictures endpoint with sort=character_likeness and character_id=<character_id>
+            start = time()
             pics_resp = client.get(
                 "/pictures",
                 params={"sort": "character_likeness", "character_id": char_id},
             )
+            end = time()
             assert pics_resp.status_code == 200, (
                 f"Failed to get pictures by character likeness: {pics_resp.text}"
+            )
+            logger.info(
+                f"Fetched pictures sorted by character likeness in {end - start:.2f} seconds"
             )
             pics = pics_resp.json()
             # If response is wrapped in {"pictures": [...]}, unwrap
