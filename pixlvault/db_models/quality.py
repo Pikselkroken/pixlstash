@@ -3,7 +3,7 @@ import numpy as np
 import time
 
 from sqlalchemy.types import LargeBinary
-from sqlmodel import Column, ForeignKey, Integer, SQLModel, Field, Relationship
+from sqlmodel import Column, ForeignKey, Integer, SQLModel, Field, Relationship, Session
 from typing import List, Optional, TYPE_CHECKING
 
 from scipy.ndimage import median_filter
@@ -283,3 +283,17 @@ class Quality(SQLModel, table=True):
             "brightness",
             "noise_level",
         ]
+
+    @classmethod
+    def quality_read_for_picture(cls, session: Session, picture_id: int) -> Optional["Quality"]:
+        """
+        Load quality record for given picture ID.
+        """
+        return session.query(cls).filter(cls.picture_id == picture_id).first()
+    
+    @classmethod
+    def quality_read_for_face(cls, session: Session, face_id: int) -> Optional["Quality"]:
+        """
+        Load quality record for given face ID.
+        """
+        return session.query(cls).filter(cls.face_id == face_id).first()

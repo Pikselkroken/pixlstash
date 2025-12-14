@@ -1,7 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
-from sqlmodel import select
+
+from sqlalchemy import func
+from sqlmodel import select, Session
+from typing import List, Optional, Tuple
 
 from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
@@ -9,61 +12,84 @@ from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.quality import Quality
 from pixlvault.picture_utils import PictureUtils
-from pixlvault.db_models.picture_likeness import PictureLikeness
+from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessFrontier
 
 logger = get_logger(__name__)
 
-
 class LikenessWorker(BaseWorker):
     BATCH_SIZE = 5000
+    TOP_K = 200
 
     def worker_type(self) -> WorkerType:
         return WorkerType.LIKENESS
 
+    @classmethod
+    def get_next_batch(cls, session: Session) -> Optional[Tuple[int, List[int]]]:
+        """
+        Return the next work chunk as (a, bs), where:
+        - a is the next picture_id_a with remaining work and quality ready,
+        - bs is a contiguous list of b ids (a < b) with quality ready,
+        - len(bs) <= batch_size and starts at the current frontier start_b.
+        Returns None if nothing to do.
+        """
+
+        a = PictureLikenessFrontier.get_next_a_candidate(
+            session, quality_ready=Quality.quality_read_for_picture
+        )
+        if a is None:
+            return None, None
+        
+        max_id = PictureLikenessFrontier.max_picture_id(session)
+        # Ask the model to compute the next contiguous [start_b, end_b] window
+        rng = PictureLikenessFrontier.range_to_compare(
+            session, a, max_id=max_id, batch_limit=cls.BATCH_SIZE
+        )
+        if not rng:
+            return None, None # frontier already at max or race
+            
+
+        start_b, end_b = rng
+
+        # Filter window to b with quality ready on both sides
+        # Note: we require Quality for 'a' (already checked) and for each 'b'
+        # Query all b rows in one go for efficiency
+        b_rows = session.exec(
+            select(Quality.picture_id)
+            .where(
+                (Quality.picture_id >= start_b) &
+                (Quality.picture_id <= end_b)
+            )
+            .order_by(Quality.picture_id)
+        ).all()
+        eligible_bs_all = [int(pid) for pid in b_rows]
+
+        # Take the longest consecutive prefix from start_b
+        bs_prefix = PictureLikenessFrontier.consecutive_prefix(start_b, eligible_bs_all)
+
+        if not bs_prefix:
+            return None, None  # No eligible b in the window
+
+        return a, bs_prefix[:cls.BATCH_SIZE]
+
     def _run(self):
+        logger.info("LikenessWorker: Likeness worker started.")
+        
+        self._db.run_task(PictureLikenessFrontier.ensure_all)
+
+        logger.info("LikenessWorker: PictureLikenessFrontier initialized.")
+
         while not self._stop.is_set():
-            # 1. Fetch pending pairs from the work queue
+            a, bs = self._db.run_immediate_read_task(LikenessWorker.get_next_batch)
 
-            def fetch_missing_pairs(session):
-                from sqlalchemy import and_
-                from sqlalchemy.orm import aliased
-                from sqlmodel import select
-                Q2 = aliased(Quality)
-                stmt = (
-                    select(Quality.picture_id.label('a_id'), Q2.picture_id.label('b_id'))
-                    .select_from(Quality)
-                    .join(Q2, and_(Quality.picture_id < Q2.picture_id, Q2.color_histogram.is_not(None)))
-                    .outerjoin(
-                        PictureLikeness,
-                        and_(
-                            PictureLikeness.picture_id_a == Quality.picture_id,
-                            PictureLikeness.picture_id_b == Q2.picture_id,
-                        )
-                    )
-                    .where(
-                        Quality.picture_id.is_not(None),
-                        Quality.color_histogram.is_not(None),
-                        PictureLikeness.picture_id_a == None
-                    )
-                    .limit(self.BATCH_SIZE)
-                )
-                result = session.exec(stmt)
-                pairs = [(row.a_id, row.b_id) for row in result]
-                return pairs
-
-            logger.info("LikenessWorker: Fetching pending picture pairs...")
-            pairs = self._db.run_task(fetch_missing_pairs, priority=DBPriority.LOW)
-
-            if not pairs:
+            if not a or not bs:
                 logger.debug("LikenessWorker: No pending pairs. Sleeping...")
                 self._wait()
                 continue
 
-            total_pairs = len(pairs)
-            logger.info(f"LikenessWorker: Processing {total_pairs} pairs.")
+            logger.debug(f"LikenessWorker: Processing {len(bs)} pairs.")
 
             pids_needed = set()
-            for a, b in pairs:
+            for b in bs:
                 pids_needed.add(a)
                 pids_needed.add(b)
 
@@ -72,10 +98,10 @@ class LikenessWorker(BaseWorker):
                 return {quality.picture_id: quality for quality in qualities}
             quality_dict = self._db.run_task(fetch_quality, list(pids_needed), priority=DBPriority.LOW)
 
-            # 2. Do likeness computation outside the session
             likeness_results = []
             processed_notify_ids = []
-            for a, b in pairs:
+            for b in bs:
+                logger.debug(f"LikenessWorker: Processing pair (a={a}, b={b})")
                 quality_a = quality_dict.get(a).get_color_histogram()
                 quality_b = quality_dict.get(b).get_color_histogram()
                 likeness = self._color_histogram_likeness(
@@ -96,18 +122,19 @@ class LikenessWorker(BaseWorker):
                 if self._stop.is_set():
                     break
 
-            # 3. Write results and remove processed pairs in a new DB task
-            def write_results(session):
-                if likeness_results:
-                    session.add_all(likeness_results)
-                    logger.debug(f"Inserted {len(likeness_results)} likeness scores.")
-                session.commit()
 
-            logger.info("LikenessWorker: Writing likeness scores to database...")
-            self._db.run_task(write_results, priority=DBPriority.LOW)
+            logger.debug("LikenessWorker: Writing likeness scores to database...")
+
+            def insert_likeness_and_update_frontier(session, likeness_results, a, max_b):
+                PictureLikeness.bulk_insert_ignore(session, likeness_results)
+                PictureLikenessFrontier.update(session, a, max_b)
+                PictureLikeness.prune_below_top_k(session, a, self.TOP_K)
+                session.commit()
+            self._db.run_task(insert_likeness_and_update_frontier, likeness_results, a, max(bs), priority=DBPriority.LOW)
 
             if processed_notify_ids:
                 self._notify_ids_processed(processed_notify_ids)
+                # Update completed_tasks to track all b's for each a
                 logger.info(
                     f"LikenessWorker: Processed {len(processed_notify_ids)} likeness scores."
                 )

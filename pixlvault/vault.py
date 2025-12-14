@@ -290,6 +290,7 @@ class Vault:
             image_root_path=logo_dest_folder,
             source_file_path=logo_src,
         )
+        picture.description = "PixlVault Logo"
 
         assert picture.file_path
 

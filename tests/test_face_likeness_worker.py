@@ -6,6 +6,7 @@ import time
 from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
 from pixlvault.worker_registry import WorkerType
+from pixlvault.face_likeness_worker import FaceLikenessWorker
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.face import Face
 from pixlvault.db_models.face_likeness import FaceLikeness
@@ -61,6 +62,10 @@ def test_face_likeness_worker():
             server.vault.stop_workers({WorkerType.FACE})
 
 
+            all_faces = server.vault.db.run_task(Face.find)
+            for face in all_faces:
+                assert face.features is not None, f"Face ID {face.id} has no features"
+
             pairs = []
             ids = sorted(all_face_ids)
             for i, a in enumerate(ids):
@@ -80,25 +85,24 @@ def test_face_likeness_worker():
 
             # Wait for all futures to complete
             timeout = time.time() + 60
+            valid_results = 0
             for key, future in futures.items():
+                logger.info(f"Waiting for face likeness result for pair {key}...")
                 pair, result = future.result(timeout=timeout - time.time())
                 assert pair == key
-                assert result >= 0.0
+                if result is not None:
+                    assert result >= FaceLikenessWorker.MIN_THRESHOLD
+                    valid_results += 1
             server.vault.stop_workers({WorkerType.FACE_LIKENESS})
 
             # Check that all face likeness results are present
             likeness_results = server.vault.db.run_task(
-                lambda session: session.exec(FaceLikeness.__table__.select()).all()
+                lambda session: session.exec(FaceLikeness.__table__.select().order_by(FaceLikeness.likeness.desc())).all()
             )
             result_pairs = set((r.face_id_a, r.face_id_b) for r in likeness_results)
-            assert len(likeness_results) == len(pairs), (
+            assert valid_results == len(likeness_results), (
                 "Not all face likeness pairs were processed"
             )
-            for a, b in pairs:
-                assert (a, b) in result_pairs, "Face likeness pair (%s, %s) missing" % (
-                    a,
-                    b,
-                )
 
             # Print table of face likeness scores with picture descriptions and face indices
             faces = server.vault.db.run_task(lambda session: session.exec(Face.__table__.select()).all())
@@ -134,3 +138,25 @@ def test_face_likeness_worker():
                 logger.info(
                     f"{desc_a:<30} {idx_a!s:<8} | {desc_b:<30} {idx_b!s:<8} | {r.likeness:<10.4f}"
                 )
+            # Log all the entries that were below the threshold
+            for a, b in pairs:
+                if (a, b) not in result_pairs:
+                    face_a = face_map.get(a)
+                    face_b = face_map.get(b)
+                    desc_a = (
+                        pic_map.get(face_a.picture_id).description
+                        if face_a and face_a.picture_id in pic_map
+                        else "?"
+                    )
+                    desc_b = (
+                        pic_map.get(face_b.picture_id).description
+                        if face_b and face_b.picture_id in pic_map
+                        else "?"
+                    )
+                    idx_a = face_a.face_index if face_a else "?"
+                    idx_b = face_b.face_index if face_b else "?"
+                    logger.info(
+                        f"{desc_a:<30} {idx_a!s:<8} | {desc_b:<30} {idx_b!s:<8} | {'Below Threshold':<10}"
+                    )
+                    
+

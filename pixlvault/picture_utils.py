@@ -372,7 +372,7 @@ class PictureUtils:
     def create_picture_from_file(
         image_root_path: str,
         source_file_path: str,
-        picture_id: Optional[str] = None,
+        picture_uuid: Optional[str] = None,
         pixel_sha: Optional[str] = None,
     ) -> Picture:
         """
@@ -388,7 +388,7 @@ class PictureUtils:
         return PictureUtils.create_picture_from_bytes(
             image_root_path=image_root_path,
             image_bytes=image_bytes,
-            picture_id=picture_id,
+            picture_uuid=picture_uuid,
             pixel_sha=pixel_sha,
             created_at=created_at,
         )
@@ -397,7 +397,7 @@ class PictureUtils:
     def create_picture_from_bytes(
         image_root_path: str,
         image_bytes: bytes,
-        picture_id: Optional[str] = None,
+        picture_uuid: Optional[str] = None,
         pixel_sha: Optional[str] = None,
         created_at: Optional[str] = None,
     ) -> Picture:
@@ -436,10 +436,10 @@ class PictureUtils:
             img_format = "MP4"
             os.remove(tmp_path)
 
-        if not picture_id:
-            picture_id = str(uuid.uuid4()) + f".{img_format.lower()}"
+        if not picture_uuid:
+            picture_uuid = str(uuid.uuid4()) + f".{img_format.lower()}"
 
-        file_path = os.path.join(image_root_path, picture_id)
+        file_path = os.path.join(image_root_path, picture_uuid)
         if os.path.exists(file_path):
             size_bytes = os.path.getsize(file_path)
         else:
@@ -456,7 +456,6 @@ class PictureUtils:
             created_at = datetime.now(timezone.utc)
 
         pic = Picture(
-            id=picture_id,
             file_path=file_path,
             format=img_format,
             width=width,

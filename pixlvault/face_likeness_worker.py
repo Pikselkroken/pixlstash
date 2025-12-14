@@ -1,65 +1,77 @@
 import numpy as np
 import time
-from sqlmodel import select
+from sqlmodel import select, Session, text
+from typing import List, Optional, Tuple
 
 from pixlvault.database import DBPriority
+from pixlvault.db_models.quality import Quality
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.face import Face
-from pixlvault.db_models.face_likeness import FaceLikeness
+from pixlvault.db_models.face_likeness import FaceLikeness, FaceLikenessFrontier
 
 logger = get_logger(__name__)
 
-
 class FaceLikenessWorker(BaseWorker):
     BATCH_SIZE = 50000
-    CHUNKS = 500
-
+    MIN_THRESHOLD = 0.6
+    
     def worker_type(self) -> WorkerType:
         return WorkerType.FACE_LIKENESS
 
+    @classmethod
+    def get_next_batch(cls, session: Session) -> Optional[Tuple[int, List[int]]]:
+        """
+        Return the next work chunk as (a, bs), where:
+        - a is the next face_id_a with remaining work and quality ready,
+        - bs is a contiguous list of b ids (a < b) with quality ready,
+        - len(bs) <= batch_size and starts at the current frontier start_b.
+        Returns None if nothing to do.
+        """
+       
+        max_id = FaceLikenessFrontier.max_face_id(session)
+        if not max_id:
+            return None, None
+            
+        a = FaceLikenessFrontier.smallest_a_with_work(
+            session, max_id=max_id
+        )   
+        if a is None:
+            return None, None
+
+        rng = FaceLikenessFrontier.range_to_compare(
+            session, a, max_id=max_id, batch_limit=cls.BATCH_SIZE
+        )
+        if not rng:
+            return None, None # frontier already at max or race
+
+        start_b, end_b = rng
+        bs = list(range(start_b, end_b + 1))
+        return a, bs
+
+
     def _run(self):
         logger.info("FaceLikenessWorker: Face likeness worker started.")
+
+        self._db.run_task(FaceLikenessFrontier.ensure_all)
+    
         while not self._stop.is_set():
             start = time.time()
 
-            # 1. Fetch a batch of missing (a, b) pairs (a < b) not in FaceLikeness
-            def fetch_missing_pairs(session):
-                from sqlalchemy import and_
-                from sqlalchemy.orm import aliased
-                from sqlmodel import select
-                Face2 = aliased(Face)
-                from sqlalchemy import and_
-                stmt = (
-                    select(Face.id.label('a_id'), Face2.id.label('b_id'))
-                    .select_from(Face)
-                    .join(Face2, and_(Face.face_index != -1, Face2.face_index != -1, Face.id < Face2.id))
-                    .outerjoin(
-                        FaceLikeness,
-                        and_(
-                            FaceLikeness.face_id_a == Face.id,
-                            FaceLikeness.face_id_b == Face2.id,
-                        )
-                    )
-                    .where(FaceLikeness.face_id_a == None)
-                    .limit(self.BATCH_SIZE)
-                )
-                result = session.exec(stmt)
-                batch = [(row.a_id, row.b_id) for row in result]
-                return batch, None
+            a, bs = self._db.run_immediate_read_task(FaceLikenessWorker.get_next_batch)
 
-            pending_pairs, remaining = self._db.run_task(fetch_missing_pairs, priority=DBPriority.LOW)
-            if not pending_pairs:
+            if not a or not bs:
                 logger.info("FaceLikenessWorker: No pending pairs. Sleeping...")
                 self._wait()
                 continue
 
-            logger.info(f"FaceLikenessWorker: Processing {len(pending_pairs)} pairs. Remaining: {remaining}.")
+            logger.info(f"FaceLikenessWorker: Processing {len(bs)} pairs.")
 
             face_ids_needed = set()
-            for a, b in pending_pairs:
+            for b in bs:
                 face_ids_needed.add(a)
                 face_ids_needed.add(b)
+            
             def fetch_faces(session, ids):
                 faces = session.exec(select(Face).where(Face.id.in_(ids))).all()
                 return {face.id: face for face in faces}
@@ -70,42 +82,44 @@ class FaceLikenessWorker(BaseWorker):
             arr_a_list = []
             arr_b_list = []
             pair_ids = []
-            for a, b in pending_pairs:
+            for b in bs:
                 face_a = face_dict.get(a)
                 face_b = face_dict.get(b)
                 if not face_a or not face_b or face_a.features is None or face_b.features is None:
+                    logger.warning(f"FaceLikenessWorker: Missing features for pair ({a}, {b}), skipping.")
                     continue
                 arr_a_list.append(np.frombuffer(face_a.features, dtype=np.float32))
                 arr_b_list.append(np.frombuffer(face_b.features, dtype=np.float32))
                 pair_ids.append((a, b))
 
+            logger.debug(f"FaceLikenessWorker: Computing cosine similarities for batch. Lists lengths: arr_a_list={len(arr_a_list)}, arr_b_list={len(arr_b_list)}")
             if arr_a_list and arr_b_list:
                 sims = self._cosine_similarity_batch(arr_a_list, arr_b_list)
                 for (a, b), likeness in zip(pair_ids, sims):
-                    likeness_results.append(
-                        FaceLikeness(
-                            face_id_a=a,
-                            face_id_b=b,
-                            likeness=float(likeness),
-                            metric="cosine_similarity",
+                    if likeness >= self.MIN_THRESHOLD:
+                        likeness_results.append(
+                            FaceLikeness(
+                                face_id_a=a,
+                                face_id_b=b,
+                                likeness=float(likeness),
+                                metric="cosine_similarity",
+                            )
                         )
-                    )
-                    processed_notify_ids.append((FaceLikeness, (a, b), "pair", float(likeness)))
+                    processed_notify_ids.append((FaceLikeness, (a, b), "pair", likeness if likeness >= self.MIN_THRESHOLD else None))
 
-                futures = []
-                def write_results(session, batch):
-                    if batch:
-                        session.add_all(batch)
+                
+            def insert_likeness_and_update_frontier(session, likeness_results, a, max_b):
+                try:
+                    session.execute(text("BEGIN IMMEDIATE"))
+                    FaceLikeness.bulk_insert_ignore(session, likeness_results)
+                    FaceLikenessFrontier.update(session, a, max_b)
                     session.commit()
-            
-                # Split likeness_results into chunks for parallel writing
-                chunk_size = max(1, len(likeness_results) // self.CHUNKS)
-                for i in range(0, len(likeness_results), chunk_size):
-                    chunk = likeness_results[i:i+chunk_size]
-                    futures.append(self._db.submit_task(write_results, chunk, priority=DBPriority.LOW))
+                except Exception as e:
+                    logger.error(f"Error during insert and update frontier: {e}")
+                    session.rollback()
 
-                for future in futures:
-                    future.result()
+            self._db.run_task(insert_likeness_and_update_frontier, likeness_results, a, max(bs), priority=DBPriority.LOW)                
+            
             elapsed = time.time() - start
             if processed_notify_ids:
                 self._notify_ids_processed(processed_notify_ids)

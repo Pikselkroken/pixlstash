@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 
 class FaceExtractionWorker(BaseWorker):
-    INSIGHTFACE_CLEANUP_TIMEOUT = 60  # seconds
+    INSIGHTFACE_CLEANUP_TIMEOUT = 6000  # seconds
 
     def worker_type(self) -> WorkerType:
         return WorkerType.FACE
@@ -137,6 +137,10 @@ class FaceExtractionWorker(BaseWorker):
                             features_bytes = None
                             if hasattr(face, 'embedding') and face.embedding is not None:
                                 features_bytes = face.embedding.astype('float32').tobytes()
+                            else:
+                                logger.warning(
+                                    f"Face embedding missing for face in video {file_path}, frame {frame_index}"
+                                )
                             face_objects.append(
                                 Face(
                                     picture_id=pic.id,

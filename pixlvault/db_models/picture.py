@@ -58,7 +58,7 @@ class SortMechanism(str, Enum):
 
 
 class Picture(SQLModel, table=True):
-    id: str = Field(default=None, primary_key=True)
+    id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None
     format: Optional[str] = None

@@ -328,9 +328,9 @@ def test_picture_embedding_storage_and_retrieval():
         arr = np.random.randn(384).astype(np.float32)
         with Session(engine) as session:
             # Always provide a valid string id
-            pic = Picture(id="test_id.png", description="Test", text_embedding=arr)
-            assert pic.id == "test_id.png", (
-                f"Picture.id should be a non-None string, got {pic.id}"
+            pic = Picture(id=0, description="Test", text_embedding=arr)
+            assert pic.id == 0, (
+                f"Picture.id should be a non-None integer, got {pic.id}"
             )
             session.add(pic)
             session.commit()
@@ -379,17 +379,17 @@ def test_picture_semantic_search_returns_relevant_result(test_server):
     with Session(engine) as session:
         # Create pictures with known descriptions and embeddings
         pic1 = Picture(
-            id="pic1.png",
+            id=0,
             description="Clementine holding a black assault rifle",
             text_embedding=dummy_text_to_embedding("assault rifle"),
         )
         pic2 = Picture(
-            id="pic2.png",
+            id=1,
             description="A young woman named Clementine is sitting on a bench, reading a book.",
             text_embedding=dummy_text_to_embedding("reading a book"),
         )
         pic3 = Picture(
-            id="pic3.png",
+            id=2,
             description="Clementine is running through a field of flowers, wearing a white dress.",
             text_embedding=dummy_text_to_embedding("other"),
         )
@@ -446,17 +446,17 @@ def test_picture_semantic_search_with_tags_and_weights(test_server,
     engine = server.vault.db._engine
     with Session(engine) as session:
         pic1 = Picture(
-            id="pic1.png",
+            id=0,
             description="Clementine holding a black assault rifle",
             text_embedding=dummy_text_to_embedding("assault rifle"),
         )
         pic2 = Picture(
-            id="pic2.png",
+            id=1,
             description="A young woman named Clementine is sitting on a bench, reading a book.",
             text_embedding=dummy_text_to_embedding("reading a book"),
         )
         pic3 = Picture(
-            id="pic3.png",
+            id=2,
             description="Clementine is running through a field of flowers, wearing a white dress.",
             text_embedding=dummy_text_to_embedding("other"),
         )
@@ -522,15 +522,15 @@ def test_picture_semantic_search_without_embeddings(test_server,
     engine = server.vault.db._engine
     with Session(engine) as session:
         pic1 = Picture(
-            id="pic1.png",
+            id=0,
             description="Clementine holding a black assault rifle",
         )
         pic2 = Picture(
-            id="pic2.png",
+            id=1,
             description="A young woman named Clementine is sitting on a bench, reading a book.",
         )
         pic3 = Picture(
-            id="pic3.png",
+            id=2,
             description="Clementine is running through a field of flowers, wearing a white dress.",
         )
         session.add(pic1)
@@ -595,17 +595,17 @@ def test_picture_semantic_search_without_tags(test_server,
     engine = server.vault.db._engine
     with Session(engine) as session:
         pic1 = Picture(
-            id="pic1.png",
+            id=0,
             description="Clementine holding a black assault rifle",
             text_embedding=dummy_text_to_embedding("assault rifle"),
         )
         pic2 = Picture(
-            id="pic2.png",
+            id=1,
             description="A young woman named Clementine is sitting on a bench, reading a book.",
             text_embedding=dummy_text_to_embedding("reading a book"),
         )
         pic3 = Picture(
-            id="pic3.png",
+            id=2,
             description="Clementine is running through a field of flowers, wearing a white dress.",
             text_embedding=dummy_text_to_embedding("other"),
         )

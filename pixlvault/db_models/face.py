@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 class Face(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
 
-    picture_id: str = Field(
-        sa_column=Column(String, ForeignKey("picture.id", ondelete="CASCADE")),
+    picture_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("picture.id", ondelete="CASCADE")),
         default=None,
     )
     frame_index: int = Field(default=0)

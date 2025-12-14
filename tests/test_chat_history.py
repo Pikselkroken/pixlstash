@@ -13,16 +13,31 @@ def test_server():
     config_path = os.path.join(tmpdir, "config.json")
     server_config_path = os.path.join(tmpdir, "server_config.json")
     server = Server(config_path, server_config_path)
+    server.vault.import_default_data()
     client = TestClient(server.api)
-    yield client
+
+    # Create Esmeralda
+    char_name = "Esmeralda"
+    char_desc = "Default vault character"
+    resp = client.post(
+        "/characters",
+        json={"name": char_name, "description": char_desc},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
+    char_id = data["character"]["id"]
+
+    yield client, char_id
     shutil.rmtree(tmpdir)
 
 
 def test_chat_history_save_and_load(test_server):
-    client = test_server
+    client, char_id = test_server
 
+    
     resp = client.post(
-        "/conversations", params={"character_id": 0, "description": "Test chat"}
+        "/conversations", params={"character_id": char_id, "description": "Test chat"}
     )
     assert resp.status_code == 200, f"Failed to create chat: {resp.text}"
     conversation_id = resp.json().get("conversation_id")
@@ -32,7 +47,6 @@ def test_chat_history_save_and_load(test_server):
         "conversation_id": conversation_id,
         "role": "user",
         "content": "Hello!",
-        "picture_id": 42,
     }
     # Save a message
     resp = client.post("/conversations/message", json=payload)
@@ -44,13 +58,12 @@ def test_chat_history_save_and_load(test_server):
     messages = resp.json()["messages"]
     assert len(messages) == 1
     assert messages[0]["content"] == "Hello!"
-    assert int(messages[0]["picture_id"]) == 42
 
 
 def test_chat_history_clear(test_server):
-    client = test_server
+    client, char_id = test_server
 
-    resp = client.post("/conversations", params={"character_id": 0})
+    resp = client.post("/conversations", params={"character_id": char_id})
     assert resp.status_code == 200, f"Failed to create chat: {resp.text}"
     conversation_id = resp.json().get("conversation_id")
     assert conversation_id == 1
@@ -72,14 +85,14 @@ def test_chat_history_clear(test_server):
 
 
 def test_chat_history_multiple_sessions(test_server):
-    client = test_server
+    client, char_id = test_server
 
-    resp = client.post("/conversations", params={"character_id": 0})
+    resp = client.post("/conversations", params={"character_id": char_id})
     assert resp.status_code == 200, f"Failed to create chat: {resp.text}"
     conversation_id_1 = resp.json().get("conversation_id")
     assert conversation_id_1 == 1
 
-    resp = client.post("/conversations", params={"character_id": 0})
+    resp = client.post("/conversations", params={"character_id": char_id})
     assert resp.status_code == 200, f"Failed to create chat: {resp.text}"
     conversation_id_2 = resp.json().get("conversation_id")
     assert conversation_id_2 == 2

@@ -67,14 +67,14 @@ def test_picture_stacking():
             for pid1 in picture_ids:
                 for pid2 in picture_ids:
                     if pid2 > pid1:
-                        logger.debug("Queuing likeness pair: (%s, %s)", pid1, pid2)
-                        picture_likeness_futures.append(
+                        logger.info("Queuing likeness pair: (%s, %s)", pid1, pid2)
+                        picture_likeness_futures.append((pid1, pid2,
                             server.vault.get_worker_future(
                                 WorkerType.LIKENESS,
                                 PictureLikeness,
                                 (pid1, pid2),
                                 "pair",
-                            )
+                            ))
                         )
 
             server.vault.start_workers(
@@ -110,7 +110,7 @@ def test_picture_stacking():
             for face_id1 in all_face_ids:
                 for face_id2 in all_face_ids:
                     if face_id2 > face_id1:
-                        face_likeness_futures.append((face_id1, face_id2,
+                        face_likeness_futures.append((face_id1, face_id2,                            
                             server.vault.get_worker_future(
                                 WorkerType.FACE_LIKENESS,
                                 FaceLikeness,
@@ -124,7 +124,8 @@ def test_picture_stacking():
             logger.info("Waiting for likeness to be processed...")
 
             likeness_pairs = []
-            for future in picture_likeness_futures:
+            for pid1, pid2, future in picture_likeness_futures:
+                logger.info("Waiting for picture likeness pair : (%s, %s)", pid1, pid2)
                 result = future.result(timeout=60)
                 assert result is not None, "LikenessWorker timed out"
                 likeness_pairs.append(result)
@@ -146,6 +147,15 @@ def test_picture_stacking():
                 == (len(all_face_ids) * (len(all_face_ids) - 1)) // 2
             ), "Not all face likeness pairs were computed."
 
+
+            # Log DB contents for likeness and face likeness
+            likeness_rows = server.vault.db.run_task(PictureLikeness.find)
+            face_likeness_rows = server.vault.db.run_task(
+                lambda session: session.exec(FaceLikeness.__table__.select().order_by(FaceLikeness.likeness.desc())).all()
+            )
+            logger.info(f"PictureLikeness table rows: {[{'a': r.picture_id_a, 'b': r.picture_id_b, 'likeness': r.likeness} for r in likeness_rows]}")
+            logger.info(f"FaceLikeness table rows: {[{'a': r.face_id_a, 'b': r.face_id_b, 'likeness': r.likeness} for r in face_likeness_rows]}")
+
             server.vault.stop_workers()
 
             # --- NEW: Fetch /pictures/stacks and log likeness table ---
@@ -154,10 +164,11 @@ def test_picture_stacking():
                 f"Failed to fetch /pictures/stacks: {response.text}"
             )
             stacks_data = response.json()
+            logger.info("Fetched /pictures/stacks data: %s", stacks_data)
             # Build a picture-to-picture likeness table from all stacks
             pic_ids = picture_ids
             # Fetch descriptions for all picture ids
-            desc_resp = client.get("/pictures", params={"ids": ",".join(pic_ids)})
+            desc_resp = client.get("/pictures", params={"ids": ",".join(map(str, pic_ids))})
             assert desc_resp.status_code == 200, (
                 f"Failed to fetch picture descriptions: {desc_resp.text}"
             )
@@ -168,9 +179,9 @@ def test_picture_stacking():
             # Build a dict of dicts for likeness values
             likeness_table = {pid: {} for pid in pic_ids}
             for stack in stacks_data.get("stacks", []):
-                matrix = stack.get("face_likeness_matrix", {})
+                matrix = stack.get("likeness_matrix", {})
                 for key, score in matrix.items():
-                    id_a, id_b = key.split("|", 1)
+                    id_a, id_b = map(int, key.split("|", 1))
                     likeness_table.setdefault(id_a, {})[id_b] = score
                     likeness_table.setdefault(id_b, {})[id_a] = score
             # Log as a text table using descriptions
