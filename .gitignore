@@ -13,3 +13,4 @@ cpu
 !.vscode/launch.json
 frontend/.vite
 tmp
+cuda
