@@ -76,7 +76,9 @@ class FaceExtractionWorker(BaseWorker):
                 providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
             )
             self._insightface_app.prepare(
-                ctx_id=0 if not PictureTagger.FORCE_CPU else -1, det_thresh=0.25, det_size=(480, 480)
+                ctx_id=0 if not PictureTagger.FORCE_CPU else -1,
+                det_thresh=0.25,
+                det_size=(480, 480),
             )
 
     def _extract_faces(self, pics) -> List[tuple]:
@@ -101,8 +103,8 @@ class FaceExtractionWorker(BaseWorker):
                             face.bbox, img.shape[1], img.shape[0], 0.1
                         )
                         features_bytes = None
-                        if hasattr(face, 'embedding') and face.embedding is not None:
-                            features_bytes = face.embedding.astype('float32').tobytes()
+                        if hasattr(face, "embedding") and face.embedding is not None:
+                            features_bytes = face.embedding.astype("float32").tobytes()
                         face_objects.append(
                             Face(
                                 picture_id=pic.id,
@@ -135,8 +137,13 @@ class FaceExtractionWorker(BaseWorker):
                                 face.bbox, frame.shape[1], frame.shape[0], 0.1
                             )
                             features_bytes = None
-                            if hasattr(face, 'embedding') and face.embedding is not None:
-                                features_bytes = face.embedding.astype('float32').tobytes()
+                            if (
+                                hasattr(face, "embedding")
+                                and face.embedding is not None
+                            ):
+                                features_bytes = face.embedding.astype(
+                                    "float32"
+                                ).tobytes()
                             else:
                                 logger.warning(
                                     f"Face embedding missing for face in video {file_path}, frame {frame_index}"
@@ -172,11 +179,11 @@ class FaceExtractionWorker(BaseWorker):
 
                 def insert_sentinel(session):
                     face = Face(
-                            picture_id=pic.id,
-                            face_index=-1,
-                            character_id=None,
-                            bbox=None,
-                        )
+                        picture_id=pic.id,
+                        face_index=-1,
+                        character_id=None,
+                        bbox=None,
+                    )
                     session.add(face)
                     session.commit()
                     session.refresh(face)
@@ -196,7 +203,9 @@ class FaceExtractionWorker(BaseWorker):
                         face_ids.append(face.id)
                     return face_ids
 
-                face_ids = self._db.run_task(insert_faces, face_objects, priority=DBPriority.LOW)
+                face_ids = self._db.run_task(
+                    insert_faces, face_objects, priority=DBPriority.LOW
+                )
                 pic_face_ids.extend(face_ids)
 
             all_face_ids.extend(pic_face_ids)

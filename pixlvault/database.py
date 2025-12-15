@@ -4,7 +4,7 @@ import threading
 import queue
 from concurrent.futures import Future
 from enum import IntEnum
-from sqlalchemy import event, engine
+from sqlalchemy import event
 from sqlmodel import SQLModel, create_engine, Session
 from rapidfuzz.distance import Levenshtein
 
@@ -75,6 +75,7 @@ def init_database(dbapi_conn, conn_record):
     cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
+
 
 class VaultDatabase:
     def __init__(self, db_path: str):

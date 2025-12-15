@@ -1,7 +1,6 @@
 import shutil
 import pytest
 
-import pytest
 import numpy as np
 from sqlmodel import Session
 import sqlite3
@@ -63,6 +62,7 @@ descriptions = [
     "Clementine holding a black assault rifle.",
 ]
 
+
 # Shared fixture for PictureTagger to avoid repeated model loading
 @pytest.fixture(scope="module")
 def shared_tagger():
@@ -70,9 +70,11 @@ def shared_tagger():
     yield tagger
     del tagger
 
+
 @pytest.mark.parametrize("query", ["Clementine holding a black assault rifle"])
 def test_clip_text_embedding_similarity_measures(query, shared_tagger):
     import gc
+
     tagger = shared_tagger
     query_embedding = (
         tagger._clip_model.encode_text(
@@ -170,6 +172,7 @@ def test_clip_text_embedding_similarity_measures(query, shared_tagger):
     del query_embedding, emb
     gc.collect()
 
+
 @pytest.fixture(scope="module")
 def test_model():
     import gc
@@ -179,6 +182,7 @@ def test_model():
 
     del model
     gc.collect()
+
 
 @pytest.mark.parametrize("query", ["Clementine holding a black assault rifle"])
 def test_sbert_text_similarity(test_model, query):
@@ -329,9 +333,7 @@ def test_picture_embedding_storage_and_retrieval():
         with Session(engine) as session:
             # Always provide a valid string id
             pic = Picture(id=0, description="Test", text_embedding=arr)
-            assert pic.id == 0, (
-                f"Picture.id should be a non-None integer, got {pic.id}"
-            )
+            assert pic.id == 0, f"Picture.id should be a non-None integer, got {pic.id}"
             session.add(pic)
             session.commit()
             session.refresh(pic)
@@ -349,7 +351,6 @@ def test_picture_embedding_storage_and_retrieval():
             print(f"First 5 values loaded: {arr_loaded[:5]}")
             assert arr_loaded.shape == arr.shape
             assert np.allclose(arr_loaded, arr)
-
 
 
 @pytest.fixture
@@ -411,9 +412,7 @@ def test_picture_semantic_search_returns_relevant_result(test_server):
         )
         assert results, "semantic_search returned no results"
         top_result, score = results[0]
-        print(
-            f"Top result description: {top_result.description} with score {score}"
-        )
+        print(f"Top result description: {top_result.description} with score {score}")
         assert "assault rifle" in top_result.description.lower(), (
             "Top result should be the most relevant by embedding similarity."
         )
@@ -431,8 +430,8 @@ def test_picture_semantic_search_returns_relevant_result(test_server):
         (0.0, 0.0, 0.1, None),  # All weights zero
     ],
 )
-def test_picture_semantic_search_with_tags_and_weights(test_server,
-    fuzzy_weight, embedding_weight, threshold, expected_top_desc
+def test_picture_semantic_search_with_tags_and_weights(
+    test_server, fuzzy_weight, embedding_weight, threshold, expected_top_desc
 ):
     def dummy_text_to_embedding(text):
         if "assault rifle" in text:
@@ -474,7 +473,7 @@ def test_picture_semantic_search_with_tags_and_weights(test_server,
         session.commit()
 
         results = Picture.semantic_search(
-            session,    
+            session,
             query="assault rifle",
             query_words=["assault", "rifle"],
             text_to_embedding=dummy_text_to_embedding,
@@ -507,8 +506,8 @@ def test_picture_semantic_search_with_tags_and_weights(test_server,
         (0.5, 0.5, 0.6, None),  # Both with high threshold
     ],
 )
-def test_picture_semantic_search_without_embeddings(test_server,
-    fuzzy_weight, embedding_weight, threshold, expected_top_desc
+def test_picture_semantic_search_without_embeddings(
+    test_server, fuzzy_weight, embedding_weight, threshold, expected_top_desc
 ):
     def dummy_text_to_embedding(text):
         if "assault rifle" in text:
@@ -580,8 +579,8 @@ def test_picture_semantic_search_without_embeddings(test_server,
         (0.5, 0.5, 0.6, None),  # Both with high threshold
     ],
 )
-def test_picture_semantic_search_without_tags(test_server,
-    fuzzy_weight, embedding_weight, threshold, expected_top_desc
+def test_picture_semantic_search_without_tags(
+    test_server, fuzzy_weight, embedding_weight, threshold, expected_top_desc
 ):
     def dummy_text_to_embedding(text):
         if "assault rifle" in text:

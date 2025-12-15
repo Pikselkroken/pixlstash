@@ -62,9 +62,13 @@ class QualityWorker(BaseWorker):
                     if self._stop.is_set():
                         break
 
-                    batch = group[:min(len(group), BATCH_SIZE)]
+                    batch = group[: min(len(group), BATCH_SIZE)]
                     # Determine expected shape from group key
-                    expected_shape = (group_key[2], group_key[1], 3)  # (height, width, channels)
+                    expected_shape = (
+                        group_key[2],
+                        group_key[1],
+                        3,
+                    )  # (height, width, channels)
                     valid_batch = []
                     skipped = []
                     batch_shapes = []
@@ -75,7 +79,9 @@ class QualityWorker(BaseWorker):
                         if shape == expected_shape:
                             valid_batch.append(pic)
                         else:
-                            logger.warning(f"Skipping image {pic.id}: expected shape {expected_shape}, got {shape}")
+                            logger.warning(
+                                f"Skipping image {pic.id}: expected shape {expected_shape}, got {shape}"
+                            )
                             skipped.append(pic)
                     if len(valid_batch) > 0:
                         qualities = self._calculate_quality(valid_batch)
@@ -101,7 +107,7 @@ class QualityWorker(BaseWorker):
                 )
                 break
             timing = time.time() - start
-            if quality_updates > 0:                
+            if quality_updates > 0:
                 logger.info("QualityWorker: Done after %.2f seconds." % timing)
                 self._notify_others(EventType.QUALITY_UPDATED)
             else:
@@ -155,7 +161,9 @@ class QualityWorker(BaseWorker):
             for pic in pics:
                 img = PictureUtils.load_image_or_video(pic.file_path)
                 if img is None:
-                    logger.warning(f"Could not load image for picture_id={pic.id}, file_path={pic.file_path}")
+                    logger.warning(
+                        f"Could not load image for picture_id={pic.id}, file_path={pic.file_path}"
+                    )
                 loaded_pics.append(img)
 
             # Remove None images for batch processing, keep index mapping
@@ -186,6 +194,7 @@ class QualityWorker(BaseWorker):
             return all_qualities
         except Exception as e:
             import traceback
+
             logger.error(
                 "Failed to calculate quality for batch: %s\n%s",
                 e,

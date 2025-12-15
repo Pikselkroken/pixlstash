@@ -61,7 +61,6 @@ def test_face_likeness_worker():
 
             server.vault.stop_workers({WorkerType.FACE})
 
-
             all_faces = server.vault.db.run_task(Face.find)
             for face in all_faces:
                 assert face.features is not None, f"Face ID {face.id} has no features"
@@ -97,7 +96,11 @@ def test_face_likeness_worker():
 
             # Check that all face likeness results are present
             likeness_results = server.vault.db.run_task(
-                lambda session: session.exec(FaceLikeness.__table__.select().order_by(FaceLikeness.likeness.desc())).all()
+                lambda session: session.exec(
+                    FaceLikeness.__table__.select().order_by(
+                        FaceLikeness.likeness.desc()
+                    )
+                ).all()
             )
             result_pairs = set((r.face_id_a, r.face_id_b) for r in likeness_results)
             assert valid_results == len(likeness_results), (
@@ -105,7 +108,9 @@ def test_face_likeness_worker():
             )
 
             # Print table of face likeness scores with picture descriptions and face indices
-            faces = server.vault.db.run_task(lambda session: session.exec(Face.__table__.select()).all())
+            faces = server.vault.db.run_task(
+                lambda session: session.exec(Face.__table__.select()).all()
+            )
             face_map = {face.id: face for face in faces}
             pic_map = {
                 pic.id: pic
@@ -158,5 +163,3 @@ def test_face_likeness_worker():
                     logger.info(
                         f"{desc_a:<30} {idx_a!s:<8} | {desc_b:<30} {idx_b!s:<8} | {'Below Threshold':<10}"
                     )
-                    
-

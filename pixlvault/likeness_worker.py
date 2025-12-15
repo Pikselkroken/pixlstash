@@ -2,19 +2,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
 
-from sqlalchemy import func
 from sqlmodel import select, Session
 from typing import List, Optional, Tuple
 
 from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
-from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.quality import Quality
-from pixlvault.picture_utils import PictureUtils
-from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessFrontier
+from pixlvault.db_models.picture_likeness import (
+    PictureLikeness,
+    PictureLikenessFrontier,
+)
 
 logger = get_logger(__name__)
+
 
 class LikenessWorker(BaseWorker):
     BATCH_SIZE = 5000
@@ -38,15 +39,14 @@ class LikenessWorker(BaseWorker):
         )
         if a is None:
             return None, None
-        
+
         max_id = PictureLikenessFrontier.max_picture_id(session)
         # Ask the model to compute the next contiguous [start_b, end_b] window
         rng = PictureLikenessFrontier.range_to_compare(
             session, a, max_id=max_id, batch_limit=cls.BATCH_SIZE
         )
         if not rng:
-            return None, None # frontier already at max or race
-            
+            return None, None  # frontier already at max or race
 
         start_b, end_b = rng
 
@@ -55,10 +55,7 @@ class LikenessWorker(BaseWorker):
         # Query all b rows in one go for efficiency
         b_rows = session.exec(
             select(Quality.picture_id)
-            .where(
-                (Quality.picture_id >= start_b) &
-                (Quality.picture_id <= end_b)
-            )
+            .where((Quality.picture_id >= start_b) & (Quality.picture_id <= end_b))
             .order_by(Quality.picture_id)
         ).all()
         eligible_bs_all = [int(pid) for pid in b_rows]
@@ -69,11 +66,11 @@ class LikenessWorker(BaseWorker):
         if not bs_prefix:
             return None, None  # No eligible b in the window
 
-        return a, bs_prefix[:cls.BATCH_SIZE]
+        return a, bs_prefix[: cls.BATCH_SIZE]
 
     def _run(self):
         logger.info("LikenessWorker: Likeness worker started.")
-        
+
         self._db.run_task(PictureLikenessFrontier.ensure_all)
 
         logger.info("LikenessWorker: PictureLikenessFrontier initialized.")
@@ -94,9 +91,14 @@ class LikenessWorker(BaseWorker):
                 pids_needed.add(b)
 
             def fetch_quality(session, ids):
-                qualities = session.exec(select(Quality).where(Quality.picture_id.in_(ids))).all()
+                qualities = session.exec(
+                    select(Quality).where(Quality.picture_id.in_(ids))
+                ).all()
                 return {quality.picture_id: quality for quality in qualities}
-            quality_dict = self._db.run_task(fetch_quality, list(pids_needed), priority=DBPriority.LOW)
+
+            quality_dict = self._db.run_task(
+                fetch_quality, list(pids_needed), priority=DBPriority.LOW
+            )
 
             likeness_results = []
             processed_notify_ids = []
@@ -104,9 +106,7 @@ class LikenessWorker(BaseWorker):
                 logger.debug(f"LikenessWorker: Processing pair (a={a}, b={b})")
                 quality_a = quality_dict.get(a).get_color_histogram()
                 quality_b = quality_dict.get(b).get_color_histogram()
-                likeness = self._color_histogram_likeness(
-                    quality_a, quality_b
-                )
+                likeness = self._color_histogram_likeness(quality_a, quality_b)
 
                 likeness_results.append(
                     PictureLikeness(
@@ -116,21 +116,27 @@ class LikenessWorker(BaseWorker):
                         metric="color_histogram",
                     )
                 )
-                processed_notify_ids.append(
-                    (PictureLikeness, (a, b), "pair", likeness)
-                )
+                processed_notify_ids.append((PictureLikeness, (a, b), "pair", likeness))
                 if self._stop.is_set():
                     break
 
-
             logger.debug("LikenessWorker: Writing likeness scores to database...")
 
-            def insert_likeness_and_update_frontier(session, likeness_results, a, max_b):
+            def insert_likeness_and_update_frontier(
+                session, likeness_results, a, max_b
+            ):
                 PictureLikeness.bulk_insert_ignore(session, likeness_results)
                 PictureLikenessFrontier.update(session, a, max_b)
                 PictureLikeness.prune_below_top_k(session, a, self.TOP_K)
                 session.commit()
-            self._db.run_task(insert_likeness_and_update_frontier, likeness_results, a, max(bs), priority=DBPriority.LOW)
+
+            self._db.run_task(
+                insert_likeness_and_update_frontier,
+                likeness_results,
+                a,
+                max(bs),
+                priority=DBPriority.LOW,
+            )
 
             if processed_notify_ids:
                 self._notify_ids_processed(processed_notify_ids)
@@ -212,6 +218,7 @@ class LikenessWorker(BaseWorker):
         Compute color histogram likeness between img_a and a list of imgs_b efficiently.
         Returns a list of likeness scores.
         """
+
         def get_hist(img):
             chans = cv2.split(img)
             hist = [

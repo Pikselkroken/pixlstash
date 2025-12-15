@@ -31,7 +31,6 @@ class PictureLikeness(SQLModel, table=True):
     likeness: float = Field(default=None)
     metric: str = Field(default=None)
 
-
     # Table-level constraints and indexes
     __table_args__ = (
         # Enforce canonical ordering: a must be < b
@@ -80,16 +79,13 @@ class PictureLikeness(SQLModel, table=True):
         else:
             return session.exec(query).all()
 
-
     @classmethod
     def exists(cls, session, picture_id_a: int, picture_id_b: int) -> bool:
         """
         Check if a likeness entry exists for the given picture ID pair.
         """
         a, b = cls.canon_pair(picture_id_a, picture_id_b)
-        query = select(cls).where(
-            (cls.picture_id_a == a) & (cls.picture_id_b == b)
-        )
+        query = select(cls).where((cls.picture_id_a == a) & (cls.picture_id_b == b))
         result = session.exec(query).first()
         return result is not None
 
@@ -104,8 +100,12 @@ class PictureLikeness(SQLModel, table=True):
         # Prepare rows as dicts
         rows = [
             {
-                "picture_id_a": r.picture_id_a if hasattr(r, "picture_id_a") else r["picture_id_a"],
-                "picture_id_b": r.picture_id_b if hasattr(r, "picture_id_b") else r["picture_id_b"],
+                "picture_id_a": r.picture_id_a
+                if hasattr(r, "picture_id_a")
+                else r["picture_id_a"],
+                "picture_id_b": r.picture_id_b
+                if hasattr(r, "picture_id_b")
+                else r["picture_id_b"],
                 "likeness": r.likeness if hasattr(r, "likeness") else r["likeness"],
                 "metric": r.metric if hasattr(r, "metric") else r["metric"],
             }
@@ -148,22 +148,25 @@ class PictureLikeness(SQLModel, table=True):
             {"a": picture_id_a, "top_k": top_k},
         )
 
+
 class PictureLikenessFrontier(SQLModel, table=True):
     """
     Database model for the picture_likeness_frontier table.
     Stores the current frontier of picture pairs to compute likeness for.
-    """   
-    picture_id_a: int = Field(        
+    """
+
+    picture_id_a: int = Field(
         sa_column=Column(
             "picture_id_a",
-            ForeignKey("picture.id", ondelete="CASCADE"), primary_key=True,
+            ForeignKey("picture.id", ondelete="CASCADE"),
+            primary_key=True,
         ),
     )
     j_max: int = Field(default=None)
 
     __table_args__ = (
         CheckConstraint("j_max >= picture_id_a", name="ck_frontier_order"),
-               Index("ix_picture_frontier_a", "picture_id_a"),
+        Index("ix_picture_frontier_a", "picture_id_a"),
     )
 
     @classmethod
@@ -175,7 +178,9 @@ class PictureLikenessFrontier(SQLModel, table=True):
         but at your scale ORM is fine.
         """
         # Get all picture ids
-        picture_ids = [row.id for row in session.exec(select(Picture).order_by(Picture.id))]
+        picture_ids = [
+            row.id for row in session.exec(select(Picture).order_by(Picture.id))
+        ]
         # Existing frontier ids
         existing = set(session.exec(select(PictureLikenessFrontier.picture_id_a)))
         # Compute missing
@@ -204,7 +209,13 @@ class PictureLikenessFrontier(SQLModel, table=True):
         session.commit()
 
     @classmethod
-    def range_to_compare(cls, session: Session, a: int, max_id: Optional[int] = None, batch_limit: int = 5000) -> Optional[Tuple[int, int]]:
+    def range_to_compare(
+        cls,
+        session: Session,
+        a: int,
+        max_id: Optional[int] = None,
+        batch_limit: int = 5000,
+    ) -> Optional[Tuple[int, int]]:
         """
         Compute the next contiguous [start_b, end_b] for picture a.
         Ensures canonical a < b and respects frontier j_max.
@@ -226,7 +237,9 @@ class PictureLikenessFrontier(SQLModel, table=True):
         return (start_b, end_b)
 
     @classmethod
-    def get_next_a_candidate(cls, session: Session, quality_ready: callable) -> Optional[int]:
+    def get_next_a_candidate(
+        cls, session: Session, quality_ready: callable
+    ) -> Optional[int]:
         """
         Find the smallest picture_id_a whose frontier hasn't reached max_id
         AND whose Quality is ready.
@@ -264,4 +277,3 @@ class PictureLikenessFrontier(SQLModel, table=True):
             result.append(b)
             b += 1
         return result
-

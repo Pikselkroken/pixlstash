@@ -80,7 +80,12 @@ class Picture(SQLModel, table=True):
     # Relationships
     quality: Optional["Quality"] = Relationship(back_populates="picture")
     faces: List["Face"] = Relationship(
-        back_populates="picture", sa_relationship_kwargs={"overlaps": "characters"}
+        back_populates="picture",
+        sa_relationship_kwargs={
+            "overlaps": "characters",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
     )
     tags: List["Tag"] = Relationship(
         back_populates="picture",

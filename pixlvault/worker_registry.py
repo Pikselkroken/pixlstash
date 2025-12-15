@@ -139,7 +139,9 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         if self._event_callback:
             self._event_callback(event_type)
 
-    def _notify_ids_processed(self, notification: List[Tuple[Type, object, str, object]]):
+    def _notify_ids_processed(
+        self, notification: List[Tuple[Type, object, str, object]]
+    ):
         """
         Notify that an object ID has been processed.
         """

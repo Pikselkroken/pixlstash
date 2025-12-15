@@ -7,7 +7,6 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
-from pixlvault.db_models.face import Face
 
 from .database import DBPriority, VaultDatabase
 from .db_models import MetaData, Character, Picture, PictureSet

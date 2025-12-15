@@ -150,6 +150,9 @@ def test_character_thumbnail_endpoint():
             server.vault.start_workers({WorkerType.FACE})
             # Wait for all face detection futures to complete
             results = [future.result(timeout=60) for future in futures]
+            assert len(results) == len(futures), (
+                "Not all pictures were processed in time"
+            )
 
             # Assign the default character to the largest face in each picture
             chars = server.vault.db.run_task(lambda session: Character.find(session))

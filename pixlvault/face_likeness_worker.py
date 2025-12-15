@@ -4,7 +4,6 @@ from sqlmodel import select, Session, text
 from typing import List, Optional, Tuple
 
 from pixlvault.database import DBPriority
-from pixlvault.db_models.quality import Quality
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.face import Face
@@ -12,10 +11,11 @@ from pixlvault.db_models.face_likeness import FaceLikeness, FaceLikenessFrontier
 
 logger = get_logger(__name__)
 
+
 class FaceLikenessWorker(BaseWorker):
     BATCH_SIZE = 50000
     MIN_THRESHOLD = 0.6
-    
+
     def worker_type(self) -> WorkerType:
         return WorkerType.FACE_LIKENESS
 
@@ -28,14 +28,12 @@ class FaceLikenessWorker(BaseWorker):
         - len(bs) <= batch_size and starts at the current frontier start_b.
         Returns None if nothing to do.
         """
-       
+
         max_id = FaceLikenessFrontier.max_face_id(session)
         if not max_id:
             return None, None
-            
-        a = FaceLikenessFrontier.smallest_a_with_work(
-            session, max_id=max_id
-        )   
+
+        a = FaceLikenessFrontier.smallest_a_with_work(session, max_id=max_id)
         if a is None:
             return None, None
 
@@ -43,18 +41,17 @@ class FaceLikenessWorker(BaseWorker):
             session, a, max_id=max_id, batch_limit=cls.BATCH_SIZE
         )
         if not rng:
-            return None, None # frontier already at max or race
+            return None, None  # frontier already at max or race
 
         start_b, end_b = rng
         bs = list(range(start_b, end_b + 1))
         return a, bs
 
-
     def _run(self):
         logger.info("FaceLikenessWorker: Face likeness worker started.")
 
         self._db.run_task(FaceLikenessFrontier.ensure_all)
-    
+
         while not self._stop.is_set():
             start = time.time()
 
@@ -71,11 +68,14 @@ class FaceLikenessWorker(BaseWorker):
             for b in bs:
                 face_ids_needed.add(a)
                 face_ids_needed.add(b)
-            
+
             def fetch_faces(session, ids):
                 faces = session.exec(select(Face).where(Face.id.in_(ids))).all()
                 return {face.id: face for face in faces}
-            face_dict = self._db.run_task(fetch_faces, list(face_ids_needed), priority=DBPriority.LOW)
+
+            face_dict = self._db.run_task(
+                fetch_faces, list(face_ids_needed), priority=DBPriority.LOW
+            )
 
             likeness_results = []
             processed_notify_ids = []
@@ -85,14 +85,23 @@ class FaceLikenessWorker(BaseWorker):
             for b in bs:
                 face_a = face_dict.get(a)
                 face_b = face_dict.get(b)
-                if not face_a or not face_b or face_a.features is None or face_b.features is None:
-                    logger.warning(f"FaceLikenessWorker: Missing features for pair ({a}, {b}), skipping.")
+                if (
+                    not face_a
+                    or not face_b
+                    or face_a.features is None
+                    or face_b.features is None
+                ):
+                    logger.warning(
+                        f"FaceLikenessWorker: Missing features for pair ({a}, {b}), skipping."
+                    )
                     continue
                 arr_a_list.append(np.frombuffer(face_a.features, dtype=np.float32))
                 arr_b_list.append(np.frombuffer(face_b.features, dtype=np.float32))
                 pair_ids.append((a, b))
 
-            logger.debug(f"FaceLikenessWorker: Computing cosine similarities for batch. Lists lengths: arr_a_list={len(arr_a_list)}, arr_b_list={len(arr_b_list)}")
+            logger.debug(
+                f"FaceLikenessWorker: Computing cosine similarities for batch. Lists lengths: arr_a_list={len(arr_a_list)}, arr_b_list={len(arr_b_list)}"
+            )
             if arr_a_list and arr_b_list:
                 sims = self._cosine_similarity_batch(arr_a_list, arr_b_list)
                 for (a, b), likeness in zip(pair_ids, sims):
@@ -105,10 +114,18 @@ class FaceLikenessWorker(BaseWorker):
                                 metric="cosine_similarity",
                             )
                         )
-                    processed_notify_ids.append((FaceLikeness, (a, b), "pair", likeness if likeness >= self.MIN_THRESHOLD else None))
+                    processed_notify_ids.append(
+                        (
+                            FaceLikeness,
+                            (a, b),
+                            "pair",
+                            likeness if likeness >= self.MIN_THRESHOLD else None,
+                        )
+                    )
 
-                
-            def insert_likeness_and_update_frontier(session, likeness_results, a, max_b):
+            def insert_likeness_and_update_frontier(
+                session, likeness_results, a, max_b
+            ):
                 try:
                     session.execute(text("BEGIN IMMEDIATE"))
                     FaceLikeness.bulk_insert_ignore(session, likeness_results)
@@ -118,18 +135,27 @@ class FaceLikenessWorker(BaseWorker):
                     logger.error(f"Error during insert and update frontier: {e}")
                     session.rollback()
 
-            self._db.run_task(insert_likeness_and_update_frontier, likeness_results, a, max(bs), priority=DBPriority.LOW)                
-            
+            self._db.run_task(
+                insert_likeness_and_update_frontier,
+                likeness_results,
+                a,
+                max(bs),
+                priority=DBPriority.LOW,
+            )
+
             elapsed = time.time() - start
             if processed_notify_ids:
                 self._notify_ids_processed(processed_notify_ids)
-                logger.info(f"FaceLikenessWorker: Processed {len(processed_notify_ids)} pairs in {elapsed:.2f} seconds.")
+                logger.info(
+                    f"FaceLikenessWorker: Processed {len(processed_notify_ids)} pairs in {elapsed:.2f} seconds."
+                )
             else:
-                logger.info(f"FaceLikenessWorker: No valid pairs processed in {elapsed:.2f} seconds. Sleeping...")
+                logger.info(
+                    f"FaceLikenessWorker: No valid pairs processed in {elapsed:.2f} seconds. Sleeping..."
+                )
                 self._wait()
+
     logger.info("FaceLikenessWorker: Face likeness worker stopped.")
-
-
 
     def _cosine_similarity_batch(self, arr_a_list, arr_b_list):
         """
@@ -145,4 +171,3 @@ class FaceLikenessWorker(BaseWorker):
         sims = np.sum(arr_a_norm * arr_b_norm, axis=1)
         sims = 0.5 * (sims + 1.0)  # Scale to [0, 1]
         return sims
-

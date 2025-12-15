@@ -1,4 +1,4 @@
-from sqlalchemy import String, Column, ForeignKey
+from sqlalchemy import Column, ForeignKey
 from sqlmodel import SQLModel, Field, Integer, Relationship
 
 from typing import TYPE_CHECKING, Optional
@@ -11,6 +11,7 @@ class Tag(SQLModel, table=True):
     """
     SQLModel for the picture_tags table.
     """
+
     picture_id: int = Field(
         sa_column=Column(
             Integer,

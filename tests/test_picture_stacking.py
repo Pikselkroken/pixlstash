@@ -7,7 +7,6 @@ from time import time
 
 from fastapi.testclient import TestClient
 
-from pixlvault.db_models.face import Face
 from pixlvault.db_models.face_likeness import FaceLikeness
 from pixlvault.db_models.picture_likeness import PictureLikeness
 from pixlvault.db_models.picture import Picture
@@ -68,13 +67,17 @@ def test_picture_stacking():
                 for pid2 in picture_ids:
                     if pid2 > pid1:
                         logger.info("Queuing likeness pair: (%s, %s)", pid1, pid2)
-                        picture_likeness_futures.append((pid1, pid2,
-                            server.vault.get_worker_future(
-                                WorkerType.LIKENESS,
-                                PictureLikeness,
-                                (pid1, pid2),
-                                "pair",
-                            ))
+                        picture_likeness_futures.append(
+                            (
+                                pid1,
+                                pid2,
+                                server.vault.get_worker_future(
+                                    WorkerType.LIKENESS,
+                                    PictureLikeness,
+                                    (pid1, pid2),
+                                    "pair",
+                                ),
+                            )
                         )
 
             server.vault.start_workers(
@@ -110,13 +113,17 @@ def test_picture_stacking():
             for face_id1 in all_face_ids:
                 for face_id2 in all_face_ids:
                     if face_id2 > face_id1:
-                        face_likeness_futures.append((face_id1, face_id2,                            
-                            server.vault.get_worker_future(
-                                WorkerType.FACE_LIKENESS,
-                                FaceLikeness,
-                                (face_id1, face_id2),
-                                "pair",
-                            ))
+                        face_likeness_futures.append(
+                            (
+                                face_id1,
+                                face_id2,
+                                server.vault.get_worker_future(
+                                    WorkerType.FACE_LIKENESS,
+                                    FaceLikeness,
+                                    (face_id1, face_id2),
+                                    "pair",
+                                ),
+                            )
                         )
 
             server.vault.start_workers({WorkerType.FACE_LIKENESS})
@@ -134,7 +141,9 @@ def test_picture_stacking():
             logger.info("Waiting for facial likeness to be processed...")
             face_likeness_pairs = []
             for face_id1, face_id2, future in face_likeness_futures:
-                logger.debug("Waiting for facial likeness pair: (%s, %s)", face_id1, face_id2)
+                logger.debug(
+                    "Waiting for facial likeness pair: (%s, %s)", face_id1, face_id2
+                )
                 result = future.result(timeout=60)
                 assert result is not None, "FaceLikenessWorker timed out"
                 face_likeness_pairs.append(result)
@@ -147,14 +156,21 @@ def test_picture_stacking():
                 == (len(all_face_ids) * (len(all_face_ids) - 1)) // 2
             ), "Not all face likeness pairs were computed."
 
-
             # Log DB contents for likeness and face likeness
             likeness_rows = server.vault.db.run_task(PictureLikeness.find)
             face_likeness_rows = server.vault.db.run_task(
-                lambda session: session.exec(FaceLikeness.__table__.select().order_by(FaceLikeness.likeness.desc())).all()
+                lambda session: session.exec(
+                    FaceLikeness.__table__.select().order_by(
+                        FaceLikeness.likeness.desc()
+                    )
+                ).all()
             )
-            logger.info(f"PictureLikeness table rows: {[{'a': r.picture_id_a, 'b': r.picture_id_b, 'likeness': r.likeness} for r in likeness_rows]}")
-            logger.info(f"FaceLikeness table rows: {[{'a': r.face_id_a, 'b': r.face_id_b, 'likeness': r.likeness} for r in face_likeness_rows]}")
+            logger.info(
+                f"PictureLikeness table rows: {[{'a': r.picture_id_a, 'b': r.picture_id_b, 'likeness': r.likeness} for r in likeness_rows]}"
+            )
+            logger.info(
+                f"FaceLikeness table rows: {[{'a': r.face_id_a, 'b': r.face_id_b, 'likeness': r.likeness} for r in face_likeness_rows]}"
+            )
 
             server.vault.stop_workers()
 
@@ -168,7 +184,9 @@ def test_picture_stacking():
             # Build a picture-to-picture likeness table from all stacks
             pic_ids = picture_ids
             # Fetch descriptions for all picture ids
-            desc_resp = client.get("/pictures", params={"ids": ",".join(map(str, pic_ids))})
+            desc_resp = client.get(
+                "/pictures", params={"ids": ",".join(map(str, pic_ids))}
+            )
             assert desc_resp.status_code == 200, (
                 f"Failed to fetch picture descriptions: {desc_resp.text}"
             )
@@ -289,13 +307,17 @@ def test_character_likeness():
             for face_id1 in all_face_ids:
                 for face_id2 in all_face_ids:
                     if face_id2 > face_id1:
-                        face_likeness_futures.append((face_id1, face_id2,
-                            server.vault.get_worker_future(
-                                WorkerType.FACE_LIKENESS,
-                                FaceLikeness,
-                                (face_id1, face_id2),
-                                "pair",
-                            ))
+                        face_likeness_futures.append(
+                            (
+                                face_id1,
+                                face_id2,
+                                server.vault.get_worker_future(
+                                    WorkerType.FACE_LIKENESS,
+                                    FaceLikeness,
+                                    (face_id1, face_id2),
+                                    "pair",
+                                ),
+                            )
                         )
 
             server.vault.start_workers({WorkerType.FACE_LIKENESS})
@@ -303,7 +325,9 @@ def test_character_likeness():
             logger.info("Waiting for facial likeness to be processed...")
             face_likeness_pairs = []
             for face_id1, face_id2, future in face_likeness_futures:
-                logger.debug("Waiting for facial likeness pair: (%s, %s)", face_id1, face_id2)
+                logger.debug(
+                    "Waiting for facial likeness pair: (%s, %s)", face_id1, face_id2
+                )
                 result = future.result(timeout=240)
                 assert result is not None, "FaceLikenessWorker timed out"
                 face_likeness_pairs.append(result)

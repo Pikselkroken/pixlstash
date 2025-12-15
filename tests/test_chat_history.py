@@ -35,7 +35,6 @@ def test_server():
 def test_chat_history_save_and_load(test_server):
     client, char_id = test_server
 
-    
     resp = client.post(
         "/conversations", params={"character_id": char_id, "description": "Test chat"}
     )

@@ -1,6 +1,5 @@
 import os
 import tempfile
-import cv2
 import insightface
 
 from PIL import Image, ImageDraw
@@ -50,7 +49,7 @@ def test_face_extraction_speed_cpu():
             faces = worker._extract_faces(pictures)
             end = time()
             logger.info(
-                f"Face extraction took {end - start} seconds for {len(pictures)} images. Or {(end - start) / len(pictures)} seconds per image on average."
+                f"Face extraction took {end - start} seconds for {len(pictures)} images and created {len(faces)} faces. Or {(end - start) / len(pictures)} seconds per image on average."
             )
 
 
@@ -66,7 +65,9 @@ def test_face_extraction_speed_gpu():
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
-        image_files = original_image_files * 10  # Adjust multiplier as needed for testing
+        image_files = (
+            original_image_files * 10
+        )  # Adjust multiplier as needed for testing
 
         with Server(
             config_path=config_path,
@@ -77,12 +78,6 @@ def test_face_extraction_speed_gpu():
                 pic = Picture(file_path=os.path.join(src_dir, image_file))
                 pictures.append(pic)
 
-            try:
-                from insightface.app import FaceAnalysis
-            except ImportError:
-                logger.error("InsightFace is not installed. Skipping test")
-                return
-
             def notify(event_type) -> None:
                 pass
 
@@ -91,58 +86,16 @@ def test_face_extraction_speed_gpu():
             worker._insightface_app = insightface.app.FaceAnalysis(
                 providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
             )
-            worker._insightface_app.prepare(ctx_id=0, det_thresh=0.25, det_size=(480, 480))
+            worker._insightface_app.prepare(
+                ctx_id=0, det_thresh=0.25, det_size=(480, 480)
+            )
 
             start = time()
             faces = worker._extract_faces(pictures)
             end = time()
             logger.info(
-                f"Face extraction took {end - start} seconds for {len(pictures)} images. Or {(end - start) / len(pictures)} seconds per image on average."
+                f"Face extraction took {end - start} seconds for {len(pictures)} images and created {len(faces)} faces. Or {(end - start) / len(pictures)} seconds per image on average."
             )
-
-
-def test_face_extraction_speed_gpu_batch():
-    with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server_config.json")
-
-        src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
-        original_image_files = [
-            f
-            for f in os.listdir(src_dir)
-            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
-        ]
-
-        image_files = original_image_files * 10  # Adjust multiplier as needed for testing
-
-        with Server(
-            config_path=config_path,
-            server_config_path=server_config_path,
-        ) as server:
-
-            from batch_face import RetinaFace
-
-            images = []
-            detector = RetinaFace()
-            for image_file in image_files:
-                img = cv2.imread(os.path.join(src_dir, image_file))
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                images.append(img)
-
-            max_size = 480
-            threshold = 0.25  # confidence threshold for detection
-            batch_size = len(images)
-
-            start = time()
-            all_faces = detector(
-                images, threshold=threshold, max_size=max_size, batch_size=batch_size
-            )
-
-            end = time()
-            logger.info(
-                f"Face extraction took {end - start} seconds for {len(image_files)} images. Or {(end - start) / len(image_files)} seconds per image on average."
-            )
-            logger.info(f"Detected len(all_faces)={len(all_faces)}")
 
 
 def test_face_extraction_speed_server():

@@ -53,7 +53,9 @@ class DescriptionWorker(BaseWorker):
                             if db_pic is not None:
                                 db_pic.description = pic.description
                                 session.add(db_pic)
-                                changed.append((Picture, pic.id, "description", pic.description))
+                                changed.append(
+                                    (Picture, pic.id, "description", pic.description)
+                                )
                         session.commit()
                         return changed
 
@@ -228,7 +230,10 @@ class TagWorker(BaseWorker):
                         return None
 
                     pic = self._db.run_task(
-                        add_tags, pic.id, tags, priority=DBPriority.LOW,
+                        add_tags,
+                        pic.id,
+                        tags,
+                        priority=DBPriority.LOW,
                     )
                     tagged_pictures.append((Picture, pic.id, "tags", tags))
 
@@ -337,7 +342,9 @@ class EmbeddingWorker(BaseWorker):
                 if db_pic:
                     db_pic.text_embedding = pic.text_embedding
                     session.add(db_pic)
-                    changed.append((Picture, pic.id, "text_embedding", pic.text_embedding))
+                    changed.append(
+                        (Picture, pic.id, "text_embedding", pic.text_embedding)
+                    )
             session.commit()
             logger.debug(
                 f"[EMBEDDING WORKER] Committed {len(changed)} embedding updates to DB."

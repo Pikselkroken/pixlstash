@@ -1,6 +1,14 @@
-from requests import session
 from sqlalchemy import Column, ForeignKey
-from sqlmodel import CheckConstraint, Index, SQLModel, Field, Relationship, Session, Session, select, text
+from sqlmodel import (
+    CheckConstraint,
+    Index,
+    SQLModel,
+    Field,
+    Relationship,
+    Session,
+    select,
+    text,
+)
 from typing import Optional, Tuple
 
 from .face import Face
@@ -51,7 +59,9 @@ class FaceLikeness(SQLModel, table=True):
     @staticmethod
     def canon_pair(face_id_1: int, face_id_2: int) -> tuple[int, int]:
         """Return (a, b) ordered pair for given face IDs."""
-        return (face_id_1, face_id_2) if face_id_1 < face_id_2 else (face_id_2, face_id_1)
+        return (
+            (face_id_1, face_id_2) if face_id_1 < face_id_2 else (face_id_2, face_id_1)
+        )
 
     @classmethod
     def exists(cls, session, face_id_a: int, face_id_b: int) -> bool:
@@ -59,12 +69,9 @@ class FaceLikeness(SQLModel, table=True):
         Check if a likeness entry exists for the given face ID pair.
         """
         a, b = cls.canon_pair(face_id_a, face_id_b)
-        query = select(cls).where(
-            (cls.face_id_a == a) & (cls.face_id_b == b)
-        )
+        query = select(cls).where((cls.face_id_a == a) & (cls.face_id_b == b))
         result = session.exec(query).first()
         return result is not None
-
 
     @classmethod
     def bulk_insert_ignore(cls, session: Session, likeness_results):
@@ -94,24 +101,25 @@ class FaceLikeness(SQLModel, table=True):
             rows,
         )
 
+
 class FaceLikenessFrontier(SQLModel, table=True):
     """
     Database model for the face_likeness_frontier table.
     Stores the current frontier of face pairs to compute likeness for.
     """
 
-   
-    face_id_a: int = Field(        
+    face_id_a: int = Field(
         sa_column=Column(
             "face_id_a",
-            ForeignKey("face.id", ondelete="CASCADE"), primary_key=True,
+            ForeignKey("face.id", ondelete="CASCADE"),
+            primary_key=True,
         ),
     )
     j_max: int = Field(default=None)
 
     __table_args__ = (
         CheckConstraint("j_max >= face_id_a", name="ck_frontier_order"),
-               Index("ix_face_frontier_a", "face_id_a"),
+        Index("ix_face_frontier_a", "face_id_a"),
     )
 
     @classmethod
@@ -123,7 +131,12 @@ class FaceLikenessFrontier(SQLModel, table=True):
         but at your scale ORM is fine.
         """
         # Get all face ids
-        face_ids = [row.id for row in session.exec(select(Face).where(Face.face_index != -1).order_by(Face.id))]
+        face_ids = [
+            row.id
+            for row in session.exec(
+                select(Face).where(Face.face_index != -1).order_by(Face.id)
+            )
+        ]
         # Existing frontier ids
         existing = set(session.exec(select(FaceLikenessFrontier.face_id_a)))
         # Compute missing
@@ -151,7 +164,13 @@ class FaceLikenessFrontier(SQLModel, table=True):
             session.add(pf)
 
     @classmethod
-    def range_to_compare(cls, session: Session, a: int, max_id: Optional[int] = None, batch_limit: int = 5000) -> Optional[Tuple[int, int]]:
+    def range_to_compare(
+        cls,
+        session: Session,
+        a: int,
+        max_id: Optional[int] = None,
+        batch_limit: int = 5000,
+    ) -> Optional[Tuple[int, int]]:
         """
         Compute the next contiguous [start_b, end_b] for face a.
         Ensures canonical a < b and respects frontier j_max.
@@ -171,7 +190,7 @@ class FaceLikenessFrontier(SQLModel, table=True):
             return None
         end_b = min(max_id, start_b + batch_limit - 1)
         return (start_b, end_b)
-    
+
     @classmethod
     def smallest_a_with_work(cls, session: Session, max_id: int) -> Optional[int]:
         """

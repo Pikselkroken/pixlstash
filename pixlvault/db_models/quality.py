@@ -20,11 +20,15 @@ logger = get_logger(__name__)
 class Quality(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     picture_id: Optional[int] = Field(
-        sa_column=Column(Integer, ForeignKey("picture.id", ondelete="CASCADE"), index=True),
+        sa_column=Column(
+            Integer, ForeignKey("picture.id", ondelete="CASCADE"), index=True
+        ),
         default=None,
     )
     face_id: Optional[int] = Field(
-        sa_column=Column(Integer, ForeignKey("face.id", ondelete="CASCADE"), index=True),
+        sa_column=Column(
+            Integer, ForeignKey("face.id", ondelete="CASCADE"), index=True
+        ),
         default=None,
     )
     sharpness: Optional[float] = Field(default=None, index=True)
@@ -34,7 +38,10 @@ class Quality(SQLModel, table=True):
     noise_level: Optional[float] = Field(default=None, index=True)
 
     # Store color histogram as a binary blob (np.float32 array, serialized)
-    color_histogram: Optional[bytes] = Field(default=None, sa_column=Column("color_histogram", LargeBinary, default=None, nullable=True))
+    color_histogram: Optional[bytes] = Field(
+        default=None,
+        sa_column=Column("color_histogram", LargeBinary, default=None, nullable=True),
+    )
 
     # Relationships
     picture: Optional["Picture"] = Relationship(back_populates="quality")
@@ -58,7 +65,9 @@ class Quality(SQLModel, table=True):
         return likeness_values
 
     @staticmethod
-    def calculate_quality_batch(images: np.ndarray, calculate_histograms=True) -> List["Quality"]:
+    def calculate_quality_batch(
+        images: np.ndarray, calculate_histograms=True
+    ) -> List["Quality"]:
         """
         Calculate quality metrics for a batch of images.
         Accepts a 4D np.ndarray (batch, height, width, channels) and returns a list of PictureQuality instances.
@@ -106,10 +115,11 @@ class Quality(SQLModel, table=True):
             for i in range(batch_size):
                 chans = cv2.split(images[i])
                 hist = [
-                    cv2.calcHist([c], [0], None, [32], [0, 256]).flatten() for c in chans
+                    cv2.calcHist([c], [0], None, [32], [0, 256]).flatten()
+                    for c in chans
                 ]
                 hist = np.concatenate(hist).astype(np.float32)
-                hist /= (np.sum(hist) + 1e-8)
+                hist /= np.sum(hist) + 1e-8
                 histograms.append(hist.tobytes())
         else:
             histograms = [None] * batch_size
@@ -127,6 +137,7 @@ class Quality(SQLModel, table=True):
                 )
             )
         return results
+
     def get_color_histogram(self, bins=32):
         """Return the color histogram as a np.ndarray (float32)."""
         if self.color_histogram is None:
@@ -157,7 +168,9 @@ class Quality(SQLModel, table=True):
         self.contrast = contrast  # Normalized contrast (0.0-1.0)
         self.brightness = brightness  # Normalized brightness (0.0-1.0)
         self.noise_level = noise_level  # Estimated noise (0.0-1.0)
-        self.color_histogram = color_histogram  # Serialized color histogram (np.float32)
+        self.color_histogram = (
+            color_histogram  # Serialized color histogram (np.float32)
+        )
 
     @staticmethod
     def calculate_quality(
@@ -184,7 +197,7 @@ class Quality(SQLModel, table=True):
         t0 = time.time()
         noise_level = Quality._calculate_noise_level(image)
         timings["noise_level"] = time.time() - t0
-        
+
         # Post-calc None checks
         sharpness = -1.0 if sharpness is None else sharpness
         edge_density = -1.0 if edge_density is None else edge_density
@@ -285,14 +298,18 @@ class Quality(SQLModel, table=True):
         ]
 
     @classmethod
-    def quality_read_for_picture(cls, session: Session, picture_id: int) -> Optional["Quality"]:
+    def quality_read_for_picture(
+        cls, session: Session, picture_id: int
+    ) -> Optional["Quality"]:
         """
         Load quality record for given picture ID.
         """
         return session.query(cls).filter(cls.picture_id == picture_id).first()
-    
+
     @classmethod
-    def quality_read_for_face(cls, session: Session, face_id: int) -> Optional["Quality"]:
+    def quality_read_for_face(
+        cls, session: Session, face_id: int
+    ) -> Optional["Quality"]:
         """
         Load quality record for given face ID.
         """
