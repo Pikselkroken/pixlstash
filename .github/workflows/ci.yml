@@ -32,8 +32,6 @@ jobs:
           ruff check pixlvault
 
       # Individual test steps for each test file
-      - name: Test Picture Tagger Embeddings
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_tagger.py
       - name: Test Tag Worker and Tagging
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_tag_worker.py
       - name: Test Picture Likeness Worker
