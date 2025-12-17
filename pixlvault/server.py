@@ -161,7 +161,7 @@ class Server:
             "image_roots": [default_image_root],
             "selected_image_root": default_image_root,
             "description": DEFAULT_DESCRIPTION,
-            "sort": SortMechanism.Keys.DATE,
+            "sort": SortMechanism.Keys.DATE.name,
             "descending": True,
             "thumbnail": "default",
             "thumbnail_size": "default",
