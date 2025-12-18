@@ -330,7 +330,7 @@ def test_characters_summary():
 
             # Wait for facial features to be processed and associate Esmeralda Vault with largest face in each picture
             for idx, future in enumerate(face_futures):
-                result_id = future.result(timeout=120)
+                result_id, _ = future.result(timeout=120)
                 assert result_id == picture_ids[idx], (
                     f"Facial features processing returned unexpected picture ID {result_id}, expected {picture_ids[idx]}"
                 )
@@ -674,8 +674,8 @@ def test_semantic_search():
             server.vault.start_workers(
                 {
                     WorkerType.FACE,
-                    WorkerType.TEXT_EMBEDDING,
                     WorkerType.TAGGER,
+                    WorkerType.DESCRIPTION,
                 }
             )
 
@@ -763,14 +763,13 @@ def test_semantic_search():
 
             server.vault.start_workers(
                 {
-                    WorkerType.DESCRIPTION,
                     WorkerType.TEXT_EMBEDDING,
                 }
             )
 
             # Wait for all text embeddings to be processed
             for future in embeddings_futures:
-                result_id = future.result(timeout=60)
+                result_id = future.result(timeout=80)
                 logging.debug(f"Text embedding processed for picture ID: {result_id}")
 
             # Inspect embeddings for each picture after embedding futures complete

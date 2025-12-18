@@ -4,7 +4,7 @@ import numpy as np
 
 from datetime import datetime
 
-from enum import Enum
+from enum import Enum, auto
 from PIL import Image
 from sqlalchemy import desc, func
 from sqlalchemy.orm import load_only, selectinload
@@ -22,43 +22,79 @@ from pixlvault.pixl_logging import get_logger
 
 if TYPE_CHECKING:
     from .character import Character
+    from .picture_likeness import PictureLikeness
 
 
 # Configure logging for the module
 logger = get_logger(__name__)
 
 
-# Enum for sorting mechanisms
-class SortMechanism(str, Enum):
-    DATE_DESC = "created_at desc"
-    DATE_ASC = "created_at asc"
-    SCORE_DESC = "score desc"
-    SCORE_ASC = "score asc"
-    CHARACTER_LIKENESS = "character_likeness"
-    SEARCH_LIKENESS = "search_likeness desc"
-    SHARPNESS_DESC = "sharpness desc"
-    SHARPNESS_ASC = "sharpness asc"
-    EDGE_DENSITY_DESC = "edge_density desc"
-    EDGE_DENSITY_ASC = "edge_density asc"
-    NOISE_LEVEL_DESC = "noise_level desc"
-    NOISE_LEVEL_ASC = "noise_level asc"
-    DESCRIPTION_DESC = "description desc"
-    DESCRIPTION_ASC = "description asc"
-    FORMAT_DESC = "format desc"
-    FORMAT_ASC = "format asc"
+# Class for sorting mechanisms (replaces Enum)
+class SortMechanism:
+    class Keys(Enum):
+        DATE = auto()
+        SCORE = auto()
+        CHARACTER_LIKENESS = auto()
+        SHARPNESS = auto()
+        EDGE_DENSITY = auto()
+        NOISE_LEVEL = auto()
+        DESCRIPTION = auto()
+        FORMAT = auto()
 
-    # List of available sorting mechanisms for API
+    MECHANISMS = {
+        Keys.DATE: {
+            "field": "created_at",
+            "description": "Date Created",
+        },
+        Keys.SCORE: {
+            "field": "score",
+            "description": "Score",
+        },
+        Keys.CHARACTER_LIKENESS: {
+            "field": "character_likeness",
+            "description": "Similarity to Character",
+        },
+        Keys.SHARPNESS: {
+            "field": "sharpness",
+            "description": "Sharpness",
+        },
+        Keys.EDGE_DENSITY: {
+            "field": "edge_density",
+            "description": "Edge Density",
+        },
+        Keys.NOISE_LEVEL: {
+            "field": "noise_level",
+            "description": "Noise Level",
+        },
+    }
+
+    def __init__(self, key, descending: bool = True):
+        self.key = key
+        self.descending = descending
+
+    @property
+    def field(self):
+        return self.MECHANISMS[self.key]["field"]
+
     @classmethod
     def all(cls):
-        """Return a list of available sort mechanisms as dicts for API consumption."""
-        return [
-            {"name": sort.name, "field": sort.value[0], "descending": sort.value[1]}
-            for sort in cls
-        ]
+        mechanisms = []
+        for key, data in cls.MECHANISMS.items():
+            data = {"key": str(key.name), **data}
+            mechanisms.append(data)
+        return mechanisms
+
+    @classmethod
+    def from_string(cls, key_string: str, descending: bool = True) -> "SortMechanism":
+        # Try by name
+        if key_string in cls.Keys.__members__:
+            return SortMechanism(cls.Keys[key_string], descending=descending)
+
+        raise ValueError(f"{key_string!r} is not a valid SortMechanism")
 
 
 class Picture(SQLModel, table=True):
-    id: str = Field(default=None, primary_key=True)
+    id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None
     format: Optional[str] = None
@@ -80,7 +116,12 @@ class Picture(SQLModel, table=True):
     # Relationships
     quality: Optional["Quality"] = Relationship(back_populates="picture")
     faces: List["Face"] = Relationship(
-        back_populates="picture", sa_relationship_kwargs={"overlaps": "characters"}
+        back_populates="picture",
+        sa_relationship_kwargs={
+            "overlaps": "characters",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
     )
     tags: List["Tag"] = Relationship(
         back_populates="picture",
@@ -96,6 +137,23 @@ class Picture(SQLModel, table=True):
     )
     picture_sets: List["PictureSet"] = Relationship(
         back_populates="members", link_model=PictureSetMember
+    )
+
+    likeness_a: List["PictureLikeness"] = Relationship(
+        back_populates="picture_a",
+        sa_relationship_kwargs={
+            "primaryjoin": "Picture.id==PictureLikeness.picture_id_a",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
+    )
+    likeness_b: List["PictureLikeness"] = Relationship(
+        back_populates="picture_b",
+        sa_relationship_kwargs={
+            "primaryjoin": "Picture.id==PictureLikeness.picture_id_b",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
     )
 
     class Config:
@@ -285,11 +343,10 @@ class Picture(SQLModel, table=True):
                     query = query.where(getattr(cls, attr) == value)
 
         if sort:
-            field_name, descending = sort.value.split()
-            descending = descending.lower() == "desc"
+            field_name = sort.field
             field = getattr(cls, field_name, None)
             if field is not None:
-                if descending:
+                if sort.descending:
                     query = query.order_by(field.desc())
                 else:
                     query = query.order_by(field.asc())
@@ -350,3 +407,12 @@ class Picture(SQLModel, table=True):
                 except Exception:
                     d[field] = None
         return d
+
+    @classmethod
+    def clear_field(cls, session, picture_ids, field_name: str):
+        pictures = cls.find(session=session, id=picture_ids, select_fields=[field_name])
+        for pic in pictures:
+            if hasattr(pic, field_name):
+                setattr(pic, field_name, None)
+        session.add_all(pictures)
+        session.commit()

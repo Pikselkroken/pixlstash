@@ -372,7 +372,7 @@ class PictureUtils:
     def create_picture_from_file(
         image_root_path: str,
         source_file_path: str,
-        picture_id: Optional[str] = None,
+        picture_uuid: Optional[str] = None,
         pixel_sha: Optional[str] = None,
     ) -> Picture:
         """
@@ -388,7 +388,7 @@ class PictureUtils:
         return PictureUtils.create_picture_from_bytes(
             image_root_path=image_root_path,
             image_bytes=image_bytes,
-            picture_id=picture_id,
+            picture_uuid=picture_uuid,
             pixel_sha=pixel_sha,
             created_at=created_at,
         )
@@ -397,7 +397,7 @@ class PictureUtils:
     def create_picture_from_bytes(
         image_root_path: str,
         image_bytes: bytes,
-        picture_id: Optional[str] = None,
+        picture_uuid: Optional[str] = None,
         pixel_sha: Optional[str] = None,
         created_at: Optional[str] = None,
     ) -> Picture:
@@ -436,10 +436,10 @@ class PictureUtils:
             img_format = "MP4"
             os.remove(tmp_path)
 
-        if not picture_id:
-            picture_id = str(uuid.uuid4()) + f".{img_format.lower()}"
+        if not picture_uuid:
+            picture_uuid = str(uuid.uuid4()) + f".{img_format.lower()}"
 
-        file_path = os.path.join(image_root_path, picture_id)
+        file_path = os.path.join(image_root_path, picture_uuid)
         if os.path.exists(file_path):
             size_bytes = os.path.getsize(file_path)
         else:
@@ -456,7 +456,6 @@ class PictureUtils:
             created_at = datetime.now(timezone.utc)
 
         pic = Picture(
-            id=picture_id,
             file_path=file_path,
             format=img_format,
             width=width,
@@ -529,22 +528,38 @@ class PictureUtils:
             logger.warning(f"cosine_similarity error: {e}")
             return 0.0
 
+    @classmethod
+    def cosine_similarity_batch(cls, arr_a_list, arr_b_list):
+        """
+        Compute cosine similarity for two lists of np.ndarray feature vectors in batch.
+        Returns a 1D np.ndarray of similarities scaled to [0, 1].
+        """
+        arr_a = np.stack(arr_a_list)
+        arr_b = np.stack(arr_b_list)
+        # Normalize
+        arr_a_norm = arr_a / np.linalg.norm(arr_a, axis=1, keepdims=True)
+        arr_b_norm = arr_b / np.linalg.norm(arr_b, axis=1, keepdims=True)
+        # Compute dot products
+        sims = np.sum(arr_a_norm * arr_b_norm, axis=1)
+        sims = 0.5 * (sims + 1.0)  # Scale to [0, 1]
+        return sims
+
     @staticmethod
     def crop_face_bbox_exact(file_path, bbox):
         """
-        Loads an image or video file, returns a crop exactly matching the face bbox.
+        Loads an image or video file, returns a crop exactly matching the face bbox as a PIL Image.
         Args:
             file_path: Path to image or video file.
             bbox: [x1, y1, x2, y2]
         Returns:
-            Cropped PIL Image or numpy array (OpenCV), or None on error.
+            Cropped PIL Image, or None on error.
         """
         x1, y1, x2, y2 = [int(round(v)) for v in bbox]
         img = None
+        from PIL import Image
+
         # Try image first
         try:
-            from PIL import Image
-
             img = Image.open(file_path)
         except Exception:
             img = None
@@ -557,30 +572,21 @@ class PictureUtils:
                 ret, frame = cap.read()
                 cap.release()
                 if ret and frame is not None:
-                    img = frame
+                    # Convert BGR (OpenCV) to RGB for PIL
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(frame_rgb)
             except Exception:
                 img = None
         if img is None:
             return None
-        # PIL branch
-        if hasattr(img, "size") and callable(getattr(img, "crop", None)):
-            w, h = img.size
-            # Clamp bbox to image
-            x1c = max(0, min(w, x1))
-            x2c = max(0, min(w, x2))
-            y1c = max(0, min(h, y1))
-            y2c = max(0, min(h, y2))
-            crop_img = img.crop((x1c, y1c, x2c, y2c))
-            return crop_img
-        else:
-            # numpy array (OpenCV)
-            h, w = img.shape[:2]
-            x1c = max(0, min(w, x1))
-            x2c = max(0, min(w, x2))
-            y1c = max(0, min(h, y1))
-            y2c = max(0, min(h, y2))
-            crop_img = img[y1c:y2c, x1c:x2c]
-            return crop_img
+        w, h = img.size
+        # Clamp bbox to image
+        x1c = max(0, min(w, x1))
+        x2c = max(0, min(w, x2))
+        y1c = max(0, min(h, y1))
+        y2c = max(0, min(h, y2))
+        crop_img = img.crop((x1c, y1c, x2c, y2c))
+        return crop_img
 
     @staticmethod
     def softmax_weighted_average(scores, alpha=5.0):

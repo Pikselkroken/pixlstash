@@ -23,7 +23,7 @@ class PictureSetMember(SQLModel, table=True):
             index=True,
         ),
     )
-    picture_id: str = Field(
+    picture_id: int = Field(
         default=None,
         sa_column=Column(
             Integer,

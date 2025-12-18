@@ -51,7 +51,7 @@
                   No face bboxes found
                 </div>
                 <div
-                  v-for="(bbox, idx) in faceBboxes"
+                  v-for="(face, idx) in faceBboxes"
                   :key="idx"
                   class="face-bbox-overlay"
                   :style="{
@@ -59,19 +59,19 @@
                     border: `1px solid ${faceBoxColor(idx)}`,
                     background: `${faceBoxColor(idx)}22`,
                     left: `${
-                      (bbox[0] * overlayDims.width) /
+                      (face.bbox[0] * overlayDims.width) /
                         overlayDims.naturalWidth || 0
                     }px`,
                     top: `${
-                      (bbox[1] * overlayDims.height) /
+                      (face.bbox[1] * overlayDims.height) /
                         overlayDims.naturalHeight || 0
                     }px`,
                     width: `${
-                      ((bbox[2] - bbox[0]) * overlayDims.width) /
+                      ((face.bbox[2] - face.bbox[0]) * overlayDims.width) /
                         overlayDims.naturalWidth || 0
                     }px`,
                     height: `${
-                      ((bbox[3] - bbox[1]) * overlayDims.height) /
+                      ((face.bbox[3] - face.bbox[1]) * overlayDims.height) /
                         overlayDims.naturalHeight || 0
                     }px`,
                     pointerEvents: 'auto',
@@ -90,8 +90,9 @@
                       padding: 1px 4px;
                       border-bottom-right-radius: 6px;
                     "
-                    >Face {{ idx + 1 }}</span
                   >
+                    {{ face.character_name || `Face ${idx + 1}` }}
+                  </span>
                 </div>
               </template>
             </template>
@@ -378,10 +379,10 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown);
 });
 
-// Store multiple face bounding boxes
+// Store multiple face bounding boxes (now full face objects)
 const faceBboxes = ref([]);
 
-// Fetch face bounding boxes for the current image
+// Fetch face bounding boxes for the current image and set character_name for each face
 async function fetchFaceBboxes(imageId) {
   if (!imageId || !backendUrl.value) {
     faceBboxes.value = [];
@@ -391,16 +392,49 @@ async function fetchFaceBboxes(imageId) {
     const res = await fetch(`${backendUrl.value}/pictures/${imageId}/faces`);
     if (!res.ok) throw new Error("Failed to fetch face bboxes");
     const faces = await res.json();
+    console.log("Faces: ", faces);
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
-    faceBboxes.value = Array.isArray(faceArray)
-      ? faceArray
-          .map((f) =>
-            Array.isArray(f.bbox) && f.bbox.length === 4 ? f.bbox : null
-          )
-          .filter(Boolean)
-      : [];
+    const firstFrameFaces = faceArray.filter(
+      (f) => f.frame_index === 0 && Array.isArray(f.bbox) && f.bbox.length === 4
+    );
+    // For each face, fetch character name if character_id is present
+    await Promise.all(
+      firstFrameFaces.map(async (face) => {
+        console.log("Processing face:", face);
+        if (face.character_id) {
+          try {
+            const res = await fetch(
+              `${backendUrl.value}/characters/${face.character_id}/name`
+            );
+            if (res.ok) {
+              const data = await res.json();
+              face.character_name = data.name || null;
+              console.log(
+                `Fetched character_name for character_id ${face.character_id}:`,
+                face.character_name
+              );
+            } else {
+              face.character_name = null;
+              console.warn(
+                `Failed to fetch character_name for character_id ${face.character_id}`
+              );
+            }
+          } catch (e) {
+            face.character_name = null;
+            console.error(
+              `Error fetching character_name for character_id ${face.character_id}:`,
+              e
+            );
+          }
+        } else {
+          face.character_name = null;
+          console.warn("Face is missing character_id:", face);
+        }
+      })
+    );
+    faceBboxes.value = firstFrameFaces;
   } catch (e) {
-    console.error("[ImageOverlay] fetchFaceBboxes error:", e);
+    console.error("Error in fetchFaceBboxes:", e);
     faceBboxes.value = [];
   }
 }

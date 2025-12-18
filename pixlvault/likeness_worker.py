@@ -1,127 +1,155 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
-from sqlmodel import select
 
+from sqlmodel import select, Session
+from typing import List, Optional, Tuple
+
+from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
-from pixlvault.db_models.picture import Picture
-from pixlvault.db_models.likeness_work_queue import LikenessWorkQueue
-from pixlvault.picture_utils import PictureUtils
-from pixlvault.db_models.picture_likeness import PictureLikeness
+from pixlvault.db_models.quality import Quality
+from pixlvault.db_models.picture_likeness import (
+    PictureLikeness,
+    PictureLikenessFrontier,
+)
 
 logger = get_logger(__name__)
 
 
 class LikenessWorker(BaseWorker):
     BATCH_SIZE = 5000
-    NUM_THREADS = 4
-    INTERVAL = 5
+    TOP_K = 200
 
     def worker_type(self) -> WorkerType:
         return WorkerType.LIKENESS
 
-    def _run(self):
-        while not self._stop.is_set():
-            # 1. Fetch pending pairs from the work queue
-            def fetch_pending_pairs(session):
-                pairs = session.exec(
-                    select(LikenessWorkQueue).limit(self.BATCH_SIZE)
-                ).all()
-                pic_ids = set()
-                for pair in pairs:
-                    pic_ids.add(pair.picture_id_a)
-                    pic_ids.add(pair.picture_id_b)
-                pics = session.exec(
-                    select(Picture).where(Picture.id.in_(pic_ids))
-                ).all()
-                pic_dict = {pic.id: pic for pic in pics}
-                return pairs, pic_dict
+    @classmethod
+    def get_next_batch(cls, session: Session) -> Optional[Tuple[int, List[int]]]:
+        """
+        Return the next work chunk as (a, bs), where:
+        - a is the next picture_id_a with remaining work and quality ready,
+        - bs is a contiguous list of b ids (a < b) with quality ready,
+        - len(bs) <= batch_size and starts at the current frontier start_b.
+        Returns None if nothing to do.
+        """
 
-            pending_pairs, pic_dict = self._db.run_task(fetch_pending_pairs)
-            if not pending_pairs:
+        a = PictureLikenessFrontier.get_next_a_candidate(
+            session, quality_ready=Quality.quality_read_for_picture
+        )
+        if a is None:
+            return None, None
+
+        max_id = PictureLikenessFrontier.max_picture_id(session)
+        # Ask the model to compute the next contiguous [start_b, end_b] window
+        rng = PictureLikenessFrontier.range_to_compare(
+            session, a, max_id=max_id, batch_limit=cls.BATCH_SIZE
+        )
+        if not rng:
+            return None, None  # frontier already at max or race
+
+        start_b, end_b = rng
+
+        # Filter window to b with quality ready on both sides
+        # Note: we require Quality for 'a' (already checked) and for each 'b'
+        # Query all b rows in one go for efficiency
+        b_rows = session.exec(
+            select(Quality.picture_id)
+            .where((Quality.picture_id >= start_b) & (Quality.picture_id <= end_b))
+            .order_by(Quality.picture_id)
+        ).all()
+        eligible_bs_all = [int(pid) for pid in b_rows]
+
+        # Take the longest consecutive prefix from start_b
+        bs_prefix = PictureLikenessFrontier.consecutive_prefix(start_b, eligible_bs_all)
+
+        if not bs_prefix:
+            return None, None  # No eligible b in the window
+
+        return a, bs_prefix[: cls.BATCH_SIZE]
+
+    def _run(self):
+        logger.info("LikenessWorker: Likeness worker started.")
+
+        self._db.run_task(PictureLikenessFrontier.ensure_all)
+
+        logger.info("LikenessWorker: PictureLikenessFrontier initialized.")
+
+        while not self._stop.is_set():
+            a, bs = self._db.run_immediate_read_task(LikenessWorker.get_next_batch)
+
+            if not a or not bs:
                 logger.debug("LikenessWorker: No pending pairs. Sleeping...")
-                self._stop.wait(self.INTERVAL)
+                self._wait()
                 continue
 
-            logger.debug(f"LikenessWorker: Processing {len(pending_pairs)} pairs.")
+            logger.debug(f"LikenessWorker: Processing {len(bs)} pairs.")
 
-            # 2. Do likeness computation outside the session
+            pids_needed = set()
+            for b in bs:
+                pids_needed.add(a)
+                pids_needed.add(b)
+
+            def fetch_quality(session, ids):
+                qualities = session.exec(
+                    select(Quality).where(Quality.picture_id.in_(ids))
+                ).all()
+                return {quality.picture_id: quality for quality in qualities}
+
+            quality_dict = self._db.run_task(
+                fetch_quality, list(pids_needed), priority=DBPriority.LOW
+            )
+
             likeness_results = []
-            to_remove = []
             processed_notify_ids = []
-            for pair in pending_pairs:
-                pic_a = pic_dict.get(pair.picture_id_a)
-                pic_b = pic_dict.get(pair.picture_id_b)
-                if not pic_a or not pic_b:
-                    logger.warning(
-                        f"Skipping pair ({pair.picture_id_a}, {pair.picture_id_b}): missing picture(s). Removing from queue."
-                    )
-                    to_remove.append(pair)
-                    continue
-                img_a = None
-                img_b = None
-                if pic_a.file_path:
-                    img_a = PictureUtils.load_image_or_video(pic_a.file_path)
-                if pic_b.file_path:
-                    img_b = PictureUtils.load_image_or_video(pic_b.file_path)
-                if img_a is None or img_b is None:
-                    logger.warning(
-                        f"Skipping pair ({pair.picture_id_a}, {pair.picture_id_b}): missing image data. Removing from queue."
-                    )
-                    to_remove.append(pair)
-                    continue
-                likeness = self._color_histogram_likeness(img_a, img_b)
+            for b in bs:
+                logger.debug(f"LikenessWorker: Processing pair (a={a}, b={b})")
+                quality_a = quality_dict.get(a).get_color_histogram()
+                quality_b = quality_dict.get(b).get_color_histogram()
+                likeness = self._color_histogram_likeness(quality_a, quality_b)
+
                 likeness_results.append(
                     PictureLikeness(
-                        picture_id_a=pair.picture_id_a,
-                        picture_id_b=pair.picture_id_b,
+                        picture_id_a=a,
+                        picture_id_b=b,
                         likeness=likeness,
                         metric="color_histogram",
                     )
                 )
-                to_remove.append(pair)
-                processed_notify_ids.append(
-                    (PictureLikeness, (pair.picture_id_a, pair.picture_id_b), "pair")
-                )
+                processed_notify_ids.append((PictureLikeness, (a, b), "pair", likeness))
+                if self._stop.is_set():
+                    break
 
-            # 3. Write results and remove processed pairs in a new DB task
-            def write_results(session):
-                if likeness_results:
-                    session.add_all(likeness_results)
-                    logger.debug(f"Inserted {len(likeness_results)} likeness scores.")
-                if to_remove:
-                    for pair in to_remove:
-                        session.delete(pair)
-                    logger.debug(
-                        f"Removed {len(to_remove)} processed pairs from work queue."
-                    )
+            logger.debug("LikenessWorker: Writing likeness scores to database...")
+
+            def insert_likeness_and_update_frontier(
+                session, likeness_results, a, max_b
+            ):
+                PictureLikeness.bulk_insert_ignore(session, likeness_results)
+                PictureLikenessFrontier.update(session, a, max_b)
+                PictureLikeness.prune_below_top_k(session, a, self.TOP_K)
                 session.commit()
 
-            self._db.run_task(write_results)
+            self._db.run_task(
+                insert_likeness_and_update_frontier,
+                likeness_results,
+                a,
+                max(bs),
+                priority=DBPriority.LOW,
+            )
 
             if processed_notify_ids:
                 self._notify_ids_processed(processed_notify_ids)
+                # Update completed_tasks to track all b's for each a
                 logger.info(
                     f"LikenessWorker: Processed {len(processed_notify_ids)} likeness scores."
                 )
             else:
                 logger.info("LikenessWorker: No likeness scores computed. Sleeping...")
-                self._stop.wait()
+                self._wait()
         logger.info("LikenessWorker: Likeness worker stopped.")
 
-    def _color_histogram_likeness(self, img_a, img_b, bins=32):
-        def get_hist(img):
-            chans = cv2.split(img)
-            hist = [
-                cv2.calcHist([c], [0], None, [bins], [0, 256]).flatten() for c in chans
-            ]
-            hist = np.concatenate(hist)
-            hist = hist / (np.sum(hist) + 1e-8)
-            return hist
-
-        hist_a = get_hist(img_a)
-        hist_b = get_hist(img_b)
+    def _color_histogram_likeness(self, hist_a, hist_b):
         l1 = np.sum(np.abs(hist_a - hist_b))
         likeness = 1.0 - (l1 / 2.0)
         return float(np.clip(likeness, 0.0, 1.0))
@@ -135,7 +163,7 @@ class LikenessWorker(BaseWorker):
             pending_pairs[i * self.BATCH_SIZE : (i + 1) * self.BATCH_SIZE]
             for i in range(
                 min(
-                    self.NUM_THREADS,
+                    self.CHUNKS,
                     (len(pending_pairs) + self.BATCH_SIZE - 1) // self.BATCH_SIZE,
                 )
             )
@@ -185,42 +213,26 @@ class LikenessWorker(BaseWorker):
                 processed_total += len(batch_scores)
         return all_likeness_scores, all_processed_pairs, processed_total
 
-    def queue_pair(self, picture_id_a: str, picture_id_b: str):
+    def _color_histogram_likeness_batch(self, img_a, imgs_b, bins=32):
         """
-        Public method to queue a pair for likeness computation.
+        Compute color histogram likeness between img_a and a list of imgs_b efficiently.
+        Returns a list of likeness scores.
         """
-        self._db.run_task(LikenessWorker._add_pair_to_queue, picture_id_a, picture_id_b)
-        self.notify()  # Wake up the worker if sleeping
 
-    @staticmethod
-    def _add_pair_to_queue(session, picture_id_a: str, picture_id_b: str):
-        """
-        Add a pair to the likeness work queue, ensuring uniqueness and order (a < b).
-        """
-        if picture_id_a == picture_id_b:
-            return  # Don't add self-pairs
-        a, b = sorted([picture_id_a, picture_id_b])
-        # Check if already exists in queue or results
+        def get_hist(img):
+            chans = cv2.split(img)
+            hist = [
+                cv2.calcHist([c], [0], None, [bins], [0, 256]).flatten() for c in chans
+            ]
+            hist = np.concatenate(hist)
+            hist = hist / (np.sum(hist) + 1e-8)
+            return hist
 
-        from pixlvault.db_models.likeness_work_queue import LikenessWorkQueue
-        from pixlvault.db_models.picture_likeness import PictureLikeness
-
-        exists = session.exec(
-            select(LikenessWorkQueue).where(
-                (LikenessWorkQueue.picture_id_a == a)
-                & (LikenessWorkQueue.picture_id_b == b)
-            )
-        ).first()
-        if exists:
-            return
-        exists = session.exec(
-            select(PictureLikeness).where(
-                (PictureLikeness.picture_id_a == a)
-                & (PictureLikeness.picture_id_b == b)
-            )
-        ).first()
-        if exists:
-            return
-        session.add(LikenessWorkQueue(picture_id_a=a, picture_id_b=b))
-        logger.info("Added likeness pair to queue: (%s, %s)", a, b)
-        session.commit()
+        hist_a = get_hist(img_a)
+        hists_b = [get_hist(img) for img in imgs_b]
+        if not hists_b:
+            return []
+        hists_b = np.stack(hists_b, axis=0)
+        l1 = np.sum(np.abs(hists_b - hist_a), axis=1)
+        likeness = 1.0 - (l1 / 2.0)
+        return np.clip(likeness, 0.0, 1.0).tolist()

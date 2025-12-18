@@ -7,3 +7,4 @@ class EventType(Enum):
     CHANGED_CHARACTERS = auto()
     CHANGED_DESCRIPTIONS = auto()
     CHANGED_FACES = auto()
+    QUALITY_UPDATED = auto()

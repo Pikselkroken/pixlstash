@@ -13,6 +13,7 @@ const props = defineProps({
   selectedSet: { type: [Number, null], default: null },
   searchQuery: { type: String, default: "" },
   selectedSort: { type: String, default: "" },
+  selectedDescending: { type: Boolean, default: false },
   backendUrl: { type: String, required: true },
 });
 
@@ -26,8 +27,51 @@ const emit = defineEmits([
   "set-error",
   "set-loading",
   "images-assigned-to-character",
+  "images-moved",
   "search-images",
+  "update:similarity-character",
 ]);
+// --- Similarity Character Dropdown State ---
+const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
+const similarityCharacter = ref(null);
+
+const similarityCharacterOptions = computed(() => {
+  let options = [];
+  // If current character is not ALL or UNASSIGNED, add 'Current character' at the top
+  if (
+    props.selectedCharacter &&
+    props.selectedCharacter !== props.allPicturesId &&
+    props.selectedCharacter !== props.unassignedPicturesId
+  ) {
+    const currentChar = characters.value.find(
+      (c) => c.id === props.selectedCharacter
+    );
+    if (currentChar) {
+      options.push({
+        text: `Current character (${currentChar.name})`,
+        value: currentChar.id,
+      });
+    }
+  }
+  // Add all other characters
+  options = options.concat(
+    characters.value.map((c) => ({
+      text: c.name,
+      value: c.id,
+    }))
+  );
+  // Remove duplicates (if current character is also in the list)
+  const seen = new Set();
+  return options.filter((opt) => {
+    if (seen.has(opt.value)) return false;
+    seen.add(opt.value);
+    return true;
+  });
+});
+
+watch(similarityCharacter, (val) => {
+  emit("update:similarity-character", val);
+});
 
 const dragOverSet = ref(null);
 
@@ -102,9 +146,50 @@ const selectedCharacterObj = computed(() => {
   return null;
 });
 
+const reactiveSelectedDescending = ref(props.selectedDescending);
+
+watch(
+  () => props.selectedDescending,
+  (newValue, oldValue) => {
+    console.log(
+      "[SideBar.vue] Prop selectedDescending changed from",
+      oldValue,
+      "to",
+      newValue
+    );
+    reactiveSelectedDescending.value = newValue;
+  }
+);
+
+const descendingModel = computed({
+  get: () => {
+    console.log(
+      "[SideBar.vue] descendingModel.get() called. Current value:",
+      reactiveSelectedDescending.value
+    );
+    return reactiveSelectedDescending.value;
+  },
+  set: (value) => {
+    console.log(
+      "[SideBar.vue] descendingModel.set() called. New value:",
+      value
+    );
+    reactiveSelectedDescending.value = value;
+    emit("update:selected-sort", { sort: sortModel.value, descending: value });
+    console.log(
+      "[SideBar.vue] descendingModel.set() completed. Updated reactiveSelectedDescending:",
+      reactiveSelectedDescending.value
+    );
+  },
+});
+
 const sortModel = computed({
   get: () => props.selectedSort,
-  set: (value) => emit("update:selected-sort", value ?? ""),
+  set: (value) =>
+    emit("update:selected-sort", {
+      sort: value != null ? String(value) : "",
+      descending: descendingModel.value,
+    }),
 });
 
 const searchModel = computed({
@@ -223,17 +308,6 @@ watch(
   { immediate: true }
 );
 
-() => sortedCharacters.value,
-  (chars) => {
-    // Initialize collapse state for all characters to true (collapsed by default)
-    chars.forEach((char) => {
-      if (!(char.id in collapsedCharacters.value)) {
-        collapsedCharacters.value[char.id] = true;
-      }
-    });
-  },
-  { immediate: true };
-
 function toggleCharacterCollapse(charId) {
   collapsedCharacters.value[charId] = !collapsedCharacters.value[charId];
 }
@@ -337,26 +411,20 @@ async function fetchSortOptions() {
     if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
     const options = await res.json();
     console.log("Fetched sort options:", options);
-    sortOptions.value = options;
-
-    // Use backend-provided values directly
-    /* sortOptions.value = options.map((opt) => ({
-      label: opt.label,
-      value: opt.id,
-    }));
+    // Only use options with a string key (never a number)
+    sortOptions.value = options
+      .filter((opt) => typeof opt.key === "string" && !!opt.key)
+      .map((opt) => ({
+        label: opt.description,
+        value: opt.key,
+      }));
+    // Set default if not set
     if (!sortModel.value && sortOptions.value.length) {
       sortModel.value = sortOptions.value[0].value;
-    } */
+    }
   } catch (e) {
-    // Fallback to hardcoded options only if backend fails
-    sortOptions.value = [
-      { label: "Date: Latest First", value: "created_at DESC" },
-      { label: "Date: Oldest First", value: "created_at ASC" },
-      { label: "Score: Highest First", value: "score DESC" },
-      { label: "Score: Lowest First", value: "score ASC" },
-      { label: "Search Likeness", value: "search_likeness" },
-    ];
-    if (!selectedSort.value) selectedSort.value = sortOptions.value[0].value;
+    console.error("Error fetching sort options:", e);
+    sortOptions.value = [];
   }
 }
 
@@ -377,7 +445,6 @@ async function fetchPictureSets() {
       },
       {}
     );
-
   } catch (e) {
     console.error("Error fetching picture sets:", e);
     pictureSets.value = [...pictureSets.value]; // force reactivity on error
@@ -455,6 +522,9 @@ async function handleDropOnSet(setId, event) {
 
     // Refresh the picture sets to update counts
     await fetchPictureSets();
+
+    // Emit event to parent to remove images from grid
+    emit("images-moved", { imageIds: draggedIds });
 
     console.log(
       `Added ${draggedIds.length} image(s) to set "${targetSet.name}"`
@@ -552,6 +622,7 @@ async function onCharacterDrop(characterId, event) {
     console.log(
       `Assigned ${imageIds.length} image(s) to character ${characterId}`
     );
+    emit("images-assigned-to-character", { characterId, imageIds });
   } catch (e) {
     alert("Failed to assign images to character: " + (e.message || e));
   }
@@ -641,6 +712,10 @@ onMounted(() => {
   fetchSortOptions();
   fetchCharacters();
   fetchPictureSets();
+  console.log(
+    "[SideBar.vue] Initial descendingModel value:",
+    descendingModel.value
+  );
 });
 
 defineExpose({ refreshSidebar });
@@ -839,9 +914,13 @@ defineExpose({ refreshSidebar });
                           referencePictureSetsByCharacter[char.id].id,
                       },
                     ]"
-                    @click="selectSet(referencePictureSetsByCharacter[char.id].id)"
+                    @click="
+                      selectSet(referencePictureSetsByCharacter[char.id].id)
+                    "
                     @dragover.prevent="
-                      dragOverSetItem(referencePictureSetsByCharacter[char.id].id)
+                      dragOverSetItem(
+                        referencePictureSetsByCharacter[char.id].id
+                      )
                     "
                     @dragleave="dragLeaveSetItem"
                     @drop.prevent="
@@ -965,16 +1044,51 @@ defineExpose({ refreshSidebar });
             @search="searchImages"
           />
         </div>
-        <div class="sidebar-searchbar-wrapper">
+        <div
+          class="sidebar-searchbar-wrapper"
+          style="
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: stretch;
+          "
+        >
+          <div style="display: flex; align-items: center; gap: 8px">
+            <v-select
+              v-model="sortModel"
+              :items="sortOptions"
+              class="sidebar-sort-select"
+              item-title="label"
+              item-value="value"
+              label="Sort by"
+              dense
+              hide-details
+              style="flex: 1; min-width: 0"
+            />
+            <v-btn
+              icon
+              :title="descendingModel ? 'Make ascending' : 'Make descending'"
+              @click="descendingModel = !descendingModel"
+              style="margin-left: auto"
+            >
+              <v-icon>
+                {{
+                  descendingModel ? "mdi-sort-descending" : "mdi-sort-ascending"
+                }}
+              </v-icon>
+            </v-btn>
+          </div>
           <v-select
-            v-model="sortModel"
-            :items="sortOptions"
+            v-if="sortModel === SIMILARITY_SORT_KEY"
+            v-model="similarityCharacter"
+            :items="similarityCharacterOptions"
             class="sidebar-sort-select"
-            item-title="label"
-            item-value="value"
-            label="Sort by"
+            label="Similarity to Character"
             dense
             hide-details
+            style="min-width: 0; margin-top: -4px"
+            item-title="text"
+            item-value="value"
           />
         </div>
       </div>

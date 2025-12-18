@@ -730,18 +730,9 @@ class PictureTagger:
         logger.debug(f"Completed tagging for {len(all_results)} images.")
         return self._merge_video_frame_tags(all_results)
 
-    def generate_description(self, picture, character_names=[]):
-        # Compose prefix
-        prefix = ""
-        if character_names:
-            if len(character_names) == 1:
-                prefix = f"A picture of {character_names[0]}. "
-            else:
-                prefix = "A picture of "
-                prefix += ", ".join(character_names[:-1])
-                prefix += f" and {character_names[-1]}. "
+    def generate_description(self, picture):
         logger.debug(
-            f"generate_description: picture.file_path={getattr(picture, 'file_path', None)}, character_names={character_names}"
+            f"generate_description: picture.file_path={getattr(picture, 'file_path', None)}"
         )
         florence_caption = self._generate_florence_caption(
             picture.file_path,
@@ -757,134 +748,35 @@ class PictureTagger:
                 getattr(picture, "file_path", None),
             )
             raise RuntimeError("Florence captioning failed.")
-        return prefix + florence_caption
-
-    @staticmethod
-    def build_embedding_sentence(data: dict) -> str:
-        """
-        Build a general, natural language sentence from a dict with keys: description, tags, characters.
-        Prioritizes 'description' and 'original prompt' for natural output.
-        Also: removes unnecessary parentheses, capitalizes sentences, and avoids double periods.
-        """
-        desc = data.get("description") or ""
-        tags = data.get("tags") or []
-        characters = data.get("characters") or []
-
-        # Avoid redundancy: remove tags already present in description
-        desc_lower = desc.lower()
-        tags_used = [tag for tag in tags if tag.lower() not in desc_lower]
-
-        # Contextual tag integration: weave tags into description
-        if tags_used:
-            if desc:
-                desc = desc.rstrip(".") + ", " + ", ".join(tags_used) + "."
-            else:
-                desc = ", ".join(tags_used).capitalize() + "."
-
-        # Prioritize original prompts for characters
-        char_sentences = []
-        for char in characters:
-            name = char.get("name")
-            char_desc = char.get("description")
-            prompt = char.get("original_prompt")
-            if prompt:
-                if name and char_desc:
-                    char_sentences.append(f"{name}, {char_desc}, {prompt}")
-                elif name:
-                    char_sentences.append(f"{name}, {prompt}")
-                else:
-                    char_sentences.append(prompt)
-            elif name and char_desc:
-                char_sentences.append(f"{name}, {char_desc}")
-            elif name:
-                char_sentences.append(f"{name}")
-
-        # Merge character sentences
-        char_sentence = ""
-        if char_sentences:
-            if len(char_sentences) == 1:
-                char_sentence = char_sentences[0]
-            elif len(char_sentences) == 2:
-                char_sentence = f"{char_sentences[0]} and {char_sentences[1]}"
-            else:
-                char_sentence = (
-                    ", ".join(char_sentences[:-1]) + f", and {char_sentences[-1]}"
-                )
-
-        # Compose the final sentence, avoid double periods and capitalize
-        def clean_sentence(s):
-            s = s.strip()
-            # Remove double periods
-            while ".." in s:
-                s = s.replace("..", ".")
-            # Capitalize first letter
-            if s:
-                s = s[0].upper() + s[1:]
-
-            # Lowercase single- and two-letter words not at start
-            def lower_short_words(match):
-                word = match.group(0)
-                # Only lowercase if not at start of sentence
-                if word.lower() in [
-                    "a",
-                    "i",
-                    "an",
-                    "as",
-                    "at",
-                    "by",
-                    "do",
-                    "go",
-                    "he",
-                    "if",
-                    "in",
-                    "is",
-                    "it",
-                    "me",
-                    "my",
-                    "no",
-                    "of",
-                    "on",
-                    "or",
-                    "so",
-                    "to",
-                    "up",
-                    "us",
-                    "we",
-                ]:
-                    return word.lower()
-                return word
-
-            # Use regex to find single- and two-letter words not at start
-            s = re.sub(
-                r"(?<!^)(?<=\s)([A-Za-z]{1,2})(?=\s|\.|,|;|:|!|\?)",
-                lower_short_words,
-                s,
-            )
-            # Ensure single period at end
-            if s and not s.endswith("."):
-                s += "."
-            return s
-
-        # Prioritize description first, then character actions
-        if desc and char_sentence:
-            return clean_sentence(f"{desc} {char_sentence}")
-        elif desc:
-            return clean_sentence(desc)
-        elif char_sentence:
-            return clean_sentence(char_sentence)
-        else:
-            return ""
+        return florence_caption
 
     # Naive flatten
     @classmethod
-    def naive_flatten(cls, texts):
+    def _flatten_texts(cls, texts):
         flat = []
+
+        characters = texts.get("characters") or []
+
+        # Compose prefix
+        prefix = ""
+        if characters:
+            if len(characters) == 1:
+                prefix = f"A picture of {characters[0]['name']}. "
+            else:
+                prefix = "A picture of "
+                prefix += ", ".join([char["name"] for char in characters[:-1]])
+                prefix += f" and {characters[-1]['name']}. "
+            flat.append(prefix)
+
         if texts.get("description"):
             flat.append(str(texts["description"]))
-        for char in texts.get("characters") or []:
-            for v in char.values():
-                if v:
-                    flat.append(str(v))
+
+        for char in characters:
+            if char.get("description"):
+                flat.append(str(char["description"]))
+            if char.get("original_prompt"):
+                flat.append(str(char["original_prompt"]))
+
         return flat
 
     def generate_text_embedding(self, picture: Picture = None, query: str = None):
@@ -897,20 +789,18 @@ class PictureTagger:
 
         if picture:
             texts = picture.text_embedding_data()
-            flat_texts = PictureTagger.naive_flatten(texts)
+            flat_texts = PictureTagger._flatten_texts(texts)
             filtered_texts = self._filter_texts(flat_texts)
-            logger.debug(
-                f"Text Embedding: texts used for embedding (filtered): {filtered_texts}"
-            )
             if not filtered_texts:
                 logger.error(
                     "Text Embedding: No text data for embedding. picture=%s",
                     picture,
                 )
                 raise ValueError("No text data for embedding.")
-            logger.debug(
-                f"Text Embedding: tags going into description: {filtered_texts}"
-            )
+            if len(picture.characters) > 0:
+                logger.info(
+                    f"Text Embedding: texts used for embedding (filtered): {filtered_texts}"
+                )
             full_text = ". ".join(filtered_texts)
         else:
             full_text = query

@@ -10,15 +10,16 @@ import mimetypes
 import concurrent.futures
 import sys
 import time
+import zipfile
 
 from collections import defaultdict, deque
 from sqlalchemy.orm import selectinload
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from contextlib import asynccontextmanager
 from fastapi import Body, FastAPI, File, Request, UploadFile, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pillow_heif import register_heif_opener
 from typing import List
 
@@ -34,6 +35,7 @@ from pixlvault.db_models import (
 )
 
 from pixlvault.db_models import PictureLikeness, FaceLikeness
+from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
 from pixlvault.picture_stack_utils import (
     order_stack_pictures,
     combined_picture_face_likeness,
@@ -160,7 +162,8 @@ class Server:
             "image_roots": [default_image_root],
             "selected_image_root": default_image_root,
             "description": DEFAULT_DESCRIPTION,
-            "sort": SortMechanism.DATE_ASC.value,
+            "sort": SortMechanism.Keys.DATE.name,
+            "descending": True,
             "thumbnail": "default",
             "thumbnail_size": "default",
             "show_stars": True,
@@ -293,9 +296,9 @@ class Server:
 
     def _create_picture_imports(self, uploaded_files, dest_folder):
         """
-        Given a list of (img_bytes, src_path, ext), create Picture objects for new images,
+        Given a list of (img_bytes, ext), create Picture objects for new images,
         skipping duplicates based on pixel_sha hash.
-        Returns (new_pictures, existing_pictures)
+        Returns (shas, existing_map, new_pictures)
         """
 
         def create_sha(img_bytes):
@@ -306,7 +309,7 @@ class Server:
                 executor.map(create_sha, (img_bytes for img_bytes, _ in uploaded_files))
             )
 
-        existing_pictures = self.vault.db.run_task(
+        existing_pictures = self.vault.db.run_immediate_read_task(
             lambda session: Picture.find(session, pixel_shas=shas)
         )
 
@@ -323,12 +326,12 @@ class Server:
             def create_one_picture(args):
                 file_entry, sha = args
                 img_bytes, ext = file_entry
-                pic_id = str(uuid.uuid4()) + ext
-                logger.info(f"Importing picture from uploaded bytes as id={pic_id}")
+                pic_uuid = str(uuid.uuid4()) + ext
+                logger.debug(f"Importing picture from uploaded bytes as id={pic_uuid}")
                 return PictureUtils.create_picture_from_bytes(
                     image_root_path=dest_folder,
                     image_bytes=img_bytes,
-                    picture_id=pic_id,
+                    picture_uuid=pic_uuid,
                     pixel_sha=sha,
                 )
 
@@ -337,23 +340,7 @@ class Server:
         else:
             new_pictures = []
 
-        # Order new pictures according to original upload order
-        results = []
-        index = 0
-        for _, sha in zip(uploaded_files, shas):
-            if sha in existing_map:
-                pic = existing_map[sha]
-                results.append(
-                    {"status": "duplicate", "picture_id": pic.id, "file": pic.file_path}
-                )
-            else:
-                pic = new_pictures[index]
-                results.append(
-                    {"status": "success", "picture_id": pic.id, "file": pic.file_path}
-                )
-                index += 1
-
-        return results, new_pictures
+        return shas, existing_map, new_pictures
 
     def _get_version(self):
         try:
@@ -366,6 +353,146 @@ class Server:
         with open(pyproject_path, "rb") as f:
             data = tomllib.load(f)
         return data.get("project", {}).get("version", "unknown")
+
+    def _find_reference_character_id_for_set(self, picture_set_id):
+        # Find reference_character_id if this is a reference set
+        reference_character_id = None
+
+        def find_reference_character(session, picture_set_id):
+            character = Character.find(
+                session,
+                select_fields=["reference_picture_set_id"],
+                reference_picture_set_id=picture_set_id,
+            )
+            logger.info(
+                f"Found reference character for set {picture_set_id}: {character}"
+            )
+            return character[0].id if character else None
+
+        reference_character_id = self.vault.db.run_immediate_read_task(
+            find_reference_character, picture_set_id
+        )
+        return reference_character_id
+
+    def _find_pictures_by_character_likeness(
+        self, character_id, reference_character_id, offset, limit, descending
+    ):
+        reference_character_id = int(reference_character_id)
+
+        # List pictures by likeness to character
+        # 1. Fetch reference faces from the reference pictures set for character
+        # 2. Fetch all faces
+        # 3. Order them by average likeness to reference faces
+        # 4. Return pictures containing those faces in the same order as the faces
+        def get_character_reference_faces(session, reference_character_id):
+            # Need to get pictures in the reference set for this character
+            character = Character.find(session, id=reference_character_id)
+            reference_set = session.get(
+                PictureSet, character[0].reference_picture_set_id
+            )
+            if not reference_set:
+                return []
+            members = session.exec(
+                select(PictureSetMember).where(
+                    PictureSetMember.set_id == reference_set.id
+                )
+            ).all()
+            picture_ids = [m.picture_id for m in members]
+            if not picture_ids:
+                logger.warning(
+                    f"No pictures in reference set id={reference_set.id} for character id={character_id}"
+                )
+                return []
+            faces = Face.find(session, picture_id=picture_ids)
+            return faces
+
+        # 1. Get reference faces (use set of face IDs for uniqueness)
+        reference_faces = self.vault.db.run_task(
+            get_character_reference_faces,
+            reference_character_id,
+            priority=DBPriority.IMMEDIATE,
+        )
+
+        if not reference_faces:
+            logger.warning(f"No reference faces found for character id={character_id}")
+            return []
+
+        # 2. Get all faces
+        def get_all_faces(session, character_id):
+            query = select(Face)
+            if character_id == "ALL" or character_id is None:
+                pass
+            elif character_id == "UNASSIGNED":
+                query = query.where(Face.character_id.is_(None))
+            else:
+                query = query.where(Face.character_id == int(character_id))
+            faces = session.exec(query).all()
+            return faces
+
+        candidate_faces = self.vault.db.run_task(get_all_faces, character_id)
+        if not candidate_faces:
+            logger.warning("No unassigned faces found")
+            return []
+
+        # Fetch likeness scores directly from FaceCharacterLikeness
+        def fetch_character_likeness(session, reference_character_id):
+            rows = session.exec(
+                select(
+                    FaceCharacterLikeness.face_id,
+                    FaceCharacterLikeness.likeness,
+                ).where(FaceCharacterLikeness.character_id == reference_character_id)
+            ).all()
+            return {row.face_id: row.likeness for row in rows}
+
+        character_likeness_map = self.vault.db.run_task(
+            fetch_character_likeness, reference_character_id
+        )
+
+        # Debug logging for character likeness map
+        logger.debug(f"Character likeness map: {character_likeness_map}")
+
+        # 3. Get unique picture IDs in that order
+        # For each picture, use the maximum character_likeness among all its unassigned faces
+        picture_likeness_map = {}
+        for face in candidate_faces:
+            pic_id = face.picture_id
+            likeness = character_likeness_map.get(face.id, 0.0)
+            if pic_id not in picture_likeness_map:
+                picture_likeness_map[pic_id] = likeness
+            else:
+                picture_likeness_map[pic_id] = max(
+                    picture_likeness_map[pic_id], likeness
+                )
+
+        # Debug logging for picture likeness map
+        logger.debug(f"Picture likeness map: {picture_likeness_map}")
+
+        # Fetch Picture objects
+        candidate_pics = self.vault.db.run_task(
+            Picture.find,
+            id=list(picture_likeness_map.keys()),
+            select_fields=Picture.metadata_fields() | {"characters"},
+        )
+
+        # Assign character_likeness to pictures
+        dicts = []
+        for pic in candidate_pics:
+            if character_id == "UNASSIGNED":
+                character_ids = [c.id for c in pic.characters]
+                if reference_character_id in character_ids:
+                    # Skip pictures that already have the reference character assigned
+                    continue
+            pic_dict = safe_model_dict(pic)
+            pic_id = pic_dict["id"]
+            pic_dict["character_likeness"] = picture_likeness_map.get(pic_id, 0.0)
+            dicts.append(pic_dict)
+
+        # Sort by character_likeness descending
+        dicts.sort(key=lambda x: x["character_likeness"], reverse=True)
+
+        # Apply offset and limit
+        selected_pics = dicts[offset : offset + limit]
+        return selected_pics
 
     def _setup_routes(self):
         ###############################
@@ -386,8 +513,9 @@ class Server:
         @self.api.get("/sort_mechanisms")
         async def get_pictures_sort_mechanisms():
             """Return available sorting mechanisms for pictures."""
-            labels = [label for label in SortMechanism]
-            return labels
+            result = SortMechanism.all()
+            logger.info("Returning sort mechanisms: {}".format(result))
+            return result
 
         ###############################
         # Chat endpoints              #
@@ -565,6 +693,7 @@ class Server:
                     # Allow adding 'sort', 'thumbnail', 'show_stars' keys if missing
                     if key in (
                         "sort",
+                        "descending",
                         "thumbnail",
                         "show_stars",
                         "likeness_threshold",
@@ -635,7 +764,7 @@ class Server:
             if id == "ALL":
                 # All
                 metadata_fields = Picture.metadata_fields()
-                pics = self.vault.db.run_task(
+                pics = self.vault.db.run_immediate_read_task(
                     Picture.find, select_fields=metadata_fields
                 )
                 image_count = len(pics)
@@ -647,7 +776,7 @@ class Server:
                     pics = Picture.find(session, select_fields=["characters"])
                     return [pic for pic in pics if not pic.characters]
 
-                pics = self.vault.db.run_task(find_unassigned)
+                pics = self.vault.db.run_immediate_read_task(find_unassigned)
                 image_count = len(pics)
                 logger.info("UNASSIGNED pics count: {}".format(image_count))
                 char_id = None
@@ -659,7 +788,9 @@ class Server:
                     ).all()
                     return set(face.picture_id for face in faces)
 
-                faces = self.vault.db.run_task(find_assigned, character_id=int(id))
+                faces = self.vault.db.run_immediate_read_task(
+                    find_assigned, character_id=int(id)
+                )
                 image_count = len(faces)
                 char_id = int(id)
 
@@ -682,7 +813,9 @@ class Server:
                         else None
                     )
 
-                reference_set_id = self.vault.db.run_task(find_reference_set, char_id)
+                reference_set_id = self.vault.db.run_immediate_read_task(
+                    find_reference_set, char_id
+                )
             else:
                 thumb_url = None
                 reference_set_id = None
@@ -730,7 +863,9 @@ class Server:
                     return character
 
                 char = self.vault.db.run_task(
-                    lambda session: alter_char(session, id, name, description)
+                    lambda session: alter_char(
+                        session, id, name, description, priority=DBPriority.IMMEDIATE
+                    )
                 )
                 self.vault.notify(EventType.CHANGED_CHARACTERS)
 
@@ -747,7 +882,8 @@ class Server:
                     lambda session: (
                         session.delete(session.get(Character, id)),
                         session.commit(),
-                    )
+                    ),
+                    priority=DBPriority.IMMEDIATE,
                 )
                 self.vault.notify(EventType.CHANGED_CHARACTERS)
                 return {"status": "success", "deleted_id": id}
@@ -757,7 +893,7 @@ class Server:
         @self.api.get("/characters/{id}")
         async def get_character_by_id(id: int):
             try:
-                char = self.vault.db.run_task(
+                char = self.vault.db.run_immediate_read_task(
                     lambda session: Character.find(session, id=id)
                 )
                 return char[0] if char else None
@@ -769,7 +905,7 @@ class Server:
         async def get_character_field_by_id(id: int, field: str):
             if field == "thumbnail":
                 # Find character and relationships
-                char = self.vault.db.run_task(
+                char = self.vault.db.run_immediate_read_task(
                     Character.find,
                     select_fields=["reference_picture_set_id", "faces"],
                     id=id,
@@ -793,7 +929,7 @@ class Server:
                         return ref_set, members
                     return None, []
 
-                ref_set, members = self.vault.db.run_task(
+                ref_set, members = self.vault.db.run_immediate_read_task(
                     get_reference_set_and_members, char.reference_picture_set_id
                 )
                 if ref_set and ref_set.members:
@@ -805,8 +941,8 @@ class Server:
                     )
                     for pic in pics:
                         # Query faces for this picture
-                        faces = self.vault.db.run_task(
-                            lambda session: Face.find(session, picture_id=pic.id)
+                        faces = self.vault.db.run_immediate_read_task(
+                            Face.find, picture_id=pic.id
                         )
                         # Find face with character_id == char.id
                         for face in faces:
@@ -815,13 +951,16 @@ class Server:
                                 best_face = face
                                 break
                         if best_pic and best_face:
+                            logger.info("Found thumbnail from reference set!")
                             break
                 # Fallback: use faces from char.faces, query their pictures
                 if not best_pic or not best_face:
                     for face in char.faces:
                         # Query picture for this face
-                        pic = self.vault.db.run_task(
-                            lambda session: session.get(Picture, face.picture_id)
+                        pic = self.vault.db.run_immediate_read_task(
+                            Picture.find,
+                            id=face.picture_id,
+                            sort_field="score",
                         )
                         if pic:
                             best_pic = pic
@@ -835,6 +974,10 @@ class Server:
                 from pixlvault.picture_utils import PictureUtils
 
                 bbox = best_face.bbox
+
+                if isinstance(best_pic, list):
+                    best_pic = best_pic[0]
+
                 crop = PictureUtils.crop_face_bbox_exact(best_pic.file_path, bbox)
                 if crop is None:
                     raise HTTPException(
@@ -847,7 +990,7 @@ class Server:
                 return Response(content=buf.getvalue(), media_type="image/png")
             # Default: return field value
             try:
-                char = self.vault.db.run_task(
+                char = self.vault.db.run_immediate_read_task(
                     Character.find, select_fields=[field], id=id
                 )
                 if not char:
@@ -871,7 +1014,7 @@ class Server:
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
             try:
-                characters = self.vault.db.run_task(
+                characters = self.vault.db.run_immediate_read_task(
                     lambda session: Character.find(session, name=name)
                 )
                 return characters
@@ -903,7 +1046,9 @@ class Server:
                     return character.model_dump(exclude_unset=False)
 
                 char_dict = self.vault.db.run_task(
-                    create_character_and_reference_set, payload
+                    create_character_and_reference_set,
+                    payload,
+                    priority=DBPriority.IMMEDIATE,
                 )
                 logger.debug("Created character: {}".format(char_dict))
                 self.vault.notify(EventType.CHANGED_CHARACTERS)
@@ -969,8 +1114,13 @@ class Server:
                 return list(unique_faces)
 
             faces = self.vault.db.run_task(
-                assign_faces, face_ids, picture_ids, character_id
+                assign_faces,
+                face_ids,
+                picture_ids,
+                character_id,
+                priority=DBPriority.IMMEDIATE,
             )
+            self.vault.db.run_task(Picture.clear_field, picture_ids, "text_embedding")
             for face in faces:
                 if face.character_id != character_id:
                     raise HTTPException(
@@ -1025,8 +1175,14 @@ class Server:
                 return faces
 
             self.vault.db.run_task(
-                remove_faces_from_character, character_id, face_ids, picture_ids
+                remove_faces_from_character,
+                character_id,
+                face_ids,
+                picture_ids,
+                priority=DBPriority.IMMEDIATE,
             )
+
+            self.vault.db.run_task(Picture.clear_field, picture_ids, "text_embedding")
             self.vault.notify(EventType.CHANGED_CHARACTERS)
             self.vault.notify(EventType.CHANGED_FACES)
             return {
@@ -1060,9 +1216,7 @@ class Server:
                     result.append(set_dict)
                 return result
 
-            result = safe_model_dict(
-                self.vault.db.run_task(fetch_sets, priority=DBPriority.IMMEDIATE)
-            )
+            result = safe_model_dict(self.vault.db.run_immediate_read_task(fetch_sets))
             logger.debug(f"Fetched picture set {result}")
             return result
 
@@ -1103,8 +1257,8 @@ class Server:
                 picture_ids = [m.picture_id for m in members]
                 return picture_set, picture_ids
 
-            picture_set, picture_ids = self.vault.db.run_task(
-                fetch_set, id, priority=DBPriority.IMMEDIATE
+            picture_set, picture_ids = self.vault.db.run_immediate_read_task(
+                fetch_set, id
             )
             if not picture_set:
                 raise HTTPException(status_code=404, detail="Picture set not found")
@@ -1123,14 +1277,12 @@ class Server:
                     for pic in pics
                 ]
 
-            pictures = self.vault.db.run_task(
-                fetch_pics, picture_ids, priority=DBPriority.IMMEDIATE
-            )
+            pictures = self.vault.db.run_immediate_read_task(fetch_pics, picture_ids)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
         @self.api.patch("/picture_sets/{id}")
         async def update_picture_set(id: int, payload: dict = Body(...)):
-            """Update a picture set's name and/or description. Or add/remove pictures."""
+            """Update a picture set's name and/or description"""
             from pixlvault.db_models import PictureSet
 
             name = payload.get("name")
@@ -1144,7 +1296,7 @@ class Server:
                     picture_set.name = name
                 if description is not None:
                     picture_set.description = description
-                session.add(picture_set)
+
                 session.commit()
                 return True
 
@@ -1195,9 +1347,7 @@ class Server:
                 ).all()
                 return [m.picture_id for m in members]
 
-            picture_ids = self.vault.db.run_task(
-                fetch_members, id, priority=DBPriority.IMMEDIATE
-            )
+            picture_ids = self.vault.db.run_immediate_read_task(fetch_members, id)
             if picture_ids is None:
                 raise HTTPException(status_code=404, detail="Picture set not found")
             return {"picture_ids": picture_ids}
@@ -1207,7 +1357,10 @@ class Server:
             """Add a picture to a set."""
             from pixlvault.db_models import PictureSet, PictureSetMember, Picture
 
-            def add_member(session, id, picture_id):
+            # Find reference_character_id if this is a reference set
+            reference_character_id = self._find_reference_character_id_for_set(id)
+
+            def add_member(session, id, picture_id, reference_character_id=None):
                 picture_set = session.get(PictureSet, id)
                 picture = session.get(Picture, picture_id)
                 if not picture_set or not picture:
@@ -1223,13 +1376,38 @@ class Server:
                     return False
                 member = PictureSetMember(set_id=id, picture_id=picture_id)
                 session.add(member)
+                session.add(picture_set)
+                # If it is a reference set we need to remove all FaceCharacterLikeness entries for this character
+                if reference_character_id is not None:
+                    session.exec(
+                        delete(FaceCharacterLikeness).where(
+                            FaceCharacterLikeness.character_id == reference_character_id
+                        )
+                    )
+                    logger.info(
+                        "Deleted FaceCharacterLikeness entries for character {}".format(
+                            reference_character_id
+                        )
+                    )
+
                 session.commit()
                 return True
 
             success = self.vault.db.run_task(
-                add_member, id, picture_id, priority=DBPriority.IMMEDIATE
+                add_member,
+                id,
+                picture_id,
+                reference_character_id=reference_character_id,
+                priority=DBPriority.IMMEDIATE,
             )
-            if not success:
+            if success:
+                # Wake up FaceCharacterLikenessWorker to recompute likenesses for this character
+                if reference_character_id is not None:
+                    self.vault.notify(
+                        EventType.CHANGED_CHARACTERS,
+                    )
+
+            else:
                 raise HTTPException(
                     status_code=400,
                     detail="Failed to add picture to set (set may not exist or picture already in set)",
@@ -1241,7 +1419,10 @@ class Server:
             """Remove a picture from a set."""
             from pixlvault.db_models import PictureSetMember
 
-            def remove_member(session, id, picture_id):
+            # Find reference_character_id if this is a reference set
+            reference_character_id = self._find_reference_character_id_for_set(id)
+
+            def remove_member(session, id, picture_id, reference_character_id=None):
                 member = session.exec(
                     select(PictureSetMember).where(
                         PictureSetMember.set_id == id,
@@ -1251,13 +1432,37 @@ class Server:
                 if not member:
                     return False
                 session.delete(member)
+
+                # If it is a reference set we need to remove all FaceCharacterLikeness entries for this character
+                if reference_character_id is not None:
+                    session.exec(
+                        delete(FaceCharacterLikeness).where(
+                            FaceCharacterLikeness.character_id == reference_character_id
+                        )
+                    )
+                    logger.info(
+                        "Deleted FaceCharacterLikeness entries for character {}".format(
+                            reference_character_id
+                        )
+                    )
+
                 session.commit()
                 return True
 
             success = self.vault.db.run_task(
-                remove_member, id, picture_id, priority=DBPriority.IMMEDIATE
+                remove_member,
+                id,
+                picture_id,
+                reference_character_id=reference_character_id,
+                priority=DBPriority.IMMEDIATE,
             )
-            if not success:
+            if success:
+                # Wake up FaceCharacterLikenessWorker to recompute likenesses for this character
+                if reference_character_id is not None:
+                    self.vault.notify(
+                        EventType.CHANGED_CHARACTERS,
+                    )
+            else:
                 raise HTTPException(status_code=404, detail="Picture not in set")
             return {"status": "success"}
 
@@ -1265,33 +1470,45 @@ class Server:
         # Picture endpoints            #
         ################################
         @self.api.get("/pictures/stacks")
-        async def get_picture_stacks(threshold: float = 0.5, min_group_size: int = 2):
+        async def get_picture_stacks(threshold: float = 0.0, min_group_size: int = 2):
             """
             Return groups (stacks) of near-identical pictures based on likeness threshold.
             Each stack contains picture dicts and preselection info.
             """
 
-            def fetch_likeness_pairs(session, threshold):
+            def fetch_likeness(session):
                 # Query all likeness pairs above threshold
-                rows = session.exec(
-                    select(PictureLikeness).where(PictureLikeness.likeness >= threshold)
-                ).all()
-                return [
-                    (row.picture_id_a, row.picture_id_b, row.likeness) for row in rows
-                ]
+                rows = session.exec(select(PictureLikeness)).all()
+                logger.info(f"Fetched {len(rows)} picture likeness rows from DB.")
+                return {
+                    (row.picture_id_a, row.picture_id_b): row.likeness for row in rows
+                }
 
             def fetch_face_likeness(session):
                 # Fetch all face likeness scores
                 rows = session.exec(select(FaceLikeness)).all()
+                logger.info(f"Fetched {len(rows)} face likeness rows from DB.")
                 return {(row.face_id_a, row.face_id_b): row.likeness for row in rows}
 
-            rows = self.vault.db.run_task(fetch_likeness_pairs, threshold)
-            face_likeness_map = self.vault.db.run_task(fetch_face_likeness)
+            picture_likeness_map = self.vault.db.run_immediate_read_task(fetch_likeness)
+            logger.info(
+                f"Picture likeness map keys: {list(picture_likeness_map.keys())[:10]} (showing up to 10)"
+            )
+            face_likeness_map = self.vault.db.run_immediate_read_task(
+                fetch_face_likeness
+            )
+            logger.info(
+                f"Face likeness map keys: {list(face_likeness_map.keys())[:10]} (showing up to 10)"
+            )
 
             neighbors = defaultdict(set)
-            for picture_id_a, picture_id_b, _ in rows:
+            for picture_id_a, picture_id_b in picture_likeness_map.keys():
                 neighbors[picture_id_a].add(picture_id_b)
                 neighbors[picture_id_b].add(picture_id_a)
+
+            logger.info(
+                f"Neighbors dict: {dict(list(neighbors.items())[:5])} (showing up to 5)"
+            )
 
             # Find connected components (groups)
             visited = set()
@@ -1313,6 +1530,12 @@ class Server:
                 if len(stack) >= min_group_size:
                     groups.append(list(stack))
 
+            logger.info(
+                f"Found {len(groups)} groups (stacks) with min_group_size={min_group_size}."
+            )
+            if groups:
+                logger.info(f"First group: {groups[0]}")
+
             # For each group, fetch picture info and select best
             def fetch_pictures(session, ids):
                 return Picture.find(
@@ -1330,6 +1553,7 @@ class Server:
             stacks = []
             for group in groups:
                 pics = self.vault.db.run_task(fetch_pictures, group)
+                logger.info(f"Fetched {len(pics)} pictures for group: {group}")
                 # Compute combined likeness for all pairs in group
                 likeness_matrix = {}
                 for i, pic_a in enumerate(pics):
@@ -1338,16 +1562,20 @@ class Server:
                             score = combined_picture_face_likeness(
                                 pic_a, pic_b, face_likeness_lookup
                             )
+                            logger.info(
+                                f"Combined likeness for ({pic_a.id}, {pic_b.id}): {score}"
+                            )
                             likeness_matrix[(pic_a.id, pic_b.id)] = score
                 # Convert tuple keys to string keys for JSON compatibility
                 likeness_matrix_json = {
                     f"{k[0]}|{k[1]}": v for k, v in likeness_matrix.items()
                 }
+                logger.info(f"Likeness matrix for group: {likeness_matrix_json}")
                 ordered = order_stack_pictures(pics)
                 stacks.append(
                     {
                         "pictures": [safe_model_dict(pic) for pic in ordered],
-                        "face_likeness_matrix": likeness_matrix_json,
+                        "likeness_matrix": likeness_matrix_json,
                     }
                 )
 
@@ -1431,27 +1659,15 @@ class Server:
             request: Request,
             query: str = Query(None),
             set_id: int = Query(None),
-            sort: str = Query(None),
             threshold: float = Query(0.0),
         ):
             """
             Export pictures matching the filters as a zip file.
             Uses same filter logic as /pictures endpoint, but returns a zip.
             """
-            import zipfile
-            from fastapi.responses import StreamingResponse
-            from collections import defaultdict
-            from pixlvault.db_models import (
-                Picture,
-                PictureSet,
-                PictureSetMember,
-                SortMechanism,
-            )
-
             query_params = dict(request.query_params)
             query_params.pop("query", None)
             query_params.pop("set_id", None)
-            query_params.pop("sort", None)
             query_params.pop("threshold", None)
 
             pics = []
@@ -1494,7 +1710,6 @@ class Server:
                 # Fallback to filter-based search
                 pics = self.vault.db.run_task(
                     Picture.find,
-                    sort=SortMechanism(sort.lower()) if sort else None,
                     offset=0,
                     limit=sys.maxsize,
                     select_fields=Picture.metadata_fields(),
@@ -1547,7 +1762,6 @@ class Server:
         async def search_pictures(
             request: Request,
             query: str,
-            sort: str = Query(SortMechanism.SEARCH_LIKENESS.value),
             offset: int = Query(0),
             limit: int = Query(sys.maxsize),
             threshold: float = Query(0.5),
@@ -1556,10 +1770,8 @@ class Server:
             if request.query_params:
                 query_params = dict(request.query_params)
                 query = query_params.pop("query", query)
-                sort = query_params.pop("sort", sort)
                 offset = int(query_params.pop("offset", offset))
                 limit = int(query_params.pop("limit", limit))
-
             if not query:
                 raise HTTPException(
                     status_code=400, detail="Query parameter is required for search"
@@ -1591,6 +1803,8 @@ class Server:
             if not isinstance(id, str):
                 logger.error(f"Invalid id type: {type(id)} value: {id}")
                 raise HTTPException(status_code=400, detail="Invalid picture id type")
+
+            id = int(id)  # Convert id to int
 
             pics = self.vault.db.run_task(lambda session: Picture.find(session, id=id))
             if not pics:
@@ -1624,7 +1838,19 @@ class Server:
                 raise HTTPException(status_code=404, detail="Picture not found")
             pic = pics[0]
 
-            return pic.dict()
+            pic_tags = self.vault.db.run_task(
+                Picture.find, id=id, select_fields=["tags"]
+            )
+            pic_tags = pic_tags[0].tags if pic_tags else []
+            pic_dict = safe_model_dict(pic)
+            tags = []
+            for tag in pic_tags:
+                tags.append(tag.tag)
+
+            pic_dict["tags"] = tags
+
+            logger.info("Returning dict: " + str(pic_dict))
+            return pic_dict
 
         @self.api.get("/pictures/{id}/{field}")
         async def get_picture_field(id: str, field: str):
@@ -1743,7 +1969,7 @@ class Server:
             """
 
             dest_folder = self.vault.image_root
-            logger.info("Importing pictures to folder: " + str(dest_folder))
+            logger.debug("Importing pictures to folder: " + str(dest_folder))
             os.makedirs(dest_folder, exist_ok=True)
             uploaded_files = []
             # Collect files to import
@@ -1778,11 +2004,11 @@ class Server:
                 logger.error("No files provided for import")
                 raise HTTPException(status_code=400, detail="No image provided")
 
-            import_results, new_pictures = self._create_picture_imports(
+            shas, existing_map, new_pictures = self._create_picture_imports(
                 uploaded_files, dest_folder
             )
 
-            logger.info(
+            logger.debug(
                 f"Importing {len(new_pictures)} new pictures out of {len(uploaded_files)} uploaded."
             )
 
@@ -1800,14 +2026,38 @@ class Server:
                 logger.debug(
                     f"Queuing likeness calculation for {len(new_pictures)} new pictures."
                 )
-                self.vault.queue_likeness_calculation(new_pictures)
             else:
                 logger.error("No new pictures to import; all are duplicates.")
                 raise HTTPException(
                     status_code=400, detail="All pictures are duplicates"
                 )
+
+            # Build results after DB import so picture_id is available
+            results = []
+            index = 0
+            for _, sha in zip(uploaded_files, shas):
+                if sha in existing_map:
+                    pic = existing_map[sha]
+                    results.append(
+                        {
+                            "status": "duplicate",
+                            "picture_id": pic.id,
+                            "file": pic.file_path,
+                        }
+                    )
+                else:
+                    pic = new_pictures[index]
+                    results.append(
+                        {
+                            "status": "success",
+                            "picture_id": pic.id,
+                            "file": pic.file_path,
+                        }
+                    )
+                    index += 1
+
             self.vault.notify(EventType.CHANGED_PICTURES)
-            return {"results": import_results}
+            return {"results": results}
 
         @self.api.delete("/pictures/{id}")
         async def delete_picture(id: str):
@@ -1848,16 +2098,46 @@ class Server:
         async def list_pictures(
             request: Request,
             sort: str = Query(None),
+            descending: bool = Query(True),
             offset: int = Query(0),
             limit: int = Query(sys.maxsize),
         ):
             query_params = {}
             if request.query_params:
+                logger.info("Received query params: " + str(request.query_params))
                 query_params = dict(request.query_params)
                 sort = query_params.pop("sort", sort)
+                desc_val = query_params.pop("descending", descending)
+                if isinstance(desc_val, str):
+                    descending = desc_val.lower() == "true"
+                else:
+                    descending = bool(desc_val)
                 offset = int(query_params.pop("offset", offset))
                 limit = int(query_params.pop("limit", limit))
+
             character_id = query_params.pop("character_id", None)
+            reference_character_id = query_params.pop("reference_character_id", None)
+
+            logger.warning("SORTING ORDER: " + str(sort) + " DESC: " + str(descending))
+            try:
+                sort_mech = (
+                    SortMechanism.from_string(sort, descending=descending)
+                    if sort
+                    else None
+                )
+            except ValueError as ve:
+                logger.error(f"Invalid sort mechanism: {sort} - {ve}")
+                raise HTTPException(status_code=400, detail=str(ve))
+
+            if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
+                if not reference_character_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="reference_character_id is required for CHARACTER_LIKENESS sort",
+                    )
+                return self._find_pictures_by_character_likeness(
+                    character_id, reference_character_id, offset, limit, descending
+                )
 
             if character_id == "UNASSIGNED":
 
@@ -1871,7 +2151,7 @@ class Server:
                 pics = self.vault.db.run_task(
                     Picture.find,
                     id=picture_ids,
-                    sort=SortMechanism(sort.lower()) if sort else None,
+                    sort=sort_mech,
                     offset=offset,
                     limit=limit,
                     select_fields=Picture.metadata_fields(),
@@ -1881,133 +2161,14 @@ class Server:
             if character_id == "ALL":
                 character_id = None
 
-            if character_id is not None and character_id != "":
+            if (
+                character_id is not None
+                and character_id != ""
+                and character_id.isdigit()
+            ):
                 character_id = int(character_id)
 
-                if sort == SortMechanism.CHARACTER_LIKENESS.value:
-                    # List pictures by likeness to character
-                    # 1. Fetch reference faces from the reference pictures set for character
-                    # 2. Fetch all faces that are not assigned to character
-                    # 3. Order them by average likeness to reference faces
-                    # 4. Return pictures containing those faces in the same order as the faces
-                    def get_character_reference_faces(session, character_id):
-                        # Need to get pictures in the reference set for this character
-                        character = Character.find(session, id=character_id)
-                        reference_set = session.get(
-                            PictureSet, character[0].reference_picture_set_id
-                        )
-                        if not reference_set:
-                            return []
-                        members = session.exec(
-                            select(PictureSetMember).where(
-                                PictureSetMember.set_id == reference_set.id
-                            )
-                        ).all()
-                        picture_ids = [m.picture_id for m in members]
-                        if not picture_ids:
-                            logger.warning(
-                                f"No pictures in reference set id={reference_set.id} for character id={character_id}"
-                            )
-                            return []
-                        faces = Face.find(session, picture_id=picture_ids)
-                        return faces
-
-                    # 1. Get reference faces (use set of face IDs for uniqueness)
-                    reference_faces = self.vault.db.run_task(
-                        get_character_reference_faces, character_id
-                    )
-
-                    if not reference_faces:
-                        logger.warning(
-                            f"No reference faces found for character id={character_id}"
-                        )
-                        return []
-
-                    # 2. Get all faces not assigned to character
-                    def get_unassigned_faces(session, character_id):
-                        # Find faces not assigned to this character (character_id is None or not equal)
-                        faces = session.exec(
-                            select(Face).where(
-                                (Face.character_id != character_id)
-                                | (Face.character_id.is_(None))
-                            )
-                        ).all()
-                        return faces
-
-                    candidate_faces = self.vault.db.run_task(
-                        get_unassigned_faces, character_id
-                    )
-                    if not candidate_faces:
-                        logger.warning("No unassigned faces found")
-                        return []
-
-                    def face_likeness_lookup(session, face_a, face_b):
-                        # Always try min(face_a, face_b), max(face_a, face_b) to ensure consistent ordering
-                        min_id = min(face_a.id, face_b.id)
-                        max_id = max(face_a.id, face_b.id)
-                        row = session.exec(
-                            select(FaceLikeness).where(
-                                (
-                                    (FaceLikeness.face_id_a == min_id)
-                                    & (FaceLikeness.face_id_b == max_id)
-                                )
-                            )
-                        ).first()
-                        if row:
-                            return row.likeness
-                        return None
-
-                    character_likeness_map = {}
-                    for face in candidate_faces:
-                        scores = []
-                        for ref_face in reference_faces:
-                            likeness = self.vault.db.run_task(
-                                face_likeness_lookup, face, ref_face
-                            )
-                            if likeness is not None:
-                                scores.append(likeness)
-                        character_likeness_map[face.id] = (
-                            PictureUtils.softmax_weighted_average(scores, alpha=4.0)
-                            if scores
-                            else 0.0
-                        )
-                    # 3. Get unique picture IDs in that order
-                    # For each picture, use the maximum character_likeness among all its unassigned faces
-                    picture_likeness_map = {}
-                    for face in candidate_faces:
-                        pic_id = face.picture_id
-                        likeness = character_likeness_map.get(face.id, 0.0)
-                        if pic_id not in picture_likeness_map:
-                            picture_likeness_map[pic_id] = likeness
-                        else:
-                            picture_likeness_map[pic_id] = max(
-                                picture_likeness_map[pic_id], likeness
-                            )
-
-                    # Fetch Picture objects
-                    candidate_pics = self.vault.db.run_task(
-                        Picture.find,
-                        id=list(picture_likeness_map.keys()),
-                        select_fields=Picture.metadata_fields(),
-                    )
-
-                    # Assign character_likeness to pictures
-                    dicts = []
-                    for pic in candidate_pics:
-                        pic_dict = safe_model_dict(pic)
-                        pic_id = pic_dict["id"]
-                        pic_dict["character_likeness"] = picture_likeness_map.get(
-                            pic_id, 0.0
-                        )
-                        dicts.append(pic_dict)
-
-                    # Sort by character_likeness descending
-                    dicts.sort(key=lambda x: x["character_likeness"], reverse=True)
-
-                    # Apply offset and limit
-                    selected_pics = dicts[offset : offset + limit]
-                    return selected_pics
-
+            if character_id is not None and character_id != "":
                 # Find all faces for this character
                 def get_picture_ids_for_character(session, character_id):
                     faces = session.exec(
@@ -2023,7 +2184,7 @@ class Server:
                 pics = self.vault.db.run_task(
                     Picture.find,
                     id=picture_ids,
-                    sort=SortMechanism(sort.lower()) if sort else None,
+                    sort=sort_mech,
                     offset=offset,
                     limit=limit,
                     select_fields=Picture.metadata_fields(),
@@ -2032,7 +2193,7 @@ class Server:
             else:
                 pics = self.vault.db.run_task(
                     Picture.find,
-                    sort=SortMechanism(sort.lower()) if sort else None,
+                    sort=sort_mech,
                     offset=offset,
                     limit=limit,
                     select_fields=Picture.metadata_fields(),

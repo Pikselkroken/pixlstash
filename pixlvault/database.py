@@ -66,9 +66,15 @@ def levenshtein(tag, query_words):
     return sum(min_dists) / len(min_dists) if min_dists else 100
 
 
-def register_functions(dbapi_conn, conn_record):
+def init_database(dbapi_conn, conn_record):
     dbapi_conn.create_function("levenshtein", 2, levenshtein)
     dbapi_conn.create_function("cosine_similarity", 2, PictureUtils.cosine_similarity)
+
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA synchronous=NORMAL;")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
 class VaultDatabase:
@@ -78,7 +84,7 @@ class VaultDatabase:
         logger.info(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 
         self._engine = create_engine(f"sqlite:///{self._db_path}", echo=False)
-        event.listen(self._engine, "connect", register_functions)
+        event.listen(self._engine, "connect", init_database)
 
         SQLModel.metadata.create_all(self._engine)
 
@@ -160,6 +166,22 @@ class VaultDatabase:
         return self.result_or_throw(
             self.submit_task(func, *args, priority=priority, **kwargs)
         )
+
+    def run_immediate_read_task(self, func, *args, **kwargs):
+        """
+        Run a database read operation without queuing.
+        The function should accept a SQLModel Session as its first argument.
+        This should only be used for read-only operations that need immediate results.
+
+        Examples:
+
+        result = db.run_immediate_read_task(lambda session: session.exec(
+            select(Picture).where(Picture.quality > 0.9)
+        ).all())
+        """
+        with Session(self._engine) as session:
+            result = func(session, *args, **kwargs)
+        return result
 
     @staticmethod
     def result_or_throw(future: Future):

@@ -25,7 +25,7 @@
         <v-slider
           v-model="thumbnailSize"
           :min="128"
-          :max="currentView === 'likeness' ? 384 : 256"
+          :max="256"
           :step="32"
           class="toolbar-slider"
           hide-details
@@ -284,6 +284,7 @@
         :selectedSet="selectedSet"
         :searchQuery="searchQuery"
         :selectedSort="selectedSort"
+        :selectedDescending="selectedDescending.value"
         :backendUrl="BACKEND_URL"
         @select-character="handleSelectCharacter"
         @select-set="handleSelectSet"
@@ -291,6 +292,7 @@
         @images-assigned-to-character="handleImagesAssignedToCharacter"
         @update:selected-sort="handleUpdateSelectedSort"
         @update:search-query="handleUpdateSearchQuery"
+        @update:similarity-character="handleUpdateSimilarityCharacter"
         @update:set-error="error = $event"
         @update:set-loading="loading = $event"
       />
@@ -320,6 +322,8 @@
               :selectedSet="selectedSet"
               :searchQuery="searchQuery"
               :selectedSort="selectedSort"
+              :selectedDescending="selectedDescending"
+              :similarityCharacter="selectedSimilarityCharacter"
               :showStars="showStars"
               :gridVersion="gridVersion"
               :mediaTypeFilter="mediaTypeFilter"

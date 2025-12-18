@@ -31,6 +31,7 @@ const sidebarRef = ref(null);
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
 const selectedSort = ref("");
+const selectedDescending = ref(false);
 
 // --- Search & Filtering State ---
 const searchQuery = ref("");
@@ -110,9 +111,21 @@ async function handleUpdateSearchQuery(value) {
   handleSwitchToGrid();
 }
 
-async function handleUpdateSelectedSort(value) {
-  selectedSort.value = value;
+async function handleUpdateSelectedSort({ sort, descending }) {
+  selectedSort.value = sort;
+  selectedDescending.value = descending;
+  console.log("[App.vue] Updated selectedSort:", selectedSort.value);
+  console.log(
+    "[App.vue] Updated selectedDescending:",
+    selectedDescending.value
+  );
   handleSwitchToGrid();
+}
+
+const selectedSimilarityCharacter = ref(null);
+function handleUpdateSimilarityCharacter(val) {
+  selectedSimilarityCharacter.value = val;
+  refreshGridVersion();
 }
 
 // --- Settings & Config ---
@@ -224,6 +237,7 @@ async function patchConfigUIOptions() {
   // Only include fields the backend expects and that are not undefined/null/empty
   const patch = {};
   if (selectedSort.value) patch.sort = selectedSort.value;
+  patch.descending = selectedDescending.value;
   if (thumbnailSize.value) patch.thumbnail = thumbnailSize.value;
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
   if (typeof config.likeness_threshold === "number")
@@ -238,11 +252,17 @@ async function patchConfigUIOptions() {
   if (config.selected_image_root)
     patch.selected_image_root = config.selected_image_root;
   console.log("PATCH /config payload:", patch);
-  await fetch(`${BACKEND_URL}/config`, {
+  const response = await fetch(`${BACKEND_URL}/config`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
+  if (response.ok) {
+    const updatedConfig = await response.json();
+    console.log("PATCH /config response:", updatedConfig);
+  } else {
+    console.error("PATCH /config failed with status:", response.status);
+  }
 }
 
 function selectImageRoot(root) {
@@ -298,7 +318,13 @@ function handleGlobalKeydown(e) {
 }
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
-  refreshGridVersion();
+  // Forward to ImageGrid via ref
+  if (
+    gridContainer.value &&
+    typeof gridContainer.value.removeImagesById === "function"
+  ) {
+    gridContainer.value.removeImagesById(imageIds);
+  }
 }
 
 function handleImagesUploaded() {
@@ -351,8 +377,9 @@ watch(settingsDialog, (val) => {
   if (val) fetchConfig();
 });
 
-watch(selectedSort, () => {
+watch([selectedSort, selectedDescending], () => {
   patchConfigUIOptions();
+  refreshGridVersion();
 });
 
 watch(thumbnailSize, () => {

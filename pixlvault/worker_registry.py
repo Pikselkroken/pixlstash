@@ -12,11 +12,11 @@ from .pixl_logging import get_logger
 
 class WorkerType(str, Enum):
     FACE = "FaceExtractionWorker"
-    FACIAL_FEATURES = "FacialFeaturesWorker"
     TAGGER = "TagWorker"
     QUALITY = "QualityWorker"
     FACE_QUALITY = "FaceQualityWorker"
     FACE_LIKENESS = "FaceLikenessWorker"
+    FACE_CHARACTER_LIKENESS = "FaceCharacterLikenessWorker"
     LIKENESS = "LikenessWorker"
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
@@ -115,7 +115,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         Notify the worker that it needs to wake.
         """
-        logger.debug("Worker {} woken up.".format(self.name()))
+        logger.info("Worker {} woken up.".format(self.name()))
         self._event.set()
 
     def name(self):
@@ -131,6 +131,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         future = Future()
         with self._watched_ids_lock:
             self._watched_ids[(cls, object_id, attr)] = future
+        logger.debug(f"Future created for {cls.__name__} id={object_id} attr={attr}")
         return future
 
     def _notify_others(self, event_type: EventType):
@@ -140,18 +141,23 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         if self._event_callback:
             self._event_callback(event_type)
 
-    def _notify_ids_processed(self, object_ids: List[Tuple[Type, object, str]]):
+    def _notify_ids_processed(
+        self, notification: List[Tuple[Type, object, str, object]]
+    ):
         """
         Notify that an object ID has been processed.
         """
         with self._watched_ids_lock:
-            for cls, object_id, attr in object_ids:
+            for cls, object_id, attr, payload in notification:
                 future = self._watched_ids.pop((cls, object_id, attr), None)
                 if future:
                     logger.debug(
                         f"Worker {self.name()} processed {cls.__name__} id={object_id} attr={attr}"
                     )
-                    future.set_result(object_id)
+                    future.set_result((object_id, payload))
+                    logger.debug(
+                        f"Future result set for {cls.__name__} id={object_id} attr={attr} with payload={payload}"
+                    )
 
     def _wait(self):
         """

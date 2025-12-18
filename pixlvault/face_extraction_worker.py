@@ -1,7 +1,7 @@
 from typing import List
 import cv2
 import os
-import time
+from insightface.app import FaceAnalysis
 
 from sqlmodel import select
 from pixlvault.database import DBPriority
@@ -10,19 +10,24 @@ from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.face import Face
 from pixlvault.db_models.picture import Picture
+from pixlvault.picture_tagger import PictureTagger
 
 logger = get_logger(__name__)
 
 
 class FaceExtractionWorker(BaseWorker):
-    INSIGHTFACE_CLEANUP_TIMEOUT = 20  # seconds
+    INSIGHTFACE_CLEANUP_TIMEOUT = 6000  # seconds
 
     def worker_type(self) -> WorkerType:
         return WorkerType.FACE
 
+    def __init__(self, database, picture_tagger, event_callback):
+        super().__init__(database, picture_tagger, event_callback)
+        self._init_insightface_app()
+
     def _run(self):
         logger.info("FaceExtractionWorker: Worker thread started and running.")
-        time.sleep(1.25)  # Stagger start times for multiple workers
+
         while not self._stop.is_set():
             try:
                 logger.debug("FaceExtractionWorker: Starting iteration...")
@@ -37,11 +42,15 @@ class FaceExtractionWorker(BaseWorker):
                 if updates:
                     self._notify_ids_processed(updates)
                     self._notify_others(EventType.CHANGED_FACES)
-
-                logger.debug(
-                    "FaceExtractionWorker: Done with iteration having processed %d pictures.",
-                    len(updates),
-                )
+                    logger.debug(
+                        "FaceExtractionWorker: Done with iteration having processed %d pictures.",
+                        len(updates),
+                    )
+                else:
+                    logger.debug(
+                        "FaceExtractionWorker: Done with iteration but no pictures were processed."
+                    )
+                    self._wait()
             except Exception as e:
                 import traceback
 
@@ -60,18 +69,26 @@ class FaceExtractionWorker(BaseWorker):
             ).all()
         )
 
-    def _extract_faces(self, pics) -> List[tuple]:
-        try:
-            from insightface.app import FaceAnalysis
-        except ImportError:
-            logger.error("InsightFace is not installed. Skipping face extraction.")
-            return []
+    def _init_insightface_app(self):
         if not hasattr(self, "_insightface_app"):
             logger.debug("initialising InsightFace with CPU only (ctx_id=-1)")
-            self._insightface_app = FaceAnalysis()
-            self._insightface_app.prepare(ctx_id=-1, det_thresh=0.25)
+            self._insightface_app = FaceAnalysis(
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+            )
+            self._insightface_app.prepare(
+                ctx_id=0 if not PictureTagger.FORCE_CPU else -1,
+                det_thresh=0.25,
+                det_size=(480, 480),
+            )
+
+    def _extract_faces(self, pics) -> List[tuple]:
+        self._init_insightface_app()
+
         updates = []
+        all_face_ids = []
+
         for pic in pics:
+            pic_face_ids = []
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
             file_path = pic.file_path
             ext = os.path.splitext(file_path)[1].lower()
@@ -85,6 +102,9 @@ class FaceExtractionWorker(BaseWorker):
                         expanded_bbox = Face.expand_face_bbox(
                             face.bbox, img.shape[1], img.shape[0], 0.1
                         )
+                        features_bytes = None
+                        if hasattr(face, "embedding") and face.embedding is not None:
+                            features_bytes = face.embedding.astype("float32").tobytes()
                         face_objects.append(
                             Face(
                                 picture_id=pic.id,
@@ -92,6 +112,7 @@ class FaceExtractionWorker(BaseWorker):
                                 bbox=expanded_bbox,
                                 character_id=None,
                                 frame_index=0,
+                                features=features_bytes,
                             )
                         )
             elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
@@ -115,6 +136,18 @@ class FaceExtractionWorker(BaseWorker):
                             expanded_bbox = Face.expand_face_bbox(
                                 face.bbox, frame.shape[1], frame.shape[0], 0.1
                             )
+                            features_bytes = None
+                            if (
+                                hasattr(face, "embedding")
+                                and face.embedding is not None
+                            ):
+                                features_bytes = face.embedding.astype(
+                                    "float32"
+                                ).tobytes()
+                            else:
+                                logger.warning(
+                                    f"Face embedding missing for face in video {file_path}, frame {frame_index}"
+                                )
                             face_objects.append(
                                 Face(
                                     picture_id=pic.id,
@@ -122,6 +155,7 @@ class FaceExtractionWorker(BaseWorker):
                                     bbox=expanded_bbox,
                                     character_id=None,
                                     frame_index=frame_index,
+                                    features=features_bytes,
                                 )
                             )
                 cap.release()
@@ -144,27 +178,37 @@ class FaceExtractionWorker(BaseWorker):
                 )
 
                 def insert_sentinel(session):
-                    session.add(
-                        Face(
-                            picture_id=pic.id,
-                            face_index=-1,
-                            character_id=None,
-                            bbox=None,
-                        )
+                    face = Face(
+                        picture_id=pic.id,
+                        face_index=-1,
+                        character_id=None,
+                        bbox=None,
                     )
+                    session.add(face)
                     session.commit()
+                    session.refresh(face)
+                    return face.id
 
-                self._db.run_task(insert_sentinel, priority=DBPriority.LOW)
+                face_id = self._db.run_task(insert_sentinel, priority=DBPriority.LOW)
+                pic_face_ids.append(face_id)
             else:
 
                 def insert_faces(session, faces_to_insert):
-                    changed = []
+                    face_ids = []
                     for face in faces_to_insert:
                         session.add(face)
-                        changed.append((Face, face.id))
                     session.commit()
-                    return changed
+                    for face in faces_to_insert:
+                        session.refresh(face)
+                        face_ids.append(face.id)
+                    return face_ids
 
-                self._db.run_task(insert_faces, face_objects, priority=DBPriority.LOW)
-            updates.append((Picture, pic.id, "faces"))
+                face_ids = self._db.run_task(
+                    insert_faces, face_objects, priority=DBPriority.LOW
+                )
+                pic_face_ids.extend(face_ids)
+
+            all_face_ids.extend(pic_face_ids)
+            updates.append((Picture, pic.id, "faces", pic_face_ids))
+
         return updates

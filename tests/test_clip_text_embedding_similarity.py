@@ -1,4 +1,6 @@
+import shutil
 import pytest
+
 import numpy as np
 from sqlmodel import Session
 import sqlite3
@@ -61,11 +63,19 @@ descriptions = [
 ]
 
 
+# Shared fixture for PictureTagger to avoid repeated model loading
+@pytest.fixture(scope="module")
+def shared_tagger():
+    tagger = PictureTagger("cuda" if not PictureTagger.FORCE_CPU else "cpu")
+    yield tagger
+    del tagger
+
+
 @pytest.mark.parametrize("query", ["Clementine holding a black assault rifle"])
-def test_clip_text_embedding_similarity_measures(query):
+def test_clip_text_embedding_similarity_measures(query, shared_tagger):
     import gc
 
-    tagger = PictureTagger(device="cpu")
+    tagger = shared_tagger
     query_embedding = (
         tagger._clip_model.encode_text(
             tagger._clip_tokenizer([query]).to(tagger._clip_device)
@@ -159,15 +169,30 @@ def test_clip_text_embedding_similarity_measures(query):
     for desc, score in sorted(partial_scores, key=lambda x: -x[1]):
         print(f"Score: {score:.4f}\nDescription: {desc}\n---")
 
-    del tagger, query_embedding, emb
+    del query_embedding, emb
+    gc.collect()
+
+
+@pytest.fixture(scope="module")
+def test_model():
+    import gc
+
+    model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+    yield model
+
+    del model
     gc.collect()
 
 
 @pytest.mark.parametrize("query", ["Clementine holding a black assault rifle"])
-def test_sbert_text_similarity(query):
+def test_sbert_text_similarity(test_model, query):
     import gc
 
-    model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+    model = test_model
+
+    # Warm up
+    model.encode(["Test sentence"], convert_to_numpy=True)
+
     # Use numpy arrays to reduce RAM
     desc_embeddings = model.encode(descriptions, convert_to_numpy=True)
     query_embedding = model.encode(query, convert_to_numpy=True)
@@ -307,10 +332,8 @@ def test_picture_embedding_storage_and_retrieval():
         arr = np.random.randn(384).astype(np.float32)
         with Session(engine) as session:
             # Always provide a valid string id
-            pic = Picture(id="test_id.png", description="Test", text_embedding=arr)
-            assert pic.id == "test_id.png", (
-                f"Picture.id should be a non-None string, got {pic.id}"
-            )
+            pic = Picture(id=0, description="Test", text_embedding=arr)
+            assert pic.id == 0, f"Picture.id should be a non-None integer, got {pic.id}"
             session.add(pic)
             session.commit()
             session.refresh(pic)
@@ -330,14 +353,18 @@ def test_picture_embedding_storage_and_retrieval():
             assert np.allclose(arr_loaded, arr)
 
 
-def test_picture_semantic_search_returns_relevant_result():
-    from sqlmodel import Session
-    from pixlvault.db_models.picture import Picture
-    import numpy as np
-    import tempfile
-    import os
-    from pixlvault.server import Server
+@pytest.fixture
+def test_server():
+    # Force CPU for all models during test
+    tmpdir = tempfile.mkdtemp()
+    config_path = os.path.join(tmpdir, "config.json")
+    server_config_path = os.path.join(tmpdir, "server_config.json")
+    server = Server(config_path, server_config_path)
+    yield server
+    shutil.rmtree(tmpdir)
 
+
+def test_picture_semantic_search_returns_relevant_result(test_server):
     # Dummy embedding function: returns fixed vectors for known descriptions
     def dummy_text_to_embedding(text):
         if "assault rifle" in text:
@@ -347,52 +374,48 @@ def test_picture_semantic_search_returns_relevant_result():
         else:
             return np.zeros(384, dtype=np.float32)
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
-        with Server(config_path, server_config_path) as server:
-            engine = server.vault.db._engine
-            with Session(engine) as session:
-                # Create pictures with known descriptions and embeddings
-                pic1 = Picture(
-                    id="pic1.png",
-                    description="Clementine holding a black assault rifle",
-                    text_embedding=dummy_text_to_embedding("assault rifle"),
-                )
-                pic2 = Picture(
-                    id="pic2.png",
-                    description="A young woman named Clementine is sitting on a bench, reading a book.",
-                    text_embedding=dummy_text_to_embedding("reading a book"),
-                )
-                pic3 = Picture(
-                    id="pic3.png",
-                    description="Clementine is running through a field of flowers, wearing a white dress.",
-                    text_embedding=dummy_text_to_embedding("other"),
-                )
-                session.add(pic1)
-                session.add(pic2)
-                session.add(pic3)
-                session.commit()
+    server = test_server
 
-                # Query for "Clementine holding a black assault rifle"
-                results = Picture.semantic_search(
-                    session,
-                    query="Clementine holding a black assault rifle",
-                    query_words=["Clementine", "holding", "black", "assault", "rifle"],
-                    text_to_embedding=dummy_text_to_embedding,
-                    fuzzy_weight=0.0,  # Only embedding similarity
-                    embedding_weight=1.0,
-                    threshold=0.0,
-                    limit=3,
-                )
-                assert results, "semantic_search returned no results"
-                top_result, score = results[0]
-                print(
-                    f"Top result description: {top_result.description} with score {score}"
-                )
-                assert "assault rifle" in top_result.description.lower(), (
-                    "Top result should be the most relevant by embedding similarity."
-                )
+    engine = server.vault.db._engine
+    with Session(engine) as session:
+        # Create pictures with known descriptions and embeddings
+        pic1 = Picture(
+            id=0,
+            description="Clementine holding a black assault rifle",
+            text_embedding=dummy_text_to_embedding("assault rifle"),
+        )
+        pic2 = Picture(
+            id=1,
+            description="A young woman named Clementine is sitting on a bench, reading a book.",
+            text_embedding=dummy_text_to_embedding("reading a book"),
+        )
+        pic3 = Picture(
+            id=2,
+            description="Clementine is running through a field of flowers, wearing a white dress.",
+            text_embedding=dummy_text_to_embedding("other"),
+        )
+        session.add(pic1)
+        session.add(pic2)
+        session.add(pic3)
+        session.commit()
+
+        # Query for "Clementine holding a black assault rifle"
+        results = Picture.semantic_search(
+            session,
+            query="Clementine holding a black assault rifle",
+            query_words=["Clementine", "holding", "black", "assault", "rifle"],
+            text_to_embedding=dummy_text_to_embedding,
+            fuzzy_weight=0.0,  # Only embedding similarity
+            embedding_weight=1.0,
+            threshold=0.0,
+            limit=3,
+        )
+        assert results, "semantic_search returned no results"
+        top_result, score = results[0]
+        print(f"Top result description: {top_result.description} with score {score}")
+        assert "assault rifle" in top_result.description.lower(), (
+            "Top result should be the most relevant by embedding similarity."
+        )
 
 
 @pytest.mark.parametrize(
@@ -408,7 +431,7 @@ def test_picture_semantic_search_returns_relevant_result():
     ],
 )
 def test_picture_semantic_search_with_tags_and_weights(
-    fuzzy_weight, embedding_weight, threshold, expected_top_desc
+    test_server, fuzzy_weight, embedding_weight, threshold, expected_top_desc
 ):
     def dummy_text_to_embedding(text):
         if "assault rifle" in text:
@@ -418,63 +441,60 @@ def test_picture_semantic_search_with_tags_and_weights(
         else:
             return np.zeros(384, dtype=np.float32)
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
-        with Server(config_path, server_config_path) as server:
-            engine = server.vault.db._engine
-            with Session(engine) as session:
-                pic1 = Picture(
-                    id="pic1.png",
-                    description="Clementine holding a black assault rifle",
-                    text_embedding=dummy_text_to_embedding("assault rifle"),
-                )
-                pic2 = Picture(
-                    id="pic2.png",
-                    description="A young woman named Clementine is sitting on a bench, reading a book.",
-                    text_embedding=dummy_text_to_embedding("reading a book"),
-                )
-                pic3 = Picture(
-                    id="pic3.png",
-                    description="Clementine is running through a field of flowers, wearing a white dress.",
-                    text_embedding=dummy_text_to_embedding("other"),
-                )
-                session.add(pic1)
-                session.add(pic2)
-                session.add(pic3)
-                session.commit()
+    server = test_server
+    engine = server.vault.db._engine
+    with Session(engine) as session:
+        pic1 = Picture(
+            id=0,
+            description="Clementine holding a black assault rifle",
+            text_embedding=dummy_text_to_embedding("assault rifle"),
+        )
+        pic2 = Picture(
+            id=1,
+            description="A young woman named Clementine is sitting on a bench, reading a book.",
+            text_embedding=dummy_text_to_embedding("reading a book"),
+        )
+        pic3 = Picture(
+            id=2,
+            description="Clementine is running through a field of flowers, wearing a white dress.",
+            text_embedding=dummy_text_to_embedding("other"),
+        )
+        session.add(pic1)
+        session.add(pic2)
+        session.add(pic3)
+        session.commit()
 
-                tag1 = Tag(picture_id=pic1.id, tag="assault rifle")
-                tag2 = Tag(picture_id=pic2.id, tag="book")
-                tag3 = Tag(picture_id=pic3.id, tag="flowers")
-                session.add(tag1)
-                session.add(tag2)
-                session.add(tag3)
-                session.commit()
+        tag1 = Tag(picture_id=pic1.id, tag="assault rifle")
+        tag2 = Tag(picture_id=pic2.id, tag="book")
+        tag3 = Tag(picture_id=pic3.id, tag="flowers")
+        session.add(tag1)
+        session.add(tag2)
+        session.add(tag3)
+        session.commit()
 
-                results = Picture.semantic_search(
-                    session,
-                    query="assault rifle",
-                    query_words=["assault", "rifle"],
-                    text_to_embedding=dummy_text_to_embedding,
-                    fuzzy_weight=fuzzy_weight,
-                    embedding_weight=embedding_weight,
-                    threshold=threshold,
-                    limit=3,
-                )
-                if expected_top_desc is None:
-                    assert not results, f"Expected no results, but got {len(results)}"
-                else:
-                    assert results, (
-                        f"semantic_search returned no results for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
-                    )
-                    top_result, score = results[0]
-                    print(
-                        f"Top result description: {top_result.description} with score {score}"
-                    )
-                    assert expected_top_desc in top_result.description.lower(), (
-                        f"Top result should match '{expected_top_desc}' for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
-                    )
+        results = Picture.semantic_search(
+            session,
+            query="assault rifle",
+            query_words=["assault", "rifle"],
+            text_to_embedding=dummy_text_to_embedding,
+            fuzzy_weight=fuzzy_weight,
+            embedding_weight=embedding_weight,
+            threshold=threshold,
+            limit=3,
+        )
+        if expected_top_desc is None:
+            assert not results, f"Expected no results, but got {len(results)}"
+        else:
+            assert results, (
+                f"semantic_search returned no results for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
+            )
+            top_result, score = results[0]
+            print(
+                f"Top result description: {top_result.description} with score {score}"
+            )
+            assert expected_top_desc in top_result.description.lower(), (
+                f"Top result should match '{expected_top_desc}' for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
+            )
 
 
 @pytest.mark.parametrize(
@@ -487,7 +507,7 @@ def test_picture_semantic_search_with_tags_and_weights(
     ],
 )
 def test_picture_semantic_search_without_embeddings(
-    fuzzy_weight, embedding_weight, threshold, expected_top_desc
+    test_server, fuzzy_weight, embedding_weight, threshold, expected_top_desc
 ):
     def dummy_text_to_embedding(text):
         if "assault rifle" in text:
@@ -497,60 +517,57 @@ def test_picture_semantic_search_without_embeddings(
         else:
             return np.zeros(384, dtype=np.float32)
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
-        with Server(config_path, server_config_path) as server:
-            engine = server.vault.db._engine
-            with Session(engine) as session:
-                pic1 = Picture(
-                    id="pic1.png",
-                    description="Clementine holding a black assault rifle",
-                )
-                pic2 = Picture(
-                    id="pic2.png",
-                    description="A young woman named Clementine is sitting on a bench, reading a book.",
-                )
-                pic3 = Picture(
-                    id="pic3.png",
-                    description="Clementine is running through a field of flowers, wearing a white dress.",
-                )
-                session.add(pic1)
-                session.add(pic2)
-                session.add(pic3)
-                session.commit()
+    server = test_server
+    engine = server.vault.db._engine
+    with Session(engine) as session:
+        pic1 = Picture(
+            id=0,
+            description="Clementine holding a black assault rifle",
+        )
+        pic2 = Picture(
+            id=1,
+            description="A young woman named Clementine is sitting on a bench, reading a book.",
+        )
+        pic3 = Picture(
+            id=2,
+            description="Clementine is running through a field of flowers, wearing a white dress.",
+        )
+        session.add(pic1)
+        session.add(pic2)
+        session.add(pic3)
+        session.commit()
 
-                tag1 = Tag(picture_id=pic1.id, tag="assault rifle")
-                tag2 = Tag(picture_id=pic2.id, tag="book")
-                tag3 = Tag(picture_id=pic3.id, tag="flowers")
-                session.add(tag1)
-                session.add(tag2)
-                session.add(tag3)
-                session.commit()
+        tag1 = Tag(picture_id=pic1.id, tag="assault rifle")
+        tag2 = Tag(picture_id=pic2.id, tag="book")
+        tag3 = Tag(picture_id=pic3.id, tag="flowers")
+        session.add(tag1)
+        session.add(tag2)
+        session.add(tag3)
+        session.commit()
 
-                results = Picture.semantic_search(
-                    session,
-                    query="assault rifle",
-                    query_words=["assault", "rifle"],
-                    text_to_embedding=dummy_text_to_embedding,
-                    fuzzy_weight=fuzzy_weight,
-                    embedding_weight=embedding_weight,
-                    threshold=threshold,
-                    limit=3,
-                )
-                if expected_top_desc is None:
-                    assert not results, f"Expected no results, but got {len(results)}"
-                else:
-                    assert results, (
-                        f"semantic_search returned no results for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
-                    )
-                    top_result, score = results[0]
-                    print(
-                        f"Top result description: {top_result.description} with score {score}"
-                    )
-                    assert expected_top_desc in top_result.description.lower(), (
-                        f"Top result should match '{expected_top_desc}' for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
-                    )
+        results = Picture.semantic_search(
+            session,
+            query="assault rifle",
+            query_words=["assault", "rifle"],
+            text_to_embedding=dummy_text_to_embedding,
+            fuzzy_weight=fuzzy_weight,
+            embedding_weight=embedding_weight,
+            threshold=threshold,
+            limit=3,
+        )
+        if expected_top_desc is None:
+            assert not results, f"Expected no results, but got {len(results)}"
+        else:
+            assert results, (
+                f"semantic_search returned no results for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
+            )
+            top_result, score = results[0]
+            print(
+                f"Top result description: {top_result.description} with score {score}"
+            )
+            assert expected_top_desc in top_result.description.lower(), (
+                f"Top result should match '{expected_top_desc}' for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
+            )
 
 
 @pytest.mark.parametrize(
@@ -563,7 +580,7 @@ def test_picture_semantic_search_without_embeddings(
     ],
 )
 def test_picture_semantic_search_without_tags(
-    fuzzy_weight, embedding_weight, threshold, expected_top_desc
+    test_server, fuzzy_weight, embedding_weight, threshold, expected_top_desc
 ):
     def dummy_text_to_embedding(text):
         if "assault rifle" in text:
@@ -573,54 +590,51 @@ def test_picture_semantic_search_without_tags(
         else:
             return np.zeros(384, dtype=np.float32)
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
-        server_config_path = os.path.join(temp_dir, "server-config.json")
-        with Server(config_path, server_config_path) as server:
-            engine = server.vault.db._engine
-            with Session(engine) as session:
-                pic1 = Picture(
-                    id="pic1.png",
-                    description="Clementine holding a black assault rifle",
-                    text_embedding=dummy_text_to_embedding("assault rifle"),
-                )
-                pic2 = Picture(
-                    id="pic2.png",
-                    description="A young woman named Clementine is sitting on a bench, reading a book.",
-                    text_embedding=dummy_text_to_embedding("reading a book"),
-                )
-                pic3 = Picture(
-                    id="pic3.png",
-                    description="Clementine is running through a field of flowers, wearing a white dress.",
-                    text_embedding=dummy_text_to_embedding("other"),
-                )
-                session.add(pic1)
-                session.add(pic2)
-                session.add(pic3)
-                session.commit()
+    server = test_server
+    engine = server.vault.db._engine
+    with Session(engine) as session:
+        pic1 = Picture(
+            id=0,
+            description="Clementine holding a black assault rifle",
+            text_embedding=dummy_text_to_embedding("assault rifle"),
+        )
+        pic2 = Picture(
+            id=1,
+            description="A young woman named Clementine is sitting on a bench, reading a book.",
+            text_embedding=dummy_text_to_embedding("reading a book"),
+        )
+        pic3 = Picture(
+            id=2,
+            description="Clementine is running through a field of flowers, wearing a white dress.",
+            text_embedding=dummy_text_to_embedding("other"),
+        )
+        session.add(pic1)
+        session.add(pic2)
+        session.add(pic3)
+        session.commit()
 
-                preprocessed_query_words = ["assault", "rifle"]
+        preprocessed_query_words = ["assault", "rifle"]
 
-                results = Picture.semantic_search(
-                    session,
-                    query="assault rifle",
-                    query_words=preprocessed_query_words,
-                    text_to_embedding=dummy_text_to_embedding,
-                    fuzzy_weight=fuzzy_weight,
-                    embedding_weight=embedding_weight,
-                    threshold=threshold,
-                    limit=3,
-                )
-                if expected_top_desc is None:
-                    assert not results, f"Expected no results, but got {len(results)}"
-                else:
-                    assert results, (
-                        f"semantic_search returned no results for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
-                    )
-                    top_result, score = results[0]
-                    print(
-                        f"Top result description: {top_result.description} with score {score}"
-                    )
-                    assert expected_top_desc in top_result.description.lower(), (
-                        f"Top result should match '{expected_top_desc}' for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
-                    )
+        results = Picture.semantic_search(
+            session,
+            query="assault rifle",
+            query_words=preprocessed_query_words,
+            text_to_embedding=dummy_text_to_embedding,
+            fuzzy_weight=fuzzy_weight,
+            embedding_weight=embedding_weight,
+            threshold=threshold,
+            limit=3,
+        )
+        if expected_top_desc is None:
+            assert not results, f"Expected no results, but got {len(results)}"
+        else:
+            assert results, (
+                f"semantic_search returned no results for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
+            )
+            top_result, score = results[0]
+            print(
+                f"Top result description: {top_result.description} with score {score}"
+            )
+            assert expected_top_desc in top_result.description.lower(), (
+                f"Top result should match '{expected_top_desc}' for weights=({fuzzy_weight},{embedding_weight}), threshold={threshold}"
+            )

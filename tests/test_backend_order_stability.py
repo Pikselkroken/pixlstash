@@ -15,8 +15,8 @@ BACKEND_URL = "http://localhost:9537"
     "params",
     [
         {},
-        {"sort": "score DESC"},
-        {"sort": "created_at asc"},
+        {"sort": "SCORE", "descending": True},
+        {"sort": "DATE", "descending": False},
     ],
 )
 def test_order_stability(params):

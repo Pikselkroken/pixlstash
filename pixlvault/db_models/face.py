@@ -15,6 +15,8 @@ from sqlmodel import (
 )
 from typing import List, Optional, TYPE_CHECKING
 
+from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
+
 from .quality import Quality
 
 if TYPE_CHECKING:
@@ -26,8 +28,8 @@ if TYPE_CHECKING:
 class Face(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
 
-    picture_id: str = Field(
-        sa_column=Column(String, ForeignKey("picture.id", ondelete="CASCADE")),
+    picture_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("picture.id", ondelete="CASCADE")),
         default=None,
     )
     frame_index: int = Field(default=0)
@@ -41,7 +43,13 @@ class Face(SQLModel, table=True):
     likeness: Optional[float] = None
 
     # Relationships
-    quality: Optional[Quality] = Relationship(back_populates="face")
+    quality: Optional[Quality] = Relationship(
+        back_populates="face",
+        sa_relationship_kwargs={
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
+    )
     picture: Optional["Picture"] = Relationship(
         back_populates="faces", sa_relationship_kwargs={"overlaps": "character"}
     )
@@ -51,11 +59,19 @@ class Face(SQLModel, table=True):
 
     likeness_a: List["FaceLikeness"] = Relationship(
         back_populates="face_a",
-        sa_relationship_kwargs={"primaryjoin": "Face.id==FaceLikeness.face_id_a"},
+        sa_relationship_kwargs={
+            "primaryjoin": "Face.id==FaceLikeness.face_id_a",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
     )
     likeness_b: List["FaceLikeness"] = Relationship(
         back_populates="face_b",
-        sa_relationship_kwargs={"primaryjoin": "Face.id==FaceLikeness.face_id_b"},
+        sa_relationship_kwargs={
+            "primaryjoin": "Face.id==FaceLikeness.face_id_b",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
     )
 
     __table_args__ = (UniqueConstraint("picture_id", "frame_index", "face_index"),)
@@ -116,6 +132,32 @@ class Face(SQLModel, table=True):
 
         faces = session.exec(query).all()
         return faces
+
+    @classmethod
+    def find_faces_without_character_likeness(
+        cls, session, character_id: int
+    ) -> List["Face"]:
+        """
+        Find all faces that do not have a FaceCharacterLikeness entry for the given character_id.
+        Args:
+            session: The database session to use for the query.
+            character_id: The ID of the character to check likeness entries for.
+        Returns:
+            A list of Face objects without a FaceCharacterLikeness entry for the given character_id.
+        """
+        subquery = (
+            select(FaceCharacterLikeness.face_id)
+            .where((FaceCharacterLikeness.character_id == character_id))
+            .union(
+                select(FaceCharacterLikeness.face_id).where(
+                    (FaceCharacterLikeness.character_id == character_id)
+                )
+            )
+            .subquery()
+        )
+
+        query = select(cls).where(~cls.id.in_(select(subquery)))
+        return session.exec(query).all()
 
     @staticmethod
     def expand_face_bbox(
