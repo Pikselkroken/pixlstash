@@ -14,7 +14,7 @@ import zipfile
 
 from collections import defaultdict, deque
 from sqlalchemy.orm import selectinload
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from contextlib import asynccontextmanager
 from fastapi import Body, FastAPI, File, Request, UploadFile, Query, HTTPException
@@ -353,6 +353,26 @@ class Server:
         with open(pyproject_path, "rb") as f:
             data = tomllib.load(f)
         return data.get("project", {}).get("version", "unknown")
+
+    def _find_reference_character_id_for_set(self, picture_set_id):
+        # Find reference_character_id if this is a reference set
+        reference_character_id = None
+
+        def find_reference_character(session, picture_set_id):
+            character = Character.find(
+                session,
+                select_fields=["reference_picture_set_id"],
+                reference_picture_set_id=picture_set_id,
+            )
+            logger.info(
+                f"Found reference character for set {picture_set_id}: {character}"
+            )
+            return character[0].id if character else None
+
+        reference_character_id = self.vault.db.run_immediate_read_task(
+            find_reference_character, picture_set_id
+        )
+        return reference_character_id
 
     def _setup_routes(self):
         ###############################
@@ -1142,7 +1162,7 @@ class Server:
 
         @self.api.patch("/picture_sets/{id}")
         async def update_picture_set(id: int, payload: dict = Body(...)):
-            """Update a picture set's name and/or description. Or add/remove pictures."""
+            """Update a picture set's name and/or description"""
             from pixlvault.db_models import PictureSet
 
             name = payload.get("name")
@@ -1156,7 +1176,7 @@ class Server:
                     picture_set.name = name
                 if description is not None:
                     picture_set.description = description
-                session.add(picture_set)
+
                 session.commit()
                 return True
 
@@ -1217,7 +1237,10 @@ class Server:
             """Add a picture to a set."""
             from pixlvault.db_models import PictureSet, PictureSetMember, Picture
 
-            def add_member(session, id, picture_id):
+            # Find reference_character_id if this is a reference set
+            reference_character_id = self._find_reference_character_id_for_set(id)
+
+            def add_member(session, id, picture_id, reference_character_id=None):
                 picture_set = session.get(PictureSet, id)
                 picture = session.get(Picture, picture_id)
                 if not picture_set or not picture:
@@ -1233,13 +1256,38 @@ class Server:
                     return False
                 member = PictureSetMember(set_id=id, picture_id=picture_id)
                 session.add(member)
+                session.add(picture_set)
+                # If it is a reference set we need to remove all FaceCharacterLikeness entries for this character
+                if reference_character_id is not None:
+                    session.exec(
+                        delete(FaceCharacterLikeness).where(
+                            FaceCharacterLikeness.character_id == reference_character_id
+                        )
+                    )
+                    logger.info(
+                        "Deleted FaceCharacterLikeness entries for character {}".format(
+                            reference_character_id
+                        )
+                    )
+
                 session.commit()
                 return True
 
             success = self.vault.db.run_task(
-                add_member, id, picture_id, priority=DBPriority.IMMEDIATE
+                add_member,
+                id,
+                picture_id,
+                reference_character_id=reference_character_id,
+                priority=DBPriority.IMMEDIATE,
             )
-            if not success:
+            if success:
+                # Wake up FaceCharacterLikenessWorker to recompute likenesses for this character
+                if reference_character_id is not None:
+                    self.vault.notify(
+                        EventType.CHANGED_CHARACTERS,
+                    )
+
+            else:
                 raise HTTPException(
                     status_code=400,
                     detail="Failed to add picture to set (set may not exist or picture already in set)",
@@ -1251,7 +1299,10 @@ class Server:
             """Remove a picture from a set."""
             from pixlvault.db_models import PictureSetMember
 
-            def remove_member(session, id, picture_id):
+            # Find reference_character_id if this is a reference set
+            reference_character_id = self._find_reference_character_id_for_set(id)
+
+            def remove_member(session, id, picture_id, reference_character_id=None):
                 member = session.exec(
                     select(PictureSetMember).where(
                         PictureSetMember.set_id == id,
@@ -1261,13 +1312,37 @@ class Server:
                 if not member:
                     return False
                 session.delete(member)
+
+                # If it is a reference set we need to remove all FaceCharacterLikeness entries for this character
+                if reference_character_id is not None:
+                    session.exec(
+                        delete(FaceCharacterLikeness).where(
+                            FaceCharacterLikeness.character_id == reference_character_id
+                        )
+                    )
+                    logger.info(
+                        "Deleted FaceCharacterLikeness entries for character {}".format(
+                            reference_character_id
+                        )
+                    )
+
                 session.commit()
                 return True
 
             success = self.vault.db.run_task(
-                remove_member, id, picture_id, priority=DBPriority.IMMEDIATE
+                remove_member,
+                id,
+                picture_id,
+                reference_character_id=reference_character_id,
+                priority=DBPriority.IMMEDIATE,
             )
-            if not success:
+            if success:
+                # Wake up FaceCharacterLikenessWorker to recompute likenesses for this character
+                if reference_character_id is not None:
+                    self.vault.notify(
+                        EventType.CHANGED_CHARACTERS,
+                    )
+            else:
                 raise HTTPException(status_code=404, detail="Picture not in set")
             return {"status": "success"}
 

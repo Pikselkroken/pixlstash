@@ -115,7 +115,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         Notify the worker that it needs to wake.
         """
-        logger.debug("Worker {} woken up.".format(self.name()))
+        logger.info("Worker {} woken up.".format(self.name()))
         self._event.set()
 
     def name(self):
