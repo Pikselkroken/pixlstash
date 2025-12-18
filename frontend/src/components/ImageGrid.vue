@@ -274,18 +274,18 @@
           <!-- Info row absolutely positioned below thumbnail -->
           <div class="thumbnail-info-row">
             <div
-              v-if="
-                props.selectedSort === 'search_likeness desc' &&
-                img.likeness_score !== undefined
+              v-if="typeof props.selectedSort === 'string' &&
+                props.selectedSort.includes('CHARACTER_LIKENESS') &&
+                img.character_likeness !== undefined
               "
               class="likeness-score"
             >
-              Likeness: {{ img.likeness_score.toFixed(2) }}
+              Likeness: {{ img.character_likeness.toFixed(2) }}
             </div>
             <div
               v-else-if="
                 typeof props.selectedSort === 'string' &&
-                props.selectedSort.includes('created_at') &&
+                props.selectedSort.includes('DATE') &&
                 img.created_at
               "
               class="thumbnail-info"
@@ -1005,7 +1005,7 @@ function buildPictureIdsQueryParams() {
   ) {
     params.append("set_id", props.selectedSet);
   } else if (
-    props.selectedSort === "character_likeness" &&
+    props.selectedSort === "CHARACTER_LIKENESS" &&
     props.similarityCharacter
   ) {
     params.append("character_id", props.similarityCharacter);

@@ -15,6 +15,8 @@ from sqlmodel import (
 )
 from typing import List, Optional, TYPE_CHECKING
 
+from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
+
 from .quality import Quality
 
 if TYPE_CHECKING:
@@ -130,6 +132,32 @@ class Face(SQLModel, table=True):
 
         faces = session.exec(query).all()
         return faces
+
+    @classmethod
+    def find_faces_without_character_likeness(
+        cls, session, character_id: int
+    ) -> List["Face"]:
+        """
+        Find all faces that do not have a FaceCharacterLikeness entry for the given character_id.
+        Args:
+            session: The database session to use for the query.
+            character_id: The ID of the character to check likeness entries for.
+        Returns:
+            A list of Face objects without a FaceCharacterLikeness entry for the given character_id.
+        """
+        subquery = (
+            select(FaceCharacterLikeness.face_id)
+            .where((FaceCharacterLikeness.character_id == character_id))
+            .union(
+                select(FaceCharacterLikeness.face_id).where(
+                    (FaceCharacterLikeness.character_id == character_id)
+                )
+            )
+            .subquery()
+        )
+
+        query = select(cls).where(~cls.id.in_(select(subquery)))
+        return session.exec(query).all()
 
     @staticmethod
     def expand_face_bbox(

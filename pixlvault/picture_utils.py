@@ -528,6 +528,22 @@ class PictureUtils:
             logger.warning(f"cosine_similarity error: {e}")
             return 0.0
 
+    @classmethod
+    def cosine_similarity_batch(cls, arr_a_list, arr_b_list):
+        """
+        Compute cosine similarity for two lists of np.ndarray feature vectors in batch.
+        Returns a 1D np.ndarray of similarities scaled to [0, 1].
+        """
+        arr_a = np.stack(arr_a_list)
+        arr_b = np.stack(arr_b_list)
+        # Normalize
+        arr_a_norm = arr_a / np.linalg.norm(arr_a, axis=1, keepdims=True)
+        arr_b_norm = arr_b / np.linalg.norm(arr_b, axis=1, keepdims=True)
+        # Compute dot products
+        sims = np.sum(arr_a_norm * arr_b_norm, axis=1)
+        sims = 0.5 * (sims + 1.0)  # Scale to [0, 1]
+        return sims
+
     @staticmethod
     def crop_face_bbox_exact(file_path, bbox):
         """

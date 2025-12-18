@@ -1064,17 +1064,29 @@ defineExpose({ refreshSidebar });
             align-items: stretch;
           "
         >
-          <v-select
-            v-model="sortModel"
-            :items="sortOptions"
-            class="sidebar-sort-select"
-            item-title="label"
-            item-value="value"
-            label="Sort by"
-            dense
-            hide-details
-            style="min-width: 0"
-          />
+          <div style="display: flex; align-items: center; gap: 8px">
+            <v-select
+              v-model="sortModel"
+              :items="sortOptions"
+              class="sidebar-sort-select"
+              item-title="label"
+              item-value="value"
+              label="Sort by"
+              dense
+              hide-details
+              style="flex: 1; min-width: 0"
+            />
+            <v-btn
+              icon
+              :title="descendingModel ? 'Make ascending' : 'Make descending'"
+              @click="descendingModel = !descendingModel"
+              style="margin-left: auto"
+            >
+              <v-icon>
+                {{ descendingModel ? "mdi-sort-descending" : "mdi-sort-ascending" }}
+              </v-icon>
+            </v-btn>
+          </div>
           <v-select
             v-if="sortModel === SIMILARITY_SORT_KEY"
             v-model="similarityCharacter"
@@ -1087,34 +1099,6 @@ defineExpose({ refreshSidebar });
             item-title="text"
             item-value="value"
           />
-          <div
-            style="
-              display: flex;
-              gap: 8px;
-              align-items: center;
-              margin-top: 4px;
-            "
-          >
-            <v-select
-              :key="reactiveSelectedDescending"
-              v-model="descendingModel"
-              :items="[
-                { text: 'Ascending', value: false },
-                { text: 'Descending', value: true },
-              ]"
-              class="sidebar-sort-select"
-              label="Order"
-              dense
-              hide-details
-              style="flex: 1 1 0; min-width: 0"
-              item-title="text"
-              item-value="value"
-              @change="
-                (value) =>
-                  console.log('[SideBar.vue] v-select changed to:', value)
-              "
-            />
-          </div>
         </div>
       </div>
     </transition>

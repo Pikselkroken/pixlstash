@@ -16,6 +16,7 @@ class WorkerType(str, Enum):
     QUALITY = "QualityWorker"
     FACE_QUALITY = "FaceQualityWorker"
     FACE_LIKENESS = "FaceLikenessWorker"
+    FACE_CHARACTER_LIKENESS = "FaceCharacterLikenessWorker"
     LIKENESS = "LikenessWorker"
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
@@ -130,6 +131,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         future = Future()
         with self._watched_ids_lock:
             self._watched_ids[(cls, object_id, attr)] = future
+        logger.debug(f"Future created for {cls.__name__} id={object_id} attr={attr}")
         return future
 
     def _notify_others(self, event_type: EventType):
@@ -153,6 +155,9 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
                         f"Worker {self.name()} processed {cls.__name__} id={object_id} attr={attr}"
                     )
                     future.set_result((object_id, payload))
+                    logger.debug(
+                        f"Future result set for {cls.__name__} id={object_id} attr={attr} with payload={payload}"
+                    )
 
     def _wait(self):
         """

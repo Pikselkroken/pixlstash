@@ -35,6 +35,7 @@ from pixlvault.db_models import (
 )
 
 from pixlvault.db_models import PictureLikeness, FaceLikeness
+from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
 from pixlvault.picture_stack_utils import (
     order_stack_pictures,
     combined_picture_face_likeness,
@@ -1576,7 +1577,6 @@ class Server:
                 query = query_params.pop("query", query)
                 offset = int(query_params.pop("offset", offset))
                 limit = int(query_params.pop("limit", limit))
-
             if not query:
                 raise HTTPException(
                     status_code=400, detail="Query parameter is required for search"
@@ -2015,36 +2015,23 @@ class Server:
                         logger.warning("No unassigned faces found")
                         return []
 
-                    def face_likeness_lookup(session, face_a, face_b):
-                        # Always try min(face_a, face_b), max(face_a, face_b) to ensure consistent ordering
-                        min_id = min(face_a.id, face_b.id)
-                        max_id = max(face_a.id, face_b.id)
-                        row = session.exec(
-                            select(FaceLikeness).where(
-                                (
-                                    (FaceLikeness.face_id_a == min_id)
-                                    & (FaceLikeness.face_id_b == max_id)
-                                )
-                            )
-                        ).first()
-                        if row:
-                            return row.likeness
-                        return None
+                    # Fetch likeness scores directly from FaceCharacterLikeness
+                    def fetch_character_likeness(session, character_id):
+                        rows = session.exec(
+                            select(
+                                FaceCharacterLikeness.face_id,
+                                FaceCharacterLikeness.likeness,
+                            ).where(FaceCharacterLikeness.character_id == character_id)
+                        ).all()
+                        return {row.face_id: row.likeness for row in rows}
 
-                    character_likeness_map = {}
-                    for face in candidate_faces:
-                        scores = []
-                        for ref_face in reference_faces:
-                            likeness = self.vault.db.run_task(
-                                face_likeness_lookup, face, ref_face
-                            )
-                            if likeness is not None:
-                                scores.append(likeness)
-                        character_likeness_map[face.id] = (
-                            PictureUtils.softmax_weighted_average(scores, alpha=1.0)
-                            if scores
-                            else 0.0
-                        )
+                    character_likeness_map = self.vault.db.run_task(
+                        fetch_character_likeness, character_id
+                    )
+
+                    # Debug logging for character likeness map
+                    logger.debug(f"Character likeness map: {character_likeness_map}")
+
                     # 3. Get unique picture IDs in that order
                     # For each picture, use the maximum character_likeness among all its unassigned faces
                     picture_likeness_map = {}
@@ -2057,6 +2044,9 @@ class Server:
                             picture_likeness_map[pic_id] = max(
                                 picture_likeness_map[pic_id], likeness
                             )
+
+                    # Debug logging for picture likeness map
+                    logger.debug(f"Picture likeness map: {picture_likeness_map}")
 
                     # Fetch Picture objects
                     candidate_pics = self.vault.db.run_task(
