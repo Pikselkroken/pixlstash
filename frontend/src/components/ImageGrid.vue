@@ -995,7 +995,6 @@ function onGlobalKeyPress(key, event) {
 
 // Local state for all image IDs
 // Total image count for paging and 'End' key
-const totalImageCount = ref(0);
 const imagesLoading = ref(false);
 const imagesError = ref(null);
 
@@ -1089,11 +1088,6 @@ async function fetchTotalImageCount() {
       if (!res.ok) throw new Error("Failed to fetch image info for all images");
       images = await res.json();
     }
-    totalImageCount.value = images.length;
-    console.debug(
-      "[IMAGE COUNT] Total images for current filters:",
-      totalImageCount.value
-    );
     allGridImages.value = images.map((img, i) => ({
       ...img,
       idx: i,
@@ -1101,7 +1095,6 @@ async function fetchTotalImageCount() {
     }));
   } catch (e) {
     imagesError.value = e.message;
-    totalImageCount.value = 0;
     allGridImages.value = [];
   } finally {
     imagesLoading.value = false;
@@ -1184,7 +1177,7 @@ const topSpacerHeight = computed(() => {
 const bottomSpacerHeight = computed(() => {
   const cols = columns.value;
   const lastRenderedRow = Math.floor((renderEnd.value - 1) / cols) + 1;
-  const totalRows = Math.ceil(totalImageCount.value / cols);
+  const totalRows = Math.ceil(allGridImages.value.length / cols);
   const rowsBelow = totalRows - lastRenderedRow;
   const height = rowsBelow > 0 ? rowsBelow * rowHeight.value : 0;
   return height;
@@ -1195,8 +1188,12 @@ const allGridImages = ref([]);
 
 const gridImagesToRender = computed(() => {
   // Only render a window of placeholders/images for performance
-  if (allGridImages.value.length < totalImageCount.value) {
-    for (let i = allGridImages.value.length; i < totalImageCount.value; i++) {
+  if (allGridImages.value.length < allGridImages.value.length) {
+    for (
+      let i = allGridImages.value.length;
+      i < allGridImages.value.length;
+      i++
+    ) {
       allGridImages.value[i] = { id: null, thumbnail: null, idx: i };
     }
   }
@@ -1319,12 +1316,6 @@ async function fetchThumbnailsBatch(start, end) {
         }
       }
     }
-    // Ensure allGridImages.value is sized to totalImageCount
-    if (allGridImages.value.length < totalImageCount.value) {
-      for (let i = allGridImages.value.length; i < totalImageCount.value; i++) {
-        allGridImages.value[i] = { id: null, thumbnail: null, idx: i };
-      }
-    }
     // Insert/update images at their correct indices
     for (let i = 0; i < gridImages.length; i++) {
       const img = gridImages[i];
@@ -1340,7 +1331,7 @@ async function fetchThumbnailsBatch(start, end) {
 function updateVisibleThumbnails() {
   let start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
   let end = Math.min(
-    totalImageCount.value,
+    allGridImages.value.length,
     visibleEnd.value + divisibleViewWindow.value
   );
   console.log(
@@ -1352,7 +1343,6 @@ function updateVisibleThumbnails() {
     visibleStart.value,
     visibleEnd.value,
     "Total:",
-    totalImageCount.value,
     allGridImages.value.length
   );
 
