@@ -19,6 +19,7 @@ from .worker_registry import WorkerRegistry, WorkerType
 from pixlvault.event_types import EventType
 from pixlvault.tag_worker import TagWorker, DescriptionWorker, EmbeddingWorker  # noqa: F401
 from pixlvault.face_extraction_worker import FaceExtractionWorker  # noqa: F401
+from pixlvault.face_likeness_worker import FaceLikenessWorker, FaceCharacterLikenessWorker  # noqa: F401
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
 
