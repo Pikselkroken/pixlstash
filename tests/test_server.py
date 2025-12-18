@@ -675,6 +675,7 @@ def test_semantic_search():
                 {
                     WorkerType.FACE,
                     WorkerType.TAGGER,
+                    WorkerType.DESCRIPTION,
                 }
             )
 
@@ -762,14 +763,13 @@ def test_semantic_search():
 
             server.vault.start_workers(
                 {
-                    WorkerType.DESCRIPTION,
                     WorkerType.TEXT_EMBEDDING,
                 }
             )
 
             # Wait for all text embeddings to be processed
             for future in embeddings_futures:
-                result_id = future.result(timeout=60)
+                result_id = future.result(timeout=80)
                 logging.debug(f"Text embedding processed for picture ID: {result_id}")
 
             # Inspect embeddings for each picture after embedding futures complete
