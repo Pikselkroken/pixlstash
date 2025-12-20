@@ -1,6 +1,6 @@
 // media.js - Shared media/file helpers for Pixelurgy Vault frontend
 
-const PIL_IMAGE_EXTENSIONS = [
+export const PIL_IMAGE_EXTENSIONS = [
   'jpg',  'jpeg', 'png', 'bmp',  'gif', 'tiff', 'tif',  'webp', 'ppm', 'pgm',
   'pbm',  'pnm',  'ico', 'icns', 'svg', 'dds',  'msp',  'pcx',  'xbm', 'im',
   'fli',  'flc',  'eps', 'psd',  'pdf', 'jp2',  'j2k',  'jpf',  'jpx', 'j2c',
@@ -8,7 +8,7 @@ const PIL_IMAGE_EXTENSIONS = [
   'pict', 'pct',  'cur', 'emf',  'wmf', 'heic', 'heif', 'avif'
 ];
 
-const VIDEO_EXTENSIONS =
+export const VIDEO_EXTENSIONS =
     ['mp4', 'avi', 'mov', 'webm', 'mkv', 'flv', 'wmv', 'm4v'];
 
 export function isSupportedImageFile(file) {

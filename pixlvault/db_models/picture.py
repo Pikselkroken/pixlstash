@@ -311,12 +311,15 @@ class Picture(SQLModel, table=True):
         offset: int = 0,
         limit: int = sys.maxsize,
         select_fields: Optional[List[str]] = None,
+        format: Optional[List[str]] = None,
         **search,
     ) -> List["Picture"]:
         """
         Find pictures based on provided filters.
         """
         query = select(cls)
+
+        logger.info("Got search parameters: %s", search)
         if select_fields:
             # Always include 'id' in select_fields
             select_fields = list(set(select_fields) | {"id"})
@@ -341,6 +344,9 @@ class Picture(SQLModel, table=True):
                     query = query.where(getattr(cls, attr).in_(value))
                 else:
                     query = query.where(getattr(cls, attr) == value)
+
+        if format:
+            query = query.where(cls.format.in_(format))
 
         if sort:
             field_name = sort.field

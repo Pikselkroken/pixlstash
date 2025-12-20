@@ -838,6 +838,7 @@ class Server:
             description = data.get("description")
             char = None
             try:
+
                 def alter_char(session: Session, id: int, name: str, description: str):
                     character = session.get(Character, id)
                     if character is None:
@@ -875,7 +876,10 @@ class Server:
         async def delete_character(id: int):
             # Delete the character
             try:
-                def clear_character_and_nullify_faces(session: Session, character_id: int):
+
+                def clear_character_and_nullify_faces(
+                    session: Session, character_id: int
+                ):
                     character = session.get(Character, character_id)
                     if character is None:
                         raise KeyError("Character not found")
@@ -889,6 +893,7 @@ class Server:
                     session.commit()
                     session.delete(character)
                     session.commit()
+
                 self.vault.db.run_task(
                     clear_character_and_nullify_faces,
                     id,
@@ -2112,9 +2117,13 @@ class Server:
             limit: int = Query(sys.maxsize),
         ):
             query_params = {}
+            format = None
             if request.query_params:
                 logger.info("Received query params: " + str(request.query_params))
+                format = request.query_params.getlist("format")
+                logger.info("Format param: " + str(format))
                 query_params = dict(request.query_params)
+                query_params.pop("format", None)
                 sort = query_params.pop("sort", sort)
                 desc_val = query_params.pop("descending", descending)
                 if isinstance(desc_val, str):
@@ -2151,7 +2160,11 @@ class Server:
             if character_id == "UNASSIGNED":
 
                 def find_unassigned(session: Session):
-                    pics = Picture.find(session, select_fields=["characters"])
+                    pics = Picture.find(
+                        session,
+                        select_fields=["characters"],
+                        format=format,
+                    )
                     return [pic.id for pic in pics if not pic.characters]
 
                 picture_ids = self.vault.db.run_task(find_unassigned)
@@ -2197,6 +2210,7 @@ class Server:
                     offset=offset,
                     limit=limit,
                     select_fields=Picture.metadata_fields(),
+                    format=format,
                 )
                 return [safe_model_dict(pic) for pic in pics]
             else:
@@ -2206,6 +2220,7 @@ class Server:
                     offset=offset,
                     limit=limit,
                     select_fields=Picture.metadata_fields(),
+                    format=format,
                     **query_params,
                 )
             return [safe_model_dict(pic) for pic in pics]

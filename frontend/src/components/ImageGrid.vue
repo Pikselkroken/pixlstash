@@ -325,6 +325,8 @@ import {
   dataTransferHasSupportedMedia,
   isSupportedVideoFile,
   getOverlayFormat,
+  PIL_IMAGE_EXTENSIONS,
+  VIDEO_EXTENSIONS,
 } from "../utils/media.js";
 import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
@@ -1043,9 +1045,16 @@ function buildPictureIdsQueryParams() {
   }
   // Add format filter for backend media type filtering
   if (props.mediaTypeFilter === "images") {
-    params.append("format", "PNG");
+    console.log(
+      "[ImageGrid.vue] Building query params for image formats only", PIL_IMAGE_EXTENSIONS
+    );
+    for (const ext of PIL_IMAGE_EXTENSIONS) {
+      params.append("format", ext.toUpperCase());
+    }
   } else if (props.mediaTypeFilter === "videos") {
-    params.append("format", "MP4");
+    for (const ext of VIDEO_EXTENSIONS) {
+      params.append("format", ext.toUpperCase());
+    }
   }
   return params.toString();
 }
