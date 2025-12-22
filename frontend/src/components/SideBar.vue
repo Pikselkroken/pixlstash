@@ -55,7 +55,7 @@ const sections = ref({
   people: true,
   sets: true,
   analysis: true,
-  search: true,
+  sort: true,
 });
 const dragOverCharacter = ref(null);
 const nextCharacterNumber = ref(1);
@@ -1047,30 +1047,24 @@ defineExpose({ refreshSidebar });
       </div>
     </transition>
 
-    <div class="sidebar-section-header" @click="toggleSection('search')">
+    <div class="sidebar-section-header" @click="toggleSection('sort')">
       <v-icon small style="margin-right: 8px">
-        {{ sections.search ? "mdi-chevron-down" : "mdi-chevron-right" }}
+        {{ sections.sort ? "mdi-chevron-down" : "mdi-chevron-right" }}
       </v-icon>
-      Search &amp; Sorting
+      Sorting
       <span style="flex: 1 1 auto"></span>
     </div>
 
     <transition name="fade">
-      <div class="search-and-sort" v-show="sections.search">
+      <div class="search-and-sort" v-show="sections.sort">
         <div class="sidebar-searchbar-wrapper">
-          <SearchBar
-            v-model="searchModel"
-            placeholder="Search images..."
-            class="sidebar-searchbar"
-            @search="searchImages"
-          />
         </div>
         <div
           class="sidebar-searchbar-wrapper"
           style="
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 2px;
             align-items: stretch;
           "
         >
@@ -1104,7 +1098,7 @@ defineExpose({ refreshSidebar });
             v-model="similarityCharacter"
             :items="similarityCharacterOptions"
             class="sidebar-sort-select"
-            label="Similarity to Character"
+            label="Similarity to"
             dense
             hide-details
             style="min-width: 0; margin-top: -4px"
@@ -1132,7 +1126,7 @@ defineExpose({ refreshSidebar });
 
 .sidebar-section-header {
   position: relative;
-  font-size: 1.2rem;
+  font-size: 1.0rem;
   font-weight: 800;
   padding: 2px;
   margin: 2px 0 2px 0;
@@ -1161,12 +1155,12 @@ defineExpose({ refreshSidebar });
 .sidebar-list-item.active {
   display: flex;
   align-items: center;
-  min-height: 56px;
+  min-height: 48px;
   padding: 2px 6px;
   cursor: pointer;
   border-radius: 0;
   margin-bottom: 0;
-  font-size: 1em;
+  font-size: 0.9em;
   font-weight: 500;
   background: transparent;
   color: #fff;
@@ -1229,8 +1223,8 @@ defineExpose({ refreshSidebar });
   align-items: center;
   margin-right: 12px;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
 }
 
 .sidebar-list-label {
@@ -1243,8 +1237,8 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-character-thumb {
-  max-width: 44px;
-  max-height: 44px;
+  max-width: 36px;
+  max-height: 36px;
   object-fit: contain;
   border-radius: 6px;
   box-shadow: 0 0 0 #bbb;
@@ -1266,7 +1260,7 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-list-count {
-  font-size: 0.92em;
+  font-size: 0.8em;
   color: #b0b8c9;
   min-width: 2.5em;
   text-align: right;
@@ -1323,23 +1317,6 @@ defineExpose({ refreshSidebar });
 
 .sidebar-sort-select {
   background: rgba(200, 200, 200, 0.6);
-}
-
-.sidebar-searchbar-wrapper {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  position: relative;
-  width: 100%;
-  padding: 4px;
-}
-
-.sidebar-searchbar {
-  width: 100%;
-  min-width: 0;
-  position: relative;
-  transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .character-edit-btn {
