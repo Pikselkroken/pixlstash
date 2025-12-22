@@ -17,7 +17,6 @@ import SearchBar from "./components/SearchBar.vue";
 
 const likenessRowsRef = ref(null);
 
-// --- Backend Constants & Identifiers ---
 const BACKEND_URL = "http://localhost:9537";
 const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
@@ -96,30 +95,30 @@ async function handleSwitchToGrid() {
 }
 
 async function handleSelectCharacter(charId) {
+  console.log("[App.vue] handleSelectCharacter called with charId:", charId);
   selectedCharacter.value = charId;
   selectedSet.value = null; // Clear set selection
+  searchQuery.value = ""; // Clear search query
+  await nextTick(); // Ensure reactivity propagates the change
+  console.log("[App.vue] searchQuery cleared:", searchQuery.value);
   handleSwitchToGrid();
 }
 
 async function handleSelectSet(setId) {
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
+  searchQuery.value = ""; // Clear search query
   handleSwitchToGrid();
 }
 
 async function handleUpdateSearchQuery(value) {
-  searchQuery.value = value;
+  searchQuery.value = typeof value === "string" ? value : ""; // Ensure searchQuery is always a string
   handleSwitchToGrid();
 }
 
 async function handleUpdateSelectedSort({ sort, descending }) {
   selectedSort.value = sort;
   selectedDescending.value = descending;
-  console.log("[App.vue] Updated selectedSort:", selectedSort.value);
-  console.log(
-    "[App.vue] Updated selectedDescending:",
-    selectedDescending.value
-  );
   handleSwitchToGrid();
 }
 
@@ -299,15 +298,6 @@ function handleGridBackgroundClick(e) {
   }
 }
 
-// --- Chat Overlay ---
-function openChatOverlay() {
-  chatOpen.value = true;
-}
-
-function closeChatOverlay() {
-  chatOpen.value = false;
-}
-
 function handleGlobalKeydown(e) {
   const keys = ["Home", "End", "PageUp", "PageDown"];
   if (keys.includes(e.key)) {
@@ -348,9 +338,21 @@ function handleExportZip() {
 // --- Search Overlay ---
 const searchOverlayVisible = ref(false);
 
-function toggleSearchOverlay() {
-  searchOverlayVisible.value = !searchOverlayVisible.value;
+function openSearchOverlay() {
+  searchOverlayVisible.value = true;
   console.log("Search overlay visibility toggled:", searchOverlayVisible.value);
+}
+
+function closeSearchOverlay() {
+  searchOverlayVisible.value = false;
+  console.log("Search overlay closed");
+}
+
+function handleClearSearch() {
+  console.log("[App.vue] handleClearSearch called");
+  searchQuery.value = "";
+  console.log("[App.vue] searchQuery cleared:", searchQuery.value);
+  refreshGridVersion(); // Force the ImageGrid to refresh
 }
 
 // --- Watchers ---
@@ -361,9 +363,6 @@ function toggleSearchOverlay() {
 
 watch(searchQuery, (newVal, oldVal) => {
   if (!newVal && oldVal) {
-    if (previousSort.value && previousSort.value !== selectedSort.value) {
-      selectedSort.value = previousSort.value;
-    }
     refreshGridVersion();
   }
 });

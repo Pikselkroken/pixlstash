@@ -43,7 +43,7 @@
         <v-btn
           icon
           color="green"
-          @click="toggleSearchOverlay"
+          @click="openSearchOverlay"
           title="Search"
           style="margin-left: 4px"
         >
@@ -108,7 +108,6 @@
         :allPicturesId="ALL_PICTURES_ID"
         :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
         :selectedSet="selectedSet"
-        :searchQuery="searchQuery"
         :selectedSort="selectedSort"
         :selectedDescending="selectedDescending.value"
         :backendUrl="BACKEND_URL"
@@ -117,7 +116,6 @@
         @switch-to-likeness="handleSwitchToLikeness"
         @images-assigned-to-character="handleImagesAssignedToCharacter"
         @update:selected-sort="handleUpdateSelectedSort"
-        @update:search-query="handleUpdateSearchQuery"
         @update:similarity-character="handleUpdateSimilarityCharacter"
         @update:set-error="error = $event"
         @update:set-loading="loading = $event"
@@ -156,6 +154,7 @@
               :showFaceBboxes="showFaceBboxes"
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+              @clear-search="handleClearSearch"
               @refresh-sidebar="refreshSidebar"
             />
           </template>
@@ -163,24 +162,14 @@
             <!--  -->
             <div class="empty-state">Nothing to see here.</div>
           </template>
-          <ChatWindow
-            v-if="chatOpen"
-            ref="chatWindowRef"
-            :open="chatOpen"
-            :selected-character="String(selectedCharacter)"
-            :config="config"
-            :backend-url="BACKEND_URL"
-            @close="closeChatOverlay"
-          />
         </div>
       </main>
     </div>
     <SearchBar
       v-if="searchOverlayVisible"
       :modelValue="searchQuery"
-      @update:modelValue="(value) => (searchQuery = value)"
       @search="handleUpdateSearchQuery"
-      @close="searchOverlayVisible = false"
+      @close="closeSearchOverlay"
     />
   </div>
 </v-app>

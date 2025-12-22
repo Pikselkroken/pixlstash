@@ -306,6 +306,15 @@
         ></div>
       </div>
     </div>
+    <!-- Clear Search button outside the grid -->
+    <v-btn v-if="props.searchQuery && props.searchQuery.length > 0"
+      class="clear-search-btn"
+      color="primary"
+      @click="clearSearchQuery"
+      style="position: absolute; bottom: 64px; left: 16px; z-index: 1000"
+    >
+      Clear Search
+    </v-btn>
   </div>
 </template>
 
@@ -333,7 +342,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
 import { useSearchOverlay } from "../utils/useSearchOverlay";
 
-const emit = defineEmits(["open-overlay", "refresh-sidebar"]);
+const emit = defineEmits(["open-overlay", "refresh-sidebar", "clear-search"]);
 
 // Props
 const props = defineProps({
@@ -370,6 +379,7 @@ onMounted(() => {
     "[ImageGrid.vue] Mounted with selectedDescending:",
     props.selectedDescending
   );
+  console.log("[ImageGrid.vue] Clear Search button should be visible.");
 });
 onUnmounted(() => {
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
@@ -1668,7 +1678,16 @@ onMounted(() => {
 watch(searchQuery, (newQuery) => {
   console.log("Search query updated:", newQuery);
 });
+
+// Function to clear searchQuery
+function clearSearchQuery() {
+  console.log("Clearing search query");
+  searchQuery.value = "";
+  emit("clear-search", "");
+  updateVisibleThumbnails();
+}
 </script>
+
 <style scoped>
 .drag-overlay {
   position: absolute;
@@ -1873,5 +1892,15 @@ watch(searchQuery, (newQuery) => {
   align-items: center;
   cursor: pointer;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.clear-search-btn {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 1000;
+  background-color: red !important; /* Temporary debug styling */
+  color: white;
+  border: 2px solid black;
 }
 </style>
