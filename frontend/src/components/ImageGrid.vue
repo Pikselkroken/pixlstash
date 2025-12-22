@@ -331,7 +331,7 @@ import {
 import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
-import { useOverlayActions } from "../utils/useOverlayActions";
+import { useSearchOverlay } from "../utils/useSearchOverlay";
 
 const emit = defineEmits(["open-overlay", "refresh-sidebar"]);
 
@@ -1649,6 +1649,25 @@ async function exportCurrentViewToZip() {
     alert("Export failed: " + (e.message || e));
   }
 }
+
+// Search functionality
+const searchQuery = ref(props.searchQuery);
+const { visible, openSearchOverlay, closeSearchOverlay } = useSearchOverlay();
+
+function handleSearch(query) {
+  console.log("Search triggered with query:", query);
+  searchQuery.value = query;
+  props.searchQuery = query;
+  fetchTotalImageCount(); // Refresh the grid based on the new search query
+}
+
+onMounted(() => {
+  console.log("ImageGrid mounted. Initial search query:", searchQuery.value);
+});
+
+watch(searchQuery, (newQuery) => {
+  console.log("Search query updated:", newQuery);
+});
 </script>
 <style scoped>
 .drag-overlay {
@@ -1836,5 +1855,23 @@ async function exportCurrentViewToZip() {
 /* Overlay for image index on thumbnail */
 .thumbnail-index-overlay {
   pointer-events: none;
+}
+
+/* Add a button to trigger the search overlay */
+.search-button {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 50px;
+  height: 50px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 </style>

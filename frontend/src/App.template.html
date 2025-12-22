@@ -42,8 +42,8 @@
         >
         <v-btn
           icon
-          color="grey"
-          @click="$emit('toggle-search')"
+          color="green"
+          @click="toggleSearchOverlay"
           title="Search"
           style="margin-left: 4px"
         >
@@ -175,5 +175,12 @@
         </div>
       </main>
     </div>
+    <SearchBar
+      v-if="searchOverlayVisible"
+      :modelValue="searchQuery"
+      @update:modelValue="(value) => (searchQuery = value)"
+      @search="handleUpdateSearchQuery"
+      @close="searchOverlayVisible = false"
+    />
   </div>
 </v-app>
