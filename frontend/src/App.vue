@@ -13,6 +13,7 @@ import SideBar from "./components/SideBar.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import LikenessRows from "./components/LikenessRows.vue";
 import ChatWindow from "./components/ChatWindow.vue";
+import SearchBar from "./components/SearchBar.vue";
 
 const likenessRowsRef = ref(null);
 
@@ -342,6 +343,14 @@ function handleExportZip() {
     return;
   }
   gridContainer.value?.exportCurrentViewToZip();
+}
+
+// --- Search Overlay ---
+const searchOverlayVisible = ref(false);
+
+function toggleSearchOverlay() {
+  searchOverlayVisible.value = !searchOverlayVisible.value;
+  console.log("Search overlay visibility toggled:", searchOverlayVisible.value);
 }
 
 // --- Watchers ---

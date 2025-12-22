@@ -1,92 +1,97 @@
 <template>
-  <div class="search-bar">
-    <v-text-field
-      v-model="input"
-      :placeholder="placeholder"
-      @keydown.enter="emitSearch"
-      @click:append="emitSearch"
-      :prepend-inner-icon="appendIcon"
-      clearable
-      @click:clear="clearInput"
-      hide-details
-      dense
-      variant="solo"
-      class="search-bar-text-field"
-    />
-  </div>
+  <v-overlay :value="true" class="search-overlay">
+    <v-card class="search-card">
+      <v-btn icon class="close-icon" @click="closeOverlay">
+        <v-icon>mdi-close</v-icon>
+      </v-btn>
+      <v-card-title>
+        Search
+      </v-card-title>
+      <v-card-text>
+        <v-text-field
+          v-model="input"
+          label="Search"
+          outlined
+          clearable
+          @click:clear="clearInput"
+        ></v-text-field>
+      </v-card-text>
+      <v-card-actions>
+        <v-btn class="search-button" @click="emitSearch">
+          <v-icon>mdi-magnify</v-icon>
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-overlay>
 </template>
 
 <script setup>
-import { ref, watch, defineEmits, defineProps } from "vue";
+import { ref, defineEmits } from "vue";
+import {
+  VOverlay,
+  VCard,
+  VCardTitle,
+  VCardText,
+  VCardActions,
+  VBtn,
+  VIcon,
+  VTextField,
+} from "vuetify/components";
 
-const props = defineProps({
-  modelValue: String,
-  placeholder: {
-    type: String,
-    default: "Search...",
-  },
-  appendIcon: {
-    type: String,
-    default: "mdi-magnify",
-  },
-});
-
-const emit = defineEmits(["update:modelValue", "search", "collapse"]);
-const input = ref(props.modelValue || "");
-const searchInput = ref(null); // Add this line
-
-watch(
-  () => props.modelValue,
-  (val) => {
-    if (val !== input.value) input.value = val;
-  }
-);
+const emit = defineEmits(["search", "close"]);
+const input = ref("");
 
 function emitSearch() {
-  emit("update:modelValue", input.value);
   emit("search", input.value);
-  emit("collapse");
-  // Focus the main image grid after search
-  const grid = document.querySelector(".image-grid");
-  if (grid) grid.focus();
 }
 
 function clearInput() {
   input.value = "";
-  emit("update:modelValue", "");
   emit("search", "");
+}
+
+function closeOverlay() {
+  emit("close");
 }
 </script>
 
 <style scoped>
-.search-bar {
+.search-overlay {
   display: flex;
+  justify-content: center;
   align-items: center;
-  width: 100%;
-  border-bottom: none !important;
 }
-.search-bar-text-field {
-  flex: 1;
-  border-bottom: none !important;
-  box-shadow: none !important;
+.search-card {
+  width: 400px;
+  position: relative;
+  color: white;
+  background-color: #97a0ac;
+  overflow: visible;
 }
-
-/* Remove bottom border/underline from v-text-field inside SearchBar */
-::v-deep(
-    .search-bar-text-field .v-field,
-    .search-bar-text-field .v-field__outline,
-    .search-bar-text-field .v-field__outline__notch
-  ) {
-  border-bottom: none !important;
-  box-shadow: none !important;
-  --v-field-border-width: 0 !important;
-  --v-field-border-color: transparent !important;
+.search-button {
+  background-color: #97a0ac;
+  color: white;
 }
-::v-deep(.search-bar-text-field .v-field::after) {
-  display: none !important;
+.close-icon {
+  position: absolute;
+  top: -20px;
+  right: -20px;
+  background-color: #97a0ac;
+  border: none;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  z-index: 1;
 }
-/* Remove rounded corners from v-text-field (solo variant) */
-::v-deep(.search-bar-text-field .v-field) {
-  border-radius: 0 !important;
+.close-icon:hover {
+  position: absolute;
+  top: -20px;
+  right: -20px;
+  background-color: orange;
+  border: none;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  z-index: 1;
 }
 </style>
