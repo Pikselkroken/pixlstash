@@ -25,7 +25,7 @@
         <v-slider
           v-model="thumbnailSize"
           :min="128"
-          :max="256"
+          :max="224"
           :step="32"
           class="toolbar-slider"
           hide-details
@@ -36,10 +36,19 @@
             display: flex;
             align-items: center;
             height: 100%;
-            margin-right: 16px;
+            margin-right: 4px;
           "
           >mdi-image-size-select-large</v-icon
         >
+        <v-btn
+          icon
+          color="grey"
+          @click="$emit('toggle-search')"
+          title="Search"
+          style="margin-left: 4px"
+        >
+          <v-icon>mdi-magnify</v-icon>
+        </v-btn>
         <v-btn
           icon
           :color="showStars ? 'orange' : 'grey'"
@@ -47,7 +56,7 @@
           title="Toggle star ratings"
           style="margin-left: 4px"
         >
-          <v-icon>{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
+          <v-icon :color="showStars ? 'white' : undefined">{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
         </v-btn>
         <v-btn
           icon
@@ -81,23 +90,6 @@
           </v-btn>
         </v-btn-toggle>
         <v-btn
-          icon
-          @click="settingsDialog = true"
-          title="Open settings"
-          style="margin-left: 4px"
-        >
-          <v-icon>mdi-cog</v-icon>
-        </v-btn>
-        <v-btn
-          icon
-          @click="openChatOverlay"
-          title="Open AI chat"
-          style="margin-left: 4px"
-        >
-          <v-icon>mdi-robot</v-icon>
-        </v-btn>
-
-        <v-btn
           v-if="currentView === 'grid'"
           icon
           @click="handleExportZip"
@@ -106,172 +98,6 @@
         >
           <v-icon>mdi-download</v-icon>
         </v-btn>
-
-        <!-- Settings Dialog -->
-        <v-dialog v-model="settingsDialog" max-width="70vw">
-          <v-card class="settings-dialog-card">
-            <div class="settings-dialog-titlebar">
-              <div class="settings-dialog-title">Settings</div>
-              <button
-                class="settings-dialog-close"
-                @click="settingsDialog = false"
-                aria-label="Close"
-              >
-                &times;
-              </button>
-            </div>
-            <v-card-text>
-              <div class="settings-section">
-                <strong>Image Roots</strong>
-                <ul class="settings-image-roots">
-                  <li
-                    v-for="root in config.image_roots"
-                    :key="root"
-                    @click="selectImageRoot(root)"
-                    :class="[
-                    'settings-image-root',
-                    { selected: root === config.selected_image_root },
-                    ]"
-                    style="
-                      cursor: pointer;
-                      user-select: none;
-                      display: flex;
-                      align-items: center;
-                      padding: 8px 0 8px 8px;
-                      border-radius: 8px;
-                      margin-bottom: 2px;
-                    "
-                  >
-                    <span style="flex: 1">{{ root }}</span>
-                    <span
-                      v-if="root === config.selected_image_root"
-                      style="
-                        color: #1976d2;
-                        font-weight: bold;
-                        margin-left: 8px;
-                      "
-                      >(selected)</span
-                    >
-                    <button
-                      v-if="config.image_roots.length > 1"
-                      @click.stop="removeImageRoot(root)"
-                      title="Remove root"
-                      style="
-                        margin-left: 8px;
-                        background: none;
-                        border: none;
-                        color: #888;
-                        font-size: 1.2em;
-                        cursor: pointer;
-                      "
-                    >
-                      &times;
-                    </button>
-                  </li>
-                </ul>
-                <div style="display: flex; margin-top: 12px; gap: 8px">
-                  <input
-                    v-model="newImageRoot"
-                    @keydown.enter="addImageRoot"
-                    placeholder="Add new root"
-                    style="
-                      flex: 1;
-                      padding: 8px;
-                      border-radius: 8px;
-                      border: 1px solid #ccc;
-                      min-width: 0;
-                    "
-                  />
-                  <v-btn @click="addImageRoot" color="primary">Add</v-btn>
-                </div>
-              </div>
-              <div class="settings-section" style="margin-top: 24px">
-                <strong>Thumbnail Size</strong>
-                <div
-                  style="margin-top: 8px; display: flex; align-items: center"
-                >
-                  <v-slider
-                    v-model="config.thumbnail"
-                    :min="128"
-                    :max="256"
-                    :step="32"
-                    class="slider"
-                    hide-details
-                    style="flex: 1; margin-right: 16px"
-                  />
-                  <span>{{ config.thumbnail }}px</span>
-                </div>
-                <div style="margin-top: 16px">
-                  <label style="display: flex; align-items: center; gap: 8px">
-                    <input type="checkbox" v-model="config.show_stars" />
-                    Show star ratings by default
-                  </label>
-                </div>
-              </div>
-              <div class="settings-section" style="margin-top: 24px">
-                <strong>OpenAI Connection</strong>
-                <div class="settings-form-grid">
-                  <label>Host</label>
-                  <input v-model="config.openai_host" placeholder="Host" />
-                  <label>Port</label>
-                  <input v-model.number="config.openai_port" type="number" />
-                  <label>Model</label>
-                  <select
-                    v-model="config.openai_model"
-                    @focus="fetchOpenAIModels"
-                    style="
-                      padding: 6px;
-                      border-radius: 8px;
-                      border: 1px solid #ccc;
-                    "
-                  >
-                    <option value="" disabled>Select a model</option>
-                    <option v-if="openaiModelLoading" disabled>
-                      Loading...
-                    </option>
-                    <option
-                      v-for="model in openaiModels"
-                      :key="model"
-                      :value="model"
-                    >
-                      {{ model }}
-                    </option>
-                    <option
-                      v-if="!openaiModels.length && !openaiModelLoading"
-                      disabled
-                    >
-                      No models found
-                    </option>
-                    <option v-if="openaiModelFetchError" disabled>
-                      {{ openaiModelFetchError }}
-                    </option>
-                  </select>
-                  <button
-                    @click="fetchOpenAIModels"
-                    style="
-                      margin-left: 8px;
-                      padding: 6px 12px;
-                      border-radius: 8px;
-                      background: #1976d2;
-                      color: #fff;
-                      border: none;
-                      font-weight: 600;
-                      cursor: pointer;
-                    "
-                  >
-                    Refresh
-                  </button>
-                </div>
-                <div
-                  v-if="openaiModelFetchError"
-                  style="color: #c00; margin-top: 6px"
-                >
-                  {{ openaiModelFetchError }}
-                </div>
-              </div>
-            </v-card-text>
-          </v-card>
-        </v-dialog>
       </div>
     </div>
     <div class="file-manager">
