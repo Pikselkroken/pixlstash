@@ -84,6 +84,8 @@ class FaceLikenessWorker(BaseWorker):
             arr_b_list = []
             pair_ids = []
             for b in bs:
+                if self._stop.is_set():
+                    break
                 face_a = face_dict.get(a)
                 face_b = face_dict.get(b)
                 if (
@@ -101,6 +103,8 @@ class FaceLikenessWorker(BaseWorker):
                 f"FaceLikenessWorker: Computing cosine similarities for batch. Lists lengths: arr_a_list={len(arr_a_list)}, arr_b_list={len(arr_b_list)}"
             )
             if arr_a_list and arr_b_list:
+                if self._stop.is_set():
+                    break
                 sims = PictureUtils.cosine_similarity_batch(arr_a_list, arr_b_list)
                 for (a, b), likeness in zip(pair_ids, sims):
                     if likeness >= self.MIN_THRESHOLD:

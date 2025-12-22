@@ -8,6 +8,7 @@ import csv
 import numpy as np
 import onnxruntime as ort
 import os
+import platform
 import re
 import torch
 
@@ -670,7 +671,16 @@ class PictureTagger:
             max_concurrent = MAX_CONCURRENT_IMAGES_CPU
         else:
             max_concurrent = MAX_CONCURRENT_IMAGES_GPU
-        worker_count = min(max_concurrent, os.cpu_count() // 2 or 1, len(image_paths))
+
+        # On macOS, multiprocessing uses 'spawn' which requires pickling.
+        # ONNX InferenceSession cannot be pickled, so disable workers on macOS.
+        if platform.system() == "Darwin":
+            worker_count = 0
+        else:
+            worker_count = min(
+                max_concurrent, os.cpu_count() // 2 or 1, len(image_paths)
+            )
+
         logger.debug(
             "Starting tagger dataloader with worker count: "
             + str(worker_count)

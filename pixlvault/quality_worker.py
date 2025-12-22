@@ -73,6 +73,9 @@ class QualityWorker(BaseWorker):
                     skipped = []
                     batch_shapes = []
                     for pic in batch:
+                        if self._stop.is_set():
+                            break
+
                         img = PictureUtils.load_image_or_video(pic.file_path)
                         shape = img.shape if img is not None else None
                         batch_shapes.append(shape)

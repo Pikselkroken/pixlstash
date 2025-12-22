@@ -52,7 +52,7 @@ class SortMechanism:
         },
         Keys.CHARACTER_LIKENESS: {
             "field": "character_likeness",
-            "description": "Similarity to Character",
+            "description": "Similarity to",
         },
         Keys.SHARPNESS: {
             "field": "sharpness",

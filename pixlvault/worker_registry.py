@@ -163,6 +163,9 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         Wait for a random short duration to stagger working time
         """
+        if self._stop.is_set():
+            return
+
         wait_time = random.uniform(self.INTERVAL - 1.0, self.INTERVAL + 1.0)
         self._event.wait(wait_time)
         self._event.clear()

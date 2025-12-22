@@ -106,6 +106,8 @@ class FaceCharacterLikenessWorker(BaseWorker):
                 likeness_results = []
 
                 for face in faces_without_likeness:
+                    if self._stop.is_set():
+                        break
                     if face.features is None:
                         continue
                     arr_face = np.frombuffer(face.features, dtype=np.float32)
@@ -139,15 +141,14 @@ class FaceCharacterLikenessWorker(BaseWorker):
                         len(likeness_results), character_id
                     )
                 )
-                for likeness_result in likeness_results:
-                    logger.info(
-                        f"FaceCharacterLikenessWorker: Character ID {likeness_result.character_id}, Face ID {likeness_result.face_id} = Likeness {likeness_result.likeness}"
-                    )
                 self._db.run_task(
                     FaceCharacterLikeness.bulk_insert_ignore,
                     likeness_results,
                     priority=DBPriority.LOW,
                 )
+
+            if self._stop.is_set():
+                break
 
             elapsed = time.time() - start
             if processed_notify_ids:

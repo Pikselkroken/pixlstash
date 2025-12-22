@@ -103,6 +103,8 @@ class LikenessWorker(BaseWorker):
             likeness_results = []
             processed_notify_ids = []
             for b in bs:
+                if self._stop.is_set():
+                    break
                 logger.debug(f"LikenessWorker: Processing pair (a={a}, b={b})")
                 quality_a = quality_dict.get(a).get_color_histogram()
                 quality_b = quality_dict.get(b).get_color_histogram()
