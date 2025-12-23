@@ -314,13 +314,7 @@
       style="position: absolute; bottom: 64px; left: 0; width: 100%; z-index: 1000; background-color: #f5f5f5; display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);"
     >
       <span>
-        Search result found {{
-          allGridImages && allGridImages.value
-            ? (console.log("allGridImages:", allGridImages.value),
-              console.log("gridImagesToRender:", gridImagesToRender.value),
-              gridImagesToRender.value.length)
-            : 0
-        }} items
+        Search result found {{ allGridImages.length}} items
       </span>
       <v-btn color="primary" @click="clearSearchQuery">Clear</v-btn>
     </div>
