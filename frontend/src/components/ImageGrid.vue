@@ -133,7 +133,10 @@
                   :src="getImageDownloadUrl(img)"
                   :ref="(el) => setVideoRef(img.id, el)"
                   draggable="true"
-                  @dragstart="handleVideoDragStart(img)"
+                  @pointerdown="prepareThumbnailNativeDrag(img, $event)"
+                  @pointerup="handleThumbnailPointerRelease($event)"
+                  @pointercancel="handleThumbnailPointerRelease($event)"
+                  @dragstart="handleVideoDragStart(img, $event)"
                   @dragend="handleVideoDragEnd()"
                   @load="
                     () => {
@@ -155,9 +158,12 @@
                 ></video>
                 <div
                   class="thumbnail-index-overlay"
+                  @pointerdown="prepareThumbnailNativeDrag(img, $event)"
+                  @pointerup="handleThumbnailPointerRelease($event)"
+                  @pointercancel="handleThumbnailPointerRelease($event)"
+                  @dragstart="handleVideoDragStart(img, $event)"
                   :style="{
                     position: 'absolute',
-                    top: '6px',
                     left: '10px',
                     color: 'red',
                     fontWeight: 'bold',
@@ -375,6 +381,10 @@ const props = defineProps({
 // Store refs for each thumbnail image
 const thumbnailRefs = reactive({});
 const thumbnailLoadedMap = reactive({});
+const PREFETCHED_FULL_IMAGE_LIMIT = 12;
+const fullImagePrefetchControllers = new Map();
+const prefetchedFullImageIds = new Set();
+const prefetchedFullImageOrder = [];
 
 // Key to force face bbox overlay recompute
 const faceOverlayRedrawKey = ref(0);
@@ -393,6 +403,9 @@ onMounted(() => {
 });
 onUnmounted(() => {
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
+  fullImagePrefetchControllers.clear();
+  prefetchedFullImageIds.clear();
+  prefetchedFullImageOrder.length = 0;
 });
 
 function onThumbnailLoad(id) {
@@ -543,6 +556,7 @@ const hoveredImageIdx = ref(null);
 
 function handleImageMouseEnter(img) {
   img._showRes = true;
+  prefetchFullImage(img);
   hoveredImageIdx.value = img.idx;
 }
 function handleImageMouseLeave(img) {
@@ -594,6 +608,125 @@ function getImageDownloadUrl(img) {
   return `${props.backendUrl}/pictures/${img.id}${suffix}`;
 }
 
+function prefetchFullImage(img) {
+  if (!img || !img.id) return;
+  if (isVideo(img)) return;
+  const id = img.id;
+  if (prefetchedFullImageIds.has(id) || fullImagePrefetchControllers.has(id)) {
+    return;
+  }
+  const url = getImageDownloadUrl(img);
+  if (!url) return;
+  const preloader = new Image();
+  fullImagePrefetchControllers.set(id, preloader);
+  preloader.onload = () => {
+    fullImagePrefetchControllers.delete(id);
+    prefetchedFullImageIds.add(id);
+    prefetchedFullImageOrder.push(id);
+    while (prefetchedFullImageOrder.length > PREFETCHED_FULL_IMAGE_LIMIT) {
+      const oldest = prefetchedFullImageOrder.shift();
+      if (oldest !== undefined) {
+        prefetchedFullImageIds.delete(oldest);
+      }
+    }
+  };
+  preloader.onerror = () => {
+    fullImagePrefetchControllers.delete(id);
+  };
+  preloader.decoding = "async";
+  preloader.loading = "eager";
+  preloader.src = url;
+}
+
+function getDragSelectionIds(img) {
+  if (
+    img &&
+    selectedImageIds.value &&
+    selectedImageIds.value.length > 1 &&
+    selectedImageIds.value.includes(img.id)
+  ) {
+    return selectedImageIds.value.slice();
+  }
+  return img && img.id ? [img.id] : [];
+}
+
+function sanitizeFilenameSegment(name) {
+  if (!name || typeof name !== "string") return "PixlVault";
+  const cleaned = name.trim().replace(/[^a-z0-9_-]+/gi, "_");
+  return cleaned || "PixlVault";
+}
+
+function buildSelectionZipFilename(count) {
+  const base = sanitizeFilenameSegment(selectedGroupName.value || "PixlVault");
+  return `${base}-${String(count).padStart(2, "0")}-images.zip`;
+}
+
+function buildExportUrlForIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return "";
+  const params = new URLSearchParams();
+  ids.forEach((id) => {
+    if (id !== undefined && id !== null) {
+      params.append("id", id);
+    }
+  });
+  return `${props.backendUrl}/pictures/export?${params.toString()}`;
+}
+
+function setupMultiExportDrag(event, ids) {
+  if (!event?.dataTransfer || !Array.isArray(ids) || ids.length < 2) return;
+  const url = buildExportUrlForIds(ids);
+  if (!url) return;
+  const filename = buildSelectionZipFilename(ids.length);
+  const payload = `application/zip:${filename}:${url}`;
+  const dt = event.dataTransfer;
+  try {
+    dt.setData("DownloadURL", payload);
+  } catch (err) {
+    console.debug("[DRAG] Unable to set DownloadURL", err);
+  }
+  try {
+    dt.setData("text/uri-list", `${url}\n`);
+  } catch (err) {
+    console.debug("[DRAG] Unable to set text/uri-list", err);
+  }
+  try {
+    dt.setData("text/plain", url);
+  } catch (err) {
+    console.debug("[DRAG] Unable to set text/plain", err);
+  }
+  try {
+    dt.setData("public.url", url);
+  } catch (err) {
+    console.debug("[DRAG] Unable to set public.url", err);
+  }
+  try {
+    dt.setData("public.url-name", filename);
+  } catch (err) {
+    console.debug("[DRAG] Unable to set public.url-name", err);
+  }
+  dt.effectAllowed = "copy";
+  dt.dropEffect = "copy";
+  console.debug("[DRAG] Multi-selection export", {
+    filename,
+    count: ids.length,
+    url,
+  });
+}
+
+function ensurePrimaryDragSelection(img, event) {
+  console.debug("[DRAG] ensurePrimaryDragSelection", {
+    imgId: img ? img.id : null,
+    selectedIds: selectedImageIds.value,
+  });
+  if (!img || !img.id) return;
+  const hasModifier = event?.ctrlKey || event?.metaKey || event?.shiftKey;
+  if (hasModifier) return;
+  if (!selectedImageIds.value.includes(img.id) || selectedImageIds.value.length === 0) {
+    selectedImageIds.value = [img.id];
+    lastSelectedIndex = typeof img.idx === "number" ? img.idx : null;
+  }
+}
+
 function promoteImageForNativeDrag(target, fullUrl) {
   if (!fullUrl || !(target instanceof HTMLImageElement)) return;
   if (!target.dataset.thumbSrc) {
@@ -614,8 +747,13 @@ function restoreImageAfterNativeDrag(target) {
 
 function prepareThumbnailNativeDrag(img, event) {
   if (!img || !event) return;
+  ensurePrimaryDragSelection(img, event);
+  const selectionIds = getDragSelectionIds(img);
+  if (selectionIds.length > 1) return;
+  prefetchFullImage(img);
   if (event.pointerType === "mouse" && event.button !== 0) return;
   const target = event.target;
+  if (!(target instanceof HTMLImageElement)) return;
   const fullUrl = getImageDownloadUrl(img);
   promoteImageForNativeDrag(target, fullUrl);
 }
@@ -1574,7 +1712,14 @@ const isImageSelected = (id) =>
 
 function handleThumbnailNativeDragStart(img, event) {
   dragSource.value = "grid";
+  ensurePrimaryDragSelection(img, event);
+  const selectionIds = getDragSelectionIds(img);
+  if (selectionIds.length > 1) {
+    setupMultiExportDrag(event, selectionIds);
+    return;
+  }
   const target = event?.target;
+  if (!(target instanceof HTMLImageElement)) return;
   const fullUrl = getImageDownloadUrl(img);
   if (!fullUrl) return;
   promoteImageForNativeDrag(target, fullUrl);
@@ -1586,9 +1731,14 @@ function handleThumbnailNativeDragEnd(event) {
   dragSource.value = null;
 }
 
-function handleVideoDragStart(img) {
+function handleVideoDragStart(img, event) {
   if (!img) return;
   dragSource.value = "grid";
+  ensurePrimaryDragSelection(img, event);
+  const selectionIds = getDragSelectionIds(img);
+  if (selectionIds.length > 1) {
+    setupMultiExportDrag(event, selectionIds);
+  }
 }
 
 function handleVideoDragEnd() {
