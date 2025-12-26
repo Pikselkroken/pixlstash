@@ -134,6 +134,7 @@
                   :ref="(el) => setVideoRef(img.id, el)"
                   draggable="true"
                   @dragstart="handleVideoDragStart(img)"
+                  @dragend="handleVideoDragEnd()"
                   @load="
                     () => {
                       setThumbnailRef(img.id, el);
@@ -588,6 +589,24 @@ function getImageDownloadUrl(img) {
   const ext = getImageFormatExtension(img);
   const suffix = ext ? `.${ext}` : "";
   return `${props.backendUrl}/pictures/${img.id}${suffix}`;
+}
+
+function promoteImageForNativeDrag(target, fullUrl) {
+  if (!fullUrl || !(target instanceof HTMLImageElement)) return;
+  if (!target.dataset.thumbSrc) {
+    target.dataset.thumbSrc = target.src;
+  }
+  if (target.dataset.usingFullSrc === "1" && target.src === fullUrl) return;
+  target.dataset.usingFullSrc = "1";
+  target.src = fullUrl;
+}
+
+function restoreImageAfterNativeDrag(target) {
+  if (!(target instanceof HTMLImageElement)) return;
+  if (target.dataset.usingFullSrc === "1" && target.dataset.thumbSrc) {
+    target.src = target.dataset.thumbSrc;
+  }
+  delete target.dataset.usingFullSrc;
 }
 
 function debugLogDataTransfer(label, dataTransfer) {
@@ -1540,31 +1559,24 @@ const isImageSelected = (id) =>
 function handleThumbnailNativeDragStart(img, event) {
   dragSource.value = "grid";
   const target = event?.target;
-  if (!target || typeof target !== "object") return;
-  if (!(target instanceof HTMLImageElement)) return;
   const fullUrl = getImageDownloadUrl(img);
   if (!fullUrl) return;
-  if (!target.dataset.thumbSrc) {
-    target.dataset.thumbSrc = target.src;
-  }
-  if (target.dataset.usingFullSrc === "1" && target.src === fullUrl) return;
-  target.dataset.usingFullSrc = "1";
-  target.src = fullUrl;
+  promoteImageForNativeDrag(target, fullUrl);
 }
 
 function handleThumbnailNativeDragEnd(event) {
   const target = event?.target;
-  if (!target || typeof target !== "object") return;
-  if (!(target instanceof HTMLImageElement)) return;
-  if (target.dataset.usingFullSrc === "1" && target.dataset.thumbSrc) {
-    target.src = target.dataset.thumbSrc;
-  }
-  delete target.dataset.usingFullSrc;
+  restoreImageAfterNativeDrag(target);
+  dragSource.value = null;
 }
 
 function handleVideoDragStart(img) {
   if (!img) return;
   dragSource.value = "grid";
+}
+
+function handleVideoDragEnd() {
+  dragSource.value = null;
 }
 
 // Event handlers: these should emit events or call parent-provided functions
