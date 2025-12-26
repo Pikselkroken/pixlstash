@@ -175,6 +175,9 @@
                   class="thumbnail-img"
                   :ref="(el) => setThumbnailRef(img.id, el)"
                   draggable="true"
+                  @pointerdown="prepareThumbnailNativeDrag(img, $event)"
+                  @pointerup="handleThumbnailPointerRelease($event)"
+                  @pointercancel="handleThumbnailPointerRelease($event)"
                   @dragstart="handleThumbnailNativeDragStart(img, $event)"
                   @dragend="handleThumbnailNativeDragEnd($event)"
                   @load="
@@ -607,6 +610,19 @@ function restoreImageAfterNativeDrag(target) {
     target.src = target.dataset.thumbSrc;
   }
   delete target.dataset.usingFullSrc;
+}
+
+function prepareThumbnailNativeDrag(img, event) {
+  if (!img || !event) return;
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  const target = event.target;
+  const fullUrl = getImageDownloadUrl(img);
+  promoteImageForNativeDrag(target, fullUrl);
+}
+
+function handleThumbnailPointerRelease(event) {
+  if (dragSource.value === "grid") return;
+  restoreImageAfterNativeDrag(event?.target);
 }
 
 function debugLogDataTransfer(label, dataTransfer) {
