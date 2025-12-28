@@ -385,6 +385,14 @@ const PREFETCHED_FULL_IMAGE_LIMIT = 12;
 const fullImagePrefetchControllers = new Map();
 const prefetchedFullImageIds = new Set();
 const prefetchedFullImageOrder = [];
+const multiZipState = reactive({
+  key: null,
+  status: "idle",
+  blob: null,
+  filename: null,
+  error: null,
+});
+let multiZipAbortController = null;
 
 // Key to force face bbox overlay recompute
 const faceOverlayRedrawKey = ref(0);
@@ -406,6 +414,7 @@ onUnmounted(() => {
   fullImagePrefetchControllers.clear();
   prefetchedFullImageIds.clear();
   prefetchedFullImageOrder.length = 0;
+  resetMultiSelectionZip();
 });
 
 function onThumbnailLoad(id) {
@@ -711,6 +720,94 @@ function setupMultiExportDrag(event, ids) {
     count: ids.length,
     url,
   });
+}
+
+function getSelectionSignature(ids) {
+  if (!Array.isArray(ids) || !ids.length) return null;
+  return ids
+    .slice()
+    .map((id) => String(id))
+    .sort()
+    .join(",");
+}
+
+function primeMultiSelectionZip(ids) {
+  const signature = getSelectionSignature(ids);
+  if (!signature) return;
+  if (
+    multiZipState.key === signature &&
+    (multiZipState.status === "pending" || multiZipState.status === "ready")
+  ) {
+    return;
+  }
+  resetMultiSelectionZip();
+  multiZipState.key = signature;
+  multiZipState.status = "pending";
+  multiZipState.filename = buildSelectionZipFilename(ids.length);
+  const url = buildExportUrlForIds(ids);
+  if (!url) {
+    multiZipState.status = "error";
+    multiZipState.error = "Missing export URL";
+    return;
+  }
+  const controller = new AbortController();
+  multiZipAbortController = controller;
+  fetch(url, { signal: controller.signal })
+    .then((res) => {
+      if (!res.ok) {
+        throw new Error(`Export failed (${res.status})`);
+      }
+      return res.blob();
+    })
+    .then((blob) => {
+      if (multiZipState.key !== signature) return;
+      multiZipState.status = "ready";
+      multiZipState.blob = blob;
+    })
+    .catch((err) => {
+      if (controller.signal.aborted) return;
+      multiZipState.status = "error";
+      multiZipState.error = err?.message || "Export failed";
+    });
+}
+
+function resetMultiSelectionZip() {
+  if (multiZipAbortController) {
+    multiZipAbortController.abort();
+    multiZipAbortController = null;
+  }
+  multiZipState.key = null;
+  multiZipState.status = "idle";
+  multiZipState.blob = null;
+  multiZipState.filename = null;
+  multiZipState.error = null;
+}
+
+function attachMultiSelectionZipToDrag(event, ids) {
+  if (!event?.dataTransfer) return false;
+  const signature = getSelectionSignature(ids);
+  if (
+    !signature ||
+    signature !== multiZipState.key ||
+    multiZipState.status !== "ready" ||
+    !multiZipState.blob
+  ) {
+    return false;
+  }
+  try {
+    const file = new File(
+      [multiZipState.blob],
+      multiZipState.filename || buildSelectionZipFilename(ids.length),
+      { type: "application/zip" }
+    );
+    event.dataTransfer.items.add(file);
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.dropEffect = "copy";
+    return true;
+  } catch (err) {
+    console.debug("[DRAG] Unable to attach zip file", err);
+    return false;
+  }
 }
 
 function ensurePrimaryDragSelection(img, event) {
@@ -1060,6 +1157,18 @@ watch(
 // Local selection state (mirrors parent prop)
 const selectedImageIds = ref([]);
 let lastSelectedIndex = null;
+
+watch(
+  selectedImageIds,
+  (ids) => {
+    if (ids.length > 1) {
+      primeMultiSelectionZip(ids);
+    } else {
+      resetMultiSelectionZip();
+    }
+  },
+  { deep: false }
+);
 
 // --- Overlay ---
 async function fetchImageInfo(imageId) {
@@ -1715,7 +1824,9 @@ function handleThumbnailNativeDragStart(img, event) {
   ensurePrimaryDragSelection(img, event);
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) {
-    setupMultiExportDrag(event, selectionIds);
+    if (!attachMultiSelectionZipToDrag(event, selectionIds)) {
+      setupMultiExportDrag(event, selectionIds);
+    }
     return;
   }
   const target = event?.target;
@@ -1737,7 +1848,9 @@ function handleVideoDragStart(img, event) {
   ensurePrimaryDragSelection(img, event);
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) {
-    setupMultiExportDrag(event, selectionIds);
+    if (!attachMultiSelectionZipToDrag(event, selectionIds)) {
+      setupMultiExportDrag(event, selectionIds);
+    }
   }
 }
 

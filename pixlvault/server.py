@@ -1679,13 +1679,21 @@ class Server:
             Export pictures matching the filters as a zip file.
             Uses same filter logic as /pictures endpoint, but returns a zip.
             """
+            picture_ids = request.query_params.getlist("id")
             query_params = dict(request.query_params)
             query_params.pop("query", None)
             query_params.pop("set_id", None)
             query_params.pop("threshold", None)
+            character_id = query_params.pop("character_id", None)
 
             pics = []
-            if set_id is not None:
+
+            # First option is if a list of picture_ids is provided
+            if picture_ids:
+                pics = self.vault.db.run_task(Picture.find, id=picture_ids)
+            elif set_id is not None:
+                logger.info("Exporting pictures set {} ".format(set_id))
+
                 # Fetch picture IDs in set, then fetch Picture objects
                 def fetch_members(session, set_id):
                     members = session.exec(
@@ -1699,8 +1707,26 @@ class Server:
                     return Picture.find(session, id=picture_ids)
 
                 pics = self.vault.db.run_task(fetch_members, set_id)
-            elif query:
+            elif character_id is not None:
+                logger.info(
+                    "Exporting pictures for character ID: {}".format(character_id)
+                )
 
+                # Fetch pictures with faces matching character_id
+                def fetch_by_character(session, character_id):
+                    faces = session.exec(
+                        select(Face).where(Face.character_id == character_id)
+                    ).all()
+                    picture_ids = list({face.picture_id for face in faces})
+                    if not picture_ids:
+                        return []
+                    return Picture.find(session, id=picture_ids)
+
+                pics = self.vault.db.run_task(fetch_by_character, character_id)
+            elif query:
+                logger.info("Exporting pictures using search query: {}".format(query))
+
+                # Search query
                 def find_by_text(session, query):
                     words = re.findall(r"\b\w+\b", query.lower())
                     preprocessed_query_words = self.vault.preprocess_query_words(words)
@@ -1721,6 +1747,7 @@ class Server:
 
                 pics = self.vault.db.run_task(find_by_text, query)
             else:
+                logger.info("Exporting pictures using filter parameters: {}".format(query_params))
                 # Fallback to filter-based search
                 pics = self.vault.db.run_task(
                     Picture.find,
@@ -1729,6 +1756,10 @@ class Server:
                     select_fields=Picture.metadata_fields(),
                     **query_params,
                 )
+
+            if not pics:
+                raise HTTPException(status_code=404, detail="No pictures found")
+
 
             # Create zip file in memory
             zip_buffer = io.BytesIO()
@@ -1765,6 +1796,8 @@ class Server:
 
             filename = "_".join(filename_parts) if filename_parts else "pictures"
             filename = f"{filename}_{len(pics)}_images.zip"
+
+            logger.info(f"Streaming file name {filename} containing {len(pics)} pictures.")
 
             return StreamingResponse(
                 io.BytesIO(zip_buffer.getvalue()),
@@ -2184,7 +2217,7 @@ class Server:
                 pics = self.vault.db.run_task(
                     Picture.find,
                     id=picture_ids,
-                    sort=sort_mech,
+                    sort_mech=sort_mech,
                     offset=offset,
                     limit=limit,
                     select_fields=Picture.metadata_fields(),
@@ -2217,7 +2250,7 @@ class Server:
                 pics = self.vault.db.run_task(
                     Picture.find,
                     id=picture_ids,
-                    sort=sort_mech,
+                    sort_mech=sort_mech,
                     offset=offset,
                     limit=limit,
                     select_fields=Picture.metadata_fields(),
@@ -2227,7 +2260,7 @@ class Server:
             else:
                 pics = self.vault.db.run_task(
                     Picture.find,
-                    sort=sort_mech,
+                    sort_mech=sort_mech,
                     offset=offset,
                     limit=limit,
                     select_fields=Picture.metadata_fields(),

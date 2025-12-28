@@ -307,7 +307,7 @@ class Picture(SQLModel, table=True):
         cls,
         session,
         *,
-        sort: Optional[SortMechanism] = None,
+        sort_mech: Optional[SortMechanism] = None,
         offset: int = 0,
         limit: int = sys.maxsize,
         select_fields: Optional[List[str]] = None,
@@ -348,11 +348,11 @@ class Picture(SQLModel, table=True):
         if format:
             query = query.where(cls.format.in_(format))
 
-        if sort:
-            field_name = sort.field
+        if sort_mech:
+            field_name = sort_mech.field
             field = getattr(cls, field_name, None)
             if field is not None:
-                if sort.descending:
+                if sort_mech.descending:
                     query = query.order_by(field.desc())
                 else:
                     query = query.order_by(field.asc())
