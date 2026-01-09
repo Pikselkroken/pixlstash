@@ -324,11 +324,21 @@
     <div
       v-if="props.searchQuery && props.searchQuery.length > 0"
       class="search-result-bar"
-      style="position: absolute; bottom: 64px; left: 0; width: 100%; z-index: 1000; background-color: #f5f5f5; display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);"
+      style="
+        position: absolute;
+        bottom: 64px;
+        left: 0;
+        width: 100%;
+        z-index: 1000;
+        background-color: #f5f5f5;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 16px;
+        box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+      "
     >
-      <span>
-        Search result found {{ allGridImages.length}} items
-      </span>
+      <span> Search result found {{ allGridImages.length }} items </span>
       <v-btn color="primary" @click="clearSearchQuery">Clear</v-btn>
     </div>
   </div>
@@ -834,7 +844,10 @@ function ensurePrimaryDragSelection(img, event) {
   if (!img || !img.id) return;
   const hasModifier = event?.ctrlKey || event?.metaKey || event?.shiftKey;
   if (hasModifier) return;
-  if (!selectedImageIds.value.includes(img.id) || selectedImageIds.value.length === 0) {
+  if (
+    !selectedImageIds.value.includes(img.id) ||
+    selectedImageIds.value.length === 0
+  ) {
     selectedImageIds.value = [img.id];
     lastSelectedIndex = typeof img.idx === "number" ? img.idx : null;
   }
@@ -919,7 +932,6 @@ function debugLogDataTransfer(label, dataTransfer) {
     }
   }
 }
-
 
 function clearSelection() {
   selectedImageIds.value = [];
@@ -1300,11 +1312,7 @@ async function handleGridDragEnter(e) {
   console.debug("[DEBUG] dataTransfer items:", e.dataTransfer.items);
 
   // Focus on standard dataTransfer types for inspection
-  const standardTypesToInspect = [
-    "text/uri-list",
-    "text/html",
-    "text/plain",
-  ];
+  const standardTypesToInspect = ["text/uri-list", "text/html", "text/plain"];
   for (const type of standardTypesToInspect) {
     if (e.dataTransfer.types.includes(type)) {
       const data = e.dataTransfer.getData(type);
@@ -1356,7 +1364,10 @@ function handleGridDrop(e) {
   debugLogDataTransfer("drop", e.dataTransfer);
 
   // Ignore drag-and-drop if the source is the grid itself
-  if (dragSource.value === "grid" || e.dataTransfer.types.includes("application/json")) {
+  if (
+    dragSource.value === "grid" ||
+    e.dataTransfer.types.includes("application/json")
+  ) {
     console.debug("Drag-and-drop within the grid ignored.");
     dragSource.value = null;
     return;
@@ -1462,7 +1473,8 @@ function buildPictureIdsQueryParams() {
   // Add format filter for backend media type filtering
   if (props.mediaTypeFilter === "images") {
     console.log(
-      "[ImageGrid.vue] Building query params for image formats only", PIL_IMAGE_EXTENSIONS
+      "[ImageGrid.vue] Building query params for image formats only",
+      PIL_IMAGE_EXTENSIONS
     );
     for (const ext of PIL_IMAGE_EXTENSIONS) {
       params.append("format", ext.toUpperCase());
@@ -1776,7 +1788,7 @@ function updateVisibleThumbnails() {
     visibleStart.value,
     visibleEnd.value,
     "Total:",
-      allGridImages.value.length
+    allGridImages.value.length
   );
 
   // Debounce fetches to avoid excessive requests
@@ -1971,6 +1983,7 @@ onMounted(() => {
 
 // Clear selection on ESC key
 function handleKeyDown(event) {
+  if (imgOverlayOpen.value) return; // Ignore if overlay is open
   if (event.key === "Escape") {
     selectedImageIds.value = [];
     lastSelectedIndex = null;
@@ -2124,7 +2137,6 @@ function clearSearchQuery() {
   console.log("[ImageGrid.vue] clearSearchQuery called");
   emit("clear-search", "");
 }
-
 </script>
 
 <style scoped>
