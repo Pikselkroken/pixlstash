@@ -36,6 +36,7 @@ from pixlvault.db_models import (
 
 from pixlvault.db_models import PictureLikeness, FaceLikeness
 from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
+from pixlvault.db_models.tag import Tag
 from pixlvault.picture_stack_utils import (
     order_stack_pictures,
     combined_picture_face_likeness,
@@ -1914,6 +1915,80 @@ class Server:
 
             logger.info("Returning dict: " + str(pic_dict))
             return pic_dict
+
+        @self.api.post("/pictures/{id}/tags")
+        async def add_tag_to_picture(id: str, payload: dict = Body(...)):
+            """
+            Add a tag to a picture.
+            """
+            try:
+                tag = payload.get("tag")
+                if not tag:
+                    raise HTTPException(status_code=400, detail="Tag is required")
+
+                pic_list = self.vault.db.run_task(
+                    lambda session: Picture.find(session, id=id, select_fields=["tags"])
+                )
+                if not pic_list:
+                    raise HTTPException(status_code=404, detail="Picture not found")
+                pic = pic_list[0]
+
+                full_tag = Tag(tag=tag, picture_id=pic.id)
+                if full_tag not in pic.tags:
+                    def update_picture(session, pic_id, tag):
+                        pic = Picture.find(session, id=pic_id, select_fields=["tags"])[0]
+                        pic.tags.append(tag)
+                        session.add(pic)
+                        session.commit()
+                        session.refresh(pic)
+                        return pic
+
+                    self.vault.db.run_task(update_picture, pic.id, full_tag)
+                    self.vault.notify(EventType.CHANGED_TAGS)
+
+                return {"status": "success", "tags": pic.tags}
+            except Exception as e:
+                logger.error(f"Failed to add tag: {e}")
+                raise HTTPException(status_code=500, detail="Failed to add tag")
+
+        @self.api.delete("/pictures/{id}/tags/{tag}")
+        async def remove_tag_from_picture(id: str, tag: str):
+            """
+            Remove a tag from a picture.
+            """
+            try:
+                pic_list = self.vault.db.run_task(
+                    lambda session: Picture.find(session, id=id, select_fields=["tags"])
+                )
+                logger.info(f"Removing tag '{tag}' from picture id={id}. Found pics: {pic_list}")
+                if not pic_list:
+                    raise HTTPException(status_code=404, detail="Picture not found")
+                pic = pic_list[0]
+
+                full_tag = Tag(tag=tag, picture_id=pic.id)
+
+                if full_tag in pic.tags:
+                    logger.info(f"Tag {tag} found in picture tags {pic.tags}, proceeding to remove.")
+
+                    def update_picture(session, pic_id, tag):
+                        pic = Picture.find(session, id=pic_id, select_fields=["tags"])[0]
+                        pic.tags.remove(tag)
+                        session.add(pic)
+                        session.commit()
+                        session.refresh(pic)
+                        return pic
+
+                    self.vault.db.run_task(update_picture, pic.id, full_tag)
+                    self.vault.notify(EventType.CHANGED_TAGS)
+
+                    logger.info(f"Remaining tags after removal: {pic.tags}")
+                else:
+                    logger.info(f"Tag {tag} not found in picture tags {pic.tags}, nothing to remove.")
+
+                return {"status": "success", "tags": pic.tags}
+            except Exception as e:
+                logger.error(f"Failed to remove tag: {e}")
+                raise HTTPException(status_code=500, detail="Failed to remove tag")
 
         @self.api.get("/pictures/{id}/{field}")
         async def get_picture_field(id: str, field: str):

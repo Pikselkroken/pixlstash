@@ -6,6 +6,8 @@
     :backendUrl="props.backendUrl"
     @close="closeOverlay"
     @apply-score="applyScore"
+    @add-tag="addTagToImage"
+    @remove-tag="removeTagFromImage"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -1975,6 +1977,45 @@ function updateColumns() {
   });
 }
 
+async function removeTagFromImage(imageId, tag) {
+  if (!imageId) {
+    console.error("Image ID is required to remove a tag.");
+    return;
+  }
+
+  fetch(`${props.backendUrl}/pictures/${imageId}/tags/${tag}`, {
+    method: "DELETE",
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error("Failed to remove tag");
+      }
+      console.log(`Tag '${tag}' removed from image ${imageId}`);
+    })
+    .catch((error) => {
+      console.error("Error removing tag:", error);
+    });
+}
+
+async function addTagToImage(imageId, tag) {
+  try {
+    const response = await fetch(
+      `${props.backendUrl}/pictures/${imageId}/tags`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag }),
+      }
+    );
+    if (!response.ok) {
+      throw new Error("Failed to add tag");
+    }
+    console.log(`Tag '${tag}' added to image ${imageId}`);
+  } catch (error) {
+    console.error("Error adding tag:", error);
+  }
+}
+
 onMounted(() => {
   updateColumns();
   window.addEventListener("resize", updateColumns);
@@ -1983,7 +2024,7 @@ onMounted(() => {
 
 // Clear selection on ESC key
 function handleKeyDown(event) {
-  if (imgOverlayOpen.value) return; // Ignore if overlay is open
+  if (overlayOpen.value) return; // Ignore if overlay is open
   if (event.key === "Escape") {
     selectedImageIds.value = [];
     lastSelectedIndex = null;

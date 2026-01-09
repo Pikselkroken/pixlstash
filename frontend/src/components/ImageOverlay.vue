@@ -222,7 +222,7 @@
           {{ tag }}
           <button
             class="tag-delete-btn"
-            @click.stop="emit('remove-tag', tag)"
+            @click.stop="removeTag(tag)"
             title="Remove tag"
           >
             ×
@@ -251,6 +251,13 @@
             padding: 2px 8px;
             min-width: 80px;
             outline: none;
+            background: rgba(
+              255,
+              255,
+              0,
+              0.8
+            ); /* Bright semi-opaque background */
+            color: #000; /* Visible text color */
           "
           placeholder="New tag"
           autofocus
@@ -403,7 +410,11 @@ function confirmAddTag() {
     cancelAddTag();
     return;
   }
-  emit("add-tag", trimmed);
+  emit("add-tag", image.value.id, trimmed);
+  if (image.value && Array.isArray(image.value.tags)) {
+    image.value.tags.push(trimmed);
+    image.value.tags.sort(); // Ensure tags remain sorted
+  }
   resetTagInput();
 }
 
@@ -434,12 +445,16 @@ function showNextImage() {
 function handleKeydown(e) {
   if (!open.value) return;
 
-  if (isEditingDescription.value) {
+  if (isEditingDescription.value || addingTag.value) {
     // Handle editing-specific keydown behavior
     if (e.key === "Escape") {
-      cancelEditDescription(); // Close editing without saving
+      if (isEditingDescription.value) {
+        cancelEditDescription(); // Close editing description without saving
+      } else if (addingTag.value) {
+        cancelAddTag(); // Close tag editing without saving
+      }
     }
-      return;
+    return; // Ignore other overlay key presses when editing
   }
 
   // Regular keydown behavior
@@ -547,7 +562,6 @@ async function fetchFaceBboxes(imageId) {
           }
         } else {
           face.character_name = null;
-          console.warn("Face is missing character_id:", face);
         }
       })
     );
@@ -715,6 +729,15 @@ function selectAllText() {
   const input = descriptionEditorRef.value;
   if (input) {
     input.select();
+  }
+}
+
+function removeTag(tag) {
+  if (!image.value || !Array.isArray(image.value.tags)) return;
+  const index = image.value.tags.indexOf(tag);
+  if (index !== -1) {
+    image.value.tags.splice(index, 1);
+    emit("remove-tag", image.value.id, tag); // Notify parent component
   }
 }
 </script>
