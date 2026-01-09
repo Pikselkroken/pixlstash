@@ -6,24 +6,18 @@
         &times;
       </button>
       <div class="overlay-title-row">
-        <div class="overlay-title-desc-shell">
+        <div
+          class="overlay-title-desc-shell"
+          :class="{ editing: isEditingDescription }"
+        >
           <textarea
-            v-if="isEditingDescription"
             ref="descriptionEditorRef"
             v-model="descriptionDraft"
-            class="overlay-title-editor"
-            rows="3"
-            :placeholder="image ? 'Enter description' : 'No description'"
-            @keydown="handleDescriptionEditorKey"
-          ></textarea>
-          <span
-            v-else
             class="overlay-title-desc"
-            :class="descriptionScrollClasses"
-            ref="descriptionRef"
-            @scroll.passive="handleDescriptionScroll"
-            >{{ image?.description || "No description" }}</span
-          >
+            :readonly="!isEditingDescription"
+            @keydown.enter.prevent="isEditingDescription && saveDescription()"
+            @blur="isEditingDescription && cancelEditDescription()"
+          ></textarea>
         </div>
         <div class="overlay-title-actions">
           <button
@@ -34,7 +28,11 @@
             @click.stop="copyDescription"
           >
             <v-icon size="18">
-              {{ descriptionCopyState === "copied" ? "mdi-check-bold" : "mdi-content-copy" }}
+              {{
+                descriptionCopyState === "copied"
+                  ? "mdi-check-bold"
+                  : "mdi-content-copy"
+              }}
             </v-icon>
           </button>
           <template v-if="isEditingDescription">
@@ -45,10 +43,7 @@
               :disabled="isSavingDescription"
               @click.stop="saveDescription"
             >
-              <v-icon
-                size="18"
-                :class="{ 'mdi-spin': isSavingDescription }"
-              >
+              <v-icon size="18" :class="{ 'mdi-spin': isSavingDescription }">
                 {{ isSavingDescription ? "mdi-loading" : "mdi-content-save" }}
               </v-icon>
             </button>
@@ -310,8 +305,6 @@ const emit = defineEmits([
 const descriptionRef = ref(null);
 const descriptionScrollMeta = reactive({
   hasOverflow: false,
-  showTopFade: false,
-  showBottomFade: false,
 });
 const isEditingDescription = ref(false);
 const isSavingDescription = ref(false);
@@ -440,6 +433,32 @@ function showNextImage() {
 
 function handleKeydown(e) {
   if (!open.value) return;
+
+  if (isEditingDescription.value) {
+    // Handle editing-specific keydown behavior
+    if (e.key === "Escape") {
+      cancelEditDescription(); // Close editing without saving
+      return;
+    }
+    // Allow Left, Right, and number keys to be handled by the text box
+    if (
+      [
+        "ArrowLeft",
+        "ArrowRight",
+        "Left",
+        "Right",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+      ].includes(e.key)
+    ) {
+      return;
+    }
+  }
+
+  // Regular keydown behavior
   if (e.key === "Escape") {
     emit("close");
   } else if (["ArrowLeft", "Left"].includes(e.key)) {
@@ -587,21 +606,10 @@ function updateDescriptionScrollState() {
   const el = descriptionRef.value;
   if (!el) {
     descriptionScrollMeta.hasOverflow = false;
-    descriptionScrollMeta.showTopFade = false;
-    descriptionScrollMeta.showBottomFade = false;
     return;
   }
-  const tolerance = 2;
-  const hasOverflow = el.scrollHeight - el.clientHeight > tolerance;
-  descriptionScrollMeta.hasOverflow = hasOverflow;
-  if (!hasOverflow) {
-    descriptionScrollMeta.showTopFade = false;
-    descriptionScrollMeta.showBottomFade = false;
-    return;
-  }
-  descriptionScrollMeta.showTopFade = el.scrollTop > tolerance;
-  descriptionScrollMeta.showBottomFade =
-    el.scrollTop + el.clientHeight < el.scrollHeight - tolerance;
+
+  descriptionScrollMeta.hasOverflow = false; // Disable overflow logic
 }
 
 function handleDescriptionScroll() {
@@ -611,8 +619,6 @@ function handleDescriptionScroll() {
 const descriptionScrollClasses = computed(() => {
   return {
     "has-overflow": descriptionScrollMeta.hasOverflow,
-    "fade-top": descriptionScrollMeta.showTopFade,
-    "fade-bottom": descriptionScrollMeta.showBottomFade,
   };
 });
 
@@ -651,9 +657,14 @@ async function saveDescription() {
     }
     image.value = { ...image.value, description: newDescription };
     if (Array.isArray(allImages.value)) {
-      const idx = allImages.value.findIndex((img) => img && img.id === image.value.id);
+      const idx = allImages.value.findIndex(
+        (img) => img && img.id === image.value.id
+      );
       if (idx !== -1) {
-        allImages.value[idx] = { ...allImages.value[idx], description: newDescription };
+        allImages.value[idx] = {
+          ...allImages.value[idx],
+          description: newDescription,
+        };
       }
     }
     isEditingDescription.value = false;
@@ -715,6 +726,13 @@ function handleDescriptionEditorKey(event) {
     saveDescription();
   }
 }
+
+function selectAllText() {
+  const input = descriptionEditorRef.value;
+  if (input) {
+    input.select();
+  }
+}
 </script>
 
 <style scoped>
@@ -762,41 +780,33 @@ function handleDescriptionEditorKey(event) {
 .overlay-title-desc-shell {
   flex: 1;
   width: 100%;
-  padding: 2px 12px;
-  padding-right: 120px;
+  padding: 4px 4px;
+  padding-right: 100px;
   line-height: 1.1;
   max-height: calc(1.1em * 3.3);
   overflow-y: auto;
-  border: 1px dashed rgba(255, 255, 255, 0.25);
-  border-radius: 8px;
+  border: 1px dashed #bbb;
+  border-radius: 4px;
   scrollbar-color: #ff9800 #2b2b2b;
   scrollbar-width: thick;
   scrollbar-gutter: stable both-edges;
+}
 
+.overlay-title-desc-shell.editing {
+  border: 1px solid orange; /* Change to solid orange border when editing */
 }
 .overlay-title-desc {
   flex: 1;
   color: #eee;
-  font-size: 1.0rem;
-  text-align: center;
-  word-break: break-word;
-  padding: 0 18px;
-  position: relative;
-}
-.overlay-title-editor {
   width: 100%;
-  min-height: 64px;
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-  border: 1px solid rgba(255, 152, 0, 0.7);
-  border-radius: 6px;
-  padding: 8px 12px;
   font-size: 1rem;
-  font-family: inherit;
-  resize: vertical;
-}
-.overlay-title-editor:focus {
-  outline: 2px solid #ff9800;
+  text-align: left;
+  word-break: break-word;
+  position: relative;
+  display: block;
+  border: none; /* Removed border to avoid double border issue */
+  outline: none;
+  resize: none;
 }
 .overlay-title-actions {
   position: absolute;
@@ -832,11 +842,9 @@ function handleDescriptionEditorKey(event) {
 }
 .overlay-title-desc::-webkit-scrollbar-track {
   background: #2b2b2b;
-  border-radius: 999px;
 }
 .overlay-title-desc::-webkit-scrollbar-thumb {
   background: #ff9800;
-  border-radius: 999px;
 }
 .overlay-title-desc.has-overflow {
   padding-right: 40px;
@@ -851,16 +859,6 @@ function handleDescriptionEditorKey(event) {
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.2s ease;
-}
-.overlay-title-desc.fade-top::before {
-  top: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0));
-  opacity: 1;
-}
-.overlay-title-desc.fade-bottom::after {
-  bottom: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.85));
-  opacity: 1;
 }
 .overlay-close {
   position: absolute;
