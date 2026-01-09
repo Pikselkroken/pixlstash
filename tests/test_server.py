@@ -146,7 +146,7 @@ def test_esmeralda_vault_character_and_logo():
             )
 
             # Fetch the  picture form id
-            img_resp = client.get(f"/pictures/{pics[0]['id']}")
+            img_resp = client.get(f"/pictures/{pics[0]['id']}.png")
             assert img_resp.status_code == 200
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
             with open(logo_path, "rb") as f:
@@ -593,7 +593,7 @@ def test_benchmark_add_images_by_binary_upload():
             random_indices = random.sample(range(TEST_SIZE), 3)
             for check_idx in random_indices:
                 pic_id = ids[check_idx]
-                img_resp = client.get(f"/pictures/{pic_id}")
+                img_resp = client.get(f"/pictures/{pic_id}.png")
                 assert img_resp.status_code == 200
                 assert img_resp.content[:1024] == random_images[check_idx][:1024]
     gc.collect()
