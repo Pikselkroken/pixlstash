@@ -39,6 +39,10 @@ def test_order_stability(params):
         with Server(config_path, server_config_path) as server:
             server.vault.import_default_data(True)
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             first_ids = []
 
             for i in range(0, 3):

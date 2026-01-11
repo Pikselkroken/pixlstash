@@ -136,6 +136,10 @@ def test_face_extraction_speed_server():
         ) as server:
             # Upload all images as new pictures
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             picture_ids = []
             face_futures = []
             id_to_filename = {}

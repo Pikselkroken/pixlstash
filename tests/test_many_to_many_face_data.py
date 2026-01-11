@@ -28,6 +28,9 @@ def test_many_to_many_face_data():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             # Create two characters
             resp1 = client.post(
                 "/characters", json={"name": "Alice", "description": "Test char 1"}

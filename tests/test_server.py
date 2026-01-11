@@ -93,6 +93,14 @@ def test_esmeralda_vault_character_and_logo():
             server.vault.import_default_data()
             client = TestClient(server.api)
 
+            # Get a valid token
+            response = client.post("/login")
+            assert response.status_code == 200
+            # First access with the token
+            response = client.get("/protected")
+            assert response.status_code == 200
+            assert response.json()["message"] == "You are authenticated!"
+
             pics = server.vault.db.run_task(lambda s: s.query(Picture).all())
             assert len(pics) > 0, "No pictures found in vault"
 
@@ -171,6 +179,10 @@ def test_create_and_get_default_character():
         ) as server:
             client = TestClient(server.api)
 
+            # Get a valid token
+            response = client.post("/login")
+            assert response.status_code == 200
+
             # Create Esmeralda
             char_name = "Esmeralda"
             char_desc = "Default vault character"
@@ -209,7 +221,9 @@ def test_upload_existing_picture():
             config_path=config_path, server_config_path=server_config_path
         ) as server:
             client = TestClient(server.api)
-
+            # Get a valid token
+            response = client.post("/login")
+            assert response.status_code == 200
             # Create a new picture
             img_bytes = random_images[0]
             images = [("file", ("master.png", img_bytes, "image/png"))]
@@ -297,6 +311,10 @@ def test_characters_summary():
         with Server(config_path, server_config_path) as server:
             server.vault.import_default_data()
             client = TestClient(server.api)
+
+            # Get a valid token
+            response = client.post("/login")
+            assert response.status_code == 200
 
             # Get Esmeralda Vault character ID
             resp = client.get("/characters")
@@ -400,6 +418,9 @@ def test_pictures_stacks():
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
+
+            response = client.post("/login")
+            assert response.status_code == 200
             resp = client.get("/pictures/stacks")
             assert resp.status_code == 200
             data = resp.json()
@@ -418,6 +439,9 @@ def test_pictures_thumbnails():
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
+
+            response = client.post("/login")
+            assert response.status_code == 200
             # Send empty payload for basic test
             resp = client.post("/pictures/thumbnails", json={"ids": []})
             assert resp.status_code == 200
@@ -437,6 +461,10 @@ def test_pictures_export():
         with Server(config_path, server_config_path) as server:
             server.vault.import_default_data(add_tagger_test_images=True)
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             resp = client.get("/pictures/export")
             assert resp.status_code == 200, f"Error: {resp.text}"
             assert resp.headers["content-type"] == "application/zip"
@@ -495,6 +523,10 @@ def test_post_logo_identical_upload():
         ) as server:
             server.vault.import_default_data()
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
             with open(logo_path, "rb") as f:
                 img_bytes = f.read()
@@ -514,6 +546,10 @@ def test_post_logo_altered_pixel_upload():
             config_path=config_path, server_config_path=server_config_path
         ) as server:
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
             img = Image.open(logo_path).convert("RGBA")
             arr = np.array(img)
@@ -566,6 +602,9 @@ def test_benchmark_add_images_by_binary_upload():
             config_path=config_path, server_config_path=server_config_path
         ) as server:
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
 
             start = time.time()
             ids = []
@@ -621,6 +660,9 @@ def test_semantic_search():
         ) as server:
             server.vault.import_default_data()
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
 
             # Get Esmeralda's character ID
             resp = client.get("/characters")

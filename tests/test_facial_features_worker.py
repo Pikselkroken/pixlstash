@@ -192,6 +192,10 @@ def test_character_thumbnail_endpoint():
             from fastapi.testclient import TestClient
 
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             response = client.get(f"/characters/{char.id}/thumbnail")
             assert response.status_code == 200, (
                 f"Thumbnail endpoint failed: {response.status_code}"

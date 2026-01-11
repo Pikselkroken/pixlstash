@@ -22,6 +22,9 @@ def setup_server_with_temp_db():
         f.write(json.dumps({"port": 8000}))
     server = Server(config_path, server_config_path)
     client = TestClient(server.api)
+
+    resp = client.post("/login")
+    assert resp.status_code == 200
     return temp_dir, client
 
 
