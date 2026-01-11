@@ -711,43 +711,17 @@ function buildExportUrlForIds(ids) {
 
 function setupMultiExportDrag(event, ids) {
   if (!event?.dataTransfer || !Array.isArray(ids) || ids.length < 2) return;
-  const url = buildExportUrlForIds(ids);
-  if (!url) return;
-  const filename = buildSelectionZipFilename(ids.length);
-  const payload = `application/zip:${filename}:${url}`;
-  const dt = event.dataTransfer;
+
   try {
-    dt.setData("DownloadURL", payload);
+    const dragData = {
+      type: "image-ids",
+      imageIds: ids,
+    };
+    event.dataTransfer.setData("application/json", JSON.stringify(dragData));
+    console.debug("[DRAG] Multi-selection drag data set:", dragData);
   } catch (err) {
-    console.debug("[DRAG] Unable to set DownloadURL", err);
+    console.error("[ERROR] Failed to set drag data:", err);
   }
-  try {
-    dt.setData("text/uri-list", `${url}\n`);
-  } catch (err) {
-    console.debug("[DRAG] Unable to set text/uri-list", err);
-  }
-  try {
-    dt.setData("text/plain", url);
-  } catch (err) {
-    console.debug("[DRAG] Unable to set text/plain", err);
-  }
-  try {
-    dt.setData("public.url", url);
-  } catch (err) {
-    console.debug("[DRAG] Unable to set public.url", err);
-  }
-  try {
-    dt.setData("public.url-name", filename);
-  } catch (err) {
-    console.debug("[DRAG] Unable to set public.url-name", err);
-  }
-  dt.effectAllowed = "copy";
-  dt.dropEffect = "copy";
-  console.debug("[DRAG] Multi-selection export", {
-    filename,
-    count: ids.length,
-    url,
-  });
 }
 
 function getSelectionSignature(ids) {
@@ -1854,9 +1828,7 @@ function handleThumbnailNativeDragStart(img, event) {
   ensurePrimaryDragSelection(img, event);
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) {
-    if (!attachMultiSelectionZipToDrag(event, selectionIds)) {
-      setupMultiExportDrag(event, selectionIds);
-    }
+    setupMultiExportDrag(event, selectionIds);
     return;
   }
   const target = event?.target;
@@ -1864,6 +1836,10 @@ function handleThumbnailNativeDragStart(img, event) {
   const fullUrl = getImageDownloadUrl(img);
   if (!fullUrl) return;
   promoteImageForNativeDrag(target, fullUrl);
+  event.dataTransfer.setData("application/json", JSON.stringify({
+    type: "image-ids",
+    imageIds: [img.id],
+  }));
 }
 
 function handleThumbnailNativeDragEnd(event) {
@@ -1878,10 +1854,13 @@ function handleVideoDragStart(img, event) {
   ensurePrimaryDragSelection(img, event);
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) {
-    if (!attachMultiSelectionZipToDrag(event, selectionIds)) {
-      setupMultiExportDrag(event, selectionIds);
-    }
+    setupMultiExportDrag(event, selectionIds);
+    return;
   }
+  event.dataTransfer.setData("application/json", JSON.stringify({
+    type: "image-ids",
+    imageIds: [img.id],
+  }));
 }
 
 function handleVideoDragEnd() {
