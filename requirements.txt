@@ -29,3 +29,6 @@ sentence_transformers
 pillow-heif
 sqlmodel
 nltk
+python-jose[cryptography]
+dotenv
+

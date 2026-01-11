@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pillow_heif import register_heif_opener
 from typing import List
+from jose import jwt, JWTError
 
 from pixlvault.db_models import (
     Character,
@@ -118,6 +119,13 @@ class Server:
         self._add_cors_exception_handler()
         self._setup_routes()
 
+        # Path to the .env file
+        self.ENV_FILE = ".env"
+
+        # Get or create the SECRET_KEY
+        self.SECRET_KEY = None
+        self.ALGORITHM = "HS256"
+
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
         return self
@@ -127,6 +135,32 @@ class Server:
             logger.warning("Closing the vault and cleaning up resources")
             self.vault.close()
         gc.collect()
+
+    # Function to generate and save the SECRET_KEY
+    def get_or_create_secret_key(self):
+        if not self.SECRET_KEY:
+            # Generate a new secure key
+            self.SECRET_KEY = os.urandom(32).hex()
+            # Save it to the .env file
+            with open(self.ENV_FILE, "a") as env_file:
+                env_file.write(f"SECRET_KEY={self.SECRET_KEY}\n")
+            print("Generated and saved a new SECRET_KEY.")
+        return self.SECRET_KEY
+
+    def remove_secret_key(self):
+        """Remove the SECRET_KEY by deleting it from memory and the .env file."""
+        self.SECRET_KEY = None
+        # Remove the SECRET_KEY from the .env file
+        if os.path.exists(self.ENV_FILE):
+            with open(self.ENV_FILE, "r") as env_file:
+                lines = env_file.readlines()
+            with open(self.ENV_FILE, "w") as env_file:
+                for line in lines:
+                    if not line.startswith("SECRET_KEY="):
+                        env_file.write(line)
+        print(
+            "SECRET_KEY removed. The server will generate a new one on the next login."
+        )
 
     def run(self):
         uvicorn_kwargs = dict(
@@ -1935,8 +1969,11 @@ class Server:
 
                 full_tag = Tag(tag=tag, picture_id=pic.id)
                 if full_tag not in pic.tags:
+
                     def update_picture(session, pic_id, tag):
-                        pic = Picture.find(session, id=pic_id, select_fields=["tags"])[0]
+                        pic = Picture.find(session, id=pic_id, select_fields=["tags"])[
+                            0
+                        ]
                         pic.tags.append(tag)
                         session.add(pic)
                         session.commit()
@@ -1960,7 +1997,9 @@ class Server:
                 pic_list = self.vault.db.run_task(
                     lambda session: Picture.find(session, id=id, select_fields=["tags"])
                 )
-                logger.info(f"Removing tag '{tag}' from picture id={id}. Found pics: {pic_list}")
+                logger.info(
+                    f"Removing tag '{tag}' from picture id={id}. Found pics: {pic_list}"
+                )
                 if not pic_list:
                     raise HTTPException(status_code=404, detail="Picture not found")
                 pic = pic_list[0]
@@ -1968,10 +2007,14 @@ class Server:
                 full_tag = Tag(tag=tag, picture_id=pic.id)
 
                 if full_tag in pic.tags:
-                    logger.info(f"Tag {tag} found in picture tags {pic.tags}, proceeding to remove.")
+                    logger.info(
+                        f"Tag {tag} found in picture tags {pic.tags}, proceeding to remove."
+                    )
 
                     def update_picture(session, pic_id, tag):
-                        pic = Picture.find(session, id=pic_id, select_fields=["tags"])[0]
+                        pic = Picture.find(session, id=pic_id, select_fields=["tags"])[
+                            0
+                        ]
                         pic.tags.remove(tag)
                         session.add(pic)
                         session.commit()
@@ -1983,7 +2026,9 @@ class Server:
 
                     logger.info(f"Remaining tags after removal: {pic.tags}")
                 else:
-                    logger.info(f"Tag {tag} not found in picture tags {pic.tags}, nothing to remove.")
+                    logger.info(
+                        f"Tag {tag} not found in picture tags {pic.tags}, nothing to remove."
+                    )
 
                 return {"status": "success", "tags": pic.tags}
             except Exception as e:
@@ -2119,6 +2164,7 @@ class Server:
                     ext = None
                     if image.filename:
                         ext = os.path.splitext(image.filename)[1]
+
                     if not ext:
                         # Guess from content type
                         ext = mimetypes.guess_extension(image.content_type or "")
@@ -2348,3 +2394,56 @@ class Server:
                     **query_params,
                 )
             return [safe_model_dict(pic) for pic in pics]
+
+        @self.api.middleware("http")
+        async def auth_middleware(request: Request, call_next):
+            # Exclude specific routes from authentication
+            excluded_paths = ["/login", "/docs", "/openapi.json", "/favicon.ico", "/"]
+            if request.url.path not in excluded_paths:
+                token = request.cookies.get("access_token")
+                logger.info(
+                    f"Retrieved token from cookies: {token}"
+                )  # Log the token for debugging
+                if not token:
+                    raise HTTPException(status_code=401, detail="Not authenticated")
+                try:
+                    jwt.decode(
+                        token,
+                        self.SECRET_KEY,
+                        algorithms=[self.ALGORITHM],
+                    )
+                except JWTError as e:
+                    logger.error(f"Token decoding failed: {e}")  # Log decoding errors
+                    raise HTTPException(status_code=401, detail="Invalid token")
+            return await call_next(request)
+
+        @self.api.post("/login")
+        async def login(resp: Response):
+            if self.SECRET_KEY:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Login not allowed. Server has already handed out the SECRET_KEY to another client. Run the server again with --regenerate-secret-key to reset.",
+                )
+
+            secret_key = self.get_or_create_secret_key()
+            logger.info("SECRET_KEY generated and saved: " + secret_key)
+
+            # Return the token
+            access_token = jwt.encode(
+                {"sub": "user"}, self.SECRET_KEY, algorithm=self.ALGORITHM
+            )
+
+            # Set the token in an HTTP-only cookie
+            resp.set_cookie(
+                key="access_token",
+                value=access_token,
+                httponly=True,  # Prevent JavaScript access
+                secure=False,  # Use this in production with HTTPS
+                samesite="Strict",  # Adjust based on your app's needs
+            )
+
+            return {"message": "Login successful"}
+
+        @self.api.get("/protected")
+        async def protected():
+            return {"message": "You are authenticated!"}

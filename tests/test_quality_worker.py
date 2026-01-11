@@ -28,6 +28,9 @@ def test_quality_worker_face_metrics():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             # Upload a picture
             img_bytes = make_image((128, 128, 128))
             files = [("file", ("gray.png", img_bytes, "image/png"))]
@@ -103,6 +106,9 @@ def test_quality_worker_end_to_end():
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
 
             # Upload a real test image with a face
             with open(

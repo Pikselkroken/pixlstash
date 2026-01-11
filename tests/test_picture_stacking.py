@@ -38,6 +38,8 @@ def test_picture_stacking():
         ) as server:
             # server.vault.import_default_data()
             client = TestClient(server.api)
+            resp = client.post("/login")
+            assert resp.status_code == 200
 
             server.vault.start_workers(
                 {
@@ -257,6 +259,9 @@ def test_character_likeness():
         ) as server:
             # server.vault.import_default_data()
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
 
             # Upload all images as new pictures
             picture_ids = []

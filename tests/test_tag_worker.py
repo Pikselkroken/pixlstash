@@ -28,6 +28,9 @@ def test_tag_worker_picture_tags():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             # Upload a picture
             img_bytes = make_image((128, 128, 128))
             files = [("file", ("gray.png", img_bytes, "image/png"))]
@@ -89,6 +92,9 @@ def test_tag_worker_end_to_end():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
+            resp = client.post("/login")
+            assert resp.status_code == 200
+
             # Upload a real test image
             with open(
                 os.path.join(os.path.dirname(__file__), "../pictures/TaggerTest.png"),
@@ -144,6 +150,9 @@ def test_tagger_worker_adds_tags():
             config_path=config_path, server_config_path=server_config_path
         ) as server:
             client = TestClient(server.api)
+
+            resp = client.post("/login")
+            assert resp.status_code == 200
 
             # Upload TaggerTest.png as a new picture
             with open(src_img, "rb") as f:

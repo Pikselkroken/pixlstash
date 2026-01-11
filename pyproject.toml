@@ -34,7 +34,9 @@ dependencies = [
     "sentence_transformers",
     "spacy",
     "pillow-heif",
-    "sqlmodel"
+    "sqlmodel",
+    "python-jose[cryptography]",
+    "dotenv"
 ]
 
 [project.optional-dependencies]
