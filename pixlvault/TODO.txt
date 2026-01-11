@@ -1,6 +1,8 @@
-* Save Likeness threshold
+* Re-introduce stacking
 * Automatic assignment to characters
 * Clean up code
-* Export data sets for LoRA training
+* Export data sets for LoRA training with descriptions and metadata
 * Monitoring of T2I output folders
 * Authentication
+* Package better
+* Make it work right on mobile screens
