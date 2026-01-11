@@ -22,7 +22,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pillow_heif import register_heif_opener
 from typing import List
-from jose import jwt, JWTError
+from passlib.hash import bcrypt
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 from pixlvault.db_models import (
     Character,
@@ -48,6 +50,8 @@ from pixlvault.utils import safe_model_dict
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
+
+load_dotenv()
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
 
@@ -123,8 +127,8 @@ class Server:
         self.ENV_FILE = ".env"
 
         # Get or create the SECRET_KEY
-        self.SECRET_KEY = None
-        self.ALGORITHM = "HS256"
+        self.PASSWORD_HASH = None
+        self.active_session_ids = set()
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -136,30 +140,18 @@ class Server:
             self.vault.close()
         gc.collect()
 
-    # Function to generate and save the SECRET_KEY
-    def get_or_create_secret_key(self):
-        if not self.SECRET_KEY:
-            # Generate a new secure key
-            self.SECRET_KEY = os.urandom(32).hex()
-            # Save it to the .env file
-            with open(self.ENV_FILE, "a") as env_file:
-                env_file.write(f"SECRET_KEY={self.SECRET_KEY}\n")
-            print("Generated and saved a new SECRET_KEY.")
-        return self.SECRET_KEY
-
-    def remove_secret_key(self):
-        """Remove the SECRET_KEY by deleting it from memory and the .env file."""
-        self.SECRET_KEY = None
-        # Remove the SECRET_KEY from the .env file
+    def remove_password_hash(self):
+        """Remove the PASSWORD_HASH by deleting it from memory and the .env file."""
+        self.PASSWORD_HASH = None
         if os.path.exists(self.ENV_FILE):
             with open(self.ENV_FILE, "r") as env_file:
                 lines = env_file.readlines()
             with open(self.ENV_FILE, "w") as env_file:
                 for line in lines:
-                    if not line.startswith("SECRET_KEY="):
+                    if not line.startswith("PASSWORD_HASH="):
                         env_file.write(line)
         print(
-            "SECRET_KEY removed. The server will generate a new one on the next login."
+            "PASSWORD_HASH removed. The server will generate a new one on the next login."
         )
 
     def run(self):
@@ -326,7 +318,22 @@ class Server:
             return JSONResponse(
                 status_code=exc.status_code,
                 content={"detail": exc.detail},
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Credentials": "true",
+                },
+            )
+
+        @self.api.exception_handler(Exception)
+        async def generic_exception_handler(request, exc):
+            logger.error(f"Unhandled exception: {exc}")
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal Server Error"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true",
+                },
             )
 
     def _create_picture_imports(self, uploaded_files, dest_folder):
@@ -1063,12 +1070,17 @@ class Server:
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
             try:
+                logger.info(f"Fetching characters with name: {name}")
                 characters = self.vault.db.run_immediate_read_task(
                     lambda session: Character.find(session, name=name)
                 )
                 return characters
             except KeyError:
+                logger.error("Character not found")
                 raise HTTPException(status_code=404, detail="Character not found")
+            except Exception as e:
+                logger.error(f"Error fetching characters: {e}")
+                raise HTTPException(status_code=500, detail="Internal Server Error")
 
         @self.api.post("/characters")
         async def create_character(payload: dict = Body(...)):
@@ -2400,49 +2412,59 @@ class Server:
             # Exclude specific routes from authentication
             excluded_paths = ["/login", "/docs", "/openapi.json", "/favicon.ico", "/"]
             if request.url.path not in excluded_paths:
-                token = request.cookies.get("access_token")
+                session_id = request.cookies.get("session_id")
                 logger.info(
-                    f"Retrieved token from cookies: {token}"
-                )  # Log the token for debugging
-                if not token:
-                    raise HTTPException(status_code=401, detail="Not authenticated")
-                try:
-                    jwt.decode(
-                        token,
-                        self.SECRET_KEY,
-                        algorithms=[self.ALGORITHM],
+                    f"Retrieved session_id from cookies: {session_id}"
+                )  # Log for debugging
+                if not session_id or session_id not in self.active_session_ids:
+                    logger.error("Invalid or missing session_id")
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Not authenticated"},
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Access-Control-Allow-Credentials": "true",
+                        },
                     )
-                except JWTError as e:
-                    logger.error(f"Token decoding failed: {e}")  # Log decoding errors
-                    raise HTTPException(status_code=401, detail="Invalid token")
             return await call_next(request)
 
+        class LoginRequest(BaseModel):
+            password: str = Field(
+                ...,
+                min_length=12,
+                description="Password must be at least 12 characters long",
+            )
+
         @self.api.post("/login")
-        async def login(resp: Response):
-            if self.SECRET_KEY:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Login not allowed. Server has already handed out the SECRET_KEY to another client. Run the server again with --regenerate-secret-key to reset.",
+        def login(request: LoginRequest):
+            if not self.PASSWORD_HASH:
+                # First login: set the password
+                hashed_password = bcrypt.hash(request.password)
+                with open(".env", "a") as env_file:
+                    env_file.write(f"\nPASSWORD_HASH={hashed_password}")
+                self.PASSWORD_HASH = hashed_password
+                response = JSONResponse(
+                    content={"message": "Password set successfully."}
                 )
+            else:
+                # Validate the password
+                if not bcrypt.verify(request.password, self.PASSWORD_HASH):
+                    raise HTTPException(status_code=401, detail="Invalid password")
+                response = JSONResponse(content={"message": "Login successful."})
 
-            secret_key = self.get_or_create_secret_key()
-            logger.info("SECRET_KEY generated and saved: " + secret_key)
+            # Generate a new session ID using uuid
+            session_id = str(uuid.uuid4())
+            self.active_session_ids.add(session_id)
 
-            # Return the token
-            access_token = jwt.encode(
-                {"sub": "user"}, self.SECRET_KEY, algorithm=self.ALGORITHM
+            # Set the session ID as a cookie
+            response.set_cookie(
+                key="session_id",
+                value=session_id,
+                httponly=True,
+                samesite="Lax",
+                secure=False,
             )
-
-            # Set the token in an HTTP-only cookie
-            resp.set_cookie(
-                key="access_token",
-                value=access_token,
-                httponly=True,  # Prevent JavaScript access
-                secure=False,  # Use this in production with HTTPS
-                samesite="Strict",  # Adjust based on your app's needs
-            )
-
-            return {"message": "Login successful"}
+            return response
 
         @self.api.get("/protected")
         async def protected():

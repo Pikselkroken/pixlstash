@@ -31,4 +31,4 @@ sqlmodel
 nltk
 python-jose[cryptography]
 dotenv
-
+passlib

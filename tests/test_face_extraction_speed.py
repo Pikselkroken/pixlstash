@@ -137,7 +137,7 @@ def test_face_extraction_speed_server():
             # Upload all images as new pictures
             client = TestClient(server.api)
 
-            resp = client.post("/login")
+            resp = client.post("/login", json={"password": "testpassword"})
             assert resp.status_code == 200
 
             picture_ids = []
