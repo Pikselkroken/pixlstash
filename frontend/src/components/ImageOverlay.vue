@@ -279,6 +279,7 @@ import {
   watch,
 } from "vue";
 import { isSupportedVideoFile, getOverlayFormat } from "../utils/media.js";
+import { apiClient } from '../utils/apiClient';
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -523,9 +524,8 @@ async function fetchFaceBboxes(imageId) {
     return;
   }
   try {
-    const res = await fetch(`${backendUrl.value}/pictures/${imageId}/faces`);
-    if (!res.ok) throw new Error("Failed to fetch face bboxes");
-    const faces = await res.json();
+    const res = await apiClient.get(`${backendUrl.value}/pictures/${imageId}/faces`);
+    const faces = await res.data;
     console.log("Faces: ", faces);
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
     const firstFrameFaces = faceArray.filter(
@@ -537,22 +537,16 @@ async function fetchFaceBboxes(imageId) {
         console.log("Processing face:", face);
         if (face.character_id) {
           try {
-            const res = await fetch(
+            const res = await apiClient.get(
               `${backendUrl.value}/characters/${face.character_id}/name`
             );
-            if (res.ok) {
-              const data = await res.json();
-              face.character_name = data.name || null;
-              console.log(
-                `Fetched character_name for character_id ${face.character_id}:`,
-                face.character_name
-              );
-            } else {
-              face.character_name = null;
-              console.warn(
-                `Failed to fetch character_name for character_id ${face.character_id}`
-              );
-            }
+            const data = await res.data;
+            face.character_name = data.name || null;
+            console.log(
+              `Fetched character_name for character_id ${face.character_id}:`,
+              face.character_name
+            );
+          
           } catch (e) {
             face.character_name = null;
             console.error(
@@ -645,14 +639,7 @@ async function saveDescription() {
   const newDescription = descriptionDraft.value.trim();
   const payload = { description: newDescription || null };
   try {
-    const res = await fetch(`${backendUrl.value}/pictures/${image.value.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      throw new Error(`Server responded with ${res.status}`);
-    }
+    const res = await apiClient.patch(`${backendUrl.value}/pictures/${image.value.id}`, payload);
     image.value = { ...image.value, description: newDescription };
     if (Array.isArray(allImages.value)) {
       const idx = allImages.value.findIndex(

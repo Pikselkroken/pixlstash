@@ -36,7 +36,8 @@ dependencies = [
     "pillow-heif",
     "sqlmodel",
     "python-jose[cryptography]",
-    "dotenv"
+    "dotenv",
+    "passlib",
 ]
 
 [project.optional-dependencies]

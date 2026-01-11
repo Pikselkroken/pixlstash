@@ -125,18 +125,6 @@
           :class="['main-content', selectedCharacter ? 'accent-border' : '']"
           style="margin-top: 0; padding-top: 0"
         >
-          <template v-if="currentView === 'likeness'">
-            <LikenessRows
-              ref="likenessRowsRef"
-              :backendUrl="BACKEND_URL"
-              :thumbnailSize="thumbnailSize"
-              :showStars="showStars"
-              :storedLikenessThreshold="config.likeness_threshold"
-              :mediaTypeFilter="mediaTypeFilter"
-              @update:likeness-threshold="val => config.likeness_threshold = val"
-            />
-          </template>
-          <template v-else-if="selectedCharacter || selectedSet !== null">
             <ImageGrid
               ref="gridContainer"
               :thumbnailSize="thumbnailSize"
@@ -157,11 +145,6 @@
               @clear-search="handleClearSearch"
               @refresh-sidebar="refreshSidebar"
             />
-          </template>
-          <template v-else>
-            <!--  -->
-            <div class="empty-state">Nothing to see here.</div>
-          </template>
         </div>
       </main>
     </div>

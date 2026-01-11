@@ -1,4 +1,5 @@
 import {unref} from 'vue';
+import {apiClient} from './apiClient';
 
 /**
  * Encapsulates overlay-specific interactions to avoid cluttering App.vue.
@@ -14,12 +15,9 @@ export function useOverlayActions({
     const existingTags = Array.isArray(img.tags) ? img.tags : [];
     const newTags = existingTags.filter((t) => t !== tag);
     try {
-      const res = await fetch(`${backendUrl}/pictures/${img.id}`, {
-        method: 'PATCH',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tags: newTags}),
+      await apiClient.patch(`/pictures/${img.id}`, {
+        tags: newTags,
       });
-      if (!res.ok) throw new Error('Failed to remove tag');
       img.tags = newTags;
     } catch (e) {
       alert('Failed to remove tag: ' + (e.message || e));
@@ -38,12 +36,9 @@ export function useOverlayActions({
     const newTags = [...existingTags, trimmed];
 
     try {
-      const res = await fetch(`${backendUrl}/pictures/${img.id}`, {
-        method: 'PATCH',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tags: newTags}),
+      await apiClient.patch(`/pictures/${img.id}`, {
+        tags: newTags,
       });
-      if (!res.ok) throw new Error('Failed to add tag');
       img.tags = newTags;
     } catch (e) {
       alert('Failed to add tag: ' + (e.message || e));

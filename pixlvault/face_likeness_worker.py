@@ -59,7 +59,7 @@ class FaceLikenessWorker(BaseWorker):
             a, bs = self._db.run_immediate_read_task(FaceLikenessWorker.get_next_batch)
 
             if not a or not bs:
-                logger.info("FaceLikenessWorker: No pending pairs. Sleeping...")
+                logger.debug("FaceLikenessWorker: No pending pairs. Sleeping...")
                 self._wait()
                 continue
 

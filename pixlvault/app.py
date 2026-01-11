@@ -55,9 +55,9 @@ def main():
         help="Path to server config file.",
     )
     parser.add_argument(
-        "--regenerate-secret-key",
+        "--remove-password",
         action="store_true",
-        help="Cause the server to regenerate the SECRET_KEY on first login.",
+        help="Cause the server to recreate the password on next login.",
     )
     args = parser.parse_args()
 
@@ -73,10 +73,10 @@ def main():
     else:
         setup_logging(log_level=log_level)
 
-    if args.regenerate_secret_key:
+    if args.remove_password:
         server = Server(config_path=args.config, server_config_path=args.server_config)
-        server.remove_secret_key()
-        # Continue running the server after removing the secret key
+        server.remove_password_hash()
+        # Continue running the server after removing the password hash
 
     server = Server(config_path=args.config, server_config_path=args.server_config)
     server.vault.start_workers()

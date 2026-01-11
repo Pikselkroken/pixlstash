@@ -3,16 +3,16 @@ import nlp from "compromise";
 import {
   nextTick,
   onBeforeUnmount,
+  onBeforeMount,
   onMounted,
   reactive,
   ref,
   watch,
 } from "vue";
+import { apiClient } from "./utils/apiClient";
 
 import SideBar from "./components/SideBar.vue";
 import ImageGrid from "./components/ImageGrid.vue";
-import LikenessRows from "./components/LikenessRows.vue";
-import ChatWindow from "./components/ChatWindow.vue";
 import SearchBar from "./components/SearchBar.vue";
 
 const likenessRowsRef = ref(null);
@@ -134,12 +134,10 @@ async function fetchOpenAIModels() {
   openaiModelFetchError.value = "";
   openaiModels.value = [];
   try {
-    const url = `http://${config.openai_host}:${config.openai_port}/v1/models`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("Failed to fetch models");
-    const data = await res.json();
-    if (Array.isArray(data.data)) {
-      openaiModels.value = data.data.map((m) => m.id);
+    const res = await apiClient.get("/openai/models");
+    console.log("Fetched OpenAI models:", res);
+    if (Array.isArray(res.data)) {
+      openaiModels.value = res.data.map((m) => m.id);
     } else {
       openaiModelFetchError.value = "No models found.";
     }
@@ -152,43 +150,38 @@ async function fetchOpenAIModels() {
 
 async function fetchConfig() {
   try {
-    const res = await fetch(`${BACKEND_URL}/config`);
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("Failed to fetch /config:", res.status, text);
-      return;
+    const res = await apiClient.get("/config");
+    console.log("Fetched config:", res);
+    config.image_roots = res.data.image_roots || [];
+    config.selected_image_root = res.data.selected_image_root || "";
+    if (typeof res.data.likeness_threshold === "number") {
+      config.likeness_threshold = res.data.likeness_threshold;
     }
-    const data = await res.json();
-    config.image_roots = data.image_roots || [];
-    config.selected_image_root = data.selected_image_root || "";
-    if (typeof data.likeness_threshold === "number") {
-      config.likeness_threshold = data.likeness_threshold;
-    }
-    const sortValue = data.sort_order ?? data.sort;
+    const sortValue = res.data.sort_order ?? res.data.sort;
     if (typeof sortValue === "string" && sortValue) {
       selectedSort.value = sortValue;
     }
     const thumbnailValue =
-      typeof data.thumbnail_size === "number"
-        ? data.thumbnail_size
-        : typeof data.thumbnail === "number"
-        ? data.thumbnail
+      typeof res.data.thumbnail_size === "number"
+        ? res.data.thumbnail_size
+        : typeof res.data.thumbnail === "number"
+        ? res.data.thumbnail
         : null;
     if (thumbnailValue !== null) {
       thumbnailSize.value = thumbnailValue;
       await nextTick();
     }
-    if (typeof data.show_stars === "boolean") showStars.value = data.show_stars;
+    if (typeof res.data.show_stars === "boolean") showStars.value = res.data.show_stars;
     config.sort_order = sortValue || selectedSort.value;
     config.thumbnail_size = thumbnailValue || thumbnailSize.value;
     config.show_stars =
-      typeof data.show_stars === "boolean" ? data.show_stars : showStars.value;
-    config.openai_host = data.openai_host || "localhost";
-    config.openai_port = data.openai_port || 8000;
-    config.openai_model = data.openai_model || "";
-    config.default_device = data.default_device || "cpu";
+      typeof res.data.show_stars === "boolean" ? res.data.show_stars : showStars.value;
+    config.openai_host = res.data.openai_host || "localhost";
+    config.openai_port = res.data.openai_port || 8000;
+    config.openai_model = res.data.openai_model || "";
+    config.default_device = res.data.default_device || "cpu";
   } catch (e) {
-    console.error("Error fetching /config:", e);
+    console.error("Failed to fetch /config:", e);
   }
 }
 
@@ -197,10 +190,8 @@ async function addImageRoot() {
   if (!val || config.image_roots.includes(val)) return;
   config.image_roots.push(val);
   newImageRoot.value = "";
-  await fetch(`${BACKEND_URL}/config`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image_roots: config.image_roots }),
+  await apiClient.patch("/config", {
+    image_roots: config.image_roots,
   });
 }
 
@@ -217,10 +208,8 @@ function removeImageRoot(root) {
 }
 
 async function updateSelectedRoot() {
-  await fetch(`${BACKEND_URL}/config`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ selected_image_root: config.selected_image_root }),
+  await apiClient.patch("/config", {
+    selected_image_root: config.selected_image_root,
   });
   await fetchConfig();
   selectedCharacter.value = ALL_PICTURES_ID;
@@ -252,16 +241,13 @@ async function patchConfigUIOptions() {
   if (config.selected_image_root)
     patch.selected_image_root = config.selected_image_root;
   console.log("PATCH /config payload:", patch);
-  const response = await fetch(`${BACKEND_URL}/config`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  if (response.ok) {
-    const updatedConfig = await response.json();
+  try {
+    const response = await apiClient.patch("/config", patch);
+
+    const updatedConfig = await response.data;
     console.log("PATCH /config response:", updatedConfig);
-  } else {
-    console.error("PATCH /config failed with status:", response.status);
+  } catch (e) {
+    console.error("Error patching /config:", e);
   }
 }
 
@@ -273,13 +259,9 @@ function selectImageRoot(root) {
 }
 
 async function saveConfig() {
-  await fetch(`${BACKEND_URL}/config`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      image_roots: config.image_roots,
-      selected_image_root: config.selected_image_root,
-    }),
+  await apiClient.patch("/config", {
+    image_roots: config.image_roots,
+    selected_image_root: config.selected_image_root,
   });
 }
 
@@ -433,9 +415,10 @@ watch(
 );
 
 // --- Lifecycle ---
-
-onMounted(() => {
+onBeforeMount(() => {
   fetchConfig();
+});
+onMounted(() => {
   window.addEventListener("keydown", handleGlobalKeydown);
 });
 

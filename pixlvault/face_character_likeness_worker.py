@@ -153,11 +153,11 @@ class FaceCharacterLikenessWorker(BaseWorker):
             elapsed = time.time() - start
             if processed_notify_ids:
                 self._notify_ids_processed(processed_notify_ids)
-                logger.info(
+                logger.debug(
                     f"FaceCharacterLikenessWorker: Processed {len(processed_notify_ids)} Face-Character pairs in {elapsed:.2f}"
                 )
             else:
-                logger.info(
+                logger.debug(
                     f"FaceCharacterLikenessWorker: No valid Face-Character pairs processed in {elapsed:.2f} seconds. Sleeping..."
                 )
                 self._wait()

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
+    "axios": "^1.13.2",
     "compromise": "^14.14.4",
     "lodash-es": "^4.17.21",
     "marked": "^16.4.1",

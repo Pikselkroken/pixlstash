@@ -22,7 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pillow_heif import register_heif_opener
 from typing import List
-from jose import jwt, JWTError
+from passlib.hash import bcrypt
+from pydantic import BaseModel, Field
 
 from pixlvault.db_models import (
     Character,
@@ -82,6 +83,7 @@ class Server:
         gc.collect()
 
         self._config_path = config_path
+        self._server_config_path = server_config_path
 
         self._config = self._init_config(config_path)
         with open(config_path, "w") as f:
@@ -109,9 +111,10 @@ class Server:
 
         self.api = FastAPI(lifespan=self.lifespan)
         # Enable CORS for frontend dev server
+        self.allow_origins = ["http://localhost:5173"]
         self.api.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],  # Or restrict to ["http://localhost:5173"]
+            allow_origins=self.allow_origins,  # Restrict to frontend origin
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -119,12 +122,9 @@ class Server:
         self._add_cors_exception_handler()
         self._setup_routes()
 
-        # Path to the .env file
-        self.ENV_FILE = ".env"
-
-        # Get or create the SECRET_KEY
-        self.SECRET_KEY = None
-        self.ALGORITHM = "HS256"
+        # Updated to store the PASSWORD_HASH in self._server_config
+        self.PASSWORD_HASH = self._server_config.get("PASSWORD_HASH", None)
+        self.active_session_ids = set()
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -136,31 +136,20 @@ class Server:
             self.vault.close()
         gc.collect()
 
-    # Function to generate and save the SECRET_KEY
-    def get_or_create_secret_key(self):
-        if not self.SECRET_KEY:
-            # Generate a new secure key
-            self.SECRET_KEY = os.urandom(32).hex()
-            # Save it to the .env file
-            with open(self.ENV_FILE, "a") as env_file:
-                env_file.write(f"SECRET_KEY={self.SECRET_KEY}\n")
-            print("Generated and saved a new SECRET_KEY.")
-        return self.SECRET_KEY
+    def set_password_hash(self, hashed_password):
+        self.PASSWORD_HASH = hashed_password
+        self._server_config["PASSWORD_HASH"] = hashed_password
+        with open(self._server_config_path, "w") as f:
+            json.dump(self._server_config, f, indent=2)
+        print("Password hash stored in server configuration.")
 
-    def remove_secret_key(self):
-        """Remove the SECRET_KEY by deleting it from memory and the .env file."""
-        self.SECRET_KEY = None
-        # Remove the SECRET_KEY from the .env file
-        if os.path.exists(self.ENV_FILE):
-            with open(self.ENV_FILE, "r") as env_file:
-                lines = env_file.readlines()
-            with open(self.ENV_FILE, "w") as env_file:
-                for line in lines:
-                    if not line.startswith("SECRET_KEY="):
-                        env_file.write(line)
-        print(
-            "SECRET_KEY removed. The server will generate a new one on the next login."
-        )
+    def remove_password_hash(self):
+        """Remove the PASSWORD_HASH by deleting it from the server configuration."""
+        self.PASSWORD_HASH = None
+        if "PASSWORD_HASH" in self._server_config:
+            del self._server_config["PASSWORD_HASH"]
+            with open(self._server_config_path, "w") as f:
+                json.dump(self._server_config, f, indent=2)
 
     def run(self):
         uvicorn_kwargs = dict(
@@ -323,10 +312,31 @@ class Server:
     def _add_cors_exception_handler(self):
         @self.api.exception_handler(HTTPException)
         async def cors_exception_handler(request, exc):
+            origin = request.headers.get("origin")
+            headers = {
+                "Access-Control-Allow-Credentials": "true",
+            }
+            if origin in self.allow_origins:
+                headers["Access-Control-Allow-Origin"] = origin
             return JSONResponse(
                 status_code=exc.status_code,
                 content={"detail": exc.detail},
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers=headers,
+            )
+
+        @self.api.exception_handler(Exception)
+        async def generic_exception_handler(request, exc):
+            logger.error(f"Unhandled exception: {exc}")
+            origin = request.headers.get("origin")
+            headers = {
+                "Access-Control-Allow-Credentials": "true",
+            }
+            if origin in self.allow_origins:
+                headers["Access-Control-Allow-Origin"] = origin
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal Server Error"},
+                headers=headers
             )
 
     def _create_picture_imports(self, uploaded_files, dest_folder):
@@ -514,8 +524,8 @@ class Server:
         for pic in candidate_pics:
             if character_id == "UNASSIGNED":
                 character_ids = [c.id for c in pic.characters]
-                if reference_character_id in character_ids:
-                    # Skip pictures that already have the reference character assigned
+                if reference_character_id in character_ids or character_ids:
+                    # Skip pictures that already have any characters assigned
                     continue
             pic_dict = safe_model_dict(pic)
             pic_id = pic_dict["id"]
@@ -1063,12 +1073,17 @@ class Server:
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
             try:
+                logger.info(f"Fetching characters with name: {name}")
                 characters = self.vault.db.run_immediate_read_task(
                     lambda session: Character.find(session, name=name)
                 )
                 return characters
             except KeyError:
+                logger.error("Character not found")
                 raise HTTPException(status_code=404, detail="Character not found")
+            except Exception as e:
+                logger.error(f"Error fetching characters: {e}")
+                raise HTTPException(status_code=500, detail="Internal Server Error")
 
         @self.api.post("/characters")
         async def create_character(payload: dict = Body(...)):
@@ -1700,7 +1715,8 @@ class Server:
                     )
                     results[pic.id] = {"thumbnail": None, "faces": []}
             response = JSONResponse(results)
-            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
             return response
 
         @self.api.get("/pictures/export")
@@ -1921,7 +1937,8 @@ class Server:
 
             # Return the image file with CORS headers
             response = FileResponse(pic.file_path)
-            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
             return response
 
         @self.api.get("/pictures/{id}/metadata")
@@ -2306,7 +2323,6 @@ class Server:
             character_id = query_params.pop("character_id", None)
             reference_character_id = query_params.pop("reference_character_id", None)
 
-            logger.warning("SORTING ORDER: " + str(sort) + " DESC: " + str(descending))
             try:
                 sort_mech = (
                     SortMechanism.from_string(sort, descending=descending)
@@ -2398,51 +2414,99 @@ class Server:
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):
             # Exclude specific routes from authentication
-            excluded_paths = ["/login", "/docs", "/openapi.json", "/favicon.ico", "/"]
+            excluded_paths = [
+                "/login",
+                "/docs",
+                "/openapi.json",
+                "/favicon.ico",
+                "/",
+                "/check-session",
+                "/logout",
+            ]
+            if request.method == "OPTIONS":
+                return await call_next(request)
+
             if request.url.path not in excluded_paths:
-                token = request.cookies.get("access_token")
+                session_id = request.cookies.get("session_id")
                 logger.info(
-                    f"Retrieved token from cookies: {token}"
-                )  # Log the token for debugging
-                if not token:
-                    raise HTTPException(status_code=401, detail="Not authenticated")
-                try:
-                    jwt.decode(
-                        token,
-                        self.SECRET_KEY,
-                        algorithms=[self.ALGORITHM],
+                    f"Retrieved session_id from cookies: {session_id}"
+                )  # Log for debugging
+                logger.debug(f"Current active_session_ids: {self.active_session_ids}")
+                if session_id not in self.active_session_ids:
+                    logger.error(
+                        f"Invalid session_id: {session_id}. It has expired and the client needs to log in again. When trying to access {request.url.path}"
                     )
-                except JWTError as e:
-                    logger.error(f"Token decoding failed: {e}")  # Log decoding errors
-                    raise HTTPException(status_code=401, detail="Invalid token")
+                    origin = request.headers.get("origin")
+                    headers = {
+                        "Access-Control-Allow-Credentials": "true",
+                    }
+                    if origin in self.allow_origins:
+                        headers["Access-Control-Allow-Origin"] = origin
+
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Not authenticated"},
+                        headers=headers,
+                    )
             return await call_next(request)
 
+        class LoginRequest(BaseModel):
+            password: str = Field(
+                ...,
+                min_length=8,
+                description="Password must be at least 8 characters long",
+            )
+
+        @self.api.get("/check-session")
+        async def check_session(request: Request):
+            session_id = request.cookies.get("session_id")
+            if session_id and session_id in self.active_session_ids:
+                return JSONResponse(content={"status": "success"})
+            raise HTTPException(status_code=401, detail="Invalid session")
+
         @self.api.post("/login")
-        async def login(resp: Response):
-            if self.SECRET_KEY:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Login not allowed. Server has already handed out the SECRET_KEY to another client. Run the server again with --regenerate-secret-key to reset.",
+        def login(request: LoginRequest):
+            if not self.PASSWORD_HASH:
+                # First login: set the password
+                hashed_password = bcrypt.hash(request.password)
+                self.set_password_hash(hashed_password)
+                response = JSONResponse(
+                    content={"message": "Password set successfully."}
                 )
+            else:
+                # Validate the password
+                if not bcrypt.verify(request.password, self.PASSWORD_HASH):
+                    raise HTTPException(status_code=401, detail="Invalid password")
+                response = JSONResponse(content={"message": "Login successful."})
 
-            secret_key = self.get_or_create_secret_key()
-            logger.info("SECRET_KEY generated and saved: " + secret_key)
+            # Generate a new session ID using uuid
+            session_id = str(uuid.uuid4())
+            self.active_session_ids.add(session_id)
 
-            # Return the token
-            access_token = jwt.encode(
-                {"sub": "user"}, self.SECRET_KEY, algorithm=self.ALGORITHM
+            # Set the session ID as a cookie
+            response.set_cookie(
+                key="session_id",
+                value=session_id,
+                httponly=True,
+                samesite="Lax",
+                secure=False,
             )
+            return response
 
-            # Set the token in an HTTP-only cookie
-            resp.set_cookie(
-                key="access_token",
-                value=access_token,
-                httponly=True,  # Prevent JavaScript access
-                secure=False,  # Use this in production with HTTPS
-                samesite="Strict",  # Adjust based on your app's needs
-            )
+        @self.api.get("/login")
+        def check_registration():
+            if not self.PASSWORD_HASH:
+                return JSONResponse(content={"needs_registration": True})
+            return JSONResponse(content={"needs_registration": False})
 
-            return {"message": "Login successful"}
+        @self.api.post("/logout")
+        def logout(response: Response, request: Request):
+            session_id = request.cookies.get("session_id")
+            if session_id in self.active_session_ids:
+                self.active_session_ids.remove(session_id)
+                logger.info(f"Session {session_id} invalidated.")
+            response.delete_cookie("session_id", path="/")
+            return {"message": "Logged out successfully."}
 
         @self.api.get("/protected")
         async def protected():

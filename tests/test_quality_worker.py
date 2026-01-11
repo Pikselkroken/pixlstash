@@ -28,7 +28,7 @@ def test_quality_worker_face_metrics():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
-            resp = client.post("/login")
+            resp = client.post("/login", json={"password": "testpassword"})
             assert resp.status_code == 200
 
             # Upload a picture
@@ -107,7 +107,7 @@ def test_quality_worker_end_to_end():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
-            resp = client.post("/login")
+            resp = client.post("/login", json={"password": "testpassword"})
             assert resp.status_code == 200
 
             # Upload a real test image with a face

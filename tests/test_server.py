@@ -94,7 +94,7 @@ def test_esmeralda_vault_character_and_logo():
             client = TestClient(server.api)
 
             # Get a valid token
-            response = client.post("/login")
+            response = client.post("/login", json={"password": "testpassword"})
             assert response.status_code == 200
             # First access with the token
             response = client.get("/protected")
@@ -180,7 +180,7 @@ def test_create_and_get_default_character():
             client = TestClient(server.api)
 
             # Get a valid token
-            response = client.post("/login")
+            response = client.post("/login", json={"password": "testpassword"})
             assert response.status_code == 200
 
             # Create Esmeralda
@@ -222,7 +222,7 @@ def test_upload_existing_picture():
         ) as server:
             client = TestClient(server.api)
             # Get a valid token
-            response = client.post("/login")
+            response = client.post("/login", json={"password": "testpassword"})
             assert response.status_code == 200
             # Create a new picture
             img_bytes = random_images[0]
@@ -313,7 +313,7 @@ def test_characters_summary():
             client = TestClient(server.api)
 
             # Get a valid token
-            response = client.post("/login")
+            response = client.post("/login", json={"password": "testpassword"})
             assert response.status_code == 200
 
             # Get Esmeralda Vault character ID
@@ -419,7 +419,7 @@ def test_pictures_stacks():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
-            response = client.post("/login")
+            response = client.post("/login", json={"password": "testpassword"})
             assert response.status_code == 200
             resp = client.get("/pictures/stacks")
             assert resp.status_code == 200
@@ -440,7 +440,7 @@ def test_pictures_thumbnails():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
-            response = client.post("/login")
+            response = client.post("/login", json={"password": "testpassword"})
             assert response.status_code == 200
             # Send empty payload for basic test
             resp = client.post("/pictures/thumbnails", json={"ids": []})
@@ -462,7 +462,7 @@ def test_pictures_export():
             server.vault.import_default_data(add_tagger_test_images=True)
             client = TestClient(server.api)
 
-            resp = client.post("/login")
+            resp = client.post("/login", json={"password": "testpassword"})
             assert resp.status_code == 200
 
             resp = client.get("/pictures/export")
@@ -524,7 +524,7 @@ def test_post_logo_identical_upload():
             server.vault.import_default_data()
             client = TestClient(server.api)
 
-            resp = client.post("/login")
+            resp = client.post("/login", json={"password": "testpassword"})
             assert resp.status_code == 200
 
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
@@ -547,7 +547,7 @@ def test_post_logo_altered_pixel_upload():
         ) as server:
             client = TestClient(server.api)
 
-            resp = client.post("/login")
+            resp = client.post("/login", json={"password": "testpassword"})
             assert resp.status_code == 200
 
             logo_path = os.path.join(os.path.dirname(__file__), "../Logo.png")
@@ -603,7 +603,7 @@ def test_benchmark_add_images_by_binary_upload():
         ) as server:
             client = TestClient(server.api)
 
-            resp = client.post("/login")
+            resp = client.post("/login", json={"password": "testpassword"})
             assert resp.status_code == 200
 
             start = time.time()
@@ -661,7 +661,7 @@ def test_semantic_search():
             server.vault.import_default_data()
             client = TestClient(server.api)
 
-            resp = client.post("/login")
+            resp = client.post("/login", json={"password": "testpassword"})
             assert resp.status_code == 200
 
             # Get Esmeralda's character ID

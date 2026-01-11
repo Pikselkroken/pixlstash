@@ -5,6 +5,7 @@ import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
 import SearchBar from "./SearchBar.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
+import { apiClient } from '../utils/apiClient';
 
 const props = defineProps({
   selectedCharacter: { type: [String, Number, null], default: null },
@@ -216,13 +217,7 @@ async function deleteCharacter() {
   if (!props.selectedCharacter) return;
   if (!window.confirm("Delete this character?")) return;
   try {
-    const res = await fetch(
-      `${props.backendUrl}/characters/${props.selectedCharacter}`,
-      {
-        method: "DELETE",
-      }
-    );
-    if (!res.ok) throw new Error("Failed to delete character");
+    await apiClient.delete(`/characters/${props.selectedCharacter}`);
 
     // Remove the deleted character from the characters array
     characters.value = characters.value.filter(
@@ -298,42 +293,33 @@ async function fetchSidebarData() {
   // Fetch total image count for END key logic
   try {
     // All images summary
-    const resAll = await fetch(
+    const resAll = await apiClient.get(
       `${props.backendUrl}/characters/${props.allPicturesId}/summary`
     );
-    if (resAll.ok) {
-      const data = await resAll.json();
-      categoryCounts.value[props.allPicturesId] = data.image_count;
-    } else {
-      console.warn("Failed to fetch all images summary");
-    }
+    const data = await resAll.data;
+    categoryCounts.value[props.allPicturesId] = data.image_count;
   } catch (e) {
     console.warn("Error fetching all images summary:", e);
   }
   try {
     // Unassigned images summary
-    const resUnassigned = await fetch(
+    const resUnassigned = await apiClient.get(
       `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`
     );
-    if (resUnassigned.ok) {
-      const data = await resUnassigned.json();
-      categoryCounts.value[props.unassignedPicturesId] = data.image_count;
-    } else {
-      console.warn("Failed to fetch unassigned images summary");
-    }
+    const data = await resUnassigned.data;
+    categoryCounts.value[props.unassignedPicturesId] = data.image_count;
   } catch (e) {
     console.warn("Error fetching unassigned images summary:", e);
   }
   await Promise.all(
     characters.value.map(async (char) => {
       try {
-        const res = await fetch(
+        const res = await apiClient.get(
           `${props.backendUrl}/characters/${char.id}/summary`
         );
-        if (res.ok) {
-          const data = await res.json();
-          categoryCounts.value[char.id] = data.image_count;
-        }
+        const data = await res.data;
+        categoryCounts.value[char.id] = data.image_count;
+        
       } catch {}
     })
   );
@@ -343,9 +329,8 @@ async function fetchCharacters() {
   setLoading(true);
   setError(null);
   try {
-    const res = await fetch(`${props.backendUrl}/characters`);
-    if (!res.ok) throw new Error("Failed to fetch characters");
-    const chars = await res.json();
+    const res = await apiClient.get(`${props.backendUrl}/characters`);
+    const chars = await res.data;
     characters.value = chars;
     console.log("characters", characters.value);
     for (const char of chars) {
@@ -368,14 +353,14 @@ function refreshSidebar() {
 async function fetchCharacterThumbnail(characterId) {
   try {
     const cacheBuster = Date.now();
-    const thumbUrl = `${props.backendUrl}/characters/${characterId}/thumbnail?cb=${cacheBuster}`;
-    const res = await fetch(thumbUrl);
-    if (res.ok && res.headers.get("content-type")?.includes("image/png")) {
-      characterThumbnails.value[characterId] = thumbUrl;
-    } else {
-      characterThumbnails.value[characterId] = null;
-    }
+    const thumbUrl = `/characters/${characterId}/thumbnail?cb=${cacheBuster}`;
+    const res = await apiClient.get(thumbUrl, { responseType: 'blob' });
+
+    // Create an object URL for the blob
+    const blobUrl = URL.createObjectURL(res.data);
+    characterThumbnails.value[characterId] = blobUrl;
   } catch (e) {
+    console.error(`Failed to fetch thumbnail for character ${characterId}:`, e);
     characterThumbnails.value[characterId] = null;
   }
 }
@@ -388,9 +373,9 @@ function toggleSidebarSection(section) {
 // --- Sorting & Pagination ---
 async function fetchSortOptions() {
   try {
-    const res = await fetch(`${props.backendUrl}/sort_mechanisms`);
-    if (!res.ok) throw new Error("Failed to fetch sort mechanisms");
-    const options = await res.json();
+    const res = await apiClient.get(`${props.backendUrl}/sort_mechanisms`);
+    
+    const options = await res.data;
     console.log("Fetched sort options:", options);
 
     // Filter out CHARACTER_LIKENESS if there are no characters
@@ -432,9 +417,9 @@ async function fetchSortedCharactersAndSortOptions() {
 // --- Picture Sets ---
 async function fetchPictureSets() {
   try {
-    const res = await fetch(`${props.backendUrl}/picture_sets`);
-    if (!res.ok) throw new Error("Failed to fetch picture sets");
-    const sets = await res.json();
+    const res = await apiClient.get(`${props.backendUrl}/picture_sets`);
+
+    const sets = await res.data; // Axios responses use `data` for the payload
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
     console.log("Found picture sets:", pictureSets.value);
     referencePictureSetsByCharacter.value = pictureSets.value.reduce(
@@ -470,13 +455,9 @@ async function handleDeleteSet() {
     return;
 
   try {
-    const res = await fetch(
-      `${props.backendUrl}/picture_sets/${props.selectedSet}`,
-      {
-        method: "DELETE",
-      }
+    const res = await apiClient.delete(
+      `${props.backendUrl}/picture_sets/${props.selectedSet}`
     );
-    if (!res.ok) throw new Error("Failed to delete set");
     emit("select-set", null);
     await fetchPictureSets();
     await fetchSidebarData();
@@ -509,14 +490,9 @@ async function handleDropOnSet(setId, event) {
   try {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
-      const res = await fetch(
-        `${props.backendUrl}/picture_sets/${setId}/members/${picId}`,
-        { method: "POST" }
+      const res = await apiClient.post(
+        `${props.backendUrl}/picture_sets/${setId}/members/${picId}`
       );
-      // 400 error might mean it's already in the set, which is ok
-      if (!res.ok && res.status !== 400) {
-        throw new Error(`Failed to add image ${picId}`);
-      }
     });
 
     await Promise.all(addPromises);
@@ -574,17 +550,10 @@ async function onCharacterDrop(characterId, event) {
     try {
       const body = { face_ids: faceIds };
       console.log("Assigning faces to character:", characterId, body);
-      const res = await fetch(
+      const res = await apiClient.post(
         `${props.backendUrl}/characters/${characterId}/faces`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
+        body
       );
-      if (!res.ok) {
-        throw new Error("Failed to assign faces to character");
-      }
       await fetchSidebarData();
       await fetchCharacterThumbnail(characterId);
       //emit("faces-assigned-to-character", { characterId, faceIds});
@@ -606,17 +575,10 @@ async function onCharacterDrop(characterId, event) {
     // Fallback: assign images to character
     const body = { picture_ids: imageIds };
     console.log("Assigning images to character:", characterId, body);
-    const res = await fetch(
+    const res = await apiClient.post(
       `${props.backendUrl}/characters/${characterId}/faces`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }
+      body
     );
-    if (!res.ok) {
-      throw new Error("Failed to assign images to character");
-    }
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
     //emit("faces-assigned-to-character", { characterId, imageIds });
@@ -632,17 +594,12 @@ async function onCharacterDrop(characterId, event) {
 // Batched face removal
 async function removeFacesFromCharacter(characterId, faceIds) {
   try {
-    const res = await fetch(
+    const res = await apiClient.delete(
       `${props.backendUrl}/characters/${characterId}/faces`,
       {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ face_ids: faceIds }),
+        data: { face_ids: faceIds },
       }
     );
-    if (!res.ok) {
-      throw new Error("Failed to remove faces from character");
-    }
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
     emit("faces-removed-from-character", { characterId, faceIds });

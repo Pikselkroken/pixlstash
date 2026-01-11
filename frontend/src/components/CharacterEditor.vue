@@ -106,6 +106,7 @@
 
 <script setup>
 import { computed, ref, watch, nextTick } from "vue";
+import { apiClient } from '../utils/apiClient';
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -219,24 +220,21 @@ function handleKeydown(event) {
 async function saveCharacter(charData) {
   try {
     const isNew = !charData.id;
-    const method = isNew ? "POST" : "PATCH";
     const url = isNew
       ? `${props.backendUrl}/characters`
       : `${props.backendUrl}/characters/${charData.id}`;
 
     console.log("URL: ", url);
 
-    const res = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(charData),
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      throw new Error(errorText || "Failed to save character");
+    if (isNew) {
+      const res = await apiClient.post(url, 
+        JSON.stringify(charData),
+      );
+    } else {
+      const res = await apiClient.patch(url, 
+        JSON.stringify(charData),
+      );
     }
-
     emit("saved");
   } catch (e) {
     alert("Failed to save character: " + (e.message || e));
