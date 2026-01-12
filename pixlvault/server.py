@@ -515,8 +515,8 @@ class Server:
         for pic in candidate_pics:
             if character_id == "UNASSIGNED":
                 character_ids = [c.id for c in pic.characters]
-                if reference_character_id in character_ids:
-                    # Skip pictures that already have the reference character assigned
+                if reference_character_id in character_ids or character_ids:
+                    # Skip pictures that already have any characters assigned
                     continue
             pic_dict = safe_model_dict(pic)
             pic_id = pic_dict["id"]
