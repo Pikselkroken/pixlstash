@@ -1,4 +1,3 @@
-
 // Vuetify styles
 import 'vuetify/styles'
 import { createVuetify } from 'vuetify'
@@ -8,7 +7,7 @@ import '@mdi/font/css/materialdesignicons.css'
 
 import { createApp } from 'vue'
 import './style.css'
-import App from './App.vue'
+import Root from './Root.vue'
 
 // Custom theme properties
 const pixlVaultTheme = {
@@ -39,6 +38,6 @@ const vuetify = createVuetify({
     directives,
 })
 
-createApp(App)
+createApp(Root)
     .use(vuetify)
     .mount('#app')

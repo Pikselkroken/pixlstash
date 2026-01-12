@@ -2314,7 +2314,6 @@ class Server:
             character_id = query_params.pop("character_id", None)
             reference_character_id = query_params.pop("reference_character_id", None)
 
-            logger.warning("SORTING ORDER: " + str(sort) + " DESC: " + str(descending))
             try:
                 sort_mech = (
                     SortMechanism.from_string(sort, descending=descending)
@@ -2412,8 +2411,12 @@ class Server:
                 "/openapi.json",
                 "/favicon.ico",
                 "/",
+                "/check-session",
                 "/logout",
             ]
+            if request.method == "OPTIONS":
+                return await call_next(request)
+
             if request.url.path not in excluded_paths:
                 session_id = request.cookies.get("session_id")
                 logger.info(
@@ -2422,7 +2425,7 @@ class Server:
                 logger.debug(f"Current active_session_ids: {self.active_session_ids}")
                 if session_id not in self.active_session_ids:
                     logger.error(
-                        f"Invalid session_id: {session_id}. It has expired and the client needs to log in again."
+                        f"Invalid session_id: {session_id}. It has expired and the client needs to log in again. When trying to access {request.url.path}"
                     )
                     return JSONResponse(
                         status_code=401,
@@ -2440,6 +2443,13 @@ class Server:
                 min_length=12,
                 description="Password must be at least 12 characters long",
             )
+
+        @self.api.get("/check-session")
+        async def check_session(request: Request):
+            session_id = request.cookies.get("session_id")
+            if session_id and session_id in self.active_session_ids:
+                return JSONResponse(content={"status": "success"})
+            raise HTTPException(status_code=401, detail="Invalid session")
 
         @self.api.post("/login")
         def login(request: LoginRequest):
