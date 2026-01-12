@@ -111,9 +111,10 @@ class Server:
 
         self.api = FastAPI(lifespan=self.lifespan)
         # Enable CORS for frontend dev server
+        self.allow_origins = ["http://localhost:5173"]
         self.api.add_middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:5173"],  # Restrict to frontend origin
+            allow_origins=self.allow_origins,  # Restrict to frontend origin
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -147,6 +148,8 @@ class Server:
         self.PASSWORD_HASH = None
         if "PASSWORD_HASH" in self._server_config:
             del self._server_config["PASSWORD_HASH"]
+            with open(self._server_config_path, "w") as f:
+                json.dump(self._server_config, f, indent=2)
 
     def run(self):
         uvicorn_kwargs = dict(
@@ -309,25 +312,31 @@ class Server:
     def _add_cors_exception_handler(self):
         @self.api.exception_handler(HTTPException)
         async def cors_exception_handler(request, exc):
+            origin = request.headers.get("origin")
+            headers = {
+                "Access-Control-Allow-Credentials": "true",
+            }
+            if origin in self.allow_origins:
+                headers["Access-Control-Allow-Origin"] = origin
             return JSONResponse(
                 status_code=exc.status_code,
                 content={"detail": exc.detail},
-                headers={
-                    "Access-Control-Allow-Origin": "http://localhost:5173",
-                    "Access-Control-Allow-Credentials": "true",
-                },
+                headers=headers,
             )
 
         @self.api.exception_handler(Exception)
         async def generic_exception_handler(request, exc):
             logger.error(f"Unhandled exception: {exc}")
+            origin = request.headers.get("origin")
+            headers = {
+                "Access-Control-Allow-Credentials": "true",
+            }
+            if origin in self.allow_origins:
+                headers["Access-Control-Allow-Origin"] = origin
             return JSONResponse(
                 status_code=500,
                 content={"detail": "Internal Server Error"},
-                headers={
-                    "Access-Control-Allow-Origin": "http://localhost:5173",
-                    "Access-Control-Allow-Credentials": "true",
-                },
+                headers=headers
             )
 
     def _create_picture_imports(self, uploaded_files, dest_folder):
@@ -2427,21 +2436,25 @@ class Server:
                     logger.error(
                         f"Invalid session_id: {session_id}. It has expired and the client needs to log in again. When trying to access {request.url.path}"
                     )
+                    origin = request.headers.get("origin")
+                    headers = {
+                        "Access-Control-Allow-Credentials": "true",
+                    }
+                    if origin in self.allow_origins:
+                        headers["Access-Control-Allow-Origin"] = origin
+
                     return JSONResponse(
                         status_code=401,
                         content={"detail": "Not authenticated"},
-                        headers={
-                            "Access-Control-Allow-Origin": "http://localhost:5173",
-                            "Access-Control-Allow-Credentials": "true",
-                        },
+                        headers=headers,
                     )
             return await call_next(request)
 
         class LoginRequest(BaseModel):
             password: str = Field(
                 ...,
-                min_length=12,
-                description="Password must be at least 12 characters long",
+                min_length=8,
+                description="Password must be at least 8 characters long",
             )
 
         @self.api.get("/check-session")
