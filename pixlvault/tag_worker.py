@@ -27,7 +27,7 @@ class DescriptionWorker(BaseWorker):
         while not self._stop.is_set():
             try:
                 start = time.time()
-                logger.info("DescriptionWorker: Starting iteration...")
+                logger.debug("DescriptionWorker: Starting iteration...")
                 data_updated = False
                 missing_descriptions = self._fetch_missing_descriptions()
 

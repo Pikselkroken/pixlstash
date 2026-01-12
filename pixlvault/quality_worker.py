@@ -47,7 +47,7 @@ class QualityWorker(BaseWorker):
                     return pics
 
                 pics_missing_quality = self._db.run_task(find_pictures_missing_quality)
-                logger.info(
+                logger.debug(
                     f"Found {len(pics_missing_quality)} pictures missing quality metrics."
                 )
 
@@ -111,10 +111,10 @@ class QualityWorker(BaseWorker):
                 break
             timing = time.time() - start
             if quality_updates > 0:
-                logger.info("QualityWorker: Done after %.2f seconds." % timing)
+                logger.debug("QualityWorker: Done after %.2f seconds." % timing)
                 self._notify_others(EventType.QUALITY_UPDATED)
             else:
-                logger.info(
+                logger.debug(
                     "QualityWorker: Sleeping after %.2f seconds, no updates made."
                     % timing
                 )
@@ -248,7 +248,7 @@ class FaceQualityWorker(BaseWorker):
 
                 faces_missing_quality = self._db.run_task(find_faces_missing_quality)
 
-                logger.info(
+                logger.debug(
                     f"Found {len(faces_missing_quality)} faces missing face quality metrics."
                 )
 
@@ -285,9 +285,9 @@ class FaceQualityWorker(BaseWorker):
                 break
             timing = time.time() - start
             if quality_update_count > 0:
-                logger.info("FaceQualityWorker: Done after %.2f seconds." % timing)
+                logger.debug("FaceQualityWorker: Done after %.2f seconds." % timing)
             else:
-                logger.info(
+                logger.debug(
                     "FaceQualityWorker: Sleeping after %.2f seconds, no updates made."
                     % timing
                 )

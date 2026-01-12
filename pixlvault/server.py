@@ -23,7 +23,6 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from pillow_heif import register_heif_opener
 from typing import List
 from passlib.hash import bcrypt
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from pixlvault.db_models import (
@@ -50,8 +49,6 @@ from pixlvault.utils import safe_model_dict
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
-
-load_dotenv()
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
 
@@ -86,6 +83,7 @@ class Server:
         gc.collect()
 
         self._config_path = config_path
+        self._server_config_path = server_config_path
 
         self._config = self._init_config(config_path)
         with open(config_path, "w") as f:
@@ -115,7 +113,7 @@ class Server:
         # Enable CORS for frontend dev server
         self.api.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],  # Or restrict to ["http://localhost:5173"]
+            allow_origins=["http://localhost:5173"],  # Restrict to frontend origin
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -123,11 +121,8 @@ class Server:
         self._add_cors_exception_handler()
         self._setup_routes()
 
-        # Path to the .env file
-        self.ENV_FILE = ".env"
-
-        # Get or create the SECRET_KEY
-        self.PASSWORD_HASH = None
+        # Updated to store the PASSWORD_HASH in self._server_config
+        self.PASSWORD_HASH = self._server_config.get("PASSWORD_HASH", None)
         self.active_session_ids = set()
 
     def __enter__(self):
@@ -140,19 +135,18 @@ class Server:
             self.vault.close()
         gc.collect()
 
+    def set_password_hash(self, hashed_password):
+        self.PASSWORD_HASH = hashed_password
+        self._server_config["PASSWORD_HASH"] = hashed_password
+        with open(self._server_config_path, "w") as f:
+            json.dump(self._server_config, f, indent=2)
+        print("Password hash stored in server configuration.")
+
     def remove_password_hash(self):
-        """Remove the PASSWORD_HASH by deleting it from memory and the .env file."""
+        """Remove the PASSWORD_HASH by deleting it from the server configuration."""
         self.PASSWORD_HASH = None
-        if os.path.exists(self.ENV_FILE):
-            with open(self.ENV_FILE, "r") as env_file:
-                lines = env_file.readlines()
-            with open(self.ENV_FILE, "w") as env_file:
-                for line in lines:
-                    if not line.startswith("PASSWORD_HASH="):
-                        env_file.write(line)
-        print(
-            "PASSWORD_HASH removed. The server will generate a new one on the next login."
-        )
+        if "PASSWORD_HASH" in self._server_config:
+            del self._server_config["PASSWORD_HASH"]
 
     def run(self):
         uvicorn_kwargs = dict(
@@ -319,7 +313,7 @@ class Server:
                 status_code=exc.status_code,
                 content={"detail": exc.detail},
                 headers={
-                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
                     "Access-Control-Allow-Credentials": "true",
                 },
             )
@@ -1712,7 +1706,8 @@ class Server:
                     )
                     results[pic.id] = {"thumbnail": None, "faces": []}
             response = JSONResponse(results)
-            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
             return response
 
         @self.api.get("/pictures/export")
@@ -1933,7 +1928,8 @@ class Server:
 
             # Return the image file with CORS headers
             response = FileResponse(pic.file_path)
-            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
             return response
 
         @self.api.get("/pictures/{id}/metadata")
@@ -2410,19 +2406,29 @@ class Server:
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):
             # Exclude specific routes from authentication
-            excluded_paths = ["/login", "/docs", "/openapi.json", "/favicon.ico", "/"]
+            excluded_paths = [
+                "/login",
+                "/docs",
+                "/openapi.json",
+                "/favicon.ico",
+                "/",
+                "/logout",
+            ]
             if request.url.path not in excluded_paths:
                 session_id = request.cookies.get("session_id")
                 logger.info(
                     f"Retrieved session_id from cookies: {session_id}"
                 )  # Log for debugging
-                if not session_id or session_id not in self.active_session_ids:
-                    logger.error("Invalid or missing session_id")
+                logger.debug(f"Current active_session_ids: {self.active_session_ids}")
+                if session_id not in self.active_session_ids:
+                    logger.error(
+                        f"Invalid session_id: {session_id}. It has expired and the client needs to log in again."
+                    )
                     return JSONResponse(
                         status_code=401,
                         content={"detail": "Not authenticated"},
                         headers={
-                            "Access-Control-Allow-Origin": "*",
+                            "Access-Control-Allow-Origin": "http://localhost:5173",
                             "Access-Control-Allow-Credentials": "true",
                         },
                     )
@@ -2440,9 +2446,7 @@ class Server:
             if not self.PASSWORD_HASH:
                 # First login: set the password
                 hashed_password = bcrypt.hash(request.password)
-                with open(".env", "a") as env_file:
-                    env_file.write(f"\nPASSWORD_HASH={hashed_password}")
-                self.PASSWORD_HASH = hashed_password
+                self.set_password_hash(hashed_password)
                 response = JSONResponse(
                     content={"message": "Password set successfully."}
                 )
@@ -2465,6 +2469,21 @@ class Server:
                 secure=False,
             )
             return response
+
+        @self.api.get("/login")
+        def check_registration():
+            if not self.PASSWORD_HASH:
+                return JSONResponse(content={"needs_registration": True})
+            return JSONResponse(content={"needs_registration": False})
+
+        @self.api.post("/logout")
+        def logout(response: Response, request: Request):
+            session_id = request.cookies.get("session_id")
+            if session_id in self.active_session_ids:
+                self.active_session_ids.remove(session_id)
+                logger.info(f"Session {session_id} invalidated.")
+            response.delete_cookie("session_id", path="/")
+            return {"message": "Logged out successfully."}
 
         @self.api.get("/protected")
         async def protected():
