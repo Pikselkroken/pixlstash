@@ -188,6 +188,7 @@
                   @pointercancel="handleThumbnailPointerRelease($event)"
                   @dragstart="handleThumbnailNativeDragStart(img, $event)"
                   @dragend="handleThumbnailNativeDragEnd($event)"
+                  @error="handleImageError"
                   @load="
                     () => {
                       setThumbnailRef(img.id, el);
@@ -369,6 +370,7 @@ import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
 import { useSearchOverlay } from "../utils/useSearchOverlay";
+import { apiClient } from '../utils/apiClient';
 
 const emit = defineEmits(["open-overlay", "refresh-sidebar", "clear-search"]);
 
@@ -707,6 +709,14 @@ function buildExportUrlForIds(ids) {
     }
   });
   return `${props.backendUrl}/pictures/export?${params.toString()}`;
+}
+
+function handleImageError(event) {
+  const imgEl = event?.target;
+  if (imgEl instanceof HTMLImageElement) {
+    imgEl.src = "";
+  }
+  logger.error("[ImageGrid] Image load error for", imgEl?.src);
 }
 
 function setupMultiExportDrag(event, ids) {
@@ -1119,13 +1129,11 @@ async function updateSelectedGroupName() {
     props.selectedCharacter !== `${props.unassignedPicturesId}`
   ) {
     try {
-      const res = await fetch(
+      const res = await apiClient.get(
         `${props.backendUrl}/characters/${props.selectedCharacter}`
       );
-      if (res.ok) {
-        const char = await res.json();
-        name = char.name || "";
-      }
+      const char = await res.data;
+      name = char.name || "";
     } catch (e) {
       console.error("Character fetch failed:", e);
     }
@@ -1135,13 +1143,11 @@ async function updateSelectedGroupName() {
     props.selectedSet !== `${props.unassignedPicturesId}`
   ) {
     try {
-      const res = await fetch(
+      const res = await apiClient.get(
         `${props.backendUrl}/picture_sets/${props.selectedSet}`
       );
-      if (res.ok) {
-        const set = await res.json();
-        name = set.name || "";
-      }
+      const set = await res.data;
+      name = set.name || "";
     } catch (e) {
       console.error("Set fetch failed:", e);
     }
@@ -1177,9 +1183,9 @@ watch(
 // --- Overlay ---
 async function fetchImageInfo(imageId) {
   try {
-    const res = await fetch(`${props.backendUrl}/pictures/${imageId}/metadata`);
-    if (!res.ok) throw new Error("Failed to fetch tags");
-    return await res.json();
+    const res = await apiClient.get(`${props.backendUrl}/pictures/${imageId}/metadata`);
+    const data = await res.data;
+    return data;
   } catch (e) {
     console.error("Tag fetch failed:", e);
     return [];
@@ -1220,12 +1226,9 @@ async function applyScore(img, newScore) {
       newScore,
       "}"
     );
-    const res = await fetch(`${props.backendUrl}/pictures/${imageId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ score: newScore }),
+    const res = await apiClient.patch(`${props.backendUrl}/pictures/${imageId}`, {
+      score: newScore,
     });
-    if (!res.ok) throw new Error(`Failed to set score for image ${imageId}`);
 
     // Update score in allGridImages
     const gridImg = allGridImages.value.find((i) => i.id === imageId);
@@ -1476,9 +1479,8 @@ async function fetchTotalImageCount() {
       props.selectedSet !== props.unassignedPicturesId
     ) {
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch images for set");
-      const data = await res.json();
+      const res = await apiClient.get(url);
+      const data = await res.data;
       images = data.pictures || [];
     } else if (props.searchQuery && props.searchQuery.trim()) {
       // Use /pictures/search endpoint for text search
@@ -1488,18 +1490,18 @@ async function fetchTotalImageCount() {
       }/pictures/search?query=${encodeURIComponent(
         props.searchQuery.trim()
       )}&top_n=10000${params ? `&${params}` : ""}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch search results");
-      images = await res.json();
+      const res = await apiClient.get(url);
+      const data = await res.data;
+      images = data;
     } else {
       const params = buildPictureIdsQueryParams();
       // Only use allowed parameters: sort, offset, limit, threshold
       const url = `${props.backendUrl}/pictures?offset=0&limit=10000${
         params ? `&${params}` : ""
       }`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch image info for all images");
-      images = await res.json();
+      const res = await apiClient.get(url);
+      const data = await res.data;
+      images = data;
     }
     allGridImages.value = images.map((img, i) => ({
       ...img,
@@ -1668,12 +1670,10 @@ async function fetchThumbnailsBatch(start, end) {
       props.selectedSet !== props.unassignedPicturesId
     ) {
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        images = data.pictures ? data.pictures.slice(start, end) : [];
-        ids = images.map((img) => img.id);
-      }
+      const res = await apiClient.get(url);
+      const data = await res.data;
+      images = data.pictures ? data.pictures.slice(start, end) : [];
+      ids = images.map((img) => img.id);
     } else {
       // Only fetch if we don't already have metadata for this range
       images = allGridImages.value.slice(start, end);
@@ -1685,20 +1685,18 @@ async function fetchThumbnailsBatch(start, end) {
         const url = `${props.backendUrl}/pictures?offset=${start}&limit=${
           end - start
         }${params ? `&${params}` : ""}`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const fetched = await res.json();
-          // Fill in missing slots
-          for (let i = 0; i < fetched.length; i++) {
-            allGridImages.value[start + i] = {
-              ...fetched[i],
-              idx: start + i,
-              thumbnail: null,
-            };
-          }
-          images = allGridImages.value.slice(start, end);
-          ids = images.map((img) => img.id);
+        const res = await apiClient.get(url);
+        const fetched = await res.data;
+        // Fill in missing slots
+        for (let i = 0; i < fetched.length; i++) {
+          allGridImages.value[start + i] = {
+            ...fetched[i],
+            idx: start + i,
+            thumbnail: null,
+          };
         }
+        images = allGridImages.value.slice(start, end);
+        ids = images.map((img) => img.id);
       }
     }
     /* console.debug(
@@ -1714,27 +1712,18 @@ async function fetchThumbnailsBatch(start, end) {
     }));
     // Now fetch thumbnails for these IDs
     if (ids.length) {
-      const thumbRes = await fetch(`${props.backendUrl}/pictures/thumbnails`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
-      });
-      if (thumbRes.ok) {
-        const thumbData = await thumbRes.json();
-        for (const gridImg of gridImages) {
-          const thumbObj = thumbData[gridImg.id];
-          gridImg.thumbnail =
-            thumbObj && thumbObj.thumbnail
-              ? `data:image/png;base64,${thumbObj.thumbnail}`
-              : null;
-          gridImg.faces =
-            thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
-        }
-      } else {
-        for (const gridImg of gridImages) {
-          gridImg.thumbnail = null;
-          gridImg.faces = [];
-        }
+      const thumbRes = await apiClient.post(`${props.backendUrl}/pictures/thumbnails`, 
+        JSON.stringify({ ids }),
+      );
+      const thumbData = await thumbRes.data;
+      for (const gridImg of gridImages) {
+        const thumbObj = thumbData[gridImg.id];
+        gridImg.thumbnail =
+          thumbObj && thumbObj.thumbnail
+            ? `data:image/png;base64,${thumbObj.thumbnail}`
+            : null;
+        gridImg.faces =
+          thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
       }
     }
     // Insert/update images at their correct indices
@@ -1978,17 +1967,12 @@ async function removeTagFromImage(imageId, tag) {
 
 async function addTagToImage(imageId, tag) {
   try {
-    const response = await fetch(
+    const response = await apiClient.post(
       `${props.backendUrl}/pictures/${imageId}/tags`,
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tag }),
+        tag: tag,
       }
     );
-    if (!response.ok) {
-      throw new Error("Failed to add tag");
-    }
     console.log(`Tag '${tag}' added to image ${imageId}`);
   } catch (error) {
     console.error("Error adding tag:", error);
@@ -2109,9 +2093,8 @@ async function exportCurrentViewToZip() {
     url += `?${params}`;
   }
   try {
-    const res = await fetch(url, { method: "GET" });
-    if (!res.ok) throw new Error("Failed to export zip");
-    const blob = await res.blob();
+    const res = await apiClient.get(url);
+    const blob = await res.data.blob();
     // Extract filename from Content-Disposition header
     let filename = "pixlvault_export.zip";
     const disposition = res.headers.get("Content-Disposition");
