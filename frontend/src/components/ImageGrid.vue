@@ -371,6 +371,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
 import { useSearchOverlay } from "../utils/useSearchOverlay";
 import { apiClient } from '../utils/apiClient';
+import { debounce, update } from "lodash-es";
 
 const emit = defineEmits(["open-overlay", "refresh-sidebar", "clear-search"]);
 
@@ -416,13 +417,12 @@ function triggerFaceOverlayRedraw() {
 }
 
 onMounted(() => {
+  console.log("[ImageGrid.vue] Mounted with selectedDescending:", props.selectedDescending);
+  console.log("[ImageGrid.vue] Initial gridImagesToRender:", gridImagesToRender.value);
+  console.log("[ImageGrid.vue] Initial allGridImages:", allGridImages.value);
   window.addEventListener("resize", triggerFaceOverlayRedraw);
-  console.log(
-    "[ImageGrid.vue] Mounted with selectedDescending:",
-    props.selectedDescending
-  );
-  console.log("[ImageGrid.vue] Clear Search button should be visible.");
 });
+
 onUnmounted(() => {
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
   fullImagePrefetchControllers.clear();
@@ -563,9 +563,6 @@ function getFaceBboxOverlays(img) {
     const el = thumbnailRefs[img.id];
     if (!el) return [];
     const firstFrameFaces = img.faces.filter((f) => f.frame_index === 0);
-    for (const face of firstFrameFaces) {
-      console.debug("Face bbox:", face.bbox, "Character:", face.character_id);
-    }
     return firstFrameFaces.map((face, fidx) => ({
       style: getFaceBboxStyle(face.bbox, fidx, img, el),
       idx: fidx,
@@ -714,7 +711,8 @@ function buildExportUrlForIds(ids) {
 function handleImageError(event) {
   const imgEl = event?.target;
   if (imgEl instanceof HTMLImageElement) {
-    imgEl.src = "";
+    console.error("[ImageGrid.vue] Image load error for:", imgEl.src);
+    imgEl.src = ""; // Reset the source to avoid broken image icon
   }
   logger.error("[ImageGrid] Image load error for", imgEl?.src);
 }
@@ -982,7 +980,7 @@ function removeFromGroup() {
         );
         selectedImageIds.value = [];
         lastSelectedIndex = null;
-        fetchTotalImageCount().then(() => {
+        fetchAllGridImages().then(() => {
           loadedRanges.value = [];
           updateVisibleThumbnails();
           emit("refresh-sidebar");
@@ -1017,7 +1015,7 @@ function removeFromGroup() {
       );
       selectedImageIds.value = [];
       lastSelectedIndex = null;
-      await fetchTotalImageCount();
+      await fetchAllGridImages();
       loadedRanges.value = [];
       updateVisibleThumbnails();
       // Ensure sidebar counts are refreshed after drag-out
@@ -1070,27 +1068,28 @@ function deleteSelected() {
 const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
 async function handleImagesUploaded(newIds) {
-  await fetchTotalImageCount();
   loadedRanges.value = [];
   allGridImages.value = [];
   selectedImageIds.value = [];
   lastSelectedIndex = null;
-  await fetchTotalImageCount();
-  updateVisibleThumbnails();
+  fetchAllGridImages().then(() => {
+    updateVisibleThumbnails();
+  });
 }
 
+// Adjust debounce timing to 200ms for better responsiveness
+const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
+
+// Debounced version of fetchAllGridImages
 watch(
   () => props.gridVersion,
   () => {
-    // Full grid data refresh
-    console.log("Grid version changed, refreshing all thumbnails");
+    console.log("[ImageGrid.vue] Grid version changed, refreshing all thumbnails.");
     loadedRanges.value = [];
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
-    fetchTotalImageCount().then(() => {
-      updateVisibleThumbnails();
-    });
+    debouncedFetchAllGridImages();
   }
 );
 
@@ -1467,7 +1466,8 @@ function buildPictureIdsQueryParams() {
 }
 
 // Fetch total image count for current filters
-async function fetchTotalImageCount() {
+async function fetchAllGridImages() {
+  console.log("[ImageGrid.vue] fetchAllGridImages called.");
   imagesLoading.value = true;
   imagesError.value = null;
   try {
@@ -1503,25 +1503,23 @@ async function fetchTotalImageCount() {
       const data = await res.data;
       images = data;
     }
-    allGridImages.value = images.map((img, i) => ({
+    const newImages = images.map((img, i) => ({
       ...img,
       idx: i,
       thumbnail: null,
     }));
+    console.log("Updating allGridImages with fetched images:", newImages);
+    allGridImages.value = newImages;
   } catch (e) {
     imagesError.value = e.message;
     allGridImages.value = [];
   } finally {
     imagesLoading.value = false;
   }
+  updateVisibleThumbnails();
 }
 
-onMounted(() => {
-  fetchTotalImageCount().then(() => {
-    updateVisibleThumbnails();
-  });
-});
-
+// Update watchers to use the debounced function
 watch(
   [
     () => props.selectedCharacter,
@@ -1530,19 +1528,30 @@ watch(
     () => props.selectedSort,
   ],
   () => {
-    // Reset loaded ranges and thumbnails when filters change
+    console.log("[ImageGrid.vue] Filters changed. Resetting state and fetching total image count.");
     loadedRanges.value = [];
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
     updateSelectedGroupName();
-    fetchTotalImageCount().then(() => {
-      updateVisibleThumbnails();
-    });
+    debouncedFetchAllGridImages();
+  }
+);
+
+watch(
+  () => props.gridVersion,
+  () => {
+    console.log("[ImageGrid.vue] Grid version changed, refreshing all thumbnails.");
+    loadedRanges.value = [];
+    allGridImages.value = [];
+    selectedImageIds.value = [];
+    lastSelectedIndex = null;
+    debouncedFetchAllGridImages();
   }
 );
 
 watch([() => props.mediaTypeFilter], () => {
+   console.log("[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count.");
   // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
   loadedRanges.value = [];
   selectedImageIds.value = [];
@@ -1550,7 +1559,7 @@ watch([() => props.mediaTypeFilter], () => {
   visibleStart.value = 0;
   visibleEnd.value = 0;
   allGridImages.value = [];
-  fetchTotalImageCount().then(() => {
+  fetchAllGridImages().then(() => {
     updateVisibleThumbnails();
   });
 });
@@ -1566,6 +1575,9 @@ const visibleStart = ref(0);
 const visibleEnd = ref(0);
 
 const rowHeight = ref(props.thumbnailSize + 24);
+
+// Internal columns state
+const columns = ref(1);
 
 const renderStart = computed(() => {
   const cols = columns.value;
@@ -1602,24 +1614,19 @@ const bottomSpacerHeight = computed(() => {
 const allGridImages = ref([]);
 
 watch(allGridImages, (newVal, oldVal) => {
-  console.log("allGridImages updated:", newVal);
+  console.log("[ImageGrid.vue] allGridImages updated:", {
+    oldLength: oldVal.length,
+    newLength: newVal.length,
+    oldValue: oldVal,
+    newValue: newVal,
+  });
 });
+
 
 const gridImagesToRender = computed(() => {
   if (!allGridImages.value) {
     console.warn("allGridImages is undefined");
     return [];
-  }
-
-  // Only render a window of placeholders/images for performance
-  if (allGridImages.value.length < allGridImages.value.length) {
-    for (
-      let i = allGridImages.value.length;
-      i < allGridImages.value.length;
-      i++
-    ) {
-      allGridImages.value[i] = { id: null, thumbnail: null, idx: i };
-    }
   }
 
   let filtered = allGridImages.value;
@@ -1642,6 +1649,16 @@ const gridImagesToRender = computed(() => {
   }
   return filtered.slice(renderStart.value, renderEnd.value);
 });
+
+watch(gridImagesToRender, (newVal, oldVal) => {
+  console.log("[ImageGrid.vue] gridImagesToRender updated:", {
+    oldLength: oldVal.length,
+    newLength: newVal.length,
+    oldValue: oldVal,
+    newValue: newVal,
+  });
+});
+
 
 // Batch fetch metadata (including thumbnail) for visible range
 async function fetchThumbnailsBatch(start, end) {
@@ -1678,26 +1695,6 @@ async function fetchThumbnailsBatch(start, end) {
       // Only fetch if we don't already have metadata for this range
       images = allGridImages.value.slice(start, end);
       ids = images.map((img) => img.id);
-      // If not enough images, fetch missing ones
-      if (images.length < end - start) {
-        const params = buildPictureIdsQueryParams();
-        // Only use allowed parameters: sort, offset, limit, threshold
-        const url = `${props.backendUrl}/pictures?offset=${start}&limit=${
-          end - start
-        }${params ? `&${params}` : ""}`;
-        const res = await apiClient.get(url);
-        const fetched = await res.data;
-        // Fill in missing slots
-        for (let i = 0; i < fetched.length; i++) {
-          allGridImages.value[start + i] = {
-            ...fetched[i],
-            idx: start + i,
-            thumbnail: null,
-          };
-        }
-        images = allGridImages.value.slice(start, end);
-        ids = images.map((img) => img.id);
-      }
     }
     /* console.debug(
       `[BATCH RESPONSE] Received ${images.length} images:`,
@@ -1727,6 +1724,7 @@ async function fetchThumbnailsBatch(start, end) {
       }
     }
     // Insert/update images at their correct indices
+    console.log("Updating allGridImages with thumbnails");
     for (let i = 0; i < gridImages.length; i++) {
       const img = gridImages[i];
       img.idx = start + i; // Redundant but explicit for safety
@@ -1744,22 +1742,20 @@ function updateVisibleThumbnails() {
     allGridImages.value.length,
     visibleEnd.value + divisibleViewWindow.value
   );
-  console.log(
-    "Fetch range: ",
+  console.log("[ImageGrid.vue] Updating visible thumbnails:", {
     start,
-    "to",
     end,
-    "Visible:",
-    visibleStart.value,
-    visibleEnd.value,
-    "Total:",
-    allGridImages.value.length
-  );
+    visibleStart: visibleStart.value,
+    visibleEnd: visibleEnd.value,
+    divisibleViewWindow: divisibleViewWindow.value,
+    allGridImagesLength: allGridImages.value.length,
+  });
 
   // Debounce fetches to avoid excessive requests
   if (thumbFetchTimeout) clearTimeout(thumbFetchTimeout);
 
   thumbFetchTimeout = setTimeout(async () => {
+    console.log("[ImageGrid.vue] Fetching thumbnails batch:", { start, end });
     await fetchThumbnailsBatch(start, end);
   }, 80);
 }
@@ -1804,9 +1800,6 @@ function onGridScroll(e) {
     }
   }, 50);
 }
-
-// Internal columns state
-const columns = ref(1);
 
 // Selection logic
 const isImageSelected = (id) =>
@@ -2124,7 +2117,9 @@ function handleSearch(query) {
   console.log("Search triggered with query:", query);
   searchQuery.value = query;
   props.searchQuery = query;
-  fetchTotalImageCount(); // Refresh the grid based on the new search query
+  fetchAllGridImages().then(() => {
+    updateVisibleThumbnails();
+  });
 }
 
 onMounted(() => {
@@ -2252,7 +2247,7 @@ function clearSearchQuery() {
   background: rgba(255, 255, 255, 1);
 }
 .star-overlay .v-icon {
-  font-size: 20px !important;
+  font-size:  20px !important;
   width: 20px;
   height: 20px;
 }

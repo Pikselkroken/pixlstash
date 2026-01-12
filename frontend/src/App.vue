@@ -3,6 +3,7 @@ import nlp from "compromise";
 import {
   nextTick,
   onBeforeUnmount,
+  onBeforeMount,
   onMounted,
   reactive,
   ref,
@@ -13,7 +14,6 @@ import { apiClient } from "./utils/apiClient";
 import SideBar from "./components/SideBar.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import LikenessRows from "./components/LikenessRows.vue";
-import ChatWindow from "./components/ChatWindow.vue";
 import SearchBar from "./components/SearchBar.vue";
 
 const likenessRowsRef = ref(null);
@@ -416,9 +416,10 @@ watch(
 );
 
 // --- Lifecycle ---
-
-onMounted(() => {
+onBeforeMount(() => {
   fetchConfig();
+});
+onMounted(() => {
   window.addEventListener("keydown", handleGlobalKeydown);
 });
 
