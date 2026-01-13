@@ -336,7 +336,7 @@ class Server:
             return JSONResponse(
                 status_code=500,
                 content={"detail": "Internal Server Error"},
-                headers=headers
+                headers=headers,
             )
 
     def _create_picture_imports(self, uploaded_files, dest_folder):
@@ -2291,9 +2291,9 @@ class Server:
             success = self.vault.db.run_task(delete_pic, id)
             if not success:
                 raise HTTPException(status_code=404, detail="Picture not found")
-            return {
-                "status": "success",
-            }
+            return JSONResponse(
+                content={"status": "success", "message": f"Picture id={id} deleted."}
+            )
 
         @self.api.get("/pictures")
         async def list_pictures(
