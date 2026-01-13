@@ -299,6 +299,15 @@
             >
               Likeness: {{ img.character_likeness.toFixed(2) }}
             </div>
+             <div
+              v-if="
+                typeof props.searchQuery &&
+                img.likeness_score !== undefined
+              "
+              class="likeness-score"
+            >
+              Search likeness: {{ img.likeness_score.toFixed(2) }}
+            </div>
             <div
               v-else-if="
                 typeof props.selectedSort === 'string' &&
@@ -332,7 +341,7 @@
         bottom: 64px;
         left: 0;
         width: 100%;
-        z-index: 1000;
+        z-index: 10;
         background-color: #f5f5f5;
         display: flex;
         align-items: center;
