@@ -762,13 +762,8 @@ function primeMultiSelectionZip(ids) {
   }
   const controller = new AbortController();
   multiZipAbortController = controller;
-  fetch(url, { signal: controller.signal })
-    .then((res) => {
-      if (!res.ok) {
-        throw new Error(`Export failed (${res.status})`);
-      }
-      return res.blob();
-    })
+  apiClient.get(url, { signal: controller.signal })
+    .then((res) => res.data.blob()) // Access the blob from res.data
     .then((blob) => {
       if (multiZipState.key !== signature) return;
       multiZipState.status = "ready";
@@ -962,14 +957,9 @@ function removeFromGroup() {
     props.selectedCharacter !== props.allPicturesId &&
     props.selectedCharacter !== props.unassignedPicturesId
   ) {
-    fetch(`${backendUrl}/characters/${props.selectedCharacter}/faces`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ picture_ids: selectedImageIds.value }),
+    apiClient.delete(`${backendUrl}/characters/${props.selectedCharacter}/faces`, {
+      data: { picture_ids: selectedImageIds.value },
     })
-      .then((res) => {
-        if (!res.ok) throw new Error(`Failed to remove images from character`);
-      })
       .catch((err) => {
         alert(`Error removing images from character: ${err.message}`);
       })
@@ -997,13 +987,8 @@ function removeFromGroup() {
   ) {
     Promise.all(
       selectedImageIds.value.map((id) =>
-        fetch(`${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`, {
-          method: "DELETE",
-        })
-          .then((res) => {
-            if (!res.ok)
-              throw new Error(`Failed to remove image ${id} from set`);
-          })
+        apiClient.delete(`${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`)
+   
           .catch((err) => {
             alert(`Error removing image ${id} from set: ${err.message}`);
           })
@@ -1045,10 +1030,7 @@ function deleteSelected() {
   const backendUrl = props.backendUrl;
   Promise.all(
     selectedImageIds.value.map((id) =>
-      fetch(`${backendUrl}/pictures/${id}`, { method: "DELETE" })
-        .then((res) => {
-          if (!res.ok) throw new Error(`Failed to delete image ${id}`);
-        })
+      apiClient.delete(`${backendUrl}/pictures/${id}`)
         .catch((err) => {
           alert(`Error deleting image ${id}: ${err.message}`);
         })
@@ -1944,15 +1926,8 @@ async function removeTagFromImage(imageId, tag) {
     return;
   }
 
-  fetch(`${props.backendUrl}/pictures/${imageId}/tags/${tag}`, {
-    method: "DELETE",
-  })
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error("Failed to remove tag");
-      }
-      console.log(`Tag '${tag}' removed from image ${imageId}`);
-    })
+  apiClient.delete(`${props.backendUrl}/pictures/${imageId}/tags/${tag}`)
+
     .catch((error) => {
       console.error("Error removing tag:", error);
     });
@@ -2139,7 +2114,7 @@ function clearSearchQuery() {
 
 <style scoped>
 .drag-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(255, 166, 0, 0.2);
   z-index: 9999;

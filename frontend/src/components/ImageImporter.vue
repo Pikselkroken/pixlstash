@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, ref } from "vue";
+import { apiClient } from '../utils/apiClient';
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
@@ -153,19 +154,18 @@ async function startImport(files, options = {}) {
         currentImportController.value = controller;
         const timeout = setTimeout(() => controller.abort(), batchTimeoutMs);
         try {
-          res = await fetch(`${props.backendUrl}/pictures`, {
-            method: "POST",
-            body: formData,
+          res = await apiClient.post(`${props.backendUrl}/pictures`, formData, {
             signal: controller.signal,
+            timeout: batchTimeoutMs,
+            headers: {
+              "Content-Type": "multipart/form-data", // Ensure this is set correctly
+          },
           });
           clearTimeout(timeout);
           if (controller === currentImportController.value) {
             currentImportController.value = null;
           }
-          if (res.ok) {
-            break;
-          }
-          lastError = new Error(`Upload failed with status ${res.status}`);
+          break; // Success, exit retry loop
         } catch (err) {
           clearTimeout(timeout);
           if (controller === currentImportController.value) {
@@ -193,18 +193,25 @@ async function startImport(files, options = {}) {
           }
         }
 
+        if (res && res.status >= 200 && res.status < 300) {
+          break;
+        }
+        lastError = new Error(
+          res ? `Upload failed with status ${res.status}` : "No response received"
+        );
+
         if (!res?.ok && attempt < MAX_RETRIES) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
 
-      if (!res || !res.ok) {
+      if (!res || res.status < 200 || res.status >= 300) {
         const message = lastError ? lastError.message : "Upload failed.";
         finalizeError(message);
         return;
       }
 
-      const result = await res.json();
+      const result = await res.data;
       if (result && Array.isArray(result.results)) {
         completed += result.results.length;
         importProgress.value = completed;

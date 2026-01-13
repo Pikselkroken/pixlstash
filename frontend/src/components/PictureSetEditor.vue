@@ -48,6 +48,7 @@
 
 <script setup>
 import { computed, ref, watch, nextTick } from "vue";
+import { apiClient } from '../utils/apiClient';
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -117,19 +118,19 @@ function handleKeydown(event) {
 async function saveSetFromEditor(setData) {
   try {
     const isNew = !setData.id;
-    const method = isNew ? "POST" : "PATCH";
     const url = isNew
       ? `${props.backendUrl}/picture_sets`
       : `${props.backendUrl}/picture_sets/${setData.id}`;
 
-    const res = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(setData),
-    });
+    let res = null;
+    if (isNew) {
+      res = await apiClient.post(url, setData);
+    } else {
+      res = await apiClient.patch(url, setData);
+    }
 
     if (!res.ok) {
-      const errorText = await res.text();
+      const errorText = await res.data;
       throw new Error(errorText || "Failed to save picture set");
     }
     emit("close");
