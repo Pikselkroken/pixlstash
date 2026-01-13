@@ -540,6 +540,7 @@ async function onCharacterDrop(characterId, event) {
     if (data.imageIds && Array.isArray(data.imageIds)) {
       imageIds = data.imageIds;
     }
+    emit("images-assigned-to-character", { characterId, imageIds });
   } catch (e) {
     console.error("Could not parse drag data:", e);
     return;
