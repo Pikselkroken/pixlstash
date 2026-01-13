@@ -122,7 +122,7 @@ class FaceExtractionWorker(BaseWorker):
                     logger.warning(f"No frames found in video: {file_path}")
                     cap.release()
                 else:
-                    step = max(1, frame_count // 10)
+                    step = max(1, frame_count // 3)
                     for frame_index in range(0, frame_count, step):
                         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
                         ret, frame = cap.read()
