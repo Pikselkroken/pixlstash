@@ -76,12 +76,15 @@
             <template v-if="image">
               <video
                 v-if="isSupportedVideoFile(getOverlayFormat(image))"
+                ref="videoRef"
                 :src="getFullImageUrl(image)"
                 class="overlay-video"
                 controls
                 preload="auto"
                 playsinline
                 style="background: #111"
+                @loadedmetadata="updateOverlayDims"
+
               ></video>
               <img
                 v-else
@@ -485,6 +488,7 @@ function toggleFaceBbox() {
 }
 
 const imgRef = ref(null);
+const videoRef = ref(null);
 const overlayDims = ref({
   width: 1,
   height: 1,
@@ -498,6 +502,11 @@ function updateOverlayDims() {
     overlayDims.value.height = imgRef.value.clientHeight;
     overlayDims.value.naturalWidth = imgRef.value.naturalWidth;
     overlayDims.value.naturalHeight = imgRef.value.naturalHeight;
+  } else if (videoRef.value) {
+    overlayDims.value.width = videoRef.value.clientWidth;
+    overlayDims.value.height = videoRef.value.clientHeight;
+    overlayDims.value.naturalWidth = videoRef.value.videoWidth;
+    overlayDims.value.naturalHeight = videoRef.value.videoHeight;
   }
 }
 
