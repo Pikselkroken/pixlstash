@@ -1870,11 +1870,13 @@ class Server:
             threshold: float = Query(0.5),
         ):
             query_params = {}
+            format = None
             if request.query_params:
                 query_params = dict(request.query_params)
                 query = query_params.pop("query", query)
                 offset = int(query_params.pop("offset", offset))
                 limit = int(query_params.pop("limit", limit))
+                format = request.query_params.getlist("format")
             if not query:
                 raise HTTPException(
                     status_code=400, detail="Query parameter is required for search"
@@ -1894,6 +1896,7 @@ class Server:
                     offset=offset,
                     limit=limit,
                     threshold=threshold,
+                    format=format,
                     select_fields=Picture.metadata_fields(),
                 )
 

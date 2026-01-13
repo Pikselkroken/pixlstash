@@ -203,6 +203,7 @@ class Picture(SQLModel, table=True):
         threshold: float = 0.0,
         offset: int = 0,
         limit: int = sys.maxsize,
+        format: Optional[List[str]] = None,
         select_fields: Optional[List[str]] = None,
     ) -> List["Picture"]:
         """
@@ -281,6 +282,9 @@ class Picture(SQLModel, table=True):
             ]
             for rel_attr in rel_attrs:
                 stmt = stmt.options(selectinload(rel_attr))
+
+        if format:
+            stmt = stmt.where(cls.format.in_(format))
 
         results = session.exec(stmt).all()
         output = []
