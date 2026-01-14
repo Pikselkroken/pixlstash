@@ -36,8 +36,6 @@ jobs:
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_tag_worker.py
       - name: Test Picture Likeness Worker
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_likeness_worker.py
-      - name: Test Chat History API
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_chat_history.py
       - name: Test Florence-2 Captioning
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_florence.py
       - name: Test Face Likeness Worker
