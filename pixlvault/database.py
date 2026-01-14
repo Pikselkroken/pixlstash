@@ -1,4 +1,5 @@
 import inspect
+import math
 import os
 import threading
 import queue
@@ -46,11 +47,11 @@ logger = get_logger(__name__)
 def levenshtein_function(a, b):
     try:
         if a is None or b is None:
-            return 100  # or some large default distance
-        return Levenshtein.distance(str(a), str(b))
+            return 100.0  # or some large default distance
+        return float(Levenshtein.distance(str(a), str(b)))
     except Exception as e:
         logger.error(f"Levenshtein error: {e} (a={a}, b={b})")
-        return 100  # fallback value
+        return 100.0  # fallback value
 
 
 def softmin(distances, beta=1.0):
@@ -68,19 +69,33 @@ def softmin(distances, beta=1.0):
     return softmin_value
 
 
-def levenshtein(tags, query):
-    # Split the concatenated tags and query into words
-    tag_words = tags.split() if isinstance(tags, str) else [tags]
+def levenshtein(concatenated_tags, query):
+    # Split the concatenated tags into tags
+    tags = (
+        concatenated_tags.split()
+        if isinstance(concatenated_tags, str)
+        else [concatenated_tags]
+    )
     query_words = query.split() if isinstance(query, str) else [query]
 
-    # For each tag word, find the minimum distance to any query word
-    min_dists = [
-        min(levenshtein_function(tag_word, query_word) for query_word in query_words)
-        for tag_word in tag_words
-    ]
+    dists = []
+    for tag in tags:
+        min_dist = 1.0
+        for query_word in query_words:
+            min_dist = min(
+                min_dist,
+                levenshtein_function(tag, query_word)
+                / max(len(tag), len(query_word), 1),
+            )
+        dists.append(min_dist)
 
-    # Return the average of these minimum distances
-    return softmin(min_dists, 2.0) if min_dists else 100
+    dists = sorted(dists)
+    logger.info(
+        f"Best Levenshtein distances for tags '{concatenated_tags}': {dists[:5]}"
+    )
+
+    # Return softmin of these distances
+    return math.pow(softmin(dists, 2.5), 3.0) if dists else 1.0
 
 
 def init_database(dbapi_conn, conn_record):

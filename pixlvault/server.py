@@ -1780,14 +1780,14 @@ class Server:
                 # Search query
                 def find_by_text(session, query):
                     words = re.findall(r"\b\w+\b", query.lower())
-                    preprocessed_query_words = self.vault.preprocess_query_words(words)
+                    # preprocessed_query_words = self.vault.preprocess_query_words(words)
                     query_full = "A photo of " + query
                     return [
                         r[0]
                         for r in Picture.semantic_search(
                             session,
                             query_full,
-                            preprocessed_query_words,
+                            words,
                             text_to_embedding=self.vault.generate_text_embedding,
                             offset=0,
                             limit=sys.maxsize,
@@ -1886,12 +1886,12 @@ class Server:
             def find_by_text(session, query, offset, limit):
                 # Use regex to extract words, removing punctuation
                 words = re.findall(r"\b\w+\b", query.lower())
-                preprocessed_query_words = self.vault.preprocess_query_words(words)
+                # preprocessed_query_words = self.vault.preprocess_query_words(words)
                 query = "A photo of " + query
                 return Picture.semantic_search(
                     session,
                     query,
-                    preprocessed_query_words,
+                    words,
                     text_to_embedding=self.vault.generate_text_embedding,
                     offset=offset,
                     limit=limit,

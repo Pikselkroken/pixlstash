@@ -235,26 +235,13 @@ class Picture(SQLModel, table=True):
             select(
                 cls,
                 (
-                    fuzzy_weight
-                    * (
-                        1.0
-                        - func.pow(
-                            func.coalesce(tag_subq.c.min_tag_dist, func.length(query))
-                            / func.length(query),
-                            1.0 / 3.0,
-                        )
-                    )
+                    fuzzy_weight * (1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0))
                     + embedding_weight
                     * func.cosine_similarity(cls.text_embedding, query_embedding_bytes)
                 ).label("combined_score"),
-                (
-                    1.0
-                    - func.pow(
-                        func.coalesce(tag_subq.c.min_tag_dist, func.length(query))
-                        / func.length(query),
-                        1.0 / 3.0,
-                    )
-                ).label("fuzzy_score"),
+                (1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0)).label(
+                    "fuzzy_score"
+                ),
                 func.cosine_similarity(cls.text_embedding, query_embedding_bytes).label(
                     "embedding_score"
                 ),
