@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from pixlvault.db_models import Picture
 from pixlvault.server import Server
 from pixlvault.worker_registry import WorkerType
+from tests.utils import upload_pictures_and_wait
 
 
 def make_image(color=(0, 0, 0)):
@@ -34,9 +35,9 @@ def test_tag_worker_picture_tags():
             # Upload a picture
             img_bytes = make_image((128, 128, 128))
             files = [("file", ("gray.png", img_bytes, "image/png"))]
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 200
-            pic_id = r.json()["results"][0]["picture_id"]
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            pic_id = import_status["results"][0]["picture_id"]
 
             # Simulate description (required for tag worker)
             def set_description(session):
@@ -102,9 +103,9 @@ def test_tag_worker_end_to_end():
             ) as f:
                 img_bytes = f.read()
             files = [("file", ("TaggerTest.png", img_bytes, "image/png"))]
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 200
-            pic_id = r.json()["results"][0]["picture_id"]
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            pic_id = import_status["results"][0]["picture_id"]
 
             # Simulate description (required for tag worker)
             def set_description(session):
@@ -157,11 +158,10 @@ def test_tagger_worker_adds_tags():
             # Upload TaggerTest.png as a new picture
             with open(src_img, "rb") as f:
                 files = [("file", ("TaggerTest.png", f.read(), "image/png"))]
-                r = client.post("/pictures", files=files)
-            assert r.status_code == 200
-            resp = r.json()
-            assert resp["results"][0]["status"] == "success"
-            picture_id = resp["results"][0]["picture_id"]
+                import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            assert import_status["results"][0]["status"] == "success"
+            picture_id = import_status["results"][0]["picture_id"]
 
             future = server.vault.get_worker_future(
                 WorkerType.TAGGER, Picture, picture_id, "tags"

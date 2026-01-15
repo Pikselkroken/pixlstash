@@ -11,6 +11,7 @@ from pixlvault.db_models.picture import Picture
 from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
 from pixlvault.worker_registry import WorkerType
+from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
 
@@ -151,11 +152,10 @@ def test_face_extraction_speed_server():
                     files.append(
                         ("file", (os.path.basename(fname), f.read(), "image/png"))
                     )
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 200
-            resp = r.json()
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
 
-            for result in resp["results"]:
+            for result in import_status["results"]:
                 assert result["status"] == "success"
                 id_to_filename[result["picture_id"]] = fname
                 picture_ids.append(result["picture_id"])

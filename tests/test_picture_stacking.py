@@ -14,6 +14,7 @@ from pixlvault.db_models.picture import Picture
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import WorkerType
 from pixlvault.server import Server
+from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
 
@@ -55,12 +56,11 @@ def test_picture_stacking():
             for fname in image_files:
                 with open(os.path.join(src_dir, fname), "rb") as f:
                     files = [("file", (fname, f.read(), "image/png"))]
-                    r = client.post("/pictures", files=files)
-                assert r.status_code == 200
-                resp = r.json()
-                assert resp["results"][0]["status"] == "success"
-                id_to_filename[resp["results"][0]["picture_id"]] = fname
-                picture_ids.append(resp["results"][0]["picture_id"])
+                    import_status = upload_pictures_and_wait(client, files)
+                assert import_status["status"] == "completed"
+                assert import_status["results"][0]["status"] == "success"
+                id_to_filename[import_status["results"][0]["picture_id"]] = fname
+                picture_ids.append(import_status["results"][0]["picture_id"])
                 face_futures.append(
                     server.vault.get_worker_future(
                         WorkerType.FACE, Picture, picture_ids[-1], "faces"
@@ -270,12 +270,11 @@ def test_character_likeness():
             for fname in image_files:
                 with open(os.path.join(src_dir, fname), "rb") as f:
                     files = [("file", (fname, f.read(), "image/png"))]
-                    r = client.post("/pictures", files=files)
-                assert r.status_code == 200
-                resp = r.json()
-                assert resp["results"][0]["status"] == "success"
-                id_to_filename[resp["results"][0]["picture_id"]] = fname
-                picture_ids.append(resp["results"][0]["picture_id"])
+                    import_status = upload_pictures_and_wait(client, files)
+                assert import_status["status"] == "completed"
+                assert import_status["results"][0]["status"] == "success"
+                id_to_filename[import_status["results"][0]["picture_id"]] = fname
+                picture_ids.append(import_status["results"][0]["picture_id"])
                 face_futures.append(
                     server.vault.get_worker_future(
                         WorkerType.FACE, Picture, picture_ids[-1], "faces"

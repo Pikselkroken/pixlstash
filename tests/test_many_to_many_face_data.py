@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from pixlvault.server import Server
 from pixlvault.db_models import Face
+from tests.utils import upload_pictures_and_wait
 
 
 def make_image(color=(0, 0, 0)):
@@ -54,9 +55,9 @@ def test_many_to_many_face_data():
             # Upload a picture
             img_bytes = make_image((255, 0, 0))
             files = [("file", ("red.png", img_bytes, "image/png"))]
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 200
-            pic_id = r.json()["results"][0]["picture_id"]
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            pic_id = import_status["results"][0]["picture_id"]
 
             # Simulate worker: insert two face rows for the picture
             server.vault.db.run_task(

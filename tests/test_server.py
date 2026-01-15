@@ -22,6 +22,7 @@ from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.worker_registry import WorkerType
 from pixlvault.server import Server
+from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
 
@@ -227,12 +228,10 @@ def test_upload_existing_picture():
             # Create a new picture
             img_bytes = random_images[0]
             images = [("file", ("master.png", img_bytes, "image/png"))]
-            r = client.post("/pictures", files=images)
-
-            assert 200 == r.status_code, "Error: " + r.text
-            resp = r.json()
-            assert resp["results"][0]["status"] == "success"
-            picture_id_1 = resp["results"][0]["picture_id"]
+            import_status = upload_pictures_and_wait(client, images)
+            assert import_status["status"] == "completed"
+            assert import_status["results"][0]["status"] == "success"
+            picture_id_1 = import_status["results"][0]["picture_id"]
 
             # Fetch the picture and check it
             fetch_r1 = client.get(f"/pictures/{picture_id_1}/metadata")
@@ -243,11 +242,10 @@ def test_upload_existing_picture():
             # Upload a new file
             img_bytes2 = random_images[1]
             files2 = [("file", ("iteration2.png", img_bytes2, "image/png"))]
-            r2 = client.post("/pictures", files=files2)
-            assert 200 == r2.status_code, "Error: " + r2.text
-            resp2 = r2.json()
-            assert resp2["results"][0]["status"] == "success"
-            picture_id_2 = resp2["results"][0]["picture_id"]
+            import_status_2 = upload_pictures_and_wait(client, files2)
+            assert import_status_2["status"] == "completed"
+            assert import_status_2["results"][0]["status"] == "success"
+            picture_id_2 = import_status_2["results"][0]["picture_id"]
 
             # Fetch the new picture and check association
             fetch_r2 = client.get(f"/pictures/{picture_id_2}/metadata")
@@ -258,8 +256,8 @@ def test_upload_existing_picture():
 
             # Upload the first picture again. Should get a 400
             files3 = [("file", ("random_name.png", img_bytes, "image/png"))]
-            r3 = client.post("/pictures", files=files3)
-            assert 400 == r3.status_code
+            import_status_3 = upload_pictures_and_wait(client, files3)
+            assert import_status_3["status"] == "failed"
 
             image_bytes3 = random_images[2]
             # Upload two pictures at once, one existing and one new
@@ -267,9 +265,9 @@ def test_upload_existing_picture():
                 files2[0],
                 ("file", ("random_name2.png", image_bytes3, "image/png")),
             ]
-            r4 = client.post("/pictures", files=files4)
-            assert 200 == r4.status_code, "Error: " + r4.text
-            for i, result in enumerate(r4.json()["results"]):
+            import_status_4 = upload_pictures_and_wait(client, files4)
+            assert import_status_4["status"] == "completed"
+            for i, result in enumerate(import_status_4["results"]):
                 if i == 0:
                     assert result["status"] == "duplicate"  # Existing picture
                 else:
@@ -333,11 +331,10 @@ def test_characters_summary():
             for fname in image_files:
                 with open(os.path.join(src_dir, fname), "rb") as f:
                     files = [("file", (fname, f.read(), "image/png"))]
-                    r = client.post("/pictures", files=files)
-                assert r.status_code == 200
-                resp = r.json()
-                assert resp["results"][0]["status"] == "success"
-                picture_ids.append(resp["results"][0]["picture_id"])
+                    import_status = upload_pictures_and_wait(client, files)
+                assert import_status["status"] == "completed"
+                assert import_status["results"][0]["status"] == "success"
+                picture_ids.append(import_status["results"][0]["picture_id"])
                 face_futures.append(
                     server.vault.get_worker_future(
                         WorkerType.FACE, Picture, picture_ids[-1], "faces"
@@ -569,8 +566,8 @@ def test_post_logo_identical_upload():
             with open(logo_path, "rb") as f:
                 img_bytes = f.read()
                 files = [("file", ("identical_logo.png", img_bytes, "image/png"))]
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 400
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "failed"
     gc.collect()
     log_resources("END test_post_logo_identical_upload")
 
@@ -600,12 +597,10 @@ def test_post_logo_altered_pixel_upload():
             with open(tmp_path, "rb") as f:
                 img_bytes = f.read()
             files = [("file", ("altered_logo.png", img_bytes, "image/png"))]
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 200
-            resp = r.json()
-            assert "results" in resp
-            assert resp["results"][0]["status"] == "success"
-            assert resp["results"][0]["picture_id"]
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            assert import_status["results"][0]["status"] == "success"
+            assert import_status["results"][0]["picture_id"]
             os.remove(tmp_path)
     gc.collect()
     log_resources("END test_post_logo_altered_pixel_upload")
@@ -651,14 +646,12 @@ def test_benchmark_add_images_by_binary_upload():
                 file = ("file", (f"image_{i:04d}.png", img_bytes, "image/png"))
                 files.append(file)
 
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 200
+            import_status = upload_pictures_and_wait(client, files)
             end = time.time()
 
-            resp = r.json()
-            assert "results" in resp
-            assert len(resp["results"]) == TEST_SIZE
-            for result in resp["results"]:
+            assert import_status["status"] == "completed"
+            assert len(import_status["results"]) == TEST_SIZE
+            for result in import_status["results"]:
                 assert result["status"] == "success"
                 ids.append(result["picture_id"])
 
@@ -732,11 +725,10 @@ def test_semantic_search():
             for fname in image_files:
                 with open(os.path.join(src_dir, fname), "rb") as f:
                     files = [("file", (fname, f.read(), "image/png"))]
-                    r = client.post("/pictures", files=files)
-                assert r.status_code == 200
-                resp = r.json()
-                assert resp["results"][0]["status"] == "success"
-                picture_ids.append(resp["results"][0]["picture_id"])
+                    import_status = upload_pictures_and_wait(client, files)
+                assert import_status["status"] == "completed"
+                assert import_status["results"][0]["status"] == "success"
+                picture_ids.append(import_status["results"][0]["picture_id"])
                 face_futures.append(
                     server.vault.get_worker_future(
                         WorkerType.FACE, Picture, picture_ids[-1], "faces"

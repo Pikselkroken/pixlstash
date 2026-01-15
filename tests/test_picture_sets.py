@@ -3,6 +3,7 @@ from pixlvault.server import Server
 import tempfile
 import os
 import json
+from tests.utils import upload_pictures_and_wait
 
 
 def setup_server_with_temp_db():
@@ -78,8 +79,8 @@ def test_add_and_remove_picture_from_set():
     img_path = png_files[0]
     with open(img_path, "rb") as f:
         files = {"file": (os.path.basename(img_path), f, "image/png")}
-        resp = client.post("/pictures", files=files)
-    assert resp.status_code == 200
+        import_status = upload_pictures_and_wait(client, files)
+    assert import_status["status"] == "completed"
     # Get picture id
     resp = client.get("/pictures")
     pic_id = resp.json()[0]["id"]

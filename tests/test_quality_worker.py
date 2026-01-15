@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from pixlvault.db_models import Face, Picture, Quality
 from pixlvault.server import Server
 from pixlvault.worker_registry import WorkerType
+from tests.utils import upload_pictures_and_wait
 
 
 from PIL import Image
@@ -34,9 +35,9 @@ def test_quality_worker_face_metrics():
             # Upload a picture
             img_bytes = make_image((128, 128, 128))
             files = [("file", ("gray.png", img_bytes, "image/png"))]
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 200
-            pic_id = r.json()["results"][0]["picture_id"]
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            pic_id = import_status["results"][0]["picture_id"]
 
             # Simulate worker: insert a face row for the picture
             # Add a face using SQLModel ORM
@@ -117,9 +118,9 @@ def test_quality_worker_end_to_end():
             ) as f:
                 img_bytes = f.read()
             files = [("file", ("TaggerTest.png", img_bytes, "image/png"))]
-            r = client.post("/pictures", files=files)
-            assert r.status_code == 200
-            pic_id = r.json()["results"][0]["picture_id"]
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            pic_id = import_status["results"][0]["picture_id"]
 
             future = server.vault.get_worker_future(
                 WorkerType.FACE, Picture, pic_id, "faces"

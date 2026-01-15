@@ -131,6 +131,9 @@ class Server:
         self.TEMP_EXPORT_DIR = "tmp/exports"
         os.makedirs(self.TEMP_EXPORT_DIR, exist_ok=True)
 
+        # Temporary storage for import tasks
+        self.import_tasks = {}
+
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
         return self
@@ -2229,6 +2232,7 @@ class Server:
 
         @self.api.post("/pictures")
         async def import_pictures(
+            background_tasks: BackgroundTasks,
             file: List[UploadFile] = File(None),
         ):
             """
@@ -2274,60 +2278,106 @@ class Server:
                 logger.error("No files provided for import")
                 raise HTTPException(status_code=400, detail="No image provided")
 
-            shas, existing_map, new_pictures = self._create_picture_imports(
-                uploaded_files, dest_folder
-            )
+            task_id = str(uuid.uuid4())
+            self.import_tasks[task_id] = {
+                "status": "in_progress",
+                "total": len(uploaded_files),
+                "processed": 0,
+                "results": None,
+                "error": None,
+            }
 
-            logger.debug(
-                f"Importing {len(new_pictures)} new pictures out of {len(uploaded_files)} uploaded."
-            )
-
-            # Import all at once
-            if new_pictures:
-
-                def import_task(session):
-                    session.add_all(new_pictures)
-                    session.commit()
-                    for pic in new_pictures:
-                        session.refresh(pic)
-                    return new_pictures
-
-                new_pictures = self.vault.db.run_task(import_task)
-                logger.debug(
-                    f"Queuing likeness calculation for {len(new_pictures)} new pictures."
-                )
-            else:
-                logger.error("No new pictures to import; all are duplicates.")
-                raise HTTPException(
-                    status_code=400, detail="All pictures are duplicates"
-                )
-
-            # Build results after DB import so picture_id is available
-            results = []
-            index = 0
-            for _, sha in zip(uploaded_files, shas):
-                if sha in existing_map:
-                    pic = existing_map[sha]
-                    results.append(
-                        {
-                            "status": "duplicate",
-                            "picture_id": pic.id,
-                            "file": pic.file_path,
-                        }
+            def run_import_task():
+                try:
+                    shas, existing_map, new_pictures = self._create_picture_imports(
+                        uploaded_files, dest_folder
                     )
-                else:
-                    pic = new_pictures[index]
-                    results.append(
-                        {
-                            "status": "success",
-                            "picture_id": pic.id,
-                            "file": pic.file_path,
-                        }
-                    )
-                    index += 1
 
-            self.vault.notify(EventType.CHANGED_PICTURES)
-            return {"results": results}
+                    logger.debug(
+                        f"Importing {len(new_pictures)} new pictures out of {len(uploaded_files)} uploaded."
+                    )
+
+                    # Import all at once
+                    if new_pictures:
+
+                        def import_task(session):
+                            session.add_all(new_pictures)
+                            session.commit()
+                            for pic in new_pictures:
+                                session.refresh(pic)
+                            return new_pictures
+
+                        new_pictures = self.vault.db.run_task(import_task)
+                        logger.debug(
+                            f"Queuing likeness calculation for {len(new_pictures)} new pictures."
+                        )
+                    else:
+                        logger.error("No new pictures to import; all are duplicates.")
+                        self.import_tasks[task_id]["status"] = "failed"
+                        self.import_tasks[task_id]["error"] = (
+                            "All pictures are duplicates"
+                        )
+                        self.import_tasks[task_id]["processed"] = len(uploaded_files)
+                        return
+
+                    # Build results after DB import so picture_id is available
+                    results = []
+                    index = 0
+                    for _, sha in zip(uploaded_files, shas):
+                        if sha in existing_map:
+                            pic = existing_map[sha]
+                            results.append(
+                                {
+                                    "status": "duplicate",
+                                    "picture_id": pic.id,
+                                    "file": pic.file_path,
+                                }
+                            )
+                        else:
+                            pic = new_pictures[index]
+                            results.append(
+                                {
+                                    "status": "success",
+                                    "picture_id": pic.id,
+                                    "file": pic.file_path,
+                                }
+                            )
+                            index += 1
+
+                    self.import_tasks[task_id]["results"] = results
+                    self.import_tasks[task_id]["processed"] = len(uploaded_files)
+                    self.import_tasks[task_id]["status"] = "completed"
+                    self.vault.notify(EventType.CHANGED_PICTURES)
+                except Exception as exc:
+                    self.import_tasks[task_id]["status"] = "failed"
+                    self.import_tasks[task_id]["error"] = str(exc)
+                    logger.error(f"Import task {task_id} failed: {exc}")
+
+            background_tasks.add_task(run_import_task)
+            return {"task_id": task_id}
+
+        @self.api.get("/pictures/import/status")
+        async def import_status(task_id: str):
+            """Check the status of an import task."""
+            task = self.import_tasks.get(task_id)
+            if not task:
+                raise HTTPException(status_code=404, detail="Task not found")
+
+            total = task.get("total") or 0
+            processed = task.get("processed") or 0
+            progress = (processed / total * 100.0) if total else 0.0
+
+            payload = {
+                "status": task["status"],
+                "total": total,
+                "processed": processed,
+                "progress": progress,
+            }
+            if task["status"] == "completed":
+                payload["results"] = task.get("results") or []
+            if task["status"] == "failed":
+                payload["error"] = task.get("error")
+            return payload
 
         @self.api.delete("/pictures/{id}")
         async def delete_picture(id: str):
