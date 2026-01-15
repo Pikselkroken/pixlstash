@@ -1,5 +1,5 @@
 <template>
-  <v-overlay class="search-overlay">
+  <v-overlay class="search-overlay" :model-value="true" @click:outside="closeOverlay">
     <v-card class="search-card">
       <v-btn icon size="36px" class="close-icon" @click="closeOverlay">
         <v-icon size="24px">mdi-close</v-icon>

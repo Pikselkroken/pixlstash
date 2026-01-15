@@ -12,7 +12,8 @@ import time
 import zipfile
 
 from collections import defaultdict, deque
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
+from sqlalchemy import exists
 from sqlmodel import Session, delete, select
 
 from contextlib import asynccontextmanager
@@ -2465,24 +2466,51 @@ class Server:
             if character_id == "UNASSIGNED":
 
                 def find_unassigned(session: Session):
-                    pics = Picture.find(
-                        session,
-                        select_fields=["characters"],
-                        format=format,
+                    query = select(Picture)
+                    unassigned_condition = ~exists(
+                        select(Face.id).where(
+                            Face.picture_id == Picture.id,
+                            Face.character_id.is_not(None),
+                        )
                     )
-                    return [pic.id for pic in pics if not pic.characters]
+                    query = query.where(unassigned_condition)
 
-                picture_ids = self.vault.db.run_task(find_unassigned)
-                if not picture_ids:
-                    return []
-                pics = self.vault.db.run_task(
-                    Picture.find,
-                    id=picture_ids,
-                    sort_mech=sort_mech,
-                    offset=offset,
-                    limit=limit,
-                    select_fields=Picture.metadata_fields(),
-                )
+                    if format:
+                        query = query.where(Picture.format.in_(format))
+
+                    select_fields = Picture.metadata_fields()
+                    if select_fields:
+                        select_fields = list(set(select_fields) | {"id"})
+                        scalar_attrs = [
+                            getattr(Picture, field)
+                            for field in Picture.scalar_fields().intersection(
+                                select_fields
+                            )
+                        ]
+                        if scalar_attrs:
+                            query = query.options(load_only(*scalar_attrs))
+                        rel_attrs = [
+                            getattr(Picture, field)
+                            for field in Picture.relationship_fields().intersection(
+                                select_fields
+                            )
+                        ]
+                        for rel_attr in rel_attrs:
+                            query = query.options(selectinload(rel_attr))
+
+                    if sort_mech:
+                        field = getattr(Picture, sort_mech.field, None)
+                        if field is not None:
+                            query = query.order_by(
+                                field.desc() if sort_mech.descending else field.asc()
+                            )
+
+                    if offset > 0 or limit != sys.maxsize:
+                        query = query.offset(offset).limit(limit)
+
+                    return session.exec(query).all()
+
+                pics = self.vault.db.run_task(find_unassigned)
                 return [safe_model_dict(pic) for pic in pics]
 
             if character_id == "ALL":
