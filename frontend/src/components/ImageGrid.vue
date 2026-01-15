@@ -1234,6 +1234,58 @@ async function setScore(img, n) {
   applyScore(img, newScore);
 }
 
+function isScoreSortActive() {
+  return typeof props.selectedSort === "string"
+    ? props.selectedSort.toUpperCase() === "SCORE"
+    : false;
+}
+
+function invalidateVisibleThumbnailRanges() {
+  const start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
+  const end = Math.min(
+    allGridImages.value.length,
+    visibleEnd.value + divisibleViewWindow.value
+  );
+  loadedRanges.value = loadedRanges.value.filter(
+    ([rangeStart, rangeEnd]) => rangeEnd <= start || rangeStart >= end
+  );
+  updateVisibleThumbnails();
+}
+
+function repositionImageByScore(imageId, newScore) {
+  const items = allGridImages.value.slice();
+  const currentIndex = items.findIndex((item) => item.id === imageId);
+  if (currentIndex === -1) return;
+
+  const target = items[currentIndex];
+  target.score = newScore;
+  items.splice(currentIndex, 1);
+
+  const targetScore = newScore ?? 0;
+  const descending = props.selectedDescending === true;
+  let insertIndex = items.findIndex((item) => {
+    const score = item.score ?? 0;
+    return descending ? score < targetScore : score > targetScore;
+  });
+  if (insertIndex === -1) insertIndex = items.length;
+  items.splice(insertIndex, 0, target);
+
+  for (let i = 0; i < items.length; i += 1) {
+    items[i].idx = i;
+  }
+
+  allGridImages.value = items;
+  invalidateVisibleThumbnailRanges();
+  nextTick(() => {
+    const grid = gridContainer.value;
+    if (!grid) return;
+    const card = grid.querySelectorAll(".image-card")[insertIndex];
+    if (card && card.scrollIntoView) {
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  });
+}
+
 async function applyScore(img, newScore) {
   console.debug("Applying score:", newScore);
   const imageId = img.id || (overlayImage.value && overlayImage.value.id);
@@ -1258,11 +1310,6 @@ async function applyScore(img, newScore) {
     if (gridImg) {
       gridImg.score = newScore;
     }
-    // Update score in images array if present
-    const idx = loadedRanges.value.findIndex((i) => i.id === imageId);
-    if (idx !== -1) {
-      loadedRanges.value[idx].score = newScore;
-    }
     // Update overlay image if open and matches
     if (
       overlayOpen.value &&
@@ -1272,26 +1319,8 @@ async function applyScore(img, newScore) {
       overlayImage.value = { ...overlayImage.value, score: newScore };
     }
 
-    // If sorting by score, re-sort
-    if (
-      props.selectedSort.value === "score_desc" ||
-      props.selectedSort.value === "score_asc"
-    ) {
-      // Resort images array
-      loadedRanges.value.sort((a, b) => {
-        const sa = a.score || 0;
-        const sb = b.score || 0;
-        return props.selectedSort.value === "score_desc" ? sb - sa : sa - sb;
-      });
-      nextTick(() => {
-        const grid = gridContainer.value;
-        if (!grid) return;
-        const newIdx = loadedRanges.value.findIndex((i) => i.id === imageId);
-        const card = grid.querySelectorAll(".image-card")[newIdx];
-        if (card && card.scrollIntoView) {
-          card.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      });
+    if (isScoreSortActive()) {
+      repositionImageByScore(imageId, newScore);
     }
     emit("refresh-sidebar");
   } catch (e) {
@@ -2091,6 +2120,7 @@ function removeImagesById(imageIds) {
   selectedImageIds.value = selectedImageIds.value.filter(
     (id) => !imageIds.includes(id)
   );
+  loadedRanges.value = [];
   updateVisibleThumbnails();
 }
 
@@ -2119,7 +2149,7 @@ async function exportCurrentViewToZip() {
       throw new Error("Missing task_id from export response.");
     }
 
-    let downloadUrl = null;
+     let downloadUrl = null;
     const maxAttempts = 600;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const statusRes = await apiClient.get(

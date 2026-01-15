@@ -35,11 +35,6 @@ class SortMechanism:
         DATE = auto()
         SCORE = auto()
         CHARACTER_LIKENESS = auto()
-        SHARPNESS = auto()
-        EDGE_DENSITY = auto()
-        NOISE_LEVEL = auto()
-        DESCRIPTION = auto()
-        FORMAT = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -53,18 +48,6 @@ class SortMechanism:
         Keys.CHARACTER_LIKENESS: {
             "field": "character_likeness",
             "description": "Similarity to",
-        },
-        Keys.SHARPNESS: {
-            "field": "sharpness",
-            "description": "Sharpness",
-        },
-        Keys.EDGE_DENSITY: {
-            "field": "edge_density",
-            "description": "Edge Density",
-        },
-        Keys.NOISE_LEVEL: {
-            "field": "noise_level",
-            "description": "Noise Level",
         },
     }
 
