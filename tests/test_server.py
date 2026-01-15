@@ -467,19 +467,57 @@ def test_pictures_export():
 
             resp = client.get("/pictures/export")
             assert resp.status_code == 200, f"Error: {resp.text}"
-            assert resp.headers["content-type"] == "application/zip"
-            assert resp.content[:2] == b"PK"  # ZIP file signature
+            assert resp.headers["content-type"] == "application/json"
+
+            task_id = resp.json().get("task_id")
+            assert task_id, "Missing task_id in export response"
+
+            status_payload = None
+            timeout_s = 10
+            start = time.time()
+            while time.time() - start < timeout_s:
+                status_resp = client.get(
+                    "/pictures/export/status", params={"task_id": task_id}
+                )
+                assert status_resp.status_code == 200, f"Error: {status_resp.text}"
+                status_payload = status_resp.json()
+                if status_payload.get("status") == "completed":
+                    break
+                if status_payload.get("status") == "failed":
+                    raise AssertionError("Export task failed")
+                time.sleep(0.1)
+
+            assert status_payload, "Missing export status payload"
+            assert status_payload.get("status") == "completed", (
+                f"Export task did not complete in {timeout_s}s"
+            )
+
+            download_url = status_payload.get("download_url")
+            assert download_url, "Missing download_url in export status"
+
+            download_resp = client.get(download_url)
+            assert download_resp.status_code == 200, f"Error: {download_resp.text}"
+            assert download_resp.content[:2] == b"PK"  # ZIP file signature
+            logger.info(
+                "Exported pictures zip size: {} bytes".format(
+                    len(download_resp.content)
+                )
+            )
 
             # Extract zip and compare SHA, file size, format, width, height
-            with zipfile.ZipFile(BytesIO(resp.content)) as zf:
+            with zipfile.ZipFile(BytesIO(download_resp.content)) as zf:
                 zip_names = set(zf.namelist())
+                image_names = [
+                    name for name in zip_names if not name.lower().endswith(".txt")
+                ]
                 # Get expected metadata from the database
                 pictures = server.vault.db.run_task(Picture.find)
 
-                assert len(pictures) == len(zip_names), (
-                    f"Expected {len(pictures)} pictures in export, found {len(zip_names)} in zip"
+                assert len(pictures) == len(image_names), (
+                    f"Expected {len(pictures)} pictures in export, found {len(image_names)} in zip"
                 )
-                for fname in zip_names:
+                logger.info("Found {} images in export zip".format(len(image_names)))
+                for fname in image_names:
                     found = False
                     data = None
                     with zf.open(fname) as f:
