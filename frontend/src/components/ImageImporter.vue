@@ -29,6 +29,8 @@ const importPhaseMessage = computed(() => {
   switch (importPhase.value) {
     case "uploading":
       return "Uploading images...";
+    case "processing":
+      return "Processing import...";
     case "done":
       return "Import complete!";
     case "duplicates":
@@ -87,6 +89,49 @@ function handleCancelImport() {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollImportStatus(taskId, batchOffset, batchCount) {
+  const maxAttempts = 600;
+  const intervalMs = 1000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (cancelImport.value) {
+      finalizeCancelled();
+      return null;
+    }
+
+    const statusRes = await apiClient.get(
+      `${props.backendUrl}/pictures/import/status`,
+      { params: { task_id: taskId } }
+    );
+    const status = statusRes?.data?.status || "in_progress";
+    const processed = statusRes?.data?.processed ?? 0;
+    const total = statusRes?.data?.total ?? batchCount;
+
+    importPhase.value = "processing";
+    if (processed > 0) {
+      importProgress.value = Math.min(importTotal.value, batchOffset + processed);
+    } else {
+      importProgress.value = Math.max(importProgress.value, batchOffset);
+    }
+    importTotal.value = Math.max(importTotal.value, batchOffset + total);
+
+    if (status === "completed") {
+      return statusRes.data;
+    }
+    if (status === "failed") {
+      throw new Error(statusRes?.data?.error || "Import failed");
+    }
+
+    await sleep(intervalMs);
+  }
+
+  throw new Error("Import timed out");
+}
+
 async function startImport(files, options = {}) {
   if (!files || !files.length) return;
   if (importInProgress.value) {
@@ -112,15 +157,9 @@ async function startImport(files, options = {}) {
       ? options.timeoutMs
       : null;
 
-  const selectedCharacterId =
-    options.selectedCharacterId ?? props.selectedCharacterId ?? "";
-  const shouldAttachCharacter =
-    selectedCharacterId &&
-    selectedCharacterId !== props.allPicturesId &&
-    selectedCharacterId !== props.unassignedPicturesId;
-
   let completed = 0;
   let importedCount = 0;
+  const allResults = [];
 
   try {
     for (let i = 0; i < files.length; i += BATCH_SIZE) {
@@ -137,9 +176,6 @@ async function startImport(files, options = {}) {
       batch.forEach((file) => {
         formData.append("file", file);
       });
-      if (shouldAttachCharacter) {
-        formData.append("character_id", selectedCharacterId);
-      }
 
       let res = null;
       let lastError = null;
@@ -154,7 +190,7 @@ async function startImport(files, options = {}) {
         currentImportController.value = controller;
         const timeout = setTimeout(() => controller.abort(), batchTimeoutMs);
         try {
-          res = await apiClient.post(`${props.backendUrl}/pictures`, formData, {
+          res = await apiClient.post(`${props.backendUrl}/pictures/import`, formData, {
             signal: controller.signal,
             timeout: batchTimeoutMs,
             headers: {
@@ -200,8 +236,8 @@ async function startImport(files, options = {}) {
           res ? `Upload failed with status ${res.status}` : "No response received"
         );
 
-        if (!res?.ok && attempt < MAX_RETRIES) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (attempt < MAX_RETRIES) {
+          await sleep(1000);
         }
       }
 
@@ -211,15 +247,31 @@ async function startImport(files, options = {}) {
         return;
       }
 
-      const result = await res.data;
-      if (result && Array.isArray(result.results)) {
-        completed += result.results.length;
-        importProgress.value = completed;
-        importedCount += result.results.filter(
-          (r) => r.status === "success"
-        ).length;
-        await nextTick();
+      completed += batch.length;
+      importProgress.value = completed;
+      await nextTick();
+
+      const taskId = res?.data?.task_id;
+      if (!taskId) {
+        finalizeError("Missing task id from import response.");
+        return;
       }
+
+      importPhase.value = "processing";
+      const statusPayload = await pollImportStatus(taskId, completed, batch.length);
+      if (!statusPayload) {
+        return;
+      }
+
+      const batchResults = Array.isArray(statusPayload.results)
+        ? statusPayload.results
+        : [];
+      allResults.push(...batchResults);
+      importedCount += batchResults.filter((r) => r.status === "success").length;
+
+      completed += statusPayload.total ?? batch.length;
+      importProgress.value = completed;
+      await nextTick();
     }
 
     if (importedCount === 0) {

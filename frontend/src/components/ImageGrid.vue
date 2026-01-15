@@ -1098,6 +1098,7 @@ async function handleImagesUploaded(newIds) {
   fetchAllGridImages().then(() => {
     updateVisibleThumbnails();
   });
+  emit("refresh-sidebar");
 }
 
 // Adjust debounce timing to 200ms for better responsiveness

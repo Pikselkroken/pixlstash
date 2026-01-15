@@ -2124,6 +2124,29 @@ class Server:
                 logger.error(f"Failed to remove tag: {e}")
                 raise HTTPException(status_code=500, detail="Failed to remove tag")
 
+        @self.api.get("/pictures/import/status")
+        async def import_status(task_id: str):
+            """Check the status of an import task."""
+            task = self.import_tasks.get(task_id)
+            if not task:
+                raise HTTPException(status_code=404, detail="Task not found")
+
+            total = task.get("total") or 0
+            processed = task.get("processed") or 0
+            progress = (processed / total * 100.0) if total else 0.0
+
+            payload = {
+                "status": task["status"],
+                "total": total,
+                "processed": processed,
+                "progress": progress,
+            }
+            if task["status"] == "completed":
+                payload["results"] = task.get("results") or []
+            if task["status"] == "failed":
+                payload["error"] = task.get("error")
+            return payload
+
         @self.api.get("/pictures/{id}/{field}")
         async def get_picture_field(id: str, field: str):
             """Return single field for a picture"""
@@ -2230,7 +2253,7 @@ class Server:
                     self.vault.notify(EventType.CHANGED_PICTURES)
             return {"status": "success", "picture": safe_model_dict(pic)}
 
-        @self.api.post("/pictures")
+        @self.api.post("/pictures/import")
         async def import_pictures(
             background_tasks: BackgroundTasks,
             file: List[UploadFile] = File(None),
@@ -2355,29 +2378,6 @@ class Server:
 
             background_tasks.add_task(run_import_task)
             return {"task_id": task_id}
-
-        @self.api.get("/pictures/import/status")
-        async def import_status(task_id: str):
-            """Check the status of an import task."""
-            task = self.import_tasks.get(task_id)
-            if not task:
-                raise HTTPException(status_code=404, detail="Task not found")
-
-            total = task.get("total") or 0
-            processed = task.get("processed") or 0
-            progress = (processed / total * 100.0) if total else 0.0
-
-            payload = {
-                "status": task["status"],
-                "total": total,
-                "processed": processed,
-                "progress": progress,
-            }
-            if task["status"] == "completed":
-                payload["results"] = task.get("results") or []
-            if task["status"] == "failed":
-                payload["error"] = task.get("error")
-            return payload
 
         @self.api.delete("/pictures/{id}")
         async def delete_picture(id: str):
