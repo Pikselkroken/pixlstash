@@ -7,7 +7,7 @@ const isAuthenticated = ref(false);
 // Axios instance
 const apiClient = axios.create({
   baseURL: 'http://localhost:9537',
-  timeout: 10000,
+  timeout: 60000, // Increased timeout to 60 seconds
   headers: {
     'Content-Type': 'application/json',
   },

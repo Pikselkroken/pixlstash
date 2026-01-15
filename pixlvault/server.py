@@ -1,7 +1,6 @@
 import base64
 import gc
 import uvicorn
-import io
 import os
 import json
 import re
@@ -18,8 +17,9 @@ from sqlmodel import Session, delete, select
 
 from contextlib import asynccontextmanager
 from fastapi import Body, FastAPI, File, Request, UploadFile, Query, HTTPException
+from fastapi import BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pillow_heif import register_heif_opener
 from typing import List
 from passlib.hash import bcrypt
@@ -125,6 +125,11 @@ class Server:
         # Updated to store the PASSWORD_HASH in self._server_config
         self.PASSWORD_HASH = self._server_config.get("PASSWORD_HASH", None)
         self.active_session_ids = set()
+
+        # Temporary storage for export tasks
+        self.export_tasks = {}
+        self.TEMP_EXPORT_DIR = "tmp/exports"
+        os.makedirs(self.TEMP_EXPORT_DIR, exist_ok=True)
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -1722,144 +1727,205 @@ class Server:
         @self.api.get("/pictures/export")
         async def export_pictures_zip(
             request: Request,
+            background_tasks: BackgroundTasks,
             query: str = Query(None),
             set_id: int = Query(None),
             threshold: float = Query(0.0),
         ):
             """
             Export pictures matching the filters as a zip file.
-            Uses same filter logic as /pictures endpoint, but returns a zip.
+            Uses same filter logic as /pictures endpoint, but returns a task ID.
             """
-            picture_ids = request.query_params.getlist("id")
-            query_params = dict(request.query_params)
-            query_params.pop("query", None)
-            query_params.pop("set_id", None)
-            query_params.pop("threshold", None)
-            character_id = query_params.pop("character_id", None)
+            task_id = str(uuid.uuid4())
+            self.export_tasks[task_id] = {
+                "status": "in_progress",
+                "file_path": None,
+                "total": 0,
+                "processed": 0,
+                "filename": None,
+            }
 
-            pics = []
+            def generate_zip():
+                try:
+                    picture_ids = request.query_params.getlist("id")
+                    query_params = dict(request.query_params)
+                    query_params.pop("query", None)
+                    query_params.pop("set_id", None)
+                    query_params.pop("threshold", None)
+                    character_id = query_params.pop("character_id", None)
 
-            # First option is if a list of picture_ids is provided
-            if picture_ids:
-                pics = self.vault.db.run_task(Picture.find, id=picture_ids)
-            elif set_id is not None:
-                logger.info("Exporting pictures set {} ".format(set_id))
+                    pics = []
 
-                # Fetch picture IDs in set, then fetch Picture objects
-                def fetch_members(session, set_id):
-                    members = session.exec(
-                        select(PictureSetMember).where(
-                            PictureSetMember.set_id == set_id
+                    if picture_ids:
+                        pics = self.vault.db.run_task(Picture.find, id=picture_ids)
+                    elif set_id is not None:
+                        logger.info("Exporting pictures set {} ".format(set_id))
+
+                        def fetch_members(session, set_id):
+                            members = session.exec(
+                                select(PictureSetMember).where(
+                                    PictureSetMember.set_id == set_id
+                                )
+                            ).all()
+                            picture_ids = [m.picture_id for m in members]
+                            if not picture_ids:
+                                return []
+                            return Picture.find(session, id=picture_ids)
+
+                        pics = self.vault.db.run_task(fetch_members, set_id)
+                    elif character_id is not None:
+                        logger.info(
+                            "Exporting pictures for character ID: {}".format(
+                                character_id
+                            )
                         )
-                    ).all()
-                    picture_ids = [m.picture_id for m in members]
-                    if not picture_ids:
-                        return []
-                    return Picture.find(session, id=picture_ids)
 
-                pics = self.vault.db.run_task(fetch_members, set_id)
-            elif character_id is not None:
-                logger.info(
-                    "Exporting pictures for character ID: {}".format(character_id)
-                )
+                        def fetch_by_character(session, character_id):
+                            faces = session.exec(
+                                select(Face).where(Face.character_id == character_id)
+                            ).all()
+                            picture_ids = list({face.picture_id for face in faces})
+                            if not picture_ids:
+                                return []
+                            return Picture.find(session, id=picture_ids)
 
-                # Fetch pictures with faces matching character_id
-                def fetch_by_character(session, character_id):
-                    faces = session.exec(
-                        select(Face).where(Face.character_id == character_id)
-                    ).all()
-                    picture_ids = list({face.picture_id for face in faces})
-                    if not picture_ids:
-                        return []
-                    return Picture.find(session, id=picture_ids)
+                        pics = self.vault.db.run_task(fetch_by_character, character_id)
+                    elif query:
+                        logger.info(
+                            "Exporting pictures using search query: {}".format(query)
+                        )
 
-                pics = self.vault.db.run_task(fetch_by_character, character_id)
-            elif query:
-                logger.info("Exporting pictures using search query: {}".format(query))
+                        def find_by_text(session, query):
+                            words = re.findall(r"\b\w+\b", query.lower())
+                            query_full = "A photo of " + query
+                            return [
+                                r[0]
+                                for r in Picture.semantic_search(
+                                    session,
+                                    query_full,
+                                    words,
+                                    text_to_embedding=self.vault.generate_text_embedding,
+                                    offset=0,
+                                    limit=sys.maxsize,
+                                    threshold=threshold,
+                                    select_fields=Picture.metadata_fields(),
+                                )
+                            ]
 
-                # Search query
-                def find_by_text(session, query):
-                    words = re.findall(r"\b\w+\b", query.lower())
-                    # preprocessed_query_words = self.vault.preprocess_query_words(words)
-                    query_full = "A photo of " + query
-                    return [
-                        r[0]
-                        for r in Picture.semantic_search(
-                            session,
-                            query_full,
-                            words,
-                            text_to_embedding=self.vault.generate_text_embedding,
+                        pics = self.vault.db.run_task(find_by_text, query)
+                    else:
+                        logger.info(
+                            "Exporting pictures using filter parameters: {}".format(
+                                query_params
+                            )
+                        )
+                        pics = self.vault.db.run_task(
+                            Picture.find,
                             offset=0,
                             limit=sys.maxsize,
-                            threshold=threshold,
                             select_fields=Picture.metadata_fields(),
+                            **query_params,
                         )
-                    ]
 
-                pics = self.vault.db.run_task(find_by_text, query)
-            else:
-                logger.info(
-                    "Exporting pictures using filter parameters: {}".format(
-                        query_params
+                    self.export_tasks[task_id]["total"] = len(pics)
+                    self.export_tasks[task_id]["processed"] = 0
+
+                    logger.info(
+                        f"Export task {task_id}: {len(pics)} pictures to be added to the ZIP."
                     )
-                )
-                # Fallback to filter-based search
-                pics = self.vault.db.run_task(
-                    Picture.find,
-                    offset=0,
-                    limit=sys.maxsize,
-                    select_fields=Picture.metadata_fields(),
-                    **query_params,
-                )
 
-            if not pics:
-                raise HTTPException(status_code=404, detail="No pictures found")
+                    if not pics:
+                        self.export_tasks[task_id]["status"] = "failed"
+                        return
 
-            # Create zip file in memory
-            zip_buffer = io.BytesIO()
-            char_groups = defaultdict(list)
-            for pic in pics:
-                char_groups["image"].append(pic)
+                    filename_parts = []
+                    if set_id is not None:
 
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                for char_name, group in char_groups.items():
-                    for idx, pic in enumerate(group, start=1):
-                        if (
-                            hasattr(pic, "file_path")
-                            and pic.file_path
-                            and os.path.exists(pic.file_path)
-                        ):
-                            ext = os.path.splitext(pic.file_path)[1]
-                            arcname = f"{char_name}_{idx:05d}{ext}"
-                            zip_file.write(pic.file_path, arcname=arcname)
+                        def get_set(session, set_id):
+                            return session.get(PictureSet, set_id)
 
-            zip_buffer.seek(0)
+                        picture_set = self.vault.db.run_task(get_set, set_id)
+                        if picture_set:
+                            filename_parts.append(picture_set.name.replace(" ", "_"))
+                    if query:
+                        filename_parts.append(f"search_{query[:20]}")
 
-            # Generate filename based on filters
-            filename_parts = []
-            if set_id is not None:
+                    filename = (
+                        "_".join(filename_parts) if filename_parts else "pictures"
+                    )
+                    filename = f"{filename}_{len(pics)}_images.zip"
+                    self.export_tasks[task_id]["filename"] = filename
 
-                def get_set(session, set_id):
-                    return session.get(PictureSet, set_id)
+                    zip_path = os.path.join(
+                        self.TEMP_EXPORT_DIR, f"export_{task_id}.zip"
+                    )
+                    with zipfile.ZipFile(
+                        zip_path, "w", zipfile.ZIP_DEFLATED
+                    ) as zip_file:
+                        for idx, pic in enumerate(pics, start=1):
+                            if (
+                                hasattr(pic, "file_path")
+                                and pic.file_path
+                                and os.path.exists(pic.file_path)
+                            ):
+                                ext = os.path.splitext(pic.file_path)[1]
+                                arcname = f"image_{idx:05d}{ext}"
+                                zip_file.write(pic.file_path, arcname=arcname)
+                                zip_file.writestr(
+                                    f"image_{idx:05d}.txt", pic.description or ""
+                                )
+                                self.export_tasks[task_id]["processed"] += 1
 
-                picture_set = self.vault.db.run_task(get_set, set_id)
-                if picture_set:
-                    filename_parts.append(picture_set.name.replace(" ", "_"))
-            if query:
-                filename_parts.append(f"search_{query[:20]}")
+                    zip_size = os.path.getsize(zip_path)
+                    logger.info(
+                        f"Export task {task_id}: ZIP file created with size {zip_size} bytes."
+                    )
 
-            filename = "_".join(filename_parts) if filename_parts else "pictures"
-            filename = f"{filename}_{len(pics)}_images.zip"
+                    self.export_tasks[task_id]["status"] = "completed"
+                    self.export_tasks[task_id]["file_path"] = zip_path
+                except Exception as exc:
+                    self.export_tasks[task_id]["status"] = "failed"
+                    logger.error(f"Export task {task_id} failed: {exc}")
 
-            logger.info(
-                f"Streaming file name {filename} containing {len(pics)} pictures."
-            )
+            background_tasks.add_task(generate_zip)
+            return JSONResponse({"task_id": task_id})
 
-            return StreamingResponse(
-                io.BytesIO(zip_buffer.getvalue()),
-                media_type="application/zip",
-                headers={"Content-Disposition": f"attachment; filename={filename}"},
-            )
+        @self.api.get("/pictures/export/status")
+        async def export_status(task_id: str):
+            """Check the status of an export task."""
+            task = self.export_tasks.get(task_id)
+            if not task:
+                raise HTTPException(status_code=404, detail="Task not found")
+
+            total = task.get("total") or 0
+            processed = task.get("processed") or 0
+            progress = (processed / total * 100.0) if total else 0.0
+
+            if task["status"] == "completed":
+                return {
+                    "status": "completed",
+                    "download_url": f"/pictures/export/download/{task_id}",
+                    "total": total,
+                    "processed": processed,
+                    "progress": progress,
+                }
+
+            return {
+                "status": task["status"],
+                "total": total,
+                "processed": processed,
+                "progress": progress,
+            }
+
+        @self.api.get("/pictures/export/download/{task_id}")
+        async def download_export(task_id: str):
+            """Download the completed ZIP file."""
+            task = self.export_tasks.get(task_id)
+            if not task or task["status"] != "completed":
+                raise HTTPException(status_code=404, detail="File not ready")
+
+            filename = task.get("filename") or os.path.basename(task["file_path"])
+            return FileResponse(task["file_path"], filename=filename)
 
         @self.api.get("/pictures/search")
         async def search_pictures(

@@ -129,14 +129,79 @@ async function saveSetFromEditor(setData) {
       res = await apiClient.patch(url, setData);
     }
 
-    if (!res.ok) {
-      const errorText = await res.data;
-      throw new Error(errorText || "Failed to save picture set");
-    }
     emit("close");
     emit("refresh-sidebar");
   } catch (e) {
     alert("Failed to save picture set: " + (e.message || e));
+  }
+}
+
+const exportTaskId = ref(null);
+const exportStatus = ref(null);
+const downloadUrl = ref(null);
+
+async function startExport() {
+  try {
+    const response = await apiClient.get(`${props.backendUrl}/pictures/export`, {
+      params: { set_id: props.set.id },
+    });
+    exportTaskId.value = response.data.task_id;
+    pollExportStatus();
+  } catch (error) {
+    alert('Failed to start export: ' + (error.message || error));
+  }
+}
+
+async function pollExportStatus() {
+  if (!exportTaskId.value) return;
+
+  const interval = setInterval(async () => {
+    try {
+      const response = await apiClient.get(
+        `${props.backendUrl}/pictures/export/status`,
+        { params: { task_id: exportTaskId.value } }
+      );
+
+      exportStatus.value = response.data.status;
+
+      if (response.data.status === 'completed') {
+        downloadUrl.value = response.data.download_url;
+        clearInterval(interval);
+      } else if (response.data.status === 'failed') {
+        alert('Export failed.');
+        clearInterval(interval);
+      }
+    } catch (error) {
+      console.error('Error checking export status:', error);
+      clearInterval(interval);
+    }
+  }, 2000);
+}
+
+async function downloadExport() {
+  if (downloadUrl.value) {
+    try {
+      const response = await apiClient.get(`${props.backendUrl}${downloadUrl.value}`, {
+        responseType: 'blob', // Ensure binary data is handled correctly
+      });
+
+      console.log('Response headers:', response.headers);
+      console.log('Response status:', response.status);
+      console.log('Blob size:', response.data.size, 'bytes');
+
+      // Create a downloadable link for the file
+      const blob = new Blob([response.data], { type: 'application/zip' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'exported_pictures.zip'; // Default file name
+      link.click();
+
+      // Clean up the object URL
+      URL.revokeObjectURL(link.href);
+    } catch (error) {
+      console.error('Download failed:', error);
+      alert('Failed to download export: ' + (error.message || error));
+    }
   }
 }
 
@@ -263,11 +328,9 @@ watch(
   border-color: #4caf50;
 }
 
-.editor-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 16px 24px;
+.export-section {
+  margin-top: 24px;
+  padding-top: 16px;
   border-top: 1px solid #e0e0e0;
 }
 
@@ -302,5 +365,39 @@ watch(
 .btn-save:disabled {
   background: #ccc;
   cursor: not-allowed;
+}
+
+.btn-export {
+  background: #2196f3;
+  color: white;
+  width: 100%;
+}
+
+.btn-export:hover {
+  background: #1976d2;
+}
+
+.export-status {
+  margin-top: 12px;
+  font-size: 0.95rem;
+  color: #333;
+}
+
+.status-completed {
+  color: #4caf50;
+}
+
+.status-failed {
+  color: #f44336;
+}
+
+.download-link {
+  color: #2196f3;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.download-link:hover {
+  text-decoration: none;
 }
 </style>

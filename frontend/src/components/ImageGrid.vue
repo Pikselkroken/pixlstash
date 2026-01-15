@@ -30,6 +30,24 @@
       @delete-selected="deleteSelected"
       style="position: absolute; top: 0; left: 0; width: 100%; z-index: 100"
     />
+    <div
+      v-if="exportProgress.visible"
+      class="export-progress"
+      :class="{ 'export-progress-error': exportProgress.status === 'failed' }"
+    >
+      <div class="export-progress-title">
+        {{ exportProgress.message }}
+      </div>
+      <div class="export-progress-bar">
+        <div
+          class="export-progress-fill"
+          :style="{ width: `${exportProgressPercent}%` }"
+        ></div>
+      </div>
+      <div class="export-progress-meta">
+        {{ exportProgress.processed }} / {{ exportProgress.total }}
+      </div>
+    </div>
 
     <div
       class="grid-scroll-wrapper"
@@ -417,6 +435,20 @@ const multiZipState = reactive({
   error: null,
 });
 let multiZipAbortController = null;
+
+const exportProgress = reactive({
+  visible: false,
+  status: "idle",
+  processed: 0,
+  total: 0,
+  message: "",
+});
+
+const exportProgressPercent = computed(() => {
+  if (!exportProgress.total) return 0;
+  const percent = (exportProgress.processed / exportProgress.total) * 100;
+  return Math.min(100, Math.max(0, Math.round(percent)));
+});
 
 // Key to force face bbox overlay recompute
 const faceOverlayRedrawKey = ref(0);
@@ -2062,34 +2094,91 @@ function removeImagesById(imageIds) {
 }
 
 // --- Export to Zip ---
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function exportCurrentViewToZip() {
-  // Build query params for current view
   let url = `${props.backendUrl}/pictures/export`;
   const params = buildPictureIdsQueryParams();
   if (params) {
     url += `?${params}`;
   }
+
   try {
-    const res = await apiClient.get(url);
-    const blob = await res.data.blob();
-    // Extract filename from Content-Disposition header
+    exportProgress.visible = true;
+    exportProgress.status = "starting";
+    exportProgress.processed = 0;
+    exportProgress.total = 0;
+    exportProgress.message = "Preparing export...";
+
+    const startRes = await apiClient.get(url);
+    const taskId = startRes?.data?.task_id;
+    if (!taskId) {
+      throw new Error("Missing task_id from export response.");
+    }
+
+    let downloadUrl = null;
+    const maxAttempts = 600;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const statusRes = await apiClient.get(
+        `${props.backendUrl}/pictures/export/status`,
+        { params: { task_id: taskId } }
+      );
+      const status = statusRes?.data?.status;
+      exportProgress.status = status || "in_progress";
+      exportProgress.processed = statusRes?.data?.processed || 0;
+      exportProgress.total = statusRes?.data?.total || 0;
+      exportProgress.message =
+        status === "completed"
+          ? "Finalizing download..."
+          : "Exporting images...";
+      if (status === "completed") {
+        downloadUrl = statusRes?.data?.download_url;
+        break;
+      }
+      if (status === "failed") {
+        throw new Error("Export failed on server.");
+      }
+      await sleep(1000);
+    }
+
+    if (!downloadUrl) {
+      throw new Error("Export timed out waiting for ZIP.");
+    }
+
+    const fileRes = await apiClient.get(`${props.backendUrl}${downloadUrl}`, {
+      responseType: "blob",
+    });
+
     let filename = "pixlvault_export.zip";
-    const disposition = res.headers.get("Content-Disposition");
+    const disposition = fileRes.headers["content-disposition"];
     if (disposition) {
-      const match = disposition.match(/filename=\"?([^\";]+)\"?/);
+      const match = disposition.match(/filename="?([^";]+)"?/);
       if (match) filename = match[1];
     }
+
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
+    link.href = URL.createObjectURL(fileRes.data);
     link.download = filename;
     document.body.appendChild(link);
     link.click();
     setTimeout(() => {
       URL.revokeObjectURL(link.href);
       document.body.removeChild(link);
+      exportProgress.visible = false;
+      exportProgress.status = "idle";
+      exportProgress.message = "";
     }, 2000);
   } catch (e) {
+    exportProgress.status = "failed";
+    exportProgress.message = "Export failed";
     alert("Export failed: " + (e.message || e));
+    setTimeout(() => {
+      exportProgress.visible = false;
+      exportProgress.status = "idle";
+      exportProgress.message = "";
+    }, 4000);
   }
 }
 
@@ -2138,6 +2227,49 @@ function clearSearchQuery() {
   color: #ffffff;
   font-size: 3em;
   font-weight: bold;
+}
+
+.export-progress {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 120;
+  background: rgba(20, 20, 20, 0.9);
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 8px;
+  min-width: 220px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.export-progress-error {
+  background: rgba(140, 20, 20, 0.95);
+}
+
+.export-progress-title {
+  font-size: 0.9em;
+  margin-bottom: 8px;
+}
+
+.export-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.export-progress-fill {
+  height: 100%;
+  background: #4caf50;
+  width: 0;
+  transition: width 0.3s ease;
+}
+
+.export-progress-meta {
+  margin-top: 6px;
+  font-size: 0.8em;
+  opacity: 0.85;
 }
 .face-bbox-overlay span {
   white-space: pre-line;
