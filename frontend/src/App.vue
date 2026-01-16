@@ -15,8 +15,6 @@ import SideBar from "./components/SideBar.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import SearchBar from "./components/SearchBar.vue";
 
-const likenessRowsRef = ref(null);
-
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
@@ -25,7 +23,6 @@ const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
 const gridContainer = ref(null);
 const selectedImageIds = ref([]);
 let lastSelectedIndex = null;
-const currentView = ref("grid"); // or 'likeness'
 const sidebarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
@@ -38,16 +35,11 @@ const searchQuery = ref("");
 const showStars = ref(true);
 const showFaceBboxes = ref(false);
 
-const chatWindowRef = ref(null);
-
 const thumbnailSize = ref(256);
 const sidebarVisible = ref(true);
 
 // --- Media Type Filter State ---
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
-
-// --- Chat Overlay State ---
-const chatOpen = ref(false);
 
 const gridVersion = ref(0);
 
@@ -66,42 +58,17 @@ const exportCaptionOptions = [
 ];
 
 // --- Config Dialog State ---
-const settingsDialog = ref(false);
 const config = reactive({
-  image_roots: [],
-  selected_image_root: "",
   sort: "",
   thumbnail: 256,
   show_stars: true,
-  likeness_threshold: 0.97,
-  openai_host: "localhost",
-  openai_port: 8000,
-  openai_model: "",
-  default_device: "cpu", // Add default_device to config
 });
-const openaiModels = ref([]);
-const openaiModelFetchError = ref("");
-const openaiModelLoading = ref(false);
-const newImageRoot = ref("");
 
 const loading = ref(false);
 const error = ref(null);
 
 function refreshSidebar() {
   sidebarRef.value?.refreshSidebar();
-}
-
-function handleSwitchToLikeness() {
-  console.log("[App.vue] handleSwitchToLikeness called");
-  currentView.value = "likeness";
-  nextTick(() => {
-    console.log("[App.vue] Calling likenessRowsRef.refreshLikeness()");
-    likenessRowsRef.value?.refreshLikeness();
-  });
-}
-
-async function handleSwitchToGrid() {
-  currentView.value = "grid";
 }
 
 async function handleSelectCharacter(charId) {
@@ -111,25 +78,21 @@ async function handleSelectCharacter(charId) {
   searchQuery.value = ""; // Clear search query
   await nextTick(); // Ensure reactivity propagates the change
   console.log("[App.vue] searchQuery cleared:", searchQuery.value);
-  handleSwitchToGrid();
 }
 
 async function handleSelectSet(setId) {
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
   searchQuery.value = ""; // Clear search query
-  handleSwitchToGrid();
 }
 
 async function handleUpdateSearchQuery(value) {
   searchQuery.value = typeof value === "string" ? value : ""; // Ensure searchQuery is always a string
-  handleSwitchToGrid();
 }
 
 async function handleUpdateSelectedSort({ sort, descending }) {
   selectedSort.value = sort;
   selectedDescending.value = descending;
-  handleSwitchToGrid();
 }
 
 const selectedSimilarityCharacter = ref(null);
@@ -138,35 +101,10 @@ function handleUpdateSimilarityCharacter(val) {
   refreshGridVersion();
 }
 
-// --- Settings & Config ---
-async function fetchOpenAIModels() {
-  openaiModelLoading.value = true;
-  openaiModelFetchError.value = "";
-  openaiModels.value = [];
-  try {
-    const res = await apiClient.get("/openai/models");
-    console.log("Fetched OpenAI models:", res);
-    if (Array.isArray(res.data)) {
-      openaiModels.value = res.data.map((m) => m.id);
-    } else {
-      openaiModelFetchError.value = "No models found.";
-    }
-  } catch (e) {
-    openaiModelFetchError.value = "Failed to fetch models: " + (e.message || e);
-  } finally {
-    openaiModelLoading.value = false;
-  }
-}
-
 async function fetchConfig() {
   try {
     const res = await apiClient.get("/config");
     console.log("Fetched config:", res);
-    config.image_roots = res.data.image_roots || [];
-    config.selected_image_root = res.data.selected_image_root || "";
-    if (typeof res.data.likeness_threshold === "number") {
-      config.likeness_threshold = res.data.likeness_threshold;
-    }
     const sortValue = res.data.sort_order ?? res.data.sort;
     if (typeof sortValue === "string" && sortValue) {
       selectedSort.value = sortValue;
@@ -184,54 +122,17 @@ async function fetchConfig() {
     if (typeof res.data.show_stars === "boolean")
       showStars.value = res.data.show_stars;
     config.sort_order = sortValue || selectedSort.value;
+    config.descending = res.data.descending ?? selectedDescending.value;
     config.thumbnail_size = thumbnailValue || thumbnailSize.value;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
         : showStars.value;
-    config.openai_host = res.data.openai_host || "localhost";
-    config.openai_port = res.data.openai_port || 8000;
-    config.openai_model = res.data.openai_model || "";
-    config.default_device = res.data.default_device || "cpu";
+    config.selectedSimilarityCharacter =
+      res.data.selected_similarity_character ||
+      selectedSimilarityCharacter.value;
   } catch (e) {
     console.error("Failed to fetch /config:", e);
-  }
-}
-
-async function addImageRoot() {
-  const val = newImageRoot.value.trim();
-  if (!val || config.image_roots.includes(val)) return;
-  config.image_roots.push(val);
-  newImageRoot.value = "";
-  await apiClient.patch("/config", {
-    image_roots: config.image_roots,
-  });
-}
-
-function removeImageRoot(root) {
-  if (config.image_roots.length <= 1) return;
-  const idx = config.image_roots.indexOf(root);
-  if (idx !== -1) {
-    config.image_roots.splice(idx, 1);
-    if (config.selected_image_root === root) {
-      config.selected_image_root = config.image_roots[0] || "";
-    }
-    saveConfig();
-  }
-}
-
-async function updateSelectedRoot() {
-  await apiClient.patch("/config", {
-    selected_image_root: config.selected_image_root,
-  });
-  await fetchConfig();
-  selectedCharacter.value = ALL_PICTURES_ID;
-  selectedSet.value = null;
-  refreshSidebar();
-  if (currentView.value === "grid") {
-    refreshGridVersion();
-  } else if (currentView.value === "likeness") {
-    likenessRowsRef.value?.refreshLikeness();
   }
 }
 
@@ -242,17 +143,9 @@ async function patchConfigUIOptions() {
   patch.descending = selectedDescending.value;
   if (thumbnailSize.value) patch.thumbnail = thumbnailSize.value;
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
-  if (typeof config.likeness_threshold === "number")
-    patch.likeness_threshold = config.likeness_threshold;
-  if (config.openai_host) patch.openai_host = config.openai_host;
-  if (config.openai_port) patch.openai_port = config.openai_port;
-  if (config.openai_model) patch.openai_model = config.openai_model;
-  if (config.default_device) patch.default_device = config.default_device;
-  // Only send image_roots and selected_image_root if present
-  if (Array.isArray(config.image_roots) && config.image_roots.length > 0)
-    patch.image_roots = config.image_roots;
-  if (config.selected_image_root)
-    patch.selected_image_root = config.selected_image_root;
+  if (config.selectedSimilarityCharacter)
+    patch.selected_similarity_character = config.selectedSimilarityCharacter;
+
   console.log("PATCH /config payload:", patch);
   try {
     const response = await apiClient.patch("/config", patch);
@@ -262,28 +155,6 @@ async function patchConfigUIOptions() {
   } catch (e) {
     console.error("Error patching /config:", e);
   }
-}
-
-function selectImageRoot(root) {
-  if (config.selected_image_root !== root) {
-    config.selected_image_root = root;
-    updateSelectedRoot();
-  }
-}
-
-async function saveConfig() {
-  await apiClient.patch("/config", {
-    image_roots: config.image_roots,
-    selected_image_root: config.selected_image_root,
-  });
-}
-
-function openSettingsDialog() {
-  console.debug("Opening settings dialog");
-  fetchConfig().then(() => {
-    fetchOpenAIModels();
-  });
-  settingsDialog.value = true;
 }
 
 function handleGridBackgroundClick(e) {
@@ -321,10 +192,6 @@ function handleImagesUploaded() {
 
 // --- Export to Zip ---
 function handleExportZip() {
-  if (currentView.value !== "grid") {
-    console.warn("Export to zip is only available in grid view.");
-    return;
-  }
   exportDialog.value = true;
 }
 
@@ -362,33 +229,10 @@ function handleClearSearch() {
 }
 
 // --- Watchers ---
-// Scroll to bottom after END loads last page
-// (Removed watch on images)
-
-// (Removed watch on selectedSort, selectedCharacter, selectedSet for image loading)
-
 watch(searchQuery, (newVal, oldVal) => {
   if (!newVal && oldVal) {
     refreshGridVersion();
   }
-});
-
-watch(currentView, (val) => {
-  if (val === "likeness") {
-    console.log(
-      "[App.vue] currentView watcher: switched to likeness, refreshing..."
-    );
-    nextTick(() => {
-      console.log(
-        "[App.vue] currentView watcher: calling likenessRowsRef.refreshLikeness()"
-      );
-      likenessRowsRef.value?.refreshLikeness();
-    });
-  }
-});
-
-watch(settingsDialog, (val) => {
-  if (val) fetchConfig();
 });
 
 watch([selectedSort, selectedDescending], () => {
@@ -400,43 +244,13 @@ watch(thumbnailSize, () => {
   patchConfigUIOptions();
 });
 
-watch(
-  () => config.likeness_threshold,
-  () => {
-    patchConfigUIOptions();
-  }
-);
-
 watch(showStars, () => {
   patchConfigUIOptions();
 });
 
-// Watch all AI chat config fields together and PATCH all at once
-watch(
-  () => [config.openai_host, config.openai_port, config.openai_model],
-  ([host, port, model], [oldHost, oldPort, oldModel]) => {
-    if (host !== oldHost || port !== oldPort || model !== oldModel) {
-      patchConfigUIOptions();
-    }
-  }
-);
-// Watch for default_device changes
-watch(
-  () => config.default_device,
-  () => {
-    patchConfigUIOptions();
-  }
-);
-
-// Watch for vault change and update view
-watch(
-  () => config.selected_image_root,
-  (val, oldVal) => {
-    if (val !== oldVal) {
-      refreshSidebar();
-    }
-  }
-);
+watch(selectedSimilarityCharacter, () => {
+  patchConfigUIOptions();
+});
 
 // --- Lifecycle ---
 onBeforeMount(() => {
@@ -444,13 +258,14 @@ onBeforeMount(() => {
 });
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalKeydown);
+  refreshSidebar();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleGlobalKeydown);
 });
 
-defineExpose({ currentView, sidebarVisible, mediaTypeFilter });
+defineExpose({ sidebarVisible, mediaTypeFilter });
 </script>
 <template src="./App.template.html"></template>
 <style scoped src="./App.css"></style>

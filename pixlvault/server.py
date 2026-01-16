@@ -205,9 +205,7 @@ class Server:
             "thumbnail": "default",
             "thumbnail_size": "default",
             "show_stars": True,
-            "openai_host": "localhost",
-            "openai_port": 8000,
-            "openai_model": "gpt-3.5-turbo",
+            "similarity_character": None,
             "default_device": "cpu",
         }
         config = defaults.copy()
@@ -797,7 +795,6 @@ class Server:
             """
             patch_data = await request.json()
             updated = False
-            image_root_changed = False
             for key, value in patch_data.items():
                 logger.info(f"Updating config key '{key}' with value: {value}")
                 if key not in self._config:
@@ -807,11 +804,8 @@ class Server:
                         "descending",
                         "thumbnail",
                         "show_stars",
-                        "likeness_threshold",
-                        "openai_host",
-                        "openai_port",
-                        "openai_model",
                         "default_device",
+                        "similarity_character",
                     ):
                         self._config[key] = value
                         updated = True
@@ -819,16 +813,6 @@ class Server:
                     raise HTTPException(
                         status_code=400, detail=f"Key '{key}' does not exist in config."
                     )
-                if key == "image_roots" and isinstance(value, list):
-                    # Ensure all image root directories exist
-                    for v in value:
-                        if not os.path.exists(v):
-                            os.makedirs(v, exist_ok=True)
-                if (
-                    key == "selected_image_root"
-                    and self._config.get("selected_image_root") != value
-                ):
-                    image_root_changed = True
                 if isinstance(self._config[key], list) and isinstance(value, list):
                     # Append unique items
                     for v in value:
@@ -845,16 +829,6 @@ class Server:
                 config_path = self._config_path
                 with open(config_path, "w") as f:
                     json.dump(self._config, f, indent=2)
-            # If selected_image_root changed, re-initialize vault with new root
-            if image_root_changed:
-                new_root = self._config["selected_image_root"]
-                if not os.path.exists(new_root):
-                    os.makedirs(new_root, exist_ok=True)
-                # Re-initialize vault (and DB) with new root
-                self.vault = Vault(
-                    image_root=new_root,
-                    description=self._config.get("description"),
-                )
             elapsed = time.time() - start_time
             logger.info(f"[TIMING] PATCH /config completed in {elapsed:.3f} seconds")
             return {"status": "success", "updated": updated, "config": self._config}

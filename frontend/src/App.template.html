@@ -92,7 +92,6 @@
           </v-btn>
         </v-btn-toggle>
         <v-btn
-          v-if="currentView === 'grid'"
           icon
           @click="handleExportZip"
           title="Export current grid to zip"
@@ -111,11 +110,11 @@
         :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
         :selectedSet="selectedSet"
         :selectedSort="selectedSort"
-        :selectedDescending="selectedDescending.value"
+        :selectedDescending="selectedDescending"
         :backendUrl="BACKEND_URL"
+        :selectedSimilarityCharacter="selectedSimilarityCharacter"
         @select-character="handleSelectCharacter"
         @select-set="handleSelectSet"
-        @switch-to-likeness="handleSwitchToLikeness"
         @images-assigned-to-character="handleImagesAssignedToCharacter"
         @update:selected-sort="handleUpdateSelectedSort"
         @update:similarity-character="handleUpdateSimilarityCharacter"

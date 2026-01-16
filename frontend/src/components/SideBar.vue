@@ -5,7 +5,7 @@ import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
 import SearchBar from "./SearchBar.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
-import { apiClient } from '../utils/apiClient';
+import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
   selectedCharacter: { type: [String, Number, null], default: null },
@@ -15,6 +15,7 @@ const props = defineProps({
   searchQuery: { type: String, default: "" },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: false },
+  selectedSimilarityCharacter: { type: [String, Number, null], default: null },
   backendUrl: { type: String, required: true },
 });
 
@@ -23,7 +24,6 @@ const emit = defineEmits([
   "update:selected-sort",
   "update:search-query",
   "select-set",
-  "switch-to-likeness",
   "import-finished",
   "set-error",
   "set-loading",
@@ -108,7 +108,6 @@ const selectedCharacterObj = computed(() => {
 
 // --- Similarity Character Dropdown State ---
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
-const similarityCharacter = ref(null);
 
 const similarityCharacterOptions = computed(() => {
   let options = sortedCharacters.value.map((c) => ({
@@ -118,8 +117,9 @@ const similarityCharacterOptions = computed(() => {
   return options;
 });
 
-watch(similarityCharacter, (val) => {
-  emit("update:similarity-character", val);
+const similarityCharacterModel = computed({
+  get: () => props.selectedSimilarityCharacter,
+  set: (value) => emit("update:similarity-character", value ?? null),
 });
 
 const reactiveSelectedDescending = ref(props.selectedDescending);
@@ -319,7 +319,6 @@ async function fetchSidebarData() {
         );
         const data = await res.data;
         categoryCounts.value[char.id] = data.image_count;
-        
       } catch {}
     })
   );
@@ -354,7 +353,7 @@ async function fetchCharacterThumbnail(characterId) {
   try {
     const cacheBuster = Date.now();
     const thumbUrl = `/characters/${characterId}/thumbnail?cb=${cacheBuster}`;
-    const res = await apiClient.get(thumbUrl, { responseType: 'blob' });
+    const res = await apiClient.get(thumbUrl, { responseType: "blob" });
 
     // Create an object URL for the blob
     const blobUrl = URL.createObjectURL(res.data);
@@ -374,7 +373,7 @@ function toggleSidebarSection(section) {
 async function fetchSortOptions() {
   try {
     const res = await apiClient.get(`${props.backendUrl}/sort_mechanisms`);
-    
+
     const options = await res.data;
     console.log("Fetched sort options:", options);
 
@@ -685,10 +684,10 @@ watch(
       // Check if the current similarityCharacter is valid
       if (
         !sortedCharacters.value.some(
-          (char) => char.id === similarityCharacter.value
+          (char) => char.id === similarityCharacterModel.value
         )
       ) {
-        similarityCharacter.value =
+        similarityCharacterModel.value =
           sortedCharacters.value.length > 0
             ? sortedCharacters.value[0].id
             : null; // Default to the first character or null
@@ -1015,8 +1014,7 @@ defineExpose({ refreshSidebar });
 
     <transition name="fade">
       <div class="search-and-sort" v-show="sections.sort">
-        <div class="sidebar-searchbar-wrapper">
-        </div>
+        <div class="sidebar-searchbar-wrapper"></div>
         <div
           class="sidebar-searchbar-wrapper"
           style="
@@ -1053,7 +1051,7 @@ defineExpose({ refreshSidebar });
           </div>
           <v-select
             v-if="sortModel === SIMILARITY_SORT_KEY"
-            v-model="similarityCharacter"
+            v-model="similarityCharacterModel"
             :items="similarityCharacterOptions"
             class="sidebar-sort-select"
             label="Similarity to"
@@ -1084,7 +1082,7 @@ defineExpose({ refreshSidebar });
 
 .sidebar-section-header {
   position: relative;
-  font-size: 1.0rem;
+  font-size: 1rem;
   font-weight: 800;
   padding: 2px;
   margin: 2px 0 2px 0;
