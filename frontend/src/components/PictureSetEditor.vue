@@ -48,7 +48,7 @@
 
 <script setup>
 import { computed, ref, watch, nextTick } from "vue";
-import { apiClient } from '../utils/apiClient';
+import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -122,11 +122,10 @@ async function saveSetFromEditor(setData) {
       ? `${props.backendUrl}/picture_sets`
       : `${props.backendUrl}/picture_sets/${setData.id}`;
 
-    let res = null;
     if (isNew) {
-      res = await apiClient.post(url, setData);
+      await apiClient.post(url, setData);
     } else {
-      res = await apiClient.patch(url, setData);
+      await apiClient.patch(url, setData);
     }
 
     emit("close");
@@ -142,13 +141,16 @@ const downloadUrl = ref(null);
 
 async function startExport() {
   try {
-    const response = await apiClient.get(`${props.backendUrl}/pictures/export`, {
-      params: { set_id: props.set.id },
-    });
+    const response = await apiClient.get(
+      `${props.backendUrl}/pictures/export`,
+      {
+        params: { set_id: props.set.id },
+      }
+    );
     exportTaskId.value = response.data.task_id;
     pollExportStatus();
   } catch (error) {
-    alert('Failed to start export: ' + (error.message || error));
+    alert("Failed to start export: " + (error.message || error));
   }
 }
 
@@ -164,15 +166,15 @@ async function pollExportStatus() {
 
       exportStatus.value = response.data.status;
 
-      if (response.data.status === 'completed') {
+      if (response.data.status === "completed") {
         downloadUrl.value = response.data.download_url;
         clearInterval(interval);
-      } else if (response.data.status === 'failed') {
-        alert('Export failed.');
+      } else if (response.data.status === "failed") {
+        alert("Export failed.");
         clearInterval(interval);
       }
     } catch (error) {
-      console.error('Error checking export status:', error);
+      console.error("Error checking export status:", error);
       clearInterval(interval);
     }
   }, 2000);
@@ -181,26 +183,29 @@ async function pollExportStatus() {
 async function downloadExport() {
   if (downloadUrl.value) {
     try {
-      const response = await apiClient.get(`${props.backendUrl}${downloadUrl.value}`, {
-        responseType: 'blob', // Ensure binary data is handled correctly
-      });
+      const response = await apiClient.get(
+        `${props.backendUrl}${downloadUrl.value}`,
+        {
+          responseType: "blob", // Ensure binary data is handled correctly
+        }
+      );
 
-      console.log('Response headers:', response.headers);
-      console.log('Response status:', response.status);
-      console.log('Blob size:', response.data.size, 'bytes');
+      console.log("Response headers:", response.headers);
+      console.log("Response status:", response.status);
+      console.log("Blob size:", response.data.size, "bytes");
 
       // Create a downloadable link for the file
-      const blob = new Blob([response.data], { type: 'application/zip' });
-      const link = document.createElement('a');
+      const blob = new Blob([response.data], { type: "application/zip" });
+      const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = 'exported_pictures.zip'; // Default file name
+      link.download = "exported_pictures.zip"; // Default file name
       link.click();
 
       // Clean up the object URL
       URL.revokeObjectURL(link.href);
     } catch (error) {
-      console.error('Download failed:', error);
-      alert('Failed to download export: ' + (error.message || error));
+      console.error("Download failed:", error);
+      alert("Failed to download export: " + (error.message || error));
     }
   }
 }
