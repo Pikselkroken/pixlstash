@@ -56,7 +56,9 @@
           title="Toggle star ratings"
           style="margin-left: 4px"
         >
-          <v-icon :color="showStars ? 'white' : undefined">{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon>
+          <v-icon :color="showStars ? 'white' : undefined"
+            >{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon
+          >
         </v-btn>
         <v-btn
           icon
@@ -125,26 +127,26 @@
           :class="['main-content', selectedCharacter ? 'accent-border' : '']"
           style="margin-top: 0; padding-top: 0"
         >
-            <ImageGrid
-              ref="gridContainer"
-              :thumbnailSize="thumbnailSize"
-              :sidebarVisible="sidebarVisible"
-              :backendUrl="BACKEND_URL"
-              :selectedCharacter="selectedCharacter"
-              :selectedSet="selectedSet"
-              :searchQuery="searchQuery"
-              :selectedSort="selectedSort"
-              :selectedDescending="selectedDescending"
-              :similarityCharacter="selectedSimilarityCharacter"
-              :showStars="showStars"
-              :gridVersion="gridVersion"
-              :mediaTypeFilter="mediaTypeFilter"
-              :showFaceBboxes="showFaceBboxes"
-              :allPicturesId="ALL_PICTURES_ID"
-              :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-              @clear-search="handleClearSearch"
-              @refresh-sidebar="refreshSidebar"
-            />
+          <ImageGrid
+            ref="gridContainer"
+            :thumbnailSize="thumbnailSize"
+            :sidebarVisible="sidebarVisible"
+            :backendUrl="BACKEND_URL"
+            :selectedCharacter="selectedCharacter"
+            :selectedSet="selectedSet"
+            :searchQuery="searchQuery"
+            :selectedSort="selectedSort"
+            :selectedDescending="selectedDescending"
+            :similarityCharacter="selectedSimilarityCharacter"
+            :showStars="showStars"
+            :gridVersion="gridVersion"
+            :mediaTypeFilter="mediaTypeFilter"
+            :showFaceBboxes="showFaceBboxes"
+            :allPicturesId="ALL_PICTURES_ID"
+            :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+            @clear-search="handleClearSearch"
+            @refresh-sidebar="refreshSidebar"
+          />
         </div>
       </main>
     </div>
@@ -154,5 +156,32 @@
       @search="handleUpdateSearchQuery"
       @close="closeSearchOverlay"
     />
+    <v-dialog v-model="exportDialog" max-width="420">
+      <v-card>
+        <v-card-title>Export Options</v-card-title>
+        <v-card-text>
+          <v-select
+            v-model="exportCaptionMode"
+            :items="exportCaptionOptions"
+            item-title="title"
+            item-value="value"
+            label="Captions"
+            density="comfortable"
+          />
+          <v-switch
+            v-model="exportIncludeCharacterName"
+            label="Include character name"
+            color="primary"
+            density="comfortable"
+            :disabled="exportCaptionMode === 'none'"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn variant="text" @click="cancelExportZip">Cancel</v-btn>
+          <v-btn color="orange" @click="confirmExportZip">Export</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </v-app>

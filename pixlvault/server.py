@@ -21,6 +21,7 @@ from fastapi import Body, FastAPI, File, Request, UploadFile, Query, HTTPExcepti
 from fastapi import BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.exceptions import RequestValidationError
 from pillow_heif import register_heif_opener
 from typing import List
 from passlib.hash import bcrypt
@@ -111,11 +112,13 @@ class Server:
         )
 
         self.api = FastAPI(lifespan=self.lifespan)
-        # Enable CORS for frontend dev server
-        self.allow_origins = ["*"]
+        # Enable CORS for any origin (credentials require explicit origin echo)
+        self.allow_origins = []
+        self.allow_origin_regex = r".*"
         self.api.add_middleware(
             CORSMiddleware,
-            allow_origins=self.allow_origins,  # Restrict to frontend origin
+            allow_origins=self.allow_origins,
+            allow_origin_regex=self.allow_origin_regex,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -154,7 +157,9 @@ class Server:
 
     def remove_password_hash(self):
         """Remove the PASSWORD_HASH by deleting it from the server configuration."""
+        logger.info("Removing stored password hash from server configuration.")
         self.PASSWORD_HASH = None
+        self.active_session_ids = set()
         if "PASSWORD_HASH" in self._server_config:
             del self._server_config["PASSWORD_HASH"]
             with open(self._server_config_path, "w") as f:
@@ -259,6 +264,8 @@ class Server:
                 "require_ssl": False,
                 "ssl_keyfile": default_ssl_key_path,
                 "ssl_certfile": default_ssl_cert_path,
+                "cookie_samesite": "Lax",
+                "cookie_secure": False,
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -281,6 +288,10 @@ class Server:
                     server_config["ssl_keyfile"] = default_ssl_key_path
                 if "ssl_certfile" not in server_config:
                     server_config["ssl_certfile"] = default_ssl_cert_path
+                if "cookie_samesite" not in server_config:
+                    server_config["cookie_samesite"] = "Lax"
+                if "cookie_secure" not in server_config:
+                    server_config["cookie_secure"] = False
 
         return server_config
 
@@ -325,7 +336,13 @@ class Server:
             headers = {
                 "Access-Control-Allow-Credentials": "true",
             }
-            if origin in self.allow_origins:
+            if origin and (
+                origin in self.allow_origins
+                or (
+                    self.allow_origin_regex
+                    and re.match(self.allow_origin_regex, origin)
+                )
+            ):
                 headers["Access-Control-Allow-Origin"] = origin
             return JSONResponse(
                 status_code=exc.status_code,
@@ -340,11 +357,51 @@ class Server:
             headers = {
                 "Access-Control-Allow-Credentials": "true",
             }
-            if origin in self.allow_origins:
+            if origin and (
+                origin in self.allow_origins
+                or (
+                    self.allow_origin_regex
+                    and re.match(self.allow_origin_regex, origin)
+                )
+            ):
                 headers["Access-Control-Allow-Origin"] = origin
             return JSONResponse(
                 status_code=500,
                 content={"detail": "Internal Server Error"},
+                headers=headers,
+            )
+
+        @self.api.exception_handler(RequestValidationError)
+        async def validation_exception_handler(request, exc):
+            origin = request.headers.get("origin")
+            headers = {
+                "Access-Control-Allow-Credentials": "true",
+            }
+            if origin and (
+                origin in self.allow_origins
+                or (
+                    self.allow_origin_regex
+                    and re.match(self.allow_origin_regex, origin)
+                )
+            ):
+                headers["Access-Control-Allow-Origin"] = origin
+
+            detail = exc.errors()
+            for err in detail:
+                if err.get("type") == "string_too_short" and "password" in (
+                    err.get("loc") or []
+                ):
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "detail": "Password must be at least 8 characters long."
+                        },
+                        headers=headers,
+                    )
+
+            return JSONResponse(
+                status_code=422,
+                content={"detail": detail},
                 headers=headers,
             )
 
@@ -1659,7 +1716,7 @@ class Server:
             }
 
         @self.api.post("/pictures/thumbnails")
-        async def get_thumbnails(payload: dict = Body(...)):
+        async def get_thumbnails(request: Request, payload: dict = Body(...)):
             ids = payload.get("ids", [])
             if not isinstance(ids, list):
                 raise HTTPException(status_code=400, detail="'ids' must be a list")
@@ -1724,8 +1781,16 @@ class Server:
                     )
                     results[pic.id] = {"thumbnail": None, "faces": []}
             response = JSONResponse(results)
-            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
+            origin = request.headers.get("origin")
+            if origin and (
+                origin in self.allow_origins
+                or (
+                    self.allow_origin_regex
+                    and re.match(self.allow_origin_regex, origin)
+                )
+            ):
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
             return response
 
         @self.api.get("/pictures/export")
@@ -1735,6 +1800,8 @@ class Server:
             query: str = Query(None),
             set_id: int = Query(None),
             threshold: float = Query(0.0),
+            caption_mode: str = Query("description"),
+            include_character_name: bool = Query(False),
         ):
             """
             Export pictures matching the filters as a zip file.
@@ -1751,17 +1818,36 @@ class Server:
 
             def generate_zip():
                 try:
+                    caption_mode_normalized = (caption_mode or "description").lower()
+                    if caption_mode_normalized not in {"none", "description", "tags"}:
+                        caption_mode_normalized = "description"
+                    include_character_name_enabled = (
+                        bool(include_character_name)
+                        and caption_mode_normalized != "none"
+                    )
+
                     picture_ids = request.query_params.getlist("id")
                     query_params = dict(request.query_params)
                     query_params.pop("query", None)
                     query_params.pop("set_id", None)
                     query_params.pop("threshold", None)
+                    query_params.pop("caption_mode", None)
+                    query_params.pop("include_character_name", None)
                     character_id = query_params.pop("character_id", None)
+
+                    select_fields = Picture.metadata_fields()
+                    if (
+                        caption_mode_normalized == "tags"
+                        or include_character_name_enabled
+                    ):
+                        select_fields = select_fields | {"tags", "characters"}
 
                     pics = []
 
                     if picture_ids:
-                        pics = self.vault.db.run_task(Picture.find, id=picture_ids)
+                        pics = self.vault.db.run_task(
+                            Picture.find, id=picture_ids, select_fields=select_fields
+                        )
                     elif set_id is not None:
                         logger.info("Exporting pictures set {} ".format(set_id))
 
@@ -1774,7 +1860,11 @@ class Server:
                             picture_ids = [m.picture_id for m in members]
                             if not picture_ids:
                                 return []
-                            return Picture.find(session, id=picture_ids)
+                            return Picture.find(
+                                session,
+                                id=picture_ids,
+                                select_fields=select_fields,
+                            )
 
                         pics = self.vault.db.run_task(fetch_members, set_id)
                     elif character_id is not None:
@@ -1791,7 +1881,11 @@ class Server:
                             picture_ids = list({face.picture_id for face in faces})
                             if not picture_ids:
                                 return []
-                            return Picture.find(session, id=picture_ids)
+                            return Picture.find(
+                                session,
+                                id=picture_ids,
+                                select_fields=select_fields,
+                            )
 
                         pics = self.vault.db.run_task(fetch_by_character, character_id)
                     elif query:
@@ -1812,7 +1906,7 @@ class Server:
                                     offset=0,
                                     limit=sys.maxsize,
                                     threshold=threshold,
-                                    select_fields=Picture.metadata_fields(),
+                                    select_fields=select_fields,
                                 )
                             ]
 
@@ -1827,7 +1921,7 @@ class Server:
                             Picture.find,
                             offset=0,
                             limit=sys.maxsize,
-                            select_fields=Picture.metadata_fields(),
+                            select_fields=select_fields,
                             **query_params,
                         )
 
@@ -1875,9 +1969,52 @@ class Server:
                                 ext = os.path.splitext(pic.file_path)[1]
                                 arcname = f"image_{idx:05d}{ext}"
                                 zip_file.write(pic.file_path, arcname=arcname)
-                                zip_file.writestr(
-                                    f"image_{idx:05d}.txt", pic.description or ""
-                                )
+                                caption_text = None
+                                if caption_mode_normalized == "description":
+                                    caption_text = pic.description or ""
+                                elif caption_mode_normalized == "tags":
+                                    tags = []
+                                    for tag in getattr(pic, "tags", []) or []:
+                                        tag_value = getattr(tag, "tag", None)
+                                        if tag_value:
+                                            tags.append(tag_value)
+                                    caption_text = ", ".join(tags)
+
+                                if include_character_name_enabled:
+                                    character_names = []
+                                    for character in (
+                                        getattr(pic, "characters", []) or []
+                                    ):
+                                        name_value = getattr(character, "name", None)
+                                        if name_value:
+                                            character_names.append(name_value)
+                                    if character_names:
+                                        if caption_mode_normalized == "tags":
+                                            prefix = ", ".join(character_names)
+                                            if caption_text:
+                                                caption_text = (
+                                                    f"{prefix}, {caption_text}"
+                                                )
+                                            else:
+                                                caption_text = prefix
+                                        elif caption_mode_normalized == "description":
+                                            prefix = "A picture of " + ", ".join(
+                                                character_names
+                                            )
+                                            if caption_text:
+                                                caption_text = (
+                                                    f"{prefix}. {caption_text}"
+                                                )
+                                            else:
+                                                caption_text = prefix
+
+                                if (
+                                    caption_mode_normalized != "none"
+                                    and caption_text is not None
+                                ):
+                                    zip_file.writestr(
+                                        f"image_{idx:05d}.txt", caption_text
+                                    )
                                 self.export_tasks[task_id]["processed"] += 1
 
                     zip_size = os.path.getsize(zip_path)
@@ -1975,7 +2112,7 @@ class Server:
             return [Picture.serialize_with_likeness(r) for r in results]
 
         @self.api.get("/pictures/{id}.{ext}")
-        async def get_picture(id: str, ext: str):
+        async def get_picture(request: Request, id: str, ext: str):
             if not isinstance(id, str):
                 logger.error(f"Invalid id type: {type(id)} value: {id}")
                 raise HTTPException(status_code=400, detail="Invalid picture id type")
@@ -2010,8 +2147,16 @@ class Server:
 
             # Return the image file with CORS headers
             response = FileResponse(pic.file_path)
-            response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
+            origin = request.headers.get("origin")
+            if origin and (
+                origin in self.allow_origins
+                or (
+                    self.allow_origin_regex
+                    and re.match(self.allow_origin_regex, origin)
+                )
+            ):
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
             return response
 
         @self.api.get("/pictures/{id}/metadata")
@@ -2587,7 +2732,13 @@ class Server:
                     headers = {
                         "Access-Control-Allow-Credentials": "true",
                     }
-                    if origin in self.allow_origins:
+                    if origin and (
+                        origin in self.allow_origins
+                        or (
+                            self.allow_origin_regex
+                            and re.match(self.allow_origin_regex, origin)
+                        )
+                    ):
                         headers["Access-Control-Allow-Origin"] = origin
 
                     return JSONResponse(
@@ -2631,12 +2782,18 @@ class Server:
             self.active_session_ids.add(session_id)
 
             # Set the session ID as a cookie
+            cookie_samesite = self._server_config.get("cookie_samesite", "Lax")
+            cookie_secure = self._server_config.get("cookie_secure", False)
+            if cookie_samesite == "None" and not cookie_secure:
+                logger.warning(
+                    "cookie_samesite=None requires cookie_secure=True for cross-site cookies to work in browsers."
+                )
             response.set_cookie(
                 key="session_id",
                 value=session_id,
                 httponly=True,
-                samesite="Lax",
-                secure=False,
+                samesite=cookie_samesite,
+                secure=bool(cookie_secure),
             )
             return response
 

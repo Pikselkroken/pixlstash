@@ -14,3 +14,4 @@ cpu
 frontend/.vite
 tmp
 cuda
+node_modules

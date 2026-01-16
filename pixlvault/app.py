@@ -73,12 +73,11 @@ def main():
     else:
         setup_logging(log_level=log_level)
 
+    server = Server(config_path=args.config, server_config_path=args.server_config)
     if args.remove_password:
-        server = Server(config_path=args.config, server_config_path=args.server_config)
         server.remove_password_hash()
         # Continue running the server after removing the password hash
 
-    server = Server(config_path=args.config, server_config_path=args.server_config)
     server.vault.start_workers()
     server.run()
 

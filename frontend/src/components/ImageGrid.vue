@@ -317,10 +317,9 @@
             >
               Likeness: {{ img.character_likeness.toFixed(2) }}
             </div>
-             <div
+            <div
               v-if="
-                typeof props.searchQuery &&
-                img.likeness_score !== undefined
+                typeof props.searchQuery && img.likeness_score !== undefined
               "
               class="likeness-score"
             >
@@ -397,7 +396,7 @@ import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
 import { useSearchOverlay } from "../utils/useSearchOverlay";
-import { apiClient } from '../utils/apiClient';
+import { apiClient } from "../utils/apiClient";
 import { debounce, update } from "lodash-es";
 
 const emit = defineEmits(["open-overlay", "refresh-sidebar", "clear-search"]);
@@ -458,8 +457,14 @@ function triggerFaceOverlayRedraw() {
 }
 
 onMounted(() => {
-  console.log("[ImageGrid.vue] Mounted with selectedDescending:", props.selectedDescending);
-  console.log("[ImageGrid.vue] Initial gridImagesToRender:", gridImagesToRender.value);
+  console.log(
+    "[ImageGrid.vue] Mounted with selectedDescending:",
+    props.selectedDescending
+  );
+  console.log(
+    "[ImageGrid.vue] Initial gridImagesToRender:",
+    gridImagesToRender.value
+  );
   console.log("[ImageGrid.vue] Initial allGridImages:", allGridImages.value);
   window.addEventListener("resize", triggerFaceOverlayRedraw);
 });
@@ -803,7 +808,8 @@ function primeMultiSelectionZip(ids) {
   }
   const controller = new AbortController();
   multiZipAbortController = controller;
-  apiClient.get(url, { signal: controller.signal })
+  apiClient
+    .get(url, { signal: controller.signal })
     .then((res) => res.data.blob()) // Access the blob from res.data
     .then((blob) => {
       if (multiZipState.key !== signature) return;
@@ -998,9 +1004,10 @@ function removeFromGroup() {
     props.selectedCharacter !== props.allPicturesId &&
     props.selectedCharacter !== props.unassignedPicturesId
   ) {
-    apiClient.delete(`${backendUrl}/characters/${props.selectedCharacter}/faces`, {
-      data: { picture_ids: selectedImageIds.value },
-    })
+    apiClient
+      .delete(`${backendUrl}/characters/${props.selectedCharacter}/faces`, {
+        data: { picture_ids: selectedImageIds.value },
+      })
       .catch((err) => {
         alert(`Error removing images from character: ${err.message}`);
       })
@@ -1028,8 +1035,11 @@ function removeFromGroup() {
   ) {
     Promise.all(
       selectedImageIds.value.map((id) =>
-        apiClient.delete(`${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`)
-   
+        apiClient
+          .delete(
+            `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`
+          )
+
           .catch((err) => {
             alert(`Error removing image ${id} from set: ${err.message}`);
           })
@@ -1071,10 +1081,9 @@ function deleteSelected() {
   const backendUrl = props.backendUrl;
   Promise.all(
     selectedImageIds.value.map((id) =>
-      apiClient.delete(`${backendUrl}/pictures/${id}`)
-        .catch((err) => {
-          alert(`Error deleting image ${id}: ${err.message}`);
-        })
+      apiClient.delete(`${backendUrl}/pictures/${id}`).catch((err) => {
+        alert(`Error deleting image ${id}: ${err.message}`);
+      })
     )
   ).then(() => {
     // Remove deleted images from grid and clear selection
@@ -1108,7 +1117,9 @@ const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
 watch(
   () => props.gridVersion,
   () => {
-    console.log("[ImageGrid.vue] Grid version changed, refreshing all thumbnails.");
+    console.log(
+      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails."
+    );
     loadedRanges.value = [];
     allGridImages.value = [];
     selectedImageIds.value = [];
@@ -1206,7 +1217,9 @@ watch(
 // --- Overlay ---
 async function fetchImageInfo(imageId) {
   try {
-    const res = await apiClient.get(`${props.backendUrl}/pictures/${imageId}/metadata`);
+    const res = await apiClient.get(
+      `${props.backendUrl}/pictures/${imageId}/metadata`
+    );
     const data = await res.data;
     return data;
   } catch (e) {
@@ -1301,9 +1314,12 @@ async function applyScore(img, newScore) {
       newScore,
       "}"
     );
-    const res = await apiClient.patch(`${props.backendUrl}/pictures/${imageId}`, {
-      score: newScore,
-    });
+    const res = await apiClient.patch(
+      `${props.backendUrl}/pictures/${imageId}`,
+      {
+        score: newScore,
+      }
+    );
 
     // Update score in allGridImages
     const gridImg = allGridImages.value.find((i) => i.id === imageId);
@@ -1581,7 +1597,9 @@ watch(
     () => props.selectedSort,
   ],
   () => {
-    console.log("[ImageGrid.vue] Filters changed. Resetting state and fetching total image count.");
+    console.log(
+      "[ImageGrid.vue] Filters changed. Resetting state and fetching total image count."
+    );
     loadedRanges.value = [];
     allGridImages.value = [];
     selectedImageIds.value = [];
@@ -1594,7 +1612,9 @@ watch(
 watch(
   () => props.gridVersion,
   () => {
-    console.log("[ImageGrid.vue] Grid version changed, refreshing all thumbnails.");
+    console.log(
+      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails."
+    );
     loadedRanges.value = [];
     allGridImages.value = [];
     selectedImageIds.value = [];
@@ -1604,7 +1624,9 @@ watch(
 );
 
 watch([() => props.mediaTypeFilter], () => {
-   console.log("[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count.");
+  console.log(
+    "[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count."
+  );
   // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
   loadedRanges.value = [];
   selectedImageIds.value = [];
@@ -1675,7 +1697,6 @@ watch(allGridImages, (newVal, oldVal) => {
   });
 });
 
-
 const gridImagesToRender = computed(() => {
   if (!allGridImages.value) {
     console.warn("allGridImages is undefined");
@@ -1711,7 +1732,6 @@ watch(gridImagesToRender, (newVal, oldVal) => {
     newValue: newVal,
   });
 });
-
 
 // Batch fetch metadata (including thumbnail) for visible range
 async function fetchThumbnailsBatch(start, end) {
@@ -1762,8 +1782,9 @@ async function fetchThumbnailsBatch(start, end) {
     }));
     // Now fetch thumbnails for these IDs
     if (ids.length) {
-      const thumbRes = await apiClient.post(`${props.backendUrl}/pictures/thumbnails`, 
-        JSON.stringify({ ids }),
+      const thumbRes = await apiClient.post(
+        `${props.backendUrl}/pictures/thumbnails`,
+        JSON.stringify({ ids })
       );
       const thumbData = await thumbRes.data;
       for (const gridImg of gridImages) {
@@ -1871,10 +1892,13 @@ function handleThumbnailNativeDragStart(img, event) {
   const fullUrl = getImageDownloadUrl(img);
   if (!fullUrl) return;
   promoteImageForNativeDrag(target, fullUrl);
-  event.dataTransfer.setData("application/json", JSON.stringify({
-    type: "image-ids",
-    imageIds: [img.id],
-  }));
+  event.dataTransfer.setData(
+    "application/json",
+    JSON.stringify({
+      type: "image-ids",
+      imageIds: [img.id],
+    })
+  );
 }
 
 function handleThumbnailNativeDragEnd(event) {
@@ -1892,10 +1916,13 @@ function handleVideoDragStart(img, event) {
     setupMultiExportDrag(event, selectionIds);
     return;
   }
-  event.dataTransfer.setData("application/json", JSON.stringify({
-    type: "image-ids",
-    imageIds: [img.id],
-  }));
+  event.dataTransfer.setData(
+    "application/json",
+    JSON.stringify({
+      type: "image-ids",
+      imageIds: [img.id],
+    })
+  );
 }
 
 function handleVideoDragEnd() {
@@ -1997,7 +2024,8 @@ async function removeTagFromImage(imageId, tag) {
     return;
   }
 
-  apiClient.delete(`${props.backendUrl}/pictures/${imageId}/tags/${tag}`)
+  apiClient
+    .delete(`${props.backendUrl}/pictures/${imageId}/tags/${tag}`)
 
     .catch((error) => {
       console.error("Error removing tag:", error);
@@ -2129,11 +2157,26 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function exportCurrentViewToZip() {
+async function exportCurrentViewToZip(options = {}) {
+  const captionMode = options.captionMode || "description";
+  const includeCharacterName = options.includeCharacterName !== false;
   let url = `${props.backendUrl}/pictures/export`;
   const params = buildPictureIdsQueryParams();
+  const extraParams = new URLSearchParams();
+  if (captionMode) {
+    extraParams.append("caption_mode", captionMode);
+  }
+  if (includeCharacterName) {
+    extraParams.append("include_character_name", "true");
+  }
+  const extraParamString = extraParams.toString();
   if (params) {
     url += `?${params}`;
+    if (extraParamString) {
+      url += `&${extraParamString}`;
+    }
+  } else if (extraParamString) {
+    url += `?${extraParamString}`;
   }
 
   try {
@@ -2149,7 +2192,7 @@ async function exportCurrentViewToZip() {
       throw new Error("Missing task_id from export response.");
     }
 
-     let downloadUrl = null;
+    let downloadUrl = null;
     const maxAttempts = 600;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const statusRes = await apiClient.get(
@@ -2394,7 +2437,7 @@ function clearSearchQuery() {
   background: rgba(255, 255, 255, 1);
 }
 .star-overlay .v-icon {
-  font-size:  20px !important;
+  font-size: 20px !important;
   width: 20px;
   height: 20px;
 }

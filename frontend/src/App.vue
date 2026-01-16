@@ -55,6 +55,16 @@ function refreshGridVersion() {
   gridVersion.value++;
 }
 
+// --- Export Dialog State ---
+const exportDialog = ref(false);
+const exportCaptionMode = ref("description");
+const exportIncludeCharacterName = ref(true);
+const exportCaptionOptions = [
+  { title: "No Captions", value: "none" },
+  { title: "Description", value: "description" },
+  { title: "Tags", value: "tags" },
+];
+
 // --- Config Dialog State ---
 const settingsDialog = ref(false);
 const config = reactive({
@@ -171,11 +181,14 @@ async function fetchConfig() {
       thumbnailSize.value = thumbnailValue;
       await nextTick();
     }
-    if (typeof res.data.show_stars === "boolean") showStars.value = res.data.show_stars;
+    if (typeof res.data.show_stars === "boolean")
+      showStars.value = res.data.show_stars;
     config.sort_order = sortValue || selectedSort.value;
     config.thumbnail_size = thumbnailValue || thumbnailSize.value;
     config.show_stars =
-      typeof res.data.show_stars === "boolean" ? res.data.show_stars : showStars.value;
+      typeof res.data.show_stars === "boolean"
+        ? res.data.show_stars
+        : showStars.value;
     config.openai_host = res.data.openai_host || "localhost";
     config.openai_port = res.data.openai_port || 8000;
     config.openai_model = res.data.openai_model || "";
@@ -308,13 +321,24 @@ function handleImagesUploaded() {
 
 // --- Export to Zip ---
 function handleExportZip() {
-  // Forward export event to ImageGrid via ref
-  console.log("Exporting current view to zip...");
   if (currentView.value !== "grid") {
     console.warn("Export to zip is only available in grid view.");
     return;
   }
-  gridContainer.value?.exportCurrentViewToZip();
+  exportDialog.value = true;
+}
+
+function cancelExportZip() {
+  exportDialog.value = false;
+}
+
+function confirmExportZip() {
+  console.log("Exporting current view to zip...");
+  gridContainer.value?.exportCurrentViewToZip({
+    captionMode: exportCaptionMode.value,
+    includeCharacterName: exportIncludeCharacterName.value,
+  });
+  exportDialog.value = false;
 }
 
 // --- Search Overlay ---
