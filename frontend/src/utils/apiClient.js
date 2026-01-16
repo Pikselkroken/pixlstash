@@ -57,6 +57,17 @@ async function checkSession() {
   }
 }
 
+// Check if registration is required
+async function checkLoginStatus() {
+  try {
+    const response = await apiClient.get('/login');
+    return response.data;
+  } catch (error) {
+    console.error('Login status check failed:', error);
+    throw error;
+  }
+}
+
 // Interceptor to handle 401 errors globally
 apiClient.interceptors.response.use(
   (response) => response,
@@ -69,4 +80,12 @@ apiClient.interceptors.response.use(
   }
 );
 
-export { apiClient, checkSession, isAuthenticated, login, logout, resolvedBaseUrl as API_BASE_URL };
+export {
+  apiClient,
+  checkLoginStatus,
+  checkSession,
+  isAuthenticated,
+  login,
+  logout,
+  resolvedBaseUrl as API_BASE_URL,
+};

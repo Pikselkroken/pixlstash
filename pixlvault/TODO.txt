@@ -1,3 +1,5 @@
+* Fix login screen
+* Move user settings into database
 * Re-introduce stacking
 * Automatic assignment to characters
 * Clean up code
@@ -5,4 +7,8 @@
 * Package better
 * Make it work right on mobile screens
 * Fix selection and clicking
-* token authentication for API Uses
+* Token authentication for API Uses
+
+Eventually:
+* Multi-user
+* Backup system
