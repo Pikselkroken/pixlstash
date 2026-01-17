@@ -275,13 +275,11 @@
                   :style="{
                     width: '100%',
                     height: '100%',
-                    background: '#e0e0e0',
                     borderRadius: '8px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontSize: '1.5em',
-                    color: '#aaa',
                     position: 'absolute',
                     top: 0,
                     left: 0,
