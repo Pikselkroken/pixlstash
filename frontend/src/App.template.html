@@ -42,7 +42,7 @@
         >
         <v-btn
           icon
-          color="green"
+          :color="searchOverlayVisible ? 'green' : 'secondary'"
           @click="openSearchOverlay"
           title="Search"
           style="margin-left: 4px"
@@ -51,7 +51,7 @@
         </v-btn>
         <v-btn
           icon
-          :color="showStars ? 'orange' : 'grey'"
+          :color="showStars ? 'blue' : 'secondary'"
           @click="showStars = !showStars"
           title="Toggle star ratings"
           style="margin-left: 4px"
@@ -62,7 +62,7 @@
         </v-btn>
         <v-btn
           icon
-          :color="showFaceBboxes ? '#ff5252' : 'grey'"
+          :color="showFaceBboxes ? 'red' : 'secondary'"
           @click="showFaceBboxes = !showFaceBboxes"
           title="Toggle face bounding boxes"
           class="face-bbox-toggle-btn"
@@ -93,6 +93,7 @@
         </v-btn-toggle>
         <v-btn
           icon
+          :color="exportDialog ? 'accent' : 'secondary'"
           @click="handleExportZip"
           title="Export current grid to zip"
           style="margin-left: 4px"
