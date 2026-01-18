@@ -1,6 +1,5 @@
-import json
 
-from sqlmodel import Column, SQLModel, Field, Relationship, select, String
+from sqlmodel import SQLModel, Field, Relationship, select
 from typing import Optional, List, TYPE_CHECKING
 
 from .chat import Conversation

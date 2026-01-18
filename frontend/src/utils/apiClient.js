@@ -20,9 +20,9 @@ const apiClient = axios.create({
 });
 
 // Login function
-async function login(password) {
+async function login(username, password) {
   try {
-    const response = await apiClient.post('/login', { password });
+    const response = await apiClient.post('/login', { username, password });
     isAuthenticated.value = true; // Update authentication state
     console.log('Login successful:', response.data);
     return response.data; // Return response data for further use if needed

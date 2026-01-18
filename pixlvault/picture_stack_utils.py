@@ -3,7 +3,7 @@ from pixlvault.db_models import Picture
 from pixlvault.picture_utils import PictureUtils
 
 
-def picture_order_key(pic: Picture):
+def picture_order_key(pic: Picture, image_root: str = None):
     """
     Key for ordering pictures in a likeness stack:
     - Higher resolution (width*height) first
@@ -11,7 +11,8 @@ def picture_order_key(pic: Picture):
     - Lower noise_level first
     """
     if not pic.height or not pic.width:
-        pic.width, pic.height, _ = PictureUtils.load_metadata(pic.file_path)
+        file_path = PictureUtils.resolve_picture_path(image_root, pic.file_path)
+        pic.width, pic.height, _ = PictureUtils.load_metadata(file_path)
     resolution = (pic.width * pic.height) if pic.width and pic.height else 0
 
     quality = pic.quality
@@ -21,11 +22,13 @@ def picture_order_key(pic: Picture):
     return (-resolution, -sharp, noise)
 
 
-def order_stack_pictures(pictures: List[Picture]) -> List[Picture]:
+def order_stack_pictures(
+    pictures: List[Picture], image_root: str = None
+) -> List[Picture]:
     """
     Return pictures sorted by best-to-worst (resolution, sharpness, noise).
     """
-    return sorted(pictures, key=picture_order_key)
+    return sorted(pictures, key=lambda pic: picture_order_key(pic, image_root))
 
 
 def combined_picture_face_likeness(pic_a, pic_b, face_likeness_lookup):

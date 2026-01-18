@@ -112,6 +112,7 @@ def init_database(dbapi_conn, conn_record):
 class VaultDatabase:
     def __init__(self, db_path: str):
         self._db_path = db_path
+        self.image_root = os.path.dirname(self._db_path)
         db_exists = os.path.exists(self._db_path)
         logger.info(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 

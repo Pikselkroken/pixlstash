@@ -908,11 +908,21 @@ defineExpose({ refreshSidebar });
                       >mdi-layers</v-icon
                     >
                     <span class="sidebar-list-label">Reference Pictures</span>
+                    <span class="sidebar-list-count">
+                      {{
+                        referencePictureSetsByCharacter[char.id]
+                          ?.picture_count ?? ""
+                      }}
+                    </span>
                   </div>
                 </template>
                 <template v-else>
                   <span
-                    style="color: #888; font-size: 0.9em; padding-left: 32px"
+                    style="
+                      color: rgb(var(--v-theme-on-accent));
+                      font-size: 0.9em;
+                      padding-left: 32px;
+                    "
                     >No reference set found for this character</span
                   >
                 </template>
@@ -1311,8 +1321,8 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-reference-set.active {
-  background: #f0f0f055;
-  color: #fff;
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
   position: relative;
   padding-left: 40px;
 }

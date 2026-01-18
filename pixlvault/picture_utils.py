@@ -17,6 +17,24 @@ logger = get_logger(__name__)
 
 class PictureUtils:
     @staticmethod
+    def resolve_picture_path(
+        image_root: Optional[str], file_path: Optional[str]
+    ) -> Optional[str]:
+        """
+        Resolve a stored picture path to an absolute file path.
+
+        If file_path is already absolute, it is returned unchanged.
+        If file_path is relative, it is joined with image_root.
+        """
+        if not file_path:
+            return None
+        if os.path.isabs(file_path):
+            return file_path
+        if not image_root:
+            return file_path
+        return os.path.join(image_root, file_path)
+
+    @staticmethod
     def is_video_file(file_path: str) -> bool:
         """
         Returns True if the file is a supported video format.
@@ -439,24 +457,25 @@ class PictureUtils:
         if not picture_uuid:
             picture_uuid = str(uuid.uuid4()) + f".{img_format.lower()}"
 
-        file_path = os.path.join(image_root_path, picture_uuid)
-        if os.path.exists(file_path):
-            size_bytes = os.path.getsize(file_path)
+        file_name = os.path.basename(picture_uuid)
+        full_path = os.path.join(image_root_path, file_name)
+        if os.path.exists(full_path):
+            size_bytes = os.path.getsize(full_path)
         else:
             os.makedirs(image_root_path, exist_ok=True)
-            with open(file_path, "wb") as f:
+            with open(full_path, "wb") as f:
                 f.write(image_bytes)
             size_bytes = len(image_bytes)
 
         if not created_at:
             created_at = PictureUtils.extract_created_at_from_metadata(
-                image_bytes, fallback_file_path=file_path
+                image_bytes, fallback_file_path=full_path
             )
         if not created_at:
             created_at = datetime.now(timezone.utc)
 
         pic = Picture(
-            file_path=file_path,
+            file_path=file_name,
             format=img_format,
             width=width,
             height=height,

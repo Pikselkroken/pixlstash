@@ -15,12 +15,22 @@
       }}
     </p>
     <form @submit.prevent="handleLogin">
+      <div class="input-field">
+        <input
+          class="text-input"
+          v-model="username"
+          type="text"
+          placeholder="Enter username"
+          autocomplete="username"
+        />
+      </div>
       <div class="password-field">
         <input
           class="password-input"
           v-model="password"
           :type="showPassword ? 'text' : 'password'"
           placeholder="Enter password"
+          autocomplete="current-password"
         />
         <button
           class="password-toggle"
@@ -52,6 +62,7 @@
 import { onMounted, ref } from "vue";
 import { checkLoginStatus, login } from "../utils/apiClient";
 
+const username = ref("");
 const password = ref("");
 const error = ref(null);
 const needsRegistration = ref(false);
@@ -70,7 +81,7 @@ onMounted(async () => {
 async function handleLogin() {
   try {
     error.value = null;
-    response = await login(password.value); // Call the centralized login function
+    await login(username.value, password.value); // Call the centralized login function
   } catch (err) {
     console.error("Login failed:", err);
     error.value = err.response?.data?.detail || err.message || "Login failed.";
@@ -104,6 +115,7 @@ async function handleLogin() {
   color: #999;
   text-align: center;
 }
+.text-input,
 .password-input {
   padding: 0.5rem 0.5rem 0.5rem 0.5rem;
   font-size: 1rem;
@@ -112,6 +124,11 @@ async function handleLogin() {
   background-color: #222;
   color: #eee;
   width: 100%;
+}
+
+.input-field {
+  display: flex;
+  align-items: center;
 }
 
 .password-field {
