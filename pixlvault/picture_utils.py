@@ -581,6 +581,7 @@ class PictureUtils:
         try:
             img = Image.open(file_path)
         except Exception:
+            logger.error(f"Failed to open image for cropping: {file_path}")
             img = None
         # If not an image, try as video (extract first frame)
         if img is None:

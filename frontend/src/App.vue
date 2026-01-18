@@ -29,6 +29,7 @@ const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
 const selectedSort = ref("");
 const selectedDescending = ref(false);
+const stackThreshold = ref("0.0");
 
 // --- Search & Filtering State ---
 const searchQuery = ref("");
@@ -110,6 +111,10 @@ async function handleUpdateSelectedSort({ sort, descending }) {
   selectedSort.value = sort;
   selectedDescending.value = descending;
   closeSidebarIfMobile();
+}
+
+function handleUpdateStackThreshold(value) {
+  stackThreshold.value = value;
 }
 
 const selectedSimilarityCharacter = ref(null);

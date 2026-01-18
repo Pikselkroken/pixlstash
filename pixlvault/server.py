@@ -40,13 +40,9 @@ from pixlvault.db_models import (
     User,
 )
 
-from pixlvault.db_models import PictureLikeness, FaceLikeness
+from pixlvault.db_models import PictureLikeness
 from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
 from pixlvault.db_models.tag import Tag
-from pixlvault.picture_stack_utils import (
-    order_stack_pictures,
-    combined_picture_face_likeness,
-)
 from pixlvault.database import DBPriority
 from pixlvault.event_types import EventType
 from pixlvault.utils import safe_model_dict
@@ -1712,45 +1708,104 @@ class Server:
         # Picture endpoints            #
         ################################
         @self.api.get("/pictures/stacks")
-        async def get_picture_stacks(threshold: float = 0.0, min_group_size: int = 2):
+        async def get_picture_stacks(
+            threshold: float = 0.0,
+            min_group_size: int = 2,
+            set_id: int = Query(None),
+            character_id: str = Query(None),
+            format: List[str] = Query(None),
+        ):
             """
-            Return groups (stacks) of near-identical pictures based on likeness threshold.
-            Each stack contains picture dicts and preselection info.
+            Return pictures with stack_index assigned based on likeness clustering.
+            Output matches /pictures endpoint plus stack_index for each image.
             """
+
+            candidate_ids = None
+
+            if set_id is not None:
+
+                def fetch_set_ids(session, set_id):
+                    members = session.exec(
+                        select(PictureSetMember).where(
+                            PictureSetMember.set_id == set_id
+                        )
+                    ).all()
+                    return [m.picture_id for m in members]
+
+                candidate_ids = set(
+                    self.vault.db.run_immediate_read_task(fetch_set_ids, set_id)
+                )
+            elif character_id is not None:
+                if character_id == "UNASSIGNED":
+
+                    def fetch_unassigned_ids(session):
+                        query = select(Picture.id)
+                        unassigned_condition = ~exists(
+                            select(Face.id).where(
+                                Face.picture_id == Picture.id,
+                                Face.character_id.is_not(None),
+                            )
+                        )
+                        query = query.where(unassigned_condition)
+                        return list(session.exec(query).all())
+
+                    candidate_ids = set(
+                        self.vault.db.run_immediate_read_task(fetch_unassigned_ids)
+                    )
+                elif character_id == "ALL" or character_id == "":
+                    candidate_ids = None
+                elif character_id.isdigit():
+
+                    def fetch_character_ids(session, character_id):
+                        faces = session.exec(
+                            select(Face).where(Face.character_id == character_id)
+                        ).all()
+                        return list({face.picture_id for face in faces})
+
+                    candidate_ids = set(
+                        self.vault.db.run_immediate_read_task(
+                            fetch_character_ids, int(character_id)
+                        )
+                    )
+
+            if format:
+
+                def fetch_format_ids(session, format):
+                    rows = session.exec(
+                        select(Picture.id).where(Picture.format.in_(format))
+                    ).all()
+                    return list(rows)
+
+                format_ids = set(
+                    self.vault.db.run_immediate_read_task(fetch_format_ids, format)
+                )
+                candidate_ids = (
+                    format_ids if candidate_ids is None else candidate_ids & format_ids
+                )
 
             def fetch_likeness(session):
-                # Query all likeness pairs above threshold
-                rows = session.exec(select(PictureLikeness)).all()
-                logger.info(f"Fetched {len(rows)} picture likeness rows from DB.")
-                return {
-                    (row.picture_id_a, row.picture_id_b): row.likeness for row in rows
-                }
+                rows = session.exec(
+                    select(PictureLikeness).where(PictureLikeness.likeness >= threshold)
+                ).all()
+                logger.info(
+                    "Fetched %d picture likeness rows above threshold=%s",
+                    len(rows),
+                    threshold,
+                )
+                return rows
 
-            def fetch_face_likeness(session):
-                # Fetch all face likeness scores
-                rows = session.exec(select(FaceLikeness)).all()
-                logger.info(f"Fetched {len(rows)} face likeness rows from DB.")
-                return {(row.face_id_a, row.face_id_b): row.likeness for row in rows}
-
-            picture_likeness_map = self.vault.db.run_immediate_read_task(fetch_likeness)
-            logger.info(
-                f"Picture likeness map keys: {list(picture_likeness_map.keys())[:10]} (showing up to 10)"
-            )
-            face_likeness_map = self.vault.db.run_immediate_read_task(
-                fetch_face_likeness
-            )
-            logger.info(
-                f"Face likeness map keys: {list(face_likeness_map.keys())[:10]} (showing up to 10)"
-            )
+            rows = self.vault.db.run_immediate_read_task(fetch_likeness)
 
             neighbors = defaultdict(set)
-            for picture_id_a, picture_id_b in picture_likeness_map.keys():
-                neighbors[picture_id_a].add(picture_id_b)
-                neighbors[picture_id_b].add(picture_id_a)
-
-            logger.info(
-                f"Neighbors dict: {dict(list(neighbors.items())[:5])} (showing up to 5)"
-            )
+            for row in rows:
+                if candidate_ids is not None:
+                    if (
+                        row.picture_id_a not in candidate_ids
+                        or row.picture_id_b not in candidate_ids
+                    ):
+                        continue
+                neighbors[row.picture_id_a].add(row.picture_id_b)
+                neighbors[row.picture_id_b].add(row.picture_id_a)
 
             # Find connected components (groups)
             visited = set()
@@ -1772,60 +1827,38 @@ class Server:
                 if len(stack) >= min_group_size:
                     groups.append(list(stack))
 
-            logger.info(
-                f"Found {len(groups)} groups (stacks) with min_group_size={min_group_size}."
-            )
-            if groups:
-                logger.info(f"First group: {groups[0]}")
+            groups = sorted(groups, key=lambda g: min(g))
+            stack_index_map = {}
+            ordered_ids = []
+            for idx, group in enumerate(groups):
+                for pic_id in sorted(group):
+                    stack_index_map[pic_id] = idx
+                    ordered_ids.append(pic_id)
 
-            # For each group, fetch picture info and select best
+            if not ordered_ids:
+                return []
+
             def fetch_pictures(session, ids):
                 return Picture.find(
                     session,
                     id=ids,
-                    select_fields=["faces", "quality", "height", "width"],
+                    select_fields=Picture.metadata_fields(),
                 )
 
-            def face_likeness_lookup(face_a, face_b):
-                # Try both (a, b) and (b, a) since order may vary
-                return face_likeness_map.get(
-                    (face_a.id, face_b.id)
-                ) or face_likeness_map.get((face_b.id, face_a.id))
+            ordered_pics = self.vault.db.run_immediate_read_task(
+                fetch_pictures, ordered_ids
+            )
+            pics_by_id = {pic.id: pic for pic in ordered_pics}
+            ordered_pics = [pics_by_id.get(pid) for pid in ordered_ids]
+            ordered_pics = [pic for pic in ordered_pics if pic is not None]
 
-            stacks = []
-            for group in groups:
-                pics = self.vault.db.run_task(fetch_pictures, group)
-                logger.info(f"Fetched {len(pics)} pictures for group: {group}")
-                # Compute combined likeness for all pairs in group
-                likeness_matrix = {}
-                for i, pic_a in enumerate(pics):
-                    for j, pic_b in enumerate(pics):
-                        if i < j:
-                            score = combined_picture_face_likeness(
-                                pic_a, pic_b, face_likeness_lookup
-                            )
-                            logger.info(
-                                f"Combined likeness for ({pic_a.id}, {pic_b.id}): {score}"
-                            )
-                            likeness_matrix[(pic_a.id, pic_b.id)] = score
-                # Convert tuple keys to string keys for JSON compatibility
-                likeness_matrix_json = {
-                    f"{k[0]}|{k[1]}": v for k, v in likeness_matrix.items()
-                }
-                logger.info(f"Likeness matrix for group: {likeness_matrix_json}")
-                ordered = order_stack_pictures(pics, image_root=self.vault.image_root)
-                stacks.append(
-                    {
-                        "pictures": [safe_model_dict(pic) for pic in ordered],
-                        "likeness_matrix": likeness_matrix_json,
-                    }
-                )
+            response = []
+            for pic in ordered_pics:
+                pic_dict = safe_model_dict(pic)
+                pic_dict["stack_index"] = stack_index_map.get(pic.id)
+                response.append(pic_dict)
 
-            return {
-                "stacks": stacks,
-                "threshold": threshold,
-                "min_group_size": min_group_size,
-            }
+            return response
 
         @self.api.post("/pictures/thumbnails")
         async def get_thumbnails(request: Request, payload: dict = Body(...)):

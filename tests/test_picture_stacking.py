@@ -199,41 +199,18 @@ def test_picture_stacking():
 
             logger.info("Picture descriptions data: %s", desc_data)
 
-            # Build a dict of dicts for likeness values
-            likeness_table = {pid: {} for pid in pic_ids}
-            for stack in stacks_data.get("stacks", []):
-                matrix = stack.get("likeness_matrix", {})
-                for key, score in matrix.items():
-                    id_a, id_b = map(int, key.split("|", 1))
-                    likeness_table.setdefault(id_a, {})[id_b] = score
-                    likeness_table.setdefault(id_b, {})[id_a] = score
-            # Log as a text table using descriptions
-            header = [" "] + [id_to_filename[pid] for pid in pic_ids]
-            rows = []
-            for pid_a in pic_ids:
-                row = [id_to_filename[pid_a]]
-                for pid_b in pic_ids:
-                    if pid_a == pid_b:
-                        row.append("--")
-                    else:
-                        val = likeness_table.get(pid_a, {}).get(pid_b)
-                        row.append(f"{val:.3f}" if val is not None else "")
-                rows.append(row)
-            # Format as aligned text
-            col_widths = [
-                max(len(str(cell)) for cell in col) for col in zip(*([header] + rows))
-            ]
-
-            def fmt_row(row):
-                return " | ".join(
-                    str(cell).ljust(w) for cell, w in zip(row, col_widths)
+            # Check the list of stacks. We can't really build a full table anymore since
+            # we only get stacks of similar pictures, not all pairs.
+            logger.info(f"Getting stack data {stacks_data}")
+            stack_dict = {}
+            for stack_pic in stacks_data:
+                logger.info(f"Processing stack picture: {stack_pic}")
+                stack_dict.setdefault(stack_pic.get("stack_index"), []).append(
+                    stack_pic
                 )
 
-            table_str = "\n".join([fmt_row(header)] + [fmt_row(r) for r in rows])
-            logger.info(
-                "\nPicture-to-picture likeness table (from /pictures/stacks):\n%s",
-                table_str,
-            )
+            for stack_index, stack_pics in stack_dict.items():
+                logger.info(f"Stack index {stack_index} has pictures: {stack_pics}")
 
     gc.collect()
 
