@@ -14,10 +14,8 @@ if TYPE_CHECKING:
 class Character(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     name: str = Field(default=None, index=True)
-    original_seed: Optional[int] = Field(default=None)
-    original_prompt: Optional[str] = Field(default=None)
-    loras_: Optional[str] = Field(sa_column=Column("loras", String, default=None))
     description: Optional[str] = Field(default=None)
+    extra_metadata: Optional[str] = Field(default=None)
 
     reference_picture_set_id: Optional[int] = Field(
         default=None, foreign_key="pictureset.id"
@@ -37,22 +35,6 @@ class Character(SQLModel, table=True):
     reference_picture_set: Optional["PictureSet"] = Relationship(
         back_populates="reference_character"
     )
-
-    @property
-    def loras(self) -> Optional[List[str]]:
-        """
-        Return the list of Loras associated with this character.
-        """
-        if self.loras_:
-            return json.loads(self.loras_)
-        return None
-
-    @loras.setter
-    def loras(self, loras: List[str]):
-        """
-        Set the list of Loras associated with this character.
-        """
-        self.loras_ = json.dumps(loras)
 
     @classmethod
     def find(

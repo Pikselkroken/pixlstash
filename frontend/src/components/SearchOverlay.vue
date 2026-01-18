@@ -1,13 +1,15 @@
 <template>
-  <v-overlay class="search-overlay" :model-value="true" @click:outside="closeOverlay">
+  <v-overlay
+    class="search-overlay"
+    :model-value="true"
+    @click:outside="closeOverlay"
+  >
     <v-card class="search-card">
       <v-btn icon size="36px" class="close-icon" @click="closeOverlay">
         <v-icon size="24px">mdi-close</v-icon>
       </v-btn>
-      <v-card-title>
-        Search
-      </v-card-title>
-      <v-card-text style="display: flex; align-items: center;">
+      <v-card-title> Search </v-card-title>
+      <v-card-text style="display: flex; align-items: center">
         <v-text-field
           v-model="input"
           dense
@@ -40,7 +42,6 @@ const emit = defineEmits(["search", "close"]);
 const input = ref("");
 const inputField = ref(null); // Reference to the text field
 
-
 function emitSearch() {
   emit("close");
   emit("search", input.value);
@@ -51,7 +52,7 @@ function clearInput() {
 }
 
 function closeOverlay() {
-  console.log("[SearchBar.vue] Closing overlay"); // Debugging log
+  console.log("[SearchOverlay.vue] Closing overlay"); // Debugging log
   emit("close");
 }
 
@@ -60,8 +61,7 @@ function handleKeydown(event) {
     event.stopPropagation(); // Prevent event propagation
     event.preventDefault(); // Prevent default browser behavior
     closeOverlay();
-  }
-  else if (event.key === "Enter") {
+  } else if (event.key === "Enter") {
     emitSearch();
   }
 }
@@ -70,10 +70,9 @@ onMounted(() => {
   console.log("Mounted: Adding keydown listener"); // Debugging log
   window.addEventListener("keydown", handleKeydown);
 
-    nextTick(() => {
+  nextTick(() => {
     inputField.value?.focus(); // Focus the text field when the overlay opens
   });
-
 });
 
 onUnmounted(() => {
@@ -93,21 +92,21 @@ onUnmounted(() => {
   padding-left: 16px;
   padding-top: 8px;
   position: relative;
-  color: white;
-  background-color: #999;
+  color: rgb(var(--v-theme-on-surface));
+  background-color: rgb(var(--v-theme-surface));
   overflow: visible;
 }
 .close-icon {
   position: absolute;
   top: -16px;
   right: -16px;
-  background-color: #ccc;
+  background-color: rgb(var(--v-theme-primary));
   border: none;
-  color: white;
+  color: rgb(var(--v-theme-on-primary));
   cursor: pointer;
   z-index: 1;
 }
 .close-icon:hover {
-  background-color: orange;
+  background-color: rgb(var(--v-theme-accent));
 }
 </style>

@@ -168,7 +168,6 @@ class Picture(SQLModel, table=True):
         for character in getattr(self, "characters", []):
             char_info = {
                 "name": getattr(character, "name", None),
-                "original_prompt": getattr(character, "original_prompt", None),
                 "description": getattr(character, "description", None),
             }
             data["characters"].append(char_info)

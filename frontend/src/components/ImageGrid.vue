@@ -270,21 +270,7 @@
                 </div>
               </template>
               <template v-else>
-                <div
-                  class="thumbnail-placeholder"
-                  :style="{
-                    width: '100%',
-                    height: '100%',
-                    borderRadius: '8px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '1.5em',
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                  }"
-                >
+                <div class="thumbnail-placeholder">
                   <span> Image #{{ String(img.idx).padStart(5, "0") }} </span>
                 </div>
               </template>
@@ -457,11 +443,11 @@ function triggerFaceOverlayRedraw() {
 onMounted(() => {
   console.log(
     "[ImageGrid.vue] Mounted with selectedDescending:",
-    props.selectedDescending
+    props.selectedDescending,
   );
   console.log(
     "[ImageGrid.vue] Initial gridImagesToRender:",
-    gridImagesToRender.value
+    gridImagesToRender.value,
   );
   console.log("[ImageGrid.vue] Initial allGridImages:", allGridImages.value);
   window.addEventListener("resize", triggerFaceOverlayRedraw);
@@ -493,13 +479,13 @@ const selectedFaceIds = ref([]); // Array of { imageId, faceIdx, faceId }
 
 function isFaceSelected(imageId, faceIdx) {
   return selectedFaceIds.value.some(
-    (f) => f.imageId === imageId && f.faceIdx === faceIdx
+    (f) => f.imageId === imageId && f.faceIdx === faceIdx,
   );
 }
 
 function toggleFaceSelection(imageId, faceIdx, faceId) {
   const idx = selectedFaceIds.value.findIndex(
-    (f) => f.imageId === imageId && f.faceIdx === faceIdx
+    (f) => f.imageId === imageId && f.faceIdx === faceIdx,
   );
   if (idx !== -1) {
     selectedFaceIds.value.splice(idx, 1);
@@ -565,7 +551,7 @@ function getFaceBboxStyle(bbox, idx, img, el) {
   // Calculate scale and offset for object-fit: cover
   const scale = Math.max(
     containerWidth / naturalWidth,
-    containerHeight / naturalHeight
+    containerHeight / naturalHeight,
   );
   const displayWidth = naturalWidth * scale;
   const displayHeight = naturalHeight * scale;
@@ -652,7 +638,7 @@ function formatIsoDate(dateStr) {
   if (isNaN(d.getTime())) return dateStr;
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
-    d.getHours()
+    d.getHours(),
   )}:${pad(d.getMinutes())}`;
 }
 
@@ -848,7 +834,7 @@ function attachMultiSelectionZipToDrag(event, ids) {
     const file = new File(
       [multiZipState.blob],
       multiZipState.filename || buildSelectionZipFilename(ids.length),
-      { type: "application/zip" }
+      { type: "application/zip" },
     );
     event.dataTransfer.items.add(file);
     event.dataTransfer.effectAllowed = "copy";
@@ -857,23 +843,6 @@ function attachMultiSelectionZipToDrag(event, ids) {
   } catch (err) {
     console.debug("[DRAG] Unable to attach zip file", err);
     return false;
-  }
-}
-
-function ensurePrimaryDragSelection(img, event) {
-  console.debug("[DRAG] ensurePrimaryDragSelection", {
-    imgId: img ? img.id : null,
-    selectedIds: selectedImageIds.value,
-  });
-  if (!img || !img.id) return;
-  const hasModifier = event?.ctrlKey || event?.metaKey || event?.shiftKey;
-  if (hasModifier) return;
-  if (
-    !selectedImageIds.value.includes(img.id) ||
-    selectedImageIds.value.length === 0
-  ) {
-    selectedImageIds.value = [img.id];
-    lastSelectedIndex = typeof img.idx === "number" ? img.idx : null;
   }
 }
 
@@ -897,7 +866,6 @@ function restoreImageAfterNativeDrag(target) {
 
 function prepareThumbnailNativeDrag(img, event) {
   if (!img || !event) return;
-  ensurePrimaryDragSelection(img, event);
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) return;
   prefetchFullImage(img);
@@ -1012,7 +980,7 @@ function removeFromGroup() {
       .finally(() => {
         // Remove affected images from grid immediately
         allGridImages.value = allGridImages.value.filter(
-          (img) => !selectedImageIds.value.includes(img.id)
+          (img) => !selectedImageIds.value.includes(img.id),
         );
         selectedImageIds.value = [];
         lastSelectedIndex = null;
@@ -1035,17 +1003,17 @@ function removeFromGroup() {
       selectedImageIds.value.map((id) =>
         apiClient
           .delete(
-            `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`
+            `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`,
           )
 
           .catch((err) => {
             alert(`Error removing image ${id} from set: ${err.message}`);
-          })
-      )
+          }),
+      ),
     ).then(async () => {
       // Remove affected images from grid immediately
       allGridImages.value = allGridImages.value.filter(
-        (img) => !selectedImageIds.value.includes(img.id)
+        (img) => !selectedImageIds.value.includes(img.id),
       );
       selectedImageIds.value = [];
       lastSelectedIndex = null;
@@ -1072,7 +1040,7 @@ function deleteSelected() {
   if (!selectedImageIds.value.length) return;
   if (
     !confirm(
-      `Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`
+      `Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`,
     )
   )
     return;
@@ -1081,12 +1049,12 @@ function deleteSelected() {
     selectedImageIds.value.map((id) =>
       apiClient.delete(`${backendUrl}/pictures/${id}`).catch((err) => {
         alert(`Error deleting image ${id}: ${err.message}`);
-      })
-    )
+      }),
+    ),
   ).then(() => {
     // Remove deleted images from grid and clear selection
     allGridImages.value = allGridImages.value.filter(
-      (img) => !selectedImageIds.value.includes(img.id)
+      (img) => !selectedImageIds.value.includes(img.id),
     );
     selectedImageIds.value = [];
     lastSelectedIndex = null;
@@ -1116,14 +1084,14 @@ watch(
   () => props.gridVersion,
   () => {
     console.log(
-      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails."
+      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
     );
     loadedRanges.value = [];
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
     debouncedFetchAllGridImages();
-  }
+  },
 );
 
 const VIEW_WINDOW = 100;
@@ -1153,7 +1121,7 @@ async function updateSelectedGroupName() {
     "Updating selected group name: ",
     props.selectedCharacter,
     props.selectedSet,
-    props.allPicturesId
+    props.allPicturesId,
   );
   if (
     props.selectedCharacter &&
@@ -1162,7 +1130,7 @@ async function updateSelectedGroupName() {
   ) {
     try {
       const res = await apiClient.get(
-        `${props.backendUrl}/characters/${props.selectedCharacter}`
+        `${props.backendUrl}/characters/${props.selectedCharacter}`,
       );
       const char = await res.data;
       name = char.name || "";
@@ -1176,7 +1144,7 @@ async function updateSelectedGroupName() {
   ) {
     try {
       const res = await apiClient.get(
-        `${props.backendUrl}/picture_sets/${props.selectedSet}`
+        `${props.backendUrl}/picture_sets/${props.selectedSet}`,
       );
       const set = await res.data;
       name = set.name || "";
@@ -1192,7 +1160,7 @@ watch(
   () => {
     updateSelectedGroupName();
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // --- Multi-selection state ---
@@ -1209,14 +1177,14 @@ watch(
       resetMultiSelectionZip();
     }
   },
-  { deep: false }
+  { deep: false },
 );
 
 // --- Overlay ---
 async function fetchImageInfo(imageId) {
   try {
     const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${imageId}/metadata`
+      `${props.backendUrl}/pictures/${imageId}/metadata`,
     );
     const data = await res.data;
     return data;
@@ -1255,10 +1223,10 @@ function invalidateVisibleThumbnailRanges() {
   const start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
   const end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value
+    visibleEnd.value + divisibleViewWindow.value,
   );
   loadedRanges.value = loadedRanges.value.filter(
-    ([rangeStart, rangeEnd]) => rangeEnd <= start || rangeStart >= end
+    ([rangeStart, rangeEnd]) => rangeEnd <= start || rangeStart >= end,
   );
   updateVisibleThumbnails();
 }
@@ -1310,13 +1278,13 @@ async function applyScore(img, newScore) {
       imageId,
       " body: { score:",
       newScore,
-      "}"
+      "}",
     );
     const res = await apiClient.patch(
       `${props.backendUrl}/pictures/${imageId}`,
       {
         score: newScore,
-      }
+      },
     );
 
     // Update score in allGridImages
@@ -1452,12 +1420,12 @@ function onGlobalKeyPress(key, event) {
     } else if (key === "PageUp") {
       newScrollTop = Math.max(
         0,
-        newScrollTop - scrollWrapper.value.clientHeight
+        newScrollTop - scrollWrapper.value.clientHeight,
       );
     } else if (key === "PageDown") {
       newScrollTop = Math.min(
         maxScroll,
-        newScrollTop + scrollWrapper.value.clientHeight
+        newScrollTop + scrollWrapper.value.clientHeight,
       );
     }
     // Only update if changed
@@ -1506,20 +1474,20 @@ function buildPictureIdsQueryParams() {
   if (typeof props.selectedDescending === "boolean") {
     console.log(
       "[ImageGrid.vue] Constructing query with descending:",
-      props.selectedDescending
+      props.selectedDescending,
     );
     params.append("descending", props.selectedDescending ? "true" : "false");
   } else {
     console.warn(
       "[ImageGrid.vue] selectedDescending is not boolean, skipping param. Type:",
-      typeof props.selectedDescending
+      typeof props.selectedDescending,
     );
   }
   // Add format filter for backend media type filtering
   if (props.mediaTypeFilter === "images") {
     console.log(
       "[ImageGrid.vue] Building query params for image formats only",
-      PIL_IMAGE_EXTENSIONS
+      PIL_IMAGE_EXTENSIONS,
     );
     for (const ext of PIL_IMAGE_EXTENSIONS) {
       params.append("format", ext.toUpperCase());
@@ -1555,7 +1523,7 @@ async function fetchAllGridImages() {
       const url = `${
         props.backendUrl
       }/pictures/search?query=${encodeURIComponent(
-        props.searchQuery.trim()
+        props.searchQuery.trim(),
       )}&top_n=10000${params ? `&${params}` : ""}`;
       const res = await apiClient.get(url);
       const data = await res.data;
@@ -1596,7 +1564,7 @@ watch(
   ],
   () => {
     console.log(
-      "[ImageGrid.vue] Filters changed. Resetting state and fetching total image count."
+      "[ImageGrid.vue] Filters changed. Resetting state and fetching total image count.",
     );
     loadedRanges.value = [];
     allGridImages.value = [];
@@ -1604,26 +1572,26 @@ watch(
     lastSelectedIndex = null;
     updateSelectedGroupName();
     debouncedFetchAllGridImages();
-  }
+  },
 );
 
 watch(
   () => props.gridVersion,
   () => {
     console.log(
-      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails."
+      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
     );
     loadedRanges.value = [];
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
     debouncedFetchAllGridImages();
-  }
+  },
 );
 
 watch([() => props.mediaTypeFilter], () => {
   console.log(
-    "[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count."
+    "[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count.",
   );
   // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
   loadedRanges.value = [];
@@ -1662,7 +1630,7 @@ const renderEnd = computed(() => {
   const cols = columns.value;
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value
+    visibleEnd.value + divisibleViewWindow.value,
   );
   return end;
 });
@@ -1782,7 +1750,7 @@ async function fetchThumbnailsBatch(start, end) {
     if (ids.length) {
       const thumbRes = await apiClient.post(
         `${props.backendUrl}/pictures/thumbnails`,
-        JSON.stringify({ ids })
+        JSON.stringify({ ids }),
       );
       const thumbData = await thumbRes.data;
       for (const gridImg of gridImages) {
@@ -1812,7 +1780,7 @@ function updateVisibleThumbnails() {
   let start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value
+    visibleEnd.value + divisibleViewWindow.value,
   );
   console.log("[ImageGrid.vue] Updating visible thumbnails:", {
     start,
@@ -1864,7 +1832,7 @@ function onGridScroll(e) {
         "visibleEnd:",
         visibleEnd.value,
         "Client Height: ",
-        el.clientHeight
+        el.clientHeight,
       );
       // Only trigger buffer expansion/fetch if user is near buffer end
       // Always fetch thumbnails for the current visible window
@@ -1879,7 +1847,6 @@ const isImageSelected = (id) =>
 
 function handleThumbnailNativeDragStart(img, event) {
   dragSource.value = "grid";
-  ensurePrimaryDragSelection(img, event);
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) {
     setupMultiExportDrag(event, selectionIds);
@@ -1895,7 +1862,7 @@ function handleThumbnailNativeDragStart(img, event) {
     JSON.stringify({
       type: "image-ids",
       imageIds: [img.id],
-    })
+    }),
   );
 }
 
@@ -1908,7 +1875,6 @@ function handleThumbnailNativeDragEnd(event) {
 function handleVideoDragStart(img, event) {
   if (!img) return;
   dragSource.value = "grid";
-  ensurePrimaryDragSelection(img, event);
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) {
     setupMultiExportDrag(event, selectionIds);
@@ -1919,7 +1885,7 @@ function handleVideoDragStart(img, event) {
     JSON.stringify({
       type: "image-ids",
       imageIds: [img.id],
-    })
+    }),
   );
 }
 
@@ -1956,9 +1922,7 @@ function handleImageCardClick(img, idx, event) {
       .filter(Boolean);
     // Do NOT merge with previous selection; replace it
   } else {
-    // Single select
-    newSelection = [img.id];
-    lastSelectedIndex = idx;
+    return;
   }
   selectedImageIds.value = newSelection;
   console.log("New selection:", newSelection);
@@ -1973,6 +1937,7 @@ function handleThumbnailClick(img, idx, event) {
     return handleImageCardClick(img, idx, event);
   }
   openOverlay(img);
+  event.stopPropagation();
 }
 
 // Clear selection when clicking grid background
@@ -2011,7 +1976,7 @@ function updateColumns() {
     const containerWidth = el.offsetWidth;
     columns.value = Math.max(
       1,
-      Math.floor(containerWidth / (props.thumbnailSize + 32))
+      Math.floor(containerWidth / (props.thumbnailSize + 32)),
     );
   });
 }
@@ -2036,7 +2001,7 @@ async function addTagToImage(imageId, tag) {
       `${props.backendUrl}/pictures/${imageId}/tags`,
       {
         tag: tag,
-      }
+      },
     );
     console.log(`Tag '${tag}' added to image ${imageId}`);
   } catch (error) {
@@ -2116,7 +2081,7 @@ watch(
       visibleEnd.value = newVisibleEnd;
       updateVisibleThumbnails();
     });
-  }
+  },
 );
 
 onUnmounted(() => {
@@ -2141,10 +2106,10 @@ function removeImagesById(imageIds) {
   }
   console.log("Removing images by ID:", imageIds);
   allGridImages.value = allGridImages.value.filter(
-    (img) => !imageIds.includes(img.id)
+    (img) => !imageIds.includes(img.id),
   );
   selectedImageIds.value = selectedImageIds.value.filter(
-    (id) => !imageIds.includes(id)
+    (id) => !imageIds.includes(id),
   );
   loadedRanges.value = [];
   updateVisibleThumbnails();
@@ -2195,7 +2160,7 @@ async function exportCurrentViewToZip(options = {}) {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const statusRes = await apiClient.get(
         `${props.backendUrl}/pictures/export/status`,
-        { params: { task_id: taskId } }
+        { params: { task_id: taskId } },
       );
       const status = statusRes?.data?.status;
       exportProgress.status = status || "in_progress";
@@ -2295,7 +2260,9 @@ function clearSearchQuery() {
   border: 8px solid #ffa600; /* thick orange border */
   border-radius: 16px; /* rounded corners */
   box-sizing: border-box;
-  transition: border-color 0.2s, background 0.2s;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
   color: #ffffff;
   font-size: 3em;
   font-weight: bold;
@@ -2393,7 +2360,9 @@ function clearSearchQuery() {
   margin-bottom: 2.2em;
   padding: 0px;
   margin: 0;
-  transition: box-shadow 0.2s, border 0.2s;
+  transition:
+    box-shadow 0.2s,
+    border 0.2s;
   position: relative;
   z-index: 0; /* Ensure stacking context */
   border: 0px solid transparent;
@@ -2446,10 +2415,11 @@ function clearSearchQuery() {
   background: none;
 }
 .thumbnail-info {
-  font-size: 1em;
-  color: #222;
+  font-size: 1.1em;
+  color: rgb(var(--v-theme-on-background));
   text-align: center;
   word-break: break-all;
+  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.3);
 }
 .thumbnail-container {
   width: 100%;
@@ -2468,7 +2438,10 @@ function clearSearchQuery() {
   top: 0;
   left: 0;
   z-index: 1;
-  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
+  box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.4);
+  transition:
+    transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
+    box-shadow 0.18s;
 }
 /* Spinner for thumbnail loading */
 .thumbnail-loading {
@@ -2496,11 +2469,12 @@ function clearSearchQuery() {
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {
+  box-shadow: none;
   transform: scale(1.02);
-  box-shadow: 0 4px 24px 0 rgba(25, 118, 210, 0.2),
-    0 1.5px 6px 0 rgba(0, 0, 0, 0.3);
   z-index: 2;
-  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
+  transition:
+    transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
+    box-shadow 0.18s;
 }
 .thumbnail-card {
   width: 100%;
@@ -2553,5 +2527,18 @@ function clearSearchQuery() {
   justify-content: space-between;
   padding: 8px 16px;
   box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+}
+.thumbnail-placeholder {
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5em;
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: rgb(var(--v-theme-on-background));
 }
 </style>

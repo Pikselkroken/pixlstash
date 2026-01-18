@@ -34,63 +34,14 @@
         </div>
 
         <div class="form-group">
-          <label for="char-original-prompt">Original Prompt</label>
+          <label for="char-metadata">Metadata</label>
           <textarea
-            id="char-original-prompt"
-            v-model="localCharacter.original_prompt"
-            placeholder="The prompt used to originally generate this character"
+            id="char-metadata"
+            v-model="localCharacter.extra_metadata"
+            placeholder="Any other metadata associated with the character"
             class="form-textarea"
             rows="3"
           ></textarea>
-        </div>
-
-        <div class="form-group">
-          <label for="char-original-seed">Original Seed</label>
-          <input
-            id="char-original-seed"
-            v-model.number="localCharacter.original_seed"
-            type="number"
-            placeholder="Seed number"
-            class="form-input"
-          />
-        </div>
-
-        <div class="form-group">
-          <label>LoRAs</label>
-          <div class="loras-list">
-            <div
-              v-for="(lora, index) in localCharacter.loras"
-              :key="index"
-              class="lora-item"
-            >
-              <input
-                v-model="lora[0]"
-                type="text"
-                placeholder="LoRA name"
-                class="form-input lora-name-input"
-              />
-              <input
-                v-model.number="lora[1]"
-                type="number"
-                step="0.1"
-                min="0"
-                max="2"
-                placeholder="Weight"
-                class="form-input lora-weight-input"
-              />
-              <button
-                class="remove-lora-btn"
-                @click="removeLora(index)"
-                title="Remove LoRA"
-              >
-                ×
-              </button>
-            </div>
-            <button class="add-lora-btn" @click="addLora">
-              <v-icon small>mdi-plus</v-icon>
-              Add LoRA
-            </button>
-          </div>
         </div>
       </div>
 
@@ -106,7 +57,7 @@
 
 <script setup>
 import { computed, ref, watch, nextTick } from "vue";
-import { apiClient } from '../utils/apiClient';
+import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -120,9 +71,7 @@ const localCharacter = ref({
   id: null,
   name: "",
   description: "",
-  original_prompt: "",
-  original_seed: null,
-  loras: [],
+  extra_metadata: "",
 });
 
 const isValid = computed(() => {
@@ -143,7 +92,7 @@ watch(
         nameInput.select();
       }
     }
-  }
+  },
 );
 
 watch(
@@ -154,36 +103,19 @@ watch(
         id: newChar.id,
         name: newChar.name || "",
         description: newChar.description || "",
-        original_prompt: newChar.original_prompt || "",
-        original_seed: newChar.original_seed,
-        loras: Array.isArray(newChar.loras)
-          ? JSON.parse(JSON.stringify(newChar.loras))
-          : [],
+        extra_metadata: newChar.extra_metadata || "",
       };
     } else {
       localCharacter.value = {
         id: null,
         name: "",
         description: "",
-        original_prompt: "",
-        original_seed: null,
-        loras: [],
+        extra_metadata: "",
       };
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
-
-function addLora() {
-  if (!Array.isArray(localCharacter.value.loras)) {
-    localCharacter.value.loras = [];
-  }
-  localCharacter.value.loras.push(["", 1.0]);
-}
-
-function removeLora(index) {
-  localCharacter.value.loras.splice(index, 1);
-}
 
 function save() {
   if (!isValid.value) {
@@ -191,18 +123,8 @@ function save() {
     return;
   }
 
-  // Clean up loras - remove empty entries
-  const cleanedLoras = localCharacter.value.loras.filter(
-    (lora) => lora[0] && lora[0].trim().length > 0
-  );
-
-  console.log("Saving character:", {
-    ...localCharacter.value,
-    loras: cleanedLoras,
-  });
   saveCharacter({
     ...localCharacter.value,
-    loras: cleanedLoras,
   });
 }
 
@@ -227,13 +149,9 @@ async function saveCharacter(charData) {
     console.log("URL: ", url);
 
     if (isNew) {
-      const res = await apiClient.post(url, 
-        JSON.stringify(charData),
-      );
+      const res = await apiClient.post(url, JSON.stringify(charData));
     } else {
-      const res = await apiClient.patch(url, 
-        JSON.stringify(charData),
-      );
+      const res = await apiClient.patch(url, JSON.stringify(charData));
     }
     emit("saved");
   } catch (e) {
@@ -250,7 +168,7 @@ watch(
     } else {
       document.removeEventListener("keydown", handleKeydown);
     }
-  }
+  },
 );
 </script>
 
@@ -269,7 +187,7 @@ watch(
 }
 
 .editor-content {
-  background: white;
+  background: rgb(var(--v-theme-surface));
   border-radius: 8px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
   width: 90%;
@@ -285,21 +203,21 @@ watch(
   justify-content: space-between;
   align-items: center;
   padding: 20px 24px;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid rgb(var(--v-theme-border));
 }
 
 .editor-header h2 {
   margin: 0;
   font-size: 1.5rem;
   font-weight: 500;
-  color: #333;
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .close-btn {
   background: none;
   border: none;
   font-size: 2rem;
-  color: #666;
+  color: rgb(var(--v-theme-primary));
   cursor: pointer;
   line-height: 1;
   padding: 0;
@@ -312,7 +230,7 @@ watch(
 }
 
 .close-btn:hover {
-  color: #ff5252;
+  color: rgb(var(--v-theme-accent));
 }
 
 .editor-body {
@@ -329,14 +247,15 @@ watch(
   display: block;
   margin-bottom: 8px;
   font-weight: 500;
-  color: #555;
+  color: rgb(var(--v-theme-on-surface));
   font-size: 0.95rem;
 }
 
 .form-input {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #ddd;
+  background-color: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: 4px;
   font-size: 1rem;
   font-family: inherit;
@@ -345,13 +264,15 @@ watch(
 
 .form-input:focus {
   outline: none;
-  border-color: #4caf50;
+  border-color: rgb(var(--v-theme-accent));
 }
 
 .form-textarea {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid rgb(var(--v-theme-border));
+  background-color: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: 4px;
   font-size: 1rem;
   font-family: inherit;
@@ -361,66 +282,7 @@ watch(
 
 .form-textarea:focus {
   outline: none;
-  border-color: #4caf50;
-}
-
-.loras-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.lora-item {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.lora-name-input {
-  grid-column: 1;
-}
-
-.lora-weight-input {
-  width: 100px;
-}
-
-.remove-lora-btn {
-  background: #f44336;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  width: 32px;
-  height: 38px;
-  font-size: 1.5rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color 0.2s;
-}
-
-.remove-lora-btn:hover {
-  background: #d32f2f;
-}
-
-.add-lora-btn {
-  background: #e0e0e0;
-  color: #333;
-  border: none;
-  border-radius: 4px;
-  padding: 8px 16px;
-  font-size: 0.95rem;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  transition: background-color 0.2s;
-  align-self: flex-start;
-}
-
-.add-lora-btn:hover {
-  background: #d0d0d0;
+  border-color: rgb(var(--v-theme-accent));
 }
 
 .editor-footer {
@@ -428,7 +290,7 @@ watch(
   justify-content: flex-end;
   gap: 12px;
   padding: 16px 24px;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid rgb(var(--v-theme-hover));
 }
 
 .btn {
@@ -440,27 +302,22 @@ watch(
   transition: all 0.2s;
   font-weight: 500;
 }
-
-.btn-cancel {
-  background: #f5f5f5;
-  color: #666;
+.btn:hover {
+  filter: brightness(1.2);
 }
 
-.btn-cancel:hover {
-  background: #e0e0e0;
+.btn-cancel {
+  background: rgb(var(--v-theme-cancel-button));
+  color: rgb(var(--v-theme-cancel-button-text));
 }
 
 .btn-save {
-  background: #4caf50;
-  color: white;
-}
-
-.btn-save:hover {
-  background: #45a049;
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
 }
 
 .btn-save:disabled {
-  background: #ccc;
+  background: rgb(var(--v-theme-disabled));
   cursor: not-allowed;
 }
 </style>

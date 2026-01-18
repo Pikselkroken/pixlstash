@@ -84,7 +84,6 @@
                 playsinline
                 style="background: #111"
                 @loadedmetadata="updateOverlayDims"
-
               ></video>
               <img
                 v-else
@@ -282,7 +281,7 @@ import {
   watch,
 } from "vue";
 import { isSupportedVideoFile, getOverlayFormat } from "../utils/media.js";
-import { apiClient } from '../utils/apiClient';
+import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -301,7 +300,7 @@ watch(
   (newImg) => {
     image.value = newImg ? { ...newImg } : null;
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 const emit = defineEmits([
@@ -482,7 +481,7 @@ function toggleFaceBbox() {
     "[ImageOverlay] Toggled showFaceBbox:",
     showFaceBbox.value,
     "faceBboxes:",
-    faceBboxes.value
+    faceBboxes.value,
   );
   image.value = image.value ? { ...image.value } : null;
 }
@@ -533,12 +532,15 @@ async function fetchFaceBboxes(imageId) {
     return;
   }
   try {
-    const res = await apiClient.get(`${backendUrl.value}/pictures/${imageId}/faces`);
+    const res = await apiClient.get(
+      `${backendUrl.value}/pictures/${imageId}/faces`,
+    );
     const faces = await res.data;
     console.log("Faces: ", faces);
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
     const firstFrameFaces = faceArray.filter(
-      (f) => f.frame_index === 0 && Array.isArray(f.bbox) && f.bbox.length === 4
+      (f) =>
+        f.frame_index === 0 && Array.isArray(f.bbox) && f.bbox.length === 4,
     );
     // For each face, fetch character name if character_id is present
     await Promise.all(
@@ -547,26 +549,25 @@ async function fetchFaceBboxes(imageId) {
         if (face.character_id) {
           try {
             const res = await apiClient.get(
-              `${backendUrl.value}/characters/${face.character_id}/name`
+              `${backendUrl.value}/characters/${face.character_id}/name`,
             );
             const data = await res.data;
             face.character_name = data.name || null;
             console.log(
               `Fetched character_name for character_id ${face.character_id}:`,
-              face.character_name
+              face.character_name,
             );
-          
           } catch (e) {
             face.character_name = null;
             console.error(
               `Error fetching character_name for character_id ${face.character_id}:`,
-              e
+              e,
             );
           }
         } else {
           face.character_name = null;
         }
-      })
+      }),
     );
     faceBboxes.value = firstFrameFaces;
   } catch (e) {
@@ -582,7 +583,7 @@ watch(
     if (newId) fetchFaceBboxes(newId);
     else faceBboxes.value = [];
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // Add this helper below your script setup imports
@@ -648,11 +649,14 @@ async function saveDescription() {
   const newDescription = descriptionDraft.value.trim();
   const payload = { description: newDescription || null };
   try {
-    const res = await apiClient.patch(`${backendUrl.value}/pictures/${image.value.id}`, payload);
+    const res = await apiClient.patch(
+      `${backendUrl.value}/pictures/${image.value.id}`,
+      payload,
+    );
     image.value = { ...image.value, description: newDescription };
     if (Array.isArray(allImages.value)) {
       const idx = allImages.value.findIndex(
-        (img) => img && img.id === image.value.id
+        (img) => img && img.id === image.value.id,
       );
       if (idx !== -1) {
         allImages.value[idx] = {
@@ -770,14 +774,12 @@ function removeTag(tag) {
 }
 
 .overlay-title-row {
-  width: 90%;
+  width: 70%;
   display: flex;
   background-color: #44444488;
   align-items: center;
   justify-content: center;
   position: relative;
-  min-height: 32px;
-  max-height: 72px;
   z-index: 2;
 }
 .overlay-title-desc-shell {
@@ -786,9 +788,9 @@ function removeTag(tag) {
   padding: 4px 4px;
   padding-right: 100px;
   line-height: 1.1;
-  max-height: calc(1.1em * 3.3);
+  max-height: calc(1.1em * 3 + 12px); /* 3 lines max */
   overflow-y: auto;
-  border: 1px dashed #bbb;
+  border: 1px rgb(var(--v-theme-border)) dashed;
   border-radius: 4px;
   scrollbar-color: #ff9800 #2b2b2b;
   scrollbar-width: thick;
@@ -802,6 +804,7 @@ function removeTag(tag) {
   flex: 1;
   color: #eee;
   width: 100%;
+  height: calc(1.1em * 3 + 12px); /* 3 lines max */
   font-size: 1rem;
   text-align: left;
   word-break: break-word;
@@ -830,7 +833,9 @@ function removeTag(tag) {
   justify-content: center;
   cursor: pointer;
   padding: 0;
-  transition: background 0.15s ease, transform 0.15s ease;
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
 }
 .title-action-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.15);
@@ -908,7 +913,7 @@ function removeTag(tag) {
 }
 .overlay-img {
   max-width: 100%;
-  max-height: 80vh;
+  max-height: 90vh;
   min-height: 256px;
   object-fit: contain;
   border-radius: 8px;
@@ -1074,8 +1079,8 @@ function removeTag(tag) {
   display: inline-flex;
   align-items: center;
   vertical-align: middle;
-  background-color: #2581a2;
-  color: #ffffff;
+  background-color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
   border-radius: 6px;
   padding: 2px 6px 2px 6px;
   height: 24px;
@@ -1086,7 +1091,7 @@ function removeTag(tag) {
 .tag-delete-btn {
   background: transparent;
   border: none;
-  color: #fff;
+  color: rgb(var(--v-theme-on-primary));
   font-size: 1.2em;
   vertical-align: top;
   margin-left: 8px;
@@ -1099,8 +1104,8 @@ function removeTag(tag) {
   align-items: center;
   vertical-align: middle;
   justify-content: center;
-  background-color: #4caf50;
-  color: #ffffff;
+  background-color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
   border-radius: 50%;
   width: 32px;
   height: 32px;

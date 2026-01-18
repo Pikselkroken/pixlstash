@@ -80,7 +80,7 @@ watch(
         nameInput.select();
       }
     }
-  }
+  },
 );
 
 watch(
@@ -100,7 +100,7 @@ watch(
       };
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 function save() {
@@ -145,7 +145,7 @@ async function startExport() {
       `${props.backendUrl}/pictures/export`,
       {
         params: { set_id: props.set.id },
-      }
+      },
     );
     exportTaskId.value = response.data.task_id;
     pollExportStatus();
@@ -161,7 +161,7 @@ async function pollExportStatus() {
     try {
       const response = await apiClient.get(
         `${props.backendUrl}/pictures/export/status`,
-        { params: { task_id: exportTaskId.value } }
+        { params: { task_id: exportTaskId.value } },
       );
 
       exportStatus.value = response.data.status;
@@ -187,7 +187,7 @@ async function downloadExport() {
         `${props.backendUrl}${downloadUrl.value}`,
         {
           responseType: "blob", // Ensure binary data is handled correctly
-        }
+        },
       );
 
       console.log("Response headers:", response.headers);
@@ -219,7 +219,7 @@ watch(
     } else {
       document.removeEventListener("keydown", handleKeydown);
     }
-  }
+  },
 );
 </script>
 
@@ -238,11 +238,11 @@ watch(
 }
 
 .editor-content {
-  background: white;
+  background: rgb(var(--v-theme-surface));
   border-radius: 8px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
   width: 90%;
-  max-width: 500px;
+  max-width: 600px;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
@@ -254,21 +254,21 @@ watch(
   justify-content: space-between;
   align-items: center;
   padding: 20px 24px;
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid rgb(var(--v-theme-border));
 }
 
 .editor-header h2 {
   margin: 0;
   font-size: 1.5rem;
   font-weight: 500;
-  color: #333;
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .close-btn {
   background: none;
   border: none;
   font-size: 2rem;
-  color: #666;
+  color: rgb(var(--v-theme-primary));
   cursor: pointer;
   line-height: 1;
   padding: 0;
@@ -281,7 +281,7 @@ watch(
 }
 
 .close-btn:hover {
-  color: #ff5252;
+  color: rgb(var(--v-theme-accent));
 }
 
 .editor-body {
@@ -298,14 +298,15 @@ watch(
   display: block;
   margin-bottom: 8px;
   font-weight: 500;
-  color: #555;
+  color: rgb(var(--v-theme-on-surface));
   font-size: 0.95rem;
 }
 
 .form-input {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #ddd;
+  background-color: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: 4px;
   font-size: 1rem;
   font-family: inherit;
@@ -314,13 +315,15 @@ watch(
 
 .form-input:focus {
   outline: none;
-  border-color: #4caf50;
+  border-color: rgb(var(--v-theme-accent));
 }
 
 .form-textarea {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid rgb(var(--v-theme-border));
+  background-color: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: 4px;
   font-size: 1rem;
   font-family: inherit;
@@ -330,13 +333,21 @@ watch(
 
 .form-textarea:focus {
   outline: none;
-  border-color: #4caf50;
+  border-color: rgb(var(--v-theme-accent));
+}
+
+.editor-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid rgb(var(--v-theme-hover));
 }
 
 .export-section {
   margin-top: 24px;
   padding-top: 16px;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid rgb(var(--v-theme-border));
 }
 
 .btn {
@@ -349,55 +360,47 @@ watch(
   font-weight: 500;
 }
 
-.btn-cancel {
-  background: #f5f5f5;
-  color: #666;
+.btn:hover {
+  filter: brightness(1.2);
 }
 
-.btn-cancel:hover {
-  background: #e0e0e0;
+.btn-cancel {
+  background: rgb(var(--v-theme-cancel-button));
+  color: rgb(var(--v-theme-cancel-button-text));
 }
 
 .btn-save {
-  background: #4caf50;
-  color: white;
-}
-
-.btn-save:hover {
-  background: #45a049;
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
 }
 
 .btn-save:disabled {
-  background: #ccc;
+  background: rgb(var(--v-theme-disabled));
   cursor: not-allowed;
 }
 
 .btn-export {
-  background: #2196f3;
-  color: white;
+  background: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
   width: 100%;
-}
-
-.btn-export:hover {
-  background: #1976d2;
 }
 
 .export-status {
   margin-top: 12px;
   font-size: 0.95rem;
-  color: #333;
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .status-completed {
-  color: #4caf50;
+  color: rgb(var(--v-theme-success));
 }
 
 .status-failed {
-  color: #f44336;
+  color: rgb(var(--v-theme-error));
 }
 
 .download-link {
-  color: #2196f3;
+  color: rgb(var(--v-theme-tertiary));
   text-decoration: underline;
   cursor: pointer;
 }

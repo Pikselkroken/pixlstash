@@ -42,7 +42,7 @@
         >
         <v-btn
           icon
-          :color="searchOverlayVisible ? 'green' : 'secondary'"
+          :color="searchOverlayVisible ? 'primary' : 'surface'"
           @click="openSearchOverlay"
           title="Search"
           style="margin-left: 4px"
@@ -51,7 +51,7 @@
         </v-btn>
         <v-btn
           icon
-          :color="showStars ? 'blue' : 'secondary'"
+          :color="showStars ? 'surface' : 'accent'"
           @click="showStars = !showStars"
           title="Toggle star ratings"
           style="margin-left: 4px"
@@ -62,7 +62,7 @@
         </v-btn>
         <v-btn
           icon
-          :color="showFaceBboxes ? 'red' : 'secondary'"
+          :color="showFaceBboxes ? 'secondary' : 'surface'"
           @click="showFaceBboxes = !showFaceBboxes"
           title="Toggle face bounding boxes"
           class="face-bbox-toggle-btn"
@@ -93,12 +93,12 @@
         </v-btn-toggle>
         <v-btn
           icon
-          :color="exportDialog ? 'accent' : 'secondary'"
+          :color="'tertiary'"
           @click="handleExportZip"
           title="Export current grid to zip"
           style="margin-left: 4px"
         >
-          <v-icon>mdi-download</v-icon>
+          <v-icon :color="'onTertiary'">mdi-download</v-icon>
         </v-btn>
       </div>
     </div>
@@ -150,7 +150,7 @@
         </div>
       </main>
     </div>
-    <SearchBar
+    <SearchOverlay
       v-if="searchOverlayVisible"
       :modelValue="searchQuery"
       @search="handleUpdateSearchQuery"
@@ -158,10 +158,12 @@
     />
     <v-dialog v-model="exportDialog" max-width="420">
       <v-card>
-        <v-card-title>Export Options</v-card-title>
+        <v-card-title :color="'onSurface'">Export Pictures</v-card-title>
         <v-card-text>
           <v-select
             v-model="exportCaptionMode"
+            :background-color="'surface'"
+            :color="'onSurface'"
             :items="exportCaptionOptions"
             item-title="title"
             item-value="value"
@@ -178,8 +180,8 @@
         </v-card-text>
         <v-card-actions>
           <v-spacer></v-spacer>
-          <v-btn variant="text" @click="cancelExportZip">Cancel</v-btn>
-          <v-btn color="orange" @click="confirmExportZip">Export</v-btn>
+          <v-btn color="tertiary" @click="cancelExportZip">Cancel</v-btn>
+          <v-btn color="accent" @click="confirmExportZip">Export</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

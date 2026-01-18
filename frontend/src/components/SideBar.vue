@@ -3,7 +3,7 @@ import { computed, ref, onMounted, watch } from "vue";
 import ImageImporter from "./ImageImporter.vue";
 import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
-import SearchBar from "./SearchBar.vue";
+import SearchOverlay from "./SearchOverlay.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import { apiClient } from "../utils/apiClient";
 
@@ -83,7 +83,7 @@ const sortedCharacters = computed(() => {
   return [...characters.value]
     .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
     .sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
     );
 });
 
@@ -131,30 +131,30 @@ watch(
       "[SideBar.vue] Prop selectedDescending changed from",
       oldValue,
       "to",
-      newValue
+      newValue,
     );
     reactiveSelectedDescending.value = newValue;
-  }
+  },
 );
 
 const descendingModel = computed({
   get: () => {
     console.log(
       "[SideBar.vue] descendingModel.get() called. Current value:",
-      reactiveSelectedDescending.value
+      reactiveSelectedDescending.value,
     );
     return reactiveSelectedDescending.value;
   },
   set: (value) => {
     console.log(
       "[SideBar.vue] descendingModel.set() called. New value:",
-      value
+      value,
     );
     reactiveSelectedDescending.value = value;
     emit("update:selected-sort", { sort: sortModel.value, descending: value });
     console.log(
       "[SideBar.vue] descendingModel.set() completed. Updated reactiveSelectedDescending:",
-      reactiveSelectedDescending.value
+      reactiveSelectedDescending.value,
     );
   },
 });
@@ -221,7 +221,7 @@ async function deleteCharacter() {
 
     // Remove the deleted character from the characters array
     characters.value = characters.value.filter(
-      (char) => char.id !== props.selectedCharacter
+      (char) => char.id !== props.selectedCharacter,
     );
 
     await fetchCharacters(); // Refresh sidebar
@@ -244,9 +244,7 @@ function createCharacter() {
     id: null,
     name: name,
     description: "",
-    original_prompt: "",
-    original_seed: null,
-    loras: [],
+    extra_metadata: "",
   });
 }
 
@@ -281,7 +279,7 @@ watch(
       }
     });
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 function toggleCharacterCollapse(charId) {
@@ -294,7 +292,7 @@ async function fetchSidebarData() {
   try {
     // All images summary
     const resAll = await apiClient.get(
-      `${props.backendUrl}/characters/${props.allPicturesId}/summary`
+      `${props.backendUrl}/characters/${props.allPicturesId}/summary`,
     );
     const data = await resAll.data;
     categoryCounts.value[props.allPicturesId] = data.image_count;
@@ -304,7 +302,7 @@ async function fetchSidebarData() {
   try {
     // Unassigned images summary
     const resUnassigned = await apiClient.get(
-      `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`
+      `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`,
     );
     const data = await resUnassigned.data;
     categoryCounts.value[props.unassignedPicturesId] = data.image_count;
@@ -315,12 +313,12 @@ async function fetchSidebarData() {
     characters.value.map(async (char) => {
       try {
         const res = await apiClient.get(
-          `${props.backendUrl}/characters/${char.id}/summary`
+          `${props.backendUrl}/characters/${char.id}/summary`,
         );
         const data = await res.data;
         categoryCounts.value[char.id] = data.image_count;
       } catch {}
-    })
+    }),
   );
 }
 
@@ -428,7 +426,7 @@ async function fetchPictureSets() {
         }
         return acc;
       },
-      {}
+      {},
     );
   } catch (e) {
     console.error("Error fetching picture sets:", e);
@@ -448,14 +446,14 @@ async function handleDeleteSet() {
 
   if (
     !window.confirm(
-      `Delete picture set "${setToDelete.name}"? This will unassign all their images.`
+      `Delete picture set "${setToDelete.name}"? This will unassign all their images.`,
     )
   )
     return;
 
   try {
     const res = await apiClient.delete(
-      `${props.backendUrl}/picture_sets/${props.selectedSet}`
+      `${props.backendUrl}/picture_sets/${props.selectedSet}`,
     );
     emit("select-set", null);
     await fetchPictureSets();
@@ -490,7 +488,7 @@ async function handleDropOnSet(setId, event) {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
       const res = await apiClient.post(
-        `${props.backendUrl}/picture_sets/${setId}/members/${picId}`
+        `${props.backendUrl}/picture_sets/${setId}/members/${picId}`,
       );
     });
 
@@ -503,7 +501,7 @@ async function handleDropOnSet(setId, event) {
     emit("images-moved", { imageIds: draggedIds });
 
     console.log(
-      `Added ${draggedIds.length} image(s) to set "${targetSet.name}"`
+      `Added ${draggedIds.length} image(s) to set "${targetSet.name}"`,
     );
   } catch (e) {
     alert("Failed to add images to set: " + (e.message || e));
@@ -552,13 +550,13 @@ async function onCharacterDrop(characterId, event) {
       console.log("Assigning faces to character:", characterId, body);
       const res = await apiClient.post(
         `${props.backendUrl}/characters/${characterId}/faces`,
-        body
+        body,
       );
       await fetchSidebarData();
       await fetchCharacterThumbnail(characterId);
       //emit("faces-assigned-to-character", { characterId, faceIds});
       console.log(
-        `Assigned ${faceIds.length} face(s) to character ${characterId}`
+        `Assigned ${faceIds.length} face(s) to character ${characterId}`,
       );
     } catch (e) {
       alert("Failed to assign faces to character: " + (e.message || e));
@@ -577,13 +575,13 @@ async function onCharacterDrop(characterId, event) {
     console.log("Assigning images to character:", characterId, body);
     const res = await apiClient.post(
       `${props.backendUrl}/characters/${characterId}/faces`,
-      body
+      body,
     );
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
     //emit("faces-assigned-to-character", { characterId, imageIds });
     console.log(
-      `Assigned ${imageIds.length} image(s) to character ${characterId}`
+      `Assigned ${imageIds.length} image(s) to character ${characterId}`,
     );
     emit("images-assigned-to-character", { characterId, imageIds });
   } catch (e) {
@@ -598,13 +596,13 @@ async function removeFacesFromCharacter(characterId, faceIds) {
       `${props.backendUrl}/characters/${characterId}/faces`,
       {
         data: { face_ids: faceIds },
-      }
+      },
     );
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
     emit("faces-removed-from-character", { characterId, faceIds });
     console.log(
-      `Removed ${faceIds.length} face(s) from character ${characterId}`
+      `Removed ${faceIds.length} face(s) from character ${characterId}`,
     );
   } catch (e) {
     alert("Failed to remove faces from character: " + (e.message || e));
@@ -633,9 +631,7 @@ function addNewCharacter() {
     id: null,
     name: name,
     description: "",
-    original_prompt: "",
-    original_seed: null,
-    loras: [],
+    extra_metadata: "",
   });
 }
 
@@ -672,7 +668,7 @@ onMounted(() => {
   fetchPictureSets();
   console.log(
     "[SideBar.vue] Initial descendingModel value:",
-    descendingModel.value
+    descendingModel.value,
   );
 });
 
@@ -684,7 +680,7 @@ watch(
       // Check if the current similarityCharacter is valid
       if (
         !sortedCharacters.value.some(
-          (char) => char.id === similarityCharacterModel.value
+          (char) => char.id === similarityCharacterModel.value,
         )
       ) {
         similarityCharacterModel.value =
@@ -693,7 +689,7 @@ watch(
             : null; // Default to the first character or null
       }
     }
-  }
+  },
 );
 
 defineExpose({ refreshSidebar });
@@ -897,14 +893,14 @@ defineExpose({ refreshSidebar });
                     "
                     @dragover.prevent="
                       dragOverSetItem(
-                        referencePictureSetsByCharacter[char.id].id
+                        referencePictureSetsByCharacter[char.id].id,
                       )
                     "
                     @dragleave="dragLeaveSetItem"
                     @drop.prevent="
                       handleDropOnSet(
                         referencePictureSetsByCharacter[char.id].id,
-                        $event
+                        $event,
                       )
                     "
                   >
@@ -959,7 +955,7 @@ defineExpose({ refreshSidebar });
         </div>
         <template
           v-for="(pset, idx) in pictureSets.filter(
-            (pset) => pset.reference_character == null
+            (pset) => pset.reference_character == null,
           )"
           :key="pset.id"
         >
@@ -1013,8 +1009,7 @@ defineExpose({ refreshSidebar });
     </div>
 
     <transition name="fade">
-      <div class="search-and-sort" v-show="sections.sort">
-        <div class="sidebar-searchbar-wrapper"></div>
+      <div class="sidebar-sort" v-show="sections.sort">
         <div
           class="sidebar-searchbar-wrapper"
           style="
@@ -1038,13 +1033,14 @@ defineExpose({ refreshSidebar });
             />
             <v-btn
               icon
-              :title="descendingModel ? 'Make ascending' : 'Make descending'"
+              :color="descendingModel ? 'secondary' : 'primary'"
+              :title="descendingModel ? 'Descending' : 'Ascending'"
               @click="descendingModel = !descendingModel"
-              style="margin-left: auto"
+              style="margin-left: 0px; margin-right: 6px"
             >
               <v-icon>
                 {{
-                  descendingModel ? "mdi-sort-descending" : "mdi-sort-ascending"
+                  descendingModel ? "mdi-sort-ascending" : "mdi-sort-descending"
                 }}
               </v-icon>
             </v-btn>
@@ -1057,7 +1053,7 @@ defineExpose({ refreshSidebar });
             label="Similarity to"
             dense
             hide-details
-            style="min-width: 0; margin-top: -4px"
+            style="min-width: 0; margin-top: 2px"
             item-title="text"
             item-value="value"
           />
@@ -1070,7 +1066,8 @@ defineExpose({ refreshSidebar });
 <style scoped>
 .sidebar {
   width: 280px;
-  background: rgb(var(--v-theme-secondary));
+  color: rgb(var(--v-theme-sidebar-text));
+  background: rgb(var(--v-theme-sidebar));
   padding: 0;
   margin: 0;
   display: flex;
@@ -1092,9 +1089,11 @@ defineExpose({ refreshSidebar });
   align-items: center;
   cursor: pointer;
   user-select: none;
-  background: #7f95aa;
-  color: #fff;
-  transition: background 0.2s, color 0.2s;
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .fade-enter-active,
@@ -1120,13 +1119,15 @@ defineExpose({ refreshSidebar });
   font-weight: 500;
   background: transparent;
   color: #fff;
-  transition: background 0.18s, color 0.18s;
+  transition:
+    background 0.18s,
+    color 0.18s;
   width: 100%;
 }
 
 .sidebar-list-item.active {
-  background: #f0f0f055;
-  color: #fff;
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
   border-right: 0;
   position: relative;
 }
@@ -1148,12 +1149,12 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-list-item:hover {
-  background: #6c7a8a;
-  color: #fff;
+  background: rgb(var(--v-theme-sidebar-hover));
+  color: rgb(var(--v-theme-on-sidebar-hover));
 }
 
 .sidebar-list-item.droppable {
-  background: #6c7a8a;
+  background: rgb(var(--v-theme-sidebar-hover));
   box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
 }
 
@@ -1216,8 +1217,8 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-list-count {
-  font-size: 0.8em;
-  color: #b0b8c9;
+  font-size: 0.9em;
+  color: rgb(var(--v-theme-on-surface));
   min-width: 2.5em;
   text-align: right;
   margin: 0 8px;
@@ -1259,20 +1260,23 @@ defineExpose({ refreshSidebar });
   align-items: center;
   justify-content: center;
   flex: 0 0 32px;
-  transition: background 0.2s, color 0.2s;
+  transition:
+    background 0.2s,
+    color 0.2s;
 }
 
 .delete-character-inline:hover {
   background: #ff5252;
 }
 
-.search-and-sort {
+.sidebar-sort {
   display: flex;
   flex-direction: column;
 }
 
 .sidebar-sort-select {
-  background: rgba(200, 200, 200, 0.6);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .character-edit-btn {
@@ -1287,7 +1291,9 @@ defineExpose({ refreshSidebar });
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  transition: color 0.2s, background-color 0.2s;
+  transition:
+    color 0.2s,
+    background-color 0.2s;
 }
 
 .character-edit-btn:hover {

@@ -13,7 +13,7 @@ import { apiClient, API_BASE_URL } from "./utils/apiClient";
 
 import SideBar from "./components/SideBar.vue";
 import ImageGrid from "./components/ImageGrid.vue";
-import SearchBar from "./components/SearchBar.vue";
+import SearchOverlay from "./components/SearchOverlay.vue";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -113,8 +113,8 @@ async function fetchConfig() {
       typeof res.data.thumbnail_size === "number"
         ? res.data.thumbnail_size
         : typeof res.data.thumbnail === "number"
-        ? res.data.thumbnail
-        : null;
+          ? res.data.thumbnail
+          : null;
     if (thumbnailValue !== null) {
       thumbnailSize.value = thumbnailValue;
       await nextTick();

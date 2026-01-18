@@ -784,8 +784,6 @@ class PictureTagger:
         for char in characters:
             if char.get("description"):
                 flat.append(str(char["description"]))
-            if char.get("original_prompt"):
-                flat.append(str(char["original_prompt"]))
 
         return flat
 

@@ -295,7 +295,6 @@ class EmbeddingWorker(BaseWorker):
                     Character.id,
                     Character.name,
                     Character.description,
-                    Character.original_prompt,
                 ),
             )
             query = query.where(Picture.text_embedding.is_(None))
