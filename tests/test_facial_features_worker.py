@@ -193,7 +193,9 @@ def test_character_thumbnail_endpoint():
 
             client = TestClient(server.api)
 
-            resp = client.post("/login", json={"password": "testpassword"})
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
             assert resp.status_code == 200
 
             response = client.get(f"/characters/{char.id}/thumbnail")

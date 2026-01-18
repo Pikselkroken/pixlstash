@@ -40,7 +40,9 @@ def test_order_stability(params):
             server.vault.import_default_data(True)
             client = TestClient(server.api)
 
-            resp = client.post("/login", json={"password": "testpassword"})
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
             assert resp.status_code == 200
             print("Login Response: ", resp.json())  # Should include "session_id"
             assert "session_id" in client.cookies, (
