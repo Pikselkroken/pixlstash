@@ -183,7 +183,9 @@ def test_create_and_get_default_character():
             client = TestClient(server.api)
 
             # Get a valid token
-            response = client.post("/login", json={"password": "testpassword"})
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
             assert response.status_code == 200
 
             # Create Esmeralda
@@ -258,10 +260,11 @@ def test_upload_existing_picture():
             logger.info(f"Fetched picture 2 metadata: {fetched_picture_2}")
             assert fetched_picture_2["id"] == picture_id_2
 
-            # Upload the first picture again. Should get a 400
+            # Upload the first picture again. Should report duplicate
             files3 = [("file", ("random_name.png", img_bytes, "image/png"))]
             import_status_3 = upload_pictures_and_wait(client, files3)
-            assert import_status_3["status"] == "failed"
+            assert import_status_3["status"] == "completed"
+            assert import_status_3["results"][0]["status"] == "duplicate"
 
             image_bytes3 = random_images[2]
             # Upload two pictures at once, one existing and one new
@@ -429,9 +432,7 @@ def test_pictures_stacks():
             resp = client.get("/pictures/stacks")
             assert resp.status_code == 200
             data = resp.json()
-            assert isinstance(data, dict)
-            assert "stacks" in data
-            assert isinstance(data["stacks"], list)
+            assert isinstance(data, list)
     gc.collect()
     log_resources("END test_pictures_stacks")
 
@@ -581,7 +582,8 @@ def test_post_logo_identical_upload():
                 img_bytes = f.read()
                 files = [("file", ("identical_logo.png", img_bytes, "image/png"))]
             import_status = upload_pictures_and_wait(client, files)
-            assert import_status["status"] == "failed"
+            assert import_status["status"] == "completed"
+            assert import_status["results"][0]["status"] == "duplicate"
     gc.collect()
     log_resources("END test_post_logo_identical_upload")
 

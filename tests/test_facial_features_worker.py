@@ -217,7 +217,12 @@ def test_character_thumbnail_endpoint():
             from pixlvault.picture_utils import PictureUtils
 
             bbox = best_face.bbox
-            crop_img = PictureUtils.crop_face_bbox_exact(best_pic.file_path, bbox)
+            logger.info(
+                f"Cropping bbox: {bbox} from picture {best_pic.file_path} with description {best_pic.description}"
+            )
+            crop_img = PictureUtils.crop_face_bbox_exact(
+                os.path.join(server.vault.image_root, best_pic.file_path), bbox
+            )
             assert crop_img.size == thumb_img.size, (
                 f"Thumbnail size {thumb_img.size} does not match crop size {crop_img.size}"
             )

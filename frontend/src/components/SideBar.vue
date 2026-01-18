@@ -16,6 +16,7 @@ const props = defineProps({
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: false },
   selectedSimilarityCharacter: { type: [String, Number, null], default: null },
+  stackThreshold: { type: [String, Number, null], default: null },
   backendUrl: { type: String, required: true },
 });
 
@@ -31,6 +32,7 @@ const emit = defineEmits([
   "images-moved",
   "search-images",
   "update:similarity-character",
+  "update:stack-threshold",
 ]);
 
 const dragOverSet = ref(null);
@@ -112,6 +114,7 @@ const selectedCharacterObj = computed(() => {
 
 // --- Similarity Character Dropdown State ---
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
+const STACKS_SORT_KEY = "PICTURE_STACKS";
 
 const similarityCharacterOptions = computed(() => {
   let options = sortedCharacters.value.map((c) => ({
@@ -124,6 +127,22 @@ const similarityCharacterOptions = computed(() => {
 const similarityCharacterModel = computed({
   get: () => props.selectedSimilarityCharacter,
   set: (value) => emit("update:similarity-character", value ?? null),
+});
+
+const stackThresholdOptions = [
+  { label: "Very Loose", value: "0.90" },
+  { label: "Loose", value: "0.92" },
+  { label: "Medium", value: "0.94" },
+  { label: "Strict", value: "0.96" },
+  { label: "Very Strict", value: "0.98" },
+];
+
+const stackThresholdModel = computed({
+  get: () =>
+    props.stackThreshold != null && props.stackThreshold !== ""
+      ? String(props.stackThreshold)
+      : "0.94",
+  set: (value) => emit("update:stack-threshold", value),
 });
 
 const reactiveSelectedDescending = ref(props.selectedDescending);
@@ -1105,6 +1124,18 @@ defineExpose({ refreshSidebar });
             hide-details
             style="min-width: 0; margin-top: 2px"
             item-title="text"
+            item-value="value"
+          />
+          <v-select
+            v-if="sortModel === STACKS_SORT_KEY"
+            v-model="stackThresholdModel"
+            :items="stackThresholdOptions"
+            class="sidebar-sort-select"
+            label="Stack strictness"
+            dense
+            hide-details
+            style="min-width: 0; margin-top: 2px"
+            item-title="label"
             item-value="value"
           />
         </div>

@@ -84,6 +84,7 @@
         <div
           v-for="(img, idx) in gridImagesToRender"
           :key="img.id ? `img-${img.id}` : `placeholder-${img.idx}`"
+          :style="getStackCardStyle(img)"
           class="image-card"
           @click="handleImageCardClick(img, img.idx, $event)"
           @mouseenter="handleImageMouseEnter(img)"
@@ -371,6 +372,21 @@
             >
               {{ formatIsoDate(img.created_at) }}
             </div>
+            <div
+              v-else-if="
+                props.selectedSort === STACKS_SORT_KEY &&
+                (typeof img.stackIndex === 'number' ||
+                  typeof img.stack_index === 'number')
+              "
+              class="thumbnail-info"
+            >
+              Stack
+              {{
+                typeof img.stackIndex === "number"
+                  ? img.stackIndex + 1
+                  : img.stack_index + 1
+              }}
+            </div>
           </div>
         </div>
         <!-- Bottom spacer -->
@@ -448,6 +464,7 @@ const props = defineProps({
   selectedSort: String,
   selectedDescending: Boolean,
   similarityCharacter: { type: [String, Number, null], default: null },
+  stackThreshold: { type: [String, Number, null], default: null },
   showStars: Boolean,
   showFaceBboxes: Boolean,
   allPicturesId: String,
@@ -455,6 +472,8 @@ const props = defineProps({
   gridVersion: { type: Number, default: 0 },
   mediaTypeFilter: { type: String, default: "all" },
 });
+const STACKS_SORT_KEY = "PICTURE_STACKS";
+const STACK_COLOR_STEP = 47;
 // Store refs for each thumbnail image
 const thumbnailRefs = reactive({});
 const thumbnailContainerRefs = reactive({});
@@ -1501,6 +1520,37 @@ function onGlobalKeyPress(key, event) {
 const imagesLoading = ref(false);
 const imagesError = ref(null);
 
+function normalizeStackThreshold(value) {
+  if (value === null || value === undefined || value === "") return 0.0;
+  const parsed = parseFloat(value);
+  if (Number.isNaN(parsed)) return 0.0;
+  return Math.max(0, Math.min(1, parsed));
+}
+
+function getStackColor(stackIndex) {
+  const hue = (stackIndex * STACK_COLOR_STEP) % 360;
+  return `hsl(${hue} 70% 55%)`;
+}
+
+function getStackCardStyle(img) {
+  if (!img) return {};
+  const rawIndex =
+    typeof img.stackIndex === "number"
+      ? img.stackIndex
+      : typeof img.stack_index === "number"
+        ? img.stack_index
+        : null;
+  if (rawIndex === null) return {};
+  const color = img.stackColor || getStackColor(rawIndex);
+  return {
+    backgroundColor: color,
+    padding: "6px",
+    borderRadius: "0px",
+    boxShadow: "none",
+    border: "1px dashed black",
+  };
+}
+
 function buildPictureIdsQueryParams() {
   const params = new URLSearchParams();
   // If a set is selected, filter by set
@@ -1561,6 +1611,36 @@ function buildPictureIdsQueryParams() {
   return params.toString();
 }
 
+function buildStackQueryParams() {
+  const params = new URLSearchParams();
+  if (
+    props.selectedSet &&
+    props.selectedSet !== props.allPicturesId &&
+    props.selectedSet !== props.unassignedPicturesId
+  ) {
+    params.append("set_id", props.selectedSet);
+  } else if (
+    props.selectedCharacter !== undefined &&
+    props.selectedCharacter !== null &&
+    props.selectedCharacter !== "" &&
+    props.selectedCharacter !== props.allPicturesId
+  ) {
+    params.append("character_id", props.selectedCharacter);
+  }
+
+  if (props.mediaTypeFilter === "images") {
+    for (const ext of PIL_IMAGE_EXTENSIONS) {
+      params.append("format", ext.toUpperCase());
+    }
+  } else if (props.mediaTypeFilter === "videos") {
+    for (const ext of VIDEO_EXTENSIONS) {
+      params.append("format", ext.toUpperCase());
+    }
+  }
+
+  return params.toString();
+}
+
 // Fetch total image count for current filters
 async function fetchAllGridImages() {
   console.log("[ImageGrid.vue] fetchAllGridImages called.");
@@ -1568,8 +1648,33 @@ async function fetchAllGridImages() {
   imagesError.value = null;
   try {
     let images = [];
-    // If a set is selected, use /picture_sets/{id}
-    if (
+    const requestId = Date.now();
+    fetchAllGridImages.lastRequestId = requestId;
+    if (props.selectedSort === STACKS_SORT_KEY) {
+      const threshold = normalizeStackThreshold(props.stackThreshold);
+      const stackParams = buildStackQueryParams();
+      const url = `${props.backendUrl}/pictures/stacks?threshold=${encodeURIComponent(
+        threshold,
+      )}${stackParams ? `&${stackParams}` : ""}`;
+      const res = await apiClient.get(url);
+      const data = await res.data;
+      if (fetchAllGridImages.lastRequestId !== requestId) return;
+      const stackImages = Array.isArray(data) ? data : [];
+      images = stackImages.map((img) => {
+        const stackIndex =
+          typeof img.stack_index === "number"
+            ? img.stack_index
+            : typeof img.stackIndex === "number"
+              ? img.stackIndex
+              : null;
+        return {
+          ...img,
+          stackIndex,
+          stackColor:
+            typeof stackIndex === "number" ? getStackColor(stackIndex) : null,
+        };
+      });
+    } else if (
       props.selectedSet &&
       props.selectedSet !== props.allPicturesId &&
       props.selectedSet !== props.unassignedPicturesId
@@ -1606,6 +1711,10 @@ async function fetchAllGridImages() {
     }));
     console.log("Updating allGridImages with fetched images:", newImages);
     allGridImages.value = newImages;
+    const cols = columns.value || 1;
+    const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
+    visibleStart.value = 0;
+    visibleEnd.value = Math.min(newImages.length, windowCount);
   } catch (e) {
     imagesError.value = e.message;
     allGridImages.value = [];
@@ -1622,6 +1731,7 @@ watch(
     () => props.selectedSet,
     () => props.searchQuery,
     () => props.selectedSort,
+    () => props.stackThreshold,
   ],
   () => {
     console.log(
@@ -1808,14 +1918,16 @@ async function fetchThumbnailsBatch(start, end) {
       thumbnail: null,
     }));
     // Now fetch thumbnails for these IDs
+    ids = ids.filter((id) => id !== null && id !== undefined);
     if (ids.length) {
+      ids = Array.from(new Set(ids.map((id) => String(id))));
       const thumbRes = await apiClient.post(
         `${props.backendUrl}/pictures/thumbnails`,
         JSON.stringify({ ids }),
       );
       const thumbData = await thumbRes.data;
       for (const gridImg of gridImages) {
-        const thumbObj = thumbData[gridImg.id];
+        const thumbObj = thumbData[String(gridImg.id)];
         gridImg.thumbnail =
           thumbObj && thumbObj.thumbnail
             ? `data:image/png;base64,${thumbObj.thumbnail}`

@@ -1,9 +1,11 @@
-* Re-introduce stacking
-* Automatic assignment to characters
 * Clean up code
+* Token authentication for API Uses
+
+* Crop the thumbnail to include the faces
+* Hide a lot of output from libraries
+* Automatic assignment to characters
 * Monitoring of T2I output folders
 * Package better
-* Token authentication for API Uses
 
 Eventually:
 * Multi-user

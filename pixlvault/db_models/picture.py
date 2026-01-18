@@ -35,6 +35,7 @@ class SortMechanism:
         DATE = auto()
         SCORE = auto()
         CHARACTER_LIKENESS = auto()
+        PICTURE_STACKS = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -48,6 +49,10 @@ class SortMechanism:
         Keys.CHARACTER_LIKENESS: {
             "field": "character_likeness",
             "description": "Similarity to",
+        },
+        Keys.PICTURE_STACKS: {
+            "field": "id",
+            "description": "Picture Stacks",
         },
     }
 
