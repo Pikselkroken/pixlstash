@@ -24,7 +24,9 @@ def setup_server_with_temp_db():
     server = Server(config_path, server_config_path)
     client = TestClient(server.api)
 
-    resp = client.post("/login", json={"password": "testpassword"})
+    resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
     assert resp.status_code == 200
     return temp_dir, client
 

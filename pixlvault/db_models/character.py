@@ -1,4 +1,3 @@
-
 from sqlmodel import SQLModel, Field, Relationship, select
 from typing import Optional, List, TYPE_CHECKING
 

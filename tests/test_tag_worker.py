@@ -29,7 +29,9 @@ def test_tag_worker_picture_tags():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
-            resp = client.post("/login", json={"password": "testpassword"})
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
             assert resp.status_code == 200
 
             # Upload a picture
@@ -93,7 +95,9 @@ def test_tag_worker_end_to_end():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
-            resp = client.post("/login", json={"password": "testpassword"})
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
             assert resp.status_code == 200
 
             # Upload a real test image
@@ -152,7 +156,9 @@ def test_tagger_worker_adds_tags():
         ) as server:
             client = TestClient(server.api)
 
-            resp = client.post("/login", json={"password": "testpassword"})
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
             assert resp.status_code == 200
 
             # Upload TaggerTest.png as a new picture

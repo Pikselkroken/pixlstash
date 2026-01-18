@@ -28,9 +28,13 @@ def test_authentication_with_password_setup():
             client = TestClient(server.api)
 
             # First login to set the password
-            response = client.post("/login", json={"password": "testpassword"})
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
             assert response.status_code == 200
-            assert response.json()["message"] == "Password set successfully."
+            assert (
+                response.json()["message"] == "Username and password set successfully."
+            )
 
 
 def test_authentication_with_valid_password():
@@ -42,13 +46,20 @@ def test_authentication_with_valid_password():
         with Server(config_path, server_config_path) as server:
             with TestClient(server.api) as client1:
                 # First login to set the password
-                response = client1.post("/login", json={"password": "testpassword"})
+                response = client1.post(
+                    "/login", json={"username": "testuser", "password": "testpassword"}
+                )
                 assert response.status_code == 200
-                assert response.json()["message"] == "Password set successfully."
+                assert (
+                    response.json()["message"]
+                    == "Username and password set successfully."
+                )
 
             with TestClient(server.api) as client2:
                 # Login with the correct password
-                response = client2.post("/login", json={"password": "testpassword"})
+                response = client2.post(
+                    "/login", json={"username": "testuser", "password": "testpassword"}
+                )
                 assert response.status_code == 200
                 assert response.json()["message"] == "Login successful."
 
@@ -67,13 +78,20 @@ def test_authentication_with_invalid_password():
         with Server(config_path, server_config_path) as server:
             with TestClient(server.api) as client1:
                 # First login to set the password
-                response = client1.post("/login", json={"password": "testpassword"})
+                response = client1.post(
+                    "/login", json={"username": "testuser", "password": "testpassword"}
+                )
                 assert response.status_code == 200
-                assert response.json()["message"] == "Password set successfully."
+                assert (
+                    response.json()["message"]
+                    == "Username and password set successfully."
+                )
 
             with TestClient(server.api) as client2:
                 # Attempt login with an incorrect password
-                response = client2.post("/login", json={"password": "wrongpassword"})
+                response = client2.post(
+                    "/login", json={"username": "testuser", "password": "wrongpassword"}
+                )
                 assert response.status_code == 401
                 assert response.json()["detail"] == "Invalid password"
 
