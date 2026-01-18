@@ -97,7 +97,12 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         self._stop.set()
         self._event.set()
         if self._thread is not None:
-            self._thread.join()
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                logger.warning(
+                    "Worker %s did not shut down within timeout.",
+                    self.name(),
+                )
 
     def is_alive(self):
         """

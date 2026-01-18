@@ -1,6 +1,7 @@
 from typing import List, Tuple
 import numpy as np
 import time
+import cv2
 
 from sqlmodel import Session, select
 
@@ -340,34 +341,116 @@ class FaceQualityWorker(BaseWorker):
             all_qualities = []
             cropped_pics = []
 
+            target_width = None
+            target_height = None
             for pic, face in pics_and_faces:
                 if face.bbox is not None and len(face.bbox) == 4:
                     x1, y1, x2, y2 = face.bbox
-                    img = PictureUtils.load_image_or_video(pic.file_path)
-                    if img is not None:
-                        crop = img[int(y1) : int(y2), int(x1) : int(x2)]
-                        if crop.size > 0:
-                            cropped_pics.append(crop)
-                        else:
-                            cropped_pics.append(None)
-                    else:
-                        cropped_pics.append(None)
+                    bbox_width = int(round((x2 - x1) / 64.0) * 64)
+                    bbox_height = int(round((y2 - y1) / 64.0) * 64)
+                    if bbox_width > 0 and bbox_height > 0:
+                        target_width = bbox_width
+                        target_height = bbox_height
+                        break
 
-            # Remove None images for batch processing, keep index mapping
+            for pic, face in pics_and_faces:
+                if face.bbox is None or len(face.bbox) != 4:
+                    logger.warning(
+                        "Face bbox missing/invalid for picture_id=%s face_id=%s",
+                        pic.id,
+                        face.id,
+                    )
+                    cropped_pics.append(None)
+                    continue
+
+                x1, y1, x2, y2 = face.bbox
+                img = PictureUtils.load_image_or_video(pic.file_path)
+                if img is None:
+                    logger.warning(
+                        "Could not load image for face quality: picture_id=%s file_path=%s",
+                        pic.id,
+                        pic.file_path,
+                    )
+                    cropped_pics.append(None)
+                    continue
+
+                height, width = img.shape[:2]
+                x1_clamped = max(0, min(width, int(round(x1))))
+                x2_clamped = max(0, min(width, int(round(x2))))
+                y1_clamped = max(0, min(height, int(round(y1))))
+                y2_clamped = max(0, min(height, int(round(y2))))
+
+                if x2_clamped <= x1_clamped or y2_clamped <= y1_clamped:
+                    logger.warning(
+                        "Invalid bbox after clamping for face quality: file_path=%s bbox=%s clamped=%s",
+                        pic.file_path,
+                        face.bbox,
+                        (x1_clamped, y1_clamped, x2_clamped, y2_clamped),
+                    )
+                    cropped_pics.append(None)
+                    continue
+
+                crop = img[y1_clamped:y2_clamped, x1_clamped:x2_clamped]
+                if crop.size == 0:
+                    logger.warning(
+                        "Empty crop for face quality: file_path=%s bbox=%s crop_shape=%s",
+                        pic.file_path,
+                        face.bbox,
+                        getattr(crop, "shape", None),
+                    )
+                    cropped_pics.append(None)
+                    continue
+
+                if target_width and target_height:
+                    try:
+                        crop = cv2.resize(
+                            crop,
+                            (int(target_width), int(target_height)),
+                            interpolation=cv2.INTER_AREA,
+                        )
+                    except Exception as resize_error:
+                        logger.warning(
+                            "OpenCV resize failed: file_path=%s bbox=%s crop_shape=%s error=%s",
+                            pic.file_path,
+                            face.bbox,
+                            getattr(crop, "shape", None),
+                            resize_error,
+                        )
+                        cropped_pics.append(None)
+                        continue
+
+                if crop.ndim == 2:
+                    crop = np.stack([crop] * 3, axis=-1)
+                cropped_pics.append(crop)
+
             valid_indices = [i for i, img in enumerate(cropped_pics) if img is not None]
             valid_pics = [img for img in cropped_pics if img is not None]
             qualities = []
             if valid_pics:
-                batch_array = np.stack(valid_pics, axis=0)
-                qualities = Quality.calculate_quality_batch(batch_array, False)
+                try:
+                    batch_array = np.stack(valid_pics, axis=0)
+                except Exception as stack_exc:
+                    logger.error("np.stack failed: %s", stack_exc)
+                    valid_indices = []
+                    qualities = []
+                else:
+                    qualities = Quality.calculate_quality_batch(batch_array, False)
 
-            # Assign metrics
             for i in range(len(pics_and_faces)):
                 if i in valid_indices:
                     q = qualities[valid_indices.index(i)]
                     all_qualities.append(q)
                 else:
-                    all_qualities.append(None)
+                    all_qualities.append(
+                        Quality(
+                            sharpness=-1.0,
+                            edge_density=-1.0,
+                            contrast=-1.0,
+                            brightness=-1.0,
+                            noise_level=-1.0,
+                            color_histogram=None,
+                        )
+                    )
             return all_qualities
         except Exception as e:
             import traceback
@@ -377,13 +460,34 @@ class FaceQualityWorker(BaseWorker):
                 e,
                 traceback.format_exc(),
             )
-            return [None] * len(pics_and_faces)
+            return [
+                Quality(
+                    sharpness=-1.0,
+                    edge_density=-1.0,
+                    contrast=-1.0,
+                    brightness=-1.0,
+                    noise_level=-1.0,
+                    color_histogram=None,
+                )
+                for _ in pics_and_faces
+            ]
 
     def _update_face_quality(
         self, session, faces: List[Face], qualities: List["Quality"]
     ) -> List[Tuple[type, object, str, object]]:
         changed = []
         for face, quality in zip(faces, qualities):
+            if quality is None:
+                quality = Quality(
+                    sharpness=-1.0,
+                    edge_density=-1.0,
+                    contrast=-1.0,
+                    brightness=-1.0,
+                    noise_level=-1.0,
+                    color_histogram=None,
+                )
+            quality.face_id = face.id
+            quality.picture_id = face.picture_id
             session.add(quality)
             face.quality = quality
             session.add(face)

@@ -650,7 +650,7 @@ class PictureTagger:
         ]
         return texts
 
-    def tag_images(self, image_paths):
+    def tag_images(self, image_paths, stop_event=None):
         """
         Tag images using the WD14 tagger model.
 
@@ -702,12 +702,19 @@ class PictureTagger:
 
         tagging_failed = False
         for data_entry in tqdm(data, smoothing=0.0, disable=self._silent):
+            if stop_event is not None and stop_event.is_set():
+                logger.info("Tagging interrupted by stop event.")
+                break
             if tagging_failed:
                 break
 
             flat_data = self._flatten_data_entry(data_entry)
 
             for data in flat_data:
+                if stop_event is not None and stop_event.is_set():
+                    logger.info("Tagging interrupted by stop event.")
+                    tagging_failed = True
+                    break
                 if data is None:
                     continue
                 image, image_path = data
@@ -728,7 +735,7 @@ class PictureTagger:
                     all_results.update(self._naturalize_tags(batch_result))
                     b_imgs.clear()
 
-        if len(b_imgs) > 0:
+        if len(b_imgs) > 0 and not (stop_event is not None and stop_event.is_set()):
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
             batch_result = self._run_batch(b_imgs, undesired_tags)
             for k, tags in batch_result.items():

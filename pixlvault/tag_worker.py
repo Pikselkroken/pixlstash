@@ -199,6 +199,8 @@ class TagWorker(BaseWorker):
     def _tag_pictures(self, missing_tags) -> int:
         """Tag all pictures missing tags."""
         assert missing_tags is not None
+        if self._stop.is_set():
+            return []
         batch = missing_tags[: self._picture_tagger.max_concurrent_images()]
         image_paths = []
         pic_by_path = {}
@@ -208,8 +210,12 @@ class TagWorker(BaseWorker):
 
         tagged_pictures = []
         if image_paths:
+            if self._stop.is_set():
+                return []
             logger.debug(f"Tagging {len(image_paths)} images: {image_paths}")
-            tag_results = self._picture_tagger.tag_images(image_paths)
+            tag_results = self._picture_tagger.tag_images(
+                image_paths, stop_event=self._stop
+            )
             logger.debug(f"Got tag results for {len(tag_results)} images.")
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
