@@ -77,7 +77,10 @@ class QualityWorker(BaseWorker):
                         if self._stop.is_set():
                             break
 
-                        img = PictureUtils.load_image_or_video(pic.file_path)
+                        file_path = PictureUtils.resolve_picture_path(
+                            self._db.image_root, pic.file_path
+                        )
+                        img = PictureUtils.load_image_or_video(file_path)
                         shape = img.shape if img is not None else None
                         batch_shapes.append(shape)
                         if shape == expected_shape:
@@ -163,7 +166,10 @@ class QualityWorker(BaseWorker):
 
             loaded_pics = []
             for pic in pics:
-                img = PictureUtils.load_image_or_video(pic.file_path)
+                file_path = PictureUtils.resolve_picture_path(
+                    self._db.image_root, pic.file_path
+                )
+                img = PictureUtils.load_image_or_video(file_path)
                 if img is None:
                     logger.warning(
                         f"Could not load image for picture_id={pic.id}, file_path={pic.file_path}"
@@ -364,7 +370,10 @@ class FaceQualityWorker(BaseWorker):
                     continue
 
                 x1, y1, x2, y2 = face.bbox
-                img = PictureUtils.load_image_or_video(pic.file_path)
+                file_path = PictureUtils.resolve_picture_path(
+                    self._db.image_root, pic.file_path
+                )
+                img = PictureUtils.load_image_or_video(file_path)
                 if img is None:
                     logger.warning(
                         "Could not load image for face quality: picture_id=%s file_path=%s",

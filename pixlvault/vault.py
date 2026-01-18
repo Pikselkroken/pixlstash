@@ -61,7 +61,7 @@ class Vault:
     """
     Represents a vault for storing images and metadata.
 
-    The vault contains a database that manages a SQLite database and stores the image root and description in the metadata table.
+    The vault contains a database that manages a SQLite database and stores the vault description in the metadata table.
     """
 
     def __init__(
@@ -220,7 +220,7 @@ class Vault:
             worker_type (WorkerType): The type of worker to initialize.
         """
         if not self._picture_tagger:
-            self._picture_tagger = PictureTagger()
+            self._picture_tagger = PictureTagger(image_root=self.image_root)
 
         if worker_type not in self._workers:
             worker_instance = WorkerRegistry.create_worker(

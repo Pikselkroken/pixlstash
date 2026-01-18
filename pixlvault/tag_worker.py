@@ -5,6 +5,7 @@ from sqlalchemy.orm import load_only, selectinload
 
 from pixlvault.event_types import EventType
 from pixlvault.picture_tagger import PictureTagger
+from pixlvault.picture_utils import PictureUtils
 from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
 from pixlvault.database import VaultDatabase
@@ -205,8 +206,11 @@ class TagWorker(BaseWorker):
         image_paths = []
         pic_by_path = {}
         for pic in batch:
-            image_paths.append(pic.file_path)
-            pic_by_path[pic.file_path] = pic
+            file_path = PictureUtils.resolve_picture_path(
+                self._db.image_root, pic.file_path
+            )
+            image_paths.append(file_path)
+            pic_by_path[file_path] = pic
 
         tagged_pictures = []
         if image_paths:

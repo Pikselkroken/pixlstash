@@ -102,13 +102,13 @@ class Server:
 
         logger.info(
             "Creating Vault instance with image root: "
-            + str(self._server_config["selected_image_root"])
+            + str(self._server_config["image_root"])
         )
 
         register_heif_opener()
 
         self.vault = Vault(
-            image_root=self._server_config["selected_image_root"],
+            image_root=self._server_config["image_root"],
             description=self._config.get("description"),
         )
 
@@ -129,6 +129,7 @@ class Server:
 
         # Updated to store the PASSWORD_HASH in self._server_config
         self.PASSWORD_HASH = self._server_config.get("PASSWORD_HASH", None)
+        self.USERNAME = self._server_config.get("USERNAME", None)
         self.active_session_ids = set()
 
         # Temporary storage for export tasks
@@ -156,13 +157,23 @@ class Server:
             json.dump(self._server_config, f, indent=2)
         print("Password hash stored in server configuration.")
 
+    def set_username(self, username):
+        self.USERNAME = username
+        self._server_config["USERNAME"] = username
+        with open(self._server_config_path, "w") as f:
+            json.dump(self._server_config, f, indent=2)
+        print("Username stored in server configuration.")
+
     def remove_password_hash(self):
         """Remove the PASSWORD_HASH by deleting it from the server configuration."""
         logger.info("Removing stored password hash from server configuration.")
         self.PASSWORD_HASH = None
+        self.USERNAME = None
         self.active_session_ids = set()
         if "PASSWORD_HASH" in self._server_config:
             del self._server_config["PASSWORD_HASH"]
+        if "USERNAME" in self._server_config:
+            del self._server_config["USERNAME"]
             with open(self._server_config_path, "w") as f:
                 json.dump(self._server_config, f, indent=2)
 
@@ -226,7 +237,7 @@ class Server:
                 if k not in config:
                     config[k] = v
         # Remove server-only fields from public config
-        for key in ("image_roots", "selected_image_root", "default_device"):
+        for key in ("image_root", "default_device"):
             config.pop(key, None)
         return config
 
@@ -252,9 +263,9 @@ class Server:
                 "ssl_certfile": default_ssl_cert_path,
                 "cookie_samesite": "Lax",
                 "cookie_secure": False,
-                "image_roots": [default_image_root],
-                "selected_image_root": default_image_root,
+                "image_root": default_image_root,
                 "default_device": "cpu",
+                "USERNAME": None,
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -281,19 +292,12 @@ class Server:
                     server_config["cookie_samesite"] = "Lax"
                 if "cookie_secure" not in server_config:
                     server_config["cookie_secure"] = False
-                if "image_roots" not in server_config:
-                    server_config["image_roots"] = [default_image_root]
-                if "selected_image_root" not in server_config:
-                    server_config["selected_image_root"] = server_config[
-                        "image_roots"
-                    ][0]
+                if "image_root" not in server_config:
+                    server_config["image_root"] = default_image_root
                 if "default_device" not in server_config:
                     server_config["default_device"] = "cpu"
-
-        if not server_config.get("image_roots"):
-            server_config["image_roots"] = [default_image_root]
-        if not server_config.get("selected_image_root"):
-            server_config["selected_image_root"] = server_config["image_roots"][0]
+                if "USERNAME" not in server_config:
+                    server_config["USERNAME"] = None
 
         return server_config
 
@@ -1080,7 +1084,10 @@ class Server:
                 if isinstance(best_pic, list):
                     best_pic = best_pic[0]
 
-                crop = PictureUtils.crop_face_bbox_exact(best_pic.file_path, bbox)
+                picture_path = PictureUtils.resolve_picture_path(
+                    self.vault.image_root, best_pic.file_path
+                )
+                crop = PictureUtils.crop_face_bbox_exact(picture_path, bbox)
                 if crop is None:
                     raise HTTPException(
                         status_code=404, detail="Failed to crop face thumbnail"
@@ -1678,7 +1685,7 @@ class Server:
                     f"{k[0]}|{k[1]}": v for k, v in likeness_matrix.items()
                 }
                 logger.info(f"Likeness matrix for group: {likeness_matrix_json}")
-                ordered = order_stack_pictures(pics)
+                ordered = order_stack_pictures(pics, image_root=self.vault.image_root)
                 stacks.append(
                     {
                         "pictures": [safe_model_dict(pic) for pic in ordered],
@@ -1941,11 +1948,18 @@ class Server:
                             if (
                                 hasattr(pic, "file_path")
                                 and pic.file_path
-                                and os.path.exists(pic.file_path)
+                                and os.path.exists(
+                                    PictureUtils.resolve_picture_path(
+                                        self.vault.image_root, pic.file_path
+                                    )
+                                )
                             ):
-                                ext = os.path.splitext(pic.file_path)[1]
+                                full_path = PictureUtils.resolve_picture_path(
+                                    self.vault.image_root, pic.file_path
+                                )
+                                ext = os.path.splitext(full_path)[1]
                                 arcname = f"image_{idx:05d}{ext}"
-                                zip_file.write(pic.file_path, arcname=arcname)
+                                zip_file.write(full_path, arcname=arcname)
                                 caption_text = None
                                 if caption_mode_normalized == "description":
                                     caption_text = pic.description or ""
@@ -2106,7 +2120,10 @@ class Server:
             pic = pics[0]
 
             # Otherwise, deliver picture file as bytes
-            if not pic.file_path or not os.path.isfile(pic.file_path):
+            file_path = PictureUtils.resolve_picture_path(
+                self.vault.image_root, pic.file_path
+            )
+            if not file_path or not os.path.isfile(file_path):
                 logger.error(
                     f"File path missing or does not exist for picture id={pic.id}, file_path={pic.file_path}"
                 )
@@ -2123,9 +2140,9 @@ class Server:
                 )
 
             # Return the image file with CORS headers
-            response = FileResponse(pic.file_path)
+            response = FileResponse(file_path)
             try:
-                stat = os.stat(pic.file_path)
+                stat = os.stat(file_path)
                 etag = f'W/"{stat.st_size}-{int(stat.st_mtime)}"'
                 response.headers["ETag"] = etag
                 response.headers["Last-Modified"] = formatdate(
@@ -2469,9 +2486,7 @@ class Server:
                             f"Queuing likeness calculation for {len(new_pictures)} new pictures."
                         )
                     else:
-                        logger.warning(
-                            "No new pictures to import; all are duplicates."
-                        )
+                        logger.warning("No new pictures to import; all are duplicates.")
                         new_pictures = []
 
                     # Build results after DB import so picture_id is available
@@ -2529,7 +2544,9 @@ class Server:
                 pic = session.get(Picture, id)
                 if not pic:
                     return False
-                file_path = pic.file_path
+                file_path = PictureUtils.resolve_picture_path(
+                    self.vault.image_root, pic.file_path
+                )
                 if not file_path or not os.path.isfile(file_path):
                     logger.error(
                         f"File path missing or does not exist for picture id={pic.id}, file_path={pic.file_path}"
@@ -2743,6 +2760,11 @@ class Server:
             return await call_next(request)
 
         class LoginRequest(BaseModel):
+            username: str = Field(
+                ...,
+                min_length=1,
+                description="Username is required",
+            )
             password: str = Field(
                 ...,
                 min_length=8,
@@ -2758,15 +2780,18 @@ class Server:
 
         @self.api.post("/login")
         def login(request: LoginRequest):
-            if not self.PASSWORD_HASH:
-                # First login: set the password
+            if not self.PASSWORD_HASH or not self.USERNAME:
+                # First login: set the username and password
                 hashed_password = bcrypt.hash(request.password)
                 self.set_password_hash(hashed_password)
+                self.set_username(request.username)
                 response = JSONResponse(
-                    content={"message": "Password set successfully."}
+                    content={"message": "Username and password set successfully."}
                 )
             else:
-                # Validate the password
+                # Validate the username and password
+                if request.username != self.USERNAME:
+                    raise HTTPException(status_code=401, detail="Invalid username")
                 if not bcrypt.verify(request.password, self.PASSWORD_HASH):
                     raise HTTPException(status_code=401, detail="Invalid password")
                 response = JSONResponse(content={"message": "Login successful."})
@@ -2793,7 +2818,7 @@ class Server:
 
         @self.api.get("/login")
         def check_registration():
-            if not self.PASSWORD_HASH:
+            if not self.PASSWORD_HASH or not self.USERNAME:
                 return JSONResponse(content={"needs_registration": True})
             return JSONResponse(content={"needs_registration": False})
 

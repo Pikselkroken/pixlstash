@@ -19,6 +19,7 @@ from .pixl_logging import get_logger
 from pixlvault.db_models.picture import Picture
 from pixlvault.tag_naturaliser import TagNaturaliser
 from pixlvault.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
+from pixlvault.picture_utils import PictureUtils
 
 logger = get_logger(__name__)
 
@@ -56,10 +57,12 @@ class PictureTagger:
         force_download=False,
         silent=True,
         device=None,
+        image_root: str = None,
     ):
         logger.info("Initializing PictureTagger...")
         self._model_location = model_location
         self._silent = silent
+        self._image_root = image_root
 
         # Store device for both CLIP and ONNX
         if PictureTagger.FORCE_CPU:
@@ -108,6 +111,9 @@ class PictureTagger:
         self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 120
 
         self._init_florence_captioning()
+
+    def _resolve_picture_path(self, file_path: str) -> str:
+        return PictureUtils.resolve_picture_path(self._image_root, file_path)
 
     def __enter__(self):
         logger.debug("PictureTagger.__enter__ called.")
@@ -751,8 +757,9 @@ class PictureTagger:
         logger.debug(
             f"generate_description: picture.file_path={getattr(picture, 'file_path', None)}"
         )
+        picture_path = self._resolve_picture_path(getattr(picture, "file_path", None))
         florence_caption = self._generate_florence_caption(
-            picture.file_path,
+            picture_path,
             _retry_on_cpu=False,
         )
         if florence_caption:
@@ -860,6 +867,7 @@ class PictureTagger:
         file_path = (
             picture.file_path if hasattr(picture, "file_path") else picture["file_path"]
         )
+        file_path = self._resolve_picture_path(file_path)
         ext = os.path.splitext(file_path)[1].lower()
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
         facial_features_list = []

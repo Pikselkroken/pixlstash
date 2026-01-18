@@ -11,6 +11,7 @@ from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.face import Face
 from pixlvault.db_models.picture import Picture
 from pixlvault.picture_tagger import PictureTagger
+from pixlvault.picture_utils import PictureUtils
 
 logger = get_logger(__name__)
 
@@ -90,7 +91,9 @@ class FaceExtractionWorker(BaseWorker):
         for pic in pics:
             pic_face_ids = []
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
-            file_path = pic.file_path
+            file_path = PictureUtils.resolve_picture_path(
+                self._db.image_root, pic.file_path
+            )
             ext = os.path.splitext(file_path)[1].lower()
             face_objects = []
             if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"]:

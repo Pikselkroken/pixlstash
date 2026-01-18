@@ -1,5 +1,5 @@
 * Move user settings into database
-* Reintroduce user name
+
 * Re-introduce stacking
 * Automatic assignment to characters
 * Clean up code

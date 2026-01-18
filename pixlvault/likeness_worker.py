@@ -106,8 +106,24 @@ class LikenessWorker(BaseWorker):
                 if self._stop.is_set():
                     break
                 logger.debug(f"LikenessWorker: Processing pair (a={a}, b={b})")
-                quality_a = quality_dict.get(a).get_color_histogram()
-                quality_b = quality_dict.get(b).get_color_histogram()
+                quality_a_obj = quality_dict.get(a)
+                quality_b_obj = quality_dict.get(b)
+                if quality_a_obj is None or quality_b_obj is None:
+                    logger.warning(
+                        "LikenessWorker: Missing quality for pair (a=%s, b=%s)",
+                        a,
+                        b,
+                    )
+                    continue
+                quality_a = quality_a_obj.get_color_histogram()
+                quality_b = quality_b_obj.get_color_histogram()
+                if quality_a is None or quality_b is None:
+                    logger.warning(
+                        "LikenessWorker: Missing color histogram for pair (a=%s, b=%s)",
+                        a,
+                        b,
+                    )
+                    continue
                 likeness = self._color_histogram_likeness(quality_a, quality_b)
 
                 likeness_results.append(
@@ -152,6 +168,8 @@ class LikenessWorker(BaseWorker):
         logger.info("LikenessWorker: Likeness worker stopped.")
 
     def _color_histogram_likeness(self, hist_a, hist_b):
+        if hist_a is None or hist_b is None:
+            return 0.0
         l1 = np.sum(np.abs(hist_a - hist_b))
         likeness = 1.0 - (l1 / 2.0)
         return float(np.clip(likeness, 0.0, 1.0))
