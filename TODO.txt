@@ -1,5 +1,3 @@
-* Move user settings into database
-
 * Re-introduce stacking
 * Automatic assignment to characters
 * Clean up code

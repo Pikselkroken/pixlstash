@@ -37,6 +37,7 @@ from pixlvault.db_models import (
     PictureSet,
     PictureSetMember,
     SortMechanism,
+    User,
 )
 
 from pixlvault.db_models import PictureLikeness, FaceLikeness
@@ -112,6 +113,10 @@ class Server:
             description=self._config.get("description"),
         )
 
+        self._user = self._ensure_user()
+        if self._user and self._user.description is not None:
+            self.vault.set_description(self._user.description)
+
         self.api = FastAPI(lifespan=self.lifespan)
         # Enable CORS for any origin (credentials require explicit origin echo)
         self.allow_origins = []
@@ -127,9 +132,9 @@ class Server:
         self._add_cors_exception_handler()
         self._setup_routes()
 
-        # Updated to store the PASSWORD_HASH in self._server_config
-        self.PASSWORD_HASH = self._server_config.get("PASSWORD_HASH", None)
-        self.USERNAME = self._server_config.get("USERNAME", None)
+        # Keep cached credentials for compatibility
+        self.PASSWORD_HASH = self._user.password_hash if self._user else None
+        self.USERNAME = self._user.username if self._user else None
         self.active_session_ids = set()
 
         # Temporary storage for export tasks
@@ -139,6 +144,7 @@ class Server:
 
         # Temporary storage for import tasks
         self.import_tasks = {}
+        self._shutdown_on_lifespan = False
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -151,22 +157,54 @@ class Server:
         gc.collect()
 
     def set_password_hash(self, hashed_password):
-        self.PASSWORD_HASH = hashed_password
-        self._server_config["PASSWORD_HASH"] = hashed_password
-        with open(self._server_config_path, "w") as f:
-            json.dump(self._server_config, f, indent=2)
-        print("Password hash stored in server configuration.")
+        def update_user(session: Session):
+            user = session.exec(select(User)).first()
+            if user is None:
+                user = User()
+            user.password_hash = hashed_password
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            return user
+
+        user = self.vault.db.run_task(update_user, priority=DBPriority.IMMEDIATE)
+        self.PASSWORD_HASH = user.password_hash
+        self._user = user
+        print("Password hash stored in user database.")
 
     def set_username(self, username):
-        self.USERNAME = username
-        self._server_config["USERNAME"] = username
-        with open(self._server_config_path, "w") as f:
-            json.dump(self._server_config, f, indent=2)
-        print("Username stored in server configuration.")
+        def update_user(session: Session):
+            user = session.exec(select(User)).first()
+            if user is None:
+                user = User()
+            user.username = username
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            return user
+
+        user = self.vault.db.run_task(update_user, priority=DBPriority.IMMEDIATE)
+        self.USERNAME = user.username
+        self._user = user
+        print("Username stored in user database.")
 
     def remove_password_hash(self):
-        """Remove the PASSWORD_HASH by deleting it from the server configuration."""
-        logger.info("Removing stored password hash from server configuration.")
+        """Remove the PASSWORD_HASH and username by deleting them from the user table."""
+        logger.info("Removing stored password hash from user database.")
+
+        def clear_user(session: Session):
+            user = session.exec(select(User)).first()
+            if user is None:
+                return None
+            user.password_hash = None
+            user.username = None
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            return user
+
+        user = self.vault.db.run_task(clear_user, priority=DBPriority.IMMEDIATE)
+        self._user = user
         self.PASSWORD_HASH = None
         self.USERNAME = None
         self.active_session_ids = set()
@@ -178,6 +216,7 @@ class Server:
                 json.dump(self._server_config, f, indent=2)
 
     def run(self):
+        self._shutdown_on_lifespan = True
         uvicorn_kwargs = dict(
             host="0.0.0.0",
             port=self._server_config.get("port", 8000),
@@ -196,7 +235,7 @@ class Server:
         # Startup logic (if needed)
         yield
         # Shutdown logic
-        if hasattr(self, "vault"):
+        if self._shutdown_on_lifespan and hasattr(self, "vault"):
             self.vault.close()
 
     @staticmethod
@@ -208,7 +247,6 @@ class Server:
             "description": DEFAULT_DESCRIPTION,
             "sort": SortMechanism.Keys.DATE.name,
             "descending": True,
-            "thumbnail": "default",
             "thumbnail_size": "default",
             "show_stars": True,
             "similarity_character": None,
@@ -300,6 +338,69 @@ class Server:
                     server_config["USERNAME"] = None
 
         return server_config
+
+    def _normalize_thumbnail_size(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            if value.lower() == "default":
+                return None
+            if value.isdigit():
+                return int(value)
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        return None
+
+    def _ensure_user(self):
+        defaults = self._config if isinstance(self._config, dict) else {}
+
+        def ensure_user(session: Session):
+            user = session.exec(select(User)).first()
+            if user:
+                logger.info("Found user in the database: %s", user.username)
+                return user
+
+            thumbnail_value = defaults.get("thumbnail_size", defaults.get("thumbnail"))
+            user = User(
+                username=self._server_config.get("USERNAME"),
+                password_hash=self._server_config.get("PASSWORD_HASH"),
+                description=defaults.get("description", DEFAULT_DESCRIPTION),
+                sort=defaults.get("sort", SortMechanism.Keys.DATE.name),
+                descending=bool(defaults.get("descending", True)),
+                thumbnail_size=self._normalize_thumbnail_size(thumbnail_value),
+                show_stars=bool(defaults.get("show_stars", True)),
+                similarity_character=defaults.get("similarity_character"),
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            return user
+
+        return self.vault.db.run_task(ensure_user, priority=DBPriority.IMMEDIATE)
+
+    def _get_user(self):
+        return self.vault.db.run_task(
+            lambda session: session.exec(select(User)).first(),
+            priority=DBPriority.IMMEDIATE,
+        )
+
+    def _user_to_config(self, user: User):
+        defaults = Server.create_config()
+        if not user:
+            return defaults
+
+        sort_value = user.sort or defaults.get("sort")
+        return {
+            "description": user.description or defaults.get("description"),
+            "sort": sort_value,
+            "sort_order": sort_value,
+            "descending": bool(user.descending),
+            "thumbnail_size": user.thumbnail_size,
+            "thumbnail": user.thumbnail_size,
+            "show_stars": bool(user.show_stars),
+            "similarity_character": user.similarity_character,
+        }
 
     def _ensure_ssl_certificates(self):
         import subprocess
@@ -786,8 +887,10 @@ class Server:
             """
             Return the current image roots config (config.json) and OpenAI chat service config.
             """
-            logger.debug(f"Transmitting current config {self._config}")
-            return self._config
+            user = self._get_user()
+            config_payload = self._user_to_config(user)
+            logger.debug(f"Transmitting current config {config_payload}")
+            return config_payload
 
         @self.api.patch("/config")
         async def patch_config(request: Request):
@@ -802,43 +905,68 @@ class Server:
             Ensures new image root directories and DBs are created as needed.
             """
             patch_data = await request.json()
-            updated = False
-            for key, value in patch_data.items():
-                logger.info(f"Updating config key '{key}' with value: {value}")
-                if key not in self._config:
-                    # Allow adding 'sort', 'thumbnail', 'show_stars' keys if missing
-                    if key in (
-                        "sort",
-                        "descending",
-                        "thumbnail",
-                        "show_stars",
-                        "similarity_character",
-                    ):
-                        self._config[key] = value
-                        updated = True
-                        continue
-                    raise HTTPException(
-                        status_code=400, detail=f"Key '{key}' does not exist in config."
-                    )
-                if isinstance(self._config[key], list) and isinstance(value, list):
-                    # Append unique items
-                    for v in value:
-                        if v not in self._config[key]:
-                            self._config[key].append(v)
+            allowed_keys = {
+                "description",
+                "sort",
+                "descending",
+                "thumbnail",
+                "thumbnail_size",
+                "show_stars",
+                "similarity_character",
+            }
+
+            def update_user(session: Session):
+                user = session.exec(select(User)).first()
+                if user is None:
+                    user = User()
+
+                updated = False
+                for key, value in patch_data.items():
+                    logger.info(f"Updating config key '{key}' with value: {value}")
+                    if key not in allowed_keys:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Key '{key}' does not exist in config.",
+                        )
+                    if key in ("thumbnail", "thumbnail_size"):
+                        new_value = self._normalize_thumbnail_size(value)
+                        if user.thumbnail_size != new_value:
+                            user.thumbnail_size = new_value
                             updated = True
-                else:
-                    # Replace value
-                    if self._config[key] != value:
-                        self._config[key] = value
+                        continue
+                    if key == "similarity_character":
+                        if value in ("", None, "null"):
+                            new_value = None
+                        elif isinstance(value, str) and value.isdigit():
+                            new_value = int(value)
+                        else:
+                            new_value = value
+                        if user.similarity_character != new_value:
+                            user.similarity_character = new_value
+                            updated = True
+                        continue
+
+                    current_value = getattr(user, key, None)
+                    if current_value != value:
+                        setattr(user, key, value)
                         updated = True
-            if updated:
-                # Save config
-                config_path = self._config_path
-                with open(config_path, "w") as f:
-                    json.dump(self._config, f, indent=2)
+
+                if updated:
+                    session.add(user)
+                    session.commit()
+                    session.refresh(user)
+                return user, updated
+
+            user, updated = self.vault.db.run_task(
+                update_user, priority=DBPriority.IMMEDIATE
+            )
             elapsed = time.time() - start_time
             logger.info(f"[TIMING] PATCH /config completed in {elapsed:.3f} seconds")
-            return {"status": "success", "updated": updated, "config": self._config}
+            return {
+                "status": "success",
+                "updated": updated,
+                "config": self._user_to_config(user),
+            }
 
         ###############################
         # Character endpoints         #
@@ -2780,19 +2908,36 @@ class Server:
 
         @self.api.post("/login")
         def login(request: LoginRequest):
-            if not self.PASSWORD_HASH or not self.USERNAME:
+            user = self._get_user() or self._ensure_user()
+            if not user.username or not user.password_hash:
                 # First login: set the username and password
                 hashed_password = bcrypt.hash(request.password)
-                self.set_password_hash(hashed_password)
-                self.set_username(request.username)
+
+                def set_credentials(session: Session):
+                    db_user = session.exec(select(User)).first()
+                    if db_user is None:
+                        db_user = User()
+                    db_user.username = request.username
+                    db_user.password_hash = hashed_password
+                    session.add(db_user)
+                    session.commit()
+                    session.refresh(db_user)
+                    return db_user
+
+                user = self.vault.db.run_task(
+                    set_credentials, priority=DBPriority.IMMEDIATE
+                )
+                self._user = user
+                self.USERNAME = user.username
+                self.PASSWORD_HASH = user.password_hash
                 response = JSONResponse(
                     content={"message": "Username and password set successfully."}
                 )
             else:
                 # Validate the username and password
-                if request.username != self.USERNAME:
+                if request.username != user.username:
                     raise HTTPException(status_code=401, detail="Invalid username")
-                if not bcrypt.verify(request.password, self.PASSWORD_HASH):
+                if not bcrypt.verify(request.password, user.password_hash):
                     raise HTTPException(status_code=401, detail="Invalid password")
                 response = JSONResponse(content={"message": "Login successful."})
 
@@ -2818,7 +2963,8 @@ class Server:
 
         @self.api.get("/login")
         def check_registration():
-            if not self.PASSWORD_HASH or not self.USERNAME:
+            user = self._get_user()
+            if not user or not user.username or not user.password_hash:
                 return JSONResponse(content={"needs_registration": True})
             return JSONResponse(content={"needs_registration": False})
 
