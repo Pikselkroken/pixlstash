@@ -72,6 +72,10 @@ const characterEditorCharacter = ref(null);
 const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
 
+const sidebarNotice = ref(null);
+const sidebarNoticeSetId = ref(null);
+let sidebarNoticeTimeout = null;
+
 function createSet() {
   setEditorSet.value = null;
   setEditorOpen.value = true;
@@ -259,6 +263,20 @@ function setLoading(isLoading) {
 function setError(message) {
   sidebarError.value = message;
   emit("set-error", message);
+}
+
+function showNotice(message, setId = null, duration = 4000) {
+  if (sidebarNoticeTimeout) {
+    clearTimeout(sidebarNoticeTimeout);
+    sidebarNoticeTimeout = null;
+  }
+  sidebarNotice.value = message;
+  sidebarNoticeSetId.value = setId;
+  sidebarNoticeTimeout = setTimeout(() => {
+    sidebarNotice.value = null;
+    sidebarNoticeSetId.value = null;
+    sidebarNoticeTimeout = null;
+  }, duration);
 }
 
 function dragOverSetItem(setId) {
@@ -504,7 +522,12 @@ async function handleDropOnSet(setId, event) {
       `Added ${draggedIds.length} image(s) to set "${targetSet.name}"`,
     );
   } catch (e) {
-    alert("Failed to add images to set: " + (e.message || e));
+    const detail = e?.response?.data?.detail || e?.message || String(e);
+    if (typeof detail === "string" && detail.includes("already in set")) {
+      showNotice("Picture already in set", setId);
+      return;
+    }
+    setError("Failed to add images to set: " + detail);
   }
 }
 
@@ -914,6 +937,16 @@ defineExpose({ refreshSidebar });
                           ?.picture_count ?? ""
                       }}
                     </span>
+                    <span
+                      v-if="
+                        sidebarNotice &&
+                        sidebarNoticeSetId ===
+                          referencePictureSetsByCharacter[char.id].id
+                      "
+                      class="sidebar-inline-notice"
+                    >
+                      {{ sidebarNotice }}
+                    </span>
                   </div>
                 </template>
                 <template v-else>
@@ -972,6 +1005,7 @@ defineExpose({ refreshSidebar });
           <div
             :class="[
               'sidebar-list-item',
+              'sidebar-set-item',
               {
                 active: selectedSet === pset.id,
                 droppable: dragOverSet === pset.id,
@@ -1004,6 +1038,12 @@ defineExpose({ refreshSidebar });
             </button>
             <span class="sidebar-list-count">
               {{ pset.picture_count ?? 0 }}
+            </span>
+            <span
+              v-if="sidebarNotice && sidebarNoticeSetId === pset.id"
+              class="sidebar-inline-notice"
+            >
+              {{ sidebarNotice }}
             </span>
           </div>
         </template>
@@ -1318,6 +1358,13 @@ defineExpose({ refreshSidebar });
 .sidebar-reference-set {
   font-size: 0.88em;
   padding-left: 40px;
+  position: relative;
+  overflow: visible;
+}
+
+.sidebar-set-item {
+  position: relative;
+  overflow: visible;
 }
 
 .sidebar-reference-set.active {
@@ -1350,6 +1397,21 @@ defineExpose({ refreshSidebar });
 
 .sidebar-reference-icon {
   margin-right: 4px;
+}
+
+.sidebar-inline-notice {
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  transform: translate(100%, -50%);
+  background: rgba(var(--v-theme-secondary), 0.75);
+  color: rgb(var(--v-theme-on-secondary));
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.9em;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 100 !important;
 }
 
 @media (max-width: 900px) {

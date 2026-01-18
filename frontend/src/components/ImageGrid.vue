@@ -93,7 +93,13 @@
             class="thumbnail-card"
             @click.stop="handleThumbnailClick(img, img.idx, $event)"
           >
-            <div class="thumbnail-container">
+            <div
+              class="thumbnail-container"
+              :ref="(el) => setThumbnailContainerRef(img.id, el)"
+              draggable="true"
+              @dragstart.capture="handleContainerDragStart(img, $event)"
+              @dragend.capture="handleContainerDragEnd(img, $event)"
+            >
               <!-- Movie icon overlay for videos -->
               <div
                 v-if="isVideo(img)"
@@ -152,12 +158,10 @@
                   class="thumbnail-img"
                   :src="getImageDownloadUrl(img)"
                   :ref="(el) => setVideoRef(img.id, el)"
-                  draggable="true"
+                  draggable="false"
                   @pointerdown="prepareThumbnailNativeDrag(img, $event)"
                   @pointerup="handleThumbnailPointerRelease($event)"
                   @pointercancel="handleThumbnailPointerRelease($event)"
-                  @dragstart="handleVideoDragStart(img, $event)"
-                  @dragend="handleVideoDragEnd()"
                   @load="
                     () => {
                       setThumbnailRef(img.id, el);
@@ -176,12 +180,18 @@
                     border-radius: 8px;
                   "
                 ></video>
+                <img
+                  v-if="img.thumbnail"
+                  class="thumbnail-drag-preview"
+                  :src="img.thumbnail"
+                  :ref="(el) => setDragPreviewRef(img.id, el)"
+                  alt=""
+                />
                 <div
                   class="thumbnail-index-overlay"
                   @pointerdown="prepareThumbnailNativeDrag(img, $event)"
                   @pointerup="handleThumbnailPointerRelease($event)"
                   @pointercancel="handleThumbnailPointerRelease($event)"
-                  @dragstart="handleVideoDragStart(img, $event)"
                   :style="{
                     position: 'absolute',
                     left: '10px',
@@ -447,6 +457,8 @@ const props = defineProps({
 });
 // Store refs for each thumbnail image
 const thumbnailRefs = reactive({});
+const thumbnailContainerRefs = reactive({});
+const dragPreviewRefs = reactive({});
 const thumbnailLoadedMap = reactive({});
 const PREFETCHED_FULL_IMAGE_LIMIT = 12;
 const fullImagePrefetchControllers = new Map();
@@ -513,6 +525,22 @@ function setThumbnailRef(id, el) {
   } else {
     delete thumbnailRefs[id];
     delete thumbnailLoadedMap[id];
+  }
+}
+
+function setDragPreviewRef(id, el) {
+  if (el) {
+    dragPreviewRefs[id] = el;
+  } else {
+    delete dragPreviewRefs[id];
+  }
+}
+
+function setThumbnailContainerRef(id, el) {
+  if (el) {
+    thumbnailContainerRefs[id] = el;
+  } else {
+    delete thumbnailContainerRefs[id];
   }
 }
 
@@ -784,10 +812,21 @@ function buildExportUrlForIds(ids) {
 function handleImageError(event) {
   const imgEl = event?.target;
   if (imgEl instanceof HTMLImageElement) {
-    console.error("[ImageGrid.vue] Image load error for:", imgEl.src);
-    imgEl.src = ""; // Reset the source to avoid broken image icon
+    const src = imgEl.src || "";
+    if (src.endsWith(".mp4") || src.endsWith(".webm") || src.endsWith(".mov")) {
+      return;
+    }
+    if (imgEl.dataset.errorLogged === "1") {
+      return;
+    }
+    imgEl.dataset.errorLogged = "1";
+    console.error("[ImageGrid.vue] Image load error for:", src);
   }
-  logger.error("[ImageGrid] Image load error for", imgEl?.src);
+  const src = imgEl?.src || "";
+  if (!src) {
+    return;
+  }
+  console.error("[ImageGrid] Image load error for", src);
 }
 
 function setupMultiExportDrag(event, ids) {
@@ -889,39 +928,16 @@ function attachMultiSelectionZipToDrag(event, ids) {
   }
 }
 
-function promoteImageForNativeDrag(target, fullUrl) {
-  if (!fullUrl || !(target instanceof HTMLImageElement)) return;
-  if (!target.dataset.thumbSrc) {
-    target.dataset.thumbSrc = target.src;
-  }
-  if (target.dataset.usingFullSrc === "1" && target.src === fullUrl) return;
-  target.dataset.usingFullSrc = "1";
-  target.src = fullUrl;
-}
-
-function restoreImageAfterNativeDrag(target) {
-  if (!(target instanceof HTMLImageElement)) return;
-  if (target.dataset.usingFullSrc === "1" && target.dataset.thumbSrc) {
-    target.src = target.dataset.thumbSrc;
-  }
-  delete target.dataset.usingFullSrc;
-}
-
 function prepareThumbnailNativeDrag(img, event) {
   if (!img || !event) return;
   const selectionIds = getDragSelectionIds(img);
   if (selectionIds.length > 1) return;
   prefetchFullImage(img);
   if (event.pointerType === "mouse" && event.button !== 0) return;
-  const target = event.target;
-  if (!(target instanceof HTMLImageElement)) return;
-  const fullUrl = getImageDownloadUrl(img);
-  promoteImageForNativeDrag(target, fullUrl);
 }
 
 function handleThumbnailPointerRelease(event) {
   if (dragSource.value === "grid") return;
-  restoreImageAfterNativeDrag(event?.target);
 }
 
 function debugLogDataTransfer(label, dataTransfer) {
@@ -1898,10 +1914,15 @@ function handleThumbnailNativeDragStart(img, event) {
     return;
   }
   const target = event?.target;
-  if (!(target instanceof HTMLImageElement)) return;
-  const fullUrl = getImageDownloadUrl(img);
-  if (!fullUrl) return;
-  promoteImageForNativeDrag(target, fullUrl);
+  if (target instanceof HTMLImageElement && event?.dataTransfer?.setDragImage) {
+    const width = target.naturalWidth || target.width || 160;
+    const height = target.naturalHeight || target.height || 90;
+    event.dataTransfer.setDragImage(
+      target,
+      Math.max(1, width / 2),
+      Math.max(1, height / 2),
+    );
+  }
   event.dataTransfer.setData(
     "application/json",
     JSON.stringify({
@@ -1912,8 +1933,6 @@ function handleThumbnailNativeDragStart(img, event) {
 }
 
 function handleThumbnailNativeDragEnd(event) {
-  const target = event?.target;
-  restoreImageAfterNativeDrag(target);
   dragSource.value = null;
 }
 
@@ -1935,6 +1954,54 @@ function handleVideoDragStart(img, event) {
 }
 
 function handleVideoDragEnd() {
+  dragSource.value = null;
+}
+
+function handleContainerDragStart(img, event) {
+  if (!img || !event?.dataTransfer) return;
+  const existing = event.dataTransfer.getData("application/json");
+  if (existing) return;
+  dragSource.value = "grid";
+  const selectionIds = getDragSelectionIds(img);
+  if (selectionIds.length > 1) {
+    setupMultiExportDrag(event, selectionIds);
+    return;
+  }
+  const thumbEl = thumbnailRefs[img.id];
+  if (!isVideo(img) && thumbEl instanceof HTMLImageElement) {
+    const width = thumbEl.naturalWidth || thumbEl.width || 160;
+    const height = thumbEl.naturalHeight || thumbEl.height || 90;
+    if (event.dataTransfer?.setDragImage) {
+      event.dataTransfer.setDragImage(
+        thumbEl,
+        Math.max(1, width / 2),
+        Math.max(1, height / 2),
+      );
+    }
+  }
+  if (isVideo(img)) {
+    const previewEl = dragPreviewRefs[img.id];
+    if (previewEl && event.dataTransfer?.setDragImage) {
+      const width = previewEl.naturalWidth || previewEl.width || 160;
+      const height = previewEl.naturalHeight || previewEl.height || 90;
+      event.dataTransfer.setDragImage(
+        previewEl,
+        Math.max(1, width / 2),
+        Math.max(1, height / 2),
+      );
+    }
+  }
+  event.dataTransfer.setData(
+    "application/json",
+    JSON.stringify({
+      type: "image-ids",
+      imageIds: [img.id],
+    }),
+  );
+}
+
+function handleContainerDragEnd(img, event) {
+  if (dragSource.value !== "grid") return;
   dragSource.value = null;
 }
 
@@ -1966,6 +2033,9 @@ function handleImageCardClick(img, idx, event) {
       .map((i) => i.id)
       .filter(Boolean);
     // Do NOT merge with previous selection; replace it
+  } else if (isShift && lastSelectedIndex === null) {
+    newSelection = [img.id];
+    lastSelectedIndex = idx;
   } else {
     return;
   }
@@ -2541,6 +2611,18 @@ function clearSearchQuery() {
 /* Overlay for image index on thumbnail */
 .thumbnail-index-overlay {
   pointer-events: none;
+}
+
+.thumbnail-drag-preview {
+  position: fixed;
+  width: 160px;
+  height: auto;
+  opacity: 0.01;
+  pointer-events: none;
+  left: -9999px;
+  top: -9999px;
+  object-fit: cover;
+  border-radius: 8px;
 }
 
 /* Add a button to trigger the search overlay */
