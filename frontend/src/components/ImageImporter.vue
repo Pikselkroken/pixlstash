@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, ref } from "vue";
-import { apiClient } from '../utils/apiClient';
+import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
@@ -47,7 +47,7 @@ const importPhaseMessage = computed(() => {
 const showCancelButton = computed(
   () =>
     importInProgress.value &&
-    !["done", "duplicates", "cancelled", "error"].includes(importPhase.value)
+    !["done", "duplicates", "cancelled", "error"].includes(importPhase.value),
 );
 
 function clearHideTimer() {
@@ -93,7 +93,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pollImportStatus(taskId, batchOffset, batchCount) {
+async function pollImportStatus(taskId, uploadedCount, batchCount, totalFiles) {
   const maxAttempts = 600;
   const intervalMs = 1000;
 
@@ -105,19 +105,20 @@ async function pollImportStatus(taskId, batchOffset, batchCount) {
 
     const statusRes = await apiClient.get(
       `${props.backendUrl}/pictures/import/status`,
-      { params: { task_id: taskId } }
+      { params: { task_id: taskId } },
     );
     const status = statusRes?.data?.status || "in_progress";
     const processed = statusRes?.data?.processed ?? 0;
     const total = statusRes?.data?.total ?? batchCount;
 
     importPhase.value = "processing";
+    const totalUnits = totalFiles * 2;
+    importTotal.value = totalUnits;
     if (processed > 0) {
-      importProgress.value = Math.min(importTotal.value, batchOffset + processed);
+      importProgress.value = Math.min(totalUnits, uploadedCount + processed);
     } else {
-      importProgress.value = Math.max(importProgress.value, batchOffset);
+      importProgress.value = Math.max(importProgress.value, uploadedCount);
     }
-    importTotal.value = Math.max(importTotal.value, batchOffset + total);
 
     if (status === "completed") {
       return statusRes.data;
@@ -143,7 +144,7 @@ async function startImport(files, options = {}) {
   cancelImport.value = false;
   importInProgress.value = true;
   importProgress.value = 0;
-  importTotal.value = files.length;
+  importTotal.value = files.length * 2;
   importError.value = null;
   importPhase.value = "uploading";
   currentImportController.value = null;
@@ -157,7 +158,7 @@ async function startImport(files, options = {}) {
       ? options.timeoutMs
       : null;
 
-  let completed = 0;
+  let uploadedCount = 0;
   let importedCount = 0;
   const allResults = [];
 
@@ -190,13 +191,17 @@ async function startImport(files, options = {}) {
         currentImportController.value = controller;
         const timeout = setTimeout(() => controller.abort(), batchTimeoutMs);
         try {
-          res = await apiClient.post(`${props.backendUrl}/pictures/import`, formData, {
-            signal: controller.signal,
-            timeout: batchTimeoutMs,
-            headers: {
-              "Content-Type": "multipart/form-data", // Ensure this is set correctly
-          },
-          });
+          res = await apiClient.post(
+            `${props.backendUrl}/pictures/import`,
+            formData,
+            {
+              signal: controller.signal,
+              timeout: batchTimeoutMs,
+              headers: {
+                "Content-Type": "multipart/form-data", // Ensure this is set correctly
+              },
+            },
+          );
           clearTimeout(timeout);
           if (controller === currentImportController.value) {
             currentImportController.value = null;
@@ -216,7 +221,7 @@ async function startImport(files, options = {}) {
             console.warn(
               `[IMPORT] Batch ${
                 i / BATCH_SIZE + 1
-              } timed out (attempt ${attempt})`
+              } timed out (attempt ${attempt})`,
             );
           } else {
             lastError = err;
@@ -224,7 +229,7 @@ async function startImport(files, options = {}) {
               `[IMPORT] Batch ${
                 i / BATCH_SIZE + 1
               } failed (attempt ${attempt}):`,
-              err
+              err,
             );
           }
         }
@@ -233,7 +238,9 @@ async function startImport(files, options = {}) {
           break;
         }
         lastError = new Error(
-          res ? `Upload failed with status ${res.status}` : "No response received"
+          res
+            ? `Upload failed with status ${res.status}`
+            : "No response received",
         );
 
         if (attempt < MAX_RETRIES) {
@@ -247,8 +254,8 @@ async function startImport(files, options = {}) {
         return;
       }
 
-      completed += batch.length;
-      importProgress.value = completed;
+      uploadedCount += batch.length;
+      importProgress.value = uploadedCount;
       await nextTick();
 
       const taskId = res?.data?.task_id;
@@ -258,7 +265,12 @@ async function startImport(files, options = {}) {
       }
 
       importPhase.value = "processing";
-      const statusPayload = await pollImportStatus(taskId, completed, batch.length);
+      const statusPayload = await pollImportStatus(
+        taskId,
+        uploadedCount,
+        batch.length,
+        files.length,
+      );
       if (!statusPayload) {
         return;
       }
@@ -267,10 +279,15 @@ async function startImport(files, options = {}) {
         ? statusPayload.results
         : [];
       allResults.push(...batchResults);
-      importedCount += batchResults.filter((r) => r.status === "success").length;
+      importedCount += batchResults.filter(
+        (r) => r.status === "success",
+      ).length;
 
-      completed += statusPayload.total ?? batch.length;
-      importProgress.value = completed;
+      const processedCount = statusPayload.total ?? batch.length;
+      importProgress.value = Math.min(
+        importTotal.value,
+        uploadedCount + processedCount,
+      );
       await nextTick();
     }
 
@@ -284,6 +301,7 @@ async function startImport(files, options = {}) {
       }.`;
     }
 
+    importProgress.value = importTotal.value;
     currentImportController.value = null;
     cancelImport.value = false;
     hideTimerId = setTimeout(() => {

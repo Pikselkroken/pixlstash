@@ -18,7 +18,7 @@ const pixlVaultTheme = {
     'sidebar-text': '#f2e5da',
     'toolbar': '#444850',
     'toolbar-text': '#f2e5da',
-    'sidebar-hover': '#6c7a8a',
+    'sidebar-hover': '#f28f3b',
     'on-sidebar-hover': '#f2e5da',
     'input-background': '#646668',
     'input-text': '#f2e5da',

@@ -57,6 +57,7 @@ body {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  position: relative;
 }
 .main-area {
   flex: 1;
@@ -131,6 +132,116 @@ body {
   margin-left: auto;
   margin-right: 0px;
   padding-right: 2px;
+}
+
+.toolbar-size-controls {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+}
+
+.sidebar-shell {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  body {
+    min-height: 100vh;
+    height: 100dvh;
+  }
+
+  .app-viewport {
+    height: 100dvh;
+  }
+
+  .file-manager {
+    flex-direction: column;
+    height: 100dvh;
+  }
+
+  .top-toolbar {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    padding: 2px 4px;
+    min-height: 44px;
+  }
+
+  .toolbar-title {
+    display: none;
+  }
+
+  .toolbar-slider {
+    min-width: 140px;
+    max-width: 220px;
+    margin: 0 8px;
+  }
+
+  .toolbar-logo {
+    display: none;
+  }
+
+  .toolbar-size-controls {
+    display: none;
+  }
+
+  .toolbar-download-btn {
+    display: none !important;
+  }
+
+  .toolbar-actions {
+    width: auto;
+    flex-wrap: nowrap;
+    gap: 2px;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .main-area {
+    height: calc(100dvh - 60px);
+  }
+
+  .main-content {
+    height: calc(100dvh - 60px);
+    border-left: none;
+  }
+
+  .sidebar-shell {
+    position: fixed;
+    top: 60px;
+    left: 0;
+    height: calc(100dvh - 60px);
+    width: 100%;
+    z-index: 20;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease-out;
+  }
+
+  .sidebar-shell.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 60px 0 0 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 10;
+    display: block;
+  }
+
+  :deep(.sidebar-toggle-btn) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  :deep(.top-toolbar .v-btn) {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 @font-face {
   font-family: "PressStart2P";

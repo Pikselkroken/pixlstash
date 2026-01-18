@@ -70,7 +70,12 @@
         </div>
       </div>
       <!-- Image Row -->
-      <div class="overlay-img-row">
+      <div
+        class="overlay-img-row"
+        @touchstart="onTouchStart"
+        @touchmove="onTouchMove"
+        @touchend="onTouchEnd"
+      >
         <div class="overlay-img-wrapper">
           <div style="position: relative; display: inline-block">
             <template v-if="image">
@@ -203,6 +208,10 @@
           </div>
         </div>
       </div>
+      <div v-if="swipeHintVisible" class="overlay-swipe-hint">
+        <v-icon size="18">mdi-swap-horizontal</v-icon>
+        <span>Swipe to navigate</span>
+      </div>
       <!-- Navigation Buttons (fixed, outside grid) -->
       <button
         class="overlay-nav overlay-nav-left"
@@ -219,7 +228,7 @@
         <v-icon>mdi-skip-next</v-icon>
       </button>
       <!-- Tag Row -->
-      <div v-if="hasTags" class="overlay-tags-row">
+      <div class="overlay-tags-row">
         <span v-for="tag in image?.tags || []" :key="tag" class="overlay-tag">
           {{ tag }}
           <button
@@ -357,7 +366,8 @@ function getFullImageUrl(targetImage = null) {
   if (!data || !data.id) return "";
   const ext = normalizePictureFormat(data);
   const suffix = ext ? `.${ext}` : "";
-  return `${backendUrl.value}/pictures/${data.id}${suffix}`;
+  const cacheBuster = data.pixel_sha ? `?v=${data.pixel_sha}` : "";
+  return `${backendUrl.value}/pictures/${data.id}${suffix}${cacheBuster}`;
 }
 
 watch(image, () => {
@@ -474,6 +484,29 @@ function handleKeydown(e) {
 }
 
 const showFaceBbox = ref(false);
+const isMobile = ref(false);
+const MOBILE_BREAKPOINT = 900;
+const touchStart = ref({ x: 0, y: 0, time: 0 });
+const touchLatest = ref({ x: 0, y: 0 });
+const swipeHintVisible = ref(false);
+let swipeHintTimer = null;
+
+function updateIsMobile() {
+  if (typeof window !== "undefined") {
+    isMobile.value = window.innerWidth <= MOBILE_BREAKPOINT;
+  }
+}
+
+function showSwipeHint() {
+  if (!isMobile.value) return;
+  swipeHintVisible.value = true;
+  if (swipeHintTimer) {
+    clearTimeout(swipeHintTimer);
+  }
+  swipeHintTimer = window.setTimeout(() => {
+    swipeHintVisible.value = false;
+  }, 2000);
+}
 
 function toggleFaceBbox() {
   showFaceBbox.value = !showFaceBbox.value;
@@ -512,15 +545,73 @@ function updateOverlayDims() {
 watch(image, () => nextTick(updateOverlayDims));
 
 onMounted(() => {
+  updateIsMobile();
+  window.addEventListener("resize", updateIsMobile);
   window.addEventListener("keydown", handleKeydown);
   window.addEventListener("resize", updateDescriptionScrollState);
   nextTick(updateDescriptionScrollState);
 });
 onUnmounted(() => {
+  window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleKeydown);
   window.removeEventListener("resize", updateDescriptionScrollState);
+  if (swipeHintTimer) {
+    clearTimeout(swipeHintTimer);
+    swipeHintTimer = null;
+  }
   resetCopyState();
 });
+
+watch(open, (isOpen) => {
+  if (!isOpen) {
+    swipeHintVisible.value = false;
+    if (swipeHintTimer) {
+      clearTimeout(swipeHintTimer);
+      swipeHintTimer = null;
+    }
+    return;
+  }
+  showSwipeHint();
+});
+
+function onTouchStart(event) {
+  if (!isMobile.value) return;
+  const touch = event.touches?.[0];
+  if (!touch) return;
+  touchStart.value = {
+    x: touch.clientX,
+    y: touch.clientY,
+    time: Date.now(),
+  };
+  touchLatest.value = { x: touch.clientX, y: touch.clientY };
+}
+
+function onTouchMove(event) {
+  if (!isMobile.value) return;
+  const touch = event.touches?.[0];
+  if (!touch) return;
+  touchLatest.value = { x: touch.clientX, y: touch.clientY };
+}
+
+function onTouchEnd() {
+  if (!isMobile.value) return;
+  const dx = touchLatest.value.x - touchStart.value.x;
+  const dy = touchLatest.value.y - touchStart.value.y;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  const elapsed = Date.now() - touchStart.value.time;
+  const swipeThreshold = 50;
+  const maxVertical = 80;
+  const maxTime = 600;
+
+  if (absX >= swipeThreshold && absY <= maxVertical && elapsed <= maxTime) {
+    if (dx > 0) {
+      showPrevImage();
+    } else {
+      showNextImage();
+    }
+  }
+}
 
 // Store multiple face bounding boxes (now full face objects)
 const faceBboxes = ref([]);
@@ -1067,6 +1158,31 @@ function removeTag(tag) {
 .overlay-nav:hover {
   border: none;
   color: orange;
+}
+
+.overlay-swipe-hint {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .overlay-swipe-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    margin: 6px auto 0;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    z-index: 5;
+  }
+}
+
+@media (max-width: 900px) {
+  .overlay-nav {
+    display: none;
+  }
 }
 .overlay-tags {
   justify-content: center;

@@ -37,6 +37,8 @@ const showFaceBboxes = ref(false);
 
 const thumbnailSize = ref(256);
 const sidebarVisible = ref(true);
+const isMobile = ref(false);
+const MOBILE_BREAKPOINT = 900;
 
 // --- Media Type Filter State ---
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
@@ -71,6 +73,18 @@ function refreshSidebar() {
   sidebarRef.value?.refreshSidebar();
 }
 
+function updateIsMobile() {
+  if (typeof window !== "undefined") {
+    isMobile.value = window.innerWidth <= MOBILE_BREAKPOINT;
+  }
+}
+
+function closeSidebarIfMobile() {
+  if (isMobile.value) {
+    sidebarVisible.value = false;
+  }
+}
+
 async function handleSelectCharacter(charId) {
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
   selectedCharacter.value = charId;
@@ -78,12 +92,14 @@ async function handleSelectCharacter(charId) {
   searchQuery.value = ""; // Clear search query
   await nextTick(); // Ensure reactivity propagates the change
   console.log("[App.vue] searchQuery cleared:", searchQuery.value);
+  closeSidebarIfMobile();
 }
 
 async function handleSelectSet(setId) {
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
   searchQuery.value = ""; // Clear search query
+  closeSidebarIfMobile();
 }
 
 async function handleUpdateSearchQuery(value) {
@@ -93,12 +109,14 @@ async function handleUpdateSearchQuery(value) {
 async function handleUpdateSelectedSort({ sort, descending }) {
   selectedSort.value = sort;
   selectedDescending.value = descending;
+  closeSidebarIfMobile();
 }
 
 const selectedSimilarityCharacter = ref(null);
 function handleUpdateSimilarityCharacter(val) {
   selectedSimilarityCharacter.value = val;
   refreshGridVersion();
+  closeSidebarIfMobile();
 }
 
 async function fetchConfig() {
@@ -128,9 +146,11 @@ async function fetchConfig() {
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
         : showStars.value;
-    config.selectedSimilarityCharacter =
-      res.data.selected_similarity_character ||
-      selectedSimilarityCharacter.value;
+    const similarityValue =
+      res.data.similarity_character ?? res.data.selected_similarity_character;
+    selectedSimilarityCharacter.value =
+      similarityValue ?? selectedSimilarityCharacter.value ?? null;
+    config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
   } catch (e) {
     console.error("Failed to fetch /config:", e);
   }
@@ -143,8 +163,9 @@ async function patchConfigUIOptions() {
   patch.descending = selectedDescending.value;
   if (thumbnailSize.value) patch.thumbnail = thumbnailSize.value;
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
-  if (config.selectedSimilarityCharacter)
-    patch.selected_similarity_character = config.selectedSimilarityCharacter;
+  if (selectedSimilarityCharacter.value != null) {
+    patch.similarity_character = selectedSimilarityCharacter.value;
+  }
 
   console.log("PATCH /config payload:", patch);
   try {
@@ -257,11 +278,14 @@ onBeforeMount(() => {
   fetchConfig();
 });
 onMounted(() => {
+  updateIsMobile();
+  window.addEventListener("resize", updateIsMobile);
   window.addEventListener("keydown", handleGlobalKeydown);
   refreshSidebar();
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleGlobalKeydown);
 });
 

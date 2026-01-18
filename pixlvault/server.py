@@ -10,6 +10,7 @@ import concurrent.futures
 import sys
 import time
 import zipfile
+from email.utils import formatdate
 
 from collections import defaultdict, deque
 from sqlalchemy.orm import load_only, selectinload
@@ -101,13 +102,13 @@ class Server:
 
         logger.info(
             "Creating Vault instance with image root: "
-            + str(self._config["selected_image_root"])
+            + str(self._server_config["selected_image_root"])
         )
 
         register_heif_opener()
 
         self.vault = Vault(
-            image_root=self._config["selected_image_root"],
+            image_root=self._server_config["selected_image_root"],
             description=self._config.get("description"),
         )
 
@@ -192,13 +193,7 @@ class Server:
         """
         Create a config dict from provided keys in kwargs, using defaults for missing keys.
         """
-        config_dir = kwargs.get("config_dir")
-        if not config_dir:
-            config_dir = os.path.expanduser("~/.pixlvault")
-        default_image_root = os.path.join(config_dir, "images")
         defaults = {
-            "image_roots": [default_image_root],
-            "selected_image_root": default_image_root,
             "description": DEFAULT_DESCRIPTION,
             "sort": SortMechanism.Keys.DATE.name,
             "descending": True,
@@ -206,15 +201,9 @@ class Server:
             "thumbnail_size": "default",
             "show_stars": True,
             "similarity_character": None,
-            "default_device": "cpu",
         }
         config = defaults.copy()
         config.update({k: v for k, v in kwargs.items() if v is not None})
-        # Ensure image_roots and selected_image_root are valid
-        if not config.get("image_roots") or len(config["image_roots"]) == 0:
-            config["image_roots"] = [default_image_root]
-        if not config.get("selected_image_root"):
-            config["selected_image_root"] = config["image_roots"][0]
         return config
 
     @staticmethod
@@ -236,11 +225,9 @@ class Server:
             for k, v in defaults.items():
                 if k not in config:
                     config[k] = v
-        # Ensure image_roots and selected_image_root are valid
-        if not config.get("image_roots") or len(config["image_roots"]) == 0:
-            config["image_roots"] = [os.path.join(config_dir, "images")]
-        if not config.get("selected_image_root"):
-            config["selected_image_root"] = config["image_roots"][0]
+        # Remove server-only fields from public config
+        for key in ("image_roots", "selected_image_root", "default_device"):
+            config.pop(key, None)
         return config
 
     @staticmethod
@@ -251,6 +238,7 @@ class Server:
         default_log_path = os.path.join(config_dir, "server.log")
         default_ssl_cert_path = os.path.join(config_dir, "ssl", "cert.pem")
         default_ssl_key_path = os.path.join(config_dir, "ssl", "key.pem")
+        default_image_root = os.path.join(config_dir, "images")
 
         server_config = {}
         if not os.path.exists(server_config_path):
@@ -264,6 +252,9 @@ class Server:
                 "ssl_certfile": default_ssl_cert_path,
                 "cookie_samesite": "Lax",
                 "cookie_secure": False,
+                "image_roots": [default_image_root],
+                "selected_image_root": default_image_root,
+                "default_device": "cpu",
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -290,6 +281,19 @@ class Server:
                     server_config["cookie_samesite"] = "Lax"
                 if "cookie_secure" not in server_config:
                     server_config["cookie_secure"] = False
+                if "image_roots" not in server_config:
+                    server_config["image_roots"] = [default_image_root]
+                if "selected_image_root" not in server_config:
+                    server_config["selected_image_root"] = server_config[
+                        "image_roots"
+                    ][0]
+                if "default_device" not in server_config:
+                    server_config["default_device"] = "cpu"
+
+        if not server_config.get("image_roots"):
+            server_config["image_roots"] = [default_image_root]
+        if not server_config.get("selected_image_root"):
+            server_config["selected_image_root"] = server_config["image_roots"][0]
 
         return server_config
 
@@ -804,7 +808,6 @@ class Server:
                         "descending",
                         "thumbnail",
                         "show_stars",
-                        "default_device",
                         "similarity_character",
                     ):
                         self._config[key] = value
@@ -2121,6 +2124,17 @@ class Server:
 
             # Return the image file with CORS headers
             response = FileResponse(pic.file_path)
+            try:
+                stat = os.stat(pic.file_path)
+                etag = f'W/"{stat.st_size}-{int(stat.st_mtime)}"'
+                response.headers["ETag"] = etag
+                response.headers["Last-Modified"] = formatdate(
+                    stat.st_mtime, usegmt=True
+                )
+                # Force revalidation without disabling caching completely
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            except OSError:
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
             origin = request.headers.get("origin")
             if origin and (
                 origin in self.allow_origins
@@ -2455,16 +2469,14 @@ class Server:
                             f"Queuing likeness calculation for {len(new_pictures)} new pictures."
                         )
                     else:
-                        logger.error("No new pictures to import; all are duplicates.")
-                        self.import_tasks[task_id]["status"] = "failed"
-                        self.import_tasks[task_id]["error"] = (
-                            "All pictures are duplicates"
+                        logger.warning(
+                            "No new pictures to import; all are duplicates."
                         )
-                        self.import_tasks[task_id]["processed"] = len(uploaded_files)
-                        return
+                        new_pictures = []
 
                     # Build results after DB import so picture_id is available
                     results = []
+                    duplicate_count = 0
                     index = 0
                     for _, sha in zip(uploaded_files, shas):
                         if sha in existing_map:
@@ -2476,6 +2488,7 @@ class Server:
                                     "file": pic.file_path,
                                 }
                             )
+                            duplicate_count += 1
                         else:
                             pic = new_pictures[index]
                             results.append(
@@ -2486,6 +2499,13 @@ class Server:
                                 }
                             )
                             index += 1
+
+                    if duplicate_count:
+                        logger.warning(
+                            "Import completed with %d duplicate(s) out of %d file(s).",
+                            duplicate_count,
+                            len(uploaded_files),
+                        )
 
                     self.import_tasks[task_id]["results"] = results
                     self.import_tasks[task_id]["processed"] = len(uploaded_files)

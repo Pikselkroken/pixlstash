@@ -13,33 +13,36 @@
       <img
         src="/Logo.png"
         alt="Logo"
+        class="toolbar-logo"
         style="height: 50px; vertical-align: middle; margin-right: 8px"
       />
       <span class="toolbar-title">PixlVault</span>
       <div class="toolbar-actions">
-        <v-icon
-          class="toolbar-icon"
-          style="display: flex; align-items: center; height: 100%"
-          >mdi-image-size-select-small</v-icon
-        >
-        <v-slider
-          v-model="thumbnailSize"
-          :min="128"
-          :max="224"
-          :step="32"
-          class="toolbar-slider"
-          hide-details
-        />
-        <v-icon
-          class="toolbar-icon"
-          style="
-            display: flex;
-            align-items: center;
-            height: 100%;
-            margin-right: 4px;
-          "
-          >mdi-image-size-select-large</v-icon
-        >
+        <div class="toolbar-size-controls">
+          <v-icon
+            class="toolbar-icon"
+            style="display: flex; align-items: center; height: 100%"
+            >mdi-image-size-select-small</v-icon
+          >
+          <v-slider
+            v-model="thumbnailSize"
+            :min="128"
+            :max="224"
+            :step="32"
+            class="toolbar-slider"
+            hide-details
+          />
+          <v-icon
+            class="toolbar-icon"
+            style="
+              display: flex;
+              align-items: center;
+              height: 100%;
+              margin-right: 4px;
+            "
+            >mdi-image-size-select-large</v-icon
+          >
+        </div>
         <v-btn
           icon
           :color="searchOverlayVisible ? 'primary' : 'surface'"
@@ -51,7 +54,7 @@
         </v-btn>
         <v-btn
           icon
-          :color="showStars ? 'surface' : 'accent'"
+          :color="showStars ? 'accent' : 'surface'"
           @click="showStars = !showStars"
           title="Toggle star ratings"
           style="margin-left: 4px"
@@ -96,6 +99,7 @@
           :color="'tertiary'"
           @click="handleExportZip"
           title="Export current grid to zip"
+          class="toolbar-download-btn"
           style="margin-left: 4px"
         >
           <v-icon :color="'onTertiary'">mdi-download</v-icon>
@@ -103,25 +107,35 @@
       </div>
     </div>
     <div class="file-manager">
-      <SideBar
-        ref="sidebarRef"
+      <div
+        class="sidebar-shell"
+        :class="{ open: sidebarVisible }"
+        v-show="sidebarVisible"
+      >
+        <SideBar
+          ref="sidebarRef"
+          :selectedCharacter="selectedCharacter"
+          :allPicturesId="ALL_PICTURES_ID"
+          :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+          :selectedSet="selectedSet"
+          :selectedSort="selectedSort"
+          :selectedDescending="selectedDescending"
+          :backendUrl="BACKEND_URL"
+          :selectedSimilarityCharacter="selectedSimilarityCharacter"
+          @select-character="handleSelectCharacter"
+          @select-set="handleSelectSet"
+          @images-assigned-to-character="handleImagesAssignedToCharacter"
+          @update:selected-sort="handleUpdateSelectedSort"
+          @update:similarity-character="handleUpdateSimilarityCharacter"
+          @update:set-error="error = $event"
+          @update:set-loading="loading = $event"
+        />
+      </div>
+      <div
         v-if="sidebarVisible"
-        :selectedCharacter="selectedCharacter"
-        :allPicturesId="ALL_PICTURES_ID"
-        :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-        :selectedSet="selectedSet"
-        :selectedSort="selectedSort"
-        :selectedDescending="selectedDescending"
-        :backendUrl="BACKEND_URL"
-        :selectedSimilarityCharacter="selectedSimilarityCharacter"
-        @select-character="handleSelectCharacter"
-        @select-set="handleSelectSet"
-        @images-assigned-to-character="handleImagesAssignedToCharacter"
-        @update:selected-sort="handleUpdateSelectedSort"
-        @update:similarity-character="handleUpdateSimilarityCharacter"
-        @update:set-error="error = $event"
-        @update:set-loading="loading = $event"
-      />
+        class="sidebar-backdrop"
+        @click="sidebarVisible = false"
+      ></div>
       <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
         <div
           :class="['main-content', selectedCharacter ? 'accent-border' : '']"

@@ -194,6 +194,27 @@
                 >
                   {{ img.idx }}
                 </div>
+                <div
+                  v-if="img.id"
+                  class="thumbnail-id-overlay"
+                  :style="{
+                    position: 'absolute',
+                    left: '10px',
+                    bottom: '6px',
+                    color: '#fff',
+                    background: 'rgba(0, 0, 0, 0.6)',
+                    fontSize: '0.72em',
+                    padding: '2px 6px',
+                    borderRadius: '6px',
+                    zIndex: 20,
+                    maxWidth: '90%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }"
+                >
+                  {{ img.id }}
+                </div>
               </template>
               <template v-else-if="img.thumbnail">
                 <img
@@ -267,6 +288,27 @@
                   }"
                 >
                   {{ img.idx }}
+                </div>
+                <div
+                  v-if="img.id"
+                  class="thumbnail-id-overlay"
+                  :style="{
+                    position: 'absolute',
+                    left: '10px',
+                    bottom: '6px',
+                    color: '#fff',
+                    background: 'rgba(0, 0, 0, 0.6)',
+                    fontSize: '0.72em',
+                    padding: '2px 6px',
+                    borderRadius: '6px',
+                    zIndex: 20,
+                    maxWidth: '90%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }"
+                >
+                  {{ img.id }}
                 </div>
               </template>
               <template v-else>
@@ -671,7 +713,8 @@ function getImageDownloadUrl(img) {
   if (!img || !img.id) return "";
   const ext = getImageFormatExtension(img);
   const suffix = ext ? `.${ext}` : "";
-  return `${props.backendUrl}/pictures/${img.id}${suffix}`;
+  const cacheBuster = img.pixel_sha ? `?v=${img.pixel_sha}` : "";
+  return `${props.backendUrl}/pictures/${img.id}${suffix}${cacheBuster}`;
 }
 
 function prefetchFullImage(img) {
@@ -1195,13 +1238,15 @@ async function fetchImageInfo(imageId) {
 }
 
 async function openOverlay(img) {
-  if (img && img.id) {
-    const latestInfo = await fetchImageInfo(img.id);
-    // Merge all fields from latestInfo into img
-    Object.assign(img, latestInfo);
-  }
+  if (!img || !img.id) return;
+  const requestedId = img.id;
   overlayImage.value = { ...img };
   overlayOpen.value = true;
+
+  const latestInfo = await fetchImageInfo(requestedId);
+  if (!latestInfo || Array.isArray(latestInfo)) return;
+  if (!overlayImage.value || overlayImage.value.id !== requestedId) return;
+  overlayImage.value = { ...overlayImage.value, ...latestInfo };
 }
 
 function closeOverlay() {
@@ -1974,6 +2019,17 @@ function updateColumns() {
     const el = scrollWrapper.value?.$el || scrollWrapper.value;
     if (!el) return;
     const containerWidth = el.offsetWidth;
+    const isMobile = typeof window !== "undefined" && window.innerWidth <= 900;
+    const isLandscape =
+      typeof window !== "undefined" &&
+      window.matchMedia &&
+      window.matchMedia("(orientation: landscape)").matches;
+
+    if (isMobile) {
+      columns.value = isLandscape ? 4 : 2;
+      return;
+    }
+
     columns.value = Math.max(
       1,
       Math.floor(containerWidth / (props.thumbnailSize + 32)),
@@ -2419,7 +2475,7 @@ function clearSearchQuery() {
   color: rgb(var(--v-theme-on-background));
   text-align: center;
   word-break: break-all;
-  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.3);
+  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.2);
 }
 .thumbnail-container {
   width: 100%;
