@@ -2717,7 +2717,7 @@ function handleEmptyStateReset() {
   max-height: 1.1em;
 }
 .grid-scroll-wrapper {
-  height: 100vh; /* or calc(100vh - headerHeight) if you have a header */
+  height: calc(100vh - 60px);
   overflow-y: auto;
   width: 100%;
   padding-right: 0px;
