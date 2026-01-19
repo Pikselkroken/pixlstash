@@ -1234,6 +1234,11 @@ const divisibleViewWindow = computed(() => {
   return Math.ceil(VIEW_WINDOW / cols) * cols;
 });
 
+const initialRender = ref(true);
+const renderBuffer = computed(() =>
+  initialRender.value ? 0 : divisibleViewWindow.value,
+);
+
 const isLoadingThumbnails = ref(false);
 const hasMoreImages = ref(true);
 
@@ -1355,10 +1360,10 @@ function isScoreSortActive() {
 }
 
 function invalidateVisibleThumbnailRanges() {
-  const start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
+  const start = Math.max(0, visibleStart.value - renderBuffer.value);
   const end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value,
+    visibleEnd.value + renderBuffer.value,
   );
   loadedRanges.value = loadedRanges.value.filter(
     ([rangeStart, rangeEnd]) => rangeEnd <= start || rangeStart >= end,
@@ -1807,13 +1812,10 @@ async function fetchAllGridImages() {
     const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
     visibleStart.value = 0;
     visibleEnd.value = Math.min(newImages.length, windowCount);
-    const prefetchStart = Math.max(
-      0,
-      visibleStart.value - divisibleViewWindow.value,
-    );
+    const prefetchStart = Math.max(0, visibleStart.value - renderBuffer.value);
     const prefetchEnd = Math.min(
       newImages.length,
-      visibleEnd.value + divisibleViewWindow.value,
+      visibleEnd.value + renderBuffer.value,
     );
     fetchThumbnailsBatch(prefetchStart, prefetchEnd);
     const rangeEnd = performance.now();
@@ -1830,6 +1832,10 @@ async function fetchAllGridImages() {
       console.log("[ImageGrid.vue] post-assign frame timing", {
         rafMs: (rafEnd - assignEnd).toFixed(1),
       });
+      if (initialRender.value) {
+        initialRender.value = false;
+        updateVisibleThumbnails();
+      }
     });
   } catch (e) {
     imagesError.value = e.message;
@@ -1869,6 +1875,7 @@ watch(
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
+    initialRender.value = true;
     updateSelectedGroupName();
     debouncedFetchAllGridImages();
   },
@@ -1884,6 +1891,7 @@ watch(
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
+    initialRender.value = true;
     debouncedFetchAllGridImages();
   },
 );
@@ -1899,6 +1907,7 @@ watch([() => props.mediaTypeFilter], () => {
   visibleStart.value = 0;
   visibleEnd.value = 0;
   allGridImages.value = [];
+  initialRender.value = true;
   fetchAllGridImages().then(() => {
     updateVisibleThumbnails();
   });
@@ -1928,7 +1937,7 @@ const columns = ref(1);
 
 const renderStart = computed(() => {
   const cols = columns.value;
-  let start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
+  let start = Math.max(0, visibleStart.value - renderBuffer.value);
   return start;
 });
 
@@ -1936,7 +1945,7 @@ const renderEnd = computed(() => {
   const cols = columns.value;
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value,
+    visibleEnd.value + renderBuffer.value,
   );
   return end;
 });
@@ -2169,10 +2178,10 @@ async function fetchThumbnailsBatch(start, end) {
 }
 
 function updateVisibleThumbnails() {
-  let start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
+  let start = Math.max(0, visibleStart.value - renderBuffer.value);
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value,
+    visibleEnd.value + renderBuffer.value,
   );
   if (rangeCovers(loadedRanges.value, start, end)) return;
   if (rangeCovers(pendingRanges, start, end)) return;
