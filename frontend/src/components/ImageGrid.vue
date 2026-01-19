@@ -116,6 +116,14 @@
           <div class="empty-state-subtitle">
             Try clearing filters, adjusting your search, or switching sets.
           </div>
+          <v-btn
+            class="empty-state-action"
+            color="primary"
+            variant="elevated"
+            @click.stop="handleEmptyStateReset"
+          >
+            Show All Pictures
+          </v-btn>
         </div>
       </div>
       <div
@@ -514,7 +522,12 @@ import { useSearchOverlay } from "../utils/useSearchOverlay";
 import { apiClient } from "../utils/apiClient";
 import { debounce, update } from "lodash-es";
 
-const emit = defineEmits(["open-overlay", "refresh-sidebar", "clear-search"]);
+const emit = defineEmits([
+  "open-overlay",
+  "refresh-sidebar",
+  "clear-search",
+  "reset-to-all",
+]);
 
 // Props
 const props = defineProps({
@@ -595,6 +608,10 @@ onUnmounted(() => {
   prefetchedFullImageIds.clear();
   prefetchedFullImageOrder.length = 0;
   resetMultiSelectionZip();
+  if (emptyStateDelayTimer) {
+    clearTimeout(emptyStateDelayTimer);
+    emptyStateDelayTimer = null;
+  }
 });
 
 function onThumbnailLoad(id) {
@@ -1915,8 +1932,35 @@ const filteredGridCount = computed(() => {
   return filterImagesByMediaType(allGridImages.value).length;
 });
 
+const EMPTY_STATE_DELAY_MS = 350;
+const emptyStateDelayPassed = ref(false);
+let emptyStateDelayTimer = null;
+
 const showEmptyState = computed(() => {
-  return !imagesLoading.value && filteredGridCount.value === 0;
+  return (
+    !imagesLoading.value &&
+    filteredGridCount.value === 0 &&
+    emptyStateDelayPassed.value
+  );
+});
+
+watch([imagesLoading, filteredGridCount], ([loading, count]) => {
+  if (emptyStateDelayTimer) {
+    clearTimeout(emptyStateDelayTimer);
+    emptyStateDelayTimer = null;
+  }
+
+  if (loading || count > 0) {
+    emptyStateDelayPassed.value = false;
+    return;
+  }
+
+  emptyStateDelayPassed.value = false;
+  emptyStateDelayTimer = setTimeout(() => {
+    if (!imagesLoading.value && filteredGridCount.value === 0) {
+      emptyStateDelayPassed.value = true;
+    }
+  }, EMPTY_STATE_DELAY_MS);
 });
 
 watch(allGridImages, (newVal, oldVal) => {
@@ -2560,6 +2604,10 @@ function clearSearchQuery() {
   console.log("[ImageGrid.vue] clearSearchQuery called");
   emit("clear-search", "");
 }
+
+function handleEmptyStateReset() {
+  emit("reset-to-all");
+}
 </script>
 
 <style scoped>
@@ -2650,7 +2698,7 @@ function clearSearchQuery() {
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none;
+  pointer-events: auto;
   z-index: 5;
 }
 .empty-state-card {
@@ -2666,6 +2714,7 @@ function clearSearchQuery() {
   text-align: center;
   max-width: 420px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  pointer-events: auto;
 }
 .empty-state-illustration {
   color: rgba(0, 0, 0, 0.45);
@@ -2677,6 +2726,9 @@ function clearSearchQuery() {
 .empty-state-subtitle {
   font-size: 0.95em;
   opacity: 0.8;
+}
+.empty-state-action {
+  margin-top: 6px;
 }
 .image-grid {
   height: 100%;

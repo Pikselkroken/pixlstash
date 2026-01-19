@@ -254,6 +254,18 @@ function handleClearSearch() {
   refreshGridVersion(); // Force the ImageGrid to refresh
 }
 
+function handleResetToAll() {
+  selectedCharacter.value = ALL_PICTURES_ID;
+  selectedSet.value = null;
+  selectedSort.value = "DATE";
+  selectedDescending.value = false;
+  selectedSimilarityCharacter.value = null;
+  searchQuery.value = "";
+  mediaTypeFilter.value = "all";
+  refreshGridVersion();
+  closeSidebarIfMobile();
+}
+
 // --- Watchers ---
 watch(searchQuery, (newVal, oldVal) => {
   if (!newVal && oldVal) {
