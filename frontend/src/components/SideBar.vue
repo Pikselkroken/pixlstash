@@ -115,6 +115,11 @@ const selectedCharacterObj = computed(() => {
   return null;
 });
 
+const selectedSetObj = computed(() => {
+  if (!props.selectedSet) return null;
+  return pictureSets.value.find((pset) => pset.id === props.selectedSet) || null;
+});
+
 // --- Similarity Character Dropdown State ---
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
 const STACKS_SORT_KEY = "PICTURE_STACKS";
@@ -879,6 +884,14 @@ defineExpose({ refreshSidebar });
       <span class="sidebar-header-spacer"></span>
       <div class="sidebar-header-actions">
         <v-icon
+          v-if="selectedCharacterObj"
+          class="edit-character-inline"
+          @click.stop="openCharacterEditor(selectedCharacterObj)"
+          title="Edit selected character"
+        >
+          mdi-pencil
+        </v-icon>
+        <v-icon
           v-if="
             props.selectedCharacter &&
             props.selectedCharacter !== props.allPicturesId &&
@@ -937,7 +950,7 @@ defineExpose({ refreshSidebar });
             <span style="display: flex; align-items: center">
               <v-icon
                 small
-                style="margin-right: 8px; cursor: pointer"
+                style="margin-right: 4px; cursor: pointer"
                 @click.stop="toggleCharacterCollapse(char.id)"
               >
                 {{
@@ -966,13 +979,6 @@ defineExpose({ refreshSidebar });
                 <span>{{ char.name }}</span>
               </v-tooltip>
             </span>
-            <button
-              class="character-edit-btn"
-              @click.stop="openCharacterEditor(char)"
-              title="Edit character details"
-            >
-              <v-icon size="small">mdi-pencil</v-icon>
-            </button>
             <span class="sidebar-list-count">
               {{ categoryCounts[char.id] ?? "" }}
             </span>
@@ -1061,6 +1067,14 @@ defineExpose({ refreshSidebar });
       <span class="sidebar-header-spacer"></span>
       <div class="sidebar-header-actions">
         <v-icon
+          v-if="selectedSetObj"
+          class="edit-set-inline"
+          @click.stop="openSetEditor(selectedSetObj)"
+          title="Edit selected set"
+        >
+          mdi-pencil
+        </v-icon>
+        <v-icon
           v-if="selectedSet"
           class="delete-character-inline"
           color="white"
@@ -1116,13 +1130,6 @@ defineExpose({ refreshSidebar });
                 <span>{{ pset.name }}</span>
               </v-tooltip>
             </span>
-            <button
-              class="character-edit-btn"
-              @click.stop="openSetEditor(pset)"
-              title="Edit picture set details"
-            >
-              <v-icon size="small">mdi-pencil</v-icon>
-            </button>
             <span class="sidebar-list-count">
               {{ pset.picture_count ?? 0 }}
             </span>
@@ -1311,7 +1318,6 @@ defineExpose({ refreshSidebar });
   filter: brightness(1.2);
   background: rgb(var(--v-theme-sidebar-hover));
   color: rgb(var(--v-theme-on-sidebar-hover));
-  font-weight: bold;
 }
 
 .sidebar-list-item.droppable {
@@ -1352,14 +1358,17 @@ defineExpose({ refreshSidebar });
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: left;
+  padding-left: 6px;
 }
 
 .sidebar-character-thumb {
-  max-width: 36px;
-  max-height: 36px;
+  width: 36px;
+  height: 36px;
   object-fit: contain;
   border-radius: 6px;
   box-shadow: 0 0 0 #bbb;
+  background: transparent;
+  display: inline-block;
 }
 
 .sidebar-character-group {
@@ -1407,6 +1416,30 @@ defineExpose({ refreshSidebar });
 
 .add-character-inline:hover {
   background: rgb(var(--v-theme-accent));
+}
+
+.edit-character-inline,
+.edit-set-inline {
+  color: rgb(var(--v-theme-on-surface)) !important;
+  font-size: 1.2rem;
+  cursor: pointer;
+  background: transparent;
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+
+.edit-character-inline:hover,
+.edit-set-inline:hover {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary)) !important;
 }
 
 .upload-pictures-inline {
@@ -1463,27 +1496,6 @@ defineExpose({ refreshSidebar });
   color: rgb(var(--v-theme-on-surface));
 }
 
-.character-edit-btn {
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.4);
-  cursor: pointer;
-  padding: 4px;
-  margin-left: auto;
-  margin-right: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transition:
-    color 0.2s,
-    background-color 0.2s;
-}
-
-.character-edit-btn:hover {
-  color: rgba(255, 255, 255, 1);
-  background-color: rgba(255, 255, 255, 0.1);
-}
 /* Reference set child entry styling */
 .sidebar-reference-set {
   font-size: 0.88em;
@@ -1575,7 +1587,8 @@ defineExpose({ refreshSidebar });
 
   .add-character-inline,
   .delete-character-inline,
-  .character-edit-btn {
+  .edit-character-inline,
+  .edit-set-inline {
     width: 44px;
     height: 44px;
   }

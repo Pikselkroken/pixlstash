@@ -358,32 +358,17 @@
                   </div>
                 </template>
                 <div
-                  class="thumbnail-index-overlay"
-                  :style="{
-                    position: 'absolute',
-                    top: '6px',
-                    left: '10px',
-                    color: 'red',
-                    fontWeight: 'bold',
-                    fontSize: '1.2em',
-                    textShadow: '0 0 2px #fff',
-                    zIndex: 20,
-                  }"
-                >
-                  {{ img.idx }}
-                </div>
-                <div
-                  v-if="img.id"
+                  v-if="img.format && img.format !== 'unknown'"
                   class="thumbnail-id-overlay"
                   :style="{
                     position: 'absolute',
                     left: '10px',
                     bottom: '6px',
                     color: '#fff',
-                    background: 'rgba(0, 0, 0, 0.6)',
+                    background: 'rgba(0, 0, 0, 0.4)',
                     fontSize: '0.72em',
-                    padding: '2px 6px',
-                    borderRadius: '6px',
+                    padding: '2px 4px',
+                    borderRadius: '4px',
                     zIndex: 20,
                     maxWidth: '90%',
                     overflow: 'hidden',
@@ -391,7 +376,7 @@
                     whiteSpace: 'nowrap',
                   }"
                 >
-                  {{ img.id }}
+                  {{ img.format.toUpperCase() }}
                 </div>
               </template>
               <template v-else>
@@ -477,19 +462,6 @@
     <div
       v-if="props.searchQuery && props.searchQuery.length > 0"
       class="search-result-bar"
-      style="
-        position: absolute;
-        bottom: 64px;
-        left: 0;
-        width: 100%;
-        z-index: 10;
-        background-color: #f5f5f5;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 8px 16px;
-        box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
-      "
     >
       <span> Search result found {{ allGridImages.length }} items </span>
       <v-btn color="primary" @click="clearSearchQuery">Clear</v-btn>

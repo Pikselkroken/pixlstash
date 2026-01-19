@@ -36,7 +36,7 @@ const pixlVaultTheme = {
     onSecondary: '#f2e5da',
     tertiary: '#dce2aa',
     onTertiary: '#444850',
-    border: '#242830',
+    border: '#262828',
     divider: '#d4c8bd',
     overlay: '#00000033',
     focus: '#7c4dff',
