@@ -35,6 +35,9 @@ const emit = defineEmits([
   "update:stack-threshold",
 ]);
 
+const imageImporterRef = ref(null);
+const uploadInputRef = ref(null);
+
 const dragOverSet = ref(null);
 
 // --- Sorting State ---
@@ -280,6 +283,19 @@ function createCharacter() {
 
 function handleImportFinished() {
   emit("import-finished");
+}
+
+function openUploadDialog() {
+  if (uploadInputRef.value) {
+    uploadInputRef.value.click();
+  }
+}
+
+function handleUploadInputChange(event) {
+  const files = Array.from(event?.target?.files || []);
+  if (!files.length) return;
+  imageImporterRef.value?.startImport(files);
+  event.target.value = "";
 }
 
 function setLoading(isLoading) {
@@ -780,6 +796,14 @@ defineExpose({ refreshSidebar });
     :unassigned-pictures-id="props.unassignedPicturesId"
     @import-finished="handleImportFinished"
   />
+  <input
+    ref="uploadInputRef"
+    class="sidebar-upload-input"
+    type="file"
+    accept="image/*,video/*"
+    multiple
+    @change="handleUploadInputChange"
+  />
   <CharacterEditor
     :open="characterEditorOpen"
     :character="characterEditorCharacter"
@@ -801,6 +825,16 @@ defineExpose({ refreshSidebar });
         {{ sections.pictures ? "mdi-chevron-down" : "mdi-chevron-right" }}
       </v-icon>
       Pictures
+      <span class="sidebar-header-spacer"></span>
+      <div class="sidebar-header-actions">
+        <v-icon
+          class="upload-pictures-inline"
+          @click.stop="openUploadDialog"
+          title="Upload pictures"
+        >
+          mdi-cloud-upload-outline
+        </v-icon>
+      </div>
     </div>
     <transition name="fade">
       <div v-show="sections.pictures">
@@ -1365,6 +1399,29 @@ defineExpose({ refreshSidebar });
 
 .add-character-inline:hover {
   background: rgb(var(--v-theme-accent));
+}
+
+.upload-pictures-inline {
+  color: rgb(var(--v-theme-on-surface)) !important;
+  font-size: 1.2rem;
+  cursor: pointer;
+  background: transparent;
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  transition: background 0.2s;
+}
+
+.upload-pictures-inline:hover {
+  background: rgb(var(--v-theme-accent));
+}
+
+.sidebar-upload-input {
+  display: none;
 }
 
 .delete-character-inline {

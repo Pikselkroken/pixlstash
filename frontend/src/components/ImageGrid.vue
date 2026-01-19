@@ -111,12 +111,13 @@
             </svg>
           </div>
           <div class="empty-state-title">
-            No pictures match the current filters
+            {{ emptyStateTitle }}
           </div>
           <div class="empty-state-subtitle">
-            Try clearing filters, adjusting your search, or switching sets.
+            {{ emptyStateSubtitle }}
           </div>
           <v-btn
+            v-if="canShowAllPicturesButton"
             class="empty-state-action"
             color="primary"
             variant="elevated"
@@ -600,6 +601,7 @@ onMounted(() => {
   );
   console.log("[ImageGrid.vue] Initial allGridImages:", allGridImages.value);
   window.addEventListener("resize", triggerFaceOverlayRedraw);
+  fetchAllPicturesCount();
 });
 
 onUnmounted(() => {
@@ -1249,6 +1251,7 @@ watch(
     selectedImageIds.value = [];
     lastSelectedIndex = null;
     debouncedFetchAllGridImages();
+    fetchAllPicturesCount();
   },
 );
 
@@ -1599,6 +1602,7 @@ function onGlobalKeyPress(key, event) {
 // Total image count for paging and 'End' key
 const imagesLoading = ref(false);
 const imagesError = ref(null);
+const totalAllPicturesCount = ref(0);
 
 function normalizeStackThreshold(value) {
   if (value === null || value === undefined || value === "") return 0.94;
@@ -1804,6 +1808,18 @@ async function fetchAllGridImages() {
   updateVisibleThumbnails();
 }
 
+async function fetchAllPicturesCount() {
+  try {
+    const res = await apiClient.get(
+      `${props.backendUrl}/characters/${props.allPicturesId}/summary`,
+    );
+    const data = await res.data;
+    totalAllPicturesCount.value = Number(data.image_count) || 0;
+  } catch (e) {
+    console.warn("[ImageGrid.vue] Failed to fetch all pictures count:", e);
+  }
+}
+
 // Update watchers to use the debounced function
 watch(
   [
@@ -1942,6 +1958,22 @@ const showEmptyState = computed(() => {
     filteredGridCount.value === 0 &&
     emptyStateDelayPassed.value
   );
+});
+
+const canShowAllPicturesButton = computed(() => {
+  return totalAllPicturesCount.value > 0;
+});
+
+const emptyStateTitle = computed(() => {
+  return totalAllPicturesCount.value > 0
+    ? "No pictures match the current filters"
+    : "No pictures in the database.";
+});
+
+const emptyStateSubtitle = computed(() => {
+  return totalAllPicturesCount.value > 0
+    ? "Try clearing filters, adjusting your search, or switching sets."
+    : "Add pictures by dragging them here.";
 });
 
 watch([imagesLoading, filteredGridCount], ([loading, count]) => {
