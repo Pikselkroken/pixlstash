@@ -2,8 +2,6 @@
 * Token authentication for API Uses
 
 * Crop the thumbnail to include the faces
-* Hide a lot of output from libraries
-* Automatic assignment to characters
 * Monitoring of T2I output folders
 * Package better
 

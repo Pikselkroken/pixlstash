@@ -110,4 +110,10 @@ onUnmounted(() => {
 .close-icon:hover {
   background-color: rgb(var(--v-theme-accent));
 }
+
+/* Darker overlay for dialogs/overlays */
+.v-overlay__scrim {
+  background: rgba(0, 0, 0, 0.8) !important;
+  opacity: 0.9 !important;
+}
 </style>
