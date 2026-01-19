@@ -1283,22 +1283,6 @@ defineExpose({ refreshSidebar });
   position: relative;
 }
 
-.sidebar-list-item.active::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 20px;
-  height: 100%;
-  background: linear-gradient(
-    to right,
-    rgba(255, 165, 0, 0) 30%,
-    rgba(255, 165, 0, 1) 90%
-  );
-  pointer-events: none;
-  z-index: 2;
-}
-
 .sidebar-list-item:hover {
   filter: brightness(1.2);
   background: rgb(var(--v-theme-sidebar-hover));
