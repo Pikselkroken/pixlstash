@@ -29,7 +29,7 @@ const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
 const selectedSort = ref("");
 const selectedDescending = ref(false);
-const stackThreshold = ref("0.0");
+const stackThreshold = ref(null);
 
 // --- Search & Filtering State ---
 const searchQuery = ref("");

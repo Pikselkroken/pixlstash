@@ -55,6 +55,69 @@
       @scroll="onGridScroll"
       style="position: relative"
     >
+      <div v-if="showEmptyState" class="empty-state">
+        <div class="empty-state-card">
+          <div class="empty-state-illustration" aria-hidden="true">
+            <svg
+              width="160"
+              height="120"
+              viewBox="0 0 160 120"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <rect
+                x="18"
+                y="16"
+                width="86"
+                height="64"
+                rx="10"
+                stroke="currentColor"
+                stroke-width="3"
+                opacity="0.4"
+              />
+              <rect
+                x="34"
+                y="28"
+                width="86"
+                height="64"
+                rx="10"
+                stroke="currentColor"
+                stroke-width="3"
+                opacity="0.6"
+              />
+              <rect
+                x="50"
+                y="40"
+                width="86"
+                height="64"
+                rx="10"
+                stroke="currentColor"
+                stroke-width="3"
+              />
+              <circle
+                cx="96"
+                cy="70"
+                r="8"
+                stroke="currentColor"
+                stroke-width="3"
+              />
+              <path
+                d="M60 86 L76 70 L88 82 L104 66 L122 86"
+                stroke="currentColor"
+                stroke-width="3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+          <div class="empty-state-title">
+            No pictures match the current filters
+          </div>
+          <div class="empty-state-subtitle">
+            Try clearing filters, adjusting your search, or switching sets.
+          </div>
+        </div>
+      </div>
       <div
         class="image-grid"
         :style="{
@@ -1521,10 +1584,10 @@ const imagesLoading = ref(false);
 const imagesError = ref(null);
 
 function normalizeStackThreshold(value) {
-  if (value === null || value === undefined || value === "") return 0.0;
+  if (value === null || value === undefined || value === "") return 0.94;
   const parsed = parseFloat(value);
-  if (Number.isNaN(parsed)) return 0.0;
-  return Math.max(0, Math.min(1, parsed));
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0.94;
+  return Math.max(0.9, Math.min(0.98, parsed));
 }
 
 function getStackColor(stackIndex) {
@@ -1825,22 +1888,8 @@ const bottomSpacerHeight = computed(() => {
 // Compute grid images (id, idx, thumbnail)
 const allGridImages = ref([]);
 
-watch(allGridImages, (newVal, oldVal) => {
-  console.log("[ImageGrid.vue] allGridImages updated:", {
-    oldLength: oldVal.length,
-    newLength: newVal.length,
-    oldValue: oldVal,
-    newValue: newVal,
-  });
-});
-
-const gridImagesToRender = computed(() => {
-  if (!allGridImages.value) {
-    console.warn("allGridImages is undefined");
-    return [];
-  }
-
-  let filtered = allGridImages.value;
+function filterImagesByMediaType(images) {
+  let filtered = images;
   if (props.mediaTypeFilter === "images") {
     filtered = filtered.filter((img) => {
       if (!img) return false;
@@ -1858,6 +1907,34 @@ const gridImagesToRender = computed(() => {
       return candidates.some((val) => isSupportedVideoFile(val));
     });
   }
+  return filtered;
+}
+
+const filteredGridCount = computed(() => {
+  if (!allGridImages.value) return 0;
+  return filterImagesByMediaType(allGridImages.value).length;
+});
+
+const showEmptyState = computed(() => {
+  return !imagesLoading.value && filteredGridCount.value === 0;
+});
+
+watch(allGridImages, (newVal, oldVal) => {
+  console.log("[ImageGrid.vue] allGridImages updated:", {
+    oldLength: oldVal.length,
+    newLength: newVal.length,
+    oldValue: oldVal,
+    newValue: newVal,
+  });
+});
+
+const gridImagesToRender = computed(() => {
+  if (!allGridImages.value) {
+    console.warn("allGridImages is undefined");
+    return [];
+  }
+
+  const filtered = filterImagesByMediaType(allGridImages.value);
   return filtered.slice(renderStart.value, renderEnd.value);
 });
 
@@ -2566,6 +2643,40 @@ function clearSearchQuery() {
   padding-right: 0px;
   scrollbar-color: orange #ddd;
   border: 0px solid red;
+}
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 5;
+}
+.empty-state-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 30px;
+  border-radius: 18px;
+  border: 1px dashed rgba(0, 0, 0, 0.25);
+  background: rgba(255, 255, 255, 0.72);
+  color: rgb(var(--v-theme-on-background));
+  text-align: center;
+  max-width: 420px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+.empty-state-illustration {
+  color: rgba(0, 0, 0, 0.45);
+}
+.empty-state-title {
+  font-size: 1.2em;
+  font-weight: 600;
+}
+.empty-state-subtitle {
+  font-size: 0.95em;
+  opacity: 0.8;
 }
 .image-grid {
   height: 100%;

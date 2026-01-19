@@ -115,6 +115,7 @@ const selectedCharacterObj = computed(() => {
 // --- Similarity Character Dropdown State ---
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
 const STACKS_SORT_KEY = "PICTURE_STACKS";
+const DATE_SORT_KEY = "DATE";
 
 const similarityCharacterOptions = computed(() => {
   let options = sortedCharacters.value.map((c) => ({
@@ -138,10 +139,16 @@ const stackThresholdOptions = [
 ];
 
 const stackThresholdModel = computed({
-  get: () =>
-    props.stackThreshold != null && props.stackThreshold !== ""
-      ? String(props.stackThreshold)
-      : "0.94",
+  get: () => {
+    if (props.stackThreshold == null || props.stackThreshold === "") {
+      return "0.94";
+    }
+    const parsed = parseFloat(String(props.stackThreshold));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return "0.94";
+    }
+    return String(props.stackThreshold);
+  },
   set: (value) => emit("update:stack-threshold", value),
 });
 
@@ -684,6 +691,7 @@ async function characterSaved() {
     nextCharacterNumber.value++;
   }
   await fetchCharacters(); // Refresh characters
+  await fetchSortOptions(); // Ensure sort options include similarity when characters exist
   await fetchPictureSets(); // Refresh picture sets to include reference sets
   closeCharacterEditor();
 }
@@ -732,6 +740,32 @@ watch(
       }
     }
   },
+);
+
+watch(
+  () => sortedCharacters.value.length,
+  () => {
+    fetchSortOptions();
+  },
+);
+
+watch(
+  [() => sortedCharacters.value, () => props.selectedSort],
+  ([chars, selectedSort]) => {
+    const hasCharacters = Array.isArray(chars) && chars.length > 0;
+    if (!hasCharacters && selectedSort === SIMILARITY_SORT_KEY) {
+      sortModel.value = DATE_SORT_KEY;
+      similarityCharacterModel.value = null;
+      return;
+    }
+
+    if (hasCharacters && selectedSort === SIMILARITY_SORT_KEY) {
+      if (!similarityCharacterModel.value) {
+        similarityCharacterModel.value = chars[0].id;
+      }
+    }
+  },
+  { immediate: true },
 );
 
 defineExpose({ refreshSidebar });
