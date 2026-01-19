@@ -1222,8 +1222,32 @@ defineExpose({ refreshSidebar });
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  min-height: 100vh;
+  min-height: 0;
+  height: calc(100vh - 60px);
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
+  scrollbar-color: rgb(var(--v-theme-accent)) rgba(0, 0, 0, 0.15);
   box-sizing: border-box;
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    height: calc(100dvh - 44px);
+    max-height: calc(100dvh - 44px);
+  }
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgb(var(--v-theme-accent));
+  border-radius: 8px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.15);
 }
 
 .sidebar-section-header {

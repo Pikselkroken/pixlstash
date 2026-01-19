@@ -143,6 +143,7 @@ body {
 .sidebar-shell {
   display: flex;
   flex: 0 0 auto;
+  height: calc(100vh - 60px);
 }
 
 .sidebar-backdrop {
@@ -162,6 +163,10 @@ body {
   .file-manager {
     flex-direction: column;
     height: 100dvh;
+  }
+
+  .sidebar-shell {
+    height: calc(100dvh - 44px);
   }
 
   .top-toolbar {
