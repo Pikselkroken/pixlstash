@@ -2646,13 +2646,13 @@ function handleEmptyStateReset() {
 .drag-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(255, 166, 0, 0.2);
+  background: rgba(var(--v-theme-accent), 0.2);
   z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: all;
-  border: 8px solid #ffa600; /* thick orange border */
+  border: 8px solid rgb(var(--v-theme-accent));
   border-radius: 16px; /* rounded corners */
   box-sizing: border-box;
   transition:
@@ -2695,7 +2695,7 @@ function handleEmptyStateReset() {
 
 .export-progress-fill {
   height: 100%;
-  background: #4caf50;
+  background: rgb(var(--v-theme-accent));
   width: 0;
   transition: width 0.3s ease;
 }
@@ -2721,8 +2721,7 @@ function handleEmptyStateReset() {
   overflow-y: auto;
   width: 100%;
   padding-right: 0px;
-  scrollbar-color: orange #ddd;
-  border: 0px solid red;
+  scrollbar-color: rgb(var(--v-theme-accent)) rgb(var(--v-theme-on-accent));
 }
 .empty-state {
   position: absolute;
@@ -2777,11 +2776,11 @@ function handleEmptyStateReset() {
   width: 8px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: orange;
+  background: rgb(var(--v-theme-accent));
   border-radius: 8px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-track {
-  background: #ddd;
+  background: rgb(var(--v-theme-on-accent));
 }
 .image-card {
   min-width: 0;

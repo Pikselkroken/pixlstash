@@ -1,5 +1,5 @@
 html {
-  border: 2px solid magenta !important;
+  border: none;
 }
 body {
   margin: 0;
@@ -12,7 +12,7 @@ body {
   width: 100vw;
   height: 100vh;
   box-sizing: border-box;
-  border: 2px solid cyan !important;
+  border: none;
 }
 .app-viewport {
   position: fixed;
@@ -81,7 +81,7 @@ body {
   align-items: stretch;
   justify-content: flex-start;
   padding: 0;
-  border-left: 4px solid orange;
+  border-left: 2px solid rgb(var(--v-theme-border));
   transition: border-color 0.2s;
   height: calc(100vh - 60px);
   /* No overflow property here; only .image-grid should scroll */
@@ -374,93 +374,10 @@ button:focus:not(:focus-visible) {
   box-shadow: none !important;
 }
 
-.settings-dialog-titlebar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  background: #f5f5f7;
-  border-bottom: 1px solid #e0e0e0;
-  padding: 0.5em 1.5em 0.5em 1.5em;
-  box-sizing: border-box;
-  margin-bottom: 0;
-  border-radius: 0;
-}
-.settings-dialog-title {
-  font-size: 1.18em;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: #333;
-  margin: 0;
-}
-.settings-dialog-close {
-  background: none;
-  border: none;
-  font-size: 1.5em;
-  color: #888;
-  cursor: pointer;
-  line-height: 1;
-  padding: 0 8px;
-  transition: color 0.2s;
-  margin-left: 12px;
-}
-.settings-dialog-close:hover {
-  color: #1976d2;
-}
-
-/* Settings dialog styled to match overlay dialog */
-.settings-dialog-card {
-  min-width: 400px;
-  max-width: 90vw;
-  border-radius: 18px;
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.25),
-    0 1.5px 6px rgba(0, 0, 0, 0.08);
-  background: #fff;
-  padding: 0px 0px 0px 0px;
-  position: relative;
-}
-.settings-section {
-  margin-bottom: 24px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #eee;
-}
-.settings-image-roots {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.settings-image-root {
-  display: block;
-  padding: 8px 0 8px 8px;
-  font-size: 1.12em;
-  color: #333;
-  border-radius: 8px;
-  transition: background 0.2s;
-}
-.settings-image-root.selected {
-  font-weight: bold;
-  color: #1976d2;
-  background: #e3f2fd;
-}
-.settings-dialog-card .headline {
-  font-size: 1.35em;
-  font-weight: 600;
-  margin-bottom: 12px;
-}
-.settings-dialog-card .v-card-actions {
-  margin-bottom: 24px;
-  padding: 24px 20px 16px 20px;
-  background: #fff;
-  border-radius: 14px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
-  border: none;
-  min-width: 90px;
-}
 .clear-selection-button {
   margin-left: 8px;
   color: white;
-  background-color: #4f6fdd;
+  background-color: rgb(var(--v-theme-accent));
 }
 .clear-selection-button:hover {
   background-color: #6b8eeb;
@@ -488,7 +405,7 @@ button:focus:not(:focus-visible) {
 }
 
 .media-type-toggle .v-btn--active {
-  background-color: orange !important;
+  background-color: rgb(var(--v-theme-accent)) !important;
   color: white !important;
 }
 .face-bbox-toggle-btn .face-bbox-icon-wrapper {
