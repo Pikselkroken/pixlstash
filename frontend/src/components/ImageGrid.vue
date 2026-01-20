@@ -19,12 +19,13 @@
   />
   <div style="position: relative">
     <SelectionBar
-      v-if="selectedImageIds.length > 0"
+      v-if="selectedImageIds.length > 0 || selectedFaceIds.length > 0"
       :selectedCount="selectedImageIds.length"
+      :selectedFaceCount="selectedFaceIds.length"
       :selectedCharacter="String(props.selectedCharacter)"
       :selectedSet="String(props.selectedSet)"
       :selectedGroupName="selectedGroupName"
-      :visible="selectedImageIds.length > 0"
+      :visible="selectedImageIds.length > 0 || selectedFaceIds.length > 0"
       @clear-selection="clearSelection"
       @remove-from-group="removeFromGroup"
       @delete-selected="deleteSelected"
@@ -324,14 +325,28 @@
                 >
                   <div
                     v-for="overlay in getFaceBboxOverlays(img).value"
-                    :key="overlay.idx + '-' + thumbnailLoadedMap[img.id]"
+                    :key="overlay.faceId + '-' + thumbnailLoadedMap[img.id]"
                     class="face-bbox-overlay"
                     :style="overlay.style"
                     draggable="true"
+                    @pointerdown.stop
+                    @mousedown.stop
+                    @click.stop="
+                      toggleFaceSelection(
+                        img.id,
+                        overlay.faceIdx,
+                        overlay.faceId,
+                      )
+                    "
                     @dragstart="
                       (e) => {
                         e.stopPropagation();
-                        onFaceBboxDragStart(e, img, overlay.idx);
+                        onFaceBboxDragStart(
+                          e,
+                          img,
+                          overlay.faceIdx,
+                          overlay.faceId,
+                        );
                       }
                     "
                   >
@@ -348,11 +363,9 @@
                       "
                     >
                       {{
-                        img.faces &&
-                        img.faces[overlay.idx] &&
-                        img.faces[overlay.idx].character_name
-                          ? img.faces[overlay.idx].character_name
-                          : `Face ${overlay.idx + 1}`
+                        overlay.face && overlay.face.character_name
+                          ? overlay.face.character_name
+                          : `Face ${overlay.colorIdx + 1}`
                       }}
                     </span>
                   </div>
@@ -641,7 +654,7 @@ function clearFaceSelection() {
   selectedFaceIds.value = [];
 }
 
-function onFaceBboxDragStart(event, img, faceIdx) {
+function onFaceBboxDragStart(event, img, faceIdx, faceId) {
   // If this face is selected, drag all selected faces; else, drag just this one
   console.log(`Dragging face bbox: imageId=${img.id}, faceIdx=${faceIdx}`);
   let facesToDrag = [];
@@ -652,8 +665,11 @@ function onFaceBboxDragStart(event, img, faceIdx) {
       faceId: f.faceId,
     }));
   } else {
-    const face = img.faces[faceIdx];
-    facesToDrag = [{ imageId: img.id, faceIdx, faceId: face.id }];
+    const resolvedFaceId = faceId ?? (img.faces && img.faces[faceIdx]?.id);
+    if (!resolvedFaceId) {
+      return;
+    }
+    facesToDrag = [{ imageId: img.id, faceIdx, faceId: resolvedFaceId }];
   }
 
   // Ensure that additional data types are preserved in the dataTransfer object
@@ -683,7 +699,7 @@ function onFaceBboxDragStart(event, img, faceIdx) {
 }
 
 // Helper to calculate face bbox overlay style using object-fit: cover logic
-function getFaceBboxStyle(bbox, idx, img, el) {
+function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
   if (!el) return { display: "none" };
   const container = el.parentElement;
   if (!container) return { display: "none" };
@@ -705,16 +721,17 @@ function getFaceBboxStyle(bbox, idx, img, el) {
   const top = offsetY + bbox[1] * scale;
   const width = (bbox[2] - bbox[0]) * scale;
   const height = (bbox[3] - bbox[1]) * scale;
+  const borderColor = faceBoxColor(idx);
   return {
     position: "absolute",
-    border: `1.5px solid ${faceBoxColor(idx)}`,
-    background: `${faceBoxColor(idx)}22`,
+    border: `${isSelected ? 3 : 1.5}px solid ${borderColor}`,
+    background: `${borderColor}${isSelected ? "44" : "22"}`,
     left: `${left}px`,
     top: `${top}px`,
     width: `${width}px`,
     height: `${height}px`,
     pointerEvents: "auto",
-    zIndex: 100,
+    zIndex: isSelected ? 60 : 40,
     display: "block",
   };
 }
@@ -724,6 +741,7 @@ function getFaceBboxOverlays(img) {
     void thumbnailLoadedMap[img.id];
     void thumbnailRefs[img.id];
     void faceOverlayRedrawKey.value; // depend on redraw key
+    void selectedFaceIds.value;
     if (
       !props.showFaceBboxes ||
       !img.faces ||
@@ -735,10 +753,21 @@ function getFaceBboxOverlays(img) {
     }
     const el = thumbnailRefs[img.id];
     if (!el) return [];
-    const firstFrameFaces = img.faces.filter((f) => f.frame_index === 0);
-    return firstFrameFaces.map((face, fidx) => ({
-      style: getFaceBboxStyle(face.bbox, fidx, img, el),
-      idx: fidx,
+    const firstFrameFaces = img.faces
+      .map((face, faceIdx) => ({ face, faceIdx }))
+      .filter((entry) => entry.face.frame_index === 0);
+    return firstFrameFaces.map((entry, colorIdx) => ({
+      style: getFaceBboxStyle(
+        entry.face.bbox,
+        colorIdx,
+        img,
+        el,
+        isFaceSelected(img.id, entry.faceIdx),
+      ),
+      faceIdx: entry.faceIdx,
+      faceId: entry.face.id,
+      face: entry.face,
+      colorIdx,
     }));
   });
 }
@@ -1059,6 +1088,7 @@ function debugLogDataTransfer(label, dataTransfer) {
 
 function clearSelection() {
   selectedImageIds.value = [];
+  clearFaceSelection();
 }
 
 // Video refs for hover play/pause in grid
@@ -1094,27 +1124,53 @@ function isVideo(img) {
 }
 
 function removeFromGroup() {
-  if (!selectedImageIds.value.length) return;
+  if (!selectedImageIds.value.length && !selectedFaceIds.value.length) return;
   const backendUrl = props.backendUrl;
+  const faceIds = selectedFaceIds.value
+    .map((entry) => entry.faceId)
+    .filter((id) => id !== undefined && id !== null);
+  const pictureIds = selectedImageIds.value.slice();
   // Remove from character
   if (
     props.selectedCharacter &&
     props.selectedCharacter !== props.allPicturesId &&
     props.selectedCharacter !== props.unassignedPicturesId
   ) {
-    apiClient
-      .delete(`${backendUrl}/characters/${props.selectedCharacter}/faces`, {
-        data: { picture_ids: selectedImageIds.value },
-      })
+    const requests = [];
+    if (pictureIds.length) {
+      requests.push(
+        apiClient.delete(
+          `${backendUrl}/characters/${props.selectedCharacter}/faces`,
+          {
+            data: { picture_ids: pictureIds },
+          },
+        ),
+      );
+    }
+    if (faceIds.length) {
+      requests.push(
+        apiClient.delete(
+          `${backendUrl}/characters/${props.selectedCharacter}/faces`,
+          {
+            data: { face_ids: faceIds },
+          },
+        ),
+      );
+    }
+    if (!requests.length) return;
+    Promise.all(requests)
       .catch((err) => {
-        alert(`Error removing images from character: ${err.message}`);
+        alert(`Error removing faces from character: ${err.message}`);
       })
       .finally(() => {
-        // Remove affected images from grid immediately
-        allGridImages.value = allGridImages.value.filter(
-          (img) => !selectedImageIds.value.includes(img.id),
-        );
+        if (pictureIds.length) {
+          // Remove affected images from grid immediately
+          allGridImages.value = allGridImages.value.filter(
+            (img) => !pictureIds.includes(img.id),
+          );
+        }
         selectedImageIds.value = [];
+        clearFaceSelection();
         lastSelectedIndex = null;
         fetchAllGridImages().then(() => {
           loadedRanges.value = [];
@@ -1131,8 +1187,12 @@ function removeFromGroup() {
     props.selectedSet !== props.allPicturesId &&
     props.selectedSet !== props.unassignedPicturesId
   ) {
+    if (!pictureIds.length) {
+      clearFaceSelection();
+      return;
+    }
     Promise.all(
-      selectedImageIds.value.map((id) =>
+      pictureIds.map((id) =>
         apiClient
           .delete(
             `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`,
@@ -1145,9 +1205,10 @@ function removeFromGroup() {
     ).then(async () => {
       // Remove affected images from grid immediately
       allGridImages.value = allGridImages.value.filter(
-        (img) => !selectedImageIds.value.includes(img.id),
+        (img) => !pictureIds.includes(img.id),
       );
       selectedImageIds.value = [];
+      clearFaceSelection();
       lastSelectedIndex = null;
       await fetchAllGridImages();
       loadedRanges.value = [];
@@ -2311,6 +2372,9 @@ function handleVideoDragEnd() {
 
 function handleContainerDragStart(img, event) {
   if (!img || !event?.dataTransfer) return;
+  if (event.target && event.target.closest?.(".face-bbox-overlay")) {
+    return;
+  }
   const existing = event.dataTransfer.getData("application/json");
   if (existing) return;
   dragSource.value = "grid";
@@ -2499,6 +2563,7 @@ function handleKeyDown(event) {
   if (event.key === "Escape") {
     selectedImageIds.value = [];
     lastSelectedIndex = null;
+    clearFaceSelection();
   } else if (event.key === "Delete" || event.key === "Backspace") {
     if (selectedImageIds.value.length > 0) {
       deleteSelected();
@@ -2574,6 +2639,7 @@ defineExpose({
   updateVisibleThumbnails,
   exportCurrentViewToZip,
   removeImagesById,
+  clearFaceSelection,
 });
 
 // Remove images by ID (for event-driven removal)
@@ -2908,9 +2974,9 @@ function handleEmptyStateReset() {
 }
 .star-overlay {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 12;
+  top: 2px;
+  right: 2px;
+  z-index: 120;
   display: flex;
   flex-direction: row;
   background: rgba(255, 255, 255, 0.7);
@@ -2926,6 +2992,12 @@ function handleEmptyStateReset() {
   font-size: 20px !important;
   width: 20px;
   height: 20px;
+}
+.star-overlay .v-icon:hover {
+  font-size: 20px !important;
+  width: 20px;
+  height: 20px;
+  color: rgba(var(--v-theme-accent), 0.5);
 }
 .thumbnail-info-row {
   margin-top: 2px;

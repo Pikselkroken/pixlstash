@@ -29,6 +29,7 @@ const emit = defineEmits([
   "set-error",
   "set-loading",
   "images-assigned-to-character",
+  "faces-assigned-to-character",
   "images-moved",
   "search-images",
   "update:similarity-character",
@@ -242,6 +243,7 @@ function toggleSection(section) {
 }
 
 function selectCharacter(id) {
+  emit("select-set", null);
   emit("select-character", id);
 }
 
@@ -250,6 +252,7 @@ function searchImages(query) {
 }
 
 function selectSet(setId) {
+  emit("select-character", null);
   emit("select-set", setId);
 }
 
@@ -531,6 +534,7 @@ async function handleDeleteSet() {
 }
 
 async function handleDropOnSet(setId, event) {
+  dragOverSet.value = null;
   // Get the dragged image IDs from the drag event
   let draggedIds = [];
   try {
@@ -589,6 +593,7 @@ function handleDragLeaveCharacter() {
 }
 
 async function onCharacterDrop(characterId, event) {
+  dragOverCharacter.value = null;
   // Accept faceIds or imageIds from drag event
   let faceIds = [];
   let imageIds = [];
@@ -626,7 +631,7 @@ async function onCharacterDrop(characterId, event) {
       );
       await fetchSidebarData();
       await fetchCharacterThumbnail(characterId);
-      //emit("faces-assigned-to-character", { characterId, faceIds});
+      emit("faces-assigned-to-character", { characterId, faceIds });
       console.log(
         `Assigned ${faceIds.length} face(s) to character ${characterId}`,
       );
@@ -682,6 +687,7 @@ async function removeFacesFromCharacter(characterId, faceIds) {
 }
 
 function handleDropOnCharacter(payload) {
+  dragOverCharacter.value = null;
   if (!payload || !payload.characterId) return;
   onCharacterDrop(payload.characterId, payload.event);
 }
@@ -1322,7 +1328,7 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-list-item.droppable {
-  background: rgb(var(--v-theme-sidebar-hover));
+  background: rgb(var(--v-theme-primary));
   box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
 }
 

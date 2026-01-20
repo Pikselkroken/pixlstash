@@ -318,35 +318,6 @@ body {
   color: rgb(var(--v-theme-on-primary)) !important;
 }
 
-.star-overlay {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 12;
-  display: flex;
-  flex-direction: row;
-  background-color: rgba(var(--v-theme-background), 0.7);
-  border-radius: 4px;
-  box-shadow: none;
-  font-size: 0.85em;
-  margin: 4px 4px 4px 4px;
-}
-.star-overlay:hover {
-  background-color: rgba(var(--v-theme-background), 1);
-}
-.star-overlay .v-icon {
-  font-size: 20px !important;
-  width: 20px;
-  height: 20px;
-}
-.image-card {
-  position: relative;
-}
-.v-card {
-  position: relative;
-  overflow: visible;
-}
-
 /* Darker overlay for dialogs/overlays */
 .v-overlay__scrim {
   background: rgba(0, 0, 0, 0.8) !important;

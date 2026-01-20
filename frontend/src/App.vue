@@ -28,7 +28,7 @@ const sidebarRef = ref(null);
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
 const selectedSort = ref("");
-const selectedDescending = ref(false);
+const selectedDescending = ref(true);
 const stackThreshold = ref(null);
 
 // --- Search & Filtering State ---
@@ -88,6 +88,11 @@ function closeSidebarIfMobile() {
 
 async function handleSelectCharacter(charId) {
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
+  if (charId == null) {
+    selectedCharacter.value = null;
+    await nextTick();
+    return;
+  }
   selectedCharacter.value = charId;
   selectedSet.value = null; // Clear set selection
   searchQuery.value = ""; // Clear search query
@@ -97,6 +102,11 @@ async function handleSelectCharacter(charId) {
 }
 
 async function handleSelectSet(setId) {
+  if (setId == null) {
+    selectedSet.value = null;
+    await nextTick();
+    return;
+  }
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
   searchQuery.value = ""; // Clear search query
@@ -144,8 +154,11 @@ async function fetchConfig() {
     }
     if (typeof res.data.show_stars === "boolean")
       showStars.value = res.data.show_stars;
+    if (typeof res.data.descending === "boolean") {
+      selectedDescending.value = res.data.descending;
+    }
     config.sort_order = sortValue || selectedSort.value;
-    config.descending = res.data.descending ?? selectedDescending.value;
+    config.descending = selectedDescending.value;
     config.thumbnail_size = thumbnailValue || thumbnailSize.value;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
@@ -210,6 +223,15 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
   }
 }
 
+function handleFacesAssignedToCharacter({ characterId, faceIds }) {
+  if (
+    gridContainer.value &&
+    typeof gridContainer.value.clearFaceSelection === "function"
+  ) {
+    gridContainer.value.clearFaceSelection();
+  }
+}
+
 function handleImagesUploaded() {
   // Called when images are imported
   refreshGridVersion(); // Force grid and thumbnails to refresh
@@ -258,7 +280,7 @@ function handleResetToAll() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
   selectedSort.value = "DATE";
-  selectedDescending.value = false;
+  selectedDescending.value = true;
   selectedSimilarityCharacter.value = null;
   searchQuery.value = "";
   mediaTypeFilter.value = "all";
