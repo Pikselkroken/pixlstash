@@ -37,6 +37,7 @@ const showStars = ref(true);
 const showFaceBboxes = ref(false);
 
 const thumbnailSize = ref(256);
+const columns = ref(4); // Default columns
 const sidebarVisible = ref(true);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;

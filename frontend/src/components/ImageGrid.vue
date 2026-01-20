@@ -131,7 +131,7 @@
       <div
         class="image-grid"
         :style="{
-          gridTemplateColumns: `repeat(${columns}, 1fr)`,
+          gridTemplateColumns: `repeat(${props.columns}, 1fr)`,
           position: 'relative',
         }"
         ref="gridContainer"
@@ -537,6 +537,7 @@ const props = defineProps({
   unassignedPicturesId: String,
   gridVersion: { type: Number, default: 0 },
   mediaTypeFilter: { type: String, default: "all" },
+  columns: { type: Number, required: true },
 });
 const STACKS_SORT_KEY = "PICTURE_STACKS";
 const STACK_COLOR_STEP = 47;
@@ -1295,7 +1296,7 @@ watch(
 const VIEW_WINDOW = 100;
 
 const divisibleViewWindow = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   return Math.ceil(VIEW_WINDOW / cols) * cols;
 });
 
@@ -1873,7 +1874,7 @@ async function fetchAllGridImages() {
     console.log("Updating allGridImages with fetched images:", newImages);
     allGridImages.value = newImages;
     const assignEnd = performance.now();
-    const cols = columns.value || 1;
+    const cols = props.columns || 1;
     const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
     visibleStart.value = 0;
     visibleEnd.value = Math.min(newImages.length, windowCount);
@@ -1997,17 +1998,16 @@ const visibleEnd = ref(0);
 
 const rowHeight = ref(props.thumbnailSize + 24);
 
-// Internal columns state
-const columns = ref(1);
+// columns is now controlled by prop
 
 const renderStart = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   let start = Math.max(0, visibleStart.value - renderBuffer.value);
   return start;
 });
 
 const renderEnd = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   let end = Math.min(
     allGridImages.value.length,
     visibleEnd.value + renderBuffer.value,
@@ -2016,14 +2016,14 @@ const renderEnd = computed(() => {
 });
 
 const topSpacerHeight = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   const rowsAbove = Math.floor(renderStart.value / cols);
   const height = rowsAbove > 0 ? rowsAbove * rowHeight.value : 1;
   return height;
 });
 
 const bottomSpacerHeight = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   const lastRenderedRow = Math.floor((renderEnd.value - 1) / cols) + 1;
   const totalRows = Math.ceil(allGridImages.value.length / cols);
   const rowsBelow = totalRows - lastRenderedRow;
@@ -2288,7 +2288,7 @@ function onGridScroll(e) {
     if (!el) return;
     let cardHeight = rowHeight.value;
     const scrollTop = el.scrollTop;
-    const cols = columns.value;
+    const cols = props.columns;
     // First visible row (may be partially visible)
     const firstVisibleRow = scrollTop / cardHeight;
     // Last visible row (may be partially visible)
@@ -2493,39 +2493,7 @@ function formatLikenessScore(score) {
 const gridContainer = ref(null);
 const scrollWrapper = ref(null);
 
-function updateColumns() {
-  nextTick(() => {
-    function measureRowHeight(retries = 0) {
-      const firstCard = gridContainer.value?.querySelector(".image-card");
-      if (firstCard) {
-        const rect = firstCard.getBoundingClientRect();
-        rowHeight.value = rect.height;
-      } else if (retries < 5) {
-        setTimeout(() => measureRowHeight(retries + 1), 60);
-      }
-    }
-    measureRowHeight();
-
-    const el = scrollWrapper.value?.$el || scrollWrapper.value;
-    if (!el) return;
-    const containerWidth = el.offsetWidth;
-    const isMobile = typeof window !== "undefined" && window.innerWidth <= 900;
-    const isLandscape =
-      typeof window !== "undefined" &&
-      window.matchMedia &&
-      window.matchMedia("(orientation: landscape)").matches;
-
-    if (isMobile) {
-      columns.value = isLandscape ? 4 : 2;
-      return;
-    }
-
-    columns.value = Math.max(
-      1,
-      Math.floor(containerWidth / (props.thumbnailSize + 32)),
-    );
-  });
-}
+// updateColumns removed; columns is now controlled by prop
 
 async function removeTagFromImage(imageId, tag) {
   if (!imageId) {
@@ -2556,8 +2524,6 @@ async function addTagToImage(imageId, tag) {
 }
 
 onMounted(() => {
-  updateColumns();
-  window.addEventListener("resize", updateColumns);
   window.addEventListener("keydown", handleKeyDown);
 });
 
@@ -2610,14 +2576,13 @@ function handleKeyDown(event) {
 watch(
   () => props.thumbnailSize,
   () => {
-    // Recalculate visibleStart and visibleEnd after columns/rowHeight update
+    // Recalculate visibleStart and visibleEnd after rowHeight update
     nextTick(() => {
-      updateColumns();
       const el = scrollWrapper.value;
       if (!el) return;
       let cardHeight = rowHeight.value;
       const scrollTop = el.scrollTop;
-      const cols = columns.value;
+      const cols = props.columns;
       // First visible row (may be partially visible)
       const firstVisibleRow = scrollTop / cardHeight;
       // Last visible row (may be partially visible)
@@ -2632,7 +2597,6 @@ watch(
 );
 
 onUnmounted(() => {
-  window.removeEventListener("resize", updateColumns);
   window.removeEventListener("keydown", handleKeyDown);
 });
 
@@ -3026,7 +2990,7 @@ function handleEmptyStateReset() {
   width: 100%;
   height: 100%;
   aspect-ratio: 1 / 1;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
   border-radius: 8px;
   position: absolute;
@@ -3076,6 +3040,7 @@ function handleEmptyStateReset() {
   max-width: none;
   min-width: none;
   position: relative;
+  padding: 8px;
 }
 /* Overlay for image index on thumbnail */
 .thumbnail-index-overlay {
