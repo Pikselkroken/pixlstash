@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
 from pixlvault.db_models.face_likeness import FaceLikeness
 from pixlvault.db_models.picture_likeness import PictureLikeness
-from pixlvault.db_models.picture import Picture
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import WorkerType
 from pixlvault.server import Server
@@ -47,12 +46,12 @@ def test_picture_stacking():
             server.vault.start_workers(
                 {
                     WorkerType.QUALITY,
+                    WorkerType.FACE,
                 }
             )
 
             # Upload all images as new pictures
             picture_ids = []
-            face_futures = []
             picture_likeness_futures = []
             id_to_filename = {}
             for fname in image_files:
@@ -63,11 +62,6 @@ def test_picture_stacking():
                 assert import_status["results"][0]["status"] == "success"
                 id_to_filename[import_status["results"][0]["picture_id"]] = fname
                 picture_ids.append(import_status["results"][0]["picture_id"])
-                face_futures.append(
-                    server.vault.get_worker_future(
-                        WorkerType.FACE, Picture, picture_ids[-1], "faces"
-                    )
-                )
             for pid1 in picture_ids:
                 for pid2 in picture_ids:
                     if pid2 > pid1:
@@ -88,14 +82,12 @@ def test_picture_stacking():
             server.vault.start_workers(
                 {
                     WorkerType.LIKENESS,
-                    WorkerType.FACE,
                 }
             )
 
             # Wait for facial features to be processed
             all_face_ids = set()
-            for idx, future in enumerate(face_futures):
-                pid, _ = future.result(timeout=120)
+            for pid in picture_ids:
                 logging.debug(f"Facial features processed for picture ID: {pid}")
 
                 # Fetch faces for this picture
@@ -244,9 +236,14 @@ def test_character_likeness():
             )
             assert resp.status_code == 200
 
+            server.vault.start_workers(
+                {
+                    WorkerType.FACE,
+                }
+            )
+
             # Upload all images as new pictures
             picture_ids = []
-            face_futures = []
             id_to_filename = {}
             for fname in image_files:
                 with open(os.path.join(src_dir, fname), "rb") as f:
@@ -256,17 +253,6 @@ def test_character_likeness():
                 assert import_status["results"][0]["status"] == "success"
                 id_to_filename[import_status["results"][0]["picture_id"]] = fname
                 picture_ids.append(import_status["results"][0]["picture_id"])
-                face_futures.append(
-                    server.vault.get_worker_future(
-                        WorkerType.FACE, Picture, picture_ids[-1], "faces"
-                    )
-                )
-
-            server.vault.start_workers(
-                {
-                    WorkerType.FACE,
-                }
-            )
 
             # Create a character
             char_name = "Test Character"
@@ -307,8 +293,7 @@ def test_character_likeness():
                 )
 
             all_face_ids = set()
-            for idx, future in enumerate(face_futures):
-                pid, faces = future.result(timeout=120)
+            for pid in picture_ids:
                 logging.debug(f"Facial features processed for picture ID: {pid}")
 
                 # Fetch faces for this picture

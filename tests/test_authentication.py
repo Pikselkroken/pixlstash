@@ -99,3 +99,47 @@ def test_authentication_with_invalid_password():
                 response = client2.get("/protected")
                 assert response.status_code == 401
                 assert response.json()["detail"] == "Not authenticated"
+
+
+def test_authentication_with_token_login():
+    """Test creating a token and logging in with it."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config_path = f"{temp_dir}/config.json"
+        server_config_path = f"{temp_dir}/server-config.json"
+
+        with Server(config_path, server_config_path) as server:
+            with TestClient(server.api) as client1:
+                # First login to set the password
+                response = client1.post(
+                    "/login", json={"username": "testuser", "password": "testpassword"}
+                )
+                assert response.status_code == 200
+                assert (
+                    response.json()["message"]
+                    == "Username and password set successfully."
+                )
+
+                # Create a token
+                response = client1.post(
+                    "/users/me/token", json={"description": "Test token"}
+                )
+                assert response.status_code == 200
+                token = response.json().get("token")
+                assert token
+
+            with TestClient(server.api) as client2:
+                # Login with token
+                response = client2.post("/login", json={"token": token})
+                assert response.status_code == 200
+                assert response.json()["message"] == "Login successful."
+
+                # Access a protected endpoint
+                response = client2.get("/protected")
+                assert response.status_code == 200
+                assert response.json()["message"] == "You are authenticated!"
+
+            with TestClient(server.api) as client3:
+                # Login with wrong token
+                response = client3.post("/login", json={"token": "bad-token"})
+                assert response.status_code == 401
+                assert response.json()["detail"] == "Invalid token"

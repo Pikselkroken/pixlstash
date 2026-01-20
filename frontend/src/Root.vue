@@ -6,13 +6,17 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
-import { checkSession, isAuthenticated } from './utils/apiClient';
-import LoginScreen from './components/LoginScreen.vue';
-import App from './App.vue';
+import { ref, onMounted } from "vue";
+import { checkSession, isAuthenticated } from "./utils/apiClient";
+import LoginScreen from "./components/LoginScreen.vue";
+import App from "./App.vue";
 
 onMounted(async () => {
   const session = await checkSession();
-  isAuthenticated.value = !!session; // Update authentication state based on session validity
+  if (session?.status === "ok") {
+    isAuthenticated.value = true;
+  } else if (session?.status === "invalid") {
+    isAuthenticated.value = false;
+  }
 });
 </script>

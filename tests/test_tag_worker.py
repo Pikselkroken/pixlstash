@@ -27,6 +27,7 @@ def test_tag_worker_picture_tags():
         config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path, server_config_path) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -93,6 +94,8 @@ def test_tag_worker_end_to_end():
             f.write(json.dumps(config, indent=2))
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path, server_config_path) as server:
+            server.vault.start_workers({WorkerType.FACE})
+
             client = TestClient(server.api)
 
             resp = client.post(
@@ -154,6 +157,8 @@ def test_tagger_worker_adds_tags():
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
+            server.vault.start_workers({WorkerType.FACE})
+
             client = TestClient(server.api)
 
             resp = client.post(

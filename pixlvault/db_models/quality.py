@@ -304,7 +304,11 @@ class Quality(SQLModel, table=True):
         """
         Load quality record for given picture ID.
         """
-        return session.query(cls).filter(cls.picture_id == picture_id).first()
+        return (
+            session.query(cls)
+            .filter(cls.picture_id == picture_id, cls.face_id.is_(None))
+            .first()
+        )
 
     @classmethod
     def quality_read_for_face(

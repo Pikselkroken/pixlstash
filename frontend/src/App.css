@@ -25,24 +25,6 @@ body {
   padding: 0;
   overflow: hidden;
 }
-/* .file-manager, .main-area, .main-content borders for debugging can be re-enabled if needed */
-
-.drag-overlay-grid {
-  position: absolute;
-  inset: 0;
-  background: rgba(32, 32, 32, 0.25);
-  color: #fff8e1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 2.2rem;
-  font-weight: 700;
-  z-index: 1000;
-  pointer-events: none;
-  user-select: none;
-  letter-spacing: 0.04em;
-  text-shadow: 0 2px 8px #000a;
-}
 
 /* Removed duplicate body rule */
 /* Removed stray closing brace */
@@ -65,14 +47,11 @@ body {
   flex-direction: column;
   background-color: rgb(var(--v-theme-background)) !important;
   min-width: 0;
-  height: calc(100vh - 60px);
+  height: 100vh;
   box-sizing: border-box;
   padding: 0;
   margin: 0;
   transition: width 0.2s;
-}
-.main-area.full-width {
-  width: 100vw;
 }
 .main-content {
   flex: 1 1 0%;
@@ -81,7 +60,6 @@ body {
   align-items: stretch;
   justify-content: flex-start;
   padding: 0;
-  border-left: 2px solid rgb(var(--v-theme-border));
   transition: border-color 0.2s;
   height: calc(100vh - 60px);
   /* No overflow property here; only .image-grid should scroll */
@@ -90,13 +68,16 @@ body {
 .export-dialog-card {
   position: relative;
   border-radius: 8px;
+  background: rgba(var(--v-theme-background), 0.9);
+  color: rgb(var(--theme-on-background));
+  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
 }
 
 .export-dialog-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 8px;
+  padding: 8px 8px 0;
 }
 
 .export-dialog-shell {
@@ -117,11 +98,11 @@ body {
 }
 
 .export-dialog-card :deep(.v-card-text) {
-  padding: 16px 20px 8px;
+  padding: 12px 16px 8px;
 }
 
 .export-dialog-card :deep(.v-card-actions) {
-  padding: 8px 20px 16px;
+  padding: 8px 16px 12px;
   gap: 12px;
 }
 
@@ -148,61 +129,108 @@ body {
   margin-top: 32px;
   text-align: center;
 }
-.toolbar-slider {
-  flex: 1;
-  margin: 0 12px;
-  min-width: 256px;
-  max-width: 320px;
-}
 
 .top-toolbar {
   background-color: rgb(var(--v-theme-toolbar)) !important;
   width: 100%;
-  min-height: 60px;
+  min-height: 30px;
   display: flex;
   align-items: center;
-  padding: 0 2px;
-  border-bottom: 2px solid rgb(var(--v-theme-border));
-  margin-bottom: 2;
-  z-index: 2;
+  padding: 4px 4px 4px 4px;
+  z-index: 5;
   position: relative;
-}
-.toolbar-slider :deep(.v-slider-track) {
-  background: rgb(var(--v-theme-surface)) !important;
-}
-.toolbar-slider :deep(.v-slider-track__fill) {
-  background: rgb(var(--v-theme-on-primary)) !important;
-}
-.toolbar-slider :deep(.v-slider-thumb) {
-  color: #ffffff !important;
 }
 
 .toolbar-icon {
   color: rgb(var(--v-theme-on-primary)) !important;
+  font-size: 16px;
 }
+
 .toolbar-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
-  margin-left: auto;
-  margin-right: 0px;
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
   padding-right: 2px;
+  gap: 8px;
 }
 
-.toolbar-size-controls {
+.toolbar-search-slot {
+  flex: 1 1 0;
   display: flex;
   align-items: center;
-  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.sidebar-shell {
+.toolbar-controls {
   display: flex;
-  flex: 0 0 auto;
-  height: calc(100vh - 60px);
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
 }
 
-.sidebar-backdrop {
-  display: none;
+.toolbar-search-field {
+  flex: 1 1 auto;
+  min-width: 220px;
+  max-width: none;
+  width: 100%;
+  margin-left: 4px;
+  margin-right: 4px;
+}
+
+.toolbar-search-field :deep(.v-input__control) {
+  width: 100%;
+}
+
+.toolbar-search-field :deep(.v-field) {
+  border-radius: 8px;
+  background: rgba(var(--v-theme-surface), 0.2);
+}
+
+.toolbar-search-field :deep(.v-field__input) {
+  color: rgb(var(--v-theme-on-background));
+}
+
+.toolbar-search-field :deep(.v-label) {
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.toolbar-search-field :deep(.v-icon) {
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.toolbar-search-field :deep(.v-field__clearable) {
+  color: rgba(var(--v-theme-on-background), 0.6);
+}
+
+.app-btn-base {
+  border-radius: 8px;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-weight: 500;
+  box-shadow: none;
+  border: none;
+  background-color: transparent !important;
+  color: black !important;
+}
+
+.app-btn-base:hover,
+.app-btn-base:focus-visible {
+  box-shadow: none !important;
+  background-color: transparent !important;
+}
+
+.toolbar-btn {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: none;
+}
+
+.toolbar-btn.v-btn--active {
+  border-color: rgba(var(--v-theme-surface), 0.2);
 }
 
 @media (max-width: 900px) {
@@ -220,35 +248,6 @@ body {
     height: 100dvh;
   }
 
-  .sidebar-shell {
-    height: calc(100dvh - 44px);
-  }
-
-  .top-toolbar {
-    flex-wrap: wrap;
-    row-gap: 2px;
-    padding: 2px 4px;
-    min-height: 44px;
-  }
-
-  .toolbar-title {
-    display: none;
-  }
-
-  .toolbar-slider {
-    min-width: 140px;
-    max-width: 220px;
-    margin: 0 8px;
-  }
-
-  .toolbar-logo {
-    display: none;
-  }
-
-  .toolbar-size-controls {
-    display: none;
-  }
-
   .toolbar-download-btn {
     display: none !important;
   }
@@ -262,7 +261,7 @@ body {
   }
 
   .main-area {
-    height: calc(100dvh - 60px);
+    height: 100dvh;
   }
 
   .main-content {
@@ -270,37 +269,9 @@ body {
     border-left: none;
   }
 
-  .sidebar-shell {
-    position: fixed;
-    top: 60px;
-    left: 0;
-    height: calc(100dvh - 60px);
-    width: 100%;
-    z-index: 20;
-    transform: translateX(-100%);
-    transition: transform 0.2s ease-out;
-  }
-
-  .sidebar-shell.open {
-    transform: translateX(0);
-  }
-
-  .sidebar-backdrop {
-    position: fixed;
-    inset: 60px 0 0 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 10;
-    display: block;
-  }
-
-  :deep(.sidebar-toggle-btn) {
-    min-width: 44px;
-    min-height: 44px;
-  }
-
   :deep(.top-toolbar .v-btn) {
-    min-width: 44px;
-    min-height: 44px;
+    min-width: 28px;
+    min-height: 28px;
   }
 }
 @font-face {
@@ -316,35 +287,6 @@ body {
   letter-spacing: 0px;
   position: relative;
   color: rgb(var(--v-theme-on-primary)) !important;
-}
-
-.star-overlay {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 12;
-  display: flex;
-  flex-direction: row;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 4px;
-  box-shadow: none;
-  font-size: 0.85em;
-  margin: 4px 4px 4px 4px;
-}
-.star-overlay:hover {
-  background: rgba(255, 255, 255, 1);
-}
-.star-overlay .v-icon {
-  font-size: 20px !important;
-  width: 20px;
-  height: 20px;
-}
-.image-card {
-  position: relative;
-}
-.v-card {
-  position: relative;
-  overflow: visible;
 }
 
 /* Darker overlay for dialogs/overlays */
@@ -441,38 +383,22 @@ button:focus:not(:focus-visible) {
   box-shadow: none !important;
 }
 
-.clear-selection-button {
-  margin-left: 8px;
-  color: white;
-  background-color: rgb(var(--v-theme-accent));
-}
-.clear-selection-button:hover {
-  background-color: #6b8eeb;
-}
-.delete-button {
-  margin-left: 8px;
-  color: white;
-  background-color: #d32f2f;
-}
-.delete-button:hover {
-  background-color: #f75c5c;
-}
-
 .media-type-toggle {
-  border-radius: 14px;
+  border-radius: 8px;
   margin-left: 4px;
   display: inline-flex;
 }
 
 .media-type-toggle .v-btn {
-  color: rgb(var(--v-theme-on-primary)) !important;
-  height: 48px;
-  width: 48px;
+  color: rgb(var(--v-theme-on-secondary)) !important;
+  height: 32px;
+  width: 32px;
+  background-color: rgba(var(--v-theme-surface), 0.3) !important;
   align-items: center;
 }
 
 .media-type-toggle .v-btn--active {
-  background-color: rgb(var(--v-theme-accent)) !important;
+  background-color: rgb(var(--v-theme-secondary)) !important;
   color: white !important;
 }
 .face-bbox-toggle-btn .face-bbox-icon-wrapper {
@@ -481,10 +407,23 @@ button:focus:not(:focus-visible) {
   justify-content: center;
   border: 2px dashed;
   border-radius: 4px;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   box-sizing: border-box;
   background: transparent;
+}
+
+.face-bbox-toggle-btn .face-bbox-icon-wrapper-active {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed;
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
+  background: transparent;
+  color: rgb(var(--v-theme-secondary)) !important;
 }
 
 /* Ensure search overlay is visible and styled correctly */

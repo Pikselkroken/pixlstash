@@ -6,7 +6,7 @@ import uuid
 
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Optional
+from typing import List, Optional
 from PIL import Image
 
 from pixlvault.pixl_logging import get_logger
@@ -236,7 +236,7 @@ class PictureUtils:
     @staticmethod
     def generate_thumbnail_bytes(img, size=(256, 256)) -> Optional[bytes]:
         """
-        Resize image so the longest edge is 256px, preserve aspect ratio, no padding.
+        Crop to square (bottom-cropped for tall images) and resize longest edge to 256px.
         Accepts either a PIL Image or a numpy array (OpenCV image).
         """
         try:
@@ -245,6 +245,17 @@ class PictureUtils:
             else:
                 # Assume numpy array (OpenCV image, BGR)
                 pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            if pil_img.width != pil_img.height:
+                side = min(pil_img.width, pil_img.height)
+                if pil_img.height > pil_img.width:
+                    left = 0
+                    top = 0
+                else:
+                    left = int(round((pil_img.width - side) / 2.0))
+                    top = 0
+                right = left + side
+                bottom = top + side
+                pil_img = pil_img.crop((left, top, right, bottom))
             max_edge = max(pil_img.width, pil_img.height)
             if max_edge > size[0]:
                 scale = size[0] / max_edge
@@ -257,6 +268,113 @@ class PictureUtils:
         except Exception as e:
             logger.error(f"Error generating thumbnail bytes: {e}")
             return None
+
+    @staticmethod
+    def generate_face_weighted_thumbnail_bytes(
+        img,
+        face_bboxes: List[List[int]],
+        min_side: int = 256,
+        output_size: tuple[int, int] = (256, 256),
+    ) -> Optional[bytes]:
+        thumbnail_bytes, _ = PictureUtils.generate_face_weighted_thumbnail_with_crop(
+            img,
+            face_bboxes,
+            min_side=min_side,
+            output_size=output_size,
+        )
+        return thumbnail_bytes
+
+    @staticmethod
+    def generate_face_weighted_thumbnail_with_crop(
+        img,
+        face_bboxes: List[List[int]],
+        min_side: int = 256,
+        output_size: tuple[int, int] = (256, 256),
+    ) -> tuple[Optional[bytes], Optional[dict]]:
+        if img is None or not face_bboxes:
+            return None, None
+        try:
+            if isinstance(img, Image.Image):
+                pil_img = img.copy()
+            else:
+                pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+
+            w, h = pil_img.size
+            side_max = min(w, h)
+            if side_max <= 0:
+                return None, None
+
+            clamped = []
+            for bbox in face_bboxes:
+                if not bbox or len(bbox) != 4:
+                    continue
+                x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+                x1 = max(0, min(w, x1))
+                x2 = max(0, min(w, x2))
+                y1 = max(0, min(h, y1))
+                y2 = max(0, min(h, y2))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                area = float((x2 - x1) * (y2 - y1))
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                clamped.append((x1, y1, x2, y2, area, cx, cy))
+
+            if not clamped:
+                return None, None
+
+            min_x = min(b[0] for b in clamped)
+            min_y = min(b[1] for b in clamped)
+            max_x = max(b[2] for b in clamped)
+            max_y = max(b[3] for b in clamped)
+
+            total_area = sum(b[4] for b in clamped)
+            if total_area > 0:
+                cx = sum(b[4] * b[5] for b in clamped) / total_area
+                cy = sum(b[4] * b[6] for b in clamped) / total_area
+            else:
+                cx = (min_x + max_x) / 2.0
+                cy = (min_y + max_y) / 2.0
+
+            side = side_max
+
+            span_x = max_x - min_x
+            span_y = max_y - min_y
+            lower_left = max_x - side
+            upper_left = min_x
+            lower_top = max_y - side
+            upper_top = min_y
+
+            if span_x <= side:
+                left = min(max(cx - side / 2.0, lower_left), upper_left)
+            else:
+                left = cx - side / 2.0
+            if span_y <= side:
+                top = min(max(cy - side / 2.0, lower_top), upper_top)
+            else:
+                top = cy - side / 2.0
+
+            left = max(0, min(w - side, left))
+            top = max(0, min(h - side, top))
+
+            left = int(round(left))
+            top = int(round(top))
+            side = int(round(side))
+
+            square_img = pil_img.crop((left, top, left + side, top + side))
+            if output_size and square_img.size != output_size:
+                square_img = square_img.resize(output_size, resample=Image.LANCZOS)
+            buf = BytesIO()
+            square_img.save(buf, format="PNG")
+            crop = {
+                "left": left,
+                "top": top,
+                "side": side,
+            }
+            return buf.getvalue(), crop
+        except Exception as e:
+            logger.error(f"Error generating face-weighted thumbnail: {e}")
+            return None, None
 
     @staticmethod
     def load_and_crop_square_image_with_face(file_path, bbox):

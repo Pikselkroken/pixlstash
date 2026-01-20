@@ -801,36 +801,31 @@ class PictureTagger:
 
         return flat
 
-    def generate_text_embedding(self, picture: Picture = None, query: str = None):
+    def generate_text_embedding(
+        self, pictures: list[Picture] = None, query: str = None
+    ):
         """
-        Generate a SBERT embedding from all text found in character and picture objects (recursively), avoiding cycles.
-        Returns text_embedding and full_text.
+        Generate SBERT embeddings for the provided pictures or query text.
+        Returns a list of embeddings matching the input order.
         """
-        if picture is None and query is None:
+        if pictures is None and query is None:
             raise ValueError("Either picture or query_string must be provided.")
 
-        if picture:
-            texts = picture.text_embedding_data()
-            flat_texts = PictureTagger._flatten_texts(texts)
-            filtered_texts = self._filter_texts(flat_texts)
-            if not filtered_texts:
-                logger.error(
-                    "Text Embedding: No text data for embedding. picture=%s",
-                    picture,
-                )
-                raise ValueError("No text data for embedding.")
-            if len(picture.characters) > 0:
-                logger.info(
-                    f"Text Embedding: texts used for embedding (filtered): {filtered_texts}"
-                )
-            full_text = ". ".join(filtered_texts)
+        texts = []
+        if query:
+            full_text = query.lower()
+            texts.append(full_text)
         else:
-            full_text = query
-            logger.debug(
-                f"Text Embedding: using query_string for embedding: {full_text}"
-            )
+            for picture in pictures or []:
+                text = picture.text_embedding_data()
+                flat_text = PictureTagger._flatten_texts(text)
+                filtered_text = self._filter_texts(flat_text)
+                full_text = ". ".join(filtered_text)
+                full_text = full_text.lower()
+                texts.append(full_text)
 
-        full_text = full_text.lower()
+        if not texts:
+            return []
 
         # Generate text embedding using SBERT
         sbert_model = getattr(self, "_sbert_model", None)
@@ -838,9 +833,15 @@ class PictureTagger:
             sbert_model = SentenceTransformer("all-MiniLM-L6-v2", device=self._device)
             self._sbert_model = sbert_model
 
-        text_embedding = None
+        logger.info(
+            "Generating SBERT embeddings for %s texts on device: %s",
+            len(texts),
+            sbert_model.device,
+        )
+        text_embeddings = None
         try:
-            text_embedding = sbert_model.encode(full_text)
+            text_embeddings = sbert_model.encode(texts, show_progress_bar=False)
+            logger.info("Done generating SBERT embeddings.")
         except RuntimeError as e:
             if "CUDA" in str(e):
                 logger.warning(
@@ -848,11 +849,14 @@ class PictureTagger:
                 )
                 sbert_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
                 self._sbert_model = sbert_model
-                text_embedding = sbert_model.encode(full_text)
+                logger.info("Falling back to CPU for SBERT embeddings.")
+                text_embeddings = sbert_model.encode(texts, show_progress_bar=False)
             else:
                 logger.error(f"Failed to generate text embedding: {e}")
                 raise
-        return text_embedding, full_text
+
+        embeddings_array = np.asarray(text_embeddings)
+        return [embeddings_array[i] for i in range(len(texts))]
 
     def generate_facial_features(self, picture, face_bboxes):
         """

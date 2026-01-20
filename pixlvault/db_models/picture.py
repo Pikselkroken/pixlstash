@@ -98,6 +98,9 @@ class Picture(SQLModel, table=True):
     thumbnail: Optional[Image.Image] = Field(
         sa_column=Column("thumbnail", LargeBinary, default=None, nullable=True)
     )
+    thumbnail_left: Optional[int] = Field(default=None)
+    thumbnail_top: Optional[int] = Field(default=None)
+    thumbnail_side: Optional[int] = Field(default=None)
     score: Optional[int] = None
     pixel_sha: Optional[str] = Field(default=None, index=True)
 

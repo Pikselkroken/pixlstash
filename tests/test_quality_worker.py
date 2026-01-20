@@ -27,6 +27,7 @@ def test_quality_worker_face_metrics():
         config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path, server_config_path) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -109,6 +110,7 @@ def test_quality_worker_end_to_end():
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
+            server.vault.start_workers({WorkerType.FACE})
 
             resp = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
@@ -125,18 +127,6 @@ def test_quality_worker_end_to_end():
             import_status = upload_pictures_and_wait(client, files)
             assert import_status["status"] == "completed"
             pic_id = import_status["results"][0]["picture_id"]
-
-            future = server.vault.get_worker_future(
-                WorkerType.FACE, Picture, pic_id, "faces"
-            )
-
-            # Start facial features worker to detect faces and create bboxes
-            server.vault.start_workers({WorkerType.FACE})
-            (
-                future.result(timeout=60),
-                "FacialFeaturesWorker did not process picture in time",
-            )
-            server.vault.stop_workers({WorkerType.FACE})
 
             # Debug dump of picture_faces table after face detection
             print("\n--- DEBUG DUMP: picture_faces after face detection ---")

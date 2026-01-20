@@ -251,6 +251,8 @@ class EmbeddingWorker(BaseWorker):
     Worker for generating text embeddings for pictures with descriptions.
     """
 
+    EMBEDDING_BATCH_SIZE = 32
+
     def worker_type(self) -> WorkerType:
         return WorkerType.TEXT_EMBEDDING
 
@@ -309,6 +311,8 @@ class EmbeddingWorker(BaseWorker):
             )
             query = query.where(Picture.text_embedding.is_(None))
             query = query.where(Picture.description.is_not(None))
+            query = query.order_by(Picture.id)
+            query = query.limit(self.EMBEDDING_BATCH_SIZE)
             results = session.exec(query)
             return results.all()
 
@@ -321,19 +325,24 @@ class EmbeddingWorker(BaseWorker):
         Generate text embeddings for a batch of PictureModel objects using PictureTagger.
         Returns the number of pictures updated.
         """
-        updated = []
-        for pic in pictures_to_embed:
-            try:
-                logger.debug(
-                    f"[EMBEDDING WORKER]  Generating embedding for picture {pic.id} of type {type(pic)}"
-                )
-                embedding, _ = self._picture_tagger.generate_text_embedding(picture=pic)
-                if embedding is not None:
-                    pic.text_embedding = embedding.tobytes()
-                    updated.append(pic)
-            except Exception as e:
-                logger.error(f"Failed to generate text embedding for {pic.id}: {e}")
-        return updated
+        embeddings = self._picture_tagger.generate_text_embedding(
+            pictures=pictures_to_embed
+        )
+        if not embeddings:
+            return []
+
+        if len(embeddings) != len(pictures_to_embed):
+            logger.warning(
+                "[EMBEDDING WORKER] Embedding count mismatch: embeddings=%s pictures=%s",
+                len(embeddings),
+                len(pictures_to_embed),
+            )
+
+        limit = min(len(embeddings), len(pictures_to_embed))
+        for pic, embedding in zip(pictures_to_embed[:limit], embeddings[:limit]):
+            pic.text_embedding = embedding
+
+        return pictures_to_embed[:limit]
 
     def _update_text_embeddings(self, pictures: list[Picture]):
         """

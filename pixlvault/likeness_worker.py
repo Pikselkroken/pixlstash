@@ -55,7 +55,11 @@ class LikenessWorker(BaseWorker):
         # Query all b rows in one go for efficiency
         b_rows = session.exec(
             select(Quality.picture_id)
-            .where((Quality.picture_id >= start_b) & (Quality.picture_id <= end_b))
+            .where(
+                (Quality.picture_id >= start_b)
+                & (Quality.picture_id <= end_b)
+                & (Quality.face_id.is_(None))
+            )
             .order_by(Quality.picture_id)
         ).all()
         eligible_bs_all = [int(pid) for pid in b_rows]
@@ -92,7 +96,9 @@ class LikenessWorker(BaseWorker):
 
             def fetch_quality(session, ids):
                 qualities = session.exec(
-                    select(Quality).where(Quality.picture_id.in_(ids))
+                    select(Quality).where(
+                        Quality.picture_id.in_(ids) & (Quality.face_id.is_(None))
+                    )
                 ).all()
                 return {quality.picture_id: quality for quality in qualities}
 
@@ -159,11 +165,11 @@ class LikenessWorker(BaseWorker):
             if processed_notify_ids:
                 self._notify_ids_processed(processed_notify_ids)
                 # Update completed_tasks to track all b's for each a
-                logger.info(
+                logger.debug(
                     f"LikenessWorker: Processed {len(processed_notify_ids)} likeness scores."
                 )
             else:
-                logger.info("LikenessWorker: No likeness scores computed. Sleeping...")
+                logger.debug("LikenessWorker: No likeness scores computed. Sleeping...")
                 self._wait()
         logger.info("LikenessWorker: Likeness worker stopped.")
 

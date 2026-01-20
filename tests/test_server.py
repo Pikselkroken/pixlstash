@@ -110,17 +110,6 @@ def test_esmeralda_vault_character_and_logo():
             logging.info(
                 f"Found {len(pics)} pictures in vault, starting facial features processing"
             )
-            futures = []
-            for pic in pics:
-                future = server.vault.get_worker_future(
-                    WorkerType.FACE, Picture, pic.id, "faces"
-                )
-                futures.append(future)
-
-            server.vault.start_workers({WorkerType.FACE})
-            for future in futures:
-                result_id = future.result(timeout=60)
-                logging.info(f"Processed picture ID: {result_id}")
 
             # Find Esmeralda Vault character (by name)
             resp = client.get("/characters")
@@ -225,6 +214,7 @@ def test_upload_existing_picture():
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
             # Get a valid token
             response = client.post(
@@ -316,6 +306,7 @@ def test_characters_summary():
         with Server(config_path, server_config_path) as server:
             server.vault.import_default_data()
             client = TestClient(server.api)
+            server.vault.start_workers({WorkerType.FACE})
 
             # Get a valid token
             response = client.post(
@@ -336,7 +327,6 @@ def test_characters_summary():
 
             # Upload all images as new pictures
             picture_ids = []
-            face_futures = []
             for fname in image_files:
                 with open(os.path.join(src_dir, fname), "rb") as f:
                     files = [("file", (fname, f.read(), "image/png"))]
@@ -344,21 +334,9 @@ def test_characters_summary():
                 assert import_status["status"] == "completed"
                 assert import_status["results"][0]["status"] == "success"
                 picture_ids.append(import_status["results"][0]["picture_id"])
-                face_futures.append(
-                    server.vault.get_worker_future(
-                        WorkerType.FACE, Picture, picture_ids[-1], "faces"
-                    )
-                )
-
-            server.vault.start_workers({WorkerType.FACE})
 
             # Wait for facial features to be processed and associate Esmeralda Vault with largest face in each picture
-            for idx, future in enumerate(face_futures):
-                result_id, _ = future.result(timeout=120)
-                assert result_id == picture_ids[idx], (
-                    f"Facial features processing returned unexpected picture ID {result_id}, expected {picture_ids[idx]}"
-                )
-                pid = picture_ids[idx]
+            for pid in picture_ids:
                 faces_resp = client.get(f"/pictures/{pid}/faces")
                 assert faces_resp.status_code == 200
                 faces_data = faces_resp.json().get("faces", [])
@@ -424,6 +402,8 @@ def test_pictures_stacks():
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
+
+            server.vault.start_workers({WorkerType.FACE})
 
             response = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
@@ -570,6 +550,7 @@ def test_post_logo_identical_upload():
             config_path=config_path, server_config_path=server_config_path
         ) as server:
             server.vault.import_default_data()
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -596,6 +577,7 @@ def test_post_logo_altered_pixel_upload():
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -652,6 +634,7 @@ def test_benchmark_add_images_by_binary_upload():
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -666,7 +649,7 @@ def test_benchmark_add_images_by_binary_upload():
                 file = ("file", (f"image_{i:04d}.png", img_bytes, "image/png"))
                 files.append(file)
 
-            import_status = upload_pictures_and_wait(client, files)
+            import_status = upload_pictures_and_wait(client, files, timeout_s=60)
             end = time.time()
 
             assert import_status["status"] == "completed"
@@ -711,6 +694,7 @@ def test_semantic_search():
         ) as server:
             server.vault.import_default_data()
             client = TestClient(server.api)
+            server.vault.start_workers({WorkerType.FACE})
 
             resp = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
@@ -742,7 +726,6 @@ def test_semantic_search():
 
             # Upload all images as new pictures
             picture_ids = []
-            face_futures = []
             embeddings_futures = []
             for fname in image_files:
                 with open(os.path.join(src_dir, fname), "rb") as f:
@@ -751,11 +734,6 @@ def test_semantic_search():
                 assert import_status["status"] == "completed"
                 assert import_status["results"][0]["status"] == "success"
                 picture_ids.append(import_status["results"][0]["picture_id"])
-                face_futures.append(
-                    server.vault.get_worker_future(
-                        WorkerType.FACE, Picture, picture_ids[-1], "faces"
-                    )
-                )
                 embeddings_futures.append(
                     server.vault.get_worker_future(
                         WorkerType.TEXT_EMBEDDING,
@@ -767,17 +745,13 @@ def test_semantic_search():
 
             server.vault.start_workers(
                 {
-                    WorkerType.FACE,
                     WorkerType.TAGGER,
                     WorkerType.DESCRIPTION,
                 }
             )
 
             # Wait for facial features to be processed and associate Esmeralda Vault with largest face in each picture
-            for idx, future in enumerate(face_futures):
-                result_id = future.result(timeout=120)
-                logging.debug(f"Facial features processed for picture ID: {result_id}")
-                pid = picture_ids[idx]
+            for pid in picture_ids:
                 # Fetch faces for this picture
                 faces_resp = client.get(f"/pictures/{pid}/faces")
                 assert faces_resp.status_code == 200, (

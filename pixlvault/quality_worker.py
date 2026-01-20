@@ -40,7 +40,11 @@ class QualityWorker(BaseWorker):
                 def find_pictures_missing_quality(session: Session):
                     result = session.exec(
                         select(Picture)
-                        .outerjoin(Quality, Quality.picture_id == Picture.id)
+                        .outerjoin(
+                            Quality,
+                            (Quality.picture_id == Picture.id)
+                            & (Quality.face_id.is_(None)),
+                        )
                         .where(Quality.id.is_(None))
                         .order_by(Picture.format, Picture.width, Picture.height)
                     )

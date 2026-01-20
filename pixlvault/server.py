@@ -11,6 +11,8 @@ import sys
 import time
 import zipfile
 from email.utils import formatdate
+from datetime import datetime
+import secrets
 
 from collections import defaultdict, deque
 from sqlalchemy.orm import load_only, selectinload
@@ -24,20 +26,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pillow_heif import register_heif_opener
-from typing import List
+from typing import List, Optional
 from passlib.hash import bcrypt
 from pydantic import BaseModel, Field
 
 from pixlvault.db_models import (
     Character,
     Face,
-    Conversation,
-    Message,
     Picture,
     PictureSet,
     PictureSetMember,
     SortMechanism,
     User,
+    UserToken,
 )
 
 from pixlvault.db_models import PictureLikeness
@@ -49,6 +50,8 @@ from pixlvault.utils import safe_model_dict
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
+from pixlvault.worker_registry import WorkerType
+from pixlvault.watch_folder_worker import WatchFolderWorker
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
 
@@ -109,6 +112,8 @@ class Server:
             description=self._config.get("description"),
         )
 
+        WatchFolderWorker.configure(self._server_config_path)
+
         self._user = self._ensure_user()
         if self._user and self._user.description is not None:
             self.vault.set_description(self._user.description)
@@ -131,7 +136,7 @@ class Server:
         # Keep cached credentials for compatibility
         self.PASSWORD_HASH = self._user.password_hash if self._user else None
         self.USERNAME = self._user.username if self._user else None
-        self.active_session_ids = set()
+        self.active_session_ids = {}
 
         # Temporary storage for export tasks
         self.export_tasks = {}
@@ -203,7 +208,7 @@ class Server:
         self._user = user
         self.PASSWORD_HASH = None
         self.USERNAME = None
-        self.active_session_ids = set()
+        self.active_session_ids = {}
         if "PASSWORD_HASH" in self._server_config:
             del self._server_config["PASSWORD_HASH"]
         if "USERNAME" in self._server_config:
@@ -300,6 +305,7 @@ class Server:
                 "image_root": default_image_root,
                 "default_device": "cpu",
                 "USERNAME": None,
+                "watch_folders": [],
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -332,6 +338,8 @@ class Server:
                     server_config["default_device"] = "cpu"
                 if "USERNAME" not in server_config:
                     server_config["USERNAME"] = None
+                if "watch_folders" not in server_config:
+                    server_config["watch_folders"] = []
 
         return server_config
 
@@ -732,174 +740,58 @@ class Server:
             return result
 
         ###############################
-        # Chat endpoints              #
-        ###############################
-        @self.api.delete("/conversations/{id}")
-        async def delete_conversation(id: int):
-            """Delete a conversation and all messages."""
-
-            def delete_query(session, id: int):
-                conversation = session.get(Conversation, id)
-                session.delete(conversation)
-                session.commit()
-
-            future = self.vault.db.submit_task(delete_query, id)
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to delete conversation {id}",
-                )
-
-            return {"status": "ok"}
-
-        @self.api.get("/conversations/{id}")
-        async def get_conversation(id: int, limit: int = 100):
-            """Return conversation and its messages."""
-            future = self.vault.db.submit_task(
-                lambda session: session.get(Conversation, id)
-            )
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to load conversation {id}",
-                )
-            conversation = future.result()
-            if conversation is None:
-                raise HTTPException(
-                    status_code=404, detail=f"Conversation {id} not found"
-                )
-            future = self.vault.db.submit_task(
-                lambda session: session.exec(
-                    select(Message)
-                    .where(Message.conversation_id == id)
-                    .order_by(Message.timestamp.asc())
-                    .limit(limit)
-                ).all()
-            )
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to load chat messages for conversation {id}",
-                )
-
-            messages = future.result()
-            return {"conversation": conversation, "messages": messages}
-
-        @self.api.get("/conversations")
-        async def list_conversations():
-            """Return list of conversations."""
-            future = self.vault.db.submit_task(
-                lambda session: session.exec(select(Conversation)).all()
-            )
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to load conversations",
-                )
-            conversations = future.result()
-            return {"conversations": conversations}
-
-        @self.api.post("/conversations")
-        async def create_conversation(
-            character_id: int = Query(None),
-            description: str = Query("Chat with this character"),
-        ):
-            """Create a new chat session for a character. Returns conversation_id."""
-            if character_id is None:
-                raise HTTPException(status_code=400, detail="character_id is required")
-
-            def create_conversation(session: Session, character_id: int):
-                conversation = Conversation(
-                    character_id=character_id, description=description
-                )
-                session.add(conversation)
-                session.commit()
-                session.refresh(conversation)
-                return conversation
-
-            future = self.vault.db.submit_task(create_conversation, character_id)
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to create chat session. Exception occurred: {future.exception()}",
-                )
-            conversation = future.result()
-            if conversation is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to create chat session. The resulting conversation is None.",
-                )
-
-            logger.info(
-                "Created new conversation with ID: {}. Now trying to load it again.".format(
-                    conversation.id
-                )
-            )
-
-            future = self.vault.db.submit_task(
-                lambda session: session.get(Conversation, conversation.id)
-            )
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to load created chat session due to exception {future.exception()}.",
-                )
-            return {"conversation_id": conversation.id}
-
-        @self.api.post("/conversations/message")
-        async def post_conversation_message(payload: dict):
-            """Save a chat message. Expects conversation_id, role, content, picture_id (optional)."""
-            required = ["conversation_id", "role", "content"]
-            for key in required:
-                if key not in payload:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": f"Missing required field: {key}"},
-                    )
-            logger.info(
-                f"[Chat] Saving message: conversation_id={payload.get('conversation_id')}, role={payload.get('role')}, picture_id={payload.get('picture_id')}"
-            )
-
-            def save_message(session: Session, message: str):
-                session.add(message)
-                session.commit()
-
-            message = Message(
-                conversation_id=payload["conversation_id"],
-                role=payload["role"],
-                content=payload["content"],
-                picture_id=payload.get("picture_id"),
-            )
-            future = self.vault.db.submit_task(save_message, message)
-            if future.exception():
-                raise HTTPException(status_code=500, detail="Failed to save message")
-            return {"status": "ok"}
-
-        ###############################
         # Config endpoints            #
         ###############################
-        @self.api.get("/config")
-        async def get_config():
-            """
-            Return the current image roots config (config.json) and OpenAI chat service config.
-            """
-            user = self._get_user()
-            config_payload = self._user_to_config(user)
-            logger.debug(f"Transmitting current config {config_payload}")
-            return config_payload
+        def _ensure_secure_when_required(request: Request):
+            if self._server_config.get("require_ssl", False):
+                if request.url.scheme != "https":
+                    raise HTTPException(
+                        status_code=403,
+                        detail="HTTPS is required for this operation.",
+                    )
 
-        @self.api.patch("/config")
-        async def patch_config(request: Request):
+        class ChangePasswordRequest(BaseModel):
+            current_password: Optional[str] = None
+            new_password: str = Field(
+                ...,
+                min_length=8,
+                description="Password must be at least 8 characters long",
+            )
+
+        class CreateTokenRequest(BaseModel):
+            description: Optional[str] = None
+
+        @self.api.get("/users/me/config")
+        async def get_me_config(request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user = self.vault.db.run_task(
+                lambda session: session.get(User, user_id),
+                priority=DBPriority.IMMEDIATE,
+            )
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            return self._user_to_config(user)
+
+        @self.api.patch("/users/me/config")
+        async def patch_me_config(request: Request):
+            _ensure_secure_when_required(request)
             import time
 
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
             start_time = time.time()
-            logger.info(f"[TIMING] PATCH /config called at {start_time:.3f}")
-            """
-            Update existing config values or append to existing lists. Does not allow adding new keys.
-            Body: { key: value, ... } (value replaces or is appended to existing key)
-            If the value is a list and the existing value is a list, appends items.
-            Ensures new image root directories and DBs are created as needed.
-            """
+            logger.info(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
             patch_data = await request.json()
             allowed_keys = {
                 "description",
@@ -911,10 +803,10 @@ class Server:
                 "similarity_character",
             }
 
-            def update_user(session: Session):
-                user = session.exec(select(User)).first()
+            def update_user(session: Session, user_id: int):
+                user = session.get(User, user_id)
                 if user is None:
-                    user = User()
+                    raise HTTPException(status_code=404, detail="User not found")
 
                 updated = False
                 for key, value in patch_data.items():
@@ -954,15 +846,190 @@ class Server:
                 return user, updated
 
             user, updated = self.vault.db.run_task(
-                update_user, priority=DBPriority.IMMEDIATE
+                update_user, user_id, priority=DBPriority.IMMEDIATE
             )
             elapsed = time.time() - start_time
-            logger.info(f"[TIMING] PATCH /config completed in {elapsed:.3f} seconds")
+            logger.info(
+                f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"
+            )
             return {
                 "status": "success",
                 "updated": updated,
                 "config": self._user_to_config(user),
             }
+
+        @self.api.post("/users/me/auth")
+        async def change_me_password(payload: ChangePasswordRequest, request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not session id provided")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
+            logger.info("Looking for user id: {}".format(user_id))
+            user = self.vault.db.run_task(
+                lambda session: session.get(User, user_id),
+                priority=DBPriority.IMMEDIATE,
+            )
+            if user is None:
+                logger.error("No user found with id: {}".format(user_id))
+                raise HTTPException(status_code=404, detail="User not found")
+
+            if user.password_hash:
+                if not payload.current_password:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Current password is required",
+                    )
+                if not bcrypt.verify(payload.current_password, user.password_hash):
+                    raise HTTPException(status_code=401, detail="Invalid password")
+
+            hashed_password = bcrypt.hash(payload.new_password)
+
+            def update_user(session: Session, user_id: int):
+                db_user = session.get(User, user_id)
+                if db_user is None:
+                    logger.info(f"User {user_id} not found in DB when updating")
+                    raise HTTPException(
+                        status_code=404, detail="User not found when updating"
+                    )
+                db_user.password_hash = hashed_password
+                session.add(db_user)
+                session.commit()
+                session.refresh(db_user)
+                return db_user
+
+            updated_user = self.vault.db.run_task(
+                update_user, user_id, priority=DBPriority.IMMEDIATE
+            )
+            self._user = updated_user
+            self.PASSWORD_HASH = updated_user.password_hash
+            self.USERNAME = updated_user.username
+            self.active_session_ids = {}
+            return {"status": "success"}
+
+        @self.api.get("/users/me/auth")
+        async def get_me_auth(request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user = self.vault.db.run_task(
+                lambda session: session.get(User, user_id),
+                priority=DBPriority.IMMEDIATE,
+            )
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            return {
+                "username": user.username,
+                "has_password": bool(user.password_hash),
+            }
+
+        @self.api.post("/users/me/token")
+        async def create_me_token(payload: CreateTokenRequest, request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
+            token_value = secrets.token_urlsafe(32)
+            token_hash = bcrypt.hash(token_value)
+
+            def create_token(
+                session: Session,
+                user_id: int,
+                token_hash: str,
+                description: Optional[str],
+            ):
+                user = session.get(User, user_id)
+                if user is None:
+                    raise HTTPException(status_code=404, detail="User not found")
+                token = UserToken(
+                    user_id=user_id,
+                    token_hash=token_hash,
+                    created_at=datetime.utcnow(),
+                    description=description,
+                )
+                session.add(token)
+                session.commit()
+                session.refresh(token)
+                return token
+
+            token = self.vault.db.run_task(
+                create_token,
+                user_id,
+                token_hash,
+                payload.description,
+                priority=DBPriority.IMMEDIATE,
+            )
+
+            return {
+                "token": token_value,
+                "token_id": token.id,
+            }
+
+        @self.api.get("/users/me/token")
+        async def list_me_tokens(request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
+            def fetch_tokens(session: Session, user_id: int):
+                tokens = session.exec(
+                    select(UserToken)
+                    .where(UserToken.user_id == user_id)
+                    .order_by(UserToken.created_at.desc())
+                ).all()
+                return tokens
+
+            tokens = self.vault.db.run_task(
+                fetch_tokens, user_id, priority=DBPriority.IMMEDIATE
+            )
+            return [
+                {
+                    "id": token.id,
+                    "description": token.description,
+                    "created_at": token.created_at,
+                    "last_used_at": token.last_used_at,
+                }
+                for token in tokens
+            ]
+
+        @self.api.delete("/users/me/token/{token_id}")
+        async def delete_me_token(token_id: int, request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
+            def remove_token(session: Session, user_id: int, token_id: int):
+                token = session.get(UserToken, token_id)
+                if token is None or token.user_id != user_id:
+                    raise HTTPException(status_code=404, detail="Token not found")
+                session.delete(token)
+                session.commit()
+                return True
+
+            self.vault.db.run_task(
+                remove_token, user_id, token_id, priority=DBPriority.IMMEDIATE
+            )
+
+            return {"status": "success", "deleted_id": token_id}
 
         ###############################
         # Character endpoints         #
@@ -1827,7 +1894,7 @@ class Server:
                 if len(stack) >= min_group_size:
                     groups.append(list(stack))
 
-            groups = sorted(groups, key=lambda g: min(g))
+            groups = sorted(groups, key=min)
             stack_index_map = {}
             ordered_ids = []
             for idx, group in enumerate(groups):
@@ -1866,10 +1933,46 @@ class Server:
             if not isinstance(ids, list):
                 raise HTTPException(status_code=400, detail="'ids' must be a list")
 
+            def map_bbox_to_thumbnail(bbox, picture):
+                if not bbox or len(bbox) != 4:
+                    return bbox, False
+                left = getattr(picture, "thumbnail_left", None)
+                top = getattr(picture, "thumbnail_top", None)
+                side = getattr(picture, "thumbnail_side", None)
+                if left is None or top is None or side in (None, 0):
+                    return bbox, False
+                try:
+                    scale = 256.0 / float(side)
+                    x1, y1, x2, y2 = bbox
+                    x1 = max(0.0, min(256.0, (x1 - left) * scale))
+                    y1 = max(0.0, min(256.0, (y1 - top) * scale))
+                    x2 = max(0.0, min(256.0, (x2 - left) * scale))
+                    y2 = max(0.0, min(256.0, (y2 - top) * scale))
+                    return (
+                        [
+                            int(round(x1)),
+                            int(round(y1)),
+                            int(round(x2)),
+                            int(round(y2)),
+                        ],
+                        True,
+                    )
+                except Exception:
+                    return bbox, False
+
             # Fetch pictures and their faces
             pics = self.vault.db.run_task(
                 lambda session: Picture.find(
-                    session, id=ids, select_fields=["id", "thumbnail", "faces"]
+                    session,
+                    id=ids,
+                    select_fields=[
+                        "id",
+                        "thumbnail",
+                        "faces",
+                        "thumbnail_left",
+                        "thumbnail_top",
+                        "thumbnail_side",
+                    ],
                 )
             )
             results = {}
@@ -1878,6 +1981,7 @@ class Server:
                     thumbnail_bytes = pic.thumbnail
                     # Gather face bboxes and ids
                     face_data = []
+                    mapped_any = False
                     for face in getattr(pic, "faces", []):
                         # Defensive: ensure bbox is a list of 4 ints
                         bbox = None
@@ -1890,6 +1994,8 @@ class Server:
                         except Exception:
                             bbox = None
                         if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                            mapped_bbox, mapped = map_bbox_to_thumbnail(bbox, pic)
+                            mapped_any = mapped_any or mapped
                             character = (
                                 self.vault.db.run_task(
                                     lambda session: Character.find(
@@ -1904,7 +2010,7 @@ class Server:
                             face_data.append(
                                 {
                                     "id": face.id,
-                                    "bbox": bbox,
+                                    "bbox": mapped_bbox,
                                     "character_id": face.character_id,
                                     "character_name": getattr(
                                         character[0], "name", None
@@ -1919,6 +2025,8 @@ class Server:
                         if thumbnail_bytes
                         else None,
                         "faces": face_data,
+                        "thumbnail_width": 256 if mapped_any else None,
+                        "thumbnail_height": 256 if mapped_any else None,
                     }
                 except Exception as exc:
                     logger.error(
@@ -2576,6 +2684,12 @@ class Server:
             Detects media type and sets ID as uuid + extension.
             """
 
+            if not self.vault.is_worker_running(WorkerType.FACE):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Face extraction worker is not running. Cannot import pictures.",
+                )
+
             dest_folder = self.vault.image_root
             logger.debug("Importing pictures to folder: " + str(dest_folder))
             os.makedirs(dest_folder, exist_ok=True)
@@ -2682,11 +2796,29 @@ class Server:
                             duplicate_count,
                             len(uploaded_files),
                         )
-
                     self.import_tasks[task_id]["results"] = results
                     self.import_tasks[task_id]["processed"] = len(uploaded_files)
-                    self.import_tasks[task_id]["status"] = "completed"
-                    self.vault.notify(EventType.CHANGED_PICTURES)
+                    if new_pictures:
+                        self.import_tasks[task_id]["status"] = "processing_faces"
+                        face_futures = [
+                            self.vault.get_worker_future(
+                                WorkerType.FACE, Picture, pic.id, "faces"
+                            )
+                            for pic in new_pictures
+                        ]
+                        self.vault.notify(EventType.CHANGED_PICTURES)
+                        face_timeout_s = 120
+                        for pic, future in zip(new_pictures, face_futures):
+                            try:
+                                future.result(timeout=face_timeout_s)
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"Face extraction timed out for picture id={pic.id}"
+                                ) from exc
+                        self.import_tasks[task_id]["status"] = "completed"
+                    else:
+                        self.import_tasks[task_id]["status"] = "completed"
+                        self.vault.notify(EventType.CHANGED_PICTURES)
                 except Exception as exc:
                     self.import_tasks[task_id]["status"] = "failed"
                     self.import_tasks[task_id]["error"] = str(exc)
@@ -2740,6 +2872,11 @@ class Server:
             offset: int = Query(0),
             limit: int = Query(sys.maxsize),
         ):
+            metadata_fields = Picture.metadata_fields()
+
+            def serialize_metadata(pic: Picture):
+                return {field: getattr(pic, field) for field in metadata_fields}
+
             query_params = {}
             format = None
             if request.query_params:
@@ -2828,7 +2965,7 @@ class Server:
                     return session.exec(query).all()
 
                 pics = self.vault.db.run_task(find_unassigned)
-                return [safe_model_dict(pic) for pic in pics]
+                return [serialize_metadata(pic) for pic in pics]
 
             if character_id == "ALL":
                 character_id = None
@@ -2862,7 +2999,7 @@ class Server:
                     select_fields=Picture.metadata_fields(),
                     format=format,
                 )
-                return [safe_model_dict(pic) for pic in pics]
+                return [serialize_metadata(pic) for pic in pics]
             else:
                 pics = self.vault.db.run_task(
                     Picture.find,
@@ -2873,7 +3010,7 @@ class Server:
                     format=format,
                     **query_params,
                 )
-            return [safe_model_dict(pic) for pic in pics]
+            return [serialize_metadata(pic) for pic in pics]
 
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):
@@ -2921,15 +3058,19 @@ class Server:
             return await call_next(request)
 
         class LoginRequest(BaseModel):
-            username: str = Field(
-                ...,
+            username: Optional[str] = Field(
+                default=None,
                 min_length=1,
                 description="Username is required",
             )
-            password: str = Field(
-                ...,
+            password: Optional[str] = Field(
+                default=None,
                 min_length=8,
                 description="Password must be at least 8 characters long",
+            )
+            token: Optional[str] = Field(
+                default=None,
+                description="API token for authentication",
             )
 
         @self.api.get("/check-session")
@@ -2941,42 +3082,89 @@ class Server:
 
         @self.api.post("/login")
         def login(request: LoginRequest):
-            user = self._get_user() or self._ensure_user()
-            if not user.username or not user.password_hash:
-                # First login: set the username and password
-                hashed_password = bcrypt.hash(request.password)
+            if request.token:
+                user = self._get_user()
+                if not user:
+                    raise HTTPException(status_code=404, detail="User not found")
 
-                def set_credentials(session: Session):
-                    db_user = session.exec(select(User)).first()
-                    if db_user is None:
-                        db_user = User()
-                    db_user.username = request.username
-                    db_user.password_hash = hashed_password
-                    session.add(db_user)
+                def fetch_tokens(session: Session, user_id: int):
+                    tokens = session.exec(
+                        select(UserToken).where(UserToken.user_id == user_id)
+                    ).all()
+                    return tokens
+
+                tokens = self.vault.db.run_task(
+                    fetch_tokens, user.id, priority=DBPriority.IMMEDIATE
+                )
+                matched_token = None
+                for token in tokens:
+                    if bcrypt.verify(request.token, token.token_hash):
+                        matched_token = token
+                        break
+                if matched_token is None:
+                    raise HTTPException(status_code=401, detail="Invalid token")
+
+                def update_token_last_used(session: Session, token_id: int):
+                    db_token = session.get(UserToken, token_id)
+                    if db_token is None:
+                        return None
+                    db_token.last_used_at = datetime.utcnow()
+                    session.add(db_token)
                     session.commit()
-                    session.refresh(db_user)
-                    return db_user
+                    return db_token
 
-                user = self.vault.db.run_task(
-                    set_credentials, priority=DBPriority.IMMEDIATE
+                self.vault.db.run_task(
+                    update_token_last_used,
+                    matched_token.id,
+                    priority=DBPriority.IMMEDIATE,
                 )
-                self._user = user
-                self.USERNAME = user.username
-                self.PASSWORD_HASH = user.password_hash
-                response = JSONResponse(
-                    content={"message": "Username and password set successfully."}
-                )
-            else:
-                # Validate the username and password
-                if request.username != user.username:
-                    raise HTTPException(status_code=401, detail="Invalid username")
-                if not bcrypt.verify(request.password, user.password_hash):
-                    raise HTTPException(status_code=401, detail="Invalid password")
+
                 response = JSONResponse(content={"message": "Login successful."})
+            else:
+                if not request.username or not request.password:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Username and password are required",
+                    )
+
+                user = self._get_user() or self._ensure_user()
+                if not user.username or not user.password_hash:
+                    # First login: set the username and password
+                    hashed_password = bcrypt.hash(request.password)
+
+                    def set_credentials(session: Session):
+                        db_user = session.exec(select(User)).first()
+                        if db_user is None:
+                            db_user = User()
+                        db_user.username = request.username
+                        db_user.password_hash = hashed_password
+                        session.add(db_user)
+                        session.commit()
+                        session.refresh(db_user)
+                        return db_user
+
+                    user = self.vault.db.run_task(
+                        set_credentials, priority=DBPriority.IMMEDIATE
+                    )
+                    self._user = user
+                    self.USERNAME = user.username
+                    self.PASSWORD_HASH = user.password_hash
+                    response = JSONResponse(
+                        content={"message": "Username and password set successfully."}
+                    )
+                else:
+                    # Validate the username and password
+                    if request.username != user.username:
+                        raise HTTPException(status_code=401, detail="Invalid username")
+                    if not bcrypt.verify(request.password, user.password_hash):
+                        raise HTTPException(status_code=401, detail="Invalid password")
+                    response = JSONResponse(content={"message": "Login successful."})
 
             # Generate a new session ID using uuid
             session_id = str(uuid.uuid4())
-            self.active_session_ids.add(session_id)
+            if not user or user.id is None:
+                raise HTTPException(status_code=500, detail="User not found")
+            self.active_session_ids[session_id] = user.id
 
             # Set the session ID as a cookie
             cookie_samesite = self._server_config.get("cookie_samesite", "Lax")
@@ -3005,7 +3193,7 @@ class Server:
         def logout(response: Response, request: Request):
             session_id = request.cookies.get("session_id")
             if session_id in self.active_session_ids:
-                self.active_session_ids.remove(session_id)
+                self.active_session_ids.pop(session_id, None)
                 logger.info(f"Session {session_id} invalidated.")
             response.delete_cookie("session_id", path="/")
             return {"message": "Logged out successfully."}

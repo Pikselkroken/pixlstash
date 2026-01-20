@@ -5,7 +5,12 @@
         <button class="clear-btn" @click="$emit('clear-selection')">
           Clear
         </button>
-        <span class="selection-count">{{ selectedCount }} selected</span>
+        <span v-if="selectedCount > 0" class="selection-count"
+          >{{ selectedCount }} Images selected</span
+        >
+        <span v-if="selectedFaceCount > 0" class="selection-face-count">
+          {{ selectedFaceCount }} Faces selected
+        </span>
       </div>
       <div class="selection-bar-actions">
         <button
@@ -19,8 +24,12 @@
         >
           {{ `Remove from ${selectedGroupName ? selectedGroupName : "group"}` }}
         </button>
-        <button class="delete-btn" @click="$emit('delete-selected')">
-          Delete
+        <button
+          v-if="selectedCount > 0"
+          class="delete-btn"
+          @click="$emit('delete-selected')"
+        >
+          Delete Pictures
         </button>
       </div>
     </div>
@@ -31,10 +40,13 @@
 import { computed } from "vue";
 const props = defineProps({
   selectedCount: Number,
+  selectedFaceCount: { type: Number, default: 0 },
   selectedCharacter: String,
   selectedSet: String,
   selectedGroupName: String,
   visible: Boolean,
+  allPicturesId: { type: String, required: true },
+  unassignedPicturesId: { type: String, required: true },
 });
 </script>
 
@@ -45,8 +57,8 @@ const props = defineProps({
   bottom: 0;
   width: 100%;
   z-index: 100;
-  background: rgba(195, 205, 210, 0.95);
-  padding: 8px 16px 8px 16px !important;
+  background: rgba(var(--v-theme-background), 0.95);
+  padding: 2px 8px 8px 16px !important;
   margin: 0;
   height: 52px;
   box-sizing: border-box;
@@ -74,25 +86,36 @@ const props = defineProps({
   margin-left: auto;
 }
 .clear-btn {
-  background: #eee;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
   border: none;
   padding: 6px 14px;
   border-radius: 4px;
   cursor: pointer;
+}
+.clear-btn:hover {
+  filter: brightness(1.3);
 }
 .remove-btn {
-  background: #ffd700;
+  background: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-on-warning));
   border: none;
   padding: 6px 14px;
   border-radius: 4px;
   cursor: pointer;
 }
+.remove-btn:hover {
+  filter: brightness(1.3);
+}
 .delete-btn {
-  background: #e53935;
+  background: rgb(var(--v-theme-error));
   color: #fff;
   border: none;
   padding: 6px 18px;
   border-radius: 4px;
   cursor: pointer;
+}
+.delete-btn:hover {
+  filter: brightness(1.3);
 }
 </style>

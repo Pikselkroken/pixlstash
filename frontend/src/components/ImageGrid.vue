@@ -19,12 +19,15 @@
   />
   <div style="position: relative">
     <SelectionBar
-      v-if="selectedImageIds.length > 0"
+      v-if="selectedImageIds.length > 0 || selectedFaceIds.length > 0"
       :selectedCount="selectedImageIds.length"
+      :selectedFaceCount="selectedFaceIds.length"
       :selectedCharacter="String(props.selectedCharacter)"
       :selectedSet="String(props.selectedSet)"
       :selectedGroupName="selectedGroupName"
-      :visible="selectedImageIds.length > 0"
+      :allPicturesId="String(props.allPicturesId)"
+      :unassignedPicturesId="String(props.unassignedPicturesId)"
+      :visible="selectedImageIds.length > 0 || selectedFaceIds.length > 0"
       @clear-selection="clearSelection"
       @remove-from-group="removeFromGroup"
       @delete-selected="deleteSelected"
@@ -118,7 +121,7 @@
           </div>
           <v-btn
             v-if="canShowAllPicturesButton"
-            class="empty-state-action"
+            class="empty-state-action app-btn-base"
             color="primary"
             variant="elevated"
             @click.stop="handleEmptyStateReset"
@@ -130,7 +133,7 @@
       <div
         class="image-grid"
         :style="{
-          gridTemplateColumns: `repeat(${columns}, 1fr)`,
+          gridTemplateColumns: `repeat(${props.columns}, minmax(${MIN_THUMBNAIL_SIZE}px, ${MAX_THUMBNAIL_SIZE}px))`,
           position: 'relative',
         }"
         ref="gridContainer"
@@ -324,14 +327,28 @@
                 >
                   <div
                     v-for="overlay in getFaceBboxOverlays(img).value"
-                    :key="overlay.idx + '-' + thumbnailLoadedMap[img.id]"
+                    :key="overlay.faceId + '-' + thumbnailLoadedMap[img.id]"
                     class="face-bbox-overlay"
                     :style="overlay.style"
                     draggable="true"
+                    @pointerdown.stop
+                    @mousedown.stop
+                    @click.stop="
+                      toggleFaceSelection(
+                        img.id,
+                        overlay.faceIdx,
+                        overlay.faceId,
+                      )
+                    "
                     @dragstart="
                       (e) => {
                         e.stopPropagation();
-                        onFaceBboxDragStart(e, img, overlay.idx);
+                        onFaceBboxDragStart(
+                          e,
+                          img,
+                          overlay.faceIdx,
+                          overlay.faceId,
+                        );
                       }
                     "
                   >
@@ -348,11 +365,9 @@
                       "
                     >
                       {{
-                        img.faces &&
-                        img.faces[overlay.idx] &&
-                        img.faces[overlay.idx].character_name
-                          ? img.faces[overlay.idx].character_name
-                          : `Face ${overlay.idx + 1}`
+                        overlay.face && overlay.face.character_name
+                          ? overlay.face.character_name
+                          : `Face ${overlay.colorIdx + 1}`
                       }}
                     </span>
                   </div>
@@ -390,7 +405,11 @@
                   v-for="n in 5"
                   :key="n"
                   large
-                  :color="n <= (img.score || 0) ? 'orange' : 'grey darken-2'"
+                  :color="
+                    n <= (img.score || 0)
+                      ? 'orange'
+                      : 'rgba(var(--v-theme-surface), 0.2)'
+                  "
                   style="cursor: pointer"
                   @click.stop="setScore(img, n)"
                   >mdi-star</v-icon
@@ -520,9 +539,13 @@ const props = defineProps({
   unassignedPicturesId: String,
   gridVersion: { type: Number, default: 0 },
   mediaTypeFilter: { type: String, default: "all" },
+  columns: { type: Number, required: true },
 });
 const STACKS_SORT_KEY = "PICTURE_STACKS";
 const STACK_COLOR_STEP = 47;
+const MIN_THUMBNAIL_SIZE = 128;
+const MAX_THUMBNAIL_SIZE = 384;
+const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 // Store refs for each thumbnail image
 const thumbnailRefs = reactive({});
 const thumbnailContainerRefs = reactive({});
@@ -557,6 +580,7 @@ const exportProgressPercent = computed(() => {
 
 // Key to force face bbox overlay recompute
 const faceOverlayRedrawKey = ref(0);
+let gridResizeObserver = null;
 
 function triggerFaceOverlayRedraw() {
   faceOverlayRedrawKey.value++;
@@ -574,10 +598,23 @@ onMounted(() => {
   console.log("[ImageGrid.vue] Initial allGridImages:", allGridImages.value);
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   fetchAllPicturesCount();
+  nextTick(() => {
+    updateRowHeightFromGrid();
+    if (typeof ResizeObserver !== "undefined" && gridContainer.value) {
+      gridResizeObserver = new ResizeObserver(() => {
+        updateRowHeightFromGrid();
+      });
+      gridResizeObserver.observe(gridContainer.value);
+    }
+  });
 });
 
 onUnmounted(() => {
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
+  if (gridResizeObserver) {
+    gridResizeObserver.disconnect();
+    gridResizeObserver = null;
+  }
   fullImagePrefetchControllers.clear();
   prefetchedFullImageIds.clear();
   prefetchedFullImageOrder.length = 0;
@@ -641,7 +678,7 @@ function clearFaceSelection() {
   selectedFaceIds.value = [];
 }
 
-function onFaceBboxDragStart(event, img, faceIdx) {
+function onFaceBboxDragStart(event, img, faceIdx, faceId) {
   // If this face is selected, drag all selected faces; else, drag just this one
   console.log(`Dragging face bbox: imageId=${img.id}, faceIdx=${faceIdx}`);
   let facesToDrag = [];
@@ -652,8 +689,11 @@ function onFaceBboxDragStart(event, img, faceIdx) {
       faceId: f.faceId,
     }));
   } else {
-    const face = img.faces[faceIdx];
-    facesToDrag = [{ imageId: img.id, faceIdx, faceId: face.id }];
+    const resolvedFaceId = faceId ?? (img.faces && img.faces[faceIdx]?.id);
+    if (!resolvedFaceId) {
+      return;
+    }
+    facesToDrag = [{ imageId: img.id, faceIdx, faceId: resolvedFaceId }];
   }
 
   // Ensure that additional data types are preserved in the dataTransfer object
@@ -683,7 +723,7 @@ function onFaceBboxDragStart(event, img, faceIdx) {
 }
 
 // Helper to calculate face bbox overlay style using object-fit: cover logic
-function getFaceBboxStyle(bbox, idx, img, el) {
+function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
   if (!el) return { display: "none" };
   const container = el.parentElement;
   if (!container) return { display: "none" };
@@ -699,22 +739,23 @@ function getFaceBboxStyle(bbox, idx, img, el) {
   const displayWidth = naturalWidth * scale;
   const displayHeight = naturalHeight * scale;
   const offsetX = (containerWidth - displayWidth) / 2;
-  const offsetY = (containerHeight - displayHeight) / 2;
+  const offsetY = 0;
   // Transform bbox
   const left = offsetX + bbox[0] * scale;
   const top = offsetY + bbox[1] * scale;
   const width = (bbox[2] - bbox[0]) * scale;
   const height = (bbox[3] - bbox[1]) * scale;
+  const borderColor = faceBoxColor(idx);
   return {
     position: "absolute",
-    border: `1.5px solid ${faceBoxColor(idx)}`,
-    background: `${faceBoxColor(idx)}22`,
+    border: `${isSelected ? 3 : 1.5}px solid ${borderColor}`,
+    background: `${borderColor}${isSelected ? "44" : "22"}`,
     left: `${left}px`,
     top: `${top}px`,
     width: `${width}px`,
     height: `${height}px`,
     pointerEvents: "auto",
-    zIndex: 100,
+    zIndex: isSelected ? 60 : 40,
     display: "block",
   };
 }
@@ -724,6 +765,7 @@ function getFaceBboxOverlays(img) {
     void thumbnailLoadedMap[img.id];
     void thumbnailRefs[img.id];
     void faceOverlayRedrawKey.value; // depend on redraw key
+    void selectedFaceIds.value;
     if (
       !props.showFaceBboxes ||
       !img.faces ||
@@ -735,10 +777,21 @@ function getFaceBboxOverlays(img) {
     }
     const el = thumbnailRefs[img.id];
     if (!el) return [];
-    const firstFrameFaces = img.faces.filter((f) => f.frame_index === 0);
-    return firstFrameFaces.map((face, fidx) => ({
-      style: getFaceBboxStyle(face.bbox, fidx, img, el),
-      idx: fidx,
+    const firstFrameFaces = img.faces
+      .map((face, faceIdx) => ({ face, faceIdx }))
+      .filter((entry) => entry.face.frame_index === 0);
+    return firstFrameFaces.map((entry, colorIdx) => ({
+      style: getFaceBboxStyle(
+        entry.face.bbox,
+        colorIdx,
+        img,
+        el,
+        isFaceSelected(img.id, entry.faceIdx),
+      ),
+      faceIdx: entry.faceIdx,
+      faceId: entry.face.id,
+      face: entry.face,
+      colorIdx,
     }));
   });
 }
@@ -1059,6 +1112,7 @@ function debugLogDataTransfer(label, dataTransfer) {
 
 function clearSelection() {
   selectedImageIds.value = [];
+  clearFaceSelection();
 }
 
 // Video refs for hover play/pause in grid
@@ -1094,27 +1148,53 @@ function isVideo(img) {
 }
 
 function removeFromGroup() {
-  if (!selectedImageIds.value.length) return;
+  if (!selectedImageIds.value.length && !selectedFaceIds.value.length) return;
   const backendUrl = props.backendUrl;
+  const faceIds = selectedFaceIds.value
+    .map((entry) => entry.faceId)
+    .filter((id) => id !== undefined && id !== null);
+  const pictureIds = selectedImageIds.value.slice();
   // Remove from character
   if (
     props.selectedCharacter &&
     props.selectedCharacter !== props.allPicturesId &&
     props.selectedCharacter !== props.unassignedPicturesId
   ) {
-    apiClient
-      .delete(`${backendUrl}/characters/${props.selectedCharacter}/faces`, {
-        data: { picture_ids: selectedImageIds.value },
-      })
+    const requests = [];
+    if (pictureIds.length) {
+      requests.push(
+        apiClient.delete(
+          `${backendUrl}/characters/${props.selectedCharacter}/faces`,
+          {
+            data: { picture_ids: pictureIds },
+          },
+        ),
+      );
+    }
+    if (faceIds.length) {
+      requests.push(
+        apiClient.delete(
+          `${backendUrl}/characters/${props.selectedCharacter}/faces`,
+          {
+            data: { face_ids: faceIds },
+          },
+        ),
+      );
+    }
+    if (!requests.length) return;
+    Promise.all(requests)
       .catch((err) => {
-        alert(`Error removing images from character: ${err.message}`);
+        alert(`Error removing faces from character: ${err.message}`);
       })
       .finally(() => {
-        // Remove affected images from grid immediately
-        allGridImages.value = allGridImages.value.filter(
-          (img) => !selectedImageIds.value.includes(img.id),
-        );
+        if (pictureIds.length) {
+          // Remove affected images from grid immediately
+          allGridImages.value = allGridImages.value.filter(
+            (img) => !pictureIds.includes(img.id),
+          );
+        }
         selectedImageIds.value = [];
+        clearFaceSelection();
         lastSelectedIndex = null;
         fetchAllGridImages().then(() => {
           loadedRanges.value = [];
@@ -1131,8 +1211,12 @@ function removeFromGroup() {
     props.selectedSet !== props.allPicturesId &&
     props.selectedSet !== props.unassignedPicturesId
   ) {
+    if (!pictureIds.length) {
+      clearFaceSelection();
+      return;
+    }
     Promise.all(
-      selectedImageIds.value.map((id) =>
+      pictureIds.map((id) =>
         apiClient
           .delete(
             `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`,
@@ -1145,9 +1229,10 @@ function removeFromGroup() {
     ).then(async () => {
       // Remove affected images from grid immediately
       allGridImages.value = allGridImages.value.filter(
-        (img) => !selectedImageIds.value.includes(img.id),
+        (img) => !pictureIds.includes(img.id),
       );
       selectedImageIds.value = [];
+      clearFaceSelection();
       lastSelectedIndex = null;
       await fetchAllGridImages();
       loadedRanges.value = [];
@@ -1198,7 +1283,7 @@ function deleteSelected() {
 const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
 async function handleImagesUploaded(newIds) {
-  loadedRanges.value = [];
+  resetThumbnailState();
   allGridImages.value = [];
   selectedImageIds.value = [];
   lastSelectedIndex = null;
@@ -1218,7 +1303,7 @@ watch(
     console.log(
       "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
     );
-    loadedRanges.value = [];
+    resetThumbnailState();
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
@@ -1230,9 +1315,14 @@ watch(
 const VIEW_WINDOW = 100;
 
 const divisibleViewWindow = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   return Math.ceil(VIEW_WINDOW / cols) * cols;
 });
+
+const initialRender = ref(true);
+const renderBuffer = computed(() =>
+  initialRender.value ? 0 : divisibleViewWindow.value,
+);
 
 const isLoadingThumbnails = ref(false);
 const hasMoreImages = ref(true);
@@ -1250,12 +1340,6 @@ const selectedGroupName = ref("");
 
 async function updateSelectedGroupName() {
   let name = "";
-  console.log(
-    "Updating selected group name: ",
-    props.selectedCharacter,
-    props.selectedSet,
-    props.allPicturesId,
-  );
   if (
     props.selectedCharacter &&
     props.selectedCharacter !== `${props.allPicturesId}` &&
@@ -1270,17 +1354,13 @@ async function updateSelectedGroupName() {
     } catch (e) {
       console.error("Character fetch failed:", e);
     }
-  } else if (
-    props.selectedSet &&
-    props.selectedSet !== `${props.allPicturesId}` &&
-    props.selectedSet !== `${props.unassignedPicturesId}`
-  ) {
+  } else if (props.selectedSet) {
     try {
       const res = await apiClient.get(
         `${props.backendUrl}/picture_sets/${props.selectedSet}`,
       );
       const set = await res.data;
-      name = set.name || "";
+      name = set.set.name || "";
     } catch (e) {
       console.error("Set fetch failed:", e);
     }
@@ -1355,10 +1435,10 @@ function isScoreSortActive() {
 }
 
 function invalidateVisibleThumbnailRanges() {
-  const start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
+  const start = Math.max(0, visibleStart.value - renderBuffer.value);
   const end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value,
+    visibleEnd.value + renderBuffer.value,
   );
   loadedRanges.value = loadedRanges.value.filter(
     ([rangeStart, rangeEnd]) => rangeEnd <= start || rangeStart >= end,
@@ -1703,6 +1783,7 @@ async function fetchAllGridImages() {
   imagesLoading.value = true;
   imagesError.value = null;
   try {
+    const fetchStart = performance.now();
     let images = [];
     const requestId = Date.now();
     fetchAllGridImages.lastRequestId = requestId;
@@ -1712,10 +1793,18 @@ async function fetchAllGridImages() {
       const url = `${props.backendUrl}/pictures/stacks?threshold=${encodeURIComponent(
         threshold,
       )}${stackParams ? `&${stackParams}` : ""}`;
+      const requestStart = performance.now();
       const res = await apiClient.get(url);
+      const requestEnd = performance.now();
       const data = await res.data;
+      const parseEnd = performance.now();
       if (fetchAllGridImages.lastRequestId !== requestId) return;
       const stackImages = Array.isArray(data) ? data : [];
+      console.log("[ImageGrid.vue] /pictures/stacks timing", {
+        count: stackImages.length,
+        requestMs: (requestEnd - requestStart).toFixed(1),
+        totalMs: (parseEnd - requestStart).toFixed(1),
+      });
       images = stackImages.map((img) => {
         const stackIndex =
           typeof img.stack_index === "number"
@@ -1736,9 +1825,17 @@ async function fetchAllGridImages() {
       props.selectedSet !== props.unassignedPicturesId
     ) {
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
+      const requestStart = performance.now();
       const res = await apiClient.get(url);
+      const requestEnd = performance.now();
       const data = await res.data;
+      const parseEnd = performance.now();
       images = data.pictures || [];
+      console.log("[ImageGrid.vue] /picture_sets timing", {
+        count: images.length,
+        requestMs: (requestEnd - requestStart).toFixed(1),
+        totalMs: (parseEnd - requestStart).toFixed(1),
+      });
     } else if (props.searchQuery && props.searchQuery.trim()) {
       // Use /pictures/search endpoint for text search
       const params = buildPictureIdsQueryParams();
@@ -1747,30 +1844,74 @@ async function fetchAllGridImages() {
       }/pictures/search?query=${encodeURIComponent(
         props.searchQuery.trim(),
       )}&top_n=10000${params ? `&${params}` : ""}`;
+      const requestStart = performance.now();
       const res = await apiClient.get(url);
+      const requestEnd = performance.now();
       const data = await res.data;
+      const parseEnd = performance.now();
       images = data;
+      console.log("[ImageGrid.vue] /pictures/search timing", {
+        count: Array.isArray(images) ? images.length : 0,
+        requestMs: (requestEnd - requestStart).toFixed(1),
+        totalMs: (parseEnd - requestStart).toFixed(1),
+      });
     } else {
       const params = buildPictureIdsQueryParams();
       // Only use allowed parameters: sort, offset, limit, threshold
       const url = `${props.backendUrl}/pictures?offset=0&limit=10000${
         params ? `&${params}` : ""
       }`;
+      const requestStart = performance.now();
       const res = await apiClient.get(url);
+      const requestEnd = performance.now();
       const data = await res.data;
+      const parseEnd = performance.now();
       images = data;
+      console.log("[ImageGrid.vue] /pictures timing", {
+        count: Array.isArray(images) ? images.length : 0,
+        requestMs: (requestEnd - requestStart).toFixed(1),
+        totalMs: (parseEnd - requestStart).toFixed(1),
+      });
     }
+    const mapStart = performance.now();
     const newImages = images.map((img, i) => ({
       ...img,
       idx: i,
       thumbnail: null,
     }));
+    const mapEnd = performance.now();
     console.log("Updating allGridImages with fetched images:", newImages);
     allGridImages.value = newImages;
-    const cols = columns.value || 1;
+    const assignEnd = performance.now();
+    const cols = props.columns || 1;
     const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
     visibleStart.value = 0;
     visibleEnd.value = Math.min(newImages.length, windowCount);
+    const prefetchStart = Math.max(0, visibleStart.value - renderBuffer.value);
+    const prefetchEnd = Math.min(
+      newImages.length,
+      visibleEnd.value + renderBuffer.value,
+    );
+    fetchThumbnailsBatch(prefetchStart, prefetchEnd);
+    const rangeEnd = performance.now();
+    const fetchEnd = performance.now();
+    console.log("[ImageGrid.vue] fetchAllGridImages total timing", {
+      totalMs: (fetchEnd - fetchStart).toFixed(1),
+      count: newImages.length,
+      mapMs: (mapEnd - mapStart).toFixed(1),
+      assignMs: (assignEnd - mapEnd).toFixed(1),
+      rangeMs: (rangeEnd - assignEnd).toFixed(1),
+    });
+    requestAnimationFrame(() => {
+      const rafEnd = performance.now();
+      console.log("[ImageGrid.vue] post-assign frame timing", {
+        rafMs: (rafEnd - assignEnd).toFixed(1),
+      });
+      if (initialRender.value) {
+        initialRender.value = false;
+        updateVisibleThumbnails();
+      }
+    });
   } catch (e) {
     imagesError.value = e.message;
     allGridImages.value = [];
@@ -1805,10 +1946,11 @@ watch(
     console.log(
       "[ImageGrid.vue] Filters changed. Resetting state and fetching total image count.",
     );
-    loadedRanges.value = [];
+    resetThumbnailState();
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
+    initialRender.value = true;
     updateSelectedGroupName();
     debouncedFetchAllGridImages();
   },
@@ -1820,10 +1962,11 @@ watch(
     console.log(
       "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
     );
-    loadedRanges.value = [];
+    resetThumbnailState();
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
+    initialRender.value = true;
     debouncedFetchAllGridImages();
   },
 );
@@ -1833,56 +1976,117 @@ watch([() => props.mediaTypeFilter], () => {
     "[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count.",
   );
   // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
-  loadedRanges.value = [];
+  resetThumbnailState();
   selectedImageIds.value = [];
   lastSelectedIndex = null;
   visibleStart.value = 0;
   visibleEnd.value = 0;
   allGridImages.value = [];
+  initialRender.value = true;
   fetchAllGridImages().then(() => {
     updateVisibleThumbnails();
   });
 });
 
+watch(
+  () => props.columns,
+  async () => {
+    updateRowHeightFromGrid();
+    updateVisibleThumbnails();
+    await nextTick();
+    triggerFaceOverlayRedraw();
+    requestAnimationFrame(() => {
+      triggerFaceOverlayRedraw();
+    });
+  },
+);
+
 // Track loaded batch ranges to avoid duplicate requests
 const loadedRanges = ref([]);
 // Debounce timer for scroll-triggered fetches
 let thumbFetchTimeout = null;
+let pendingRanges = [];
+const thumbnailRequestEpoch = ref(0);
+
+function resetThumbnailState() {
+  loadedRanges.value = [];
+  pendingRanges = [];
+  if (thumbFetchTimeout) {
+    clearTimeout(thumbFetchTimeout);
+    thumbFetchTimeout = null;
+  }
+  thumbnailRequestEpoch.value += 1;
+}
+
+function rangeCovers(ranges, start, end) {
+  return ranges.some(
+    ([rangeStart, rangeEnd]) => start >= rangeStart && end <= rangeEnd,
+  );
+}
 
 // Track which indices are visible in the grid
 
 const visibleStart = ref(0);
 const visibleEnd = ref(0);
 
-const rowHeight = ref(props.thumbnailSize + 24);
+const rowHeight = ref(
+  Math.round(
+    Math.min(
+      MAX_THUMBNAIL_SIZE,
+      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
+    ) + THUMBNAIL_INFO_ROW_HEIGHT,
+  ),
+);
 
-// Internal columns state
-const columns = ref(1);
+function getGridColumnWidth() {
+  const cols = Math.max(1, props.columns || 1);
+  const gridWidth =
+    gridContainer.value?.clientWidth ?? scrollWrapper.value?.clientWidth ?? 0;
+  if (!gridWidth) {
+    return Math.min(
+      MAX_THUMBNAIL_SIZE,
+      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
+    );
+  }
+  const availableWidth = Math.max(0, gridWidth - 4);
+  const rawWidth = availableWidth / cols;
+  return Math.min(
+    MAX_THUMBNAIL_SIZE,
+    Math.max(MIN_THUMBNAIL_SIZE, rawWidth || MIN_THUMBNAIL_SIZE),
+  );
+}
+
+function updateRowHeightFromGrid() {
+  const columnWidth = getGridColumnWidth();
+  rowHeight.value = Math.round(columnWidth + THUMBNAIL_INFO_ROW_HEIGHT);
+}
+
+// columns is now controlled by prop
 
 const renderStart = computed(() => {
-  const cols = columns.value;
-  let start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
+  const cols = props.columns;
+  let start = Math.max(0, visibleStart.value - renderBuffer.value);
   return start;
 });
 
 const renderEnd = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value,
+    visibleEnd.value + renderBuffer.value,
   );
   return end;
 });
 
 const topSpacerHeight = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   const rowsAbove = Math.floor(renderStart.value / cols);
   const height = rowsAbove > 0 ? rowsAbove * rowHeight.value : 1;
   return height;
 });
 
 const bottomSpacerHeight = computed(() => {
-  const cols = columns.value;
+  const cols = props.columns;
   const lastRenderedRow = Math.floor((renderEnd.value - 1) / cols) + 1;
   const totalRows = Math.ceil(allGridImages.value.length / cols);
   const rowsBelow = totalRows - lastRenderedRow;
@@ -1997,22 +2201,26 @@ watch(gridImagesToRender, (newVal, oldVal) => {
 
 // Batch fetch metadata (including thumbnail) for visible range
 async function fetchThumbnailsBatch(start, end) {
-  start = renderStart.value;
-  end = renderEnd.value;
+  if (start === undefined || start === null) {
+    start = renderStart.value;
+  }
+  if (end === undefined || end === null) {
+    end = renderEnd.value;
+  }
+
+  const requestEpoch = thumbnailRequestEpoch.value;
 
   /* console.debug(
     `[BATCH REQUEST] start=${start}, end=${end}, loadedRanges=${JSON.stringify(
       loadedRanges.value
     )}`
   ); */
-  // Check if this batch range is already loaded
-  for (const range of loadedRanges.value) {
-    if (start >= range[0] && end <= range[1]) {
-      return; // Already loaded
-    }
-  }
+  if (rangeCovers(loadedRanges.value, start, end)) return;
+  if (rangeCovers(pendingRanges, start, end)) return;
+  pendingRanges.push([start, end]);
   // Fetch batch metadata for visible range
   try {
+    const batchStart = performance.now();
     let images = [];
     let ids = [];
     // If a set is selected, use /picture_sets/{id}
@@ -2022,9 +2230,17 @@ async function fetchThumbnailsBatch(start, end) {
       props.selectedSet !== props.unassignedPicturesId
     ) {
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
+      const requestStart = performance.now();
       const res = await apiClient.get(url);
+      const requestEnd = performance.now();
       const data = await res.data;
+      const parseEnd = performance.now();
       images = data.pictures ? data.pictures.slice(start, end) : [];
+      console.log("[ImageGrid.vue] /picture_sets batch timing", {
+        count: images.length,
+        requestMs: (requestEnd - requestStart).toFixed(1),
+        totalMs: (parseEnd - requestStart).toFixed(1),
+      });
       ids = images.map((img) => img.id);
     } else {
       // Only fetch if we don't already have metadata for this range
@@ -2046,11 +2262,22 @@ async function fetchThumbnailsBatch(start, end) {
     ids = ids.filter((id) => id !== null && id !== undefined);
     if (ids.length) {
       ids = Array.from(new Set(ids.map((id) => String(id))));
+      const thumbRequestStart = performance.now();
       const thumbRes = await apiClient.post(
         `${props.backendUrl}/pictures/thumbnails`,
         JSON.stringify({ ids }),
       );
+      const thumbRequestEnd = performance.now();
       const thumbData = await thumbRes.data;
+      const thumbParseEnd = performance.now();
+      console.log("[ImageGrid.vue] /pictures/thumbnails timing", {
+        count: ids.length,
+        requestMs: (thumbRequestEnd - thumbRequestStart).toFixed(1),
+        totalMs: (thumbParseEnd - thumbRequestStart).toFixed(1),
+      });
+      if (requestEpoch !== thumbnailRequestEpoch.value) {
+        return;
+      }
       for (const gridImg of gridImages) {
         const thumbObj = thumbData[String(gridImg.id)];
         gridImg.thumbnail =
@@ -2059,9 +2286,22 @@ async function fetchThumbnailsBatch(start, end) {
             : null;
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
+        if (thumbObj) {
+          const thumbWidth = Number(thumbObj.thumbnail_width);
+          const thumbHeight = Number(thumbObj.thumbnail_height);
+          if (!Number.isNaN(thumbWidth) && thumbWidth > 0) {
+            gridImg.width = thumbWidth;
+          }
+          if (!Number.isNaN(thumbHeight) && thumbHeight > 0) {
+            gridImg.height = thumbHeight;
+          }
+        }
       }
     }
     // Insert/update images at their correct indices
+    if (requestEpoch !== thumbnailRequestEpoch.value) {
+      return;
+    }
     console.log("Updating allGridImages with thumbnails");
     for (let i = 0; i < gridImages.length; i++) {
       const img = gridImages[i];
@@ -2069,17 +2309,28 @@ async function fetchThumbnailsBatch(start, end) {
       allGridImages.value[start + i] = img;
     }
     loadedRanges.value.push([start, end]);
+    const batchEnd = performance.now();
+    console.log("[ImageGrid.vue] fetchThumbnailsBatch total timing", {
+      count: gridImages.length,
+      totalMs: (batchEnd - batchStart).toFixed(1),
+    });
   } catch (err) {
     console.error("[BATCH ERROR]", err);
+  } finally {
+    pendingRanges = pendingRanges.filter(
+      ([rangeStart, rangeEnd]) => rangeStart !== start || rangeEnd !== end,
+    );
   }
 }
 
 function updateVisibleThumbnails() {
-  let start = Math.max(0, visibleStart.value - divisibleViewWindow.value);
+  let start = Math.max(0, visibleStart.value - renderBuffer.value);
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + divisibleViewWindow.value,
+    visibleEnd.value + renderBuffer.value,
   );
+  if (rangeCovers(loadedRanges.value, start, end)) return;
+  if (rangeCovers(pendingRanges, start, end)) return;
   console.log("[ImageGrid.vue] Updating visible thumbnails:", {
     start,
     end,
@@ -2092,7 +2343,11 @@ function updateVisibleThumbnails() {
   // Debounce fetches to avoid excessive requests
   if (thumbFetchTimeout) clearTimeout(thumbFetchTimeout);
 
+  const requestEpoch = thumbnailRequestEpoch.value;
   thumbFetchTimeout = setTimeout(async () => {
+    if (requestEpoch !== thumbnailRequestEpoch.value) {
+      return;
+    }
     console.log("[ImageGrid.vue] Fetching thumbnails batch:", { start, end });
     await fetchThumbnailsBatch(start, end);
   }, 80);
@@ -2108,7 +2363,7 @@ function onGridScroll(e) {
     if (!el) return;
     let cardHeight = rowHeight.value;
     const scrollTop = el.scrollTop;
-    const cols = columns.value;
+    const cols = props.columns;
     // First visible row (may be partially visible)
     const firstVisibleRow = scrollTop / cardHeight;
     // Last visible row (may be partially visible)
@@ -2196,6 +2451,9 @@ function handleVideoDragEnd() {
 
 function handleContainerDragStart(img, event) {
   if (!img || !event?.dataTransfer) return;
+  if (event.target && event.target.closest?.(".face-bbox-overlay")) {
+    return;
+  }
   const existing = event.dataTransfer.getData("application/json");
   if (existing) return;
   dragSource.value = "grid";
@@ -2310,39 +2568,7 @@ function formatLikenessScore(score) {
 const gridContainer = ref(null);
 const scrollWrapper = ref(null);
 
-function updateColumns() {
-  nextTick(() => {
-    function measureRowHeight(retries = 0) {
-      const firstCard = gridContainer.value?.querySelector(".image-card");
-      if (firstCard) {
-        const rect = firstCard.getBoundingClientRect();
-        rowHeight.value = rect.height;
-      } else if (retries < 5) {
-        setTimeout(() => measureRowHeight(retries + 1), 60);
-      }
-    }
-    measureRowHeight();
-
-    const el = scrollWrapper.value?.$el || scrollWrapper.value;
-    if (!el) return;
-    const containerWidth = el.offsetWidth;
-    const isMobile = typeof window !== "undefined" && window.innerWidth <= 900;
-    const isLandscape =
-      typeof window !== "undefined" &&
-      window.matchMedia &&
-      window.matchMedia("(orientation: landscape)").matches;
-
-    if (isMobile) {
-      columns.value = isLandscape ? 4 : 2;
-      return;
-    }
-
-    columns.value = Math.max(
-      1,
-      Math.floor(containerWidth / (props.thumbnailSize + 32)),
-    );
-  });
-}
+// updateColumns removed; columns is now controlled by prop
 
 async function removeTagFromImage(imageId, tag) {
   if (!imageId) {
@@ -2373,8 +2599,6 @@ async function addTagToImage(imageId, tag) {
 }
 
 onMounted(() => {
-  updateColumns();
-  window.addEventListener("resize", updateColumns);
   window.addEventListener("keydown", handleKeyDown);
 });
 
@@ -2384,6 +2608,7 @@ function handleKeyDown(event) {
   if (event.key === "Escape") {
     selectedImageIds.value = [];
     lastSelectedIndex = null;
+    clearFaceSelection();
   } else if (event.key === "Delete" || event.key === "Backspace") {
     if (selectedImageIds.value.length > 0) {
       deleteSelected();
@@ -2426,14 +2651,14 @@ function handleKeyDown(event) {
 watch(
   () => props.thumbnailSize,
   () => {
-    // Recalculate visibleStart and visibleEnd after columns/rowHeight update
+    // Recalculate visibleStart and visibleEnd after rowHeight update
     nextTick(() => {
-      updateColumns();
+      updateRowHeightFromGrid();
       const el = scrollWrapper.value;
       if (!el) return;
       let cardHeight = rowHeight.value;
       const scrollTop = el.scrollTop;
-      const cols = columns.value;
+      const cols = props.columns;
       // First visible row (may be partially visible)
       const firstVisibleRow = scrollTop / cardHeight;
       // Last visible row (may be partially visible)
@@ -2448,7 +2673,6 @@ watch(
 );
 
 onUnmounted(() => {
-  window.removeEventListener("resize", updateColumns);
   window.removeEventListener("keydown", handleKeyDown);
 });
 
@@ -2458,7 +2682,9 @@ defineExpose({
   onGlobalKeyPress,
   updateVisibleThumbnails,
   exportCurrentViewToZip,
+  getExportCount,
   removeImagesById,
+  clearFaceSelection,
 });
 
 // Remove images by ID (for event-driven removal)
@@ -2474,8 +2700,14 @@ function removeImagesById(imageIds) {
   selectedImageIds.value = selectedImageIds.value.filter(
     (id) => !imageIds.includes(id),
   );
-  loadedRanges.value = [];
+  resetThumbnailState();
   updateVisibleThumbnails();
+}
+
+function getExportCount() {
+  const selectedCount = selectedImageIds.value.length;
+  const totalCount = allGridImages.value.filter((img) => img && img.id).length;
+  return { selectedCount, totalCount };
 }
 
 // --- Export to Zip ---
@@ -2793,12 +3025,12 @@ function handleEmptyStateReset() {
 }
 .star-overlay {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 12;
+  top: 2px;
+  right: 2px;
+  z-index: 120;
   display: flex;
   flex-direction: row;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(var(--v-theme-background), 0.6);
   border-radius: 4px;
   box-shadow: none;
   font-size: 0.85em;
@@ -2811,6 +3043,12 @@ function handleEmptyStateReset() {
   font-size: 20px !important;
   width: 20px;
   height: 20px;
+}
+.star-overlay .v-icon:hover {
+  font-size: 20px !important;
+  width: 20px;
+  height: 20px;
+  color: rgba(var(--v-theme-accent), 0.5);
 }
 .thumbnail-info-row {
   margin-top: 2px;
@@ -2836,13 +3074,14 @@ function handleEmptyStateReset() {
   height: 100%;
   aspect-ratio: 1 / 1;
   object-fit: cover;
+  object-position: top center;
   display: block;
   border-radius: 8px;
   position: absolute;
   top: 0;
   left: 0;
   z-index: 1;
-  box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.4);
+  box-shadow: 1px 2px 3px 3px rgba(0, 0, 0, 0.4);
   transition:
     transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
     box-shadow 0.18s;
@@ -2873,7 +3112,7 @@ function handleEmptyStateReset() {
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {
-  box-shadow: none;
+  box-shadow: 2px 4px 12px rgba(0, 0, 0, 0.6);
   transform: scale(1.02);
   z-index: 2;
   transition:
@@ -2885,6 +3124,7 @@ function handleEmptyStateReset() {
   max-width: none;
   min-width: none;
   position: relative;
+  padding: 8px;
 }
 /* Overlay for image index on thumbnail */
 .thumbnail-index-overlay {

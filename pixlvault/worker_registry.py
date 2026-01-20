@@ -20,6 +20,7 @@ class WorkerType(str, Enum):
     LIKENESS = "LikenessWorker"
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
+    WATCH_FOLDERS = "WatchFolderWorker"
 
     @staticmethod
     def all():
@@ -103,6 +104,12 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
                     "Worker %s did not shut down within timeout.",
                     self.name(),
                 )
+
+    def close(self):
+        """
+        Clean up resources held by the worker.
+        """
+        pass
 
     def is_alive(self):
         """

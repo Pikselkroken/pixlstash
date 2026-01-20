@@ -1,6 +1,7 @@
 <script setup>
 import nlp from "compromise";
 import {
+  computed,
   nextTick,
   onBeforeUnmount,
   onBeforeMount,
@@ -28,15 +29,36 @@ const sidebarRef = ref(null);
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
 const selectedSort = ref("");
-const selectedDescending = ref(false);
+const selectedDescending = ref(true);
 const stackThreshold = ref(null);
 
 // --- Search & Filtering State ---
 const searchQuery = ref("");
+const searchInput = ref("");
+const searchHistory = ref([]);
+const isSearchHistoryOpen = ref(false);
+const MAX_SEARCH_HISTORY = 8;
+const filteredSearchHistory = computed(() => {
+  const needle = (searchInput.value || "").trim().toLowerCase();
+  if (!needle) {
+    return searchHistory.value;
+  }
+  return searchHistory.value.filter((item) =>
+    item.toLowerCase().startsWith(needle),
+  );
+});
 const showStars = ref(true);
 const showFaceBboxes = ref(false);
 
 const thumbnailSize = ref(256);
+const columns = ref(4); // Default columns
+const MIN_THUMBNAIL_SIZE = 64;
+const MAX_THUMBNAIL_SIZE = 384;
+const MAX_COLUMNS = 12;
+const minColumns = ref(1);
+const maxColumns = ref(10);
+const mainAreaRef = ref(null);
+let mainAreaResizeObserver = null;
 const sidebarVisible = ref(true);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;
@@ -50,10 +72,17 @@ function refreshGridVersion() {
   gridVersion.value++;
 }
 
-// --- Export Dialog State ---
-const exportDialog = ref(false);
+// --- Export Menu State ---
+const exportMenuOpen = ref(false);
 const exportCaptionMode = ref("description");
 const exportIncludeCharacterName = ref(true);
+const exportSelectedCount = ref(0);
+const exportTotalCount = ref(0);
+const exportCount = computed(() =>
+  exportSelectedCount.value > 0
+    ? exportSelectedCount.value
+    : exportTotalCount.value,
+);
 const exportCaptionOptions = [
   { title: "No Captions", value: "none" },
   { title: "Description", value: "description" },
@@ -78,6 +107,38 @@ function updateIsMobile() {
   if (typeof window !== "undefined") {
     isMobile.value = window.innerWidth <= MOBILE_BREAKPOINT;
   }
+  updateMaxColumns();
+}
+
+function clampColumnsToBounds() {
+  if (columns.value > maxColumns.value) {
+    columns.value = maxColumns.value;
+  }
+  if (columns.value < minColumns.value) {
+    columns.value = minColumns.value;
+  }
+}
+
+function updateMaxColumns() {
+  const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
+  if (!width) {
+    minColumns.value = 1;
+    maxColumns.value = 1;
+    clampColumnsToBounds();
+    return;
+  }
+  const availableWidth = Math.max(0, width - 8);
+  const computedMin = Math.max(
+    1,
+    Math.ceil(availableWidth / MAX_THUMBNAIL_SIZE),
+  );
+  const computedMax = Math.max(
+    computedMin,
+    Math.floor(availableWidth / MIN_THUMBNAIL_SIZE),
+  );
+  minColumns.value = computedMin;
+  maxColumns.value = Math.min(MAX_COLUMNS, computedMax);
+  clampColumnsToBounds();
 }
 
 function closeSidebarIfMobile() {
@@ -88,6 +149,11 @@ function closeSidebarIfMobile() {
 
 async function handleSelectCharacter(charId) {
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
+  if (charId == null) {
+    selectedCharacter.value = null;
+    await nextTick();
+    return;
+  }
   selectedCharacter.value = charId;
   selectedSet.value = null; // Clear set selection
   searchQuery.value = ""; // Clear search query
@@ -97,6 +163,11 @@ async function handleSelectCharacter(charId) {
 }
 
 async function handleSelectSet(setId) {
+  if (setId == null) {
+    selectedSet.value = null;
+    await nextTick();
+    return;
+  }
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
   searchQuery.value = ""; // Clear search query
@@ -104,7 +175,10 @@ async function handleSelectSet(setId) {
 }
 
 async function handleUpdateSearchQuery(value) {
-  searchQuery.value = typeof value === "string" ? value : ""; // Ensure searchQuery is always a string
+  const nextQuery = typeof value === "string" ? value.trim() : "";
+  searchInput.value = nextQuery;
+  searchQuery.value = nextQuery; // Ensure searchQuery is always a string
+  addToSearchHistory(nextQuery);
 }
 
 async function handleUpdateSelectedSort({ sort, descending }) {
@@ -126,7 +200,7 @@ function handleUpdateSimilarityCharacter(val) {
 
 async function fetchConfig() {
   try {
-    const res = await apiClient.get("/config");
+    const res = await apiClient.get("/users/me/config");
     console.log("Fetched config:", res);
     const sortValue = res.data.sort_order ?? res.data.sort;
     if (typeof sortValue === "string" && sortValue) {
@@ -144,8 +218,11 @@ async function fetchConfig() {
     }
     if (typeof res.data.show_stars === "boolean")
       showStars.value = res.data.show_stars;
+    if (typeof res.data.descending === "boolean") {
+      selectedDescending.value = res.data.descending;
+    }
     config.sort_order = sortValue || selectedSort.value;
-    config.descending = res.data.descending ?? selectedDescending.value;
+    config.descending = selectedDescending.value;
     config.thumbnail_size = thumbnailValue || thumbnailSize.value;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
@@ -157,7 +234,7 @@ async function fetchConfig() {
       similarityValue ?? selectedSimilarityCharacter.value ?? null;
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
   } catch (e) {
-    console.error("Failed to fetch /config:", e);
+    console.error("Failed to fetch /users/me/config:", e);
   }
 }
 
@@ -172,14 +249,14 @@ async function patchConfigUIOptions() {
     patch.similarity_character = selectedSimilarityCharacter.value;
   }
 
-  console.log("PATCH /config payload:", patch);
+  console.log("PATCH /users/me/config payload:", patch);
   try {
-    const response = await apiClient.patch("/config", patch);
+    const response = await apiClient.patch("/users/me/config", patch);
 
     const updatedConfig = await response.data;
-    console.log("PATCH /config response:", updatedConfig);
+    console.log("PATCH /users/me/config response:", updatedConfig);
   } catch (e) {
-    console.error("Error patching /config:", e);
+    console.error("Error patching /users/me/config:", e);
   }
 }
 
@@ -210,19 +287,30 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
   }
 }
 
+function handleFacesAssignedToCharacter({ characterId, faceIds }) {
+  if (
+    gridContainer.value &&
+    typeof gridContainer.value.clearFaceSelection === "function"
+  ) {
+    gridContainer.value.clearFaceSelection();
+  }
+}
+
+function refreshExportCount() {
+  const counts = gridContainer.value?.getExportCount?.();
+  if (!counts) return;
+  exportSelectedCount.value = Number(counts.selectedCount) || 0;
+  exportTotalCount.value = Number(counts.totalCount) || 0;
+}
+
 function handleImagesUploaded() {
   // Called when images are imported
   refreshGridVersion(); // Force grid and thumbnails to refresh
   refreshSidebar(); // Optionally refresh sidebar counts
 }
 
-// --- Export to Zip ---
-function handleExportZip() {
-  exportDialog.value = true;
-}
-
 function cancelExportZip() {
-  exportDialog.value = false;
+  exportMenuOpen.value = false;
 }
 
 function confirmExportZip() {
@@ -231,7 +319,7 @@ function confirmExportZip() {
     captionMode: exportCaptionMode.value,
     includeCharacterName: exportIncludeCharacterName.value,
   });
-  exportDialog.value = false;
+  exportMenuOpen.value = false;
 }
 
 // --- Search Overlay ---
@@ -250,15 +338,53 @@ function closeSearchOverlay() {
 function handleClearSearch() {
   console.log("[App.vue] handleClearSearch called");
   searchQuery.value = "";
+  searchInput.value = "";
+  isSearchHistoryOpen.value = false;
   console.log("[App.vue] searchQuery cleared:", searchQuery.value);
   refreshGridVersion(); // Force the ImageGrid to refresh
+}
+
+function addToSearchHistory(query) {
+  if (!query) {
+    return;
+  }
+  const existingIndex = searchHistory.value.findIndex((item) => item === query);
+  if (existingIndex !== -1) {
+    searchHistory.value.splice(existingIndex, 1);
+  }
+  searchHistory.value.unshift(query);
+  if (searchHistory.value.length > MAX_SEARCH_HISTORY) {
+    searchHistory.value = searchHistory.value.slice(0, MAX_SEARCH_HISTORY);
+  }
+}
+
+function applySearchHistory(query) {
+  searchInput.value = query;
+  commitSearch();
+  isSearchHistoryOpen.value = false;
+}
+
+function clearSearchHistory() {
+  searchHistory.value = [];
+  isSearchHistoryOpen.value = false;
+}
+
+function commitSearch() {
+  const nextQuery =
+    typeof searchInput.value === "string" ? searchInput.value.trim() : "";
+  if (nextQuery === searchQuery.value) {
+    return;
+  }
+  searchQuery.value = nextQuery;
+  addToSearchHistory(nextQuery);
+  isSearchHistoryOpen.value = false;
 }
 
 function handleResetToAll() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
   selectedSort.value = "DATE";
-  selectedDescending.value = false;
+  selectedDescending.value = true;
   selectedSimilarityCharacter.value = null;
   searchQuery.value = "";
   mediaTypeFilter.value = "all";
@@ -268,9 +394,25 @@ function handleResetToAll() {
 
 // --- Watchers ---
 watch(searchQuery, (newVal, oldVal) => {
+  if (searchInput.value !== newVal) {
+    searchInput.value = newVal || "";
+  }
   if (!newVal && oldVal) {
     refreshGridVersion();
   }
+});
+
+watch([searchInput, searchHistory, isMobile], () => {
+  if (isMobile.value) {
+    isSearchHistoryOpen.value = false;
+    return;
+  }
+  const needle = (searchInput.value || "").trim();
+  if (!needle) {
+    isSearchHistoryOpen.value = false;
+    return;
+  }
+  isSearchHistoryOpen.value = filteredSearchHistory.value.length > 0;
 });
 
 watch([selectedSort, selectedDescending], () => {
@@ -280,10 +422,17 @@ watch([selectedSort, selectedDescending], () => {
 
 watch(thumbnailSize, () => {
   patchConfigUIOptions();
+  updateMaxColumns();
 });
 
 watch(showStars, () => {
   patchConfigUIOptions();
+});
+
+watch(exportMenuOpen, async (isOpen) => {
+  if (!isOpen) return;
+  await nextTick();
+  refreshExportCount();
 });
 
 watch(selectedSimilarityCharacter, () => {
@@ -299,11 +448,22 @@ onMounted(() => {
   window.addEventListener("resize", updateIsMobile);
   window.addEventListener("keydown", handleGlobalKeydown);
   refreshSidebar();
+  updateMaxColumns();
+  if (typeof ResizeObserver !== "undefined" && mainAreaRef.value) {
+    mainAreaResizeObserver = new ResizeObserver(() => {
+      updateMaxColumns();
+    });
+    mainAreaResizeObserver.observe(mainAreaRef.value);
+  }
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleGlobalKeydown);
+  if (mainAreaResizeObserver) {
+    mainAreaResizeObserver.disconnect();
+    mainAreaResizeObserver = null;
+  }
 });
 
 defineExpose({ sidebarVisible, mediaTypeFilter });

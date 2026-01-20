@@ -23,6 +23,7 @@ from pixlvault.face_likeness_worker import FaceLikenessWorker  # noqa: F401
 from pixlvault.face_character_likeness_worker import FaceCharacterLikenessWorker  # noqa: F401
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
+from pixlvault.watch_folder_worker import WatchFolderWorker  # noqa: F401
 
 
 logger = get_logger(__name__)
@@ -147,6 +148,9 @@ class Vault:
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
         self.stop_workers(WorkerType.all())
+        for worker in self._workers.values():
+            worker.close()
+
         if self._picture_tagger:
             self._picture_tagger.close()
             del self._picture_tagger
@@ -166,8 +170,8 @@ class Vault:
         Returns:
             Optional[np.ndarray]: Generated text embedding or None if failed.
         """
-        embedding, _ = self._picture_tagger.generate_text_embedding(query=query)
-        return embedding
+        embedding = self._picture_tagger.generate_text_embedding(query=query)
+        return embedding[0] if embedding is not None else None
 
     def preprocess_query_words(self, words: list[str]) -> list[str]:
         """
@@ -248,6 +252,13 @@ class Vault:
             raise ValueError(f"Worker {worker_type} not found in vault.")
 
         return worker.watch_id(cls, object_id, attr)
+
+    def is_worker_running(self, worker_type: WorkerType) -> bool:
+        """
+        Check if a specific worker is running.
+        """
+        worker = self._workers.get(worker_type)
+        return worker is not None and worker.is_alive()
 
     def import_default_data(self, add_tagger_test_images: bool = False):
         """

@@ -14,11 +14,12 @@
           : "Type in your existing password to log in"
       }}
     </p>
-    <form @submit.prevent="handleLogin">
+    <form @submit.prevent="handleLogin" autocomplete="on">
       <div class="input-field">
         <input
           class="text-input"
           v-model="username"
+          name="username"
           type="text"
           placeholder="Enter username"
           autocomplete="username"
@@ -28,6 +29,7 @@
         <input
           class="password-input"
           v-model="password"
+          name="current-password"
           :type="showPassword ? 'text' : 'password'"
           placeholder="Enter password"
           autocomplete="current-password"
