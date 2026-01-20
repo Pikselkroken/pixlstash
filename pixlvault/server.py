@@ -1827,7 +1827,7 @@ class Server:
                 if len(stack) >= min_group_size:
                     groups.append(list(stack))
 
-            groups = sorted(groups, key=lambda g: min(g))
+            groups = sorted(groups, key=min)
             stack_index_map = {}
             ordered_ids = []
             for idx, group in enumerate(groups):
