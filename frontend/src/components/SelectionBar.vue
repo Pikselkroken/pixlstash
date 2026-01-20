@@ -5,7 +5,12 @@
         <button class="clear-btn" @click="$emit('clear-selection')">
           Clear
         </button>
-        <span class="selection-count">{{ selectedCount }} selected</span>
+        <span v-if="selectedCount > 0" class="selection-count"
+          >{{ selectedCount }} Images selected</span
+        >
+        <span v-if="selectedFaceCount > 0" class="selection-face-count">
+          {{ selectedFaceCount }} Faces selected
+        </span>
       </div>
       <div class="selection-bar-actions">
         <button
@@ -19,8 +24,12 @@
         >
           {{ `Remove from ${selectedGroupName ? selectedGroupName : "group"}` }}
         </button>
-        <button class="delete-btn" @click="$emit('delete-selected')">
-          Delete
+        <button
+          v-if="selectedCount > 0"
+          class="delete-btn"
+          @click="$emit('delete-selected')"
+        >
+          Delete Pictures
         </button>
       </div>
     </div>
@@ -31,6 +40,7 @@
 import { computed } from "vue";
 const props = defineProps({
   selectedCount: Number,
+  selectedFaceCount: { type: Number, default: 0 },
   selectedCharacter: String,
   selectedSet: String,
   selectedGroupName: String,
