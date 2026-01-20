@@ -403,7 +403,11 @@
                   v-for="n in 5"
                   :key="n"
                   large
-                  :color="n <= (img.score || 0) ? 'orange' : 'grey darken-2'"
+                  :color="
+                    n <= (img.score || 0)
+                      ? 'orange'
+                      : 'rgba(var(--v-theme-surface), 0.2)'
+                  "
                   style="cursor: pointer"
                   @click.stop="setScore(img, n)"
                   >mdi-star</v-icon
@@ -2979,7 +2983,7 @@ function handleEmptyStateReset() {
   z-index: 120;
   display: flex;
   flex-direction: row;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(var(--v-theme-background), 0.6);
   border-radius: 4px;
   box-shadow: none;
   font-size: 0.85em;

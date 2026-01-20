@@ -65,14 +65,11 @@ body {
   flex-direction: column;
   background-color: rgb(var(--v-theme-background)) !important;
   min-width: 0;
-  height: calc(100vh - 60px);
+  height: 100vh;
   box-sizing: border-box;
   padding: 0;
   margin: 0;
   transition: width 0.2s;
-}
-.main-area.full-width {
-  width: 100vw;
 }
 .main-content {
   flex: 1 1 0%;
@@ -81,7 +78,6 @@ body {
   align-items: stretch;
   justify-content: flex-start;
   padding: 0;
-  border-left: 2px solid rgb(var(--v-theme-border));
   transition: border-color 0.2s;
   height: calc(100vh - 60px);
   /* No overflow property here; only .image-grid should scroll */
@@ -162,11 +158,11 @@ body {
   display: flex;
   align-items: center;
   padding: 0 2px;
-  border-bottom: 2px solid rgb(var(--v-theme-border));
   margin-bottom: 2;
   z-index: 2;
   position: relative;
 }
+
 .toolbar-slider :deep(.v-slider-track) {
   background: rgb(var(--v-theme-surface)) !important;
 }
@@ -198,7 +194,7 @@ body {
 .sidebar-shell {
   display: flex;
   flex: 0 0 auto;
-  height: calc(100vh - 60px);
+  height: 100vh;
 }
 
 .sidebar-backdrop {
@@ -221,7 +217,7 @@ body {
   }
 
   .sidebar-shell {
-    height: calc(100dvh - 44px);
+    height: 100dvh;
   }
 
   .top-toolbar {
@@ -262,7 +258,7 @@ body {
   }
 
   .main-area {
-    height: calc(100dvh - 60px);
+    height: 100dvh;
   }
 
   .main-content {
@@ -272,9 +268,9 @@ body {
 
   .sidebar-shell {
     position: fixed;
-    top: 60px;
+    top: 0;
     left: 0;
-    height: calc(100dvh - 60px);
+    height: 100dvh;
     width: 100%;
     z-index: 20;
     transform: translateX(-100%);
@@ -287,7 +283,7 @@ body {
 
   .sidebar-backdrop {
     position: fixed;
-    inset: 60px 0 0 0;
+    inset: 0;
     background: rgba(0, 0, 0, 0.45);
     z-index: 10;
     display: block;

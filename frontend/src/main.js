@@ -14,9 +14,9 @@ import Root from './Root.vue'
 const pixlVaultTheme = {
   dark: true,
   colors: {
-    'sidebar': '#393f46',
+    'sidebar': '#696f76',
     'sidebar-text': '#f2e5da',
-    'toolbar': '#444850',
+    'toolbar': '#d3d5d7',
     'toolbar-text': '#f2e5da',
     'sidebar-hover': '#f28f3b',
     'on-sidebar-hover': '#f2e5da',

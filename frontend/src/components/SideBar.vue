@@ -8,6 +8,7 @@ import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for
 import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
+  collapsed: { type: Boolean, default: false },
   selectedCharacter: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
@@ -34,6 +35,7 @@ const emit = defineEmits([
   "search-images",
   "update:similarity-character",
   "update:stack-threshold",
+  "toggle-sidebar",
 ]);
 
 const imageImporterRef = ref(null);
@@ -57,13 +59,6 @@ const expandedCharacters = ref({});
 // Ensure collapsedCharacters is reactive and initialized for all characters
 const collapsedCharacters = ref({});
 
-const sections = ref({
-  pictures: true,
-  people: true,
-  sets: true,
-  analysis: true,
-  sort: true,
-});
 const dragOverCharacter = ref(null);
 const nextCharacterNumber = ref(1);
 
@@ -122,6 +117,10 @@ const selectedSetObj = computed(() => {
     pictureSets.value.find((pset) => pset.id === props.selectedSet) || null
   );
 });
+
+const nonReferenceSets = computed(() =>
+  pictureSets.value.filter((pset) => !pset.reference_character),
+);
 
 // --- Similarity Character Dropdown State ---
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
@@ -235,11 +234,6 @@ function closeSetEditor() {
   console.log("Closing set editor");
   setEditorOpen.value = false;
   setEditorSet.value = null;
-}
-
-function toggleSection(section) {
-  if (!section || !(section in sections.value)) return;
-  sections.value[section] = !sections.value[section];
 }
 
 function selectCharacter(id) {
@@ -430,11 +424,6 @@ async function fetchCharacterThumbnail(characterId) {
     console.error(`Failed to fetch thumbnail for character ${characterId}:`, e);
     characterThumbnails.value[characterId] = null;
   }
-}
-
-function toggleSidebarSection(section) {
-  if (!section || !(section in sections.value)) return;
-  sections.value[section] = !sections.value[section];
 }
 
 // --- Sorting & Pagination ---
@@ -832,398 +821,457 @@ defineExpose({ refreshSidebar });
     @refresh-sidebar="refreshSidebar"
   />
 
-  <aside class="sidebar">
-    <div class="sidebar-section-header" @click="toggleSection('pictures')">
-      <v-icon small style="margin-right: 8px">
-        {{ sections.pictures ? "mdi-chevron-down" : "mdi-chevron-right" }}
-      </v-icon>
-      Pictures
-      <span class="sidebar-header-spacer"></span>
-      <div class="sidebar-header-actions">
-        <v-icon
-          class="upload-pictures-inline"
-          @click.stop="openUploadDialog"
-          title="Upload pictures"
+  <aside class="sidebar" :class="{ 'sidebar-collapsed': props.collapsed }">
+    <div class="sidebar-brand">
+      <div class="sidebar-brand-left">
+        <img
+          v-if="!props.collapsed"
+          src="/Logo.png"
+          alt="PixlVault logo"
+          class="sidebar-brand-logo"
+        />
+        <span v-if="!props.collapsed" class="sidebar-brand-title"
+          >PixlVault</span
         >
-          mdi-cloud-upload-outline
-        </v-icon>
       </div>
+      <v-btn
+        icon
+        class="sidebar-brand-toggle"
+        :title="props.collapsed ? 'Show sidebar' : 'Hide sidebar'"
+        @click.stop="emit('toggle-sidebar')"
+      >
+        <v-icon>{{
+          props.collapsed ? "mdi-chevron-right" : "mdi-chevron-left"
+        }}</v-icon>
+      </v-btn>
     </div>
-    <transition name="fade">
-      <div v-show="sections.pictures">
+    <template v-if="props.collapsed">
+      <div class="sidebar-collapsed-list">
         <div
           :class="[
-            'sidebar-list-item',
+            'sidebar-collapsed-item',
             { active: props.selectedCharacter === props.allPicturesId },
           ]"
+          title="All Pictures"
           @click="selectCharacter(props.allPicturesId)"
         >
-          <span class="sidebar-list-icon">
-            <v-icon size="44">mdi-image-multiple</v-icon>
-          </span>
-          <span class="sidebar-list-label">All Pictures</span>
-          <span class="sidebar-list-count">
-            {{ categoryCounts[props.allPicturesId] ?? "" }}
-          </span>
+          <v-icon>mdi-image-multiple</v-icon>
         </div>
         <div
           :class="[
-            'sidebar-list-item',
-            { active: selectedCharacter === props.unassignedPicturesId },
+            'sidebar-collapsed-item',
+            { active: props.selectedCharacter === props.unassignedPicturesId },
           ]"
+          title="Unassigned Pictures"
           @click="selectCharacter(props.unassignedPicturesId)"
         >
-          <span class="sidebar-list-icon">
-            <v-icon size="44">mdi-help-circle-outline</v-icon>
-          </span>
-          <span class="sidebar-list-label">Unassigned Pictures</span>
-          <span class="sidebar-list-count">
-            {{ categoryCounts[props.unassignedPicturesId] ?? "" }}
-          </span>
+          <v-icon>mdi-help-circle-outline</v-icon>
         </div>
-      </div>
-    </transition>
-
-    <div class="sidebar-section-header" @click="toggleSection('people')">
-      <v-icon small style="margin-right: 8px">
-        {{ sections.people ? "mdi-chevron-down" : "mdi-chevron-right" }}
-      </v-icon>
-      People
-      <span class="sidebar-header-spacer"></span>
-      <div class="sidebar-header-actions">
-        <v-icon
-          v-if="selectedCharacterObj"
-          class="edit-character-inline"
-          @click.stop="openCharacterEditor(selectedCharacterObj)"
-          title="Edit selected character"
-        >
-          mdi-pencil
-        </v-icon>
-        <v-icon
-          v-if="
-            props.selectedCharacter &&
-            props.selectedCharacter !== props.allPicturesId &&
-            props.selectedCharacter !== props.unassignedPicturesId
-          "
-          class="delete-character-inline"
-          color="white"
-          @click.stop="deleteCharacter"
-          title="Delete selected character"
-        >
-          mdi-trash-can-outline
-        </v-icon>
-        <v-icon
-          class="add-character-inline"
-          @click.stop="createCharacter"
-          title="Add character"
-        >
-          mdi-plus
-        </v-icon>
-      </div>
-    </div>
-    <transition name="fade">
-      <div v-show="sections.people">
-        <div v-if="sidebarError" class="sidebar-error">
-          {{ sidebarError.value }}
-        </div>
-        <div
-          v-if="sortedCharacters.length === 0"
-          class="sidebar-character-group"
-        >
-          <div class="sidebar-list-item">
-            No characters found. Click the + button to add one.
-          </div>
-        </div>
-        <div
-          v-if="sortedCharacters.length > 0"
+        <div class="sidebar-collapsed-divider"></div>
+        <button
           v-for="char in sortedCharacters"
           :key="char.id"
-          class="sidebar-character-group"
-        >
-          <div
-            :class="[
-              'sidebar-list-item',
-              {
-                active: selectedCharacter === char.id,
-                droppable: dragOverCharacter === char.id,
-              },
-            ]"
-            @click="selectCharacter(char.id)"
-            @dragover.prevent="handleDragOverCharacter(char.id)"
-            @dragleave="handleDragLeaveCharacter"
-            @drop.prevent="
-              handleDropOnCharacter({ characterId: char.id, event: $event })
-            "
-          >
-            <span style="display: flex; align-items: center">
-              <v-icon
-                small
-                style="margin-right: 4px; cursor: pointer"
-                @click.stop="toggleCharacterCollapse(char.id)"
-              >
-                {{
-                  collapsedCharacters[char.id]
-                    ? "mdi-chevron-right"
-                    : "mdi-chevron-down"
-                }}
-              </v-icon>
-              <img
-                :src="
-                  characterThumbnails[char.id]
-                    ? characterThumbnails[char.id]
-                    : unknownPerson
-                "
-                alt=""
-                class="sidebar-character-thumb"
-              />
-            </span>
-            <span class="sidebar-list-label">
-              <v-tooltip location="top">
-                <template #activator="{ props }">
-                  <span v-bind="props" class="sidebar-list-label-text">
-                    {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
-                  </span>
-                </template>
-                <span>{{ char.name }}</span>
-              </v-tooltip>
-            </span>
-            <span class="sidebar-list-count">
-              {{ categoryCounts[char.id] ?? "" }}
-            </span>
-            <!-- Collapse icon moved to the left of thumbnail -->
-          </div>
-          <transition name="fade">
-            <div
-              v-show="!collapsedCharacters[char.id]"
-              class="sidebar-character-details"
-            >
-              <div class="sidebar-reference-pictures">
-                <template v-if="referencePictureSetsByCharacter[char.id]">
-                  <div
-                    :class="[
-                      'sidebar-list-item',
-                      'sidebar-reference-set',
-                      {
-                        active:
-                          selectedSet ===
-                          referencePictureSetsByCharacter[char.id].id,
-                        droppable:
-                          dragOverSet ===
-                          referencePictureSetsByCharacter[char.id].id,
-                      },
-                    ]"
-                    @click="
-                      selectSet(referencePictureSetsByCharacter[char.id].id)
-                    "
-                    @dragover.prevent="
-                      dragOverSetItem(
-                        referencePictureSetsByCharacter[char.id].id,
-                      )
-                    "
-                    @dragleave="dragLeaveSetItem"
-                    @drop.prevent="
-                      handleDropOnSet(
-                        referencePictureSetsByCharacter[char.id].id,
-                        $event,
-                      )
-                    "
-                  >
-                    <v-icon size="22" class="sidebar-reference-icon"
-                      >mdi-layers</v-icon
-                    >
-                    <span class="sidebar-list-label">Reference Pictures</span>
-                    <span class="sidebar-list-count">
-                      {{
-                        referencePictureSetsByCharacter[char.id]
-                          ?.picture_count ?? ""
-                      }}
-                    </span>
-                    <span
-                      v-if="
-                        sidebarNotice &&
-                        sidebarNoticeSetId ===
-                          referencePictureSetsByCharacter[char.id].id
-                      "
-                      class="sidebar-inline-notice"
-                    >
-                      {{ sidebarNotice }}
-                    </span>
-                  </div>
-                </template>
-                <template v-else>
-                  <span
-                    style="
-                      color: rgb(var(--v-theme-on-accent));
-                      font-size: 0.9em;
-                      padding-left: 32px;
-                    "
-                    >No reference set found for this character</span
-                  >
-                </template>
-              </div>
-            </div>
-          </transition>
-        </div>
-      </div>
-    </transition>
-
-    <div class="sidebar-section-header" @click="toggleSection('sets')">
-      <v-icon small style="margin-right: 8px">
-        {{ sections.sets ? "mdi-chevron-down" : "mdi-chevron-right" }}
-      </v-icon>
-      Picture Sets
-      <span class="sidebar-header-spacer"></span>
-      <div class="sidebar-header-actions">
-        <v-icon
-          v-if="selectedSetObj"
-          class="edit-set-inline"
-          @click.stop="openSetEditor(selectedSetObj)"
-          title="Edit selected set"
-        >
-          mdi-pencil
-        </v-icon>
-        <v-icon
-          v-if="selectedSet"
-          class="delete-character-inline"
-          color="white"
-          @click.stop="handleDeleteSet"
-          title="Delete selected set"
-        >
-          mdi-trash-can-outline
-        </v-icon>
-        <v-icon
-          class="add-character-inline"
-          @click.stop="createSet"
-          title="Create new set"
-        >
-          mdi-plus
-        </v-icon>
-      </div>
-    </div>
-    <transition name="fade">
-      <div v-show="sections.sets">
-        <div v-if="pictureSets.length === 0" class="sidebar-list-item">
-          No picture sets. Click the + button to create one.
-        </div>
-        <template
-          v-for="(pset, idx) in pictureSets.filter(
-            (pset) => pset.reference_character == null,
-          )"
-          :key="pset.id"
-        >
-          <div
-            :class="[
-              'sidebar-list-item',
-              'sidebar-set-item',
-              {
-                active: selectedSet === pset.id,
-                droppable: dragOverSet === pset.id,
-              },
-            ]"
-            @click="selectSet(pset.id)"
-            @dragover.prevent="dragOverSetItem(pset.id)"
-            @dragleave="dragLeaveSetItem"
-            @drop.prevent="handleDropOnSet(pset.id, $event)"
-          >
-            <span class="sidebar-list-icon">
-              <v-icon size="44">mdi-layers</v-icon>
-            </span>
-            <span class="sidebar-list-label">
-              <v-tooltip location="top">
-                <template #activator="{ props }">
-                  <span v-bind="props" class="sidebar-list-label-text">
-                    {{ pset.name }}
-                  </span>
-                </template>
-                <span>{{ pset.name }}</span>
-              </v-tooltip>
-            </span>
-            <span class="sidebar-list-count">
-              {{ pset.picture_count ?? 0 }}
-            </span>
-            <span
-              v-if="sidebarNotice && sidebarNoticeSetId === pset.id"
-              class="sidebar-inline-notice"
-            >
-              {{ sidebarNotice }}
-            </span>
-          </div>
-        </template>
-      </div>
-    </transition>
-
-    <div class="sidebar-section-header" @click="toggleSection('sort')">
-      <v-icon small style="margin-right: 8px">
-        {{ sections.sort ? "mdi-chevron-down" : "mdi-chevron-right" }}
-      </v-icon>
-      Sorting
-      <span style="flex: 1 1 auto"></span>
-    </div>
-
-    <transition name="fade">
-      <div class="sidebar-sort" v-show="sections.sort">
-        <div
-          class="sidebar-searchbar-wrapper"
-          style="
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            align-items: stretch;
+          :class="[
+            'sidebar-collapsed-thumb',
+            {
+              active: props.selectedCharacter === char.id,
+              droppable: dragOverCharacter === char.id,
+            },
+          ]"
+          :title="char.name || 'Character'"
+          @click="selectCharacter(char.id)"
+          @dragover.prevent="handleDragOverCharacter(char.id)"
+          @dragleave="handleDragLeaveCharacter"
+          @drop.prevent="
+            handleDropOnCharacter({ characterId: char.id, event: $event })
           "
         >
-          <div style="display: flex; align-items: center; gap: 8px">
-            <v-select
-              v-model="sortModel"
-              :items="sortOptions"
-              class="sidebar-sort-select"
-              item-title="label"
-              item-value="value"
-              label="Sort by"
-              dense
-              hide-details
-              style="flex: 1; min-width: 0"
-            />
-            <v-btn
-              icon
-              :color="descendingModel ? 'secondary' : 'primary'"
-              :title="descendingModel ? 'Descending' : 'Ascending'"
-              @click="descendingModel = !descendingModel"
-              style="margin-left: 0px; margin-right: 6px"
-            >
-              <v-icon>
-                {{
-                  descendingModel ? "mdi-sort-ascending" : "mdi-sort-descending"
-                }}
-              </v-icon>
-            </v-btn>
-          </div>
-          <v-select
-            v-if="sortModel === SIMILARITY_SORT_KEY"
-            v-model="similarityCharacterModel"
-            :items="similarityCharacterOptions"
-            class="sidebar-sort-select"
-            label="Similarity to"
-            dense
-            hide-details
-            style="min-width: 0; margin-top: 2px"
-            item-title="text"
-            item-value="value"
-          />
-          <v-select
-            v-if="sortModel === STACKS_SORT_KEY"
-            v-model="stackThresholdModel"
-            :items="stackThresholdOptions"
-            class="sidebar-sort-select"
-            label="Stack strictness"
-            dense
-            hide-details
-            style="min-width: 0; margin-top: 2px"
-            item-title="label"
-            item-value="value"
-          />
+          <img :src="characterThumbnails[char.id] || unknownPerson" alt="" />
+        </button>
+        <div
+          v-if="nonReferenceSets.length"
+          class="sidebar-collapsed-divider"
+        ></div>
+        <div
+          v-for="pset in nonReferenceSets"
+          :key="pset.id"
+          :class="[
+            'sidebar-collapsed-item',
+            {
+              active: props.selectedSet === pset.id,
+              droppable: dragOverSet === pset.id,
+            },
+          ]"
+          :title="pset.name || 'Picture Set'"
+          @click="selectSet(pset.id)"
+          @dragover.prevent="dragOverSetItem(pset.id)"
+          @dragleave="dragLeaveSetItem"
+          @drop.prevent="handleDropOnSet(pset.id, $event)"
+        >
+          <v-icon>mdi-layers</v-icon>
         </div>
       </div>
-    </transition>
+    </template>
+    <template v-else>
+      <div class="sidebar-section-header">
+        Pictures
+        <span class="sidebar-header-spacer"></span>
+        <div class="sidebar-header-actions">
+          <v-icon
+            class="upload-pictures-inline"
+            @click.stop="openUploadDialog"
+            title="Upload pictures"
+          >
+            mdi-cloud-upload-outline
+          </v-icon>
+        </div>
+      </div>
+      <div
+        :class="[
+          'sidebar-list-item',
+          { active: props.selectedCharacter === props.allPicturesId },
+        ]"
+        @click="selectCharacter(props.allPicturesId)"
+      >
+        <span class="sidebar-list-icon">
+          <v-icon size="44">mdi-image-multiple</v-icon>
+        </span>
+        <span class="sidebar-list-label">All Pictures</span>
+        <span class="sidebar-list-count">
+          {{ categoryCounts[props.allPicturesId] ?? "" }}
+        </span>
+      </div>
+      <div
+        :class="[
+          'sidebar-list-item',
+          { active: selectedCharacter === props.unassignedPicturesId },
+        ]"
+        @click="selectCharacter(props.unassignedPicturesId)"
+      >
+        <span class="sidebar-list-icon">
+          <v-icon size="44">mdi-help-circle-outline</v-icon>
+        </span>
+        <span class="sidebar-list-label">Unassigned Pictures</span>
+        <span class="sidebar-list-count">
+          {{ categoryCounts[props.unassignedPicturesId] ?? "" }}
+        </span>
+      </div>
+
+      <div class="sidebar-section-header">
+        People
+        <span class="sidebar-header-spacer"></span>
+        <div class="sidebar-header-actions">
+          <v-icon
+            v-if="selectedCharacterObj"
+            class="edit-character-inline"
+            @click.stop="openCharacterEditor(selectedCharacterObj)"
+            title="Edit selected character"
+          >
+            mdi-pencil
+          </v-icon>
+          <v-icon
+            v-if="
+              props.selectedCharacter &&
+              props.selectedCharacter !== props.allPicturesId &&
+              props.selectedCharacter !== props.unassignedPicturesId
+            "
+            class="delete-character-inline"
+            color="white"
+            @click.stop="deleteCharacter"
+            title="Delete selected character"
+          >
+            mdi-trash-can-outline
+          </v-icon>
+          <v-icon
+            class="add-character-inline"
+            @click.stop="createCharacter"
+            title="Add character"
+          >
+            mdi-plus
+          </v-icon>
+        </div>
+      </div>
+      <div v-if="sidebarError" class="sidebar-error">
+        {{ sidebarError.value }}
+      </div>
+      <div v-if="sortedCharacters.length === 0" class="sidebar-character-group">
+        <div class="sidebar-list-item">
+          No characters found. Click the + button to add one.
+        </div>
+      </div>
+      <div
+        v-if="sortedCharacters.length > 0"
+        v-for="char in sortedCharacters"
+        :key="char.id"
+        class="sidebar-character-group"
+      >
+        <div
+          :class="[
+            'sidebar-list-item',
+            {
+              active: selectedCharacter === char.id,
+              droppable: dragOverCharacter === char.id,
+            },
+          ]"
+          @click="selectCharacter(char.id)"
+          @dragover.prevent="handleDragOverCharacter(char.id)"
+          @dragleave="handleDragLeaveCharacter"
+          @drop.prevent="
+            handleDropOnCharacter({ characterId: char.id, event: $event })
+          "
+        >
+          <span style="display: flex; align-items: center">
+            <v-icon
+              small
+              style="margin-right: 4px; cursor: pointer"
+              @click.stop="toggleCharacterCollapse(char.id)"
+            >
+              {{
+                collapsedCharacters[char.id]
+                  ? "mdi-chevron-right"
+                  : "mdi-chevron-down"
+              }}
+            </v-icon>
+            <img
+              :src="
+                characterThumbnails[char.id]
+                  ? characterThumbnails[char.id]
+                  : unknownPerson
+              "
+              alt=""
+              class="sidebar-character-thumb"
+            />
+          </span>
+          <span class="sidebar-list-label">
+            <v-tooltip location="top">
+              <template #activator="{ props }">
+                <span v-bind="props" class="sidebar-list-label-text">
+                  {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
+                </span>
+              </template>
+              <span>{{ char.name }}</span>
+            </v-tooltip>
+          </span>
+          <span class="sidebar-list-count">
+            {{ categoryCounts[char.id] ?? "" }}
+          </span>
+          <!-- Collapse icon moved to the left of thumbnail -->
+        </div>
+        <transition name="fade">
+          <div
+            v-show="!collapsedCharacters[char.id]"
+            class="sidebar-character-details"
+          >
+            <div class="sidebar-reference-pictures">
+              <template v-if="referencePictureSetsByCharacter[char.id]">
+                <div
+                  :class="[
+                    'sidebar-list-item',
+                    'sidebar-reference-set',
+                    {
+                      active:
+                        selectedSet ===
+                        referencePictureSetsByCharacter[char.id].id,
+                      droppable:
+                        dragOverSet ===
+                        referencePictureSetsByCharacter[char.id].id,
+                    },
+                  ]"
+                  @click="
+                    selectSet(referencePictureSetsByCharacter[char.id].id)
+                  "
+                  @dragover.prevent="
+                    dragOverSetItem(referencePictureSetsByCharacter[char.id].id)
+                  "
+                  @dragleave="dragLeaveSetItem"
+                  @drop.prevent="
+                    handleDropOnSet(
+                      referencePictureSetsByCharacter[char.id].id,
+                      $event,
+                    )
+                  "
+                >
+                  <v-icon size="22" class="sidebar-reference-icon"
+                    >mdi-layers</v-icon
+                  >
+                  <span class="sidebar-list-label">Reference Pictures</span>
+                  <span class="sidebar-list-count">
+                    {{
+                      referencePictureSetsByCharacter[char.id]?.picture_count ??
+                      ""
+                    }}
+                  </span>
+                  <span
+                    v-if="
+                      sidebarNotice &&
+                      sidebarNoticeSetId ===
+                        referencePictureSetsByCharacter[char.id].id
+                    "
+                    class="sidebar-inline-notice"
+                  >
+                    {{ sidebarNotice }}
+                  </span>
+                </div>
+              </template>
+              <template v-else>
+                <span
+                  style="
+                    color: rgb(var(--v-theme-on-accent));
+                    font-size: 0.9em;
+                    padding-left: 32px;
+                  "
+                  >No reference set found for this character</span
+                >
+              </template>
+            </div>
+          </div>
+        </transition>
+      </div>
+
+      <div class="sidebar-section-header">
+        Picture Sets
+        <span class="sidebar-header-spacer"></span>
+        <div class="sidebar-header-actions">
+          <v-icon
+            v-if="selectedSetObj"
+            class="edit-set-inline"
+            @click.stop="openSetEditor(selectedSetObj)"
+            title="Edit selected set"
+          >
+            mdi-pencil
+          </v-icon>
+          <v-icon
+            v-if="selectedSet"
+            class="delete-character-inline"
+            color="white"
+            @click.stop="handleDeleteSet"
+            title="Delete selected set"
+          >
+            mdi-trash-can-outline
+          </v-icon>
+          <v-icon
+            class="add-character-inline"
+            @click.stop="createSet"
+            title="Create new set"
+          >
+            mdi-plus
+          </v-icon>
+        </div>
+      </div>
+      <div v-if="pictureSets.length === 0" class="sidebar-list-item">
+        No picture sets. Click the + button to create one.
+      </div>
+      <template
+        v-for="(pset, idx) in pictureSets.filter(
+          (pset) => pset.reference_character == null,
+        )"
+        :key="pset.id"
+      >
+        <div
+          :class="[
+            'sidebar-list-item',
+            'sidebar-set-item',
+            {
+              active: selectedSet === pset.id,
+              droppable: dragOverSet === pset.id,
+            },
+          ]"
+          @click="selectSet(pset.id)"
+          @dragover.prevent="dragOverSetItem(pset.id)"
+          @dragleave="dragLeaveSetItem"
+          @drop.prevent="handleDropOnSet(pset.id, $event)"
+        >
+          <span class="sidebar-list-icon">
+            <v-icon size="44">mdi-layers</v-icon>
+          </span>
+          <span class="sidebar-list-label">
+            <v-tooltip location="top">
+              <template #activator="{ props }">
+                <span v-bind="props" class="sidebar-list-label-text">
+                  {{ pset.name }}
+                </span>
+              </template>
+              <span>{{ pset.name }}</span>
+            </v-tooltip>
+          </span>
+          <span class="sidebar-list-count">
+            {{ pset.picture_count ?? 0 }}
+          </span>
+          <span
+            v-if="sidebarNotice && sidebarNoticeSetId === pset.id"
+            class="sidebar-inline-notice"
+          >
+            {{ sidebarNotice }}
+          </span>
+        </div>
+      </template>
+
+      <div class="sidebar-section-header">
+        Sorting
+        <span style="flex: 1 1 auto"></span>
+      </div>
+
+      <div
+        class="sidebar-searchbar-wrapper"
+        style="
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          align-items: stretch;
+        "
+      >
+        <div style="display: flex; align-items: center; gap: 8px">
+          <v-select
+            v-model="sortModel"
+            :items="sortOptions"
+            class="sidebar-sort-select"
+            item-title="label"
+            item-value="value"
+            label="Sort by"
+            dense
+            hide-details
+            style="flex: 1; min-width: 0"
+          />
+          <v-btn
+            icon
+            :color="descendingModel ? 'secondary' : 'primary'"
+            :title="descendingModel ? 'Descending' : 'Ascending'"
+            @click="descendingModel = !descendingModel"
+            style="margin-left: 0px; margin-right: 6px"
+          >
+            <v-icon>
+              {{
+                descendingModel ? "mdi-sort-ascending" : "mdi-sort-descending"
+              }}
+            </v-icon>
+          </v-btn>
+        </div>
+        <v-select
+          v-if="sortModel === SIMILARITY_SORT_KEY"
+          v-model="similarityCharacterModel"
+          :items="similarityCharacterOptions"
+          class="sidebar-sort-select"
+          label="Similarity to"
+          dense
+          hide-details
+          style="min-width: 0; margin-top: 2px"
+          item-title="text"
+          item-value="value"
+        />
+        <v-select
+          v-if="sortModel === STACKS_SORT_KEY"
+          v-model="stackThresholdModel"
+          :items="stackThresholdOptions"
+          class="sidebar-sort-select"
+          label="Stack strictness"
+          dense
+          hide-details
+          style="min-width: 0; margin-top: 2px"
+          item-title="label"
+          item-value="value"
+        />
+      </div>
+    </template>
   </aside>
 </template>
 
@@ -1238,17 +1286,150 @@ defineExpose({ refreshSidebar });
   flex-direction: column;
   align-items: stretch;
   min-height: 0;
-  height: calc(100vh - 60px);
-  max-height: calc(100vh - 60px);
+  height: 100vh;
+  max-height: 100vh;
   overflow-y: auto;
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(0, 0, 0, 0.15);
   box-sizing: border-box;
 }
 
+.sidebar.sidebar-collapsed {
+  width: 56px;
+  overflow-y: hidden;
+}
+
+.sidebar.sidebar-collapsed .sidebar-brand {
+  justify-content: center;
+}
+
+.sidebar.sidebar-collapsed .sidebar-brand:hover .v-btn {
+  justify-content: center;
+  background-color: rgb(var(--v-theme-accent));
+}
+
+.sidebar.sidebar-collapsed .sidebar-brand-left {
+  display: none;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.sidebar-brand-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-brand-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.sidebar-brand:hover .v-btn {
+  background-color: rgb(var(--v-theme-accent));
+}
+
+.sidebar-brand-title {
+  font-family: "PressStart2P", monospace;
+  font-size: 0.95em;
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.sidebar-brand-toggle {
+  min-width: 36px;
+  min-height: 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.sidebar-collapsed-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 12px;
+  overflow-y: auto;
+}
+
+.sidebar-collapsed-item {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: pointer;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.sidebar-collapsed-item.active {
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
+}
+
+.sidebar-collapsed-item.droppable {
+  background: rgb(var(--v-theme-primary));
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+}
+
+.sidebar-collapsed-item:hover {
+  filter: brightness(1.1);
+  background-color: rgba(var(--v-theme-accent), 0.4);
+}
+
+.sidebar-collapsed-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sidebar-collapsed-thumb img {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+
+.sidebar-collapsed-thumb.active img {
+  outline: 4px solid rgb(var(--v-theme-accent));
+}
+
+.sidebar-collapsed-thumb:hover {
+  filter: brightness(1.4);
+  outline: 4px solid rgba(var(--v-theme-accent), 0.4);
+}
+
+.sidebar-collapsed-thumb.droppable img {
+  outline: 4px solid rgb(var(--v-theme-primary));
+}
+
+.sidebar-collapsed-divider {
+  width: 24px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.2);
+  margin: 6px 0;
+}
+
 @media (max-width: 900px) {
   .sidebar {
-    height: calc(100dvh - 44px);
-    max-height: calc(100dvh - 44px);
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+
+  .sidebar.sidebar-collapsed {
+    display: none;
   }
 }
 
@@ -1267,9 +1448,8 @@ defineExpose({ refreshSidebar });
 
 .sidebar-section-header {
   position: relative;
-  font-size: 1rem;
-  font-weight: 800;
-  border-bottom: 1px solid rgb(var(--v-theme-border));
+  font-size: 1.1rem;
+  font-weight: bold;
   min-height: 44px;
   padding: 6px 8px;
   margin: 0;
@@ -1279,7 +1459,6 @@ defineExpose({ refreshSidebar });
   gap: 6px;
   cursor: pointer;
   user-select: none;
-  background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
   transition:
     background 0.2s,
@@ -1417,7 +1596,6 @@ defineExpose({ refreshSidebar });
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 32px;
   transition: background 0.2s;
 }
 
@@ -1568,7 +1746,6 @@ defineExpose({ refreshSidebar });
     width: 100%;
     min-height: 100%;
     height: 100%;
-    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.35);
   }
 
   .sidebar-list-item,

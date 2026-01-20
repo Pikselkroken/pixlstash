@@ -1,119 +1,14 @@
 <v-app>
   <div class="app-viewport">
-    <div class="top-toolbar">
-      <v-btn
-        icon
-        @click="sidebarVisible = !sidebarVisible"
-        title="Toggle sidebar"
-        class="sidebar-toggle-btn"
-        style="margin-right: 16px"
-      >
-        <v-icon>{{ sidebarVisible ? "mdi-menu-open" : "mdi-menu" }}</v-icon>
-      </v-btn>
-      <img
-        src="/Logo.png"
-        alt="Logo"
-        class="toolbar-logo"
-        style="height: 50px; vertical-align: middle; margin-right: 8px"
-      />
-      <span class="toolbar-title">PixlVault</span>
-      <div class="toolbar-actions">
-        <div class="toolbar-size-controls">
-          <v-icon
-            class="toolbar-icon"
-            style="display: flex; align-items: center; height: 100%"
-            >mdi-image-size-select-small</v-icon
-          >
-          <v-slider
-            v-model="thumbnailSize"
-            :min="128"
-            :max="224"
-            :step="32"
-            class="toolbar-slider"
-            hide-details
-          />
-          <v-icon
-            class="toolbar-icon"
-            style="
-              display: flex;
-              align-items: center;
-              height: 100%;
-              margin-right: 4px;
-            "
-            >mdi-image-size-select-large</v-icon
-          >
-        </div>
-        <v-btn
-          icon
-          :color="searchOverlayVisible ? 'primary' : 'surface'"
-          @click="openSearchOverlay"
-          title="Search"
-          style="margin-left: 4px"
-        >
-          <v-icon>mdi-magnify</v-icon>
-        </v-btn>
-        <v-btn
-          icon
-          :color="showStars ? 'accent' : 'surface'"
-          @click="showStars = !showStars"
-          title="Toggle star ratings"
-          style="margin-left: 4px"
-        >
-          <v-icon :color="showStars ? 'white' : undefined"
-            >{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon
-          >
-        </v-btn>
-        <v-btn
-          icon
-          :color="showFaceBboxes ? 'primary' : 'surface'"
-          @click="showFaceBboxes = !showFaceBboxes"
-          title="Toggle face bounding boxes"
-          class="face-bbox-toggle-btn"
-          style="margin-left: 4px"
-        >
-          <span class="face-bbox-icon-wrapper">
-            <v-icon
-              >{{ showFaceBboxes ? 'mdi-account' : 'mdi-account-outline'
-              }}</v-icon
-            >
-          </span>
-        </v-btn>
-        <v-btn-toggle
-          v-model="mediaTypeFilter"
-          mandatory
-          class="media-type-toggle"
-          dense
-        >
-          <v-btn value="all" title="Show all media">
-            <v-icon>mdi-image-multiple</v-icon>
-          </v-btn>
-          <v-btn value="images" title="Show images only">
-            <v-icon>mdi-image</v-icon>
-          </v-btn>
-          <v-btn value="videos" title="Show videos only">
-            <v-icon>mdi-video</v-icon>
-          </v-btn>
-        </v-btn-toggle>
-        <v-btn
-          icon
-          :color="'surface'"
-          @click="handleExportZip"
-          title="Export current grid to zip"
-          class="toolbar-download-btn"
-          style="margin-left: 4px"
-        >
-          <v-icon :color="'onSurface'">mdi-download</v-icon>
-        </v-btn>
-      </div>
-    </div>
     <div class="file-manager">
       <div
         class="sidebar-shell"
         :class="{ open: sidebarVisible }"
-        v-show="sidebarVisible"
+        v-show="sidebarVisible || !isMobile"
       >
         <SideBar
           ref="sidebarRef"
+          :collapsed="!sidebarVisible && !isMobile"
           :selectedCharacter="selectedCharacter"
           :allPicturesId="ALL_PICTURES_ID"
           :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
@@ -127,6 +22,7 @@
           @select-set="handleSelectSet"
           @images-assigned-to-character="handleImagesAssignedToCharacter"
           @faces-assigned-to-character="handleFacesAssignedToCharacter"
+          @toggle-sidebar="sidebarVisible = !sidebarVisible"
           @update:selected-sort="handleUpdateSelectedSort"
           @update:similarity-character="handleUpdateSimilarityCharacter"
           @update:stack-threshold="handleUpdateStackThreshold"
@@ -135,11 +31,101 @@
         />
       </div>
       <div
-        v-if="sidebarVisible"
+        v-if="sidebarVisible && isMobile"
         class="sidebar-backdrop"
         @click="sidebarVisible = false"
       ></div>
-      <main class="main-area" :class="{ 'full-width': !sidebarVisible }">
+      <main class="main-area">
+        <div class="top-toolbar">
+          <div class="toolbar-actions">
+            <div class="toolbar-size-controls">
+              <v-icon
+                class="toolbar-icon"
+                style="display: flex; align-items: center; height: 100%"
+                >mdi-image-size-select-small</v-icon
+              >
+              <v-slider
+                v-model="thumbnailSize"
+                :min="128"
+                :max="224"
+                :step="32"
+                class="toolbar-slider"
+                hide-details
+              />
+              <v-icon
+                class="toolbar-icon"
+                style="
+                  display: flex;
+                  align-items: center;
+                  height: 100%;
+                  margin-right: 4px;
+                "
+                >mdi-image-size-select-large</v-icon
+              >
+            </div>
+            <v-btn
+              icon
+              :color="searchOverlayVisible ? 'primary' : 'surface'"
+              @click="openSearchOverlay"
+              title="Search"
+              style="margin-left: 4px"
+            >
+              <v-icon>mdi-magnify</v-icon>
+            </v-btn>
+            <v-btn
+              icon
+              :color="showStars ? 'accent' : 'surface'"
+              @click="showStars = !showStars"
+              title="Toggle star ratings"
+              style="margin-left: 4px"
+            >
+              <v-icon :color="showStars ? 'white' : undefined"
+                >{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon
+              >
+            </v-btn>
+            <v-btn
+              icon
+              :color="showFaceBboxes ? 'primary' : 'surface'"
+              @click="showFaceBboxes = !showFaceBboxes"
+              title="Toggle face bounding boxes"
+              class="face-bbox-toggle-btn"
+              style="margin-left: 4px"
+            >
+              <span class="face-bbox-icon-wrapper">
+                <v-icon
+                  >{{ showFaceBboxes ? 'mdi-account' : 'mdi-account-outline'
+                  }}</v-icon
+                >
+              </span>
+            </v-btn>
+            <v-btn-toggle
+              v-model="mediaTypeFilter"
+              mandatory
+              class="media-type-toggle"
+              dense
+            >
+              <v-btn value="all" title="Show all media">
+                <v-icon>mdi-image-multiple</v-icon>
+              </v-btn>
+              <v-btn value="images" title="Show images only">
+                <v-icon>mdi-image</v-icon>
+              </v-btn>
+              <v-btn value="videos" title="Show videos only">
+                <v-icon>mdi-video</v-icon>
+              </v-btn>
+            </v-btn-toggle>
+            <v-btn
+              icon
+              :color="'surface'"
+              @click="handleExportZip"
+              title="Export current grid to zip"
+              class="toolbar-download-btn"
+              style="margin-left: 4px"
+            >
+              <v-icon :color="'onSurface'">mdi-download</v-icon>
+            </v-btn>
+          </div>
+        </div>
         <div
           :class="['main-content', selectedCharacter ? 'accent-border' : '']"
           style="margin-top: 0; padding-top: 0"
