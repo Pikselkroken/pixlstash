@@ -1,6 +1,9 @@
-from typing import Optional
+from typing import List, Optional, TYPE_CHECKING
 
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, Relationship
+
+if TYPE_CHECKING:
+    from .user_token import UserToken
 
 
 class User(SQLModel, table=True):
@@ -15,3 +18,11 @@ class User(SQLModel, table=True):
     thumbnail_size: Optional[int] = Field(default=None)
     show_stars: bool = Field(default=True)
     similarity_character: Optional[int] = Field(default=None)
+
+    tokens: List["UserToken"] = Relationship(
+        back_populates="user",
+        sa_relationship_kwargs={
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
+    )

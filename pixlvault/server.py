@@ -11,6 +11,8 @@ import sys
 import time
 import zipfile
 from email.utils import formatdate
+from datetime import datetime
+import secrets
 
 from collections import defaultdict, deque
 from sqlalchemy.orm import load_only, selectinload
@@ -38,6 +40,7 @@ from pixlvault.db_models import (
     PictureSetMember,
     SortMechanism,
     User,
+    UserToken,
 )
 
 from pixlvault.db_models import PictureLikeness
@@ -753,6 +756,9 @@ class Server:
                 ..., min_length=8, description="Password must be at least 8 characters long"
             )
 
+        class CreateTokenRequest(BaseModel):
+            description: Optional[str] = None
+
         @self.api.get("/users/me/config")
         async def get_me_config(request: Request):
             _ensure_secure_when_required(request)
@@ -920,6 +926,107 @@ class Server:
                 "username": user.username,
                 "has_password": bool(user.password_hash),
             }
+
+        @self.api.post("/users/me/token")
+        async def create_me_token(payload: CreateTokenRequest, request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
+            token_value = secrets.token_urlsafe(32)
+            token_hash = bcrypt.hash(token_value)
+
+            def create_token(
+                session: Session,
+                user_id: int,
+                token_hash: str,
+                description: Optional[str],
+            ):
+                user = session.get(User, user_id)
+                if user is None:
+                    raise HTTPException(status_code=404, detail="User not found")
+                token = UserToken(
+                    user_id=user_id,
+                    token_hash=token_hash,
+                    created_at=datetime.utcnow(),
+                    description=description,
+                )
+                session.add(token)
+                session.commit()
+                session.refresh(token)
+                return token
+
+            token = self.vault.db.run_task(
+                create_token,
+                user_id,
+                token_hash,
+                payload.description,
+                priority=DBPriority.IMMEDIATE,
+            )
+
+            return {
+                "token": token_value,
+                "token_id": token.id,
+            }
+
+        @self.api.get("/users/me/token")
+        async def list_me_tokens(request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
+            def fetch_tokens(session: Session, user_id: int):
+                tokens = session.exec(
+                    select(UserToken)
+                    .where(UserToken.user_id == user_id)
+                    .order_by(UserToken.created_at.desc())
+                ).all()
+                return tokens
+
+            tokens = self.vault.db.run_task(
+                fetch_tokens, user_id, priority=DBPriority.IMMEDIATE
+            )
+            return [
+                {
+                    "id": token.id,
+                    "description": token.description,
+                    "created_at": token.created_at,
+                    "last_used_at": token.last_used_at,
+                }
+                for token in tokens
+            ]
+
+        @self.api.delete("/users/me/token/{token_id}")
+        async def delete_me_token(token_id: int, request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+
+            def remove_token(session: Session, user_id: int, token_id: int):
+                token = session.get(UserToken, token_id)
+                if token is None or token.user_id != user_id:
+                    raise HTTPException(status_code=404, detail="Token not found")
+                session.delete(token)
+                session.commit()
+                return True
+
+            self.vault.db.run_task(
+                remove_token, user_id, token_id, priority=DBPriority.IMMEDIATE
+            )
+
+            return {"status": "success", "deleted_id": token_id}
 
         ###############################
         # Character endpoints         #
@@ -2948,15 +3055,19 @@ class Server:
             return await call_next(request)
 
         class LoginRequest(BaseModel):
-            username: str = Field(
-                ...,
+            username: Optional[str] = Field(
+                default=None,
                 min_length=1,
                 description="Username is required",
             )
-            password: str = Field(
-                ...,
+            password: Optional[str] = Field(
+                default=None,
                 min_length=8,
                 description="Password must be at least 8 characters long",
+            )
+            token: Optional[str] = Field(
+                default=None,
+                description="API token for authentication",
             )
 
         @self.api.get("/check-session")
@@ -2968,38 +3079,87 @@ class Server:
 
         @self.api.post("/login")
         def login(request: LoginRequest):
-            user = self._get_user() or self._ensure_user()
-            if not user.username or not user.password_hash:
-                # First login: set the username and password
-                hashed_password = bcrypt.hash(request.password)
+            if request.token:
+                user = self._get_user()
+                if not user:
+                    raise HTTPException(status_code=404, detail="User not found")
 
-                def set_credentials(session: Session):
-                    db_user = session.exec(select(User)).first()
-                    if db_user is None:
-                        db_user = User()
-                    db_user.username = request.username
-                    db_user.password_hash = hashed_password
-                    session.add(db_user)
+                def fetch_tokens(session: Session, user_id: int):
+                    tokens = session.exec(
+                        select(UserToken).where(UserToken.user_id == user_id)
+                    ).all()
+                    return tokens
+
+                tokens = self.vault.db.run_task(
+                    fetch_tokens, user.id, priority=DBPriority.IMMEDIATE
+                )
+                matched_token = None
+                for token in tokens:
+                    if bcrypt.verify(request.token, token.token_hash):
+                        matched_token = token
+                        break
+                if matched_token is None:
+                    raise HTTPException(status_code=401, detail="Invalid token")
+
+                def update_token_last_used(session: Session, token_id: int):
+                    db_token = session.get(UserToken, token_id)
+                    if db_token is None:
+                        return None
+                    db_token.last_used_at = datetime.utcnow()
+                    session.add(db_token)
                     session.commit()
-                    session.refresh(db_user)
-                    return db_user
+                    return db_token
 
-                user = self.vault.db.run_task(
-                    set_credentials, priority=DBPriority.IMMEDIATE
+                self.vault.db.run_task(
+                    update_token_last_used,
+                    matched_token.id,
+                    priority=DBPriority.IMMEDIATE,
                 )
-                self._user = user
-                self.USERNAME = user.username
-                self.PASSWORD_HASH = user.password_hash
-                response = JSONResponse(
-                    content={"message": "Username and password set successfully."}
-                )
-            else:
-                # Validate the username and password
-                if request.username != user.username:
-                    raise HTTPException(status_code=401, detail="Invalid username")
-                if not bcrypt.verify(request.password, user.password_hash):
-                    raise HTTPException(status_code=401, detail="Invalid password")
+
                 response = JSONResponse(content={"message": "Login successful."})
+            else:
+                if not request.username or not request.password:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Username and password are required",
+                    )
+
+                user = self._get_user() or self._ensure_user()
+                if not user.username or not user.password_hash:
+                    # First login: set the username and password
+                    hashed_password = bcrypt.hash(request.password)
+
+                    def set_credentials(session: Session):
+                        db_user = session.exec(select(User)).first()
+                        if db_user is None:
+                            db_user = User()
+                        db_user.username = request.username
+                        db_user.password_hash = hashed_password
+                        session.add(db_user)
+                        session.commit()
+                        session.refresh(db_user)
+                        return db_user
+
+                    user = self.vault.db.run_task(
+                        set_credentials, priority=DBPriority.IMMEDIATE
+                    )
+                    self._user = user
+                    self.USERNAME = user.username
+                    self.PASSWORD_HASH = user.password_hash
+                    response = JSONResponse(
+                        content={"message": "Username and password set successfully."}
+                    )
+                else:
+                    # Validate the username and password
+                    if request.username != user.username:
+                        raise HTTPException(
+                            status_code=401, detail="Invalid username"
+                        )
+                    if not bcrypt.verify(request.password, user.password_hash):
+                        raise HTTPException(
+                            status_code=401, detail="Invalid password"
+                        )
+                    response = JSONResponse(content={"message": "Login successful."})
 
             # Generate a new session ID using uuid
             session_id = str(uuid.uuid4())

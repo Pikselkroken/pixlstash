@@ -81,6 +81,14 @@ const settingsSuccess = ref("");
 const currentPassword = ref("");
 const newPassword = ref("");
 const showNewPassword = ref(false);
+const tokensLoading = ref(false);
+const tokensError = ref("");
+const tokens = ref([]);
+const tokenDescription = ref("");
+const newlyCreatedToken = ref("");
+const tokenDialogOpen = ref(false);
+const tokenDeleteDialogOpen = ref(false);
+const tokenToDelete = ref(null);
 
 async function fetchSettingsAuth() {
   settingsLoading.value = true;
@@ -102,6 +110,73 @@ function resetSettingsForm() {
   currentPassword.value = "";
   newPassword.value = "";
   showNewPassword.value = false;
+  tokensError.value = "";
+  tokenDescription.value = "";
+  newlyCreatedToken.value = "";
+  tokenDialogOpen.value = false;
+  tokenDeleteDialogOpen.value = false;
+  tokenToDelete.value = null;
+}
+
+function formatTokenTimestamp(value) {
+  if (!value) return "Never used";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Never used";
+  return date.toLocaleString();
+}
+
+async function fetchUserTokens() {
+  tokensLoading.value = true;
+  tokensError.value = "";
+  try {
+    const res = await apiClient.get("/users/me/token");
+    tokens.value = Array.isArray(res.data) ? res.data : [];
+  } catch (e) {
+    tokensError.value = "Failed to load tokens.";
+  } finally {
+    tokensLoading.value = false;
+  }
+}
+
+async function createUserToken() {
+  tokensError.value = "";
+  const description = tokenDescription.value.trim() || null;
+  tokensLoading.value = true;
+  try {
+    const res = await apiClient.post("/users/me/token", { description });
+    newlyCreatedToken.value = res.data?.token || "";
+    tokenDialogOpen.value = Boolean(newlyCreatedToken.value);
+    tokenDescription.value = "";
+    await fetchUserTokens();
+  } catch (e) {
+    tokensError.value = e?.response?.data?.detail || "Failed to create token.";
+  } finally {
+    tokensLoading.value = false;
+  }
+}
+
+function confirmDeleteToken(token) {
+  tokenToDelete.value = token;
+  tokenDeleteDialogOpen.value = true;
+}
+
+async function deleteUserToken() {
+  if (!tokenToDelete.value) {
+    tokenDeleteDialogOpen.value = false;
+    return;
+  }
+  tokensLoading.value = true;
+  tokensError.value = "";
+  try {
+    await apiClient.delete(`/users/me/token/${tokenToDelete.value.id}`);
+    tokenDeleteDialogOpen.value = false;
+    tokenToDelete.value = null;
+    await fetchUserTokens();
+  } catch (e) {
+    tokensError.value = e?.response?.data?.detail || "Failed to delete token.";
+  } finally {
+    tokensLoading.value = false;
+  }
 }
 
 async function submitPasswordChange() {
@@ -852,6 +927,7 @@ watch(
     if (isOpen) {
       resetSettingsForm();
       fetchSettingsAuth();
+      fetchUserTokens();
     }
   },
 );
@@ -1013,18 +1089,115 @@ defineExpose({ refreshSidebar });
             <div class="settings-section-desc">
               Manage tokens for authenticated API access.
             </div>
-            <v-btn
-              variant="outlined"
-              color="primary"
-              class="settings-action-btn"
-              disabled
-            >
-              Create Token (coming soon)
-            </v-btn>
+            <div class="settings-tokens">
+              <v-text-field
+                v-model="tokenDescription"
+                label="Token description"
+                density="comfortable"
+                variant="filled"
+                :disabled="tokensLoading"
+              />
+              <v-btn
+                variant="outlined"
+                color="primary"
+                class="settings-action-btn"
+                :loading="tokensLoading"
+                :disabled="tokensLoading"
+                @click="createUserToken"
+              >
+                Create Token
+              </v-btn>
+              <div v-if="tokensError" class="settings-error">
+                {{ tokensError }}
+              </div>
+              <div v-if="tokensLoading" class="settings-token-loading">
+                Loading tokens...
+              </div>
+              <div v-else class="settings-token-list">
+                <div
+                  v-for="token in tokens"
+                  :key="token.id"
+                  class="settings-token-row"
+                >
+                  <div class="settings-token-meta">
+                    <div class="settings-token-desc">
+                      {{ token.description || "Untitled token" }}
+                    </div>
+                    <div class="settings-token-sub">
+                      <span
+                        >Created:
+                        {{ formatTokenTimestamp(token.created_at) }}</span
+                      >
+                      <span
+                        >Last used:
+                        {{ formatTokenTimestamp(token.last_used_at) }}</span
+                      >
+                    </div>
+                  </div>
+                  <v-btn
+                    icon
+                    variant="text"
+                    class="settings-token-delete"
+                    :disabled="tokensLoading"
+                    @click="confirmDeleteToken(token)"
+                  >
+                    <v-icon size="20">mdi-trash-can-outline</v-icon>
+                  </v-btn>
+                </div>
+                <div v-if="!tokens.length" class="settings-token-empty">
+                  No tokens yet.
+                </div>
+              </div>
+            </div>
           </div>
         </v-card-text>
       </v-card>
     </div>
+  </v-dialog>
+
+  <v-dialog v-model="tokenDialogOpen" width="520">
+    <v-card class="settings-token-dialog">
+      <v-card-title class="settings-dialog-title">New API Token</v-card-title>
+      <v-card-text class="settings-dialog-body">
+        <div class="settings-token-warning">
+          Copy this token now. You won’t be able to see it again.
+        </div>
+        <div class="settings-token-value">{{ newlyCreatedToken }}</div>
+      </v-card-text>
+      <v-card-actions class="settings-dialog-actions">
+        <v-spacer />
+        <v-btn
+          variant="outlined"
+          color="primary"
+          @click="tokenDialogOpen = false"
+        >
+          Close
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="tokenDeleteDialogOpen" width="420">
+    <v-card class="settings-token-dialog">
+      <v-card-title class="settings-dialog-title">Delete token?</v-card-title>
+      <v-card-text class="settings-dialog-body">
+        This will permanently revoke the selected token.
+      </v-card-text>
+      <v-card-actions class="settings-dialog-actions">
+        <v-spacer />
+        <v-btn variant="text" @click="tokenDeleteDialogOpen = false">
+          Cancel
+        </v-btn>
+        <v-btn
+          color="error"
+          variant="outlined"
+          :loading="tokensLoading"
+          @click="deleteUserToken"
+        >
+          Delete
+        </v-btn>
+      </v-card-actions>
+    </v-card>
   </v-dialog>
 
   <aside class="sidebar" :class="{ 'sidebar-collapsed': props.collapsed }">
@@ -1892,6 +2065,81 @@ defineExpose({ refreshSidebar });
 
 .settings-action-btn {
   align-self: flex-start;
+}
+
+.settings-tokens {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-token-loading {
+  font-size: 0.9em;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.settings-token-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.settings-token-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-surface), 0.2);
+}
+
+.settings-token-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-token-desc {
+  font-weight: 600;
+}
+
+.settings-token-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.8em;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.settings-token-delete {
+  color: rgba(var(--v-theme-error), 0.9);
+}
+
+.settings-token-empty {
+  font-size: 0.9em;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.settings-token-dialog {
+  padding-bottom: 8px;
+}
+
+.settings-token-warning {
+  font-size: 0.9em;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  margin-bottom: 8px;
+}
+
+.settings-token-value {
+  word-break: break-all;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  background: rgba(var(--v-theme-surface), 0.2);
+  border-radius: 8px;
+  padding: 10px 12px;
 }
 
 .settings-action-btn--primary {
