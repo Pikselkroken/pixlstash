@@ -34,6 +34,19 @@ const stackThreshold = ref(null);
 
 // --- Search & Filtering State ---
 const searchQuery = ref("");
+const searchInput = ref("");
+const searchHistory = ref([]);
+const isSearchHistoryOpen = ref(false);
+const MAX_SEARCH_HISTORY = 8;
+const filteredSearchHistory = computed(() => {
+  const needle = (searchInput.value || "").trim().toLowerCase();
+  if (!needle) {
+    return searchHistory.value;
+  }
+  return searchHistory.value.filter((item) =>
+    item.toLowerCase().startsWith(needle),
+  );
+});
 const showStars = ref(true);
 const showFaceBboxes = ref(false);
 
@@ -162,7 +175,10 @@ async function handleSelectSet(setId) {
 }
 
 async function handleUpdateSearchQuery(value) {
-  searchQuery.value = typeof value === "string" ? value : ""; // Ensure searchQuery is always a string
+  const nextQuery = typeof value === "string" ? value.trim() : "";
+  searchInput.value = nextQuery;
+  searchQuery.value = nextQuery; // Ensure searchQuery is always a string
+  addToSearchHistory(nextQuery);
 }
 
 async function handleUpdateSelectedSort({ sort, descending }) {
@@ -322,8 +338,46 @@ function closeSearchOverlay() {
 function handleClearSearch() {
   console.log("[App.vue] handleClearSearch called");
   searchQuery.value = "";
+  searchInput.value = "";
+  isSearchHistoryOpen.value = false;
   console.log("[App.vue] searchQuery cleared:", searchQuery.value);
   refreshGridVersion(); // Force the ImageGrid to refresh
+}
+
+function addToSearchHistory(query) {
+  if (!query) {
+    return;
+  }
+  const existingIndex = searchHistory.value.findIndex((item) => item === query);
+  if (existingIndex !== -1) {
+    searchHistory.value.splice(existingIndex, 1);
+  }
+  searchHistory.value.unshift(query);
+  if (searchHistory.value.length > MAX_SEARCH_HISTORY) {
+    searchHistory.value = searchHistory.value.slice(0, MAX_SEARCH_HISTORY);
+  }
+}
+
+function applySearchHistory(query) {
+  searchInput.value = query;
+  commitSearch();
+  isSearchHistoryOpen.value = false;
+}
+
+function clearSearchHistory() {
+  searchHistory.value = [];
+  isSearchHistoryOpen.value = false;
+}
+
+function commitSearch() {
+  const nextQuery =
+    typeof searchInput.value === "string" ? searchInput.value.trim() : "";
+  if (nextQuery === searchQuery.value) {
+    return;
+  }
+  searchQuery.value = nextQuery;
+  addToSearchHistory(nextQuery);
+  isSearchHistoryOpen.value = false;
 }
 
 function handleResetToAll() {
@@ -340,9 +394,25 @@ function handleResetToAll() {
 
 // --- Watchers ---
 watch(searchQuery, (newVal, oldVal) => {
+  if (searchInput.value !== newVal) {
+    searchInput.value = newVal || "";
+  }
   if (!newVal && oldVal) {
     refreshGridVersion();
   }
+});
+
+watch([searchInput, searchHistory, isMobile], () => {
+  if (isMobile.value) {
+    isSearchHistoryOpen.value = false;
+    return;
+  }
+  const needle = (searchInput.value || "").trim();
+  if (!needle) {
+    isSearchHistoryOpen.value = false;
+    return;
+  }
+  isSearchHistoryOpen.value = filteredSearchHistory.value.length > 0;
 });
 
 watch([selectedSort, selectedDescending], () => {

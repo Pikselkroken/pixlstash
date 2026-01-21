@@ -39,17 +39,49 @@
         <div class="top-toolbar">
           <div class="toolbar-actions">
             <div class="toolbar-search-slot">
-              <v-text-field
+              <v-menu
                 v-if="!isMobile"
-                v-model="searchQuery"
-                density="compact"
-                variant="solo-filled"
-                hide-details
-                clearable
-                prepend-inner-icon="mdi-magnify"
-                class="toolbar-search-field"
-                @click:clear="handleClearSearch"
-              />
+                v-model="isSearchHistoryOpen"
+                :close-on-content-click="false"
+                :disabled="filteredSearchHistory.length === 0"
+                open-on-focus
+                transition="scale-transition"
+                location="bottom"
+                offset="6"
+              >
+                <template #activator="{ props }">
+                  <v-text-field
+                    v-bind="props"
+                    v-model="searchInput"
+                    density="compact"
+                    variant="solo-filled"
+                    hide-details
+                    clearable
+                    prepend-inner-icon="mdi-magnify"
+                    class="toolbar-search-field"
+                    autocomplete="off"
+                    @keydown.enter="commitSearch"
+                    @click:prepend-inner="commitSearch"
+                    @click:clear="handleClearSearch"
+                  />
+                </template>
+                <v-list density="compact" class="search-history-list">
+                  <v-list-item
+                    v-for="item in filteredSearchHistory"
+                    :key="item"
+                    @click="applySearchHistory(item)"
+                  >
+                    <v-list-item-title>{{ item }}</v-list-item-title>
+                  </v-list-item>
+                  <v-divider />
+                  <v-list-item
+                    class="search-history-clear"
+                    @click="clearSearchHistory"
+                  >
+                    <v-list-item-title>Clear history</v-list-item-title>
+                  </v-list-item>
+                </v-list>
+              </v-menu>
             </div>
             <div class="toolbar-controls">
               <v-btn
