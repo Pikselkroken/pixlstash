@@ -119,7 +119,7 @@
           </div>
           <v-btn
             v-if="canShowAllPicturesButton"
-            class="empty-state-action"
+            class="empty-state-action app-btn-base"
             color="primary"
             variant="elevated"
             @click.stop="handleEmptyStateReset"
@@ -131,7 +131,7 @@
       <div
         class="image-grid"
         :style="{
-          gridTemplateColumns: `repeat(${props.columns}, 1fr)`,
+          gridTemplateColumns: `repeat(${props.columns}, minmax(${MIN_THUMBNAIL_SIZE}px, ${MAX_THUMBNAIL_SIZE}px))`,
           position: 'relative',
         }"
         ref="gridContainer"
@@ -541,6 +541,9 @@ const props = defineProps({
 });
 const STACKS_SORT_KEY = "PICTURE_STACKS";
 const STACK_COLOR_STEP = 47;
+const MIN_THUMBNAIL_SIZE = 128;
+const MAX_THUMBNAIL_SIZE = 384;
+const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 // Store refs for each thumbnail image
 const thumbnailRefs = reactive({});
 const thumbnailContainerRefs = reactive({});
@@ -575,6 +578,7 @@ const exportProgressPercent = computed(() => {
 
 // Key to force face bbox overlay recompute
 const faceOverlayRedrawKey = ref(0);
+let gridResizeObserver = null;
 
 function triggerFaceOverlayRedraw() {
   faceOverlayRedrawKey.value++;
@@ -592,10 +596,23 @@ onMounted(() => {
   console.log("[ImageGrid.vue] Initial allGridImages:", allGridImages.value);
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   fetchAllPicturesCount();
+  nextTick(() => {
+    updateRowHeightFromGrid();
+    if (typeof ResizeObserver !== "undefined" && gridContainer.value) {
+      gridResizeObserver = new ResizeObserver(() => {
+        updateRowHeightFromGrid();
+      });
+      gridResizeObserver.observe(gridContainer.value);
+    }
+  });
 });
 
 onUnmounted(() => {
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
+  if (gridResizeObserver) {
+    gridResizeObserver.disconnect();
+    gridResizeObserver = null;
+  }
   fullImagePrefetchControllers.clear();
   prefetchedFullImageIds.clear();
   prefetchedFullImageOrder.length = 0;
@@ -720,7 +737,7 @@ function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
   const displayWidth = naturalWidth * scale;
   const displayHeight = naturalHeight * scale;
   const offsetX = (containerWidth - displayWidth) / 2;
-  const offsetY = (containerHeight - displayHeight) / 2;
+  const offsetY = 0;
   // Transform bbox
   const left = offsetX + bbox[0] * scale;
   const top = offsetY + bbox[1] * scale;
@@ -1979,6 +1996,19 @@ watch([() => props.mediaTypeFilter], () => {
   });
 });
 
+watch(
+  () => props.columns,
+  async () => {
+    updateRowHeightFromGrid();
+    updateVisibleThumbnails();
+    await nextTick();
+    triggerFaceOverlayRedraw();
+    requestAnimationFrame(() => {
+      triggerFaceOverlayRedraw();
+    });
+  },
+);
+
 // Track loaded batch ranges to avoid duplicate requests
 const loadedRanges = ref([]);
 // Debounce timer for scroll-triggered fetches
@@ -1996,7 +2026,37 @@ function rangeCovers(ranges, start, end) {
 const visibleStart = ref(0);
 const visibleEnd = ref(0);
 
-const rowHeight = ref(props.thumbnailSize + 24);
+const rowHeight = ref(
+  Math.round(
+    Math.min(
+      MAX_THUMBNAIL_SIZE,
+      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
+    ) + THUMBNAIL_INFO_ROW_HEIGHT,
+  ),
+);
+
+function getGridColumnWidth() {
+  const cols = Math.max(1, props.columns || 1);
+  const gridWidth =
+    gridContainer.value?.clientWidth ?? scrollWrapper.value?.clientWidth ?? 0;
+  if (!gridWidth) {
+    return Math.min(
+      MAX_THUMBNAIL_SIZE,
+      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
+    );
+  }
+  const availableWidth = Math.max(0, gridWidth - 4);
+  const rawWidth = availableWidth / cols;
+  return Math.min(
+    MAX_THUMBNAIL_SIZE,
+    Math.max(MIN_THUMBNAIL_SIZE, rawWidth || MIN_THUMBNAIL_SIZE),
+  );
+}
+
+function updateRowHeightFromGrid() {
+  const columnWidth = getGridColumnWidth();
+  rowHeight.value = Math.round(columnWidth + THUMBNAIL_INFO_ROW_HEIGHT);
+}
 
 // columns is now controlled by prop
 
@@ -2578,6 +2638,7 @@ watch(
   () => {
     // Recalculate visibleStart and visibleEnd after rowHeight update
     nextTick(() => {
+      updateRowHeightFromGrid();
       const el = scrollWrapper.value;
       if (!el) return;
       let cardHeight = rowHeight.value;
@@ -2606,6 +2667,7 @@ defineExpose({
   onGlobalKeyPress,
   updateVisibleThumbnails,
   exportCurrentViewToZip,
+  getExportCount,
   removeImagesById,
   clearFaceSelection,
 });
@@ -2625,6 +2687,12 @@ function removeImagesById(imageIds) {
   );
   loadedRanges.value = [];
   updateVisibleThumbnails();
+}
+
+function getExportCount() {
+  const selectedCount = selectedImageIds.value.length;
+  const totalCount = allGridImages.value.filter((img) => img && img.id).length;
+  return { selectedCount, totalCount };
 }
 
 // --- Export to Zip ---
@@ -2990,14 +3058,15 @@ function handleEmptyStateReset() {
   width: 100%;
   height: 100%;
   aspect-ratio: 1 / 1;
-  object-fit: contain;
+  object-fit: cover;
+  object-position: top center;
   display: block;
   border-radius: 8px;
   position: absolute;
   top: 0;
   left: 0;
   z-index: 1;
-  box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.4);
+  box-shadow: 1px 2px 3px 3px rgba(0, 0, 0, 0.4);
   transition:
     transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
     box-shadow 0.18s;
@@ -3028,7 +3097,7 @@ function handleEmptyStateReset() {
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {
-  box-shadow: none;
+  box-shadow: 2px 4px 12px rgba(0, 0, 0, 0.6);
   transform: scale(1.02);
   z-index: 2;
   transition:

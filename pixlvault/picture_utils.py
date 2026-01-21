@@ -236,7 +236,7 @@ class PictureUtils:
     @staticmethod
     def generate_thumbnail_bytes(img, size=(256, 256)) -> Optional[bytes]:
         """
-        Resize image so the longest edge is 256px, preserve aspect ratio, no padding.
+        Crop to square (bottom-cropped for tall images) and resize longest edge to 256px.
         Accepts either a PIL Image or a numpy array (OpenCV image).
         """
         try:
@@ -245,6 +245,17 @@ class PictureUtils:
             else:
                 # Assume numpy array (OpenCV image, BGR)
                 pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            if pil_img.width != pil_img.height:
+                side = min(pil_img.width, pil_img.height)
+                if pil_img.height > pil_img.width:
+                    left = 0
+                    top = 0
+                else:
+                    left = int(round((pil_img.width - side) / 2.0))
+                    top = 0
+                right = left + side
+                bottom = top + side
+                pil_img = pil_img.crop((left, top, right, bottom))
             max_edge = max(pil_img.width, pil_img.height)
             if max_edge > size[0]:
                 scale = size[0] / max_edge

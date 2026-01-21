@@ -1,6 +1,7 @@
 <script setup>
 import nlp from "compromise";
 import {
+  computed,
   nextTick,
   onBeforeUnmount,
   onBeforeMount,
@@ -38,6 +39,13 @@ const showFaceBboxes = ref(false);
 
 const thumbnailSize = ref(256);
 const columns = ref(4); // Default columns
+const MIN_THUMBNAIL_SIZE = 64;
+const MAX_THUMBNAIL_SIZE = 384;
+const MAX_COLUMNS = 12;
+const minColumns = ref(1);
+const maxColumns = ref(10);
+const mainAreaRef = ref(null);
+let mainAreaResizeObserver = null;
 const sidebarVisible = ref(true);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;
@@ -51,10 +59,17 @@ function refreshGridVersion() {
   gridVersion.value++;
 }
 
-// --- Export Dialog State ---
-const exportDialog = ref(false);
+// --- Export Menu State ---
+const exportMenuOpen = ref(false);
 const exportCaptionMode = ref("description");
 const exportIncludeCharacterName = ref(true);
+const exportSelectedCount = ref(0);
+const exportTotalCount = ref(0);
+const exportCount = computed(() =>
+  exportSelectedCount.value > 0
+    ? exportSelectedCount.value
+    : exportTotalCount.value,
+);
 const exportCaptionOptions = [
   { title: "No Captions", value: "none" },
   { title: "Description", value: "description" },
@@ -79,6 +94,38 @@ function updateIsMobile() {
   if (typeof window !== "undefined") {
     isMobile.value = window.innerWidth <= MOBILE_BREAKPOINT;
   }
+  updateMaxColumns();
+}
+
+function clampColumnsToBounds() {
+  if (columns.value > maxColumns.value) {
+    columns.value = maxColumns.value;
+  }
+  if (columns.value < minColumns.value) {
+    columns.value = minColumns.value;
+  }
+}
+
+function updateMaxColumns() {
+  const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
+  if (!width) {
+    minColumns.value = 1;
+    maxColumns.value = 1;
+    clampColumnsToBounds();
+    return;
+  }
+  const availableWidth = Math.max(0, width - 8);
+  const computedMin = Math.max(
+    1,
+    Math.ceil(availableWidth / MAX_THUMBNAIL_SIZE),
+  );
+  const computedMax = Math.max(
+    computedMin,
+    Math.floor(availableWidth / MIN_THUMBNAIL_SIZE),
+  );
+  minColumns.value = computedMin;
+  maxColumns.value = Math.min(MAX_COLUMNS, computedMax);
+  clampColumnsToBounds();
 }
 
 function closeSidebarIfMobile() {
@@ -233,19 +280,21 @@ function handleFacesAssignedToCharacter({ characterId, faceIds }) {
   }
 }
 
+function refreshExportCount() {
+  const counts = gridContainer.value?.getExportCount?.();
+  if (!counts) return;
+  exportSelectedCount.value = Number(counts.selectedCount) || 0;
+  exportTotalCount.value = Number(counts.totalCount) || 0;
+}
+
 function handleImagesUploaded() {
   // Called when images are imported
   refreshGridVersion(); // Force grid and thumbnails to refresh
   refreshSidebar(); // Optionally refresh sidebar counts
 }
 
-// --- Export to Zip ---
-function handleExportZip() {
-  exportDialog.value = true;
-}
-
 function cancelExportZip() {
-  exportDialog.value = false;
+  exportMenuOpen.value = false;
 }
 
 function confirmExportZip() {
@@ -254,7 +303,7 @@ function confirmExportZip() {
     captionMode: exportCaptionMode.value,
     includeCharacterName: exportIncludeCharacterName.value,
   });
-  exportDialog.value = false;
+  exportMenuOpen.value = false;
 }
 
 // --- Search Overlay ---
@@ -303,10 +352,17 @@ watch([selectedSort, selectedDescending], () => {
 
 watch(thumbnailSize, () => {
   patchConfigUIOptions();
+  updateMaxColumns();
 });
 
 watch(showStars, () => {
   patchConfigUIOptions();
+});
+
+watch(exportMenuOpen, async (isOpen) => {
+  if (!isOpen) return;
+  await nextTick();
+  refreshExportCount();
 });
 
 watch(selectedSimilarityCharacter, () => {
@@ -322,11 +378,22 @@ onMounted(() => {
   window.addEventListener("resize", updateIsMobile);
   window.addEventListener("keydown", handleGlobalKeydown);
   refreshSidebar();
+  updateMaxColumns();
+  if (typeof ResizeObserver !== "undefined" && mainAreaRef.value) {
+    mainAreaResizeObserver = new ResizeObserver(() => {
+      updateMaxColumns();
+    });
+    mainAreaResizeObserver.observe(mainAreaRef.value);
+  }
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", updateIsMobile);
   window.removeEventListener("keydown", handleGlobalKeydown);
+  if (mainAreaResizeObserver) {
+    mainAreaResizeObserver.disconnect();
+    mainAreaResizeObserver = null;
+  }
 });
 
 defineExpose({ sidebarVisible, mediaTypeFilter });
