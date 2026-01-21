@@ -132,7 +132,7 @@ class Server:
         # Keep cached credentials for compatibility
         self.PASSWORD_HASH = self._user.password_hash if self._user else None
         self.USERNAME = self._user.username if self._user else None
-        self.active_session_ids = set()
+        self.active_session_ids = {}
 
         # Temporary storage for export tasks
         self.export_tasks = {}
@@ -204,7 +204,7 @@ class Server:
         self._user = user
         self.PASSWORD_HASH = None
         self.USERNAME = None
-        self.active_session_ids = set()
+        self.active_session_ids = {}
         if "PASSWORD_HASH" in self._server_config:
             del self._server_config["PASSWORD_HASH"]
         if "USERNAME" in self._server_config:
@@ -753,135 +753,19 @@ class Server:
                 ..., min_length=8, description="Password must be at least 8 characters long"
             )
 
-        @self.api.get("/users/{username}/config")
-        async def get_user_config(username: str, request: Request):
-            _ensure_secure_when_required(request)
-            user = self._get_user()
-            _require_matching_username(user, username)
-            if not user:
-                raise HTTPException(status_code=404, detail="User not found")
-            return self._user_to_config(user)
-
-        @self.api.patch("/users/{username}/config")
-        async def patch_user_config(username: str, request: Request):
-            _ensure_secure_when_required(request)
-            import time
-
-            start_time = time.time()
-            logger.info(
-                f"[TIMING] PATCH /users/{username}/config called at {start_time:.3f}"
-            )
-            patch_data = await request.json()
-            allowed_keys = {
-                "description",
-                "sort",
-                "descending",
-                "thumbnail",
-                "thumbnail_size",
-                "show_stars",
-                "similarity_character",
-            }
-
-            def update_user(session: Session):
-                user = session.exec(select(User)).first()
-                if user is None:
-                    user = User()
-                _require_matching_username(user, username)
-
-                updated = False
-                for key, value in patch_data.items():
-                    logger.info(f"Updating config key '{key}' with value: {value}")
-                    if key not in allowed_keys:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Key '{key}' does not exist in config.",
-                        )
-                    if key in ("thumbnail", "thumbnail_size"):
-                        new_value = self._normalize_thumbnail_size(value)
-                        if user.thumbnail_size != new_value:
-                            user.thumbnail_size = new_value
-                            updated = True
-                        continue
-                    if key == "similarity_character":
-                        if value in ("", None, "null"):
-                            new_value = None
-                        elif isinstance(value, str) and value.isdigit():
-                            new_value = int(value)
-                        else:
-                            new_value = value
-                        if user.similarity_character != new_value:
-                            user.similarity_character = new_value
-                            updated = True
-                        continue
-
-                    current_value = getattr(user, key, None)
-                    if current_value != value:
-                        setattr(user, key, value)
-                        updated = True
-
-                if updated:
-                    session.add(user)
-                    session.commit()
-                    session.refresh(user)
-                return user, updated
-
-            user, updated = self.vault.db.run_task(
-                update_user, priority=DBPriority.IMMEDIATE
-            )
-            elapsed = time.time() - start_time
-            logger.info(
-                f"[TIMING] PATCH /users/{username}/config completed in {elapsed:.3f} seconds"
-            )
-            return {
-                "status": "success",
-                "updated": updated,
-                "config": self._user_to_config(user),
-            }
-
-        @self.api.post("/users/{username}/auth")
-        async def change_user_password(username: str, payload: ChangePasswordRequest, request: Request):
-            _ensure_secure_when_required(request)
-            user = self._get_user() or self._ensure_user()
-            _require_matching_username(user, username)
-            if user is None:
-                raise HTTPException(status_code=404, detail="User not found")
-
-            if user.password_hash:
-                if not payload.current_password:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Current password is required",
-                    )
-                if not bcrypt.verify(payload.current_password, user.password_hash):
-                    raise HTTPException(status_code=401, detail="Invalid password")
-
-            hashed_password = bcrypt.hash(payload.new_password)
-
-            def update_user(session: Session):
-                db_user = session.exec(select(User)).first()
-                if db_user is None:
-                    db_user = User()
-                if db_user.username is None:
-                    db_user.username = username
-                elif db_user.username != username:
-                    raise HTTPException(status_code=404, detail="User not found")
-                db_user.password_hash = hashed_password
-                session.add(db_user)
-                session.commit()
-                session.refresh(db_user)
-                return db_user
-
-            updated_user = self.vault.db.run_task(update_user, priority=DBPriority.IMMEDIATE)
-            self._user = updated_user
-            self.PASSWORD_HASH = updated_user.password_hash
-            self.USERNAME = updated_user.username
-            self.active_session_ids = set()
-            return {"status": "success"}
-
         @self.api.get("/users/me/config")
         async def get_me_config(request: Request):
             _ensure_secure_when_required(request)
-            user = self._get_user()
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user = self.vault.db.run_task(
+                lambda session: session.get(User, user_id),
+                priority=DBPriority.IMMEDIATE,
+            )
             if not user:
                 raise HTTPException(status_code=404, detail="User not found")
             return self._user_to_config(user)
@@ -890,6 +774,12 @@ class Server:
         async def patch_me_config(request: Request):
             _ensure_secure_when_required(request)
             import time
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
 
             start_time = time.time()
             logger.info(
@@ -906,8 +796,8 @@ class Server:
                 "similarity_character",
             }
 
-            def update_user(session: Session):
-                user = session.exec(select(User)).first()
+            def update_user(session: Session, user_id: int):
+                user = session.get(User, user_id)
                 if user is None:
                     raise HTTPException(status_code=404, detail="User not found")
 
@@ -949,7 +839,7 @@ class Server:
                 return user, updated
 
             user, updated = self.vault.db.run_task(
-                update_user, priority=DBPriority.IMMEDIATE
+                update_user, user_id, priority=DBPriority.IMMEDIATE
             )
             elapsed = time.time() - start_time
             logger.info(
@@ -964,8 +854,20 @@ class Server:
         @self.api.post("/users/me/auth")
         async def change_me_password(payload: ChangePasswordRequest, request: Request):
             _ensure_secure_when_required(request)
-            user = self._get_user() or self._ensure_user()
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not session id provided")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+        
+            logger.info("Looking for user id: {}".format(user_id))
+            user = self.vault.db.run_task(
+                lambda session: session.get(User, user_id),
+                priority=DBPriority.IMMEDIATE,
+            )
             if user is None:
+                logger.error("No user found with id: {}".format(user_id))
                 raise HTTPException(status_code=404, detail="User not found")
 
             if user.password_hash:
@@ -979,22 +881,45 @@ class Server:
 
             hashed_password = bcrypt.hash(payload.new_password)
 
-            def update_user(session: Session):
-                db_user = session.exec(select(User)).first()
+            def update_user(session: Session, user_id: int):
+                db_user = session.get(User, user_id)
                 if db_user is None:
-                    raise HTTPException(status_code=404, detail="User not found")
+                    logger.info(f"User {user_id} not found in DB when updating")
+                    raise HTTPException(status_code=404, detail="User not found when updating")
                 db_user.password_hash = hashed_password
                 session.add(db_user)
                 session.commit()
                 session.refresh(db_user)
                 return db_user
 
-            updated_user = self.vault.db.run_task(update_user, priority=DBPriority.IMMEDIATE)
+            updated_user = self.vault.db.run_task(
+                update_user, user_id, priority=DBPriority.IMMEDIATE
+            )
             self._user = updated_user
             self.PASSWORD_HASH = updated_user.password_hash
             self.USERNAME = updated_user.username
-            self.active_session_ids = set()
+            self.active_session_ids = {}
             return {"status": "success"}
+
+        @self.api.get("/users/me/auth")
+        async def get_me_auth(request: Request):
+            _ensure_secure_when_required(request)
+            session_id = request.cookies.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is None:
+                raise HTTPException(status_code=401, detail="Not authenticated")
+            user = self.vault.db.run_task(
+                lambda session: session.get(User, user_id),
+                priority=DBPriority.IMMEDIATE,
+            )
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            return {
+                "username": user.username,
+                "has_password": bool(user.password_hash),
+            }
 
         ###############################
         # Character endpoints         #
@@ -3078,7 +3003,9 @@ class Server:
 
             # Generate a new session ID using uuid
             session_id = str(uuid.uuid4())
-            self.active_session_ids.add(session_id)
+            if not user or user.id is None:
+                raise HTTPException(status_code=500, detail="User not found")
+            self.active_session_ids[session_id] = user.id
 
             # Set the session ID as a cookie
             cookie_samesite = self._server_config.get("cookie_samesite", "Lax")
@@ -3107,7 +3034,7 @@ class Server:
         def logout(response: Response, request: Request):
             session_id = request.cookies.get("session_id")
             if session_id in self.active_session_ids:
-                self.active_session_ids.remove(session_id)
+                self.active_session_ids.pop(session_id, None)
                 logger.info(f"Session {session_id} invalidated.")
             response.delete_cookie("session_id", path="/")
             return {"message": "Logged out successfully."}

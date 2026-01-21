@@ -1,34 +1,49 @@
 import axios from 'axios';
-import { ref } from 'vue';
+import {ref} from 'vue';
 
 // Centralized authentication state
 const isAuthenticated = ref(false);
 
 const DEFAULT_BACKEND_PORT = 9537;
 const environmentBaseUrl = import.meta?.env?.VITE_BACKEND_URL;
-const browserHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-const resolvedBaseUrl = environmentBaseUrl || `http://${browserHost}:${DEFAULT_BACKEND_PORT}`;
+const browserHost =
+    typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+const resolvedBaseUrl =
+    environmentBaseUrl || `http://${browserHost}:${DEFAULT_BACKEND_PORT}`;
 
 // Axios instance
 const apiClient = axios.create({
   baseURL: resolvedBaseUrl,
-  timeout: 60000, // Increased timeout to 60 seconds
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
   },
-  withCredentials: true, // Ensure cookies are included in requests
+  withCredentials: true,  // Ensure cookies are included in requests
 });
 
 // Login function
 async function login(username, password) {
   try {
-    const response = await apiClient.post('/login', { username, password });
-    isAuthenticated.value = true; // Update authentication state
+    const response = await apiClient.post('/login', {username, password});
+    isAuthenticated.value = true;  // Update authentication state
     console.log('Login successful:', response.data);
-    return response.data; // Return response data for further use if needed
+    if (typeof window !== 'undefined' && 'credentials' in navigator &&
+        'PasswordCredential' in window && username && password) {
+      try {
+        const credential = new PasswordCredential({
+          id: username,
+          name: username,
+          password,
+        });
+        await navigator.credentials.store(credential);
+      } catch (credentialError) {
+        console.debug('Credential store failed:', credentialError);
+      }
+    }
+    return response.data;  // Return response data for further use if needed
   } catch (error) {
     console.error('Login failed:', error);
-    throw error; // Re-throw the error for the caller to handle
+    throw error;  // Re-throw the error for the caller to handle
   }
 }
 
@@ -40,20 +55,24 @@ async function logout() {
   } catch (error) {
     console.error('Logout failed:', error);
   }
-  isAuthenticated.value = false; // Update authentication state}
+  isAuthenticated.value = false;  // Update authentication state}
 }
 
 // Check session function
 async function checkSession() {
   try {
     const response = await apiClient.get('/check-session');
-    isAuthenticated.value = true; // Update authentication state
+    isAuthenticated.value = true;  // Update authentication state
     console.log('Session valid:', response.data);
-    return response.data; // Return user data if needed
+    return {status: 'ok', data: response.data};
   } catch (error) {
-    console.warn('Session invalid or expired:', error);
-    isAuthenticated.value = false; // Update authentication state
-    return null; // Return null to indicate no valid session
+    if (error.response && error.response.status === 401) {
+      console.warn('Session invalid or expired:', error);
+      isAuthenticated.value = false;  // Update authentication state
+      return {status: 'invalid'};
+    }
+    console.warn('Backend unreachable while checking session:', error);
+    return {status: 'unreachable'};
   }
 }
 
@@ -69,16 +88,16 @@ async function checkLoginStatus() {
 }
 
 // Interceptor to handle 401 errors globally
-apiClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response && error.response.status === 401) {
+apiClient.interceptors.response.use((response) => response, (error) => {
+  if (error.response && error.response.status === 401) {
+    const url = error?.config?.url || '';
+    if (!url.includes('/users/me/auth')) {
       console.error('Unauthorized! Logging out...');
-      logout(); // Call the centralized logout function
+      logout();  // Call the centralized logout function
     }
-    return Promise.reject(error);
   }
-);
+  return Promise.reject(error);
+});
 
 export {
   apiClient,

@@ -73,6 +73,84 @@ const characterEditorCharacter = ref(null);
 const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
 const settingsDialogOpen = ref(false);
+const settingsUsername = ref("");
+const settingsHasPassword = ref(false);
+const settingsLoading = ref(false);
+const settingsError = ref("");
+const settingsSuccess = ref("");
+const currentPassword = ref("");
+const newPassword = ref("");
+const showNewPassword = ref(false);
+
+async function fetchSettingsAuth() {
+  settingsLoading.value = true;
+  settingsError.value = "";
+  try {
+    const res = await apiClient.get("/users/me/auth");
+    settingsUsername.value = res.data?.username || "";
+    settingsHasPassword.value = Boolean(res.data?.has_password);
+  } catch (e) {
+    settingsError.value = "Failed to load account settings.";
+  } finally {
+    settingsLoading.value = false;
+  }
+}
+
+function resetSettingsForm() {
+  settingsError.value = "";
+  settingsSuccess.value = "";
+  currentPassword.value = "";
+  newPassword.value = "";
+  showNewPassword.value = false;
+}
+
+async function submitPasswordChange() {
+  settingsError.value = "";
+  settingsSuccess.value = "";
+  if (!newPassword.value || newPassword.value.trim().length < 8) {
+    settingsError.value = "New password must be at least 8 characters long.";
+    return;
+  }
+  if (settingsHasPassword.value && !currentPassword.value) {
+    settingsError.value = "Current password is required.";
+    return;
+  }
+  settingsLoading.value = true;
+  try {
+    const newPasswordValue = newPassword.value.trim();
+    await apiClient.post("/users/me/auth", {
+      current_password: currentPassword.value || null,
+      new_password: newPasswordValue,
+    });
+    settingsSuccess.value = "Password updated.";
+    currentPassword.value = "";
+    newPassword.value = "";
+    settingsHasPassword.value = true;
+    if (
+      typeof window !== "undefined" &&
+      "credentials" in navigator &&
+      "PasswordCredential" in window &&
+      settingsUsername.value &&
+      newPasswordValue
+    ) {
+      try {
+        const credential = new PasswordCredential({
+          id: settingsUsername.value,
+          name: settingsUsername.value,
+          password: newPasswordValue,
+        });
+        await navigator.credentials.store(credential);
+      } catch (credentialError) {
+        console.debug("Credential store failed:", credentialError);
+      }
+    }
+  } catch (e) {
+    settingsError.value =
+      e?.response?.data?.detail || "Failed to update password.";
+  } finally {
+    settingsLoading.value = false;
+  }
+}
 
 const sidebarNotice = ref(null);
 const sidebarNoticeSetId = ref(null);
@@ -769,6 +847,16 @@ watch(
 );
 
 watch(
+  () => settingsDialogOpen.value,
+  (isOpen) => {
+    if (isOpen) {
+      resetSettingsForm();
+      fetchSettingsAuth();
+    }
+  },
+);
+
+watch(
   [() => sortedCharacters.value, () => props.selectedSort],
   ([chars, selectedSort]) => {
     const hasCharacters = Array.isArray(chars) && chars.length > 0;
@@ -843,14 +931,66 @@ defineExpose({ refreshSidebar });
             <div class="settings-section-desc">
               Change your password or manage sign-in options.
             </div>
-            <v-btn
-              variant="outlined"
-              color="primary"
-              class="settings-action-btn"
-              disabled
-            >
-              Change Password (coming soon)
-            </v-btn>
+            <div class="settings-account-meta">
+              <span class="settings-account-label">Username</span>
+              <span class="settings-account-value">
+                {{ settingsUsername || "Not set" }}
+              </span>
+            </div>
+            <div class="settings-form">
+              <input
+                v-if="settingsUsername"
+                type="text"
+                name="username"
+                :value="settingsUsername"
+                autocomplete="username"
+                style="
+                  position: absolute;
+                  opacity: 0;
+                  height: 0;
+                  width: 0;
+                  pointer-events: none;
+                "
+                tabindex="-1"
+              />
+              <v-text-field
+                v-if="settingsHasPassword"
+                v-model="currentPassword"
+                label="Current password"
+                type="password"
+                density="comfortable"
+                variant="filled"
+                autocomplete="current-password"
+                name="current-password"
+              />
+              <v-text-field
+                v-model="newPassword"
+                label="New password"
+                :type="showNewPassword ? 'text' : 'password'"
+                density="comfortable"
+                variant="filled"
+                autocomplete="new-password"
+                name="new-password"
+                :append-inner-icon="showNewPassword ? 'mdi-eye-off' : 'mdi-eye'"
+                @click:append-inner="showNewPassword = !showNewPassword"
+              />
+              <div v-if="settingsError" class="settings-error">
+                {{ settingsError }}
+              </div>
+              <div v-if="settingsSuccess" class="settings-success">
+                {{ settingsSuccess }}
+              </div>
+              <v-btn
+                variant="outlined"
+                color="primary"
+                class="settings-action-btn settings-action-btn--primary"
+                :loading="settingsLoading"
+                :disabled="settingsLoading"
+                @click="submitPasswordChange"
+              >
+                Update Password
+              </v-btn>
+            </div>
           </div>
           <v-divider class="settings-section-divider" />
           <div class="settings-section">
@@ -1474,7 +1614,7 @@ defineExpose({ refreshSidebar });
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 2px 2px 2px;
+  padding: 2px 2px 2px 12px;
   margin-bottom: 8px;
 }
 
@@ -1485,8 +1625,8 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-brand-logo {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   object-fit: contain;
 }
 
@@ -1716,8 +1856,47 @@ defineExpose({ refreshSidebar });
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
+.settings-account-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0 2px;
+}
+
+.settings-account-label {
+  font-size: 0.85em;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.settings-account-value {
+  font-weight: 600;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-error {
+  color: rgb(var(--v-theme-error));
+  font-size: 0.9em;
+}
+
+.settings-success {
+  color: rgb(var(--v-theme-accent));
+  font-size: 0.9em;
+}
+
 .settings-action-btn {
   align-self: flex-start;
+}
+
+.settings-action-btn--primary {
+  background-color: rgb(var(--v-theme-primary)) !important;
+  color: rgb(var(--v-theme-on-primary)) !important;
 }
 
 .settings-section-divider {
