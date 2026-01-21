@@ -96,6 +96,7 @@
                 <v-icon>mdi-magnify</v-icon>
               </v-btn>
               <v-menu
+                v-model="columnsMenuOpen"
                 offset-y
                 :close-on-content-click="false"
                 transition="scale-transition"
@@ -146,6 +147,7 @@
                     hide-details
                     track-color="#888"
                     thumb-color="primary"
+                    @end="handleColumnsEnd"
                   />
                 </div>
               </v-menu>

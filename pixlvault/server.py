@@ -400,8 +400,7 @@ class Server:
             "sort": sort_value,
             "sort_order": sort_value,
             "descending": bool(user.descending),
-            "thumbnail_size": user.thumbnail_size,
-            "thumbnail": user.thumbnail_size,
+            "columns": int(user.columns),
             "show_stars": bool(user.show_stars),
             "similarity_character": user.similarity_character,
         }
@@ -797,8 +796,7 @@ class Server:
                 "description",
                 "sort",
                 "descending",
-                "thumbnail",
-                "thumbnail_size",
+                "columns",
                 "show_stars",
                 "similarity_character",
             }
@@ -816,12 +814,6 @@ class Server:
                             status_code=400,
                             detail=f"Key '{key}' does not exist in config.",
                         )
-                    if key in ("thumbnail", "thumbnail_size"):
-                        new_value = self._normalize_thumbnail_size(value)
-                        if user.thumbnail_size != new_value:
-                            user.thumbnail_size = new_value
-                            updated = True
-                        continue
                     if key == "similarity_character":
                         if value in ("", None, "null"):
                             new_value = None
@@ -833,7 +825,11 @@ class Server:
                             user.similarity_character = new_value
                             updated = True
                         continue
-
+                    if key == "columns":
+                        user.columns = int(value)
+                        updated = True
+                        logger.info(f"Set user.columns to {user.columns}")
+                        continue
                     current_value = getattr(user, key, None)
                     if current_value != value:
                         setattr(user, key, value)

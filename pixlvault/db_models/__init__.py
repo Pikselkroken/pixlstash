@@ -1,5 +1,4 @@
 from .character import Character  # noqa: F401
-from .chat import Conversation, Message  # noqa: F401
 from .face import Face  # noqa: F401
 from .face_likeness import FaceLikeness  # noqa: F401
 from .picture import Picture, SortMechanism  # noqa: F401

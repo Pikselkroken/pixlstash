@@ -15,7 +15,7 @@ class User(SQLModel, table=True):
     description: Optional[str] = Field(default=None)
     sort: Optional[str] = Field(default=None)
     descending: bool = Field(default=True)
-    thumbnail_size: Optional[int] = Field(default=None)
+    columns: Optional[int] = Field(default=None)
     show_stars: bool = Field(default=True)
     similarity_character: Optional[int] = Field(default=None)
 

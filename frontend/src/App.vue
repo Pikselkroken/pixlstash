@@ -52,10 +52,11 @@ const showFaceBboxes = ref(false);
 
 const thumbnailSize = ref(256);
 const columns = ref(4); // Default columns
-const MIN_THUMBNAIL_SIZE = 64;
-const MAX_THUMBNAIL_SIZE = 384;
-const MAX_COLUMNS = 12;
-const minColumns = ref(1);
+const MIN_THUMBNAIL_SIZE = 128;
+const MAX_THUMBNAIL_SIZE = 320;
+const MIN_COLUMNS = 2;
+const MAX_COLUMNS = 10;
+const minColumns = ref(4);
 const maxColumns = ref(10);
 const mainAreaRef = ref(null);
 let mainAreaResizeObserver = null;
@@ -67,6 +68,10 @@ const MOBILE_BREAKPOINT = 900;
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
 
 const gridVersion = ref(0);
+const columnsMenuOpen = ref(false);
+const configLoaded = ref(false);
+const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
+let columnsMenuCloseTimeout = null;
 
 function refreshGridVersion() {
   gridVersion.value++;
@@ -122,8 +127,8 @@ function clampColumnsToBounds() {
 function updateMaxColumns() {
   const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
   if (!width) {
-    minColumns.value = 1;
-    maxColumns.value = 1;
+    minColumns.value = MIN_COLUMNS;
+    maxColumns.value = MAX_COLUMNS;
     clampColumnsToBounds();
     return;
   }
@@ -136,7 +141,7 @@ function updateMaxColumns() {
     computedMin,
     Math.floor(availableWidth / MIN_THUMBNAIL_SIZE),
   );
-  minColumns.value = computedMin;
+  minColumns.value = Math.max(MIN_COLUMNS, computedMin);
   maxColumns.value = Math.min(MAX_COLUMNS, computedMax);
   clampColumnsToBounds();
 }
@@ -198,6 +203,16 @@ function handleUpdateSimilarityCharacter(val) {
   closeSidebarIfMobile();
 }
 
+function handleColumnsEnd() {
+  if (columnsMenuCloseTimeout) {
+    clearTimeout(columnsMenuCloseTimeout);
+  }
+  columnsMenuCloseTimeout = setTimeout(() => {
+    columnsMenuOpen.value = false;
+    columnsMenuCloseTimeout = null;
+  }, COLUMNS_MENU_CLOSE_DELAY_MS);
+}
+
 async function fetchConfig() {
   try {
     const res = await apiClient.get("/users/me/config");
@@ -206,24 +221,17 @@ async function fetchConfig() {
     if (typeof sortValue === "string" && sortValue) {
       selectedSort.value = sortValue;
     }
-    const thumbnailValue =
-      typeof res.data.thumbnail_size === "number"
-        ? res.data.thumbnail_size
-        : typeof res.data.thumbnail === "number"
-          ? res.data.thumbnail
-          : null;
-    if (thumbnailValue !== null) {
-      thumbnailSize.value = thumbnailValue;
-      await nextTick();
-    }
     if (typeof res.data.show_stars === "boolean")
       showStars.value = res.data.show_stars;
     if (typeof res.data.descending === "boolean") {
       selectedDescending.value = res.data.descending;
     }
+    if (typeof res.data.columns === "number") {
+      columns.value = res.data.columns;
+    }
     config.sort_order = sortValue || selectedSort.value;
     config.descending = selectedDescending.value;
-    config.thumbnail_size = thumbnailValue || thumbnailSize.value;
+    config.columns = columns.value;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
@@ -233,6 +241,7 @@ async function fetchConfig() {
     selectedSimilarityCharacter.value =
       similarityValue ?? selectedSimilarityCharacter.value ?? null;
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
+    configLoaded.value = true;
   } catch (e) {
     console.error("Failed to fetch /users/me/config:", e);
   }
@@ -243,7 +252,7 @@ async function patchConfigUIOptions() {
   const patch = {};
   if (selectedSort.value) patch.sort = selectedSort.value;
   patch.descending = selectedDescending.value;
-  if (thumbnailSize.value) patch.thumbnail = thumbnailSize.value;
+  if (columns.value) patch.columns = columns.value;
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
   if (selectedSimilarityCharacter.value != null) {
     patch.similarity_character = selectedSimilarityCharacter.value;
@@ -429,14 +438,19 @@ watch(showStars, () => {
   patchConfigUIOptions();
 });
 
+watch(selectedSimilarityCharacter, () => {
+  patchConfigUIOptions();
+});
+
+watch(columns, () => {
+  if (!configLoaded.value) return;
+  patchConfigUIOptions();
+});
+
 watch(exportMenuOpen, async (isOpen) => {
   if (!isOpen) return;
   await nextTick();
   refreshExportCount();
-});
-
-watch(selectedSimilarityCharacter, () => {
-  patchConfigUIOptions();
 });
 
 // --- Lifecycle ---
@@ -463,6 +477,10 @@ onBeforeUnmount(() => {
   if (mainAreaResizeObserver) {
     mainAreaResizeObserver.disconnect();
     mainAreaResizeObserver = null;
+  }
+  if (columnsMenuCloseTimeout) {
+    clearTimeout(columnsMenuCloseTimeout);
+    columnsMenuCloseTimeout = null;
   }
 });
 

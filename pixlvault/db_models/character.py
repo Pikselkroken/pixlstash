@@ -1,7 +1,6 @@
 from sqlmodel import SQLModel, Field, Relationship, select
 from typing import Optional, List, TYPE_CHECKING
 
-from .chat import Conversation
 from .face import Face
 
 if TYPE_CHECKING:
@@ -28,7 +27,6 @@ class Character(SQLModel, table=True):
         link_model=Face,
         sa_relationship_kwargs={"overlaps": "faces,character,picture"},
     )
-    conversations: List["Conversation"] = Relationship(back_populates="character")
 
     reference_picture_set: Optional["PictureSet"] = Relationship(
         back_populates="reference_character"
