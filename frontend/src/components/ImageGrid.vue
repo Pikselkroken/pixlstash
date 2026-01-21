@@ -25,6 +25,8 @@
       :selectedCharacter="String(props.selectedCharacter)"
       :selectedSet="String(props.selectedSet)"
       :selectedGroupName="selectedGroupName"
+      :allPicturesId="String(props.allPicturesId)"
+      :unassignedPicturesId="String(props.unassignedPicturesId)"
       :visible="selectedImageIds.length > 0 || selectedFaceIds.length > 0"
       @clear-selection="clearSelection"
       @remove-from-group="removeFromGroup"
@@ -1281,7 +1283,7 @@ function deleteSelected() {
 const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
 async function handleImagesUploaded(newIds) {
-  loadedRanges.value = [];
+  resetThumbnailState();
   allGridImages.value = [];
   selectedImageIds.value = [];
   lastSelectedIndex = null;
@@ -1301,7 +1303,7 @@ watch(
     console.log(
       "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
     );
-    loadedRanges.value = [];
+    resetThumbnailState();
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
@@ -1343,6 +1345,7 @@ async function updateSelectedGroupName() {
     props.selectedCharacter,
     props.selectedSet,
     props.allPicturesId,
+    props.unassignedPicturesId,
   );
   if (
     props.selectedCharacter &&
@@ -1954,7 +1957,7 @@ watch(
     console.log(
       "[ImageGrid.vue] Filters changed. Resetting state and fetching total image count.",
     );
-    loadedRanges.value = [];
+    resetThumbnailState();
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
@@ -1970,7 +1973,7 @@ watch(
     console.log(
       "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
     );
-    loadedRanges.value = [];
+    resetThumbnailState();
     allGridImages.value = [];
     selectedImageIds.value = [];
     lastSelectedIndex = null;
@@ -1984,7 +1987,7 @@ watch([() => props.mediaTypeFilter], () => {
     "[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count.",
   );
   // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
-  loadedRanges.value = [];
+  resetThumbnailState();
   selectedImageIds.value = [];
   lastSelectedIndex = null;
   visibleStart.value = 0;
@@ -2014,6 +2017,17 @@ const loadedRanges = ref([]);
 // Debounce timer for scroll-triggered fetches
 let thumbFetchTimeout = null;
 let pendingRanges = [];
+const thumbnailRequestEpoch = ref(0);
+
+function resetThumbnailState() {
+  loadedRanges.value = [];
+  pendingRanges = [];
+  if (thumbFetchTimeout) {
+    clearTimeout(thumbFetchTimeout);
+    thumbFetchTimeout = null;
+  }
+  thumbnailRequestEpoch.value += 1;
+}
 
 function rangeCovers(ranges, start, end) {
   return ranges.some(
@@ -2205,6 +2219,8 @@ async function fetchThumbnailsBatch(start, end) {
     end = renderEnd.value;
   }
 
+  const requestEpoch = thumbnailRequestEpoch.value;
+
   /* console.debug(
     `[BATCH REQUEST] start=${start}, end=${end}, loadedRanges=${JSON.stringify(
       loadedRanges.value
@@ -2270,6 +2286,9 @@ async function fetchThumbnailsBatch(start, end) {
         requestMs: (thumbRequestEnd - thumbRequestStart).toFixed(1),
         totalMs: (thumbParseEnd - thumbRequestStart).toFixed(1),
       });
+      if (requestEpoch !== thumbnailRequestEpoch.value) {
+        return;
+      }
       for (const gridImg of gridImages) {
         const thumbObj = thumbData[String(gridImg.id)];
         gridImg.thumbnail =
@@ -2291,6 +2310,9 @@ async function fetchThumbnailsBatch(start, end) {
       }
     }
     // Insert/update images at their correct indices
+    if (requestEpoch !== thumbnailRequestEpoch.value) {
+      return;
+    }
     console.log("Updating allGridImages with thumbnails");
     for (let i = 0; i < gridImages.length; i++) {
       const img = gridImages[i];
@@ -2332,7 +2354,11 @@ function updateVisibleThumbnails() {
   // Debounce fetches to avoid excessive requests
   if (thumbFetchTimeout) clearTimeout(thumbFetchTimeout);
 
+  const requestEpoch = thumbnailRequestEpoch.value;
   thumbFetchTimeout = setTimeout(async () => {
+    if (requestEpoch !== thumbnailRequestEpoch.value) {
+      return;
+    }
     console.log("[ImageGrid.vue] Fetching thumbnails batch:", { start, end });
     await fetchThumbnailsBatch(start, end);
   }, 80);
@@ -2685,7 +2711,7 @@ function removeImagesById(imageIds) {
   selectedImageIds.value = selectedImageIds.value.filter(
     (id) => !imageIds.includes(id),
   );
-  loadedRanges.value = [];
+  resetThumbnailState();
   updateVisibleThumbnails();
 }
 

@@ -45,6 +45,8 @@ const props = defineProps({
   selectedSet: String,
   selectedGroupName: String,
   visible: Boolean,
+  allPicturesId: { type: String, required: true },
+  unassignedPicturesId: { type: String, required: true },
 });
 </script>
 
@@ -56,7 +58,7 @@ const props = defineProps({
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
-  padding: 8px 16px 8px 16px !important;
+  padding: 2px 8px 8px 16px !important;
   margin: 0;
   height: 52px;
   box-sizing: border-box;
