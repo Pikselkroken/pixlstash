@@ -1340,13 +1340,6 @@ const selectedGroupName = ref("");
 
 async function updateSelectedGroupName() {
   let name = "";
-  console.log(
-    "Updating selected group name: ",
-    props.selectedCharacter,
-    props.selectedSet,
-    props.allPicturesId,
-    props.unassignedPicturesId,
-  );
   if (
     props.selectedCharacter &&
     props.selectedCharacter !== `${props.allPicturesId}` &&
@@ -1361,17 +1354,13 @@ async function updateSelectedGroupName() {
     } catch (e) {
       console.error("Character fetch failed:", e);
     }
-  } else if (
-    props.selectedSet &&
-    props.selectedSet !== `${props.allPicturesId}` &&
-    props.selectedSet !== `${props.unassignedPicturesId}`
-  ) {
+  } else if (props.selectedSet) {
     try {
       const res = await apiClient.get(
         `${props.backendUrl}/picture_sets/${props.selectedSet}`,
       );
       const set = await res.data;
-      name = set.name || "";
+      name = set.set.name || "";
     } catch (e) {
       console.error("Set fetch failed:", e);
     }
