@@ -23,6 +23,7 @@ from pixlvault.face_likeness_worker import FaceLikenessWorker  # noqa: F401
 from pixlvault.face_character_likeness_worker import FaceCharacterLikenessWorker  # noqa: F401
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
+from pixlvault.watch_folder_worker import WatchFolderWorker  # noqa: F401
 
 
 logger = get_logger(__name__)

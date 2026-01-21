@@ -51,6 +51,7 @@ from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
 from pixlvault.worker_registry import WorkerType
+from pixlvault.watch_folder_worker import WatchFolderWorker
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
 
@@ -110,6 +111,8 @@ class Server:
             image_root=self._server_config["image_root"],
             description=self._config.get("description"),
         )
+
+        WatchFolderWorker.configure(self._server_config_path)
 
         self._user = self._ensure_user()
         if self._user and self._user.description is not None:
@@ -302,6 +305,7 @@ class Server:
                 "image_root": default_image_root,
                 "default_device": "cpu",
                 "USERNAME": None,
+                "watch_folders": [],
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -334,6 +338,8 @@ class Server:
                     server_config["default_device"] = "cpu"
                 if "USERNAME" not in server_config:
                     server_config["USERNAME"] = None
+                if "watch_folders" not in server_config:
+                    server_config["watch_folders"] = []
 
         return server_config
 

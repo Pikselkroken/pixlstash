@@ -20,6 +20,7 @@ class WorkerType(str, Enum):
     LIKENESS = "LikenessWorker"
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
+    WATCH_FOLDERS = "WatchFolderWorker"
 
     @staticmethod
     def all():
