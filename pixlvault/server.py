@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pillow_heif import register_heif_opener
-from typing import List
+from typing import List, Optional
 from passlib.hash import bcrypt
 from pydantic import BaseModel, Field
 
@@ -733,174 +733,44 @@ class Server:
             return result
 
         ###############################
-        # Chat endpoints              #
-        ###############################
-        @self.api.delete("/conversations/{id}")
-        async def delete_conversation(id: int):
-            """Delete a conversation and all messages."""
-
-            def delete_query(session, id: int):
-                conversation = session.get(Conversation, id)
-                session.delete(conversation)
-                session.commit()
-
-            future = self.vault.db.submit_task(delete_query, id)
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to delete conversation {id}",
-                )
-
-            return {"status": "ok"}
-
-        @self.api.get("/conversations/{id}")
-        async def get_conversation(id: int, limit: int = 100):
-            """Return conversation and its messages."""
-            future = self.vault.db.submit_task(
-                lambda session: session.get(Conversation, id)
-            )
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to load conversation {id}",
-                )
-            conversation = future.result()
-            if conversation is None:
-                raise HTTPException(
-                    status_code=404, detail=f"Conversation {id} not found"
-                )
-            future = self.vault.db.submit_task(
-                lambda session: session.exec(
-                    select(Message)
-                    .where(Message.conversation_id == id)
-                    .order_by(Message.timestamp.asc())
-                    .limit(limit)
-                ).all()
-            )
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to load chat messages for conversation {id}",
-                )
-
-            messages = future.result()
-            return {"conversation": conversation, "messages": messages}
-
-        @self.api.get("/conversations")
-        async def list_conversations():
-            """Return list of conversations."""
-            future = self.vault.db.submit_task(
-                lambda session: session.exec(select(Conversation)).all()
-            )
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to load conversations",
-                )
-            conversations = future.result()
-            return {"conversations": conversations}
-
-        @self.api.post("/conversations")
-        async def create_conversation(
-            character_id: int = Query(None),
-            description: str = Query("Chat with this character"),
-        ):
-            """Create a new chat session for a character. Returns conversation_id."""
-            if character_id is None:
-                raise HTTPException(status_code=400, detail="character_id is required")
-
-            def create_conversation(session: Session, character_id: int):
-                conversation = Conversation(
-                    character_id=character_id, description=description
-                )
-                session.add(conversation)
-                session.commit()
-                session.refresh(conversation)
-                return conversation
-
-            future = self.vault.db.submit_task(create_conversation, character_id)
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to create chat session. Exception occurred: {future.exception()}",
-                )
-            conversation = future.result()
-            if conversation is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to create chat session. The resulting conversation is None.",
-                )
-
-            logger.info(
-                "Created new conversation with ID: {}. Now trying to load it again.".format(
-                    conversation.id
-                )
-            )
-
-            future = self.vault.db.submit_task(
-                lambda session: session.get(Conversation, conversation.id)
-            )
-            if future.exception():
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to load created chat session due to exception {future.exception()}.",
-                )
-            return {"conversation_id": conversation.id}
-
-        @self.api.post("/conversations/message")
-        async def post_conversation_message(payload: dict):
-            """Save a chat message. Expects conversation_id, role, content, picture_id (optional)."""
-            required = ["conversation_id", "role", "content"]
-            for key in required:
-                if key not in payload:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": f"Missing required field: {key}"},
-                    )
-            logger.info(
-                f"[Chat] Saving message: conversation_id={payload.get('conversation_id')}, role={payload.get('role')}, picture_id={payload.get('picture_id')}"
-            )
-
-            def save_message(session: Session, message: str):
-                session.add(message)
-                session.commit()
-
-            message = Message(
-                conversation_id=payload["conversation_id"],
-                role=payload["role"],
-                content=payload["content"],
-                picture_id=payload.get("picture_id"),
-            )
-            future = self.vault.db.submit_task(save_message, message)
-            if future.exception():
-                raise HTTPException(status_code=500, detail="Failed to save message")
-            return {"status": "ok"}
-
-        ###############################
         # Config endpoints            #
         ###############################
-        @self.api.get("/config")
-        async def get_config():
-            """
-            Return the current image roots config (config.json) and OpenAI chat service config.
-            """
-            user = self._get_user()
-            config_payload = self._user_to_config(user)
-            logger.debug(f"Transmitting current config {config_payload}")
-            return config_payload
+        def _ensure_secure_when_required(request: Request):
+            if self._server_config.get("require_ssl", False):
+                if request.url.scheme != "https":
+                    raise HTTPException(
+                        status_code=403,
+                        detail="HTTPS is required for this operation.",
+                    )
 
-        @self.api.patch("/config")
-        async def patch_config(request: Request):
+        def _require_matching_username(user: User, username: str):
+            if user and user.username and user.username != username:
+                raise HTTPException(status_code=404, detail="User not found")
+
+        class ChangePasswordRequest(BaseModel):
+            current_password: Optional[str] = None
+            new_password: str = Field(
+                ..., min_length=8, description="Password must be at least 8 characters long"
+            )
+
+        @self.api.get("/users/{username}/config")
+        async def get_user_config(username: str, request: Request):
+            _ensure_secure_when_required(request)
+            user = self._get_user()
+            _require_matching_username(user, username)
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            return self._user_to_config(user)
+
+        @self.api.patch("/users/{username}/config")
+        async def patch_user_config(username: str, request: Request):
+            _ensure_secure_when_required(request)
             import time
 
             start_time = time.time()
-            logger.info(f"[TIMING] PATCH /config called at {start_time:.3f}")
-            """
-            Update existing config values or append to existing lists. Does not allow adding new keys.
-            Body: { key: value, ... } (value replaces or is appended to existing key)
-            If the value is a list and the existing value is a list, appends items.
-            Ensures new image root directories and DBs are created as needed.
-            """
+            logger.info(
+                f"[TIMING] PATCH /users/{username}/config called at {start_time:.3f}"
+            )
             patch_data = await request.json()
             allowed_keys = {
                 "description",
@@ -916,6 +786,7 @@ class Server:
                 user = session.exec(select(User)).first()
                 if user is None:
                     user = User()
+                _require_matching_username(user, username)
 
                 updated = False
                 for key, value in patch_data.items():
@@ -958,12 +829,172 @@ class Server:
                 update_user, priority=DBPriority.IMMEDIATE
             )
             elapsed = time.time() - start_time
-            logger.info(f"[TIMING] PATCH /config completed in {elapsed:.3f} seconds")
+            logger.info(
+                f"[TIMING] PATCH /users/{username}/config completed in {elapsed:.3f} seconds"
+            )
             return {
                 "status": "success",
                 "updated": updated,
                 "config": self._user_to_config(user),
             }
+
+        @self.api.post("/users/{username}/auth")
+        async def change_user_password(username: str, payload: ChangePasswordRequest, request: Request):
+            _ensure_secure_when_required(request)
+            user = self._get_user() or self._ensure_user()
+            _require_matching_username(user, username)
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            if user.password_hash:
+                if not payload.current_password:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Current password is required",
+                    )
+                if not bcrypt.verify(payload.current_password, user.password_hash):
+                    raise HTTPException(status_code=401, detail="Invalid password")
+
+            hashed_password = bcrypt.hash(payload.new_password)
+
+            def update_user(session: Session):
+                db_user = session.exec(select(User)).first()
+                if db_user is None:
+                    db_user = User()
+                if db_user.username is None:
+                    db_user.username = username
+                elif db_user.username != username:
+                    raise HTTPException(status_code=404, detail="User not found")
+                db_user.password_hash = hashed_password
+                session.add(db_user)
+                session.commit()
+                session.refresh(db_user)
+                return db_user
+
+            updated_user = self.vault.db.run_task(update_user, priority=DBPriority.IMMEDIATE)
+            self._user = updated_user
+            self.PASSWORD_HASH = updated_user.password_hash
+            self.USERNAME = updated_user.username
+            self.active_session_ids = set()
+            return {"status": "success"}
+
+        @self.api.get("/users/me/config")
+        async def get_me_config(request: Request):
+            _ensure_secure_when_required(request)
+            user = self._get_user()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            return self._user_to_config(user)
+
+        @self.api.patch("/users/me/config")
+        async def patch_me_config(request: Request):
+            _ensure_secure_when_required(request)
+            import time
+
+            start_time = time.time()
+            logger.info(
+                f"[TIMING] PATCH /users/me/config called at {start_time:.3f}"
+            )
+            patch_data = await request.json()
+            allowed_keys = {
+                "description",
+                "sort",
+                "descending",
+                "thumbnail",
+                "thumbnail_size",
+                "show_stars",
+                "similarity_character",
+            }
+
+            def update_user(session: Session):
+                user = session.exec(select(User)).first()
+                if user is None:
+                    raise HTTPException(status_code=404, detail="User not found")
+
+                updated = False
+                for key, value in patch_data.items():
+                    logger.info(f"Updating config key '{key}' with value: {value}")
+                    if key not in allowed_keys:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Key '{key}' does not exist in config.",
+                        )
+                    if key in ("thumbnail", "thumbnail_size"):
+                        new_value = self._normalize_thumbnail_size(value)
+                        if user.thumbnail_size != new_value:
+                            user.thumbnail_size = new_value
+                            updated = True
+                        continue
+                    if key == "similarity_character":
+                        if value in ("", None, "null"):
+                            new_value = None
+                        elif isinstance(value, str) and value.isdigit():
+                            new_value = int(value)
+                        else:
+                            new_value = value
+                        if user.similarity_character != new_value:
+                            user.similarity_character = new_value
+                            updated = True
+                        continue
+
+                    current_value = getattr(user, key, None)
+                    if current_value != value:
+                        setattr(user, key, value)
+                        updated = True
+
+                if updated:
+                    session.add(user)
+                    session.commit()
+                    session.refresh(user)
+                return user, updated
+
+            user, updated = self.vault.db.run_task(
+                update_user, priority=DBPriority.IMMEDIATE
+            )
+            elapsed = time.time() - start_time
+            logger.info(
+                f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"
+            )
+            return {
+                "status": "success",
+                "updated": updated,
+                "config": self._user_to_config(user),
+            }
+
+        @self.api.post("/users/me/auth")
+        async def change_me_password(payload: ChangePasswordRequest, request: Request):
+            _ensure_secure_when_required(request)
+            user = self._get_user() or self._ensure_user()
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            if user.password_hash:
+                if not payload.current_password:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Current password is required",
+                    )
+                if not bcrypt.verify(payload.current_password, user.password_hash):
+                    raise HTTPException(status_code=401, detail="Invalid password")
+
+            hashed_password = bcrypt.hash(payload.new_password)
+
+            def update_user(session: Session):
+                db_user = session.exec(select(User)).first()
+                if db_user is None:
+                    raise HTTPException(status_code=404, detail="User not found")
+                db_user.password_hash = hashed_password
+                session.add(db_user)
+                session.commit()
+                session.refresh(db_user)
+                return db_user
+
+            updated_user = self.vault.db.run_task(update_user, priority=DBPriority.IMMEDIATE)
+            self._user = updated_user
+            self.PASSWORD_HASH = updated_user.password_hash
+            self.USERNAME = updated_user.username
+            self.active_session_ids = set()
+            return {"status": "success"}
 
         ###############################
         # Character endpoints         #

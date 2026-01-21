@@ -200,7 +200,7 @@ function handleUpdateSimilarityCharacter(val) {
 
 async function fetchConfig() {
   try {
-    const res = await apiClient.get("/config");
+    const res = await apiClient.get("/users/me/config");
     console.log("Fetched config:", res);
     const sortValue = res.data.sort_order ?? res.data.sort;
     if (typeof sortValue === "string" && sortValue) {
@@ -234,7 +234,7 @@ async function fetchConfig() {
       similarityValue ?? selectedSimilarityCharacter.value ?? null;
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
   } catch (e) {
-    console.error("Failed to fetch /config:", e);
+    console.error("Failed to fetch /users/me/config:", e);
   }
 }
 
@@ -249,14 +249,14 @@ async function patchConfigUIOptions() {
     patch.similarity_character = selectedSimilarityCharacter.value;
   }
 
-  console.log("PATCH /config payload:", patch);
+  console.log("PATCH /users/me/config payload:", patch);
   try {
-    const response = await apiClient.patch("/config", patch);
+    const response = await apiClient.patch("/users/me/config", patch);
 
     const updatedConfig = await response.data;
-    console.log("PATCH /config response:", updatedConfig);
+    console.log("PATCH /users/me/config response:", updatedConfig);
   } catch (e) {
-    console.error("Error patching /config:", e);
+    console.error("Error patching /users/me/config:", e);
   }
 }
 

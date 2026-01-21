@@ -72,6 +72,7 @@ const characterEditorCharacter = ref(null);
 
 const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
+const settingsDialogOpen = ref(false);
 
 const sidebarNotice = ref(null);
 const sidebarNoticeSetId = ref(null);
@@ -820,6 +821,71 @@ defineExpose({ refreshSidebar });
     @close="closeSetEditor"
     @refresh-sidebar="refreshSidebar"
   />
+  <v-dialog
+    v-model="settingsDialogOpen"
+    width="620"
+    @click:outside="settingsDialogOpen = false"
+  >
+    <div class="settings-dialog-shell">
+      <v-btn
+        icon
+        size="36px"
+        class="settings-dialog-close"
+        @click="settingsDialogOpen = false"
+      >
+        <v-icon size="24px">mdi-close</v-icon>
+      </v-btn>
+      <v-card class="settings-dialog-card">
+        <v-card-title class="settings-dialog-title">Settings</v-card-title>
+        <v-card-text class="settings-dialog-body">
+          <div class="settings-section">
+            <div class="settings-section-title">Account</div>
+            <div class="settings-section-desc">
+              Change your password or manage sign-in options.
+            </div>
+            <v-btn
+              variant="outlined"
+              color="primary"
+              class="settings-action-btn"
+              disabled
+            >
+              Change Password (coming soon)
+            </v-btn>
+          </div>
+          <v-divider class="settings-section-divider" />
+          <div class="settings-section">
+            <div class="settings-section-title">Imports</div>
+            <div class="settings-section-desc">
+              Monitor folders to auto-import new files.
+            </div>
+            <v-btn
+              variant="outlined"
+              color="primary"
+              class="settings-action-btn"
+              disabled
+            >
+              Add Import Folder (coming soon)
+            </v-btn>
+          </div>
+          <v-divider class="settings-section-divider" />
+          <div class="settings-section">
+            <div class="settings-section-title">API Tokens</div>
+            <div class="settings-section-desc">
+              Manage tokens for authenticated API access.
+            </div>
+            <v-btn
+              variant="outlined"
+              color="primary"
+              class="settings-action-btn"
+              disabled
+            >
+              Create Token (coming soon)
+            </v-btn>
+          </div>
+        </v-card-text>
+      </v-card>
+    </div>
+  </v-dialog>
 
   <aside class="sidebar" :class="{ 'sidebar-collapsed': props.collapsed }">
     <div class="sidebar-brand">
@@ -910,6 +976,14 @@ defineExpose({ refreshSidebar });
           @drop.prevent="handleDropOnSet(pset.id, $event)"
         >
           <v-icon>mdi-layers</v-icon>
+        </div>
+        <div class="sidebar-collapsed-divider"></div>
+        <div
+          class="sidebar-collapsed-item sidebar-settings-item"
+          title="Settings"
+          @click="settingsDialogOpen = true"
+        >
+          <v-icon>mdi-cog</v-icon>
         </div>
       </div>
     </template>
@@ -1312,6 +1386,16 @@ defineExpose({ refreshSidebar });
           </div>
         </div>
       </div>
+      <div class="sidebar-footer-spacer"></div>
+      <div
+        class="sidebar-list-item sidebar-settings-item"
+        @click="settingsDialogOpen = true"
+      >
+        <span class="sidebar-list-icon">
+          <v-icon size="44">mdi-cog</v-icon>
+        </span>
+        <span class="sidebar-list-label">Settings</span>
+      </div>
     </template>
   </aside>
 </template>
@@ -1391,6 +1475,7 @@ defineExpose({ refreshSidebar });
   align-items: center;
   justify-content: space-between;
   padding: 2px 2px 2px 2px;
+  margin-bottom: 8px;
 }
 
 .sidebar-brand-left {
@@ -1434,6 +1519,11 @@ defineExpose({ refreshSidebar });
   gap: 8px;
   padding: 6px 0 12px;
   overflow-y: auto;
+}
+
+.sidebar-collapsed-spacer {
+  flex: 1 1 auto;
+  width: 100%;
 }
 
 .sidebar-collapsed-item {
@@ -1564,6 +1654,84 @@ defineExpose({ refreshSidebar });
     background 0.18s,
     color 0.18s;
   width: 100%;
+}
+
+.sidebar-footer-spacer {
+  flex: 1 1 auto;
+}
+
+.sidebar-settings-item {
+  margin-top: 6px;
+}
+
+.settings-dialog-card {
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  border-radius: 12px;
+}
+
+.settings-dialog-shell {
+  position: relative;
+  width: 100%;
+}
+
+.settings-dialog-close {
+  position: absolute;
+  top: -16px;
+  right: -16px;
+  background-color: rgb(var(--v-theme-primary));
+  border: none;
+  color: rgb(var(--v-theme-on-primary));
+  cursor: pointer;
+  z-index: 2;
+}
+
+.settings-dialog-close:hover {
+  background-color: rgb(var(--v-theme-accent));
+}
+
+.settings-dialog-title {
+  font-weight: 700;
+  font-size: 1.2rem;
+}
+
+.settings-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-section-title {
+  font-weight: 600;
+}
+
+.settings-section-desc {
+  font-size: 0.92em;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.settings-action-btn {
+  align-self: flex-start;
+}
+
+.settings-section-divider {
+  margin: 4px 0 8px;
+}
+
+.settings-privacy-note {
+  font-size: 0.85em;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  margin-top: 4px;
+}
+
+.settings-dialog-actions {
+  padding-top: 0;
 }
 
 .sidebar-list-item.active {
