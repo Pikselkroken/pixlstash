@@ -1,119 +1,98 @@
 <template>
-  <div v-if="open" class="image-overlay" @click.self="emit('close')">
-    <div class="overlay-content overlay-grid">
-      <!-- Title Row -->
-      <button class="overlay-close" @click="emit('close')" aria-label="Close">
-        &times;
-      </button>
-      <div class="overlay-title-row">
-        <div
-          class="overlay-title-desc-shell"
-          :class="{ editing: isEditingDescription }"
-        >
-          <textarea
-            ref="descriptionEditorRef"
-            v-model="descriptionDraft"
-            class="overlay-title-desc"
-            :readonly="!isEditingDescription"
-            @keydown.enter.prevent="isEditingDescription && saveDescription()"
-            @blur="isEditingDescription && cancelEditDescription()"
-          ></textarea>
-        </div>
-        <div class="overlay-title-actions">
+  <div v-if="open" class="image-overlay" @click.self="handleBackdropClick">
+    <div
+      class="overlay-shell"
+      :class="{ 'chrome-hidden': chromeHidden, 'sidebar-open': sidebarOpen }"
+      @mousemove="handleUserActivity"
+      @mousedown="handleUserActivity"
+      @wheel.passive="handleUserActivity"
+      @touchstart.passive="handleUserActivity"
+    >
+      <header class="overlay-topbar" :class="{ hidden: chromeHidden }">
+        <button class="overlay-close" @click="emit('close')" aria-label="Close">
+          <v-icon>mdi-close</v-icon>
+        </button>
+        <div class="overlay-title">
           <button
-            class="title-action-btn"
+            class="overlay-desc-teaser"
             type="button"
-            title="Copy description"
-            :disabled="!canCopyDescription"
-            @click.stop="copyDescription"
-          >
-            <v-icon size="18">
-              {{
-                descriptionCopyState === "copied"
-                  ? "mdi-check-bold"
-                  : "mdi-content-copy"
-              }}
-            </v-icon>
-          </button>
-          <template v-if="isEditingDescription">
-            <button
-              class="title-action-btn"
-              type="button"
-              title="Save description"
-              :disabled="isSavingDescription"
-              @click.stop="saveDescription"
-            >
-              <v-icon size="18" :class="{ 'mdi-spin': isSavingDescription }">
-                {{ isSavingDescription ? "mdi-loading" : "mdi-content-save" }}
-              </v-icon>
-            </button>
-            <button
-              class="title-action-btn"
-              type="button"
-              title="Cancel editing"
-              :disabled="isSavingDescription"
-              @click.stop="cancelEditDescription"
-            >
-              <v-icon size="18">mdi-close</v-icon>
-            </button>
-          </template>
-          <button
-            v-else
-            class="title-action-btn"
-            type="button"
-            title="Edit description"
             :disabled="!image"
-            @click.stop="startEditDescription"
+            @click="openSidebarFromTeaser"
           >
-            <v-icon size="18">mdi-pencil</v-icon>
+            {{ descriptionTeaser || "Add a description" }}
           </button>
         </div>
-      </div>
-      <!-- Image Row -->
-      <div
-        class="overlay-img-row"
-        @touchstart="onTouchStart"
-        @touchmove="onTouchMove"
-        @touchend="onTouchEnd"
-      >
-        <div class="overlay-img-wrapper">
-          <div style="position: relative; display: inline-block">
-            <template v-if="image">
-              <video
-                v-if="isSupportedVideoFile(getOverlayFormat(image))"
-                ref="videoRef"
-                :src="getFullImageUrl(image)"
-                class="overlay-video"
-                controls
-                preload="auto"
-                playsinline
-                style="background: #111"
-                @loadedmetadata="updateOverlayDims"
-              ></video>
-              <img
-                v-else
-                ref="imgRef"
-                :src="getFullImageUrl(image)"
-                :alt="image.description || 'Full Image'"
-                class="overlay-img"
-                @load="updateOverlayDims"
-              />
-              <!-- Multiple face bbox overlays -->
+        <div class="overlay-top-actions">
+          <button
+            class="overlay-icon-btn zoom-btn"
+            type="button"
+            title="Toggle zoom"
+            aria-label="Toggle zoom"
+            @click="toggleZoom"
+          >
+            <v-icon>mdi-magnify</v-icon>
+            <span class="zoom-btn-label">{{ zoomHudLabel }}</span>
+          </button>
+          <button
+            class="overlay-icon-btn"
+            type="button"
+            title="Toggle sidebar"
+            aria-label="Toggle sidebar"
+            @click="toggleSidebar"
+          >
+            <v-icon>{{
+              sidebarOpen ? "mdi-dock-right" : "mdi-dock-right"
+            }}</v-icon>
+          </button>
+        </div>
+      </header>
+
+      <div class="overlay-main">
+        <div
+          class="overlay-canvas"
+          @touchstart="onTouchStart"
+          @touchmove="onTouchMove"
+          @touchend="onTouchEnd"
+          @dblclick="toggleZoom"
+          @wheel.prevent="onWheelZoom"
+        >
+          <div
+            class="overlay-media"
+            :style="mediaTransformStyle"
+            :class="{ panning: isPanning }"
+            @pointerdown="onPanStart"
+            @pointermove="onPanMove"
+            @pointerup="onPanEnd"
+            @pointercancel="onPanEnd"
+            @pointerleave="onPanEnd"
+          >
+            <div ref="mediaInnerRef" class="overlay-media-inner">
+              <template v-if="image">
+                <video
+                  v-if="isSupportedVideoFile(getOverlayFormat(image))"
+                  ref="videoRef"
+                  :src="getFullImageUrl(image)"
+                  class="overlay-video"
+                  controls
+                  preload="auto"
+                  playsinline
+                  :draggable="!isZoomed"
+                  @dragstart="handleMediaDragStart"
+                  @loadedmetadata="updateOverlayDims"
+                ></video>
+                <img
+                  v-else
+                  ref="imgRef"
+                  :src="getFullImageUrl(image)"
+                  :alt="image.description || 'Full Image'"
+                  class="overlay-img"
+                  :draggable="!isZoomed"
+                  @dragstart="handleMediaDragStart"
+                  @load="updateOverlayDims"
+                />
+              </template>
               <template v-if="showFaceBbox">
-                <div
-                  v-if="faceBboxes.length === 0"
-                  style="
-                    position: absolute;
-                    left: 8px;
-                    top: 8px;
-                    color: #ff5252;
-                    background: #fff2;
-                    z-index: 1001;
-                    font-size: 0.95em;
-                    padding: 2px 8px;
-                    border-radius: 4px;
-                  "
-                >
+                <div v-if="faceBboxes.length === 0" class="face-bbox-empty">
                   No face bboxes found
                 </div>
                 <div
@@ -121,16 +100,17 @@
                   :key="idx"
                   class="face-bbox-overlay"
                   :style="{
-                    position: 'absolute',
                     border: `1px solid ${faceBoxColor(idx)}`,
                     background: `${faceBoxColor(idx)}22`,
                     left: `${
-                      (face.bbox[0] * overlayDims.width) /
-                        overlayDims.naturalWidth || 0
+                      (overlayDims.offsetX || 0) +
+                        (face.bbox[0] * overlayDims.width) /
+                          overlayDims.naturalWidth || 0
                     }px`,
                     top: `${
-                      (face.bbox[1] * overlayDims.height) /
-                        overlayDims.naturalHeight || 0
+                      (overlayDims.offsetY || 0) +
+                        (face.bbox[1] * overlayDims.height) /
+                          overlayDims.naturalHeight || 0
                     }px`,
                     width: `${
                       ((face.bbox[2] - face.bbox[0]) * overlayDims.width) /
@@ -140,139 +120,244 @@
                       ((face.bbox[3] - face.bbox[1]) * overlayDims.height) /
                         overlayDims.naturalHeight || 0
                     }px`,
-                    pointerEvents: 'auto',
-                    zIndex: 1000,
-                    display: 'block',
                   }"
                 >
-                  <span
-                    style="
-                      position: absolute;
-                      left: 0;
-                      top: 0;
-                      background: #222c;
-                      color: #fff;
-                      font-size: 0.8em;
-                      padding: 1px 4px;
-                      border-bottom-right-radius: 6px;
-                    "
-                  >
+                  <span class="face-bbox-label">
                     {{ face.character_name || `Face ${idx + 1}` }}
                   </span>
                 </div>
               </template>
-            </template>
-            <div class="star-overlay" v-if="image">
-              <v-icon
-                v-for="n in 5"
-                :key="n"
-                large
-                :color="n <= (image?.score || 0) ? 'orange' : 'grey darken-2'"
-                style="cursor: pointer"
-                @click.stop="setScore(n)"
-                >mdi-star</v-icon
-              >
-            </div>
-            <!-- Toggle buttons -->
-            <div
-              style="
-                position: absolute;
-                left: 8px;
-                top: 8px;
-                z-index: 30;
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-              "
-            >
-              <button
-                @click.stop="toggleFaceBbox"
-                style="
-                  background: #fff2;
-                  color: #ff5252;
-                  border: 1px dashed red;
-                  border-radius: 4px;
-                  padding: 2px 8px;
-                  cursor: pointer;
-                  font-size: 1.2em;
-                  display: flex;
-                  align-items: center;
-                  justify-content: center;
-                  min-width: 32px;
-                  min-height: 32px;
-                "
-              >
-                <v-icon size="24" style="color: white">mdi-account</v-icon>
-              </button>
             </div>
           </div>
-        </div>
-      </div>
-      <div v-if="swipeHintVisible" class="overlay-swipe-hint">
-        <v-icon size="18">mdi-swap-horizontal</v-icon>
-        <span>Swipe to navigate</span>
-      </div>
-      <!-- Navigation Buttons (fixed, outside grid) -->
-      <button
-        class="overlay-nav overlay-nav-left"
-        @click.stop="showPrevImage"
-        aria-label="Previous"
-      >
-        <v-icon>mdi-skip-previous</v-icon>
-      </button>
-      <button
-        class="overlay-nav overlay-nav-right"
-        @click.stop="showNextImage"
-        aria-label="Next"
-      >
-        <v-icon>mdi-skip-next</v-icon>
-      </button>
-      <!-- Tag Row -->
-      <div class="overlay-tags-row">
-        <span v-for="tag in image?.tags || []" :key="tag" class="overlay-tag">
-          {{ tag }}
-          <button
-            class="tag-delete-btn"
-            @click.stop="removeTag(tag)"
-            title="Remove tag"
+
+          <div
+            class="star-overlay"
+            v-if="image"
+            :class="{ hidden: chromeHidden }"
           >
-            ×
+            <v-icon
+              v-for="n in 5"
+              :key="n"
+              large
+              :color="n <= (image?.score || 0) ? 'orange' : 'grey darken-2'"
+              style="cursor: pointer"
+              @click.stop="setScore(n)"
+              >mdi-star</v-icon
+            >
+          </div>
+
+          <button
+            class="face-bbox-toggle"
+            type="button"
+            title="Toggle face bounding boxes"
+            aria-label="Toggle face bounding boxes"
+            @click.stop="toggleFaceBbox"
+            :class="{ hidden: chromeHidden }"
+          >
+            <v-icon size="20">mdi-account</v-icon>
           </button>
-        </span>
-        <button
-          v-if="image"
-          class="tag-add-btn"
-          @click.stop="beginAddTag"
-          title="Add tag"
-        >
-          +
-        </button>
-        <input
-          v-if="addingTag"
-          ref="tagInputRef"
-          v-model="newTag"
-          @keydown.enter.prevent="confirmAddTag"
-          @blur="cancelAddTag"
-          class="tag-add-input"
-          style="
-            margin-left: 8px;
-            font-size: 1.1em;
-            border-radius: 8px;
-            border: 1px solid #bbb;
-            padding: 2px 8px;
-            min-width: 80px;
-            outline: none;
-            background: rgba(
-              255,
-              255,
-              0,
-              0.8
-            ); /* Bright semi-opaque background */
-            color: #000; /* Visible text color */
-          "
-          placeholder="New tag"
-          autofocus
-        />
+
+          <button
+            class="overlay-nav overlay-nav-left"
+            :class="{ hidden: chromeHidden }"
+            @click.stop="showPrevImage"
+            aria-label="Previous"
+          >
+            <v-icon>mdi-chevron-left</v-icon>
+          </button>
+          <button
+            class="overlay-nav overlay-nav-right"
+            :class="{ hidden: chromeHidden }"
+            @click.stop="showNextImage"
+            aria-label="Next"
+          >
+            <v-icon>mdi-chevron-right</v-icon>
+          </button>
+
+          <div class="zoom-hud" :class="{ hidden: chromeHidden }">
+            {{ zoomHudLabel }}
+          </div>
+
+          <div v-if="swipeHintVisible" class="overlay-swipe-hint">
+            <v-icon size="18">mdi-swap-horizontal</v-icon>
+            <span>Swipe to navigate</span>
+          </div>
+        </div>
+
+        <div class="overlay-rail" :class="{ hidden: chromeHidden }">
+          <div class="filmstrip-list">
+            <button
+              v-for="item in filmstripWindow"
+              :key="item.id"
+              class="filmstrip-thumb"
+              :class="{ active: item.isActive }"
+              @click.stop="selectImageByIndex(item.index)"
+              :title="item.description || 'Image'"
+            >
+              <img
+                v-if="getFilmstripThumbSrc(item)"
+                :src="getFilmstripThumbSrc(item)"
+                :alt="item.description || 'Thumbnail'"
+                loading="lazy"
+              />
+              <div v-else class="filmstrip-thumb-placeholder">
+                <v-icon size="22">
+                  {{
+                    isSupportedVideoFile(getOverlayFormat(item))
+                      ? "mdi-video"
+                      : "mdi-image"
+                  }}
+                </v-icon>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <aside class="overlay-sidebar" :class="{ open: sidebarOpen }">
+          <div class="sidebar-section">
+            <div class="section-header">
+              <span>Description</span>
+              <span class="section-meta">
+                {{ descriptionDraft.length }}
+              </span>
+            </div>
+            <div class="description-editor">
+              <textarea
+                ref="descriptionEditorRef"
+                v-model="descriptionDraft"
+                :readonly="!isEditingDescription"
+                @keydown.enter.prevent="
+                  isEditingDescription && saveDescription()
+                "
+                @keydown="handleDescriptionEditorKey"
+                @blur="isEditingDescription && cancelEditDescription()"
+              ></textarea>
+              <div class="description-actions">
+                <button
+                  class="overlay-icon-btn"
+                  type="button"
+                  title="Copy description"
+                  :disabled="!canCopyDescription"
+                  @click.stop="copyDescription"
+                >
+                  <v-icon size="18">
+                    {{
+                      descriptionCopyState === "copied"
+                        ? "mdi-check-bold"
+                        : "mdi-content-copy"
+                    }}
+                  </v-icon>
+                </button>
+                <template v-if="isEditingDescription">
+                  <button
+                    class="overlay-icon-btn"
+                    type="button"
+                    title="Save description"
+                    :disabled="isSavingDescription"
+                    @click.stop="saveDescription"
+                  >
+                    <v-icon
+                      size="18"
+                      :class="{ 'mdi-spin': isSavingDescription }"
+                    >
+                      {{
+                        isSavingDescription ? "mdi-loading" : "mdi-content-save"
+                      }}
+                    </v-icon>
+                  </button>
+                  <button
+                    class="overlay-icon-btn"
+                    type="button"
+                    title="Cancel editing"
+                    :disabled="isSavingDescription"
+                    @click.stop="cancelEditDescription"
+                  >
+                    <v-icon size="18">mdi-close</v-icon>
+                  </button>
+                </template>
+                <button
+                  v-else
+                  class="overlay-icon-btn"
+                  type="button"
+                  title="Edit description"
+                  :disabled="!image"
+                  @click.stop="startEditDescription"
+                >
+                  <v-icon size="18">mdi-pencil</v-icon>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <div class="section-header">Tags</div>
+            <div class="tag-list">
+              <span
+                v-for="tag in image?.tags || []"
+                :key="tag"
+                class="overlay-tag"
+              >
+                {{ tag }}
+                <button
+                  class="tag-delete-btn"
+                  @click.stop="removeTag(tag)"
+                  title="Remove tag"
+                >
+                  ×
+                </button>
+              </span>
+              <button
+                v-if="image"
+                class="tag-add-btn"
+                @click.stop="beginAddTag"
+                title="Add tag"
+              >
+                +
+              </button>
+              <input
+                v-if="addingTag"
+                ref="tagInputRef"
+                v-model="newTag"
+                @keydown.enter.prevent="confirmAddTag"
+                @keydown="handleTagBackspace"
+                @blur="cancelAddTag"
+                class="tag-add-input"
+                placeholder="New tag"
+              />
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <div class="section-header">Metadata</div>
+            <div v-if="!metadataEntries.length" class="metadata-empty">
+              No metadata available
+            </div>
+            <div v-else class="metadata-list">
+              <div
+                v-for="entry in metadataEntries"
+                :key="entry.key"
+                class="metadata-row"
+              >
+                <div class="metadata-key">{{ entry.key }}</div>
+                <div class="metadata-value">
+                  <span v-if="isPrimitiveValue(entry.value)">{{
+                    entry.value
+                  }}</span>
+                  <pre v-else>{{ stringifyMetadata(entry.value) }}</pre>
+                </div>
+                <button
+                  class="metadata-copy"
+                  type="button"
+                  @click.stop="copyMetadataValue(entry.value)"
+                  aria-label="Copy metadata value"
+                  title="Copy"
+                >
+                  <v-icon size="16">mdi-content-copy</v-icon>
+                </button>
+              </div>
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   </div>
@@ -302,12 +387,24 @@ const props = defineProps({
 const { open, initialImage, allImages, backendUrl } = toRefs(props);
 
 const image = ref(null);
+const sidebarOpen = ref(false);
+const filmstripOpen = ref(false);
+const chromeHidden = ref(false);
+const zoomMode = ref("fit");
+const zoomSteps = ["fit", 1, 1.5, 2];
+const pan = reactive({ x: 0, y: 0 });
+const isPanning = ref(false);
+const lastPointer = ref({ x: 0, y: 0 });
+const idleTimeoutMs = 1400;
+let chromeIdleTimer = null;
 
 // Watch for changes to initialImage and update local image copy
 watch(
   () => initialImage.value,
   (newImg) => {
     image.value = newImg ? { ...newImg } : null;
+    zoomMode.value = "fit";
+    resetPan();
   },
   { immediate: true },
 );
@@ -336,6 +433,13 @@ const canCopyDescription = computed(() => {
     : image.value?.description;
   return !!(source && source.length);
 });
+const descriptionTeaser = computed(() => {
+  const desc = image.value?.description || "";
+  const trimmed = desc.trim();
+  if (!trimmed) return "";
+  const match = trimmed.match(/[^.!?]+[.!?]?/);
+  return match ? match[0].trim() : trimmed;
+});
 let copyResetTimer = null;
 
 const addingTag = ref(false);
@@ -353,6 +457,11 @@ const hasTags = computed(() => {
 watch(open, (value) => {
   if (!value) {
     resetTagInput();
+    chromeHidden.value = false;
+    if (chromeIdleTimer) {
+      clearTimeout(chromeIdleTimer);
+      chromeIdleTimer = null;
+    }
   }
 });
 
@@ -368,6 +477,13 @@ function getFullImageUrl(targetImage = null) {
   const suffix = ext ? `.${ext}` : "";
   const cacheBuster = data.pixel_sha ? `?v=${data.pixel_sha}` : "";
   return `${backendUrl.value}/pictures/${data.id}${suffix}${cacheBuster}`;
+}
+
+function getFilmstripThumbSrc(target) {
+  if (!target) return "";
+  if (target.thumbnail) return target.thumbnail;
+  if (isSupportedVideoFile(getOverlayFormat(target))) return "";
+  return getFullImageUrl(target);
 }
 
 watch(image, () => {
@@ -446,6 +562,15 @@ function showPrevImage() {
   image.value = sorted[prevIdx];
 }
 
+function selectImageByIndex(idx) {
+  if (!Array.isArray(allImages.value)) return;
+  const target = allImages.value[idx];
+  if (target) {
+    image.value = target;
+    resetPan();
+  }
+}
+
 function showNextImage() {
   const sorted = allImages.value;
   if (!image.value || !sorted.length) return;
@@ -457,6 +582,8 @@ function showNextImage() {
 
 function handleKeydown(e) {
   if (!open.value) return;
+
+  handleUserActivity();
 
   if (isEditingDescription.value || addingTag.value) {
     // Handle editing-specific keydown behavior
@@ -472,11 +599,21 @@ function handleKeydown(e) {
 
   // Regular keydown behavior
   if (e.key === "Escape") {
+    if (sidebarOpen.value) {
+      sidebarOpen.value = false;
+      return;
+    }
     emit("close");
   } else if (["ArrowLeft", "Left"].includes(e.key)) {
     showPrevImage();
   } else if (["ArrowRight", "Right"].includes(e.key)) {
     showNextImage();
+  } else if (e.key === "z" || e.key === "Z") {
+    toggleZoom();
+  } else if (e.key === "i" || e.key === "I") {
+    toggleSidebar();
+  } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
+    tagInputRef.value?.focus();
   } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
     const score = parseInt(e.key, 10);
     if (image.value) setScore(score);
@@ -508,6 +645,156 @@ function showSwipeHint() {
   }, 2000);
 }
 
+function handleBackdropClick() {
+  emit("close");
+}
+
+function handleUserActivity() {
+  chromeHidden.value = false;
+  if (sidebarOpen.value) return;
+  if (chromeIdleTimer) {
+    clearTimeout(chromeIdleTimer);
+  }
+  chromeIdleTimer = window.setTimeout(() => {
+    chromeHidden.value = true;
+  }, idleTimeoutMs);
+}
+
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value;
+  if (sidebarOpen.value) {
+    chromeHidden.value = false;
+  } else {
+    handleUserActivity();
+  }
+}
+
+function openSidebarFromTeaser() {
+  if (!image.value) return;
+  sidebarOpen.value = true;
+  chromeHidden.value = false;
+  startEditDescription();
+}
+
+function toggleFilmstrip() {
+  filmstripOpen.value = !filmstripOpen.value;
+}
+
+function openFilmstrip() {
+  if (!isMobile.value) filmstripOpen.value = true;
+}
+
+function closeFilmstrip() {
+  if (!isMobile.value) filmstripOpen.value = false;
+}
+
+function toggleZoom() {
+  const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
+  const nextIndex = (currentIndex + 1) % zoomSteps.length;
+  zoomMode.value = zoomSteps[nextIndex];
+  if (zoomMode.value === "fit") {
+    resetPan();
+  }
+}
+
+function resetPan() {
+  pan.x = 0;
+  pan.y = 0;
+}
+
+function onPanStart(event) {
+  if (!isZoomed.value) return;
+  event.preventDefault();
+  isPanning.value = true;
+  lastPointer.value = { x: event.clientX, y: event.clientY };
+  if (event.currentTarget?.setPointerCapture) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+}
+
+function onPanMove(event) {
+  if (!isPanning.value || !isZoomed.value) return;
+  const dx = event.clientX - lastPointer.value.x;
+  const dy = event.clientY - lastPointer.value.y;
+  pan.x += dx;
+  pan.y += dy;
+  lastPointer.value = { x: event.clientX, y: event.clientY };
+}
+
+function onPanEnd() {
+  isPanning.value = false;
+  if (event?.currentTarget?.releasePointerCapture) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+}
+
+function handleMediaDragStart(event) {
+  if (isZoomed.value) {
+    event.preventDefault();
+  }
+}
+
+function onWheelZoom(event) {
+  if (!open.value) return;
+  handleUserActivity();
+  const direction = Math.sign(event.deltaY);
+  if (direction === 0) return;
+  const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
+  if (direction < 0 && currentIndex < zoomSteps.length - 1) {
+    zoomMode.value = zoomSteps[currentIndex + 1];
+  } else if (direction > 0 && currentIndex > 0) {
+    zoomMode.value = zoomSteps[currentIndex - 1];
+  }
+  if (zoomMode.value === "fit") {
+    resetPan();
+  }
+}
+
+const mediaTransformStyle = computed(() => {
+  const scale = zoomScale.value;
+  return {
+    transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+  };
+});
+
+const zoomScale = computed(() => {
+  if (zoomMode.value === "fit") return 1;
+  const renderedWidth = overlayDims.value.width || 1;
+  const renderedHeight = overlayDims.value.height || 1;
+  const naturalWidth = overlayDims.value.naturalWidth || renderedWidth;
+  const naturalHeight = overlayDims.value.naturalHeight || renderedHeight;
+  const baseScale = Math.min(
+    naturalWidth / renderedWidth,
+    naturalHeight / renderedHeight,
+  );
+  return baseScale * Number(zoomMode.value);
+});
+
+const isZoomed = computed(() => zoomScale.value > 1.01);
+
+const zoomHudLabel = computed(() => {
+  if (zoomMode.value === "fit") return "Fit";
+  return `${Math.round(Number(zoomMode.value) * 100)}%`;
+});
+
+const filmstripWindow = computed(() => {
+  const images = Array.isArray(allImages.value) ? allImages.value : [];
+  if (!images.length || !image.value) return [];
+  const currentIndex = images.findIndex((img) => img.id === image.value.id);
+  if (currentIndex === -1) return [];
+  const indices = [];
+  for (let offset = -2; offset <= 2; offset += 1) {
+    const idx = currentIndex + offset;
+    if (idx < 0 || idx >= images.length) continue;
+    indices.push(idx);
+  }
+  return indices.map((idx) => ({
+    ...images[idx],
+    index: idx,
+    isActive: idx === currentIndex,
+  }));
+});
+
 function toggleFaceBbox() {
   showFaceBbox.value = !showFaceBbox.value;
   console.log(
@@ -521,24 +808,35 @@ function toggleFaceBbox() {
 
 const imgRef = ref(null);
 const videoRef = ref(null);
+const mediaInnerRef = ref(null);
 const overlayDims = ref({
   width: 1,
   height: 1,
   naturalWidth: 1,
   naturalHeight: 1,
+  offsetX: 0,
+  offsetY: 0,
 });
 
 function updateOverlayDims() {
+  const innerEl = mediaInnerRef.value;
+  const innerRect = innerEl?.getBoundingClientRect();
   if (imgRef.value) {
-    overlayDims.value.width = imgRef.value.clientWidth;
-    overlayDims.value.height = imgRef.value.clientHeight;
+    const rect = imgRef.value.getBoundingClientRect();
+    overlayDims.value.width = rect.width || imgRef.value.clientWidth;
+    overlayDims.value.height = rect.height || imgRef.value.clientHeight;
     overlayDims.value.naturalWidth = imgRef.value.naturalWidth;
     overlayDims.value.naturalHeight = imgRef.value.naturalHeight;
+    overlayDims.value.offsetX = innerRect ? rect.left - innerRect.left : 0;
+    overlayDims.value.offsetY = innerRect ? rect.top - innerRect.top : 0;
   } else if (videoRef.value) {
-    overlayDims.value.width = videoRef.value.clientWidth;
-    overlayDims.value.height = videoRef.value.clientHeight;
+    const rect = videoRef.value.getBoundingClientRect();
+    overlayDims.value.width = rect.width || videoRef.value.clientWidth;
+    overlayDims.value.height = rect.height || videoRef.value.clientHeight;
     overlayDims.value.naturalWidth = videoRef.value.videoWidth;
     overlayDims.value.naturalHeight = videoRef.value.videoHeight;
+    overlayDims.value.offsetX = innerRect ? rect.left - innerRect.left : 0;
+    overlayDims.value.offsetY = innerRect ? rect.top - innerRect.top : 0;
   }
 }
 
@@ -559,6 +857,10 @@ onUnmounted(() => {
     clearTimeout(swipeHintTimer);
     swipeHintTimer = null;
   }
+  if (chromeIdleTimer) {
+    clearTimeout(chromeIdleTimer);
+    chromeIdleTimer = null;
+  }
   resetCopyState();
 });
 
@@ -572,6 +874,7 @@ watch(open, (isOpen) => {
     return;
   }
   showSwipeHint();
+  handleUserActivity();
 });
 
 function onTouchStart(event) {
@@ -584,6 +887,7 @@ function onTouchStart(event) {
     time: Date.now(),
   };
   touchLatest.value = { x: touch.clientX, y: touch.clientY };
+  handleUserActivity();
 }
 
 function onTouchMove(event) {
@@ -673,9 +977,104 @@ watch(
   (newId) => {
     if (newId) fetchFaceBboxes(newId);
     else faceBboxes.value = [];
+    resetPan();
   },
   { immediate: true },
 );
+
+function handleTagBackspace(event) {
+  if (event.key !== "Backspace") return;
+  if (newTag.value.trim()) return;
+  const tags = image.value?.tags || [];
+  if (!tags.length) return;
+  removeTag(tags[tags.length - 1]);
+}
+
+const metadataEntries = computed(() => {
+  const base = normalizeMetadata(image.value?.metadata);
+  const entries = Object.entries(base || {});
+  return entries.map(([key, value]) => ({ key, value }));
+});
+
+function normalizeMetadata(input) {
+  if (!input || typeof input !== "object") return {};
+  const output = {};
+  Object.entries(input).forEach(([key, value]) => {
+    output[key] = parseMetadataValue(value);
+  });
+  return output;
+}
+
+function parseMetadataValue(value) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return value;
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        return JSON.parse(trimmed);
+      } catch (e) {
+        return value;
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => parseMetadataValue(item));
+  }
+  if (value && typeof value === "object") {
+    const nested = {};
+    Object.entries(value).forEach(([k, v]) => {
+      nested[k] = parseMetadataValue(v);
+    });
+    return nested;
+  }
+  return value;
+}
+
+function stringifyMetadata(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (e) {
+    return String(value);
+  }
+}
+
+function isPrimitiveValue(value) {
+  return (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+async function copyMetadataValue(value) {
+  const text = isPrimitiveValue(value)
+    ? String(value)
+    : stringifyMetadata(value);
+  if (!text) return;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+  } catch (err) {
+    console.warn("Failed to copy metadata value:", err);
+  }
+}
 
 // Add this helper below your script setup imports
 function faceBoxColor(idx) {
@@ -836,426 +1235,575 @@ function removeTag(tag) {
 <style scoped>
 .image-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(0, 0, 0, 0.2);
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
   z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
-.overlay-content {
-  position: relative;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  grid-template-columns: 1fr;
-  height: 100vh;
+.overlay-shell {
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.6);
-  border-radius: 0px;
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
-  padding: 12px 12px 8px 12px;
-  align-items: center;
-  justify-items: center;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  --rail-width: 52px;
+  --rail-open-width: 170px;
+  --sidebar-width: 0px;
 }
 
-.overlay-title-row {
-  width: 70%;
-  display: flex;
-  background-color: #44444488;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 2;
-}
-.overlay-title-desc-shell {
-  flex: 1;
-  width: 100%;
-  padding: 4px 4px;
-  padding-right: 100px;
-  line-height: 1.1;
-  max-height: calc(1.1em * 3 + 12px); /* 3 lines max */
-  overflow-y: auto;
-  border: 1px rgb(var(--v-theme-border)) dashed;
-  border-radius: 4px;
-  scrollbar-color: #ff9800 #2b2b2b;
-  scrollbar-width: thick;
-  scrollbar-gutter: stable both-edges;
+.overlay-shell.sidebar-open {
+  --sidebar-width: 320px;
 }
 
-.overlay-title-desc-shell.editing {
-  border: 1px solid orange; /* Change to solid orange border when editing */
-}
-.overlay-title-desc {
-  flex: 1;
-  color: #eee;
-  width: 100%;
-  height: calc(1.1em * 3 + 12px); /* 3 lines max */
-  font-size: 1rem;
-  text-align: left;
-  word-break: break-word;
-  position: relative;
-  display: block;
-  border: none; /* Removed border to avoid double border issue */
-  outline: none;
-  resize: none;
-}
-.overlay-title-actions {
-  position: absolute;
-  top: 6px;
-  right: 8px;
+.overlay-topbar {
   display: flex;
-  gap: 8px;
-}
-.title-action-btn {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  background: transparent;
-  border: none;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
   color: #fff;
+  transition: opacity 0.2s ease;
+  z-index: 5;
+}
+
+.overlay-topbar.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.overlay-close {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
+}
+
+.overlay-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.overlay-title-text {
+  font-weight: 600;
+  font-size: 1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overlay-desc-teaser {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: left;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   padding: 0;
-  transition:
-    background 0.15s ease,
-    transform 0.15s ease;
-}
-.title-action-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-  transform: translateY(-1px);
-}
-.title-action-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.overlay-title-desc::-webkit-scrollbar {
-  width: 6px;
-}
-.overlay-title-desc::-webkit-scrollbar-track {
-  background: #2b2b2b;
-}
-.overlay-title-desc::-webkit-scrollbar-thumb {
-  background: #ff9800;
-}
-.overlay-title-desc.has-overflow {
-  padding-right: 40px;
-}
-.overlay-title-desc.has-overflow::before,
-.overlay-title-desc.has-overflow::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 18px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-.overlay-close {
-  position: absolute;
-  top: 8px;
-  right: 12px;
-  font-size: 2.2rem;
-  color: #fff;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  z-index: 10;
-  line-height: 1;
-  padding: 0 8px;
-  transition: color 0.2s;
-}
-.overlay-close:hover {
-  color: #ff5252;
 }
 
-.overlay-img-row {
-  position: relative;
-  width: 100%;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  min-height: 256px;
-  flex: 1 1 auto;
-  height: auto;
-  overflow: visible;
-  z-index: 1;
+.overlay-desc-teaser:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
-.overlay-img-wrapper {
-  position: relative;
+
+.overlay-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.overlay-icon-btn {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  vertical-align: middle;
+  cursor: pointer;
+}
+
+.zoom-btn {
+  width: auto;
+  min-width: 84px;
+  padding: 0 10px;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.zoom-btn .v-icon {
+  flex: 0 0 18px;
+}
+
+.zoom-btn-label {
+  min-width: 48px;
+  text-align: left;
+}
+
+.zoom-btn-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.overlay-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  height: 100%;
+  min-height: 0;
+}
+
+.overlay-canvas {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 0;
+  user-select: none;
+}
+
+.overlay-media {
+  position: relative;
   width: 100%;
   height: 100%;
   max-width: 100%;
   max-height: 100%;
-  min-height: 256px;
-  overflow: visible;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center;
+  transition: transform 0.15s ease;
+  cursor: grab;
 }
-.overlay-img {
+
+.overlay-media-inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
   max-width: 100%;
-  max-height: 90vh;
-  min-height: 256px;
-  object-fit: contain;
-  border-radius: 8px;
-  background: #111;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  max-height: 100%;
 }
+
+.overlay-media.panning {
+  transition: none;
+  cursor: grabbing;
+}
+
+.overlay-img,
 .overlay-video {
   max-width: 100%;
-  max-height: 80vh;
-  min-height: 256px;
-  object-fit: cover;
-  border-radius: 8px;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 12px;
   background: #111;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
 }
+
 .star-overlay {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 12;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
   display: flex;
-  flex-direction: row;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 4px;
-  box-shadow: none;
-  font-size: 0.85em;
-  margin: 4px 4px 4px 4px;
+  gap: 2px;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.75);
+  border-radius: 6px;
 }
-.star-overlay:hover {
-  background: rgba(255, 255, 255, 1);
+
+.star-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
 }
-.star-overlay .v-icon {
-  font-size: 20px !important;
-  width: 20px;
-  height: 20px;
+
+.face-bbox-toggle {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  border: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  cursor: pointer;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
+
+.face-bbox-toggle.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .overlay-nav {
-  position: fixed;
+  position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 3rem;
-  color: #eee;
-  background: none;
-  width: 64px;
-  height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  user-select: none;
-  z-index: 1200;
-  border: none;
-  pointer-events: auto;
-}
-.overlay-nav-left {
-  left: 24px;
-}
-.overlay-nav-right {
-  right: 24px;
-}
-.overlay-nav:hover {
-  color: orange;
-}
-
-.overlay-tags-row {
-  width: 100%;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  margin-top: 4px;
-  margin-bottom: 0;
-  text-align: center;
-  vertical-align: middle;
-  overflow: scroll;
-  min-height: 32px;
-  max-height: 72px;
-  z-index: 2;
-}
-
-.overlay-img-wrapper {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-  max-width: 100fw;
-  max-height: 100fh;
-  min-height: 256px;
-}
-
-.overlay-img {
-  max-width: 100fw;
-  max-height: 100fh;
-  min-height: 256px;
-  object-fit: cover;
-}
-
-.overlay-video {
-  max-width: 100fw;
-  max-height: 100fh;
-  min-height: 256px;
-  object-fit: cover;
-  border-radius: 8px;
-  background: #111;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-}
-
-.overlay-close {
-  position: absolute;
-  top: 8px;
-  right: 12px;
-  font-size: 2.2rem;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.35);
   color: #fff;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  z-index: 10;
-  line-height: 1;
-  padding: 0 8px;
-  transition: color 0.2s;
-}
-
-.overlay-close:hover {
-  color: #ff5252;
-}
-
-.overlay-nav {
-  position: absolute;
-  top: 50%;
-  font-size: 3rem;
-  color: #eee;
-  background: none;
-  max-width: 64px;
-  max-height: 64px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  user-select: none;
-  z-index: 1200;
+  transition: opacity 0.2s ease;
+  z-index: 4;
+}
+
+.overlay-nav.hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .overlay-nav-left {
-  left: 24px;
+  left: 16px;
 }
 
 .overlay-nav-right {
-  right: 24px;
+  right: 16px;
 }
 
-.overlay-nav:hover {
-  border: none;
-  color: orange;
+.zoom-hud {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.75rem;
+  transition: opacity 0.2s ease;
+  z-index: 4;
+}
+
+.zoom-hud.hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .overlay-swipe-hint {
-  display: none;
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  z-index: 4;
 }
 
-@media (max-width: 900px) {
-  .overlay-swipe-hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    margin: 6px auto 0;
-    background: rgba(0, 0, 0, 0.55);
-    color: #fff;
-    border-radius: 999px;
-    font-size: 0.85rem;
-    z-index: 5;
-  }
+.overlay-rail {
+  width: var(--rail-open-width);
+  background: rgba(12, 12, 12, 0.6);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 6px;
+  transition: opacity 0.2s ease;
+  overflow: hidden;
 }
 
-@media (max-width: 900px) {
-  .overlay-nav {
-    display: none;
-  }
+.overlay-rail.hidden {
+  opacity: 0;
+  pointer-events: none;
 }
-.overlay-tags {
+
+.filmstrip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  width: 100%;
+  padding-right: 4px;
+}
+
+.filmstrip-thumb {
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+}
+
+.filmstrip-thumb.active {
+  border-color: rgba(255, 183, 77, 0.95);
+  box-shadow: 0 0 0 2px rgba(255, 183, 77, 0.35);
+}
+
+.filmstrip-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.filmstrip-thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
   justify-content: center;
-  margin-bottom: 0;
-  text-align: center;
-  vertical-align: middle;
-  overflow: scroll;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.65);
 }
+
+.overlay-sidebar {
+  width: var(--sidebar-width);
+  background: rgba(18, 18, 18, 0.92);
+  color: #fff;
+  transition: width 0.2s ease;
+  overflow: hidden;
+  padding: 0;
+}
+
+.overlay-sidebar.open {
+  padding: 16px;
+}
+
+.sidebar-section {
+  margin-bottom: 20px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: #fff;
+}
+
+.section-meta {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.description-editor textarea {
+  width: 100%;
+  min-height: 120px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  padding: 8px;
+  resize: vertical;
+}
+
+.description-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .overlay-tag {
   display: inline-flex;
   align-items: center;
-  vertical-align: middle;
-  background-color: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  border-radius: 6px;
-  padding: 2px 6px 2px 6px;
-  height: 24px;
-  margin: 2px 2px 2px 2px;
-  font-size: 0.8em;
-  position: relative;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8rem;
 }
+
 .tag-delete-btn {
+  margin-left: 6px;
   background: transparent;
   border: none;
-  color: rgb(var(--v-theme-on-primary));
-  font-size: 1.2em;
-  vertical-align: top;
-  margin-left: 8px;
+  color: inherit;
   cursor: pointer;
-  line-height: 1;
-  padding: 0;
 }
+
 .tag-add-btn {
-  display: inline-flex;
-  align-items: center;
-  vertical-align: middle;
-  justify-content: center;
-  background-color: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  border-radius: 50%;
-  width: 32px;
-  height: 32px;
-  font-size: 1.15em;
-  margin: 2px 2px 2px 2px;
-  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
   border: none;
-  padding: 0;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  cursor: pointer;
 }
-.star-overlay {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 12;
+
+.tag-add-input {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.metadata-empty {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.metadata-list {
   display: flex;
-  flex-direction: row;
-  background: rgba(255, 255, 255, 0.7);
+  flex-direction: column;
+  gap: 10px;
+}
+
+.metadata-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: start;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.metadata-key {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.metadata-value {
+  font-size: 0.8rem;
+  color: #fff;
+  word-break: break-word;
+}
+
+.metadata-value pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.metadata-copy {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  justify-self: end;
+}
+
+.face-bbox-empty {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  color: #ff5252;
+  background: rgba(255, 255, 255, 0.12);
+  z-index: 1001;
+  font-size: 0.9em;
+  padding: 2px 8px;
   border-radius: 4px;
-  box-shadow: none;
-  font-size: 0.85em;
-  margin: 4px 4px 4px 4px;
 }
-.star-overlay:hover {
-  background: rgba(255, 255, 255, 1);
+
+.face-bbox-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.75rem;
+  padding: 1px 4px;
+  border-bottom-right-radius: 6px;
 }
-.star-overlay .v-icon {
-  font-size: 20px !important;
-  width: 20px;
-  height: 20px;
-}
+
 .face-bbox-overlay {
   box-sizing: border-box;
+  position: absolute;
   pointer-events: none;
-  background: rgba(255, 82, 82, 0.15); /* semi-transparent red */
   z-index: 1000 !important;
+}
+
+@media (max-width: 720px) {
+  .overlay-main {
+    grid-template-columns: 1fr;
+  }
+
+  .overlay-rail {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 100px;
+    flex-direction: row;
+    justify-content: flex-start;
+    padding: 6px 10px;
+  }
+
+  .overlay-rail.open {
+    width: 100%;
+  }
+
+  .filmstrip-list {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    width: auto;
+  }
+
+  .filmstrip-thumb {
+    width: 80px;
+    flex: 0 0 auto;
+  }
+
+  .filmstrip-thumb img {
+    height: 100%;
+    width: 100%;
+  }
+
+  .overlay-sidebar {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 0;
+  }
+
+  .overlay-sidebar.open {
+    width: 78%;
+  }
+
+  .overlay-nav {
+    display: none;
+  }
 }
 </style>
