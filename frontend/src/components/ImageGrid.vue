@@ -9,6 +9,7 @@
     @add-tag="addTagToImage"
     @remove-tag="removeTagFromImage"
     @update-description="updateDescriptionForImage"
+    @refresh-image="refreshImageFromOverlay"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -1453,6 +1454,134 @@ async function fetchImageInfo(imageId) {
   }
 }
 
+function invalidateThumbnailIndex(index) {
+  loadedRanges.value = loadedRanges.value.filter(
+    ([rangeStart, rangeEnd]) => index < rangeStart || index >= rangeEnd,
+  );
+}
+
+async function refreshGridImage(imageId) {
+  if (!imageId) return;
+  const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
+  if (idx === -1) return;
+  const latestInfo = await fetchImageInfo(imageId);
+  if (latestInfo && !Array.isArray(latestInfo)) {
+    const current = allGridImages.value[idx] || {};
+    allGridImages.value[idx] = {
+      ...current,
+      ...latestInfo,
+      idx: current.idx ?? idx,
+    };
+  }
+  invalidateThumbnailIndex(idx);
+  fetchThumbnailsBatch(idx, idx + 1);
+}
+
+function addImageToGrid(imageData) {
+  if (!imageData?.id) return null;
+  const items = allGridImages.value.slice();
+  const newIndex = items.length;
+  items.push({
+    ...imageData,
+    idx: newIndex,
+    thumbnail: imageData.thumbnail ?? null,
+  });
+  for (let i = 0; i < items.length; i += 1) {
+    items[i].idx = i;
+  }
+  allGridImages.value = items;
+  invalidateThumbnailIndex(newIndex);
+  fetchThumbnailsBatch(newIndex, newIndex + 1);
+  return newIndex;
+}
+
+async function fetchCharacterLikenessForImage(imageId) {
+  if (!imageId || !props.similarityCharacter) return null;
+  const params = new URLSearchParams();
+  params.set("reference_character_id", String(props.similarityCharacter));
+  if (props.selectedCharacter != null) {
+    params.set("character_id", String(props.selectedCharacter));
+  }
+  try {
+    const res = await apiClient.get(
+      `${props.backendUrl}/pictures/${imageId}/character_likeness?${params.toString()}`,
+    );
+    return res.data;
+  } catch (e) {
+    console.error("Failed to fetch character likeness for image:", e);
+    return null;
+  }
+}
+
+function shouldCheckViewEligibility() {
+  if (props.selectedSet) return false;
+  if (!props.selectedCharacter) return false;
+  if (props.selectedCharacter === props.allPicturesId) return false;
+  return true;
+}
+
+function shouldRemoveFromCurrentView(faces) {
+  if (!shouldCheckViewEligibility()) return false;
+  const list = Array.isArray(faces) ? faces : [];
+  const selected = String(props.selectedCharacter);
+  if (selected === props.unassignedPicturesId) {
+    return list.some((face) => face?.character_id != null);
+  }
+  return !list.some((face) => String(face?.character_id) === selected);
+}
+
+async function refreshImageFromOverlay(payload) {
+  const imageId =
+    typeof payload === "object" && payload !== null ? payload.imageId : payload;
+  const faces =
+    typeof payload === "object" && payload !== null ? payload.faces : null;
+  if (!imageId) return;
+  if (shouldRemoveFromCurrentView(faces)) {
+    removeImagesById([imageId]);
+    return;
+  }
+
+  const existingIndex = allGridImages.value.findIndex(
+    (img) => img?.id === imageId,
+  );
+  if (existingIndex === -1) {
+    const latestInfo = await fetchImageInfo(imageId);
+    if (!latestInfo || Array.isArray(latestInfo)) return;
+    addImageToGrid(latestInfo);
+  } else {
+    await refreshGridImage(imageId);
+  }
+
+  if (isCharacterLikenessSortActive()) {
+    const likenessPayload = await fetchCharacterLikenessForImage(imageId);
+    if (!likenessPayload) return;
+    if (likenessPayload.eligible === false) {
+      removeImagesById([imageId]);
+      return;
+    }
+    const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
+    if (idx !== -1) {
+      allGridImages.value[idx] = {
+        ...allGridImages.value[idx],
+        character_likeness: likenessPayload.character_likeness ?? 0.0,
+      };
+    }
+    repositionImageByLikeness(imageId);
+    return;
+  }
+
+  if (isScoreSortActive()) {
+    const gridImg = allGridImages.value.find((img) => img?.id === imageId);
+    repositionImageByScore(imageId, gridImg?.score ?? 0);
+    return;
+  }
+
+  if (isDateSortActive()) {
+    const gridImg = allGridImages.value.find((img) => img?.id === imageId);
+    repositionImageByDate(imageId, gridImg?.created_at);
+  }
+}
+
 async function openOverlay(img) {
   if (!img || !img.id) return;
   const requestedId = img.id;
@@ -1489,6 +1618,18 @@ async function setScore(img, n) {
 function isScoreSortActive() {
   return typeof props.selectedSort === "string"
     ? props.selectedSort.toUpperCase() === "SCORE"
+    : false;
+}
+
+function isDateSortActive() {
+  return typeof props.selectedSort === "string"
+    ? props.selectedSort.toUpperCase() === "DATE"
+    : false;
+}
+
+function isCharacterLikenessSortActive() {
+  return typeof props.selectedSort === "string"
+    ? props.selectedSort.toUpperCase() === "CHARACTER_LIKENESS"
     : false;
 }
 
@@ -1538,6 +1679,59 @@ function repositionImageByScore(imageId, newScore) {
   });
 }
 
+function repositionImageByDate(imageId, createdAt) {
+  const items = allGridImages.value.slice();
+  const currentIndex = items.findIndex((item) => item.id === imageId);
+  if (currentIndex === -1) return;
+
+  const target = items[currentIndex];
+  const targetTime =
+    new Date(createdAt || target.created_at || 0).getTime() || 0;
+  items.splice(currentIndex, 1);
+
+  const descending = props.selectedDescending === true;
+  let insertIndex = items.findIndex((item) => {
+    const itemTime = new Date(item.created_at || 0).getTime() || 0;
+    return descending ? itemTime < targetTime : itemTime > targetTime;
+  });
+  if (insertIndex === -1) insertIndex = items.length;
+  items.splice(insertIndex, 0, target);
+
+  for (let i = 0; i < items.length; i += 1) {
+    items[i].idx = i;
+  }
+
+  allGridImages.value = items;
+  invalidateVisibleThumbnailRanges();
+}
+
+function repositionImageByLikeness(imageId) {
+  const items = allGridImages.value.slice();
+  const currentIndex = items.findIndex((item) => item.id === imageId);
+  if (currentIndex === -1) return;
+
+  const target = items[currentIndex];
+  const targetScore =
+    target.character_likeness ?? target.likeness_score ?? target.score ?? 0;
+  items.splice(currentIndex, 1);
+
+  const descending = props.selectedDescending === true;
+  let insertIndex = items.findIndex((item) => {
+    const score =
+      item.character_likeness ?? item.likeness_score ?? item.score ?? 0;
+    return descending ? score < targetScore : score > targetScore;
+  });
+  if (insertIndex === -1) insertIndex = items.length;
+  items.splice(insertIndex, 0, target);
+
+  for (let i = 0; i < items.length; i += 1) {
+    items[i].idx = i;
+  }
+
+  allGridImages.value = items;
+  invalidateVisibleThumbnailRanges();
+}
+
 async function applyScore(img, newScore) {
   console.debug("Applying score:", newScore);
   const imageId = img.id || (overlayImage.value && overlayImage.value.id);
@@ -1577,6 +1771,7 @@ async function applyScore(img, newScore) {
     if (isScoreSortActive()) {
       repositionImageByScore(imageId, newScore);
     }
+    refreshGridImage(imageId);
     emit("refresh-sidebar");
   } catch (e) {
     alert(e.message);
@@ -2669,6 +2864,7 @@ async function removeTagFromImage(imageId, tag) {
         : [];
       overlayImage.value = { ...overlayImage.value, tags: overlayTags };
     }
+    refreshGridImage(imageId);
   } catch (error) {
     console.error("Error removing tag:", error);
   }
@@ -2704,6 +2900,7 @@ async function addTagToImage(imageId, tag) {
       }
       overlayImage.value = { ...overlayImage.value, tags };
     }
+    refreshGridImage(imageId);
   } catch (error) {
     console.error("Error adding tag:", error);
   }
@@ -2717,6 +2914,7 @@ function updateDescriptionForImage(imageId, description) {
   if (overlayImage.value && overlayImage.value.id === imageId) {
     overlayImage.value = { ...overlayImage.value, description };
   }
+  refreshGridImage(imageId);
 }
 
 onMounted(() => {

@@ -2560,6 +2560,94 @@ class Server:
             logger.info("Returning dict: " + str(pic_dict))
             return pic_dict
 
+        @self.api.get("/pictures/{id}/character_likeness")
+        async def get_picture_character_likeness(
+            id: str,
+            reference_character_id: int = Query(...),
+            character_id: str = Query(None),
+        ):
+            """Return a single picture's character likeness score."""
+            try:
+                pic_id = int(id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid picture id")
+
+            def fetch_picture_characters(session):
+                pic = session.exec(select(Picture).where(Picture.id == pic_id)).first()
+                if not pic:
+                    return None
+                char_ids = [c.id for c in pic.characters] if pic.characters else []
+                return {"character_ids": char_ids}
+
+            context = self.vault.db.run_task(fetch_picture_characters)
+            if not context:
+                raise HTTPException(status_code=404, detail="Picture not found")
+
+            def has_assigned_faces(session):
+                face = session.exec(
+                    select(Face.id).where(
+                        Face.picture_id == pic_id,
+                        Face.character_id.is_not(None),
+                    )
+                ).first()
+                return face is not None
+
+            if character_id == "UNASSIGNED" and self.vault.db.run_task(
+                has_assigned_faces
+            ):
+                return {
+                    "picture_id": pic_id,
+                    "character_likeness": None,
+                    "eligible": False,
+                }
+
+            def fetch_face_ids(session):
+                query = select(Face.id).where(Face.picture_id == pic_id)
+                if character_id == "UNASSIGNED":
+                    query = query.where(Face.character_id.is_(None))
+                elif character_id and character_id != "ALL":
+                    query = query.where(Face.character_id == int(character_id))
+                return session.exec(query).all()
+
+            face_ids = self.vault.db.run_task(fetch_face_ids)
+            if not face_ids:
+                if character_id and character_id not in ("ALL", "UNASSIGNED"):
+                    return {
+                        "picture_id": pic_id,
+                        "character_likeness": None,
+                        "eligible": False,
+                    }
+                return {
+                    "picture_id": pic_id,
+                    "character_likeness": 0.0,
+                    "eligible": True,
+                }
+
+            def fetch_character_likeness(session, ref_id, face_ids):
+                rows = session.exec(
+                    select(
+                        FaceCharacterLikeness.face_id,
+                        FaceCharacterLikeness.likeness,
+                    ).where(
+                        FaceCharacterLikeness.character_id == ref_id,
+                        FaceCharacterLikeness.face_id.in_(face_ids),
+                    )
+                ).all()
+                return {row.face_id: row.likeness for row in rows}
+
+            likeness_map = self.vault.db.run_task(
+                fetch_character_likeness, int(reference_character_id), face_ids
+            )
+            score = 0.0
+            for face_id in face_ids:
+                score = max(score, float(likeness_map.get(face_id, 0.0)))
+
+            return {
+                "picture_id": pic_id,
+                "character_likeness": score,
+                "eligible": True,
+            }
+
         @self.api.post("/pictures/{id}/tags")
         async def add_tag_to_picture(id: str, payload: dict = Body(...)):
             """

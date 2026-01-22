@@ -519,6 +519,7 @@ const emit = defineEmits([
   "remove-tag",
   "add-tag",
   "update-description",
+  "refresh-image",
 ]);
 
 const descriptionRef = ref(null);
@@ -1397,6 +1398,12 @@ async function assignFaceToCharacter(face, character) {
         return entry;
       });
     }
+    if (image.value?.id) {
+      emit("refresh-image", {
+        imageId: image.value.id,
+        faces: faceBboxes.value,
+      });
+    }
   } catch (e) {
     alert(`Failed to assign character: ${e?.message || e}`);
   }
@@ -1415,6 +1422,12 @@ async function unassignFaceCharacter(face) {
           return { ...entry, character_id: null, character_name: null };
         }
         return entry;
+      });
+    }
+    if (image.value?.id) {
+      emit("refresh-image", {
+        imageId: image.value.id,
+        faces: faceBboxes.value,
       });
     }
   } catch (e) {
