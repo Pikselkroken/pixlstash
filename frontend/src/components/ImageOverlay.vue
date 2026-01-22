@@ -494,7 +494,7 @@ const props = defineProps({
 const { open, initialImage, allImages, backendUrl } = toRefs(props);
 
 const image = ref(null);
-const sidebarOpen = ref(false);
+const sidebarOpen = ref(true);
 const filmstripOpen = ref(false);
 const chromeHidden = ref(false);
 const zoomMode = ref("fit");
