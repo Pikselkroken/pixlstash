@@ -147,6 +147,9 @@ class Vault:
         Cleanly close the vault, including stopping background workers and closing DB connection.
         """
         self.stop_workers(WorkerType.all())
+        for worker in self._workers.values():
+            worker.close()
+
         if self._picture_tagger:
             self._picture_tagger.close()
             del self._picture_tagger
@@ -248,6 +251,13 @@ class Vault:
             raise ValueError(f"Worker {worker_type} not found in vault.")
 
         return worker.watch_id(cls, object_id, attr)
+
+    def is_worker_running(self, worker_type: WorkerType) -> bool:
+        """
+        Check if a specific worker is running.
+        """
+        worker = self._workers.get(worker_type)
+        return worker is not None and worker.is_alive()
 
     def import_default_data(self, add_tagger_test_images: bool = False):
         """

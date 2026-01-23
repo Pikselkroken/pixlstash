@@ -2618,6 +2618,12 @@ class Server:
             Detects media type and sets ID as uuid + extension.
             """
 
+            if not self.vault.is_worker_running(WorkerType.FACE):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Face extraction worker is not running. Cannot import pictures.",
+                )
+
             dest_folder = self.vault.image_root
             logger.debug("Importing pictures to folder: " + str(dest_folder))
             os.makedirs(dest_folder, exist_ok=True)
@@ -2728,7 +2734,6 @@ class Server:
                     self.import_tasks[task_id]["processed"] = len(uploaded_files)
                     if new_pictures:
                         self.import_tasks[task_id]["status"] = "processing_faces"
-                        self.vault.start_workers({WorkerType.FACE})
                         face_futures = [
                             self.vault.get_worker_future(
                                 WorkerType.FACE, Picture, pic.id, "faces"

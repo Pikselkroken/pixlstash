@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 
 class FaceExtractionWorker(BaseWorker):
     INSIGHTFACE_CLEANUP_TIMEOUT = 6000  # seconds
+    _global_insightface_app = None
 
     def worker_type(self) -> WorkerType:
         return WorkerType.FACE
@@ -72,15 +73,42 @@ class FaceExtractionWorker(BaseWorker):
 
     def _init_insightface_app(self):
         if not hasattr(self, "_insightface_app"):
+            if FaceExtractionWorker._global_insightface_app is not None:
+                logger.debug("Reusing global InsightFace app")
+                self._insightface_app = FaceExtractionWorker._global_insightface_app
+                return
+
             logger.debug("initialising InsightFace with CPU only (ctx_id=-1)")
-            self._insightface_app = FaceAnalysis(
+            app = FaceAnalysis(
                 providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
             )
-            self._insightface_app.prepare(
+            app.prepare(
                 ctx_id=0 if not PictureTagger.FORCE_CPU else -1,
                 det_thresh=0.25,
                 det_size=(480, 480),
             )
+            FaceExtractionWorker._global_insightface_app = app
+            self._insightface_app = app
+
+    def close(self):
+        """
+        Clean up resources held by the worker.
+        """
+        if hasattr(self, "_insightface_app"):
+            # With singleton pattern, we just unlink the instance ref.
+            # We do NOT delete the global app so it can be reused.
+            self._insightface_app = None
+
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
     def _extract_faces(self, pics) -> List[tuple]:
         self._init_insightface_app()

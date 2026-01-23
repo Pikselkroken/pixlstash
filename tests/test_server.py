@@ -214,6 +214,7 @@ def test_upload_existing_picture():
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
             # Get a valid token
             response = client.post(
@@ -402,6 +403,8 @@ def test_pictures_stacks():
         with Server(config_path, server_config_path) as server:
             client = TestClient(server.api)
 
+            server.vault.start_workers({WorkerType.FACE})
+
             response = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
             )
@@ -573,6 +576,7 @@ def test_post_logo_altered_pixel_upload():
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -629,6 +633,7 @@ def test_benchmark_add_images_by_binary_upload():
         with Server(
             config_path=config_path, server_config_path=server_config_path
         ) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -643,7 +648,7 @@ def test_benchmark_add_images_by_binary_upload():
                 file = ("file", (f"image_{i:04d}.png", img_bytes, "image/png"))
                 files.append(file)
 
-            import_status = upload_pictures_and_wait(client, files)
+            import_status = upload_pictures_and_wait(client, files, timeout_s=60)
             end = time.time()
 
             assert import_status["status"] == "completed"

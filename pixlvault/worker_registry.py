@@ -104,6 +104,12 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
                     self.name(),
                 )
 
+    def close(self):
+        """
+        Clean up resources held by the worker.
+        """
+        pass
+
     def is_alive(self):
         """
         Check if the worker thread is alive.
