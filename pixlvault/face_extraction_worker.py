@@ -108,6 +108,7 @@ class FaceExtractionWorker(BaseWorker):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except ImportError:
+            # torch is an optional dependency; skip GPU cache cleanup if unavailable.
             pass
 
     def _extract_faces(self, pics) -> List[tuple]:
