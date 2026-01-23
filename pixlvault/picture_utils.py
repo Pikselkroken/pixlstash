@@ -77,16 +77,9 @@ class PictureUtils:
             # A: (N, D), B: (M, D) -> (N, M)
             return 0.5 * (1 + np.dot(A, B.T))
 
-        # 1. Character Similarity
-        if char_refs:
-            ref_vecs = [r["embedding"] for r in char_refs]
-            ref_weights = np.array([norm_weight(r["score"]) for r in char_refs])
-            M_ref = np.stack(ref_vecs)
-            
-            sims = sim01_batch(M_cand, M_ref)
-            weighted = sims * ref_weights
-            char_sim = np.max(weighted, axis=1)
-            scores += cfg["w_char"] * char_sim
+        # 1. Character Similarity (Uses Pre-calculated Face-Character Likeness if available)
+        # If 'character_likeness' is present in candidate dicts, use it instead of embedding similarity.
+        scores += cfg["w_char"] * np.array([c.get("character_likeness", 0.0) for c in candidates])
 
         # 2. Good Anchors
         mask_good = np.zeros(len(candidates), dtype=bool)

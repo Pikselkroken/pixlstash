@@ -20,7 +20,7 @@ import secrets
 
 from collections import defaultdict, deque
 from sqlalchemy.orm import load_only, selectinload
-from sqlalchemy import exists, desc
+from sqlalchemy import exists, desc, func
 from sqlmodel import Session, delete, select
 
 from contextlib import asynccontextmanager
@@ -840,11 +840,30 @@ class Server:
             query = query.where(Picture.image_embedding.is_not(None))
 
             candidates = session.exec(query).all()
-            return good, bad, char_refs, candidates
+
+            # Pre-fetch Face-Character Likeness Map
+            pic_likeness_map = {}
+            if character_id and character_id not in ("UNASSIGNED", "ALL"):
+                try:
+                    cid = int(character_id)
+                    stmt = (
+                        select(Face.picture_id, func.max(FaceCharacterLikeness.likeness))
+                        .join(FaceCharacterLikeness, Face.id == FaceCharacterLikeness.face_id)
+                        .where(FaceCharacterLikeness.character_id == cid)
+                        .group_by(Face.picture_id)
+                    )
+                    rows = session.exec(stmt).all()
+                    pic_likeness_map = {r[0]: r[1] for r in rows}
+                except ValueError:
+                    pass
+
+            return good, bad, char_refs, candidates, pic_likeness_map
 
         return self.vault.db.run_task(fetch_data, priority=DBPriority.IMMEDIATE)
 
-    def _prepare_smart_score_inputs(self, good_anchors, bad_anchors, char_refs, candidates):
+    def _prepare_smart_score_inputs(
+        self, good_anchors, bad_anchors, char_refs, candidates, pic_likeness_map
+    ):
         """Unpickle embeddings and prepare lists of dictionaries for calculation."""
         def get_vec(blob):
             try:
@@ -877,16 +896,17 @@ class Server:
                 cand_list.append({
                     "id": p.id, 
                     "embedding": v, 
-                    "aesthetic_score": p.aesthetic_score
+                    "aesthetic_score": p.aesthetic_score,
+                    "character_likeness": pic_likeness_map.get(p.id, 0.0)
                 })
-                
+        
         return good_list, bad_list, char_list, cand_list, cand_ids
 
     def _find_pictures_by_smart_score(
         self, character_id, format, offset, limit, descending
     ):
         # 1. Fetch data
-        good_anchors, bad_anchors, char_refs, candidates = self._fetch_smart_score_data(
+        good_anchors, bad_anchors, char_refs, candidates, pic_likeness_map = self._fetch_smart_score_data(
             character_id, format
         )
 
@@ -895,7 +915,8 @@ class Server:
 
         # 2. Prepare inputs (unpickling)
         good_list, bad_list, char_list, cand_list, cand_ids = self._prepare_smart_score_inputs(
-            good_anchors, bad_anchors, char_refs, candidates
+            good_anchors, bad_anchors, char_refs, candidates, pic_likeness_map,
+            cand_list, good_list, bad_list, char_list
         )
 
         if not cand_list:
@@ -1828,7 +1849,7 @@ class Server:
                     select(Picture).where(Picture.id.in_(picture_ids))
                 ).all()
                 return [
-                    pic.dict(exclude={"file_path", "thumbnail", "text_embedding"})
+                    pic.dict(exclude={"file_path", "thumbnail", "text_embedding", "image_embedding"})
                     for pic in pics
                 ]
 
