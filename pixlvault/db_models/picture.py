@@ -36,6 +36,7 @@ class SortMechanism:
         SCORE = auto()
         CHARACTER_LIKENESS = auto()
         PICTURE_STACKS = auto()
+        IMAGE_SIZE = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -53,6 +54,10 @@ class SortMechanism:
         Keys.PICTURE_STACKS: {
             "field": "id",
             "description": "Picture Stacks",
+        },
+        Keys.IMAGE_SIZE: {
+            "field": None,  # Special case, not a direct field
+            "description": "Image Size (width x height)",
         },
     }
 
@@ -344,13 +349,20 @@ class Picture(SQLModel, table=True):
             query = query.where(cls.format.in_(format))
 
         if sort_mech:
-            field_name = sort_mech.field
-            field = getattr(cls, field_name, None)
-            if field is not None:
+            if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
+                # Sort by width * height
                 if sort_mech.descending:
-                    query = query.order_by(field.desc())
+                    query = query.order_by((cls.width * cls.height).desc())
                 else:
-                    query = query.order_by(field.asc())
+                    query = query.order_by((cls.width * cls.height).asc())
+            else:
+                field_name = sort_mech.field
+                field = getattr(cls, field_name, None)
+                if field is not None:
+                    if sort_mech.descending:
+                        query = query.order_by(field.desc())
+                    else:
+                        query = query.order_by(field.asc())
         if offset > 0 or limit != sys.maxsize:
             query = query.offset(offset).limit(limit)
 
