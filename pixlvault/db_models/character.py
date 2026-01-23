@@ -35,7 +35,7 @@ class Character(SQLModel, table=True):
     @classmethod
     def find(
         cls, session, select_fields: Optional[List[str]] = None, **filters
-    ) -> Optional["Character"]:
+    ) -> List["Character"]:
         """
         Find characters matching the given filters.
         """
