@@ -8,9 +8,8 @@ from sqlmodel import (
 
 class FaceCharacterLikeness(SQLModel, table=True):
     """
-    Database model for the Face_likeness table.
-    Stores likeness scores for each (Face, Face) combination.
-    Note, this is NOT picture likeness, but individual face likeness.
+    Database model for the face_character_likeness table.
+    Stores likeness scores for each (Face, Character) combination.
     """
 
     face_id: int = Field(
@@ -48,12 +47,12 @@ class FaceCharacterLikeness(SQLModel, table=True):
             for r in likeness_results
         ]
 
-        result = session.execute(
+        result = session.exec(
             text("""
                 INSERT OR IGNORE INTO facecharacterlikeness (face_id, character_id, likeness, metric)
                 VALUES (:face_id, :character_id, :likeness, :metric)
             """),
-            rows,
+            params=rows,
         )
         session.commit()
         return result.rowcount

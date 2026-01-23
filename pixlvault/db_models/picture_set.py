@@ -41,8 +41,8 @@ class PictureSet(SQLModel, table=True):
     """
 
     id: int = Field(default=None, primary_key=True)
-    name: str = Field(default=None, index=True)
-    description: str = Field(default=None)
+    name: str = Field(index=True, nullable=False)
+    description: Optional[str] = Field(default=None)
 
     # Relationships
     members: List["Picture"] = Relationship(

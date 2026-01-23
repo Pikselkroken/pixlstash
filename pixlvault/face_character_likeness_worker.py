@@ -9,7 +9,6 @@ from pixlvault.db_models.picture_set import PictureSet, PictureSetMember
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.face import Face
-from pixlvault.db_models.face_likeness import FaceLikenessFrontier
 from pixlvault.picture_utils import PictureUtils
 
 logger = get_logger(__name__)
@@ -30,8 +29,6 @@ class FaceCharacterLikenessWorker(BaseWorker):
         logger.info(
             "FaceCharacterLikenessWorker: Face-Character likeness worker started."
         )
-
-        self._db.run_task(FaceLikenessFrontier.ensure_all)
 
         while not self._stop.is_set():
             start = time.time()
@@ -59,7 +56,7 @@ class FaceCharacterLikenessWorker(BaseWorker):
                 ).all()
                 picture_ids = [m.picture_id for m in members]
                 if not picture_ids:
-                    logger.warning(
+                    logger.debug(
                         f"No pictures in reference set id={reference_set.id} for character id={character_id}"
                     )
                     return []

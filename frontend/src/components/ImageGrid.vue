@@ -11,6 +11,17 @@
     @update-description="updateDescriptionForImage"
     @refresh-image="refreshImageFromOverlay"
   />
+  <InteractiveScoringOverlay
+    :open="interactiveScoringOpen"
+    :items="interactiveScoringItems"
+    :calibration-items="interactiveScoringCalibration"
+    :session="interactiveScoringSession"
+    :backendUrl="props.backendUrl"
+    @close="handleScoringClose"
+    @confirm="handleScoringConfirm"
+    @discard="handleScoringDiscard"
+    @session-update="handleScoringSessionUpdate"
+  />
   <ImageImporter
     ref="imageImporterRef"
     :backendUrl="props.backendUrl"
@@ -181,6 +192,15 @@
               @dragstart.capture="handleContainerDragStart(img, $event)"
               @dragend.capture="handleContainerDragEnd(img, $event)"
             >
+              <div
+                v-if="hasPenalizedTags(img)"
+                class="penalized-tag-indicator"
+                :title="penalizedTagsTitle(img)"
+              >
+                <v-icon size="18" color="error"
+                  >mdi-emoticon-sad-outline</v-icon
+                >
+              </div>
               <!-- Movie icon overlay for videos -->
               <div
                 v-if="isVideo(img)"
@@ -328,11 +348,13 @@
                 />
                 <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
                 <template
-                  v-if="thumbnailRefs[img.id] && thumbnailLoadedMap[img.id]"
+                  v-if="
+                    hasThumbnailRef(img.id) && getThumbnailLoadedKey(img.id)
+                  "
                 >
                   <div
                     v-for="overlay in getFaceBboxOverlays(img).value"
-                    :key="overlay.faceId + '-' + thumbnailLoadedMap[img.id]"
+                    :key="overlay.faceId + '-' + getThumbnailLoadedKey(img.id)"
                     class="face-bbox-overlay"
                     :style="overlay.style"
                     draggable="true"
@@ -457,11 +479,11 @@
               v-if="
                 typeof props.selectedSort === 'string' &&
                 props.selectedSort.includes('SMART_SCORE') &&
-                img.smartScore !== undefined
+                typeof img.smartScore === 'number'
               "
               class="likeness-score"
             >
-              Smart Score: {{ img.smartScore.toFixed(1) }}
+              Smart Score: {{ img.smartScore.toFixed(2) }}
             </div>
             <div
               v-if="
@@ -518,6 +540,17 @@
       <span> Search result found {{ allGridImages.length }} items </span>
       <v-btn color="primary" @click="clearSearchQuery">Clear</v-btn>
     </div>
+    <div
+      v-if="isSmartScoreSortActive() && unscoredCount > 5"
+      class="smart-score-bar"
+      :style="{ bottom: `${smartScoreBarOffset}px` }"
+    >
+      <span>
+        Score these images with a few quick choices ({{ unscoredCount }} items
+        with no score)
+      </span>
+      <v-btn color="primary" @click="handleStartScoring"> Start Scoring </v-btn>
+    </div>
   </div>
 </template>
 
@@ -542,6 +575,7 @@ import {
 } from "../utils/media.js";
 import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
+import InteractiveScoringOverlay from "./InteractiveScoringOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
 import { useSearchOverlay } from "../utils/useSearchOverlay";
 import { apiClient } from "../utils/apiClient";
@@ -552,6 +586,8 @@ const emit = defineEmits([
   "refresh-sidebar",
   "clear-search",
   "reset-to-all",
+  "start-scoring",
+  "update:selected-sort",
 ]);
 
 // Props
@@ -580,10 +616,10 @@ const STACK_COLOR_STEP = 47;
 const MIN_THUMBNAIL_SIZE = 128;
 const MAX_THUMBNAIL_SIZE = 384;
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
-// Store refs for each thumbnail image
-const thumbnailRefs = reactive({});
-const thumbnailContainerRefs = reactive({});
-const dragPreviewRefs = reactive({});
+// Store refs for each thumbnail image (non-reactive to avoid render feedback loops)
+const thumbnailRefs = {};
+const thumbnailContainerRefs = {};
+const dragPreviewRefs = {};
 const thumbnailLoadedMap = reactive({});
 const PREFETCHED_FULL_IMAGE_LIMIT = 12;
 const fullImagePrefetchControllers = new Map();
@@ -618,6 +654,9 @@ const previousImageIds = new Set();
 const hasLoadedOnce = ref(false);
 const highlightNextFetch = ref(false);
 const lastWsUpdateKey = ref(0);
+const preserveScrollOnNextFetch = ref(false);
+const pendingScrollTop = ref(null);
+const skipNextWsRefresh = ref(false);
 
 // Key to force face bbox overlay recompute
 const faceOverlayRedrawKey = ref(0);
@@ -766,7 +805,15 @@ watch(
   (nextKey) => {
     if (!nextKey || nextKey === lastWsUpdateKey.value) return;
     lastWsUpdateKey.value = nextKey;
+    const scrollTop = scrollWrapper.value?.scrollTop ?? 0;
+    const threshold = rowHeight.value * 0.5;
+    if (scrollTop > threshold) {
+      skipNextWsRefresh.value = true;
+      preserveScrollOnNextFetch.value = false;
+      return;
+    }
     highlightNextFetch.value = true;
+    preserveScrollOnNextFetch.value = true;
   },
 );
 
@@ -799,7 +846,6 @@ function setThumbnailRef(id, el) {
     thumbnailRefs[id] = el;
   } else {
     delete thumbnailRefs[id];
-    delete thumbnailLoadedMap[id];
   }
 }
 
@@ -817,6 +863,14 @@ function setThumbnailContainerRef(id, el) {
   } else {
     delete thumbnailContainerRefs[id];
   }
+}
+
+function hasThumbnailRef(id) {
+  return Boolean(id && thumbnailRefs[id]);
+}
+
+function getThumbnailLoadedKey(id) {
+  return thumbnailLoadedMap[id] || 0;
 }
 
 // --- Multi-face selection state ---
@@ -928,8 +982,6 @@ function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
 
 function getFaceBboxOverlays(img) {
   return computed(() => {
-    void thumbnailLoadedMap[img.id];
-    void thumbnailRefs[img.id];
     void faceOverlayRedrawKey.value; // depend on redraw key
     void selectedFaceIds.value;
     if (
@@ -1469,11 +1521,25 @@ watch(
     console.log(
       "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
     );
+    if (skipNextWsRefresh.value) {
+      skipNextWsRefresh.value = false;
+      return;
+    }
+    if (preserveScrollOnNextFetch.value && scrollWrapper.value) {
+      pendingScrollTop.value = scrollWrapper.value.scrollTop;
+    } else {
+      pendingScrollTop.value = null;
+    }
     resetThumbnailState();
-    allGridImages.value = [];
-    selectedImageIds.value = [];
-    lastSelectedIndex = null;
+    if (!preserveScrollOnNextFetch.value) {
+      allGridImages.value = [];
+      selectedImageIds.value = [];
+      lastSelectedIndex = null;
+    }
     debouncedFetchAllGridImages();
+    if (preserveScrollOnNextFetch.value) {
+      preserveScrollOnNextFetch.value = false;
+    }
     fetchAllPicturesCount();
   },
 );
@@ -1560,11 +1626,17 @@ watch(
 );
 
 // --- Overlay ---
-async function fetchImageInfo(imageId) {
+async function fetchImageInfo(imageId, options = {}) {
   try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${imageId}/metadata`,
-    );
+    const params = new URLSearchParams();
+    if (options.smartScore) {
+      params.set("smart_score", "true");
+    }
+    const query = params.toString();
+    const url = query
+      ? `${props.backendUrl}/pictures/${imageId}/metadata?${query}`
+      : `${props.backendUrl}/pictures/${imageId}/metadata`;
+    const res = await apiClient.get(url);
     const data = await res.data;
     return data;
   } catch (e) {
@@ -1583,7 +1655,9 @@ async function refreshGridImage(imageId) {
   if (!imageId) return;
   const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
   if (idx === -1) return;
-  const latestInfo = await fetchImageInfo(imageId);
+  const latestInfo = await fetchImageInfo(imageId, {
+    smartScore: isSmartScoreSortActive(),
+  });
   if (latestInfo && !Array.isArray(latestInfo)) {
     const current = allGridImages.value[idx] || {};
     allGridImages.value[idx] = {
@@ -1667,8 +1741,13 @@ async function refreshImageFromOverlay(payload) {
     const latestInfo = await fetchImageInfo(imageId);
     if (!latestInfo || Array.isArray(latestInfo)) return;
     addImageToGrid(latestInfo);
-  } else {
+  } else if (!isSmartScoreSortActive()) {
     await refreshGridImage(imageId);
+  }
+
+  if (isSmartScoreSortActive()) {
+    await refreshSmartScoreForImage(imageId);
+    return;
   }
 
   if (isCharacterLikenessSortActive()) {
@@ -1754,7 +1833,7 @@ function isCharacterLikenessSortActive() {
 
 function isSmartScoreSortActive() {
   return typeof props.selectedSort === "string"
-    ? props.selectedSort === "SMART_SCORE"
+    ? props.selectedSort.toUpperCase().includes("SMART_SCORE")
     : false;
 }
 
@@ -1858,6 +1937,104 @@ function repositionImageByLikeness(imageId) {
   invalidateVisibleThumbnailRanges();
 }
 
+let smartScoreRepositioning = false;
+
+function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
+  if (smartScoreRepositioning) {
+    console.debug("[SmartScore] Reposition skipped (lock active):", imageId);
+    return;
+  }
+  smartScoreRepositioning = true;
+  try {
+    const items = allGridImages.value.slice();
+    const currentIndex = items.findIndex((item) => item.id === imageId);
+    if (currentIndex === -1) {
+      console.debug("[SmartScore] Reposition skipped (not in grid):", imageId);
+      return;
+    }
+
+    const targetScore = smartScore ?? 0;
+    const target = {
+      ...items[currentIndex],
+      ...(latestInfo && typeof latestInfo === "object" ? latestInfo : {}),
+      smartScore: targetScore,
+      thumbnail:
+        items[currentIndex]?.thumbnail ?? latestInfo?.thumbnail ?? null,
+    };
+    items.splice(currentIndex, 1);
+
+    const descending = props.selectedDescending === true;
+    let insertIndex = items.findIndex((item) => {
+      const score = item.smartScore ?? 0;
+      return descending ? score < targetScore : score > targetScore;
+    });
+    if (insertIndex === -1) insertIndex = items.length;
+    console.debug("[SmartScore] Reposition", {
+      imageId,
+      currentIndex,
+      insertIndex,
+      targetScore,
+      descending,
+    });
+    if (insertIndex === currentIndex) {
+      const updated = allGridImages.value.slice();
+      updated[currentIndex] = { ...target, idx: currentIndex };
+      allGridImages.value = updated;
+      return;
+    }
+    items.splice(insertIndex, 0, target);
+
+    for (let i = 0; i < items.length; i += 1) {
+      items[i].idx = i;
+    }
+
+    allGridImages.value = items;
+    invalidateVisibleThumbnailRanges();
+  } finally {
+    smartScoreRepositioning = false;
+  }
+}
+
+async function refreshSmartScoreForImage(imageId) {
+  if (!imageId || !isSmartScoreSortActive()) return;
+  console.debug("[SmartScore] Refresh requested", {
+    imageId,
+    sort: props.selectedSort,
+  });
+  const latestInfo = await fetchImageInfo(imageId, { smartScore: true });
+  if (!latestInfo || Array.isArray(latestInfo)) return;
+
+  const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
+  if (idx !== -1) {
+    const current = allGridImages.value[idx] || {};
+    const smartScore =
+      typeof latestInfo.smartScore === "number" ? latestInfo.smartScore : null;
+    console.debug("[SmartScore] Refresh result", {
+      imageId,
+      smartScore,
+    });
+    if (current.smartScore === smartScore) {
+      console.debug("[SmartScore] No score change; skipping reposition", {
+        imageId,
+      });
+      return;
+    }
+    await nextTick();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    repositionImageBySmartScore(imageId, smartScore ?? 0, latestInfo);
+  }
+
+  if (overlayImage.value && overlayImage.value.id === imageId) {
+    overlayImage.value = {
+      ...overlayImage.value,
+      smartScore:
+        typeof latestInfo.smartScore === "number"
+          ? latestInfo.smartScore
+          : null,
+    };
+  }
+}
+
 async function applyScore(img, newScore) {
   console.debug("Applying score:", newScore);
   const imageId = img.id || (overlayImage.value && overlayImage.value.id);
@@ -1885,6 +2062,21 @@ async function applyScore(img, newScore) {
     if (gridImg) {
       gridImg.score = newScore;
     }
+    if (interactiveScoringSession.value?.provisionalMap) {
+      const updatedMap = { ...interactiveScoringSession.value.provisionalMap };
+      if (updatedMap[imageId] != null) {
+        delete updatedMap[imageId];
+        interactiveScoringSession.value = {
+          ...interactiveScoringSession.value,
+          provisionalMap: updatedMap,
+        };
+      }
+    }
+    if (interactiveScoringItems.value?.length) {
+      interactiveScoringItems.value = interactiveScoringItems.value.filter(
+        (item) => item.id !== imageId,
+      );
+    }
     // Update overlay image if open and matches
     if (
       overlayOpen.value &&
@@ -1897,11 +2089,129 @@ async function applyScore(img, newScore) {
     if (isScoreSortActive()) {
       repositionImageByScore(imageId, newScore);
     }
-    refreshGridImage(imageId);
+    if (isSmartScoreSortActive()) {
+      preserveScrollOnNextFetch.value = true;
+      debouncedFetchAllGridImages();
+    } else {
+      refreshGridImage(imageId);
+    }
     emit("refresh-sidebar");
   } catch (e) {
     alert(e.message);
   }
+}
+
+async function applyScoresForSelection(imageIds, targetScore) {
+  const ids = Array.isArray(imageIds) ? imageIds.filter(Boolean) : [];
+  if (!ids.length) return;
+  if (!Number.isFinite(targetScore)) return;
+
+  const gridById = new Map(
+    allGridImages.value
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+
+  const entries = [];
+  for (const id of ids) {
+    const key = String(id);
+    const img = gridById.get(key);
+    if (!img) continue;
+    const current = Number(img.score || 0);
+    const nextScore = current === targetScore ? 0 : targetScore;
+    entries.push([key, nextScore]);
+  }
+
+  if (!entries.length) return;
+
+  const chunkSize = 50;
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(([id, score]) =>
+        apiClient.patch(`${props.backendUrl}/pictures/${id}`, {
+          score,
+        }),
+      ),
+    );
+  }
+
+  const scoreMap = new Map(
+    entries.map(([id, score]) => [String(id), Number(score)]),
+  );
+
+  let updatedImages = allGridImages.value.map((img) => {
+    if (!img || img.id == null) return img;
+    const key = String(img.id);
+    if (!scoreMap.has(key)) return img;
+    return { ...img, score: scoreMap.get(key) };
+  });
+
+  if (interactiveScoringSession.value?.provisionalMap) {
+    const updatedMap = { ...interactiveScoringSession.value.provisionalMap };
+    let changed = false;
+    for (const key of scoreMap.keys()) {
+      if (updatedMap[key] != null) {
+        delete updatedMap[key];
+        changed = true;
+      }
+    }
+    if (changed) {
+      interactiveScoringSession.value = {
+        ...interactiveScoringSession.value,
+        provisionalMap: updatedMap,
+      };
+    }
+  }
+
+  if (interactiveScoringItems.value?.length) {
+    const removeSet = new Set(Array.from(scoreMap.keys()));
+    const filtered = interactiveScoringItems.value.filter(
+      (item) => !removeSet.has(String(item.id)),
+    );
+    if (filtered.length !== interactiveScoringItems.value.length) {
+      interactiveScoringItems.value = filtered;
+    }
+  }
+
+  if (
+    overlayOpen.value &&
+    overlayImage.value &&
+    scoreMap.has(String(overlayImage.value.id))
+  ) {
+    overlayImage.value = {
+      ...overlayImage.value,
+      score: scoreMap.get(String(overlayImage.value.id)),
+    };
+  }
+
+  if (isScoreSortActive()) {
+    const descending = props.selectedDescending === true;
+    updatedImages = updatedImages
+      .slice()
+      .sort((a, b) => {
+        const aScore = a?.score ?? 0;
+        const bScore = b?.score ?? 0;
+        if (aScore === bScore) {
+          const aIdx = a?.idx ?? 0;
+          const bIdx = b?.idx ?? 0;
+          return aIdx - bIdx;
+        }
+        return descending ? bScore - aScore : aScore - bScore;
+      })
+      .map((img, idx) => (img ? { ...img, idx } : img));
+    allGridImages.value = updatedImages;
+    invalidateVisibleThumbnailRanges();
+  } else {
+    allGridImages.value = updatedImages;
+  }
+
+  if (isSmartScoreSortActive()) {
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+  }
+
+  emit("refresh-sidebar");
 }
 
 // Drag-and-drop overlay handlers
@@ -2203,7 +2513,10 @@ async function fetchAllGridImages() {
       props.selectedSet !== props.allPicturesId &&
       props.selectedSet !== props.unassignedPicturesId
     ) {
-      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
+      const params = buildPictureIdsQueryParams();
+      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${
+        params ? `?${params}` : ""
+      }`;
       const requestStart = performance.now();
       const res = await apiClient.get(url);
       const requestEnd = performance.now();
@@ -2272,13 +2585,35 @@ async function fetchAllGridImages() {
     highlightNextFetch.value = false;
     hasLoadedOnce.value = true;
     const mapStart = performance.now();
-    const newImages = images.map((img, i) => ({
-      ...img,
-      idx: i,
-      thumbnail: null,
-    }));
+    const existingById = new Map(
+      allGridImages.value
+        .filter((img) => img && img.id != null)
+        .map((img) => [img.id, img]),
+    );
+    const uniqueImages = Array.isArray(images)
+      ? (() => {
+          const seen = new Set();
+          return images.filter((img) => {
+            const id = img?.id;
+            if (id == null) return true;
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+        })()
+      : [];
+    const newImages = uniqueImages.map((img, i) => {
+      const existing = img?.id ? existingById.get(img.id) : null;
+      return {
+        ...img,
+        idx: i,
+        thumbnail: existing?.thumbnail ?? null,
+      };
+    });
     const mapEnd = performance.now();
-    console.log("Updating allGridImages with fetched images:", newImages);
+    console.log("Updating allGridImages with fetched images:", {
+      count: newImages.length,
+    });
     allGridImages.value = newImages;
     const assignEnd = performance.now();
     const cols = props.columns || 1;
@@ -2317,6 +2652,18 @@ async function fetchAllGridImages() {
     imagesLoading.value = false;
   }
   updateVisibleThumbnails();
+  if (pendingScrollTop.value !== null && scrollWrapper.value) {
+    const targetTop = pendingScrollTop.value;
+    pendingScrollTop.value = null;
+    nextTick(() => {
+      if (!scrollWrapper.value) return;
+      const maxScroll =
+        scrollWrapper.value.scrollHeight - scrollWrapper.value.clientHeight;
+      const clamped = Math.max(0, Math.min(targetTop, maxScroll));
+      scrollWrapper.value.scrollTop = clamped;
+      updateVisibleThumbnails();
+    });
+  }
 }
 
 async function fetchAllPicturesCount() {
@@ -2350,21 +2697,6 @@ watch(
     lastSelectedIndex = null;
     initialRender.value = true;
     updateSelectedGroupName();
-    debouncedFetchAllGridImages();
-  },
-);
-
-watch(
-  () => props.gridVersion,
-  () => {
-    console.log(
-      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
-    );
-    resetThumbnailState();
-    allGridImages.value = [];
-    selectedImageIds.value = [];
-    lastSelectedIndex = null;
-    initialRender.value = true;
     debouncedFetchAllGridImages();
   },
 );
@@ -2414,6 +2746,9 @@ function resetThumbnailState() {
     thumbFetchTimeout = null;
   }
   thumbnailRequestEpoch.value += 1;
+  for (const key of Object.keys(thumbnailLoadedMap)) {
+    delete thumbnailLoadedMap[key];
+  }
 }
 
 function rangeCovers(ranges, start, end) {
@@ -2569,15 +2904,6 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
   }, EMPTY_STATE_DELAY_MS);
 });
 
-watch(allGridImages, (newVal, oldVal) => {
-  console.log("[ImageGrid.vue] allGridImages updated:", {
-    oldLength: oldVal.length,
-    newLength: newVal.length,
-    oldValue: oldVal,
-    newValue: newVal,
-  });
-});
-
 const gridImagesToRender = computed(() => {
   if (!allGridImages.value) {
     console.warn("allGridImages is undefined");
@@ -2586,15 +2912,6 @@ const gridImagesToRender = computed(() => {
 
   const filtered = filterImagesByMediaType(allGridImages.value);
   return filtered.slice(renderStart.value, renderEnd.value);
-});
-
-watch(gridImagesToRender, (newVal, oldVal) => {
-  console.log("[ImageGrid.vue] gridImagesToRender updated:", {
-    oldLength: oldVal.length,
-    newLength: newVal.length,
-    oldValue: oldVal,
-    newValue: newVal,
-  });
 });
 
 // Batch fetch metadata (including thumbnail) for visible range
@@ -2627,7 +2944,10 @@ async function fetchThumbnailsBatch(start, end) {
       props.selectedSet !== props.allPicturesId &&
       props.selectedSet !== props.unassignedPicturesId
     ) {
-      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
+      const params = buildPictureIdsQueryParams();
+      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${
+        params ? `?${params}` : ""
+      }`;
       const requestStart = performance.now();
       const res = await apiClient.get(url);
       const requestEnd = performance.now();
@@ -2684,6 +3004,10 @@ async function fetchThumbnailsBatch(start, end) {
             : null;
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
+        gridImg.penalized_tags =
+          thumbObj && Array.isArray(thumbObj.penalized_tags)
+            ? thumbObj.penalized_tags
+            : [];
         if (thumbObj) {
           const thumbWidth = Number(thumbObj.thumbnail_width);
           const thumbHeight = Number(thumbObj.thumbnail_height);
@@ -2749,6 +3073,16 @@ function updateVisibleThumbnails() {
     console.log("[ImageGrid.vue] Fetching thumbnails batch:", { start, end });
     await fetchThumbnailsBatch(start, end);
   }, 80);
+}
+
+function hasPenalizedTags(img) {
+  return Array.isArray(img?.penalized_tags) && img.penalized_tags.length > 0;
+}
+
+function penalizedTagsTitle(img) {
+  const tags = Array.isArray(img?.penalized_tags) ? img.penalized_tags : [];
+  if (!tags.length) return "";
+  return `Penalized tags: ${tags.join(", ")}`;
 }
 
 function onGridScroll(e) {
@@ -2918,10 +3252,12 @@ function handleImageCardClick(img, idx, event) {
     }
     lastSelectedIndex = idx;
   } else if (isShift && lastSelectedIndex !== null) {
-    // Range select: select only the contiguous range between anchor and clicked item
+    // Range select: select only the contiguous range between anchor and clicked item, using the visible grid
     const start = Math.min(lastSelectedIndex, idx);
     const end = Math.max(lastSelectedIndex, idx);
-    newSelection = allGridImages.value
+    // Use gridImagesToRender for visible grid selection
+    const visibleGrid = gridImagesToRender.value;
+    newSelection = visibleGrid
       .slice(start, end + 1)
       .map((i) => i.id)
       .filter(Boolean);
@@ -2930,7 +3266,9 @@ function handleImageCardClick(img, idx, event) {
     newSelection = [img.id];
     lastSelectedIndex = idx;
   } else {
-    return;
+    // Single click (no ctrl/shift): select only this image
+    newSelection = [img.id];
+    lastSelectedIndex = idx;
   }
   selectedImageIds.value = newSelection;
   console.log("New selection:", newSelection);
@@ -2990,7 +3328,11 @@ async function removeTagFromImage(imageId, tag) {
         : [];
       overlayImage.value = { ...overlayImage.value, tags: overlayTags };
     }
-    refreshGridImage(imageId);
+    if (isSmartScoreSortActive()) {
+      await refreshSmartScoreForImage(imageId);
+    } else {
+      refreshGridImage(imageId);
+    }
   } catch (error) {
     console.error("Error removing tag:", error);
   }
@@ -3026,7 +3368,11 @@ async function addTagToImage(imageId, tag) {
       }
       overlayImage.value = { ...overlayImage.value, tags };
     }
-    refreshGridImage(imageId);
+    if (isSmartScoreSortActive()) {
+      await refreshSmartScoreForImage(imageId);
+    } else {
+      refreshGridImage(imageId);
+    }
   } catch (error) {
     console.error("Error adding tag:", error);
   }
@@ -3076,17 +3422,22 @@ function handleKeyDown(event) {
     console.log("[CTRL+A] selectedImageIds:", selectedImageIds.value);
     lastSelectedIndex = null;
   } else if (
-    hoveredImageIdx.value !== null &&
-    selectedImageIds.value.length === 0 &&
+    (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
     !overlayOpen.value &&
     /^[1-5]$|^0$/.test(event.key)
   ) {
     // Number key pressed, set score for hovered image
+    if (selectedImageIds.value.length > 0) {
+      const score = parseInt(event.key, 10);
+      const ids = selectedImageIds.value.slice();
+      applyScoresForSelection(ids, score);
+      event.preventDefault();
+      return;
+    }
     const idx = hoveredImageIdx.value;
     const img = allGridImages.value[idx];
     if (img && img.id) {
       let score = parseInt(event.key, 10);
-      if (score === 0) score = 5;
       setScore(img, score);
       event.preventDefault();
     }
@@ -3163,6 +3514,7 @@ function sleep(ms) {
 async function exportCurrentViewToZip(options = {}) {
   const captionMode = options.captionMode || "description";
   const includeCharacterName = options.includeCharacterName !== false;
+  const resolution = options.resolution || "original";
   let url = `${props.backendUrl}/pictures/export`;
   const params = buildPictureIdsQueryParams();
   const extraParams = new URLSearchParams();
@@ -3171,6 +3523,9 @@ async function exportCurrentViewToZip(options = {}) {
   }
   if (includeCharacterName) {
     extraParams.append("include_character_name", "true");
+  }
+  if (resolution) {
+    extraParams.append("resolution", resolution);
   }
   const extraParamString = extraParams.toString();
   if (params) {
@@ -3288,6 +3643,162 @@ function clearSearchQuery() {
 
 function handleEmptyStateReset() {
   emit("reset-to-all");
+}
+
+function handleStartScoring() {
+  const scope = buildInteractiveScoringItems();
+  if (!scope.length) return;
+  const scopeKey = buildScoringScopeKey(scope);
+  if (
+    !interactiveScoringSession.value ||
+    interactiveScoringSession.value.scopeKey !== scopeKey
+  ) {
+    interactiveScoringSession.value = { scopeKey };
+  }
+  interactiveScoringCalibration.value = buildScoringCalibrationItems();
+  interactiveScoringItems.value = scope;
+  interactiveScoringOpen.value = true;
+  emit("start-scoring");
+}
+
+const smartScoreBarOffset = computed(() => {
+  return props.searchQuery && props.searchQuery.length > 0 ? 44 : 0;
+});
+
+const unscoredCount = computed(() => {
+  const list = Array.isArray(allGridImages.value) ? allGridImages.value : [];
+  let count = 0;
+  for (const img of list) {
+    if (!img || !img.id) continue;
+    const score = typeof img.score === "number" ? img.score : 0;
+    if (score <= 0) count += 1;
+  }
+  return count;
+});
+
+const interactiveScoringOpen = ref(false);
+const interactiveScoringItems = ref([]);
+const interactiveScoringSession = ref(null);
+const interactiveScoringCalibration = ref([]);
+
+function buildScoringScopeKey(items) {
+  return items.map((item) => String(item.id)).join(",");
+}
+
+function buildInteractiveScoringItems() {
+  const filtered = filterImagesByMediaType(allGridImages.value || []);
+  const scope = filtered.filter((img) => {
+    const score = typeof img?.score === "number" ? img.score : 0;
+    return img && img.id && typeof img.smartScore === "number" && score <= 0;
+  });
+  return scope
+    .map((img) => ({
+      id: img.id,
+      smartScore: Number(img.smartScore),
+      created_at: img.created_at || null,
+      format: img.format || null,
+      pixel_sha: img.pixel_sha || null,
+      thumbnail: img.thumbnail || null,
+    }))
+    .sort((a, b) => {
+      if (b.smartScore !== a.smartScore) {
+        return b.smartScore - a.smartScore;
+      }
+      if (a.created_at && b.created_at && a.created_at !== b.created_at) {
+        return a.created_at > b.created_at ? 1 : -1;
+      }
+      return String(a.id).localeCompare(String(b.id));
+    });
+}
+
+function buildScoringCalibrationItems() {
+  const filtered = filterImagesByMediaType(allGridImages.value || []);
+  return filtered
+    .filter((img) => {
+      const score = typeof img?.score === "number" ? img.score : 0;
+      return img && img.id && typeof img.smartScore === "number" && score > 0;
+    })
+    .map((img) => ({
+      id: img.id,
+      smartScore: Number(img.smartScore),
+      score: Number(img.score),
+      created_at: img.created_at || null,
+      format: img.format || null,
+      pixel_sha: img.pixel_sha || null,
+      thumbnail: img.thumbnail || null,
+    }));
+}
+
+function handleScoringSessionUpdate(session) {
+  if (!session) return;
+  interactiveScoringSession.value = {
+    ...interactiveScoringSession.value,
+    ...session,
+  };
+}
+
+async function applyScoresBulk(provisionalMap) {
+  const entries = Object.entries(provisionalMap || {});
+  if (!entries.length) return;
+  const chunkSize = 25;
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(([id, stars]) =>
+        apiClient.patch(`${props.backendUrl}/pictures/${id}`, {
+          score: stars,
+        }),
+      ),
+    );
+  }
+
+  const scoreMap = new Map(
+    entries.map(([id, stars]) => [String(id), Number(stars)]),
+  );
+  allGridImages.value = allGridImages.value.map((img) => {
+    if (!img || !img.id) return img;
+    const key = String(img.id);
+    if (!scoreMap.has(key)) return img;
+    return { ...img, score: scoreMap.get(key) };
+  });
+}
+
+async function handleScoringConfirm(payload) {
+  const provisionalMap = payload?.provisionalMap || {};
+  await applyScoresBulk(provisionalMap);
+  emit("update:selected-sort", { sort: "SCORE", descending: true });
+
+  if (payload?.continueScoring) {
+    if (!interactiveScoringItems.value.length) {
+      interactiveScoringOpen.value = false;
+      interactiveScoringSession.value = null;
+      return;
+    }
+    interactiveScoringSession.value = {
+      ...interactiveScoringSession.value,
+      roundNumber: (payload?.roundNumber || 1) + 1,
+      roundOneMap: payload?.roundOneMap || {},
+    };
+    interactiveScoringCalibration.value = buildScoringCalibrationItems();
+    interactiveScoringOpen.value = false;
+    await nextTick();
+    interactiveScoringOpen.value = true;
+    return;
+  }
+
+  interactiveScoringOpen.value = false;
+  interactiveScoringItems.value = [];
+  interactiveScoringSession.value = null;
+}
+
+function handleScoringDiscard() {
+  interactiveScoringOpen.value = false;
+  interactiveScoringItems.value = [];
+  interactiveScoringSession.value = null;
+}
+
+function handleScoringClose() {
+  interactiveScoringOpen.value = false;
 }
 </script>
 
@@ -3632,6 +4143,21 @@ function handleEmptyStateReset() {
   border-radius: 8px;
 }
 
+.penalized-tag-indicator {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border-radius: none;
+  z-index: 30;
+  pointer-events: auto;
+}
+
 /* Add a button to trigger the search overlay */
 .search-button {
   position: fixed;
@@ -3667,6 +4193,19 @@ function handleEmptyStateReset() {
   width: 100%;
   z-index: 200;
   background-color: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.smart-score-bar {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  z-index: 190;
+  background-color: rgba(245, 245, 245, 0.95);
   display: flex;
   align-items: center;
   justify-content: space-between;

@@ -121,12 +121,12 @@ class PictureLikeness(SQLModel, table=True):
             }
             for r in likeness_results
         ]
-        session.execute(
+        session.exec(
             text("""
                 INSERT OR IGNORE INTO picturelikeness (picture_id_a, picture_id_b, likeness, metric)
                 VALUES (:picture_id_a, :picture_id_b, :likeness, :metric)
             """),
-            rows,
+            params=rows,
         )
 
     @classmethod
@@ -135,7 +135,7 @@ class PictureLikeness(SQLModel, table=True):
         Prune PictureLikeness entries to keep only the top K likenesses per picture_id_a.
         Deletes entries beyond the TOP_K highest likeness scores for each picture_id_a.
         """
-        session.execute(
+        session.exec(
             text("""
                 WITH ranked AS (
                     SELECT
@@ -155,7 +155,7 @@ class PictureLikeness(SQLModel, table=True):
                     WHERE rn > :top_k
                 );
             """),
-            {"a": picture_id_a, "top_k": top_k},
+            params={"a": picture_id_a, "top_k": top_k},
         )
 
 

@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 class Character(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
-    name: str = Field(default=None, index=True)
+    name: str = Field(index=True, nullable=False)
     description: Optional[str] = Field(default=None)
     extra_metadata: Optional[str] = Field(default=None)
 

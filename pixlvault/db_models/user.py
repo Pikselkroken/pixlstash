@@ -18,6 +18,7 @@ class User(SQLModel, table=True):
     columns: Optional[int] = Field(default=None)
     show_stars: bool = Field(default=True)
     similarity_character: Optional[int] = Field(default=None)
+    smart_score_penalized_tags: Optional[str] = Field(default=None)
 
     tokens: List["UserToken"] = Relationship(
         back_populates="user",

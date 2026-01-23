@@ -93,6 +93,12 @@ const newlyCreatedToken = ref("");
 const tokenDialogOpen = ref(false);
 const tokenDeleteDialogOpen = ref(false);
 const tokenToDelete = ref(null);
+const smartScorePenalizedTags = ref([]);
+const smartScoreTagInput = ref("");
+const smartScoreTagsLoading = ref(false);
+const smartScoreTagsError = ref("");
+const smartScoreTagsSuccess = ref("");
+const settingsTab = ref("preferences");
 
 async function fetchSettingsAuth() {
   settingsLoading.value = true;
@@ -120,6 +126,80 @@ function resetSettingsForm() {
   tokenDialogOpen.value = false;
   tokenDeleteDialogOpen.value = false;
   tokenToDelete.value = null;
+  smartScoreTagInput.value = "";
+  smartScoreTagsError.value = "";
+  smartScoreTagsSuccess.value = "";
+}
+
+function normalizeSmartScoreTags(tags) {
+  const list = Array.isArray(tags) ? tags : [];
+  const normalized = [];
+  const seen = new Set();
+  for (const tag of list) {
+    if (tag == null) continue;
+    const clean = String(tag).trim().toLowerCase();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    normalized.push(clean);
+  }
+  return normalized;
+}
+
+async function fetchSmartScoreSettings() {
+  smartScoreTagsLoading.value = true;
+  smartScoreTagsError.value = "";
+  try {
+    const res = await apiClient.get("/users/me/config");
+    smartScorePenalizedTags.value = normalizeSmartScoreTags(
+      res.data?.smart_score_penalized_tags,
+    );
+  } catch (e) {
+    smartScoreTagsError.value = "Failed to load smart score settings.";
+  } finally {
+    smartScoreTagsLoading.value = false;
+  }
+}
+
+async function saveSmartScoreTags(nextTags) {
+  smartScoreTagsLoading.value = true;
+  smartScoreTagsError.value = "";
+  smartScoreTagsSuccess.value = "";
+  try {
+    const normalized = normalizeSmartScoreTags(nextTags);
+    await apiClient.patch("/users/me/config", {
+      smart_score_penalized_tags: normalized,
+    });
+    smartScorePenalizedTags.value = normalized;
+    smartScoreTagsSuccess.value = "Saved.";
+  } catch (e) {
+    smartScoreTagsError.value =
+      e?.response?.data?.detail || "Failed to update smart score tags.";
+  } finally {
+    smartScoreTagsLoading.value = false;
+    if (smartScoreTagsSuccess.value) {
+      setTimeout(() => {
+        smartScoreTagsSuccess.value = "";
+      }, 2000);
+    }
+  }
+}
+
+async function addSmartScoreTag() {
+  const trimmed = smartScoreTagInput.value.trim().toLowerCase();
+  if (!trimmed) return;
+  const next = normalizeSmartScoreTags([
+    ...smartScorePenalizedTags.value,
+    trimmed,
+  ]);
+  smartScoreTagInput.value = "";
+  await saveSmartScoreTags(next);
+}
+
+async function removeSmartScoreTag(tag) {
+  const next = normalizeSmartScoreTags(
+    smartScorePenalizedTags.value.filter((t) => t !== tag),
+  );
+  await saveSmartScoreTags(next);
 }
 
 function formatTokenTimestamp(value) {
@@ -969,8 +1049,10 @@ watch(
   (isOpen) => {
     if (isOpen) {
       resetSettingsForm();
+      settingsTab.value = "preferences";
       fetchSettingsAuth();
       fetchUserTokens();
+      fetchSmartScoreSettings();
     }
   },
 );
@@ -1051,155 +1133,216 @@ defineExpose({ refreshSidebar });
       </v-btn>
       <v-card class="settings-dialog-card">
         <v-card-title class="settings-dialog-title">Settings</v-card-title>
+        <v-tabs
+          v-model="settingsTab"
+          density="comfortable"
+          class="settings-tabs"
+        >
+          <v-tab value="preferences">User Preferences</v-tab>
+          <v-tab value="account">Account Settings</v-tab>
+        </v-tabs>
         <v-card-text class="settings-dialog-body">
-          <div class="settings-section">
-            <div class="settings-section-title">Account</div>
-            <div class="settings-section-desc">
-              Change your password or manage sign-in options.
-            </div>
-            <div class="settings-account-meta">
-              <span class="settings-account-label">Username</span>
-              <span class="settings-account-value">
-                {{ settingsUsername || "Not set" }}
-              </span>
-            </div>
-            <div class="settings-form">
-              <input
-                v-if="settingsUsername"
-                type="text"
-                name="username"
-                :value="settingsUsername"
-                autocomplete="username"
-                style="
-                  position: absolute;
-                  opacity: 0;
-                  height: 0;
-                  width: 0;
-                  pointer-events: none;
-                "
-                tabindex="-1"
-              />
-              <v-text-field
-                v-if="settingsHasPassword"
-                v-model="currentPassword"
-                label="Current password"
-                type="password"
-                density="comfortable"
-                variant="filled"
-                autocomplete="current-password"
-                name="current-password"
-              />
-              <v-text-field
-                v-model="newPassword"
-                label="New password"
-                :type="showNewPassword ? 'text' : 'password'"
-                density="comfortable"
-                variant="filled"
-                autocomplete="new-password"
-                name="new-password"
-                :append-inner-icon="showNewPassword ? 'mdi-eye-off' : 'mdi-eye'"
-                @click:append-inner="showNewPassword = !showNewPassword"
-              />
-              <div v-if="settingsError" class="settings-error">
-                {{ settingsError }}
-              </div>
-              <div v-if="settingsSuccess" class="settings-success">
-                {{ settingsSuccess }}
-              </div>
-              <v-btn
-                variant="outlined"
-                color="primary"
-                class="settings-action-btn settings-action-btn--primary"
-                :loading="settingsLoading"
-                :disabled="settingsLoading"
-                @click="submitPasswordChange"
-              >
-                Update Password
-              </v-btn>
-            </div>
-          </div>
-          <v-divider class="settings-section-divider" />
-          <div class="settings-section">
-            <div class="settings-section-title">Imports</div>
-            <div class="settings-section-desc">
-              Monitor folders to auto-import new files.
-            </div>
-            <v-btn
-              variant="outlined"
-              color="primary"
-              class="settings-action-btn"
-              disabled
-            >
-              Add Import Folder (coming soon)
-            </v-btn>
-          </div>
-          <v-divider class="settings-section-divider" />
-          <div class="settings-section">
-            <div class="settings-section-title">API Tokens</div>
-            <div class="settings-section-desc">
-              Manage tokens for authenticated API access.
-            </div>
-            <div class="settings-tokens">
-              <v-text-field
-                v-model="tokenDescription"
-                label="Token description"
-                density="comfortable"
-                variant="filled"
-                :disabled="tokensLoading"
-              />
-              <v-btn
-                variant="outlined"
-                color="primary"
-                class="settings-action-btn"
-                :loading="tokensLoading"
-                :disabled="tokensLoading"
-                @click="createUserToken"
-              >
-                Create Token
-              </v-btn>
-              <div v-if="tokensError" class="settings-error">
-                {{ tokensError }}
-              </div>
-              <div v-if="tokensLoading" class="settings-token-loading">
-                Loading tokens...
-              </div>
-              <div v-else class="settings-token-list">
-                <div
-                  v-for="token in tokens"
-                  :key="token.id"
-                  class="settings-token-row"
-                >
-                  <div class="settings-token-meta">
-                    <div class="settings-token-desc">
-                      {{ token.description || "Untitled token" }}
+          <v-window v-model="settingsTab" class="settings-tab-body">
+            <v-window-item value="preferences">
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">Smart Score</div>
+                <div class="settings-section-desc">
+                  Tags listed here reduce Smart Score when present on a picture.
+                </div>
+                <div class="settings-form">
+                  <v-text-field
+                    v-model="smartScoreTagInput"
+                    label="Add penalized tag"
+                    density="comfortable"
+                    variant="filled"
+                    :disabled="smartScoreTagsLoading"
+                    @keydown.enter.prevent="addSmartScoreTag"
+                  />
+                  <v-btn
+                    variant="outlined"
+                    color="primary"
+                    class="settings-action-btn"
+                    :loading="smartScoreTagsLoading"
+                    :disabled="smartScoreTagsLoading"
+                    @click="addSmartScoreTag"
+                  >
+                    Add Tag
+                  </v-btn>
+                  <div v-if="smartScoreTagsError" class="settings-error">
+                    {{ smartScoreTagsError }}
+                  </div>
+                  <div v-if="smartScoreTagsSuccess" class="settings-success">
+                    {{ smartScoreTagsSuccess }}
+                  </div>
+                  <div class="settings-tag-list">
+                    <div
+                      v-for="tag in smartScorePenalizedTags"
+                      :key="tag"
+                      class="settings-tag-chip"
+                    >
+                      <span class="settings-tag-label">{{ tag }}</span>
+                      <v-btn
+                        icon
+                        variant="text"
+                        class="settings-tag-delete"
+                        :disabled="smartScoreTagsLoading"
+                        @click="removeSmartScoreTag(tag)"
+                      >
+                        <v-icon size="16">mdi-close</v-icon>
+                      </v-btn>
                     </div>
-                    <div class="settings-token-sub">
-                      <span
-                        >Created:
-                        {{ formatTokenTimestamp(token.created_at) }}</span
-                      >
-                      <span
-                        >Last used:
-                        {{ formatTokenTimestamp(token.last_used_at) }}</span
-                      >
+                    <div
+                      v-if="
+                        !smartScoreTagsLoading &&
+                        !smartScorePenalizedTags.length
+                      "
+                      class="settings-token-empty"
+                    >
+                      No penalized tags yet.
                     </div>
                   </div>
-                  <v-btn
-                    icon
-                    variant="text"
-                    class="settings-token-delete"
-                    :disabled="tokensLoading"
-                    @click="confirmDeleteToken(token)"
-                  >
-                    <v-icon size="20">mdi-trash-can-outline</v-icon>
-                  </v-btn>
-                </div>
-                <div v-if="!tokens.length" class="settings-token-empty">
-                  No tokens yet.
                 </div>
               </div>
-            </div>
-          </div>
+            </v-window-item>
+            <v-window-item value="account">
+              <div class="settings-section">
+                <div class="settings-section-title">Account</div>
+                <div class="settings-section-desc">
+                  Change your password or manage sign-in options.
+                </div>
+                <div class="settings-account-meta">
+                  <span class="settings-account-label">Username</span>
+                  <span class="settings-account-value">
+                    {{ settingsUsername || "Not set" }}
+                  </span>
+                </div>
+                <div class="settings-form">
+                  <input
+                    v-if="settingsUsername"
+                    type="text"
+                    name="username"
+                    :value="settingsUsername"
+                    autocomplete="username"
+                    style="
+                      position: absolute;
+                      opacity: 0;
+                      height: 0;
+                      width: 0;
+                      pointer-events: none;
+                    "
+                    tabindex="-1"
+                  />
+                  <v-text-field
+                    v-if="settingsHasPassword"
+                    v-model="currentPassword"
+                    label="Current password"
+                    type="password"
+                    density="comfortable"
+                    variant="filled"
+                    autocomplete="current-password"
+                    name="current-password"
+                  />
+                  <v-text-field
+                    v-model="newPassword"
+                    label="New password"
+                    :type="showNewPassword ? 'text' : 'password'"
+                    density="comfortable"
+                    variant="filled"
+                    autocomplete="new-password"
+                    name="new-password"
+                    :append-inner-icon="
+                      showNewPassword ? 'mdi-eye-off' : 'mdi-eye'
+                    "
+                    @click:append-inner="showNewPassword = !showNewPassword"
+                  />
+                  <div v-if="settingsError" class="settings-error">
+                    {{ settingsError }}
+                  </div>
+                  <div v-if="settingsSuccess" class="settings-success">
+                    {{ settingsSuccess }}
+                  </div>
+                  <v-btn
+                    variant="outlined"
+                    color="primary"
+                    class="settings-action-btn"
+                    :loading="settingsLoading"
+                    :disabled="settingsLoading"
+                    @click="submitPasswordChange"
+                  >
+                    Update Password
+                  </v-btn>
+                </div>
+              </div>
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">API Tokens</div>
+                <div class="settings-section-desc">
+                  Manage tokens for authenticated API access.
+                </div>
+                <div class="settings-tokens">
+                  <v-text-field
+                    v-model="tokenDescription"
+                    label="Token description"
+                    density="comfortable"
+                    variant="filled"
+                    :disabled="tokensLoading"
+                  />
+                  <v-btn
+                    variant="outlined"
+                    color="primary"
+                    class="settings-action-btn"
+                    :loading="tokensLoading"
+                    :disabled="tokensLoading"
+                    @click="createUserToken"
+                  >
+                    Create Token
+                  </v-btn>
+                  <div v-if="tokensError" class="settings-error">
+                    {{ tokensError }}
+                  </div>
+                  <div v-if="tokensLoading" class="settings-token-loading">
+                    Loading tokens...
+                  </div>
+                  <div v-else class="settings-token-list">
+                    <div
+                      v-for="token in tokens"
+                      :key="token.id"
+                      class="settings-token-row"
+                    >
+                      <div class="settings-token-meta">
+                        <div class="settings-token-desc">
+                          {{ token.description || "Untitled token" }}
+                        </div>
+                        <div class="settings-token-sub">
+                          <span
+                            >Created:
+                            {{ formatTokenTimestamp(token.created_at) }}</span
+                          >
+                          <span
+                            >Last used:
+                            {{ formatTokenTimestamp(token.last_used_at) }}</span
+                          >
+                        </div>
+                      </div>
+                      <v-btn
+                        icon
+                        variant="text"
+                        class="settings-token-delete"
+                        :disabled="tokensLoading"
+                        @click="confirmDeleteToken(token)"
+                      >
+                        <v-icon size="20">mdi-trash-can-outline</v-icon>
+                      </v-btn>
+                    </div>
+                    <div v-if="!tokens.length" class="settings-token-empty">
+                      No tokens yet.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </v-window-item>
+          </v-window>
         </v-card-text>
       </v-card>
     </div>
@@ -1838,7 +1981,7 @@ defineExpose({ refreshSidebar });
 
 .sidebar.sidebar-collapsed .sidebar-brand:hover .v-btn {
   justify-content: center;
-  background-color: rgb(var(--v-theme-accent));
+  background-color: rgba(var(--v-theme-accent), 0.4);
 }
 
 .sidebar.sidebar-collapsed .sidebar-brand-left {
@@ -1849,7 +1992,7 @@ defineExpose({ refreshSidebar });
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 2px 2px 12px;
+  padding: 2px 4px 2px 2px;
   margin-bottom: 8px;
 }
 
@@ -1857,6 +2000,7 @@ defineExpose({ refreshSidebar });
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 2px 2px 2px 10px;
 }
 
 .sidebar-brand-logo {
@@ -2070,18 +2214,27 @@ defineExpose({ refreshSidebar });
   font-size: 1.2rem;
 }
 
+.settings-tabs {
+  margin-top: 4px;
+}
+
+.settings-tab-body {
+  padding-top: 6px;
+}
+
 .settings-dialog-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  line-height: 1;
 }
 
 .settings-section {
   display: flex;
+  line-height: 1;
   flex-direction: column;
   gap: 6px;
 }
-
 .settings-section-title {
   font-weight: 600;
 }
@@ -2127,6 +2280,13 @@ defineExpose({ refreshSidebar });
 
 .settings-action-btn {
   align-self: flex-start;
+  background-color: rgb(var(--v-theme-primary)) !important;
+  color: rgb(var(--v-theme-on-primary)) !important;
+  border: 1px rgb(var(--v-theme-on-primary)) !important;
+}
+.settings-action-btn:hover {
+  background-color: rgb(var(--v-theme-accent)) !important;
+  border: 1px rgb(var(--v-theme-on-primary)) !important;
 }
 
 .settings-tokens {
@@ -2186,6 +2346,42 @@ defineExpose({ refreshSidebar });
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
+.settings-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 6px;
+  border-radius: 6px;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.settings-tag-label {
+  font-size: 1em;
+}
+
+.settings-tag-delete {
+  color: rgba(var(--v-theme-on-primary), 0.9);
+  min-width: 0;
+  height: 16px;
+  width: 16px;
+  padding: 0;
+}
+
+.settings-tag-delete:hover {
+  color: rgba(var(--v-theme-error), 0.9);
+  min-width: 0;
+  height: 16px;
+  width: 16px;
+  padding: 0;
+}
+
 .settings-token-dialog {
   padding-bottom: 8px;
 }
@@ -2202,11 +2398,6 @@ defineExpose({ refreshSidebar });
   background: rgba(var(--v-theme-surface), 0.2);
   border-radius: 8px;
   padding: 10px 12px;
-}
-
-.settings-action-btn--primary {
-  background-color: rgb(var(--v-theme-primary)) !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
 }
 
 .settings-section-divider {

@@ -22,7 +22,6 @@ from .quality import Quality
 if TYPE_CHECKING:
     from .picture import Picture
     from .character import Character
-    from .face_likeness import FaceLikeness
 
 
 class Face(SQLModel, table=True):
@@ -55,23 +54,6 @@ class Face(SQLModel, table=True):
     )
     character: Optional["Character"] = Relationship(
         back_populates="faces", sa_relationship_kwargs={"overlaps": "picture"}
-    )
-
-    likeness_a: List["FaceLikeness"] = Relationship(
-        back_populates="face_a",
-        sa_relationship_kwargs={
-            "primaryjoin": "Face.id==FaceLikeness.face_id_a",
-            "cascade": "all, delete-orphan",
-            "passive_deletes": True,
-        },
-    )
-    likeness_b: List["FaceLikeness"] = Relationship(
-        back_populates="face_b",
-        sa_relationship_kwargs={
-            "primaryjoin": "Face.id==FaceLikeness.face_id_b",
-            "cascade": "all, delete-orphan",
-            "passive_deletes": True,
-        },
     )
 
     __table_args__ = (UniqueConstraint("picture_id", "frame_index", "face_index"),)

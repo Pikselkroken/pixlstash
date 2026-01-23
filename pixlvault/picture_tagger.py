@@ -12,6 +12,7 @@ import os
 import platform
 import re
 import torch
+from torchvision import transforms
 
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
@@ -35,9 +36,15 @@ BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = 32
 MAX_CONCURRENT_IMAGES_CPU = 8
 GENERAL_THRESHOLD = 0.4
-UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
+UNDESIRED_TAGS = "solo, general, blurry, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
+CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "models", "best.pt")
+CUSTOM_TAGGER_THRESHOLD = 0.5
+CUSTOM_TAGGER_IMAGE_SIZE = 576
+CUSTOM_TAGGER_BATCH = 16
+CLIP_MODEL_NAME = "ViT-B-32"
+CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
 
 
 class PictureTagger:
@@ -85,20 +92,32 @@ class PictureTagger:
 
         logger.info(f"PictureTagger initialized with device: {self._device}")
 
+        self._custom_tagger_path = CUSTOM_TAGGER_PATH
+        self._use_custom_tagger = True
+        self._custom_tagger_threshold = CUSTOM_TAGGER_THRESHOLD
+        self._custom_tagger_image_size = CUSTOM_TAGGER_IMAGE_SIZE
+        self._custom_tagger_batch = CUSTOM_TAGGER_BATCH
+
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()
         self._load_and_preprocess_tags()
+
+        if self._use_custom_tagger and os.path.isfile(self._custom_tagger_path):
+            logger.info("Using custom tagger checkpoint: %s", self._custom_tagger_path)
+            self._init_custom_tagger()
         # Load CLIP model at construction for efficiency
         # Upgraded to ViT-L-14 for better aesthetics and embedding quality
         self._clip_model, _, self._clip_preprocess = (
             open_clip.create_model_and_transforms(
-                "ViT-L-14", pretrained="laion2b_s32b_b82k"
+                CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS
             )
         )
 
         self._clip_device = self._device
         self._clip_model = self._clip_model.to(self._clip_device)
-        self._clip_tokenizer = open_clip.get_tokenizer("ViT-L-14")
+        if self._clip_device == "cuda":
+            self._clip_model = self._clip_model.half()
+        self._clip_tokenizer = open_clip.get_tokenizer(CLIP_MODEL_NAME)
 
         self._tag_naturaliser = TagNaturaliser()
 
@@ -169,6 +188,22 @@ class PictureTagger:
                 del self._clip_tokenizer
                 self._clip_tokenizer = None
                 logger.debug("Deleted _clip_tokenizer.")
+            if hasattr(self, "_custom_model"):
+                del self._custom_model
+                self._custom_model = None
+                logger.debug("Deleted _custom_model.")
+            if hasattr(self, "_custom_labels"):
+                del self._custom_labels
+                self._custom_labels = None
+                logger.debug("Deleted _custom_labels.")
+            if hasattr(self, "_custom_label_to_idx"):
+                del self._custom_label_to_idx
+                self._custom_label_to_idx = None
+                logger.debug("Deleted _custom_label_to_idx.")
+            if hasattr(self, "_custom_transform"):
+                del self._custom_transform
+                self._custom_transform = None
+                logger.debug("Deleted _custom_transform.")
         except Exception as cleanup_error:
             logger.warning(f"Exception during PictureTagger cleanup: {cleanup_error}")
 
@@ -332,7 +367,9 @@ class PictureTagger:
             if ext in video_exts:
                 from pixlvault.picture_utils import PictureUtils
 
-                frames = PictureUtils.extract_representative_video_frames(image_path, count=3)
+                frames = PictureUtils.extract_representative_video_frames(
+                    image_path, count=3
+                )
                 for idx, pil_img in enumerate(frames):
                     # Resize large images to speed up processing
                     MAX_DIM = 640
@@ -525,6 +562,50 @@ class PictureTagger:
                 )
         self.input_name = self.ort_sess.get_inputs()[0].name
 
+    def _build_custom_tagger_model(self, arch: str, num_labels: int):
+        from torchvision.models import convnext_tiny, convnext_base
+
+        if arch == "convnext_tiny":
+            model = convnext_tiny(weights=None)
+            in_features = model.classifier[2].in_features
+            model.classifier[2] = torch.nn.Linear(in_features, num_labels)
+            return model
+        if arch == "convnext_base":
+            model = convnext_base(weights=None)
+            in_features = model.classifier[2].in_features
+            model.classifier[2] = torch.nn.Linear(in_features, num_labels)
+            return model
+        raise ValueError(f"Unsupported custom tagger arch: {arch}")
+
+    def _init_custom_tagger(self):
+        if not os.path.exists(self._custom_tagger_path):
+            raise FileNotFoundError(
+                f"Custom tagger checkpoint not found: {self._custom_tagger_path}"
+            )
+        checkpoint = torch.load(self._custom_tagger_path, map_location=self._device)
+        labels = checkpoint.get("labels")
+        arch = checkpoint.get("arch", "convnext_base")
+        if not labels:
+            raise ValueError("Custom tagger checkpoint missing labels list.")
+        self._custom_labels = labels
+        self._custom_label_to_idx = {label: i for i, label in enumerate(labels)}
+        self._custom_model = self._build_custom_tagger_model(arch, len(labels))
+        self._custom_model.load_state_dict(checkpoint["model_state_dict"])
+        self._custom_model.to(self._device)
+        self._custom_model.eval()
+        self._custom_transform = transforms.Compose(
+            [
+                transforms.Resize(
+                    (self._custom_tagger_image_size, self._custom_tagger_image_size)
+                ),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406],
+                    std=[0.229, 0.224, 0.225],
+                ),
+            ]
+        )
+
     def _load_and_preprocess_tags(self):
         with open(
             os.path.join(self._model_location, CSV_FILE), "r", encoding="utf-8"
@@ -658,9 +739,79 @@ class PictureTagger:
         ]
         return texts
 
+    def _tag_images_custom(self, image_paths, stop_event=None):
+        from PIL import Image
+
+        undesired_tags = UNDESIRED_TAGS.split(CAPTION_SEPARATOR.strip())
+        undesired_tags = set(
+            [tag.strip() for tag in undesired_tags if tag.strip() != ""]
+        )
+        logger.debug("Removing tags: " + ", ".join(undesired_tags))
+
+        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+        items = []
+        for image_path in image_paths:
+            if stop_event is not None and stop_event.is_set():
+                logger.info("Tagging interrupted by stop event.")
+                break
+            path = str(image_path)
+            ext = os.path.splitext(path)[1].lower()
+            if ext in video_exts:
+                frames = PictureUtils.extract_representative_video_frames(path, count=3)
+                if not frames:
+                    logger.error("No frames extracted from video: %s", path)
+                    continue
+                for idx, frame in enumerate(frames):
+                    items.append((f"{path}#frame{idx}", frame))
+                continue
+            try:
+                image = Image.open(path).convert("RGB")
+            except Exception as e:
+                logger.error("Could not load image path: %s, error: %s", path, e)
+                continue
+            items.append((path, image))
+
+        if not items:
+            return {}
+
+        batch_size = max(1, self._custom_tagger_batch)
+        results = {}
+        for batch_start in range(0, len(items), batch_size):
+            if stop_event is not None and stop_event.is_set():
+                logger.info("Tagging interrupted by stop event.")
+                break
+            batch = items[batch_start : batch_start + batch_size]
+            batch_paths = []
+            batch_tensors = []
+            for path, image in batch:
+                try:
+                    batch_tensors.append(self._custom_transform(image))
+                    batch_paths.append(path)
+                except Exception as e:
+                    logger.error("Custom tagger failed to preprocess %s: %s", path, e)
+            if not batch_tensors:
+                continue
+            inputs = torch.stack(batch_tensors).to(self._device)
+            with torch.inference_mode():
+                logits = self._custom_model(inputs)
+                probs = torch.sigmoid(logits).cpu().numpy()
+            for path, prob in zip(batch_paths, probs):
+                tag_probs = []
+                for label, p in zip(self._custom_labels, prob):
+                    if (
+                        p >= self._custom_tagger_threshold
+                        and label not in undesired_tags
+                    ):
+                        tag_probs.append((label, float(p)))
+                all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
+                results[path] = [tag for tag, _ in all_tags_sorted]
+
+        results = self._naturalize_tags(results)
+        return self._merge_video_frame_tags(results)
+
     def tag_images(self, image_paths, stop_event=None):
         """
-        Tag images using the WD14 tagger model.
+        Tag images using WD14 and optionally extend with the custom tagger.
 
         Args:
             image_paths (list of str): List of image file paths to be tagged.
@@ -746,14 +897,27 @@ class PictureTagger:
         if len(b_imgs) > 0 and not (stop_event is not None and stop_event.is_set()):
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
             batch_result = self._run_batch(b_imgs, undesired_tags)
-            for k, tags in batch_result.items():
-                tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
-                tags = [t for t in tags if t]
-                batch_result[k] = tags
-            all_results.update(batch_result)
+            if batch_result is None:
+                logger.error(f"Tagging failed for batch: {[p for p, _ in b_imgs]}")
+            else:
+                for k, tags in batch_result.items():
+                    tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
+                    tags = [t for t in tags if t]
+                    batch_result[k] = tags
+                all_results.update(batch_result)
 
         logger.debug(f"Completed tagging for {len(all_results)} images.")
-        return self._merge_video_frame_tags(all_results)
+        wd14_results = self._merge_video_frame_tags(all_results)
+        if not self._use_custom_tagger:
+            return wd14_results
+
+        custom_results = self._tag_images_custom(image_paths, stop_event=stop_event)
+        combined_results = {}
+        for path in set(wd14_results) | set(custom_results):
+            combined_tags = set(wd14_results.get(path, []))
+            combined_tags.update(custom_results.get(path, []))
+            combined_results[path] = sorted(combined_tags)
+        return combined_results
 
     def generate_description(self, picture):
         logger.debug(
@@ -869,19 +1033,22 @@ class PictureTagger:
             return None
 
         import torch
-        try:
-             if not hasattr(self, "_clip_model") or self._clip_model is None:
-                 logger.warning("PictureTagger: CLIP model not available for text embedding.")
-                 return None
 
-             with torch.no_grad():
-                 text = self._clip_tokenizer([query]).to(self._clip_device)
-                 text_features = self._clip_model.encode_text(text)
-                 text_features /= text_features.norm(dim=-1, keepdim=True)
-                 return text_features.cpu().numpy()[0]
+        try:
+            if not hasattr(self, "_clip_model") or self._clip_model is None:
+                logger.warning(
+                    "PictureTagger: CLIP model not available for text embedding."
+                )
+                return None
+
+            with torch.no_grad():
+                text = self._clip_tokenizer([query]).to(self._clip_device)
+                text_features = self._clip_model.encode_text(text)
+                text_features /= text_features.norm(dim=-1, keepdim=True)
+                return text_features.cpu().numpy()[0]
         except Exception as e:
-             logger.error(f"PictureTagger: Failed to generate CLIP text embedding: {e}")
-             return None
+            logger.error(f"PictureTagger: Failed to generate CLIP text embedding: {e}")
+            return None
 
     def generate_facial_features(self, picture, face_bboxes):
         """
