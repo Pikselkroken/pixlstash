@@ -11,10 +11,13 @@
       <v-card-title> Search </v-card-title>
       <v-card-text style="display: flex; align-items: center">
         <v-text-field
+          v-if="!isClosing"
           v-model="input"
           dense
           outlined
           clearable
+          autocomplete="off"
+          name="pixelurgy_search_unique"
           @click:clear="clearInput"
           append-icon="mdi-magnify"
           @click:append="emitSearch"
@@ -41,10 +44,31 @@ import {
 const emit = defineEmits(["search", "close"]);
 const input = ref("");
 const inputField = ref(null); // Reference to the text field
+const isClosing = ref(false);
 
 function emitSearch() {
-  emit("close");
-  emit("search", input.value);
+  const query = input.value;
+  isClosing.value = true;
+
+  // 1. Force blur immediately - target the specific element AND document
+  if (inputField.value) {
+    inputField.value.blur();
+    const inner = inputField.value.$el.querySelector("input");
+    if (inner) inner.blur();
+  }
+
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+
+  // 2. Hide the input entirely using CSS or v-if (via isClosing)
+  // This physically removes the input from the DOM *before* closing the overlay
+  // Wait a tick for this update to happen
+  nextTick(() => {
+    emit("close");
+    // Delay search slightly to allow overlay unmount to complete
+    setTimeout(() => emit("search", query), 10);
+  });
 }
 
 function clearInput() {
@@ -52,7 +76,7 @@ function clearInput() {
 }
 
 function closeOverlay() {
-  console.log("[SearchOverlay.vue] Closing overlay"); // Debugging log
+  console.log("[SearchOverlay.vue] Closing overlay");
   emit("close");
 }
 
@@ -62,6 +86,7 @@ function handleKeydown(event) {
     event.preventDefault(); // Prevent default browser behavior
     closeOverlay();
   } else if (event.key === "Enter") {
+    event.preventDefault(); // Prevent form submission/browser history
     emitSearch();
   }
 }

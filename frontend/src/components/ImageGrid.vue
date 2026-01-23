@@ -2222,7 +2222,7 @@ async function fetchAllGridImages() {
         props.backendUrl
       }/pictures/search?query=${encodeURIComponent(
         props.searchQuery.trim(),
-      )}&top_n=10000${params ? `&${params}` : ""}`;
+      )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
       const requestStart = performance.now();
       const res = await apiClient.get(url);
       const requestEnd = performance.now();
@@ -3665,7 +3665,7 @@ function handleEmptyStateReset() {
   bottom: 0;
   left: 0;
   width: 100%;
-  z-index: 1000;
+  z-index: 200;
   background-color: #f5f5f5;
   display: flex;
   align-items: center;

@@ -164,6 +164,12 @@ body {
   min-width: 0;
 }
 
+.search-history-list {
+  max-height: 200px;
+  overflow-y: auto;
+  background-color: rgba(var(--v-theme-background), 0.9);
+}
+
 .toolbar-controls {
   display: flex;
   align-items: center;

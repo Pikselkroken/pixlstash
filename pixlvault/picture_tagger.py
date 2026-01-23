@@ -3,6 +3,7 @@
 # Under the Apache 2.0 License                                  #
 # https://github.com/kohya-ss/sd-scripts/blob/main/LICENSE.md   #
 #################################################################
+from typing import Optional
 import open_clip
 import csv
 import numpy as np
@@ -858,6 +859,29 @@ class PictureTagger:
 
         embeddings_array = np.asarray(text_embeddings)
         return [embeddings_array[i] for i in range(len(texts))]
+
+    def generate_clip_text_embedding(self, query: str) -> Optional[np.ndarray]:
+        """
+        Generate a CLIP text embedding for the provided query text.
+        Returns a single embedding (np.ndarray) or None.
+        """
+        if not query:
+            return None
+
+        import torch
+        try:
+             if not hasattr(self, "_clip_model") or self._clip_model is None:
+                 logger.warning("PictureTagger: CLIP model not available for text embedding.")
+                 return None
+
+             with torch.no_grad():
+                 text = self._clip_tokenizer([query]).to(self._clip_device)
+                 text_features = self._clip_model.encode_text(text)
+                 text_features /= text_features.norm(dim=-1, keepdim=True)
+                 return text_features.cpu().numpy()[0]
+        except Exception as e:
+             logger.error(f"PictureTagger: Failed to generate CLIP text embedding: {e}")
+             return None
 
     def generate_facial_features(self, picture, face_bboxes):
         """

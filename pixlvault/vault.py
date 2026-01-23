@@ -191,7 +191,13 @@ class Vault:
             Optional[np.ndarray]: Generated text embedding or None if failed.
         """
         embedding = self._picture_tagger.generate_text_embedding(query=query)
-        return embedding[0] if embedding is not None else None
+        return embedding[0] if embedding is not None and len(embedding) > 0 else None
+
+    def generate_clip_text_embedding(self, query: str) -> Optional[np.ndarray]:
+        """
+        Generate a CLIP text embedding for the provided query text.
+        """
+        return self._picture_tagger.generate_clip_text_embedding(query=query)
 
     def preprocess_query_words(self, words: list[str]) -> list[str]:
         """

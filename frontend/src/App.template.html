@@ -60,7 +60,7 @@
                     prepend-inner-icon="mdi-magnify"
                     class="toolbar-search-field"
                     autocomplete="off"
-                    @keydown.enter="commitSearch"
+                    @keydown.enter="blurSearch($event); commitSearch()"
                     @click:prepend-inner="commitSearch"
                     @click:clear="handleClearSearch"
                   />
@@ -87,7 +87,7 @@
               <v-btn
                 v-if="isMobile"
                 icon
-                :color="searchOverlayVisible ? 'primary' : 'rgba(var(--v-theme-surface), 0.3)'"
+                :color="searchOverlayVisible ? 'primary' : 'rgba(var(--v-theme--background), 0.3)'"
                 @click="openSearchOverlay"
                 title="Search"
                 class="toolbar-btn app-btn-base"

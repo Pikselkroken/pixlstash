@@ -439,6 +439,12 @@ function handleClearSearch() {
   refreshGridVersion(); // Force the ImageGrid to refresh
 }
 
+function blurSearch(event) {
+  if (event && event.target) {
+    event.target.blur();
+  }
+}
+
 function addToSearchHistory(query) {
   if (!query) {
     return;

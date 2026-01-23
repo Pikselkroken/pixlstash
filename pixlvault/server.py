@@ -2613,6 +2613,7 @@ class Server:
                     query,
                     words,
                     text_to_embedding=self.vault.generate_text_embedding,
+                    clip_text_to_embedding=self.vault.generate_clip_text_embedding,
                     offset=offset,
                     limit=limit,
                     threshold=threshold,
