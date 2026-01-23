@@ -433,25 +433,27 @@
                 >
                   <summary class="metadata-comfy-summary">
                     <span class="metadata-comfy-summary-left">
-                      <span
-                        class="metadata-comfy-drag-handle"
-                        draggable="true"
-                        @click.stop
-                        @dragstart="handleComfyWorkflowDragStart"
-                        title="Drag workflow"
-                        aria-label="Drag workflow"
+                      <span style="font-weight: 500; color: #fff"
+                        >Workflow JSON</span
                       >
-                        <v-icon size="14">mdi-drag-vertical</v-icon>
-                      </span>
-                      <span>Workflow JSON</span>
                     </span>
                     <button
-                      class="metadata-comfy-copy-inline"
+                      class="metadata-comfy-workflow-action"
                       type="button"
                       @click.stop="copyMetadataValue(comfyMetadata.workflow)"
                     >
                       <v-icon size="14">mdi-content-copy</v-icon>
                       Copy
+                    </button>
+                    <button
+                      class="metadata-comfy-workflow-action"
+                      type="button"
+                      @click.stop="
+                        downloadComfyWorkflow(comfyMetadata.workflow)
+                      "
+                    >
+                      <v-icon size="14">mdi-download</v-icon>
+                      Download
                     </button>
                   </summary>
                   <textarea
@@ -1867,22 +1869,6 @@ async function copyMetadataValue(value) {
   }
 }
 
-function handleComfyWorkflowDragStart(event) {
-  const workflow = comfyMetadata.value?.workflow;
-  if (!workflow) {
-    event.preventDefault();
-    return;
-  }
-  const payload = stringifyMetadata(workflow);
-  if (event.dataTransfer) {
-    event.dataTransfer.setData("application/json", payload);
-    event.dataTransfer.setData("text/plain", payload);
-    event.dataTransfer.setData("application/x-comfyui-workflow", payload);
-    event.dataTransfer.setData("text/comfyui-workflow", payload);
-    event.dataTransfer.effectAllowed = "copy";
-  }
-}
-
 // Add this helper below your script setup imports
 function faceBoxColor(idx) {
   // Pick from a palette, cycle if more faces than colors
@@ -2036,6 +2022,22 @@ function removeTag(tag) {
     image.value.tags.splice(index, 1);
     emit("remove-tag", image.value.id, tag); // Notify parent component
   }
+}
+
+function downloadComfyWorkflow(workflow) {
+  if (!workflow) return;
+  const payload = stringifyMetadata(workflow);
+  const blob = new Blob([payload], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "comfyui_workflow.json";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
 }
 </script>
 
@@ -2714,37 +2716,20 @@ function removeTag(tag) {
   min-width: 0;
 }
 
-.metadata-comfy-drag-handle {
+.metadata-comfy-workflow-action {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  color: rgba(255, 255, 255, 0.6);
-  cursor: grab;
-  padding: 0;
-  width: 14px;
-  height: 18px;
-  border-radius: 4px;
-}
-
-.metadata-comfy-drag-handle:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.metadata-comfy-copy-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  gap: 2px;
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.75);
   font-size: 0.72rem;
-  padding: 2px 6px;
-  border-radius: 6px;
+  padding: 2px 2px;
+  border-radius: 4px;
   cursor: pointer;
 }
 
-.metadata-comfy-copy-inline:hover {
+.metadata-comfy-workflow-action:hover {
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
 }
