@@ -151,6 +151,7 @@ class PictureUtils:
         # 3. Bad Anchors
         bad_component = np.zeros(len(candidates))
         raw_bad_sim = np.zeros(len(candidates))
+        mask_bad = np.zeros(len(candidates), dtype=bool)
         if bad_anchors:
             bad_vecs = [a["embedding"] for a in bad_anchors]
             # Bad weight is (1.0 - norm_score)
