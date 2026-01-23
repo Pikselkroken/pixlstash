@@ -27,6 +27,7 @@ def test_quality_worker_face_metrics():
         config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path, server_config_path) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(

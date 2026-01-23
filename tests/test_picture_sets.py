@@ -3,6 +3,7 @@ from pixlvault.server import Server
 import tempfile
 import os
 import json
+from pixlvault.worker_registry import WorkerType
 from tests.utils import upload_pictures_and_wait
 
 
@@ -22,6 +23,7 @@ def setup_server_with_temp_db():
     with open(server_config_path, "w") as f:
         f.write(json.dumps({"port": 8000}))
     server = Server(config_path, server_config_path)
+    server.vault.start_workers({WorkerType.FACE})
     client = TestClient(server.api)
 
     resp = client.post(

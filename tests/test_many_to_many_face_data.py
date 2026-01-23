@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from pixlvault.server import Server
 from pixlvault.db_models import Face
+from pixlvault.worker_registry import WorkerType
 from tests.utils import upload_pictures_and_wait
 
 
@@ -27,6 +28,7 @@ def test_many_to_many_face_data():
         config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(config_path, server_config_path) as server:
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(

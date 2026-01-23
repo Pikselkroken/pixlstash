@@ -550,6 +550,7 @@ def test_post_logo_identical_upload():
             config_path=config_path, server_config_path=server_config_path
         ) as server:
             server.vault.import_default_data()
+            server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
