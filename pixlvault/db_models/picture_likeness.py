@@ -60,8 +60,8 @@ class PictureLikeness(SQLModel, table=True):
     def find(
         cls,
         session,
-        picture_id_a: str = None,
-        picture_id_b: str = None,
+        picture_id_a: Optional[int] = None,
+        picture_id_b: Optional[int] = None,
     ):
         """
         Flexible search:

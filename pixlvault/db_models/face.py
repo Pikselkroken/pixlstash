@@ -149,11 +149,6 @@ class Face(SQLModel, table=True):
         subquery = (
             select(FaceCharacterLikeness.face_id)
             .where((FaceCharacterLikeness.character_id == character_id))
-            .union(
-                select(FaceCharacterLikeness.face_id).where(
-                    (FaceCharacterLikeness.character_id == character_id)
-                )
-            )
             .subquery()
         )
 
