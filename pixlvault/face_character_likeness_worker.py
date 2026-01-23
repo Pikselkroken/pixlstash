@@ -98,7 +98,7 @@ class FaceCharacterLikenessWorker(BaseWorker):
                     Face.find_faces_without_character_likeness, character_id
                 )
 
-                logger.info(
+                logger.debug(
                     "Found {} faces without likeness for character id={}".format(
                         len(faces_without_likeness), character_id
                     )

@@ -88,15 +88,16 @@ class PictureTagger:
         self._init_onnx_session()
         self._load_and_preprocess_tags()
         # Load CLIP model at construction for efficiency
+        # Upgraded to ViT-L-14 for better aesthetics and embedding quality
         self._clip_model, _, self._clip_preprocess = (
             open_clip.create_model_and_transforms(
-                "ViT-B-32", pretrained="laion2b_s34b_b79k"
+                "ViT-L-14", pretrained="laion2b_s32b_b82k"
             )
         )
 
         self._clip_device = self._device
         self._clip_model = self._clip_model.to(self._clip_device)
-        self._clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
+        self._clip_tokenizer = open_clip.get_tokenizer("ViT-L-14")
 
         self._tag_naturaliser = TagNaturaliser()
 

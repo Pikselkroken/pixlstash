@@ -47,12 +47,12 @@ class PictureUtils:
         cfg = {
             # Character Likeness Pivot:
             "char_pivot": 0.75,
-            "w_char_bonus": 0.40,
+            "w_char_bonus": 0.50,
             "w_char_penalty": 2.0,
 
-            "w_good": 0.50,
-            "w_bad": 0.30,
-            "w_aest": 0.30,
+            "w_good": 0.60,
+            "w_bad": 0.20,
+            "w_aest": 0.20,
             "topk": 3,
             "minSim": 0.75,
             "minBadSim": 0.88,
@@ -61,7 +61,7 @@ class PictureUtils:
             # Adjusted based on user observation (Max ~4.5)
             # We set max to 5.0 to allow some headroom, but map 4.5 to a strong 0.75
             "aest_min": 0.0,
-            "aest_max": 5.0,
+            "aest_max": 7.0,
         }
         if config:
             cfg.update(config)

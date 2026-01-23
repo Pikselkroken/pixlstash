@@ -45,11 +45,12 @@ class ImageEmbeddingWorker(BaseWorker):
     """
 
     BATCH_SIZE = 32
-    MODEL_NAME = "clip-ViT-B-32"
+    MODEL_NAME = "clip-ViT-L-14"
     
-    # LAION Aesthetic Predictor weights for ViT-B/32
-    AESTHETIC_URL = "https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_b_32_linear.pth?raw=true"
-    AESTHETIC_MODEL_PATH = "wd14_tagger_model/sa_0_4_vit_b_32_linear.pth"
+    # LAION Aesthetic Predictor weights for ViT-L/14 (V2)
+    # Using the improved predictor trained on SAC+Logos+AVA
+    AESTHETIC_URL = "https://github.com/christophschuhmann/improved-aesthetic-predictor/raw/main/sac%2Blogos%2Bava1-l14-linearMSE.pth"
+    AESTHETIC_MODEL_PATH = "wd14_tagger_model/sac+logos+ava1-l14-linearMSE.pth"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -63,13 +64,23 @@ class ImageEmbeddingWorker(BaseWorker):
     def _ensure_model(self):
         # Use picture_tagger's clip model if available, otherwise load our own
         if self._picture_tagger and getattr(self._picture_tagger, '_clip_model', None):
-             pass # Model managed by PictureTagger
+             # Check if the tagger has loaded the correct model architecture
+             # L-14 should have 768 dimensions
+             if self._picture_tagger._clip_model.visual.output_dim == 768:
+                 pass 
+             else:
+                 logger.warning("PictureTagger has incompatible CLIP model loaded (not L/14). Loading local L/14 model.")
+                 self._ensure_local_model()
         elif self.model is None:
+            self._ensure_local_model()
+            
+        self._ensure_aesthetic_model()
+
+    def _ensure_local_model(self):
+        if self.model is None:
             logger.info(f"ImageEmbeddingWorker: Loading model {self.MODEL_NAME}...")
             self.model = SentenceTransformer(self.MODEL_NAME)
             logger.info("ImageEmbeddingWorker: Model loaded.")
-            
-        self._ensure_aesthetic_model()
 
     def _ensure_aesthetic_model(self):
         if self.aesthetic_model is not None:
@@ -87,7 +98,7 @@ class ImageEmbeddingWorker(BaseWorker):
 
             # Load weights
             state_dict = torch.load(self.AESTHETIC_MODEL_PATH, map_location="cpu")
-            self.aesthetic_model = nn.Linear(512, 1)
+            self.aesthetic_model = AestheticPredictor(768)
             self.aesthetic_model.load_state_dict(state_dict)
             self.aesthetic_model.eval()
             
