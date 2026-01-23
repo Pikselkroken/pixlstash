@@ -15,9 +15,7 @@ class UserToken(SQLModel, table=True):
 
     id: int = Field(default=None, primary_key=True)
     user_id: int = Field(
-        sa_column=Column(
-            Integer, ForeignKey("user.id", ondelete="CASCADE"), index=True
-        )
+        sa_column=Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), index=True)
     )
     token_hash: str = Field(index=True)
     description: Optional[str] = Field(default=None)

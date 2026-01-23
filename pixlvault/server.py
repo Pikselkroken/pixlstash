@@ -33,8 +33,6 @@ from pydantic import BaseModel, Field
 from pixlvault.db_models import (
     Character,
     Face,
-    Conversation,
-    Message,
     Picture,
     PictureSet,
     PictureSetMember,
@@ -749,7 +747,9 @@ class Server:
         class ChangePasswordRequest(BaseModel):
             current_password: Optional[str] = None
             new_password: str = Field(
-                ..., min_length=8, description="Password must be at least 8 characters long"
+                ...,
+                min_length=8,
+                description="Password must be at least 8 characters long",
             )
 
         class CreateTokenRequest(BaseModel):
@@ -776,6 +776,7 @@ class Server:
         async def patch_me_config(request: Request):
             _ensure_secure_when_required(request)
             import time
+
             session_id = request.cookies.get("session_id")
             if not session_id:
                 raise HTTPException(status_code=401, detail="Not authenticated")
@@ -784,9 +785,7 @@ class Server:
                 raise HTTPException(status_code=401, detail="Not authenticated")
 
             start_time = time.time()
-            logger.info(
-                f"[TIMING] PATCH /users/me/config called at {start_time:.3f}"
-            )
+            logger.info(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
             patch_data = await request.json()
             allowed_keys = {
                 "description",
@@ -862,7 +861,7 @@ class Server:
             user_id = self.active_session_ids.get(session_id)
             if user_id is None:
                 raise HTTPException(status_code=401, detail="Not authenticated")
-        
+
             logger.info("Looking for user id: {}".format(user_id))
             user = self.vault.db.run_task(
                 lambda session: session.get(User, user_id),
@@ -887,7 +886,9 @@ class Server:
                 db_user = session.get(User, user_id)
                 if db_user is None:
                     logger.info(f"User {user_id} not found in DB when updating")
-                    raise HTTPException(status_code=404, detail="User not found when updating")
+                    raise HTTPException(
+                        status_code=404, detail="User not found when updating"
+                    )
                 db_user.password_hash = hashed_password
                 session.add(db_user)
                 session.commit()
@@ -3148,13 +3149,9 @@ class Server:
                 else:
                     # Validate the username and password
                     if request.username != user.username:
-                        raise HTTPException(
-                            status_code=401, detail="Invalid username"
-                        )
+                        raise HTTPException(status_code=401, detail="Invalid username")
                     if not bcrypt.verify(request.password, user.password_hash):
-                        raise HTTPException(
-                            status_code=401, detail="Invalid password"
-                        )
+                        raise HTTPException(status_code=401, detail="Invalid password")
                     response = JSONResponse(content={"message": "Login successful."})
 
             # Generate a new session ID using uuid
