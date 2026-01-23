@@ -746,10 +746,6 @@ class Server:
                         detail="HTTPS is required for this operation.",
                     )
 
-        def _require_matching_username(user: User, username: str):
-            if user and user.username and user.username != username:
-                raise HTTPException(status_code=404, detail="User not found")
-
         class ChangePasswordRequest(BaseModel):
             current_password: Optional[str] = None
             new_password: str = Field(
