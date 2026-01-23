@@ -98,7 +98,7 @@ class FaceCharacterLikenessWorker(BaseWorker):
                     Face.find_faces_without_character_likeness, character_id
                 )
 
-                logger.debug(
+                logger.info(
                     "Found {} faces without likeness for character id={}".format(
                         len(faces_without_likeness), character_id
                     )
@@ -115,7 +115,7 @@ class FaceCharacterLikenessWorker(BaseWorker):
                         [arr_face] * len(ref_arrs), ref_arrs
                     )
                     softmax_likeness = PictureUtils.softmax_weighted_average(
-                        sims, alpha=2.0
+                        sims, alpha=5.0
                     )
 
                     likeness_result = FaceCharacterLikeness(

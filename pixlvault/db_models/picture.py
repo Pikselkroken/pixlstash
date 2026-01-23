@@ -50,7 +50,7 @@ class SortMechanism:
         },
         Keys.SMART_SCORE: {
             "field": None,
-            "description": "Sort by Smart Score",
+            "description": "Smart Score",
         },
         Keys.CHARACTER_LIKENESS: {
             "field": "character_likeness",

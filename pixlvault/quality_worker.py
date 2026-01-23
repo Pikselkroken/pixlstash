@@ -223,6 +223,10 @@ class QualityWorker(BaseWorker):
         for pic, quality in zip(pics, qualities):
             session.add(quality)
             pic.quality = quality
+
+            # Aesthetic score is now handled by ImageEmbeddingWorker using CLIP
+            # pic.aesthetic_score = self._calculate_heuristic_aesthetic_score(quality)
+
             session.add(pic)
             changed.append((Picture, pic.id, "quality", quality))
         session.commit()

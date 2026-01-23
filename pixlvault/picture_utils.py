@@ -27,7 +27,6 @@ class PictureUtils:
         candidates: List[dict],
         good_anchors: List[dict],
         bad_anchors: List[dict],
-        char_refs: List[dict],
         config: Optional[dict] = None,
     ) -> np.ndarray:
         """
@@ -37,7 +36,6 @@ class PictureUtils:
             candidates: List of dicts with 'id', 'embedding' (numpy array), 'aesthetic_score'.
             good_anchors: List of dicts with 'embedding', 'score'.
             bad_anchors: List of dicts with 'embedding', 'score'.
-            char_refs: List of dicts with 'embedding', 'score'.
             config: Config dict overrides.
             
         Returns:
@@ -47,12 +45,23 @@ class PictureUtils:
         
         # Default configuration
         cfg = {
-            "w_char": 0.35,
-            "w_good": 0.30,
-            "w_bad": 0.25,
-            "w_aest": 0.10,
+            # Character Likeness Pivot:
+            "char_pivot": 0.75,
+            "w_char_bonus": 0.40,
+            "w_char_penalty": 2.0,
+
+            "w_good": 0.50,
+            "w_bad": 0.30,
+            "w_aest": 0.30,
             "topk": 3,
-            "minSim": 0.35,
+            "minSim": 0.75,
+            "minBadSim": 0.88,
+
+            # Normalization range for Neural Aesthetic Score
+            # Adjusted based on user observation (Max ~4.5)
+            # We set max to 5.0 to allow some headroom, but map 4.5 to a strong 0.75
+            "aest_min": 0.0,
+            "aest_max": 5.0,
         }
         if config:
             cfg.update(config)
@@ -62,7 +71,18 @@ class PictureUtils:
             
         # Extract candidate vectors
         cand_vecs = [c["embedding"] for c in candidates]
-        cand_aest = [c.get("aesthetic_score", 0.5) or 0.5 for c in candidates]
+
+        # Aesthetic score: normalize using configured range (e.g. 3.0-6.5 -> 0-1)
+        # DB stores raw outputs from aesthetic model (typically 1-10 scale)
+        raw_aest = np.array([float(c.get("aesthetic_score") or 5.0) for c in candidates])
+        
+        a_min = cfg.get("aest_min", 3.0)
+        a_max = cfg.get("aest_max", 7.0)
+        
+        # Avoid division by zero
+        denom = max(0.1, a_max - a_min)
+        
+        cand_aest = np.clip((raw_aest - a_min) / denom, 0.0, 1.0)
         
         M_cand = np.stack(cand_vecs)
         scores = np.zeros(len(candidates))
@@ -78,11 +98,26 @@ class PictureUtils:
             return 0.5 * (1 + np.dot(A, B.T))
 
         # 1. Character Similarity (Uses Pre-calculated Face-Character Likeness if available)
-        # If 'character_likeness' is present in candidate dicts, use it instead of embedding similarity.
-        scores += cfg["w_char"] * np.array([c.get("character_likeness", 0.0) for c in candidates])
+        # We apply a hinge loss logic:
+        # If likeness > pivot, gain small bonus.
+        # If likeness < pivot, suffer heavy penalty.
+        char_raw = np.array([c.get("character_likeness", 0.0) for c in candidates])
+        
+        # Calculate delta from pivot
+        char_deltas = char_raw - cfg["char_pivot"]
+        
+        # Apply different weights for positive vs negative deltas
+        char_component = np.where(
+            char_deltas > 0,
+            char_deltas * cfg["w_char_bonus"],
+            char_deltas * cfg["w_char_penalty"]
+        )
+        scores += char_component
 
         # 2. Good Anchors
         mask_good = np.zeros(len(candidates), dtype=bool)
+        good_component = np.zeros(len(candidates))
+        raw_good_sim = np.zeros(len(candidates))
         if good_anchors:
             good_vecs = [a["embedding"] for a in good_anchors]
             good_weights = np.array([norm_weight(a["score"]) for a in good_anchors])
@@ -92,6 +127,7 @@ class PictureUtils:
 
             # Max raw sim for gating
             max_raw = np.max(sims, axis=1)
+            raw_good_sim = max_raw
             mask_good = max_raw >= cfg["minSim"]
 
             # Weighted average of top K
@@ -109,9 +145,12 @@ class PictureUtils:
                 # Actually, -weighted values are negative. partition keeps them negative.
                 # Taking abs() restores them to positive.
                 avg_good = np.mean(np.abs(topk), axis=1)
-                scores += cfg["w_good"] * (avg_good * mask_good)
+                good_component = cfg["w_good"] * (avg_good * mask_good)
+                scores += good_component
 
         # 3. Bad Anchors
+        bad_component = np.zeros(len(candidates))
+        raw_bad_sim = np.zeros(len(candidates))
         if bad_anchors:
             bad_vecs = [a["embedding"] for a in bad_anchors]
             # Bad weight is (1.0 - norm_score)
@@ -119,6 +158,12 @@ class PictureUtils:
             M_bad = np.stack(bad_vecs)
             
             sims = sim01_batch(M_cand, M_bad)
+
+            # Max raw sim for gating negative penalty
+            max_raw_bad = np.max(sims, axis=1)
+            raw_bad_sim = max_raw_bad
+            mask_bad = max_raw_bad >= cfg["minBadSim"]
+
             weighted = sims * bad_weights
             
             K = min(cfg["topk"], weighted.shape[1])
@@ -129,15 +174,33 @@ class PictureUtils:
                     topk = weighted
                 avg_bad = np.mean(np.abs(topk), axis=1)
                 
-                # Apply only if goodSim > 0 (approximated by mask_good)
-                scores -= cfg["w_bad"] * (avg_bad * mask_good)
+                # Apply bad anchor penalty only if similarity exceeds threshold
+                bad_component = cfg["w_bad"] * (avg_bad * mask_bad)
+                scores -= bad_component
 
         # 4. Aesthetic
-        scores += cfg["w_aest"] * np.array(cand_aest)
-        
+        aest_component = cfg["w_aest"] * cand_aest
+        scores += aest_component
+
         # Rescale [0, 1] to [1, 5]
-        scores = np.clip(scores, 0.0, 1.0)
-        return 1.0 + (scores * 4.0)
+        final_scores = 1.0 + (np.clip(scores, 0.0, 1.0) * 4.0)
+
+        # Logging Breakdown for all candidates
+        # Sort indices by final score descending
+        sorted_indices = np.argsort(-final_scores)
+
+        logger.info(f"[SMART SCORE] Analyzed {len(candidates)} candidates. Breakdown:")
+        for rank, i in enumerate(sorted_indices):
+            logger.info(
+                f"[#{rank+1}] ID={candidates[i]['id']} Score={final_scores[i]:.2f} "
+                f"Char={char_component[i]:.3f} (raw={char_raw[i]:.2f}) "
+                f"Good={good_component[i]:.3f} (maxSim={raw_good_sim[i]:.3f}) "
+                f"Bad={bad_component[i]:.3f} (maxSim={raw_bad_sim[i]:.3f}) "
+                f"Aest={aest_component[i]:.3f} (raw={raw_aest[i]:.2f}) "
+                f"MaskBad={mask_bad[i]} PreClip={scores[i]:.3f} "
+            )
+        
+        return final_scores
 
     @staticmethod
     def _coerce_metadata_value(value):

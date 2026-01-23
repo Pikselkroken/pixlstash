@@ -798,22 +798,6 @@ class Server:
                 .limit(200)
             ).all()
 
-            char_refs = []
-            if character_id and character_id not in ("UNASSIGNED", "ALL"):
-                try:
-                    cid = int(character_id)
-                    char_refs = session.exec(
-                        select(Picture.image_embedding, Picture.score)
-                        .join(Face)
-                        .where(Face.picture_id == Picture.id)
-                        .where(Face.character_id == cid)
-                        .where(Picture.image_embedding.is_not(None))
-                        .order_by(desc(Picture.score), desc(Picture.created_at))
-                        .limit(5)
-                    ).all()
-                except ValueError:
-                    pass
-
             # Candidates
             query = select(Picture.id, Picture.image_embedding, Picture.aesthetic_score)
 
@@ -841,28 +825,28 @@ class Server:
 
             candidates = session.exec(query).all()
 
-            # Pre-fetch Face-Character Likeness Map
+            # Pre-fetch Max Face-Character Likeness Map for Candidates
             pic_likeness_map = {}
-            if character_id and character_id not in ("UNASSIGNED", "ALL"):
+            candidate_ids = [c.id for c in candidates]
+            if candidate_ids:
                 try:
-                    cid = int(character_id)
                     stmt = (
                         select(Face.picture_id, func.max(FaceCharacterLikeness.likeness))
                         .join(FaceCharacterLikeness, Face.id == FaceCharacterLikeness.face_id)
-                        .where(FaceCharacterLikeness.character_id == cid)
+                        .where(Face.picture_id.in_(candidate_ids))
                         .group_by(Face.picture_id)
                     )
                     rows = session.exec(stmt).all()
                     pic_likeness_map = {r[0]: r[1] for r in rows}
-                except ValueError:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to fetch likeness map: {e}")
 
-            return good, bad, char_refs, candidates, pic_likeness_map
+            return good, bad, candidates, pic_likeness_map
 
         return self.vault.db.run_task(fetch_data, priority=DBPriority.IMMEDIATE)
 
     def _prepare_smart_score_inputs(
-        self, good_anchors, bad_anchors, char_refs, candidates, pic_likeness_map
+        self, good_anchors, bad_anchors, candidates, pic_likeness_map
     ):
         """Unpickle embeddings and prepare lists of dictionaries for calculation."""
         def get_vec(blob):
@@ -884,7 +868,6 @@ class Server:
 
         good_list = process_list(good_anchors)
         bad_list = process_list(bad_anchors)
-        char_list = process_list(char_refs)
         
         cand_list = []
         cand_ids = []
@@ -900,13 +883,13 @@ class Server:
                     "character_likeness": pic_likeness_map.get(p.id, 0.0)
                 })
         
-        return good_list, bad_list, char_list, cand_list, cand_ids
+        return good_list, bad_list, cand_list, cand_ids
 
     def _find_pictures_by_smart_score(
         self, character_id, format, offset, limit, descending
     ):
         # 1. Fetch data
-        good_anchors, bad_anchors, char_refs, candidates, pic_likeness_map = self._fetch_smart_score_data(
+        good_anchors, bad_anchors, candidates, pic_likeness_map = self._fetch_smart_score_data(
             character_id, format
         )
 
@@ -914,9 +897,8 @@ class Server:
             return []
 
         # 2. Prepare inputs (unpickling)
-        good_list, bad_list, char_list, cand_list, cand_ids = self._prepare_smart_score_inputs(
-            good_anchors, bad_anchors, char_refs, candidates, pic_likeness_map,
-            cand_list, good_list, bad_list, char_list
+        good_list, bad_list, cand_list, cand_ids = self._prepare_smart_score_inputs(
+            good_anchors, bad_anchors, candidates, pic_likeness_map
         )
 
         if not cand_list:
@@ -924,7 +906,7 @@ class Server:
 
         # 3. Calculate Scores (delegated to PictureUtils)
         scores = PictureUtils.calculate_smart_score_batch_numpy(
-            cand_list, good_list, bad_list, char_list
+            cand_list, good_list, bad_list
         )
 
         # 4. Sort and Paginate
@@ -1931,7 +1913,7 @@ class Server:
         @self.api.post("/picture_sets/{id}/members/{picture_id}")
         async def add_picture_to_set(id: int, picture_id: str):
             """Add a picture to a set."""
-            from pixlvault.db_models import PictureSet, PictureSetMember, Picture
+            from pixlvault.db_models import PictureSet, PictureSetMember, Picture, Character, FaceCharacterLikeness
 
             # Find reference_character_id if this is a reference set
             reference_character_id = self._find_reference_character_id_for_set(id)

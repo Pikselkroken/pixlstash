@@ -34,7 +34,7 @@ BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = 32
 MAX_CONCURRENT_IMAGES_CPU = 8
 GENERAL_THRESHOLD = 0.4
-UNDESIRED_TAGS = "solo, general, male_focus, meme, blurry, sensitive, realistic"
+UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
 
