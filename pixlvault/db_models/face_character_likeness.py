@@ -52,7 +52,7 @@ class FaceCharacterLikeness(SQLModel, table=True):
                 INSERT OR IGNORE INTO facecharacterlikeness (face_id, character_id, likeness, metric)
                 VALUES (:face_id, :character_id, :likeness, :metric)
             """),
-            rows,
+            params=rows,
         )
         session.commit()
         return result.rowcount

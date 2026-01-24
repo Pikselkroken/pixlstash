@@ -126,7 +126,7 @@ class PictureLikeness(SQLModel, table=True):
                 INSERT OR IGNORE INTO picturelikeness (picture_id_a, picture_id_b, likeness, metric)
                 VALUES (:picture_id_a, :picture_id_b, :likeness, :metric)
             """),
-            rows,
+            params=rows,
         )
 
     @classmethod
@@ -155,7 +155,7 @@ class PictureLikeness(SQLModel, table=True):
                     WHERE rn > :top_k
                 );
             """),
-            {"a": picture_id_a, "top_k": top_k},
+            params={"a": picture_id_a, "top_k": top_k},
         )
 
 
