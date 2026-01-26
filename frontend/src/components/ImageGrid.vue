@@ -1585,11 +1585,17 @@ watch(
 );
 
 // --- Overlay ---
-async function fetchImageInfo(imageId) {
+async function fetchImageInfo(imageId, options = {}) {
   try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${imageId}/metadata`,
-    );
+    const params = new URLSearchParams();
+    if (options.smartScore) {
+      params.set("smart_score", "true");
+    }
+    const query = params.toString();
+    const url = query
+      ? `${props.backendUrl}/pictures/${imageId}/metadata?${query}`
+      : `${props.backendUrl}/pictures/${imageId}/metadata`;
+    const res = await apiClient.get(url);
     const data = await res.data;
     return data;
   } catch (e) {
@@ -1608,7 +1614,9 @@ async function refreshGridImage(imageId) {
   if (!imageId) return;
   const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
   if (idx === -1) return;
-  const latestInfo = await fetchImageInfo(imageId);
+  const latestInfo = await fetchImageInfo(imageId, {
+    smartScore: isSmartScoreSortActive(),
+  });
   if (latestInfo && !Array.isArray(latestInfo)) {
     const current = allGridImages.value[idx] || {};
     allGridImages.value[idx] = {
@@ -1692,8 +1700,13 @@ async function refreshImageFromOverlay(payload) {
     const latestInfo = await fetchImageInfo(imageId);
     if (!latestInfo || Array.isArray(latestInfo)) return;
     addImageToGrid(latestInfo);
-  } else {
+  } else if (!isSmartScoreSortActive()) {
     await refreshGridImage(imageId);
+  }
+
+  if (isSmartScoreSortActive()) {
+    await refreshSmartScoreForImage(imageId);
+    return;
   }
 
   if (isCharacterLikenessSortActive()) {
@@ -1779,7 +1792,7 @@ function isCharacterLikenessSortActive() {
 
 function isSmartScoreSortActive() {
   return typeof props.selectedSort === "string"
-    ? props.selectedSort === "SMART_SCORE"
+    ? props.selectedSort.toUpperCase().includes("SMART_SCORE")
     : false;
 }
 
@@ -3062,7 +3075,11 @@ async function addTagToImage(imageId, tag) {
       }
       overlayImage.value = { ...overlayImage.value, tags };
     }
+    if (isSmartScoreSortActive()) {
+      await refreshSmartScoreForImage(imageId);
+    } else {
     refreshGridImage(imageId);
+    }
   } catch (error) {
     console.error("Error adding tag:", error);
   }
