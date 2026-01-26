@@ -388,6 +388,18 @@ async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
   }
 }
 
+function handleImagesMovedToSet({ imageIds }) {
+  if (selectedCharacter.value !== UNASSIGNED_PICTURES_ID || selectedSet.value) {
+    return;
+  }
+  if (
+    gridContainer.value &&
+    typeof gridContainer.value.removeImagesById === "function"
+  ) {
+    gridContainer.value.removeImagesById(imageIds);
+  }
+}
+
 function handleFacesAssignedToCharacter({ characterId, faceIds }) {
   if (
     gridContainer.value &&

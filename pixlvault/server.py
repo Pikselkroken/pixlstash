@@ -754,7 +754,7 @@ class Server:
         candidate_pics = self.vault.db.run_task(
             Picture.find,
             id=list(picture_likeness_map.keys()),
-            select_fields=Picture.metadata_fields() | {"characters"},
+            select_fields=Picture.metadata_fields() | {"characters", "picture_sets"},
         )
 
         # Assign character_likeness to pictures
@@ -765,6 +765,10 @@ class Server:
                 if reference_character_id in character_ids or character_ids:
                     # Skip pictures that already have any characters assigned
                     continue
+                if getattr(pic, "picture_sets", None):
+                    if pic.picture_sets:
+                        # Skip pictures that are already in a picture set
+                        continue
             pic_dict = safe_model_dict(pic)
             pic_id = pic_dict["id"]
             pic_dict["character_likeness"] = picture_likeness_map.get(pic_id, 0.0)
@@ -809,7 +813,12 @@ class Server:
                             Face.picture_id == Picture.id,
                             Face.character_id.is_not(None),
                         )
-                    )
+                    ),
+                    ~exists(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.picture_id == Picture.id
+                        )
+                    ),
                 )
             elif character_id and character_id != "ALL":
                 try:
@@ -2093,7 +2102,12 @@ class Server:
                                 Face.character_id.is_not(None),
                             )
                         )
-                        query = query.where(unassigned_condition)
+                        not_in_set_condition = ~exists(
+                            select(PictureSetMember.picture_id).where(
+                                PictureSetMember.picture_id == Picture.id
+                            )
+                        )
+                        query = query.where(unassigned_condition, not_in_set_condition)
                         return list(session.exec(query).all())
 
                     candidate_ids = set(
@@ -2846,8 +2860,17 @@ class Server:
                 ).first()
                 return face is not None
 
-            if character_id == "UNASSIGNED" and self.vault.db.run_task(
-                has_assigned_faces
+            def is_in_picture_set(session):
+                member = session.exec(
+                    select(PictureSetMember.id).where(
+                        PictureSetMember.picture_id == pic_id
+                    )
+                ).first()
+                return member is not None
+
+            if character_id == "UNASSIGNED" and (
+                self.vault.db.run_task(has_assigned_faces)
+                or self.vault.db.run_task(is_in_picture_set)
             ):
                 return {
                     "picture_id": pic_id,
@@ -3375,7 +3398,12 @@ class Server:
                             Face.character_id.is_not(None),
                         )
                     )
-                    query = query.where(unassigned_condition)
+                    not_in_set_condition = ~exists(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.picture_id == Picture.id
+                        )
+                    )
+                    query = query.where(unassigned_condition, not_in_set_condition)
 
                     if format:
                         query = query.where(Picture.format.in_(format))
