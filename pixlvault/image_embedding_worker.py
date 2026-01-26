@@ -15,6 +15,7 @@ from pixlvault.db_models import Picture
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_utils import PictureUtils
+from pixlvault.picture_tagger import CLIP_MODEL_NAME
 
 logger = get_logger(__name__)
 
@@ -30,17 +31,29 @@ class ImageEmbeddingWorker(BaseWorker):
     # Using the improved predictor trained on SAC+Logos+AVA
     AESTHETIC_URL = "https://github.com/christophschuhmann/improved-aesthetic-predictor/raw/main/sac%2Blogos%2Bava1-l14-linearMSE.pth"
     AESTHETIC_MODEL_PATH = "wd14_tagger_model/sac+logos+ava1-l14-linearMSE.pth"
+    AESTHETIC_SUPPORTED_CLIP = {"ViT-L-14"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.model = None
         self.aesthetic_model = None
+        self._aesthetic_disabled = CLIP_MODEL_NAME not in self.AESTHETIC_SUPPORTED_CLIP
 
     def worker_type(self) -> WorkerType:
         return WorkerType.IMAGE_EMBEDDING
 
     def _ensure_model(self):
         if self.aesthetic_model is not None:
+            return
+        if self._aesthetic_disabled:
+            return
+
+        if CLIP_MODEL_NAME not in self.AESTHETIC_SUPPORTED_CLIP:
+            logger.info(
+                "ImageEmbeddingWorker: Aesthetic model disabled for CLIP model '%s'.",
+                CLIP_MODEL_NAME,
+            )
+            self._aesthetic_disabled = True
             return
 
         try:
@@ -69,6 +82,7 @@ class ImageEmbeddingWorker(BaseWorker):
         except Exception as e:
             logger.error(f"ImageEmbeddingWorker: Failed to load aesthetic model: {e}")
             self.aesthetic_model = None
+            self._aesthetic_disabled = True
 
     def _run(self):
         logger.info("ImageEmbeddingWorker: Started.")
@@ -201,7 +215,11 @@ class ImageEmbeddingWorker(BaseWorker):
                         
                         self._db.run_task(self._save_results, updates, priority=DBPriority.LOW)
                         
-                        logger.info(f"ImageEmbeddingWorker: Processed {len(updates)} pictures (embeddings + aesthetic).")
+                        logger.info(
+                            "ImageEmbeddingWorker: Processed %s pictures (embeddings%s).",
+                            len(updates),
+                            " + aesthetic" if self.aesthetic_model is not None else "",
+                        )
 
             except Exception as e:
                 logger.error(f"ImageEmbeddingWorker: Error in loop: {e}")
@@ -210,11 +228,13 @@ class ImageEmbeddingWorker(BaseWorker):
         logger.info("ImageEmbeddingWorker: Stopped.")
 
     def _fetch_work(self, session: Session):
-        """Fetch a batch of pictures that have no image_embedding OR no aesthetic_score"""
-        stmt = (
-            select(Picture.id, Picture.file_path)
-            .where((Picture.image_embedding.is_(None)) | (Picture.aesthetic_score.is_(None)))
-            .limit(self.BATCH_SIZE)
+        """Fetch a batch of pictures that need embeddings (and aesthetics when enabled)."""
+        filters = [Picture.image_embedding.is_(None)]
+        if not self._aesthetic_disabled:
+            filters.append(Picture.aesthetic_score.is_(None))
+
+        stmt = select(Picture.id, Picture.file_path).where(*filters).limit(
+            self.BATCH_SIZE
         )
         results = session.exec(stmt).all()
         return results

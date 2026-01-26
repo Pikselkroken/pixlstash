@@ -56,7 +56,7 @@ class FaceCharacterLikenessWorker(BaseWorker):
                 ).all()
                 picture_ids = [m.picture_id for m in members]
                 if not picture_ids:
-                    logger.warning(
+                    logger.debug(
                         f"No pictures in reference set id={reference_set.id} for character id={character_id}"
                     )
                     return []
