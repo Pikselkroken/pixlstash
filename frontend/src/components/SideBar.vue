@@ -1838,7 +1838,7 @@ defineExpose({ refreshSidebar });
 
 .sidebar.sidebar-collapsed .sidebar-brand:hover .v-btn {
   justify-content: center;
-  background-color: rgb(var(--v-theme-accent));
+  background-color: rgba(var(--v-theme-accent), 0.4);
 }
 
 .sidebar.sidebar-collapsed .sidebar-brand-left {
@@ -1849,7 +1849,7 @@ defineExpose({ refreshSidebar });
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 2px 2px 12px;
+  padding: 2px 4px 2px 2px;
   margin-bottom: 8px;
 }
 
@@ -1857,6 +1857,7 @@ defineExpose({ refreshSidebar });
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 2px 2px 2px 10px;
 }
 
 .sidebar-brand-logo {
