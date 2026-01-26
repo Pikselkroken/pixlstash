@@ -173,6 +173,9 @@ class ImageEmbeddingWorker(BaseWorker):
                             device = self._picture_tagger._clip_device
                             
                             image_tensors = torch.stack([preprocess(img) for img in flat_images]).to(device)
+                            # Convert to fp16 if using CUDA (to match model weights)
+                            if device == "cuda":
+                                image_tensors = image_tensors.half()
                             
                             with torch.no_grad():
                                 features = self._picture_tagger._clip_model.encode_image(image_tensors)

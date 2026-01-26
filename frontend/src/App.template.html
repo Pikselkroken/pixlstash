@@ -233,6 +233,16 @@
                   label="Captions"
                   density="comfortable"
                 />
+                <v-select
+                  v-model="exportResolution"
+                  :background-color="'surface'"
+                  :color="'onSurface'"
+                  :items="exportResolutionOptions"
+                  item-title="title"
+                  item-value="value"
+                  label="Resolution"
+                  density="comfortable"
+                />
                 <v-switch
                   v-model="exportIncludeCharacterName"
                   label="Include character name"

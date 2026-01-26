@@ -167,6 +167,7 @@ function disconnectUpdatesSocket() {
 const exportMenuOpen = ref(false);
 const exportCaptionMode = ref("description");
 const exportIncludeCharacterName = ref(true);
+const exportResolution = ref("original");
 const exportSelectedCount = ref(0);
 const exportTotalCount = ref(0);
 const exportCount = computed(() =>
@@ -178,6 +179,11 @@ const exportCaptionOptions = [
   { title: "No Captions", value: "none" },
   { title: "Description", value: "description" },
   { title: "Tags", value: "tags" },
+];
+const exportResolutionOptions = [
+  { title: "Original", value: "original" },
+  { title: "Half Size", value: "half" },
+  { title: "Quarter Size", value: "quarter" },
 ];
 
 // --- Config Dialog State ---
@@ -413,6 +419,7 @@ function confirmExportZip() {
   gridContainer.value?.exportCurrentViewToZip({
     captionMode: exportCaptionMode.value,
     includeCharacterName: exportIncludeCharacterName.value,
+    resolution: exportResolution.value,
   });
   exportMenuOpen.value = false;
 }

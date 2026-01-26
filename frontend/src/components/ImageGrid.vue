@@ -618,6 +618,9 @@ const previousImageIds = new Set();
 const hasLoadedOnce = ref(false);
 const highlightNextFetch = ref(false);
 const lastWsUpdateKey = ref(0);
+const preserveScrollOnNextFetch = ref(false);
+const pendingScrollTop = ref(null);
+const skipNextWsRefresh = ref(false);
 
 // Key to force face bbox overlay recompute
 const faceOverlayRedrawKey = ref(0);
@@ -766,7 +769,15 @@ watch(
   (nextKey) => {
     if (!nextKey || nextKey === lastWsUpdateKey.value) return;
     lastWsUpdateKey.value = nextKey;
+    const scrollTop = scrollWrapper.value?.scrollTop ?? 0;
+    const threshold = rowHeight.value * 0.5;
+    if (scrollTop > threshold) {
+      skipNextWsRefresh.value = true;
+      preserveScrollOnNextFetch.value = false;
+      return;
+    }
     highlightNextFetch.value = true;
+    preserveScrollOnNextFetch.value = true;
   },
 );
 
@@ -1469,11 +1480,25 @@ watch(
     console.log(
       "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
     );
+    if (skipNextWsRefresh.value) {
+      skipNextWsRefresh.value = false;
+      return;
+    }
+    if (preserveScrollOnNextFetch.value && scrollWrapper.value) {
+      pendingScrollTop.value = scrollWrapper.value.scrollTop;
+    } else {
+      pendingScrollTop.value = null;
+    }
     resetThumbnailState();
-    allGridImages.value = [];
-    selectedImageIds.value = [];
-    lastSelectedIndex = null;
+    if (!preserveScrollOnNextFetch.value) {
+      allGridImages.value = [];
+      selectedImageIds.value = [];
+      lastSelectedIndex = null;
+    }
     debouncedFetchAllGridImages();
+    if (preserveScrollOnNextFetch.value) {
+      preserveScrollOnNextFetch.value = false;
+    }
     fetchAllPicturesCount();
   },
 );
@@ -2203,7 +2228,10 @@ async function fetchAllGridImages() {
       props.selectedSet !== props.allPicturesId &&
       props.selectedSet !== props.unassignedPicturesId
     ) {
-      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
+      const params = buildPictureIdsQueryParams();
+      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${
+        params ? `?${params}` : ""
+      }`;
       const requestStart = performance.now();
       const res = await apiClient.get(url);
       const requestEnd = performance.now();
@@ -2272,11 +2300,19 @@ async function fetchAllGridImages() {
     highlightNextFetch.value = false;
     hasLoadedOnce.value = true;
     const mapStart = performance.now();
-    const newImages = images.map((img, i) => ({
-      ...img,
-      idx: i,
-      thumbnail: null,
-    }));
+    const existingById = new Map(
+      allGridImages.value
+        .filter((img) => img && img.id != null)
+        .map((img) => [img.id, img]),
+    );
+    const newImages = images.map((img, i) => {
+      const existing = img?.id ? existingById.get(img.id) : null;
+      return {
+        ...img,
+        idx: i,
+        thumbnail: existing?.thumbnail ?? null,
+      };
+    });
     const mapEnd = performance.now();
     console.log("Updating allGridImages with fetched images:", newImages);
     allGridImages.value = newImages;
@@ -2317,6 +2353,18 @@ async function fetchAllGridImages() {
     imagesLoading.value = false;
   }
   updateVisibleThumbnails();
+  if (pendingScrollTop.value !== null && scrollWrapper.value) {
+    const targetTop = pendingScrollTop.value;
+    pendingScrollTop.value = null;
+    nextTick(() => {
+      if (!scrollWrapper.value) return;
+      const maxScroll =
+        scrollWrapper.value.scrollHeight - scrollWrapper.value.clientHeight;
+      const clamped = Math.max(0, Math.min(targetTop, maxScroll));
+      scrollWrapper.value.scrollTop = clamped;
+      updateVisibleThumbnails();
+    });
+  }
 }
 
 async function fetchAllPicturesCount() {
@@ -2350,21 +2398,6 @@ watch(
     lastSelectedIndex = null;
     initialRender.value = true;
     updateSelectedGroupName();
-    debouncedFetchAllGridImages();
-  },
-);
-
-watch(
-  () => props.gridVersion,
-  () => {
-    console.log(
-      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
-    );
-    resetThumbnailState();
-    allGridImages.value = [];
-    selectedImageIds.value = [];
-    lastSelectedIndex = null;
-    initialRender.value = true;
     debouncedFetchAllGridImages();
   },
 );
@@ -2627,7 +2660,10 @@ async function fetchThumbnailsBatch(start, end) {
       props.selectedSet !== props.allPicturesId &&
       props.selectedSet !== props.unassignedPicturesId
     ) {
-      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}`;
+      const params = buildPictureIdsQueryParams();
+      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${
+        params ? `?${params}` : ""
+      }`;
       const requestStart = performance.now();
       const res = await apiClient.get(url);
       const requestEnd = performance.now();
@@ -3163,6 +3199,7 @@ function sleep(ms) {
 async function exportCurrentViewToZip(options = {}) {
   const captionMode = options.captionMode || "description";
   const includeCharacterName = options.includeCharacterName !== false;
+  const resolution = options.resolution || "original";
   let url = `${props.backendUrl}/pictures/export`;
   const params = buildPictureIdsQueryParams();
   const extraParams = new URLSearchParams();
@@ -3171,6 +3208,9 @@ async function exportCurrentViewToZip(options = {}) {
   }
   if (includeCharacterName) {
     extraParams.append("include_character_name", "true");
+  }
+  if (resolution) {
+    extraParams.append("resolution", resolution);
   }
   const extraParamString = extraParams.toString();
   if (params) {

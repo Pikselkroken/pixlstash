@@ -1308,9 +1308,11 @@ class Server:
                 char_id = None
             elif id == "UNASSIGNED":
                 # Unassigned
+
                 def find_unassigned(session: Session):
-                    pics = Picture.find(session, select_fields=["characters"])
-                    return [pic for pic in pics if not pic.characters]
+                    # Find all pictures with no characters and not in any picture set
+                    pics = Picture.find(session, select_fields=["characters", "picture_sets"])
+                    return [pic for pic in pics if not pic.characters and not pic.picture_sets]
 
                 pics = self.vault.db.run_immediate_read_task(find_unassigned)
                 image_count = len(pics)
@@ -1801,9 +1803,23 @@ class Server:
             return {"status": "success", "picture_set": set_dict}
 
         @self.api.get("/picture_sets/{id}")
-        async def get_picture_set(id: int, info: bool = Query(False)):
+        async def get_picture_set(
+            id: int,
+            info: bool = Query(False),
+            sort: str = Query(None),
+            descending: bool = Query(True),
+            format: List[str] = Query(None),
+        ):
             """Get a picture set by id. Use ?info=true to get metadata only."""
             from pixlvault.db_models import PictureSet, PictureSetMember, Picture
+
+            sort_mech = None
+            if sort:
+                try:
+                    sort_mech = SortMechanism.from_string(sort, descending=descending)
+                except ValueError as ve:
+                    logger.error("Invalid sort mechanism: %s - %s", sort, ve)
+                    raise HTTPException(status_code=400, detail=str(ve))
 
             def fetch_set(session, id):
                 picture_set = session.get(PictureSet, id)
@@ -1827,11 +1843,22 @@ class Server:
 
             # Return the full pictures data
             def fetch_pics(session, picture_ids):
-                pics = session.exec(
-                    select(Picture).where(Picture.id.in_(picture_ids))
-                ).all()
+                pics = Picture.find(
+                    session,
+                    id=picture_ids,
+                    sort_mech=sort_mech,
+                    select_fields=Picture.metadata_fields(),
+                    format=format,
+                )
                 return [
-                    pic.dict(exclude={"file_path", "thumbnail", "text_embedding", "image_embedding"})
+                    pic.dict(
+                        exclude={
+                            "file_path",
+                            "thumbnail",
+                            "text_embedding",
+                            "image_embedding",
+                        }
+                    )
                     for pic in pics
                 ]
 
@@ -2308,6 +2335,7 @@ class Server:
             threshold: float = Query(0.0),
             caption_mode: str = Query("description"),
             include_character_name: bool = Query(False),
+            resolution: str = Query("original"),
         ):
             """
             Export pictures matching the filters as a zip file.
@@ -2331,6 +2359,15 @@ class Server:
                         bool(include_character_name)
                         and caption_mode_normalized != "none"
                     )
+                    resolution_normalized = (resolution or "original").lower()
+                    if resolution_normalized not in {"original", "half", "quarter"}:
+                        resolution_normalized = "original"
+                    scale_map = {
+                        "original": 1.0,
+                        "half": 0.5,
+                        "quarter": 0.25,
+                    }
+                    scale_factor = scale_map.get(resolution_normalized, 1.0)
 
                     picture_ids = request.query_params.getlist("id")
                     query_params = dict(request.query_params)
@@ -2481,7 +2518,35 @@ class Server:
                                 )
                                 ext = os.path.splitext(full_path)[1]
                                 arcname = f"image_{idx:05d}{ext}"
-                                zip_file.write(full_path, arcname=arcname)
+                                if scale_factor < 1.0 and not PictureUtils.is_video_file(
+                                    full_path
+                                ):
+                                    try:
+                                        from PIL import Image
+                                        from io import BytesIO
+
+                                        with Image.open(full_path) as img:
+                                            new_width = max(1, int(img.width * scale_factor))
+                                            new_height = max(1, int(img.height * scale_factor))
+                                            resized = img.resize(
+                                                (new_width, new_height),
+                                                resample=Image.LANCZOS,
+                                            )
+                                            buffer = BytesIO()
+                                            save_format = img.format or ext.lstrip(".").upper()
+                                            if save_format.upper() in {"JPG", "JPEG"}:
+                                                resized = resized.convert("RGB")
+                                            resized.save(buffer, format=save_format)
+                                            zip_file.writestr(arcname, buffer.getvalue())
+                                    except Exception as exc:
+                                        logger.warning(
+                                            "Failed to resize %s (%s); falling back to original.",
+                                            full_path,
+                                            exc,
+                                        )
+                                        zip_file.write(full_path, arcname=arcname)
+                                else:
+                                    zip_file.write(full_path, arcname=arcname)
                                 caption_text = None
                                 if caption_mode_normalized == "description":
                                     caption_text = pic.description or ""
@@ -3336,11 +3401,21 @@ class Server:
                             query = query.options(selectinload(rel_attr))
 
                     if sort_mech:
-                        field = getattr(Picture, sort_mech.field, None)
-                        if field is not None:
+                        if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
+                            order_expr = (Picture.width * Picture.height)
                             query = query.order_by(
-                                field.desc() if sort_mech.descending else field.asc()
+                                order_expr.desc()
+                                if sort_mech.descending
+                                else order_expr.asc()
                             )
+                        else:
+                            field = getattr(Picture, sort_mech.field, None)
+                            if field is not None:
+                                query = query.order_by(
+                                    field.desc()
+                                    if sort_mech.descending
+                                    else field.asc()
+                                )
 
                     if offset > 0 or limit != sys.maxsize:
                         query = query.offset(offset).limit(limit)
