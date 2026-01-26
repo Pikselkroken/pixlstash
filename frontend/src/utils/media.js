@@ -34,7 +34,8 @@ export function dataTransferHasSupportedMedia(dataTransfer) {
     const item = items[i];
     if (!item || item.kind !== 'file') continue;
     const mime = item.type || '';
-    if (typeof mime === 'string' && (mime.startsWith('image/') || mime.startsWith('video/'))) {
+    if (typeof mime === 'string' &&
+        (mime.startsWith('image/') || mime.startsWith('video/'))) {
       return true;
     }
     if (!mime && typeof item.getAsFile === 'function') {
@@ -63,7 +64,7 @@ export function getOverlayFormat(overlayImage) {
     return overlayImage.url.split('.').pop().toLowerCase();
   }
   if (overlayImage.id) {
-    return overlayImage.id.split('.').pop().toLowerCase();
+    return String(overlayImage.id).split('.').pop().toLowerCase();
   }
   return 'png';
 }

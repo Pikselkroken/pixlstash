@@ -52,7 +52,10 @@ class PictureUtils:
 
             "w_good": 0.60,
             "w_bad": 0.20,
-            "w_aest": 0.20,
+            "w_aest": 0.30,
+            "w_resolution": 0.06,
+            "w_noise": 0.06,
+            "w_edge": 0.04,
             "w_penalized_tag": 0.40,
             "penalized_tag_cap": 3,
             "topk": 3,
@@ -64,6 +67,15 @@ class PictureUtils:
             # We set max to 5.0 to allow some headroom, but map 4.5 to a strong 0.75
             "aest_min": 0.0,
             "aest_max": 7.0,
+            "aest_spread": 1.0,
+
+            # Resolution scoring (megapixels)
+            "res_min_mpx": 0.2,
+            "res_max_mpx": 4.0,
+            "res_use_log": True,
+
+            # Contrast/stretch for final smart score spread (1.0 = no change)
+            "score_spread": 1.15,
         }
         if config:
             cfg.update(config)
@@ -85,6 +97,10 @@ class PictureUtils:
         denom = max(0.1, a_max - a_min)
         
         cand_aest = np.clip((raw_aest - a_min) / denom, 0.0, 1.0)
+        aest_spread = float(cfg.get("aest_spread", 1.0) or 1.0)
+        if np.isfinite(aest_spread) and aest_spread > 0 and aest_spread != 1.0:
+            cand_aest = 0.5 + (cand_aest - 0.5) * aest_spread
+            cand_aest = np.clip(cand_aest, 0.0, 1.0)
         
         M_cand = np.stack(cand_vecs)
         scores = np.zeros(len(candidates))
@@ -185,6 +201,44 @@ class PictureUtils:
         aest_component = cfg["w_aest"] * cand_aest
         scores += aest_component
 
+        # 4b. Resolution (megapixels)
+        widths = np.array([c.get("width") or 0 for c in candidates], dtype=np.float32)
+        heights = np.array([c.get("height") or 0 for c in candidates], dtype=np.float32)
+        mpx = (widths * heights) / 1_000_000.0
+        res_min = float(cfg.get("res_min_mpx", 0.2) or 0.2)
+        res_max = float(cfg.get("res_max_mpx", 4.0) or 4.0)
+        res_min = max(0.01, res_min)
+        res_max = max(res_min + 0.01, res_max)
+        if cfg.get("res_use_log", True):
+            res_vals = np.log10(np.clip(mpx, 1e-6, None))
+            res_min_val = np.log10(res_min)
+            res_max_val = np.log10(res_max)
+        else:
+            res_vals = mpx
+            res_min_val = res_min
+            res_max_val = res_max
+        denom_res = max(0.001, res_max_val - res_min_val)
+        res_norm = np.clip((res_vals - res_min_val) / denom_res, 0.0, 1.0)
+        res_component = cfg["w_resolution"] * res_norm
+        scores += res_component
+
+        # 4c. Noise (prefer lower noise) and edge density
+        noise_vals = np.array([c.get("noise_level") for c in candidates], dtype=np.float32)
+        noise_vals = np.where(np.isfinite(noise_vals), noise_vals, np.nan)
+        noise_vals = np.where(noise_vals < 0, np.nan, noise_vals)
+        noise_vals = np.where(np.isnan(noise_vals), 0.5, noise_vals)
+        noise_vals = np.clip(noise_vals, 0.0, 1.0)
+        noise_component = cfg["w_noise"] * (1.0 - noise_vals)
+        scores += noise_component
+
+        edge_vals = np.array([c.get("edge_density") for c in candidates], dtype=np.float32)
+        edge_vals = np.where(np.isfinite(edge_vals), edge_vals, np.nan)
+        edge_vals = np.where(edge_vals < 0, np.nan, edge_vals)
+        edge_vals = np.where(np.isnan(edge_vals), 0.5, edge_vals)
+        edge_vals = np.clip(edge_vals, 0.0, 1.0)
+        edge_component = cfg["w_edge"] * edge_vals
+        scores += edge_component
+
         # 5. Penalized Tags
         penalized_counts = np.array(
             [float(c.get("penalized_tag_count") or 0) for c in candidates]
@@ -195,8 +249,15 @@ class PictureUtils:
         penalized_component = cfg["w_penalized_tag"] * penalized_counts
         scores -= penalized_component
 
-        # Rescale [0, 1] to [1, 5]
-        final_scores = 1.0 + (np.clip(scores, 0.0, 1.0) * 4.0)
+        # Rescale [0, 1] to [1, 5] with optional spread adjustment
+        clipped = np.clip(scores, 0.0, 1.0)
+        spread = float(cfg.get("score_spread", 1.0) or 1.0)
+        if not np.isfinite(spread) or spread <= 0:
+            spread = 1.0
+        if spread != 1.0:
+            clipped = 0.5 + (clipped - 0.5) * spread
+            clipped = np.clip(clipped, 0.0, 1.0)
+        final_scores = 1.0 + (clipped * 4.0)
 
         # Logging Breakdown for all candidates
         # Sort indices by final score descending
@@ -210,6 +271,9 @@ class PictureUtils:
                 f"Good={good_component[i]:.3f} (maxSim={raw_good_sim[i]:.3f}) "
                 f"Bad={bad_component[i]:.3f} (maxSim={raw_bad_sim[i]:.3f}) "
                 f"Aest={aest_component[i]:.3f} (raw={raw_aest[i]:.2f}) "
+                f"Res={res_component[i]:.3f} (mpx={mpx[i]:.2f}) "
+                f"Noise={noise_component[i]:.3f} (raw={noise_vals[i]:.2f}) "
+                f"Edge={edge_component[i]:.3f} (raw={edge_vals[i]:.2f}) "
                 f"PenTags={penalized_component[i]:.3f} (count={int(penalized_counts[i])}) "
                 f"MaskBad={mask_bad[i]} PreClip={scores[i]:.3f} "
             )

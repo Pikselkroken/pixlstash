@@ -474,7 +474,7 @@
               "
               class="likeness-score"
             >
-              Smart Score: {{ img.smartScore.toFixed(1) }}
+              Smart Score: {{ img.smartScore.toFixed(2) }}
             </div>
             <div
               v-if="
@@ -578,6 +578,7 @@ const emit = defineEmits([
   "clear-search",
   "reset-to-all",
   "start-scoring",
+  "update:selected-sort",
 ]);
 
 // Props
@@ -2079,11 +2080,129 @@ async function applyScore(img, newScore) {
     if (isScoreSortActive()) {
       repositionImageByScore(imageId, newScore);
     }
-    refreshGridImage(imageId);
+    if (isSmartScoreSortActive()) {
+      preserveScrollOnNextFetch.value = true;
+      debouncedFetchAllGridImages();
+    } else {
+      refreshGridImage(imageId);
+    }
     emit("refresh-sidebar");
   } catch (e) {
     alert(e.message);
   }
+}
+
+async function applyScoresForSelection(imageIds, targetScore) {
+  const ids = Array.isArray(imageIds) ? imageIds.filter(Boolean) : [];
+  if (!ids.length) return;
+  if (!Number.isFinite(targetScore)) return;
+
+  const gridById = new Map(
+    allGridImages.value
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+
+  const entries = [];
+  for (const id of ids) {
+    const key = String(id);
+    const img = gridById.get(key);
+    if (!img) continue;
+    const current = Number(img.score || 0);
+    const nextScore = current === targetScore ? 0 : targetScore;
+    entries.push([key, nextScore]);
+  }
+
+  if (!entries.length) return;
+
+  const chunkSize = 50;
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(([id, score]) =>
+        apiClient.patch(`${props.backendUrl}/pictures/${id}`, {
+          score,
+        }),
+      ),
+    );
+  }
+
+  const scoreMap = new Map(
+    entries.map(([id, score]) => [String(id), Number(score)]),
+  );
+
+  let updatedImages = allGridImages.value.map((img) => {
+    if (!img || img.id == null) return img;
+    const key = String(img.id);
+    if (!scoreMap.has(key)) return img;
+    return { ...img, score: scoreMap.get(key) };
+  });
+
+  if (interactiveScoringSession.value?.provisionalMap) {
+    const updatedMap = { ...interactiveScoringSession.value.provisionalMap };
+    let changed = false;
+    for (const key of scoreMap.keys()) {
+      if (updatedMap[key] != null) {
+        delete updatedMap[key];
+        changed = true;
+      }
+    }
+    if (changed) {
+      interactiveScoringSession.value = {
+        ...interactiveScoringSession.value,
+        provisionalMap: updatedMap,
+      };
+    }
+  }
+
+  if (interactiveScoringItems.value?.length) {
+    const removeSet = new Set(Array.from(scoreMap.keys()));
+    const filtered = interactiveScoringItems.value.filter(
+      (item) => !removeSet.has(String(item.id)),
+    );
+    if (filtered.length !== interactiveScoringItems.value.length) {
+      interactiveScoringItems.value = filtered;
+    }
+  }
+
+  if (
+    overlayOpen.value &&
+    overlayImage.value &&
+    scoreMap.has(String(overlayImage.value.id))
+  ) {
+    overlayImage.value = {
+      ...overlayImage.value,
+      score: scoreMap.get(String(overlayImage.value.id)),
+    };
+  }
+
+  if (isScoreSortActive()) {
+    const descending = props.selectedDescending === true;
+    updatedImages = updatedImages
+      .slice()
+      .sort((a, b) => {
+        const aScore = a?.score ?? 0;
+        const bScore = b?.score ?? 0;
+        if (aScore === bScore) {
+          const aIdx = a?.idx ?? 0;
+          const bIdx = b?.idx ?? 0;
+          return aIdx - bIdx;
+        }
+        return descending ? bScore - aScore : aScore - bScore;
+      })
+      .map((img, idx) => (img ? { ...img, idx } : img));
+    allGridImages.value = updatedImages;
+    invalidateVisibleThumbnailRanges();
+  } else {
+    allGridImages.value = updatedImages;
+  }
+
+  if (isSmartScoreSortActive()) {
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+  }
+
+  emit("refresh-sidebar");
 }
 
 // Drag-and-drop overlay handlers
@@ -3276,17 +3395,22 @@ function handleKeyDown(event) {
     console.log("[CTRL+A] selectedImageIds:", selectedImageIds.value);
     lastSelectedIndex = null;
   } else if (
-    hoveredImageIdx.value !== null &&
-    selectedImageIds.value.length === 0 &&
+    (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
     !overlayOpen.value &&
     /^[1-5]$|^0$/.test(event.key)
   ) {
     // Number key pressed, set score for hovered image
+    if (selectedImageIds.value.length > 0) {
+      const score = parseInt(event.key, 10);
+      const ids = selectedImageIds.value.slice();
+      applyScoresForSelection(ids, score);
+      event.preventDefault();
+      return;
+    }
     const idx = hoveredImageIdx.value;
     const img = allGridImages.value[idx];
     if (img && img.id) {
       let score = parseInt(event.key, 10);
-      if (score === 0) score = 5;
       setScore(img, score);
       event.preventDefault();
     }
@@ -3571,6 +3695,10 @@ function buildScoringCalibrationItems() {
       id: img.id,
       smartScore: Number(img.smartScore),
       score: Number(img.score),
+      created_at: img.created_at || null,
+      format: img.format || null,
+      pixel_sha: img.pixel_sha || null,
+      thumbnail: img.thumbnail || null,
     }));
 }
 
@@ -3609,7 +3737,28 @@ async function applyScoresBulk(provisionalMap) {
 }
 
 async function handleScoringConfirm(payload) {
-  await applyScoresBulk(payload?.provisionalMap || {});
+  const provisionalMap = payload?.provisionalMap || {};
+  await applyScoresBulk(provisionalMap);
+  emit("update:selected-sort", { sort: "SCORE", descending: true });
+
+  if (payload?.continueScoring) {
+    if (!interactiveScoringItems.value.length) {
+      interactiveScoringOpen.value = false;
+      interactiveScoringSession.value = null;
+      return;
+    }
+    interactiveScoringSession.value = {
+      ...interactiveScoringSession.value,
+      roundNumber: (payload?.roundNumber || 1) + 1,
+      roundOneMap: payload?.roundOneMap || {},
+    };
+    interactiveScoringCalibration.value = buildScoringCalibrationItems();
+    interactiveScoringOpen.value = false;
+    await nextTick();
+    interactiveScoringOpen.value = true;
+    return;
+  }
+
   interactiveScoringOpen.value = false;
   interactiveScoringItems.value = [];
   interactiveScoringSession.value = null;
