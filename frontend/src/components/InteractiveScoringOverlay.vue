@@ -17,7 +17,40 @@
         class="scoring-body"
         :class="{ 'scoring-body-review': phase === 'review' }"
       >
-        <div class="scoring-media" v-if="phase === 'probe' && currentItem">
+        <div class="scoring-compare" v-if="showCompare">
+          <div class="scoring-compare-card">
+            <button
+              class="scoring-compare-button"
+              type="button"
+              :aria-label="`Select ${comparePair.left.id} as best`"
+              @click="chooseComparison('left')"
+            >
+              <img
+                class="scoring-compare-image"
+                :src="getFullImageUrl(comparePair.left)"
+                :alt="`Compare image ${comparePair.left.id}`"
+              />
+              <div class="scoring-compare-overlay">This is the best one</div>
+            </button>
+          </div>
+          <div class="scoring-compare-card">
+            <button
+              class="scoring-compare-button"
+              type="button"
+              :aria-label="`Select ${comparePair.right.id} as best`"
+              @click="chooseComparison('right')"
+            >
+              <img
+                class="scoring-compare-image"
+                :src="getFullImageUrl(comparePair.right)"
+                :alt="`Compare image ${comparePair.right.id}`"
+              />
+              <div class="scoring-compare-overlay">This is the best one</div>
+            </button>
+          </div>
+        </div>
+
+        <div class="scoring-media" v-else-if="phase === 'probe' && currentItem">
           <video
             v-if="isVideo(currentItem)"
             class="scoring-video"
@@ -36,7 +69,19 @@
           No eligible images found.
         </div>
 
-        <div class="scoring-actions" v-if="phase === 'probe' && currentItem">
+        <div class="scoring-actions" v-if="showCompare">
+          <div class="scoring-prompt">Click on the best image.</div>
+          <div class="scoring-buttons">
+            <v-btn variant="outlined" @click="chooseComparison('same')">
+              They are the same
+            </v-btn>
+          </div>
+        </div>
+
+        <div
+          class="scoring-actions"
+          v-else-if="phase === 'probe' && currentItem"
+        >
           <div class="scoring-prompt">Good enough to keep?</div>
           <div class="scoring-buttons">
             <v-btn color="primary" variant="elevated" @click="chooseKeep">
@@ -157,6 +202,9 @@ const sCut = ref(null);
 const orderedItems = ref([]);
 const provisionalMap = ref({});
 const manualOverrides = ref(new Set());
+const comparisonBias = ref({});
+const lastComparePair = ref(null);
+const usedComparePairs = ref(new Set());
 
 const maxProbes = computed(() => DEFAULT_CONFIG.maxProbes);
 
@@ -189,12 +237,18 @@ const calibrationModel = computed(() => {
   return { slope, intercept };
 });
 
-function getScoreForMapping(item) {
+function getCalibratedScore(item) {
   const base = typeof item?.smartScore === "number" ? item.smartScore : 0;
   const model = calibrationModel.value;
   if (!model) return base;
   const predicted = model.slope * base + model.intercept;
   return Math.max(0, Math.min(1, predicted));
+}
+
+function getScoreForMapping(item) {
+  const base = getCalibratedScore(item);
+  const bias = comparisonBias.value[item?.id] ?? 0;
+  return Math.max(0, Math.min(1, base + bias));
 }
 
 function getCalibrationSnapshot() {
@@ -257,6 +311,9 @@ function resetSessionState() {
   sCut.value = null;
   provisionalMap.value = {};
   manualOverrides.value = new Set();
+  comparisonBias.value = {};
+  lastComparePair.value = null;
+  usedComparePairs.value = new Set();
 }
 
 function hydrateFromSession(session) {
@@ -287,6 +344,12 @@ function hydrateFromSession(session) {
   if (Array.isArray(session.manualOverrideIds)) {
     manualOverrides.value = new Set(session.manualOverrideIds);
   }
+  if (session.comparisonBias && typeof session.comparisonBias === "object") {
+    comparisonBias.value = { ...session.comparisonBias };
+  }
+  if (Array.isArray(session.usedComparePairs)) {
+    usedComparePairs.value = new Set(session.usedComparePairs);
+  }
   return true;
 }
 
@@ -300,6 +363,8 @@ function emitSessionUpdate() {
     sCut: sCut.value,
     provisionalMap: provisionalMap.value,
     manualOverrideIds: Array.from(manualOverrides.value),
+    comparisonBias: comparisonBias.value,
+    usedComparePairs: Array.from(usedComparePairs.value),
   });
 }
 
@@ -399,6 +464,41 @@ function setProvisionalStars(itemId, stars) {
   emitSessionUpdate();
 }
 
+function applyComparisonBias(betterItem, worseItem) {
+  if (!betterItem || !worseItem) return;
+  const epsilon = 0.06;
+  const betterScore = getScoreForMapping(betterItem);
+  const worseScore = getScoreForMapping(worseItem);
+  const delta = Math.max(0, worseScore - betterScore + epsilon);
+  if (!delta) return;
+  const next = { ...comparisonBias.value };
+  const betterId = betterItem.id;
+  const worseId = worseItem.id;
+  next[betterId] = Math.min(0.5, (next[betterId] ?? 0) + delta);
+  next[worseId] = Math.max(-0.5, (next[worseId] ?? 0) - delta);
+  comparisonBias.value = next;
+}
+
+function chooseComparison(result) {
+  const pair = comparePair.value;
+  if (!pair) return;
+  const a = Math.min(pair.leftIndex, pair.rightIndex);
+  const b = Math.max(pair.leftIndex, pair.rightIndex);
+  lastComparePair.value = { a, b };
+  usedComparePairs.value = new Set([...usedComparePairs.value, `${a}-${b}`]);
+  if (result === "left" || result === "right") {
+    const better = result === "left" ? pair.left : pair.right;
+    const worse = result === "left" ? pair.right : pair.left;
+    const betterIndex = result === "left" ? pair.leftIndex : pair.rightIndex;
+    const worseIndex = result === "left" ? pair.rightIndex : pair.leftIndex;
+    applyComparisonBias(better, worse);
+    keepMaxIndex.value = Math.max(keepMaxIndex.value, betterIndex);
+    tossMinIndex.value = Math.min(tossMinIndex.value, worseIndex);
+  }
+  probesDone.value += 1;
+  checkProbeStop();
+}
+
 const currentIndex = computed(() => {
   if (!orderedItems.value.length) return -1;
   if (
@@ -432,6 +532,55 @@ const currentItem = computed(() => {
     );
   }
   return orderedItems.value[currentIndex.value];
+});
+
+const comparePair = computed(() => {
+  if (phase.value !== "probe") return null;
+  const list = orderedItems.value;
+  if (!list.length) return null;
+  const center = currentIndex.value;
+  if (center < 0 || center >= list.length) return null;
+  const candidates = [
+    [center, center + 1],
+    [center - 1, center],
+    [center, center - 1],
+    [center + 1, center + 2],
+    [center - 2, center - 1],
+  ]
+    .map(([a, b]) => [a, b])
+    .filter(([a, b]) => a >= 0 && b >= 0 && a < list.length && b < list.length)
+    .filter(([a, b]) => a !== b);
+
+  const used = usedComparePairs.value;
+  let selected =
+    candidates.find(([a, b]) => {
+      const min = Math.min(a, b);
+      const max = Math.max(a, b);
+      return !used.has(`${min}-${max}`);
+    }) || null;
+
+  if (!selected && candidates.length) {
+    selected = candidates[0];
+  }
+
+  if (!selected) return null;
+  const [leftIndex, rightIndex] = selected;
+  return {
+    left: list[leftIndex],
+    right: list[rightIndex],
+    leftIndex,
+    rightIndex,
+  };
+});
+
+const showCompare = computed(() => {
+  if (phase.value !== "probe") return false;
+  const pair = comparePair.value;
+  if (!pair) return false;
+  const leftScore = getCalibratedScore(pair.left);
+  const rightScore = getCalibratedScore(pair.right);
+  const diff = Math.abs(leftScore - rightScore);
+  return diff <= 0.04;
 });
 
 const summaryBuckets = computed(() => {
@@ -510,6 +659,9 @@ function confirmScores() {
 function discardScores() {
   provisionalMap.value = {};
   manualOverrides.value = new Set();
+  comparisonBias.value = {};
+  lastComparePair.value = null;
+  usedComparePairs.value = new Set();
   emit("discard");
 }
 
@@ -636,6 +788,64 @@ watch(
 .scoring-media {
   display: flex;
   justify-content: center;
+}
+
+.scoring-compare {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.scoring-compare-card {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(var(--v-theme-surface), 0.2);
+}
+
+.scoring-compare-button {
+  width: 100%;
+  display: block;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+}
+
+.scoring-compare-button:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.9);
+  outline-offset: 2px;
+}
+
+.scoring-compare-image {
+  width: 100%;
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.2);
+  display: block;
+}
+
+.scoring-compare-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(var(--v-theme-primary), 0.25);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.scoring-compare-button:hover {
+  border-color: rgba(var(--v-theme-primary), 0.9);
+}
+
+.scoring-compare-button:hover .scoring-compare-overlay {
+  opacity: 1;
 }
 
 .scoring-image,
