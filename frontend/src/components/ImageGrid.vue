@@ -11,6 +11,17 @@
     @update-description="updateDescriptionForImage"
     @refresh-image="refreshImageFromOverlay"
   />
+  <InteractiveScoringOverlay
+    :open="interactiveScoringOpen"
+    :items="interactiveScoringItems"
+    :calibration-items="interactiveScoringCalibration"
+    :session="interactiveScoringSession"
+    :backendUrl="props.backendUrl"
+    @close="handleScoringClose"
+    @confirm="handleScoringConfirm"
+    @discard="handleScoringDiscard"
+    @session-update="handleScoringSessionUpdate"
+  />
   <ImageImporter
     ref="imageImporterRef"
     :backendUrl="props.backendUrl"
@@ -555,6 +566,7 @@ import {
 } from "../utils/media.js";
 import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
+import InteractiveScoringOverlay from "./InteractiveScoringOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
 import { useSearchOverlay } from "../utils/useSearchOverlay";
 import { apiClient } from "../utils/apiClient";
@@ -2040,6 +2052,21 @@ async function applyScore(img, newScore) {
     if (gridImg) {
       gridImg.score = newScore;
     }
+    if (interactiveScoringSession.value?.provisionalMap) {
+      const updatedMap = { ...interactiveScoringSession.value.provisionalMap };
+      if (updatedMap[imageId] != null) {
+        delete updatedMap[imageId];
+        interactiveScoringSession.value = {
+          ...interactiveScoringSession.value,
+          provisionalMap: updatedMap,
+        };
+      }
+    }
+    if (interactiveScoringItems.value?.length) {
+      interactiveScoringItems.value = interactiveScoringItems.value.filter(
+        (item) => item.id !== imageId,
+      );
+    }
     // Update overlay image if open and matches
     if (
       overlayOpen.value &&
@@ -3468,6 +3495,18 @@ function handleEmptyStateReset() {
 }
 
 function handleStartScoring() {
+  const scope = buildInteractiveScoringItems();
+  if (!scope.length) return;
+  const scopeKey = buildScoringScopeKey(scope);
+  if (
+    !interactiveScoringSession.value ||
+    interactiveScoringSession.value.scopeKey !== scopeKey
+  ) {
+    interactiveScoringSession.value = { scopeKey };
+  }
+  interactiveScoringCalibration.value = buildScoringCalibrationItems();
+  interactiveScoringItems.value = scope;
+  interactiveScoringOpen.value = true;
   emit("start-scoring");
 }
 
@@ -3485,6 +3524,106 @@ const unscoredCount = computed(() => {
   }
   return count;
 });
+
+const interactiveScoringOpen = ref(false);
+const interactiveScoringItems = ref([]);
+const interactiveScoringSession = ref(null);
+const interactiveScoringCalibration = ref([]);
+
+function buildScoringScopeKey(items) {
+  return items.map((item) => String(item.id)).join(",");
+}
+
+function buildInteractiveScoringItems() {
+  const filtered = filterImagesByMediaType(allGridImages.value || []);
+  const scope = filtered.filter((img) => {
+    const score = typeof img?.score === "number" ? img.score : 0;
+    return img && img.id && typeof img.smartScore === "number" && score <= 0;
+  });
+  return scope
+    .map((img) => ({
+      id: img.id,
+      smartScore: Number(img.smartScore),
+      created_at: img.created_at || null,
+      format: img.format || null,
+      pixel_sha: img.pixel_sha || null,
+      thumbnail: img.thumbnail || null,
+    }))
+    .sort((a, b) => {
+      if (b.smartScore !== a.smartScore) {
+        return b.smartScore - a.smartScore;
+      }
+      if (a.created_at && b.created_at && a.created_at !== b.created_at) {
+        return a.created_at > b.created_at ? 1 : -1;
+      }
+      return String(a.id).localeCompare(String(b.id));
+    });
+}
+
+function buildScoringCalibrationItems() {
+  const filtered = filterImagesByMediaType(allGridImages.value || []);
+  return filtered
+    .filter((img) => {
+      const score = typeof img?.score === "number" ? img.score : 0;
+      return img && img.id && typeof img.smartScore === "number" && score > 0;
+    })
+    .map((img) => ({
+      id: img.id,
+      smartScore: Number(img.smartScore),
+      score: Number(img.score),
+    }));
+}
+
+function handleScoringSessionUpdate(session) {
+  if (!session) return;
+  interactiveScoringSession.value = {
+    ...interactiveScoringSession.value,
+    ...session,
+  };
+}
+
+async function applyScoresBulk(provisionalMap) {
+  const entries = Object.entries(provisionalMap || {});
+  if (!entries.length) return;
+  const chunkSize = 25;
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(([id, stars]) =>
+        apiClient.patch(`${props.backendUrl}/pictures/${id}`, {
+          score: stars,
+        }),
+      ),
+    );
+  }
+
+  const scoreMap = new Map(
+    entries.map(([id, stars]) => [String(id), Number(stars)]),
+  );
+  allGridImages.value = allGridImages.value.map((img) => {
+    if (!img || !img.id) return img;
+    const key = String(img.id);
+    if (!scoreMap.has(key)) return img;
+    return { ...img, score: scoreMap.get(key) };
+  });
+}
+
+async function handleScoringConfirm(payload) {
+  await applyScoresBulk(payload?.provisionalMap || {});
+  interactiveScoringOpen.value = false;
+  interactiveScoringItems.value = [];
+  interactiveScoringSession.value = null;
+}
+
+function handleScoringDiscard() {
+  interactiveScoringOpen.value = false;
+  interactiveScoringItems.value = [];
+  interactiveScoringSession.value = null;
+}
+
+function handleScoringClose() {
+  interactiveScoringOpen.value = false;
+}
 </script>
 
 <style scoped>
