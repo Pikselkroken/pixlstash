@@ -50,6 +50,7 @@ from pixlvault.db_models import (
     Picture,
     PictureSet,
     PictureSetMember,
+    Quality,
     SortMechanism,
     User,
     UserToken,
@@ -68,6 +69,19 @@ from pixlvault.worker_registry import WorkerType
 from pixlvault.watch_folder_worker import WatchFolderWorker
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
+DEFAULT_SMART_SCORE_PENALIZED_TAGS = [
+    "bad anatomy",
+    "extra digit",
+    "missing digit",
+    "extra limb",
+    "missing limb",
+    "malformed hand",
+    "malformed teeth",
+    "missing nipples",
+    "malformed nipples",
+    "waxy skin",
+    "flux chin",
+]
 
 # Logging will be set up after config is loaded
 logger = get_logger(__name__)
@@ -313,6 +327,7 @@ class Server:
             "thumbnail_size": "default",
             "show_stars": True,
             "similarity_character": None,
+            "smart_score_penalized_tags": DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         }
         config = defaults.copy()
         config.update({k: v for k, v in kwargs.items() if v is not None})
@@ -418,6 +433,57 @@ class Server:
             return int(value)
         return None
 
+    def _normalize_smart_score_penalized_tags(
+        self, value, fallback=None, allow_empty: bool = False
+    ):
+        if value is None:
+            return fallback
+
+        tags = None
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                return fallback
+            if isinstance(parsed, list):
+                tags = parsed
+            else:
+                return fallback
+        elif isinstance(value, list):
+            tags = value
+        else:
+            return fallback
+
+        normalized = []
+        seen = set()
+        for tag in tags:
+            if tag is None:
+                continue
+            clean = str(tag).strip().lower()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            normalized.append(clean)
+        if normalized:
+            return normalized
+        return [] if allow_empty else fallback
+
+    def _get_smart_score_penalized_tags_from_request(self, request: Request):
+        session_id = request.cookies.get("session_id")
+        if not session_id:
+            return DEFAULT_SMART_SCORE_PENALIZED_TAGS
+        user_id = self.active_session_ids.get(session_id)
+        if user_id is None:
+            return DEFAULT_SMART_SCORE_PENALIZED_TAGS
+        user = self.vault.db.run_task(
+            lambda session: session.get(User, user_id),
+            priority=DBPriority.IMMEDIATE,
+        )
+        return self._normalize_smart_score_penalized_tags(
+            user.smart_score_penalized_tags if user else None,
+            DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+        )
+
     def _ensure_user(self):
         defaults = self._config if isinstance(self._config, dict) else {}
 
@@ -437,6 +503,12 @@ class Server:
                 thumbnail_size=self._normalize_thumbnail_size(thumbnail_value),
                 show_stars=bool(defaults.get("show_stars", True)),
                 similarity_character=defaults.get("similarity_character"),
+                smart_score_penalized_tags=json.dumps(
+                    self._normalize_smart_score_penalized_tags(
+                        defaults.get("smart_score_penalized_tags"),
+                        DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+                    )
+                ),
             )
             session.add(user)
             session.commit()
@@ -465,6 +537,10 @@ class Server:
             "columns": int(user.columns),
             "show_stars": bool(user.show_stars),
             "similarity_character": user.similarity_character,
+            "smart_score_penalized_tags": self._normalize_smart_score_penalized_tags(
+                user.smart_score_penalized_tags,
+                DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+            ),
         }
 
     def _ensure_ssl_certificates(self):
@@ -682,7 +758,7 @@ class Server:
             ).all()
             picture_ids = [m.picture_id for m in members]
             if not picture_ids:
-                logger.warning(
+                logger.debug(
                     f"No pictures in reference set id={reference_set.id} for character id={character_id}"
                 )
                 return []
@@ -781,7 +857,9 @@ class Server:
         selected_pics = dicts[offset : offset + limit]
         return selected_pics
 
-    def _fetch_smart_score_data(self, character_id, format):
+    def _fetch_smart_score_data(
+        self, character_id, format, candidate_ids=None, penalized_tags=None
+    ):
         """Fetch anchors, character references, and candidates for smart score calculation."""
         def fetch_data(session: Session):
             # Anchors
@@ -803,7 +881,15 @@ class Server:
             ).all()
 
             # Candidates
-            query = select(Picture.id, Picture.image_embedding, Picture.aesthetic_score)
+            query = (
+                select(Picture, Quality)
+                .outerjoin(Quality, Quality.picture_id == Picture.id)
+            )
+
+            if candidate_ids is not None:
+                if not candidate_ids:
+                    return good, bad, [], {}
+                query = query.where(Picture.id.in_(candidate_ids))
 
             # Apply Filter Logic Matches list_pictures
             if character_id == "UNASSIGNED":
@@ -823,7 +909,12 @@ class Server:
             elif character_id and character_id != "ALL":
                 try:
                     cid = int(character_id)
-                    query = query.join(Face).where(Face.character_id == cid)
+                    character_picture_ids = session.exec(
+                        select(Face.picture_id).where(Face.character_id == cid)
+                    ).all()
+                    if not character_picture_ids:
+                        return good, bad, [], {}
+                    query = query.where(Picture.id.in_(character_picture_ids))
                 except ValueError:
                     pass
 
@@ -832,17 +923,61 @@ class Server:
 
             query = query.where(Picture.image_embedding.is_not(None))
 
-            candidates = session.exec(query).all()
+            candidate_rows = session.exec(query).all()
+
+            penalized_tags_set = {
+                str(tag).strip().lower()
+                for tag in (penalized_tags or [])
+                if str(tag).strip()
+            }
+
+            candidates = []
+            candidate_id_list = []
+            for pic, quality in candidate_rows:
+                aest = pic.aesthetic_score
+                if aest is None and quality is not None:
+                    try:
+                        aest = quality._calculate_heuristic_aesthetic_score()
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to compute heuristic aesthetic score for picture %s: %s",
+                            pic.id,
+                            e,
+                        )
+                candidates.append(
+                    {
+                        "id": pic.id,
+                        "image_embedding": pic.image_embedding,
+                        "aesthetic_score": aest,
+                    }
+                )
+                candidate_id_list.append(pic.id)
+
+            penalized_tag_map = defaultdict(int)
+            if penalized_tags_set and candidate_id_list:
+                tag_rows = session.exec(
+                    select(Tag.picture_id, Tag.tag).where(
+                        Tag.picture_id.in_(candidate_id_list)
+                    )
+                ).all()
+                for pic_id, tag in tag_rows:
+                    if tag and tag.strip().lower() in penalized_tags_set:
+                        penalized_tag_map[pic_id] += 1
+
+                if penalized_tag_map:
+                    for candidate in candidates:
+                        candidate["penalized_tag_count"] = penalized_tag_map.get(
+                            candidate["id"], 0
+                        )
 
             # Pre-fetch Max Face-Character Likeness Map for Candidates
             pic_likeness_map = {}
-            candidate_ids = [c.id for c in candidates]
-            if candidate_ids:
+            if candidate_id_list:
                 try:
                     stmt = (
                         select(Face.picture_id, func.max(FaceCharacterLikeness.likeness))
                         .join(FaceCharacterLikeness, Face.id == FaceCharacterLikeness.face_id)
-                        .where(Face.picture_id.in_(candidate_ids))
+                        .where(Face.picture_id.in_(candidate_id_list))
                         .group_by(Face.picture_id)
                     )
                     rows = session.exec(stmt).all()
@@ -858,6 +993,11 @@ class Server:
         self, good_anchors, bad_anchors, candidates, pic_likeness_map
     ):
         """Unpickle embeddings and prepare lists of dictionaries for calculation."""
+        def get_attr(item, key):
+            if isinstance(item, dict):
+                return item.get(key)
+            return getattr(item, key, None)
+
         def get_vec(blob):
             try:
                 obj = pickle.loads(blob)
@@ -882,24 +1022,36 @@ class Server:
         cand_ids = []
         
         for p in candidates:
-            v = get_vec(p.image_embedding)
+            pid = get_attr(p, "id")
+            v = get_vec(get_attr(p, "image_embedding"))
             if v is not None:
-                cand_ids.append(p.id)
+                cand_ids.append(pid)
                 cand_list.append({
-                    "id": p.id, 
-                    "embedding": v, 
-                    "aesthetic_score": p.aesthetic_score,
-                    "character_likeness": pic_likeness_map.get(p.id, 0.0)
+                    "id": pid,
+                    "embedding": v,
+                    "aesthetic_score": get_attr(p, "aesthetic_score"),
+                    "character_likeness": pic_likeness_map.get(pid, 0.0),
+                    "penalized_tag_count": get_attr(p, "penalized_tag_count") or 0,
                 })
         
         return good_list, bad_list, cand_list, cand_ids
 
     def _find_pictures_by_smart_score(
-        self, character_id, format, offset, limit, descending
+        self,
+        character_id,
+        format,
+        offset,
+        limit,
+        descending,
+        candidate_ids=None,
+        penalized_tags=None,
     ):
         # 1. Fetch data
         good_anchors, bad_anchors, candidates, pic_likeness_map = self._fetch_smart_score_data(
-            character_id, format
+            character_id,
+            format,
+            candidate_ids=candidate_ids,
+            penalized_tags=penalized_tags,
         )
 
         if not candidates:
@@ -1065,6 +1217,7 @@ class Server:
                 "columns",
                 "show_stars",
                 "similarity_character",
+                "smart_score_penalized_tags",
             }
 
             def update_user(session: Session, user_id: int):
@@ -1089,6 +1242,23 @@ class Server:
                             new_value = value
                         if user.similarity_character != new_value:
                             user.similarity_character = new_value
+                            updated = True
+                        continue
+                    if key == "smart_score_penalized_tags":
+                        if value in ("", None):
+                            new_value = None
+                        else:
+                            normalized = self._normalize_smart_score_penalized_tags(
+                                value, None, allow_empty=True
+                            )
+                            if normalized is None:
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail="smart_score_penalized_tags must be a JSON list",
+                                )
+                            new_value = json.dumps(normalized)
+                        if user.smart_score_penalized_tags != new_value:
+                            user.smart_score_penalized_tags = new_value
                             updated = True
                         continue
                     if key == "columns":
@@ -1813,6 +1983,7 @@ class Server:
 
         @self.api.get("/picture_sets/{id}")
         async def get_picture_set(
+            request: Request,
             id: int,
             info: bool = Query(False),
             sort: str = Query(None),
@@ -1849,6 +2020,21 @@ class Server:
                 set_dict = picture_set.dict()
                 set_dict["picture_count"] = len(picture_ids)
                 return set_dict
+
+            if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
+                penalized_tags = self._get_smart_score_penalized_tags_from_request(
+                    request
+                )
+                pictures = self._find_pictures_by_smart_score(
+                    None,
+                    format,
+                    0,
+                    sys.maxsize,
+                    descending,
+                    candidate_ids=picture_ids,
+                    penalized_tags=penalized_tags,
+                )
+                return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
             # Return the full pictures data
             def fetch_pics(session, picture_ids):
@@ -2767,8 +2953,12 @@ class Server:
             return response
 
         @self.api.get("/pictures/{id}/metadata")
-        async def get_picture_metadata(id: str):
-            """Return all simple metadata for a picture"""
+        async def get_picture_metadata(
+            request: Request,
+            id: str,
+            smart_score: bool = Query(False),
+        ):
+            """Return all simple metadata for a picture."""
             metadata_fields = Picture.metadata_fields()
             pics = self.vault.db.run_task(
                 Picture.find, id=id, select_fields=metadata_fields
@@ -2788,6 +2978,52 @@ class Server:
                 tags.append(tag.tag)
 
             pic_dict["tags"] = tags
+
+            if smart_score:
+                try:
+                    penalized_tags = self._get_smart_score_penalized_tags_from_request(
+                        request
+                    )
+                    (
+                        good_anchors,
+                        bad_anchors,
+                        candidates,
+                        pic_likeness_map,
+                    ) = self._fetch_smart_score_data(
+                        None,
+                        None,
+                        candidate_ids=[pic.id],
+                        penalized_tags=penalized_tags,
+                    )
+                    smart_score_value = None
+                    if candidates:
+                        (
+                            good_list,
+                            bad_list,
+                            cand_list,
+                            cand_ids,
+                        ) = self._prepare_smart_score_inputs(
+                            good_anchors, bad_anchors, candidates, pic_likeness_map
+                        )
+                        if cand_list:
+                            scores = PictureUtils.calculate_smart_score_batch_numpy(
+                                cand_list, good_list, bad_list
+                            )
+                            if cand_ids:
+                                try:
+                                    score_index = cand_ids.index(pic.id)
+                                except ValueError:
+                                    score_index = None
+                                if score_index is not None:
+                                    smart_score_value = float(scores[score_index])
+                    pic_dict["smartScore"] = smart_score_value
+                except Exception as exc:
+                    logger.warning(
+                        "[metadata] Failed to compute smart score for id=%s: %s",
+                        pic.id,
+                        exc,
+                    )
+                    pic_dict["smartScore"] = None
 
             embedded_metadata = {}
             try:
@@ -3384,8 +3620,16 @@ class Server:
                 )
 
             if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
+                penalized_tags = self._get_smart_score_penalized_tags_from_request(
+                    request
+                )
                 return self._find_pictures_by_smart_score(
-                    character_id, format, offset, limit, descending
+                    character_id,
+                    format,
+                    offset,
+                    limit,
+                    descending,
+                    penalized_tags=penalized_tags,
                 )
 
             if character_id == "UNASSIGNED":

@@ -53,6 +53,8 @@ class PictureUtils:
             "w_good": 0.60,
             "w_bad": 0.20,
             "w_aest": 0.20,
+            "w_penalized_tag": 0.40,
+            "penalized_tag_cap": 3,
             "topk": 3,
             "minSim": 0.75,
             "minBadSim": 0.88,
@@ -183,6 +185,16 @@ class PictureUtils:
         aest_component = cfg["w_aest"] * cand_aest
         scores += aest_component
 
+        # 5. Penalized Tags
+        penalized_counts = np.array(
+            [float(c.get("penalized_tag_count") or 0) for c in candidates]
+        )
+        penalized_counts = np.clip(
+            penalized_counts, 0.0, float(cfg["penalized_tag_cap"])
+        )
+        penalized_component = cfg["w_penalized_tag"] * penalized_counts
+        scores -= penalized_component
+
         # Rescale [0, 1] to [1, 5]
         final_scores = 1.0 + (np.clip(scores, 0.0, 1.0) * 4.0)
 
@@ -198,6 +210,7 @@ class PictureUtils:
                 f"Good={good_component[i]:.3f} (maxSim={raw_good_sim[i]:.3f}) "
                 f"Bad={bad_component[i]:.3f} (maxSim={raw_bad_sim[i]:.3f}) "
                 f"Aest={aest_component[i]:.3f} (raw={raw_aest[i]:.2f}) "
+                f"PenTags={penalized_component[i]:.3f} (count={int(penalized_counts[i])}) "
                 f"MaskBad={mask_bad[i]} PreClip={scores[i]:.3f} "
             )
         
