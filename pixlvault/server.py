@@ -949,6 +949,10 @@ class Server:
                         "id": pic.id,
                         "image_embedding": pic.image_embedding,
                         "aesthetic_score": aest,
+                        "width": pic.width,
+                        "height": pic.height,
+                        "noise_level": quality.noise_level if quality else None,
+                        "edge_density": quality.edge_density if quality else None,
                     }
                 )
                 candidate_id_list.append(pic.id)
@@ -1032,6 +1036,10 @@ class Server:
                     "aesthetic_score": get_attr(p, "aesthetic_score"),
                     "character_likeness": pic_likeness_map.get(pid, 0.0),
                     "penalized_tag_count": get_attr(p, "penalized_tag_count") or 0,
+                    "width": get_attr(p, "width"),
+                    "height": get_attr(p, "height"),
+                    "noise_level": get_attr(p, "noise_level"),
+                    "edge_density": get_attr(p, "edge_density"),
                 })
         
         return good_list, bad_list, cand_list, cand_ids
