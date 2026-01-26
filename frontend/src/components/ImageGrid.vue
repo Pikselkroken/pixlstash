@@ -520,6 +520,17 @@
       <span> Search result found {{ allGridImages.length }} items </span>
       <v-btn color="primary" @click="clearSearchQuery">Clear</v-btn>
     </div>
+    <div
+      v-if="isSmartScoreSortActive() && unscoredCount > 5"
+      class="smart-score-bar"
+      :style="{ bottom: `${smartScoreBarOffset}px` }"
+    >
+      <span>
+        Score these images with a few quick choices ({{ unscoredCount }} items
+        with no score)
+      </span>
+      <v-btn color="primary" @click="handleStartScoring"> Start Scoring </v-btn>
+    </div>
   </div>
 </template>
 
@@ -554,6 +565,7 @@ const emit = defineEmits([
   "refresh-sidebar",
   "clear-search",
   "reset-to-all",
+  "start-scoring",
 ]);
 
 // Props
@@ -3454,6 +3466,25 @@ function clearSearchQuery() {
 function handleEmptyStateReset() {
   emit("reset-to-all");
 }
+
+function handleStartScoring() {
+  emit("start-scoring");
+}
+
+const smartScoreBarOffset = computed(() => {
+  return props.searchQuery && props.searchQuery.length > 0 ? 44 : 0;
+});
+
+const unscoredCount = computed(() => {
+  const list = Array.isArray(allGridImages.value) ? allGridImages.value : [];
+  let count = 0;
+  for (const img of list) {
+    if (!img || !img.id) continue;
+    const score = typeof img.score === "number" ? img.score : 0;
+    if (score <= 0) count += 1;
+  }
+  return count;
+});
 </script>
 
 <style scoped>
@@ -3832,6 +3863,19 @@ function handleEmptyStateReset() {
   width: 100%;
   z-index: 200;
   background-color: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.smart-score-bar {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  z-index: 190;
+  background-color: rgba(245, 245, 245, 0.95);
   display: flex;
   align-items: center;
   justify-content: space-between;
