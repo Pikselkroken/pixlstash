@@ -1217,7 +1217,6 @@ async function fetchFaceBboxes(imageId) {
     // For each face, fetch character name if character_id is present
     await Promise.all(
       firstFrameFaces.map(async (face) => {
-        console.log("Processing face:", face);
         if (face.character_id) {
           try {
             const res = await apiClient.get(
