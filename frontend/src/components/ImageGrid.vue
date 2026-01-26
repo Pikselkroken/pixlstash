@@ -3252,10 +3252,12 @@ function handleImageCardClick(img, idx, event) {
     }
     lastSelectedIndex = idx;
   } else if (isShift && lastSelectedIndex !== null) {
-    // Range select: select only the contiguous range between anchor and clicked item
+    // Range select: select only the contiguous range between anchor and clicked item, using the visible grid
     const start = Math.min(lastSelectedIndex, idx);
     const end = Math.max(lastSelectedIndex, idx);
-    newSelection = allGridImages.value
+    // Use gridImagesToRender for visible grid selection
+    const visibleGrid = gridImagesToRender.value;
+    newSelection = visibleGrid
       .slice(start, end + 1)
       .map((i) => i.id)
       .filter(Boolean);
@@ -3264,7 +3266,9 @@ function handleImageCardClick(img, idx, event) {
     newSelection = [img.id];
     lastSelectedIndex = idx;
   } else {
-    return;
+    // Single click (no ctrl/shift): select only this image
+    newSelection = [img.id];
+    lastSelectedIndex = idx;
   }
   selectedImageIds.value = newSelection;
   console.log("New selection:", newSelection);
