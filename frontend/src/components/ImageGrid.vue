@@ -328,11 +328,13 @@
                 />
                 <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
                 <template
-                  v-if="thumbnailRefs[img.id] && thumbnailLoadedMap[img.id]"
+                  v-if="
+                    hasThumbnailRef(img.id) && getThumbnailLoadedKey(img.id)
+                  "
                 >
                   <div
                     v-for="overlay in getFaceBboxOverlays(img).value"
-                    :key="overlay.faceId + '-' + thumbnailLoadedMap[img.id]"
+                    :key="overlay.faceId + '-' + getThumbnailLoadedKey(img.id)"
                     class="face-bbox-overlay"
                     :style="overlay.style"
                     draggable="true"
@@ -580,10 +582,10 @@ const STACK_COLOR_STEP = 47;
 const MIN_THUMBNAIL_SIZE = 128;
 const MAX_THUMBNAIL_SIZE = 384;
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
-// Store refs for each thumbnail image
-const thumbnailRefs = reactive({});
-const thumbnailContainerRefs = reactive({});
-const dragPreviewRefs = reactive({});
+// Store refs for each thumbnail image (non-reactive to avoid render feedback loops)
+const thumbnailRefs = {};
+const thumbnailContainerRefs = {};
+const dragPreviewRefs = {};
 const thumbnailLoadedMap = reactive({});
 const PREFETCHED_FULL_IMAGE_LIMIT = 12;
 const fullImagePrefetchControllers = new Map();
@@ -810,7 +812,6 @@ function setThumbnailRef(id, el) {
     thumbnailRefs[id] = el;
   } else {
     delete thumbnailRefs[id];
-    delete thumbnailLoadedMap[id];
   }
 }
 
@@ -828,6 +829,14 @@ function setThumbnailContainerRef(id, el) {
   } else {
     delete thumbnailContainerRefs[id];
   }
+}
+
+function hasThumbnailRef(id) {
+  return Boolean(id && thumbnailRefs[id]);
+}
+
+function getThumbnailLoadedKey(id) {
+  return thumbnailLoadedMap[id] || 0;
 }
 
 // --- Multi-face selection state ---
@@ -939,8 +948,6 @@ function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
 
 function getFaceBboxOverlays(img) {
   return computed(() => {
-    void thumbnailLoadedMap[img.id];
-    void thumbnailRefs[img.id];
     void faceOverlayRedrawKey.value; // depend on redraw key
     void selectedFaceIds.value;
     if (
@@ -1896,6 +1903,104 @@ function repositionImageByLikeness(imageId) {
   invalidateVisibleThumbnailRanges();
 }
 
+let smartScoreRepositioning = false;
+
+function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
+  if (smartScoreRepositioning) {
+    console.debug("[SmartScore] Reposition skipped (lock active):", imageId);
+    return;
+  }
+  smartScoreRepositioning = true;
+  try {
+    const items = allGridImages.value.slice();
+    const currentIndex = items.findIndex((item) => item.id === imageId);
+    if (currentIndex === -1) {
+      console.debug("[SmartScore] Reposition skipped (not in grid):", imageId);
+      return;
+    }
+
+    const targetScore = smartScore ?? 0;
+    const target = {
+      ...items[currentIndex],
+      ...(latestInfo && typeof latestInfo === "object" ? latestInfo : {}),
+      smartScore: targetScore,
+      thumbnail:
+        items[currentIndex]?.thumbnail ?? latestInfo?.thumbnail ?? null,
+    };
+    items.splice(currentIndex, 1);
+
+    const descending = props.selectedDescending === true;
+    let insertIndex = items.findIndex((item) => {
+      const score = item.smartScore ?? 0;
+      return descending ? score < targetScore : score > targetScore;
+    });
+    if (insertIndex === -1) insertIndex = items.length;
+    console.debug("[SmartScore] Reposition", {
+      imageId,
+      currentIndex,
+      insertIndex,
+      targetScore,
+      descending,
+    });
+    if (insertIndex === currentIndex) {
+      const updated = allGridImages.value.slice();
+      updated[currentIndex] = { ...target, idx: currentIndex };
+      allGridImages.value = updated;
+      return;
+    }
+    items.splice(insertIndex, 0, target);
+
+    for (let i = 0; i < items.length; i += 1) {
+      items[i].idx = i;
+    }
+
+    allGridImages.value = items;
+    invalidateVisibleThumbnailRanges();
+  } finally {
+    smartScoreRepositioning = false;
+  }
+}
+
+async function refreshSmartScoreForImage(imageId) {
+  if (!imageId || !isSmartScoreSortActive()) return;
+  console.debug("[SmartScore] Refresh requested", {
+    imageId,
+    sort: props.selectedSort,
+  });
+  const latestInfo = await fetchImageInfo(imageId, { smartScore: true });
+  if (!latestInfo || Array.isArray(latestInfo)) return;
+
+  const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
+  if (idx !== -1) {
+    const current = allGridImages.value[idx] || {};
+    const smartScore =
+      typeof latestInfo.smartScore === "number" ? latestInfo.smartScore : null;
+    console.debug("[SmartScore] Refresh result", {
+      imageId,
+      smartScore,
+    });
+    if (current.smartScore === smartScore) {
+      console.debug("[SmartScore] No score change; skipping reposition", {
+        imageId,
+      });
+      return;
+    }
+    await nextTick();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    repositionImageBySmartScore(imageId, smartScore ?? 0, latestInfo);
+  }
+
+  if (overlayImage.value && overlayImage.value.id === imageId) {
+    overlayImage.value = {
+      ...overlayImage.value,
+      smartScore:
+        typeof latestInfo.smartScore === "number"
+          ? latestInfo.smartScore
+          : null,
+    };
+  }
+}
+
 async function applyScore(img, newScore) {
   console.debug("Applying score:", newScore);
   const imageId = img.id || (overlayImage.value && overlayImage.value.id);
@@ -2318,7 +2423,19 @@ async function fetchAllGridImages() {
         .filter((img) => img && img.id != null)
         .map((img) => [img.id, img]),
     );
-    const newImages = images.map((img, i) => {
+    const uniqueImages = Array.isArray(images)
+      ? (() => {
+          const seen = new Set();
+          return images.filter((img) => {
+            const id = img?.id;
+            if (id == null) return true;
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+        })()
+      : [];
+    const newImages = uniqueImages.map((img, i) => {
       const existing = img?.id ? existingById.get(img.id) : null;
       return {
         ...img,
@@ -2327,7 +2444,9 @@ async function fetchAllGridImages() {
       };
     });
     const mapEnd = performance.now();
-    console.log("Updating allGridImages with fetched images:", newImages);
+    console.log("Updating allGridImages with fetched images:", {
+      count: newImages.length,
+    });
     allGridImages.value = newImages;
     const assignEnd = performance.now();
     const cols = props.columns || 1;
@@ -2460,6 +2579,9 @@ function resetThumbnailState() {
     thumbFetchTimeout = null;
   }
   thumbnailRequestEpoch.value += 1;
+  for (const key of Object.keys(thumbnailLoadedMap)) {
+    delete thumbnailLoadedMap[key];
+  }
 }
 
 function rangeCovers(ranges, start, end) {
@@ -2615,15 +2737,6 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
   }, EMPTY_STATE_DELAY_MS);
 });
 
-watch(allGridImages, (newVal, oldVal) => {
-  console.log("[ImageGrid.vue] allGridImages updated:", {
-    oldLength: oldVal.length,
-    newLength: newVal.length,
-    oldValue: oldVal,
-    newValue: newVal,
-  });
-});
-
 const gridImagesToRender = computed(() => {
   if (!allGridImages.value) {
     console.warn("allGridImages is undefined");
@@ -2632,15 +2745,6 @@ const gridImagesToRender = computed(() => {
 
   const filtered = filterImagesByMediaType(allGridImages.value);
   return filtered.slice(renderStart.value, renderEnd.value);
-});
-
-watch(gridImagesToRender, (newVal, oldVal) => {
-  console.log("[ImageGrid.vue] gridImagesToRender updated:", {
-    oldLength: oldVal.length,
-    newLength: newVal.length,
-    oldValue: oldVal,
-    newValue: newVal,
-  });
 });
 
 // Batch fetch metadata (including thumbnail) for visible range
@@ -3039,7 +3143,11 @@ async function removeTagFromImage(imageId, tag) {
         : [];
       overlayImage.value = { ...overlayImage.value, tags: overlayTags };
     }
-    refreshGridImage(imageId);
+    if (isSmartScoreSortActive()) {
+      await refreshSmartScoreForImage(imageId);
+    } else {
+      refreshGridImage(imageId);
+    }
   } catch (error) {
     console.error("Error removing tag:", error);
   }
@@ -3078,7 +3186,7 @@ async function addTagToImage(imageId, tag) {
     if (isSmartScoreSortActive()) {
       await refreshSmartScoreForImage(imageId);
     } else {
-    refreshGridImage(imageId);
+      refreshGridImage(imageId);
     }
   } catch (error) {
     console.error("Error adding tag:", error);
