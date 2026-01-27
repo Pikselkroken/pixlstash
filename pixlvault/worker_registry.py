@@ -1,3 +1,4 @@
+import queue
 import random
 import threading
 
@@ -11,11 +12,10 @@ from .pixl_logging import get_logger
 
 
 class WorkerType(str, Enum):
-    FACE = "FaceExtractionWorker"
+    FACE = "FeatureExtractionWorker"
     TAGGER = "TagWorker"
     QUALITY = "QualityWorker"
     FACE_QUALITY = "FaceQualityWorker"
-    FACE_CHARACTER_LIKENESS = "FaceCharacterLikenessWorker"
     LIKENESS = "LikenessWorker"
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
@@ -72,6 +72,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         self._watched_ids_lock = threading.Lock()
 
         self._event_callback = event_callback
+        self._queue = queue.Queue()
 
     @abstractmethod
     def worker_type(self) -> WorkerType:
@@ -123,11 +124,12 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         return self._stop.is_set()
 
-    def notify(self):
+    def notify(self, event_type: EventType = None, data=None):
         """
         Notify the worker that it needs to wake.
         """
         logger.debug("Worker {} woken up.".format(self.name()))
+        self._queue.put(data)
         self._event.set()
 
     def name(self):
@@ -145,12 +147,12 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
             self._watched_ids[(cls, object_id, attr)] = future
         return future
 
-    def _notify_others(self, event_type: EventType):
+    def _notify_others(self, event_type: EventType, data=None):
         """
         Notify other components of an event.
         """
         if self._event_callback:
-            self._event_callback(event_type)
+            self._event_callback(event_type, data)
 
     def _notify_ids_processed(
         self, notification: List[Tuple[Type, object, str, object]]

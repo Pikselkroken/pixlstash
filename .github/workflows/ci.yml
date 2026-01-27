@@ -38,8 +38,6 @@ jobs:
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_likeness_worker.py
       - name: Test Florence-2 Captioning
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_florence.py
-      - name: Test Face Likeness Worker
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_face_likeness_worker.py
       - name: Test Picture Stack Utilities
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_stack_utils.py
       - name: Test Picture Set Management

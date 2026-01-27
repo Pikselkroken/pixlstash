@@ -1,6 +1,9 @@
+import os
+import queue
 import time
+import uuid
 
-from sqlmodel import select, Session
+from sqlmodel import select, Session, delete
 from sqlalchemy.orm import load_only, selectinload
 
 from pixlvault.event_types import EventType
@@ -11,9 +14,17 @@ from pixlvault.pixl_logging import get_logger
 from pixlvault.database import VaultDatabase
 from pixlvault.worker_registry import BaseWorker, WorkerType
 
-from pixlvault.db_models import Character, Picture, Tag
+from pixlvault.db_models import Character, Face, FaceTag, Hand, HandTag, Picture, Tag
+from pixlvault.feature_tag_blacklist import (
+    is_face_tag,
+    is_hand_tag,
+)
 
 logger = get_logger(__name__)
+
+HAND_CROP_MIN_AREA_RATIO = 0.01
+HAND_CROP_MAX_PER_PICTURE = 2
+CROP_DEBUG_ENABLED = False
 
 
 class DescriptionWorker(BaseWorker):
@@ -139,6 +150,17 @@ class DescriptionWorker(BaseWorker):
         return descriptions_generated
 
 
+def normalize_custom_tagger_tags(tags: list[str]) -> list[str]:
+    replacements = {
+        "extra fingers": "extra digit",
+        "malformed hands": "malformed hand",
+    }
+    normalized = []
+    for tag in tags:
+        normalized.append(replacements.get(tag, tag))
+    return normalized
+
+
 class TagWorker(BaseWorker):
     """
     Worker for generating tags for pictures with descriptions.
@@ -163,7 +185,8 @@ class TagWorker(BaseWorker):
                 logger.debug(f"TaggingWorker: Tagged {len(tagged_pictures)} pictures.")
                 timing = time.time() - start
                 if tagged_pictures:
-                    self._notify_others(EventType.CHANGED_TAGS)
+                    picture_ids = [pic_id for _, pic_id, _, _ in tagged_pictures]
+                    self._notify_others(EventType.CHANGED_TAGS, picture_ids)
                     logger.debug(
                         f"TaggingWorker: Done after {timing:.2f} seconds. Having updated {len(tagged_pictures)} pictures."
                     )
@@ -186,16 +209,50 @@ class TagWorker(BaseWorker):
     def _fetch_missing_tags(self):
         logger.debug("Starting the database fetch for missing tags")
 
-        def fetch_tags(session: Session):
-            statement = (
-                select(Picture)
-                .where(~Picture.tags.any())
-                .options(selectinload(Picture.tags))
-            )
+        picture_ids = []
+        while True:
+            try:
+                payload = self._queue.get_nowait()
+                if isinstance(payload, (list, tuple, set)):
+                    picture_ids.extend(payload)
+                elif isinstance(payload, int):
+                    picture_ids.append(payload)
+            except queue.Empty:
+                break
+
+        queued_ids = sorted({pid for pid in picture_ids if pid is not None})
+
+        def fetch_tags(session: Session, queued_ids):
+            if queued_ids:
+                statement = (
+                    select(Picture)
+                    .where(Picture.id.in_(queued_ids))
+                    .options(
+                        selectinload(Picture.tags),
+                        selectinload(Picture.faces),
+                        selectinload(Picture.hands),
+                    )
+                )
+            else:
+                statement = (
+                    select(Picture)
+                    .where(
+                        (~Picture.tags.any())
+                        | Picture.faces.any((Face.face_index >= 0) & (~Face.tags.any()))
+                        | Picture.hands.any((Hand.hand_index >= 0) & (~Hand.tags.any()))
+                    )
+                    .options(
+                        selectinload(Picture.tags),
+                        selectinload(Picture.faces),
+                        selectinload(Picture.hands),
+                    )
+                )
             result = session.exec(statement)
             return result.all()
 
-        return VaultDatabase.result_or_throw(self._db.submit_task(fetch_tags))
+        return VaultDatabase.result_or_throw(
+            self._db.submit_task(fetch_tags, queued_ids)
+        )
 
     def _tag_pictures(self, missing_tags) -> int:
         """Tag all pictures missing tags."""
@@ -216,29 +273,335 @@ class TagWorker(BaseWorker):
         if image_paths:
             if self._stop.is_set():
                 return []
-            logger.debug(f"Tagging {len(image_paths)} images: {image_paths}")
+            logger.info(f"Tagging {len(image_paths)} images: {image_paths}")
             tag_results = self._picture_tagger.tag_images(
                 image_paths, stop_event=self._stop
             )
+            crop_tags_by_pic_id = {}
+            face_tags_by_face_id = {}
+            hand_tags_by_hand_id = {}
+            if self._picture_tagger.custom_tagger_ready():
+                try:
+                    import cv2
+                    from PIL import Image
+
+                    enable_face_crops = True
+                    enable_hand_crops = True
+                    hand_min_area_ratio = HAND_CROP_MIN_AREA_RATIO
+                    hand_max_per_picture = HAND_CROP_MAX_PER_PICTURE
+                    crop_debug_enabled = CROP_DEBUG_ENABLED
+
+                    face_items = []
+                    hand_items = []
+                    item_to_pic_id = {}
+                    item_to_face_id = {}
+                    item_to_hand_id = {}
+                    crop_debug_dir = "/tmp/pixlvault_crops"
+                    if crop_debug_enabled:
+                        os.makedirs(crop_debug_dir, exist_ok=True)
+
+                    def save_crop_debug(crop, prefix, pic_id):
+                        if not crop_debug_enabled:
+                            return
+                        if crop is None or crop.size == 0:
+                            return
+                        name = f"{prefix}_{pic_id}_{uuid.uuid4().hex[:8]}.png"
+                        path = os.path.join(crop_debug_dir, name)
+                        try:
+                            cv2.imwrite(path, crop)
+                            logger.info("Saved crop: %s", path)
+                        except Exception as exc:
+                            logger.warning("Failed to write crop %s: %s", path, exc)
+
+                    video_exts = {
+                        ".mp4",
+                        ".avi",
+                        ".mov",
+                        ".mkv",
+                        ".webm",
+                        ".flv",
+                        ".wmv",
+                    }
+                    for pic in batch:
+                        if self._stop.is_set():
+                            break
+                        file_path = PictureUtils.resolve_picture_path(
+                            self._db.image_root, pic.file_path
+                        )
+                        ext = os.path.splitext(file_path)[1].lower()
+                        if ext in video_exts:
+                            continue
+                        frame = cv2.imread(file_path)
+                        if frame is None:
+                            logger.warning(
+                                "Failed to read image for crop tagging: %s",
+                                file_path,
+                            )
+                            continue
+                        frame_h, frame_w = frame.shape[:2]
+                        frame_area = max(1, frame_w * frame_h)
+                        if enable_face_crops:
+                            faces = getattr(pic, "faces", None) or []
+                            for face in faces:
+                                if getattr(face, "face_index", 0) < 0:
+                                    continue
+                                bbox = getattr(face, "bbox", None)
+                                crop = PictureUtils.crop_face_from_frame(frame, bbox)
+                                if crop is None:
+                                    logger.debug(
+                                        "Face crop failed for %s bbox=%s",
+                                        file_path,
+                                        bbox,
+                                    )
+                                    continue
+                                save_crop_debug(crop, "face", pic.id)
+                                try:
+                                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                                    crop_img = Image.fromarray(crop_rgb)
+                                except Exception as e:
+                                    logger.debug(
+                                        "Face crop conversion failed for %s bbox=%s: %s",
+                                        file_path,
+                                        bbox,
+                                        e,
+                                    )
+                                    continue
+                                key = f"{file_path}#face{face.id or face.face_index}"
+                                face_items.append((key, crop_img))
+                                item_to_pic_id[key] = pic.id
+                                if face.id is not None:
+                                    item_to_face_id[key] = face.id
+
+                        if enable_hand_crops:
+                            hands = getattr(pic, "hands", None) or []
+                            hand_candidates = []
+                            for hand in hands:
+                                if getattr(hand, "hand_index", 0) < 0:
+                                    continue
+                                bbox = getattr(hand, "bbox", None)
+                                if bbox is None or len(bbox) != 4:
+                                    continue
+                                x1, y1, x2, y2 = bbox
+                                x1 = int(max(0, min(frame_w - 1, round(x1))))
+                                y1 = int(max(0, min(frame_h - 1, round(y1))))
+                                x2 = int(max(0, min(frame_w, round(x2))))
+                                y2 = int(max(0, min(frame_h, round(y2))))
+                                if x2 <= x1 or y2 <= y1:
+                                    continue
+                                area = (x2 - x1) * (y2 - y1)
+                                if hand_min_area_ratio > 0:
+                                    if area / frame_area < hand_min_area_ratio:
+                                        continue
+                                hand_candidates.append((area, (x1, y1, x2, y2), hand))
+
+                            if hand_candidates:
+                                hand_candidates.sort(
+                                    key=lambda item: item[0], reverse=True
+                                )
+                                if hand_max_per_picture > 0:
+                                    hand_candidates = hand_candidates[
+                                        :hand_max_per_picture
+                                    ]
+
+                            for _, bbox, hand in hand_candidates:
+                                crop = PictureUtils.crop_face_from_frame(frame, bbox)
+                                if crop is None:
+                                    logger.debug(
+                                        "Hand crop failed for %s bbox=%s",
+                                        file_path,
+                                        bbox,
+                                    )
+                                    continue
+                                save_crop_debug(crop, "hand", pic.id)
+                                try:
+                                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                                    crop_img = Image.fromarray(crop_rgb)
+                                except Exception as e:
+                                    logger.warning(
+                                        "Hand crop conversion failed for %s bbox=%s: %s",
+                                        file_path,
+                                        bbox,
+                                        e,
+                                    )
+                                    continue
+                                key = f"{file_path}#hand{hand.id or hand.hand_index}"
+                                hand_items.append((key, crop_img))
+                                item_to_pic_id[key] = pic.id
+                                if hand.id is not None:
+                                    item_to_hand_id[key] = hand.id
+
+                    if face_items and not self._stop.is_set():
+                        face_results = self._picture_tagger._tag_custom_items(
+                            face_items,
+                            stop_event=self._stop,
+                            threshold=self._picture_tagger.custom_tagger_threshold_face(),
+                            image_size=self._picture_tagger.custom_tagger_image_size_face(),
+                        )
+                        logger.info(f"Face crop tagging results: {face_results}")
+                        for key, tags in face_results.items():
+                            pic_id = item_to_pic_id.get(key)
+                            if pic_id is None or not tags:
+                                continue
+                            existing = crop_tags_by_pic_id.get(pic_id, [])
+                            existing.extend(tags)
+                            crop_tags_by_pic_id[pic_id] = existing
+                            face_id = item_to_face_id.get(key)
+                            if face_id is not None:
+                                existing_face = face_tags_by_face_id.get(face_id, [])
+                                filtered = [tag for tag in tags if is_face_tag(tag)]
+                                existing_face.extend(filtered)
+                                face_tags_by_face_id[face_id] = existing_face
+
+                    if hand_items and not self._stop.is_set():
+                        hand_results = self._picture_tagger._tag_custom_items(
+                            hand_items,
+                            stop_event=self._stop,
+                            threshold=self._picture_tagger.custom_tagger_threshold_hand(),
+                            image_size=self._picture_tagger.custom_tagger_image_size_hand(),
+                        )
+                        logger.info(f"Hand crop tagging results: {hand_results}")
+                        for key, tags in hand_results.items():
+                            pic_id = item_to_pic_id.get(key)
+                            if pic_id is None or not tags:
+                                continue
+                            normalized_tags = normalize_custom_tagger_tags(tags)
+                            existing = crop_tags_by_pic_id.get(pic_id, [])
+                            existing.extend(normalized_tags)
+                            crop_tags_by_pic_id[pic_id] = existing
+                            hand_id = item_to_hand_id.get(key)
+                            if hand_id is not None:
+                                existing_hand = hand_tags_by_hand_id.get(hand_id, [])
+                                filtered = [
+                                    tag for tag in normalized_tags if is_hand_tag(tag)
+                                ]
+                                existing_hand.extend(filtered)
+                                hand_tags_by_hand_id[hand_id] = existing_hand
+                except Exception as e:
+                    logger.warning("Crop tagging failed: %s", e)
+
+            merged_results = {}
+            for path in image_paths:
+                pic = pic_by_path.get(path)
+                if not pic:
+                    continue
+                base_tags = tag_results.get(path, [])
+                extra_tags = crop_tags_by_pic_id.get(pic.id, [])
+                combined = sorted(set(base_tags) | set(extra_tags))
+                if combined:
+                    merged_results[path] = combined
+            tag_results = merged_results
             logger.debug(f"Got tag results for {len(tag_results)} images.")
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
                 logger.debug(f"Processing tags for image at path: {path}: {tags}")
                 if tags:
+                    face_map = {}
+                    requires_face_tags = {"face", "close-up"}
+                    inherits_photo_tag = "photo" in tags
+                    if inherits_photo_tag:
+                        requires_face_tags.add("photo")
 
-                    def add_tags(session: Session, pic_id, tags):
-                        pic = Picture.find(session, id=pic_id)
-                        session.add_all([Tag(picture_id=pic_id, tag=t) for t in tags])
+                    for face in getattr(pic, "faces", []) or []:
+                        if getattr(face, "face_index", 0) < 0:
+                            continue
+                        if face.id is None:
+                            continue
+                        raw = face_tags_by_face_id.get(face.id, [])
+                        combined = set(raw) | requires_face_tags
+                        if combined:
+                            face_map[face.id] = sorted(combined)
+
+                    hand_map = {}
+                    requires_hand_tags = {"hand", "close-up"}
+                    if inherits_photo_tag:
+                        requires_hand_tags.add("photo")
+
+                    for hand in getattr(pic, "hands", []) or []:
+                        if getattr(hand, "hand_index", 0) < 0:
+                            continue
+                        if hand.id is None:
+                            continue
+                        raw = hand_tags_by_hand_id.get(hand.id, [])
+                        combined = set(raw) | requires_hand_tags
+                        if combined:
+                            hand_map[hand.id] = sorted(combined)
+
+                    def add_tags(session: Session, pic_id, tags, face_map, hand_map):
+                        tag_ids = session.exec(
+                            select(Tag.id).where(Tag.picture_id == pic_id)
+                        ).all()
+                        if tag_ids:
+                            session.exec(
+                                delete(FaceTag).where(FaceTag.tag_id.in_(tag_ids))
+                            )
+                            session.exec(
+                                delete(HandTag).where(HandTag.tag_id.in_(tag_ids))
+                            )
+                        session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+
+                        pic = session.exec(
+                            select(Picture)
+                            .where(Picture.id == pic_id)
+                            .options(selectinload(Picture.tags))
+                        ).one()
+                        existing = {t.tag: t for t in pic.tags}
+                        for tag_value in tags:
+                            if tag_value in existing:
+                                continue
+                            new_tag = Tag(picture_id=pic_id, tag=tag_value)
+                            session.add(new_tag)
+                            existing[tag_value] = new_tag
+
+                        session.flush()
+
+                        for face_id, face_tags in face_map.items():
+                            for tag_value in face_tags:
+                                tag_obj = existing.get(tag_value)
+                                if tag_obj is None:
+                                    tag_obj = Tag(picture_id=pic_id, tag=tag_value)
+                                    session.add(tag_obj)
+                                    session.flush()
+                                    existing[tag_value] = tag_obj
+                                exists = session.exec(
+                                    select(FaceTag).where(
+                                        FaceTag.face_id == face_id,
+                                        FaceTag.tag_id == tag_obj.id,
+                                    )
+                                ).first()
+                                if exists is None:
+                                    session.add(
+                                        FaceTag(face_id=face_id, tag_id=tag_obj.id)
+                                    )
+
+                        for hand_id, hand_tags in hand_map.items():
+                            for tag_value in hand_tags:
+                                tag_obj = existing.get(tag_value)
+                                if tag_obj is None:
+                                    tag_obj = Tag(picture_id=pic_id, tag=tag_value)
+                                    session.add(tag_obj)
+                                    session.flush()
+                                    existing[tag_value] = tag_obj
+                                exists = session.exec(
+                                    select(HandTag).where(
+                                        HandTag.hand_id == hand_id,
+                                        HandTag.tag_id == tag_obj.id,
+                                    )
+                                ).first()
+                                if exists is None:
+                                    session.add(
+                                        HandTag(hand_id=hand_id, tag_id=tag_obj.id)
+                                    )
+
                         session.commit()
-                        if pic:
-                            session.refresh(pic[0])
-                            return pic[0]
-                        return None
+                        session.refresh(pic)
+                        return pic
 
                     pic = self._db.run_task(
                         add_tags,
                         pic.id,
                         tags,
+                        face_map,
+                        hand_map,
                         priority=DBPriority.LOW,
                     )
                     tagged_pictures.append((Picture, pic.id, "tags", tags))

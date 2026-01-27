@@ -37,26 +37,26 @@
           </span>
         </div>
         <div class="overlay-top-actions">
-          <div
-            class="star-overlay"
+          <AddToSetControl
+            v-if="image"
+            :key="addToSetControlKey"
+            :backend-url="backendUrl"
+            :picture-ids="[image.id]"
+            :class="{ hidden: chromeHidden }"
+            @added="handleOverlayAddToSet"
+          />
+          <StarRatingOverlay
             v-if="image"
             :class="{ hidden: chromeHidden }"
-          >
-            <v-icon
-              v-for="n in 5"
-              :key="n"
-              large
-              :color="n <= (image?.score || 0) ? 'orange' : 'grey darken-2'"
-              style="cursor: pointer"
-              @click.stop="setScore(n)"
-              >mdi-star</v-icon
-            >
-          </div>
+            :score="image?.score || 0"
+            icon-size="large"
+            @set-score="setScore"
+          />
           <button
             class="overlay-icon-btn"
             type="button"
-            title="Toggle face bounding boxes"
-            aria-label="Toggle face bounding boxes"
+            title="Toggle face/hand bounding boxes"
+            aria-label="Toggle face/hand bounding boxes"
             @click.stop="toggleFaceBbox"
             :class="{ hidden: chromeHidden }"
           >
@@ -135,39 +135,47 @@
                   @load="updateOverlayDims"
                 />
               </template>
-              <template v-if="showFaceBbox">
-                <div v-if="faceBboxes.length === 0" class="face-bbox-empty">
-                  No face bboxes found
+              <template v-if="showFaceBbox && overlayReady">
+                <div
+                  v-if="faceBboxes.length === 0 && handBboxes.length === 0"
+                  class="face-bbox-empty"
+                >
+                  No bboxes found
                 </div>
                 <div
                   v-for="(face, idx) in faceBboxes"
-                  :key="idx"
-                  class="face-bbox-overlay"
-                  :style="{
-                    border: `1px solid ${faceBoxColor(idx)}`,
-                    background: `${faceBoxColor(idx)}22`,
-                    left: `${
-                      (overlayDims.offsetX || 0) +
-                        (face.bbox[0] * overlayDims.width) /
-                          overlayDims.naturalWidth || 0
-                    }px`,
-                    top: `${
-                      (overlayDims.offsetY || 0) +
-                        (face.bbox[1] * overlayDims.height) /
-                          overlayDims.naturalHeight || 0
-                    }px`,
-                    width: `${
-                      ((face.bbox[2] - face.bbox[0]) * overlayDims.width) /
-                        overlayDims.naturalWidth || 0
-                    }px`,
-                    height: `${
-                      ((face.bbox[3] - face.bbox[1]) * overlayDims.height) /
-                        overlayDims.naturalHeight || 0
-                    }px`,
-                  }"
+                  :key="`face-${idx}`"
+                  :class="[
+                    'face-bbox-overlay',
+                    'bbox-drop-target',
+                    { 'bbox-drop-active': isDragOver('face', face.id) },
+                  ]"
+                  :style="getOverlayBoxStyle(face.bbox, faceBoxColor(idx))"
+                  @dragover.prevent="handleDragOver('face', face.id)"
+                  @dragenter.prevent="handleDragOver('face', face.id)"
+                  @dragleave="handleDragLeave('face', face.id)"
+                  @drop.prevent="handleDropToFace(face)"
                 >
                   <span class="face-bbox-label">
                     {{ face.character_name || `Face ${idx + 1}` }}
+                  </span>
+                </div>
+                <div
+                  v-for="(hand, idx) in handBboxes"
+                  :key="`hand-${idx}`"
+                  :class="[
+                    'hand-bbox-overlay',
+                    'bbox-drop-target',
+                    { 'bbox-drop-active': isDragOver('hand', hand.id) },
+                  ]"
+                  :style="getOverlayBoxStyle(hand.bbox, handBoxColor(idx))"
+                  @dragover.prevent="handleDragOver('hand', hand.id)"
+                  @dragenter.prevent="handleDragOver('hand', hand.id)"
+                  @dragleave="handleDragLeave('hand', hand.id)"
+                  @drop.prevent="handleDropToHand(hand)"
+                >
+                  <span class="hand-bbox-label">
+                    {{ handLabel(hand, idx) }}
                   </span>
                 </div>
               </template>
@@ -205,7 +213,11 @@
           <div class="filmstrip-list">
             <button
               v-for="item in filmstripWindow"
-              :key="item.id"
+              :key="
+                item.id
+                  ? `filmstrip-${item.id}-${item.index}`
+                  : `filmstrip-${item.index}`
+              "
               class="filmstrip-thumb"
               :class="{ active: item.isActive }"
               @click.stop="selectImageByIndex(item.index)"
@@ -321,7 +333,12 @@
                     ></div>
                   </div>
                   <div class="face-assign-meta">
-                    <div class="face-assign-label">{{ face.label }}</div>
+                    <div
+                      class="face-assign-label"
+                      :style="{ color: faceBoxColor(face.faceIdx) }"
+                    >
+                      {{ face.label }}
+                    </div>
                     <select
                       class="face-assign-select"
                       :disabled="!face.id"
@@ -359,10 +376,19 @@
             <div v-else class="face-assign-empty">No faces detected</div>
           </div>
 
-          <div class="sidebar-section">
+          <div class="sidebar-section sidebar-section--tags">
             <div class="section-header">
               <span>Tags</span>
               <span class="section-meta-group">
+                <button
+                  v-if="image"
+                  class="section-meta-btn section-meta-btn--danger"
+                  type="button"
+                  title="Clear tags (Causes the image to be re-tagged automatically)"
+                  @click.stop="clearTagsForImage"
+                >
+                  <v-icon size="16">mdi-refresh</v-icon>
+                </button>
                 <button
                   v-if="image"
                   class="section-meta-btn"
@@ -375,33 +401,156 @@
               </span>
             </div>
             <div class="tag-list">
-              <span
-                v-for="tag in image?.tags || []"
-                :key="tag"
-                :class="[
-                  'overlay-tag',
-                  { 'overlay-tag--penalized': isPenalizedTag(tag) },
-                ]"
-              >
-                {{ tag }}
-                <button
-                  class="tag-delete-btn"
-                  @click.stop="removeTag(tag)"
-                  title="Remove tag"
+              <div v-if="tagsRefreshing" class="tag-refresh-indicator">
+                <v-progress-circular
+                  indeterminate
+                  size="16"
+                  width="2"
+                  color="primary"
+                />
+              </div>
+              <div class="tag-section">
+                <div class="tag-section-title">All Image Tags</div>
+                <div
+                  class="tag-drop-zone"
+                  :class="{
+                    'tag-drop-zone--active': isDragOver('unassigned', null),
+                  }"
+                  @dragover.prevent="handleDragOver('unassigned', null)"
+                  @dragenter.prevent="handleDragOver('unassigned', null)"
+                  @dragleave="handleDragLeave('unassigned', null)"
+                  @drop.prevent="handleDropToUnassigned"
                 >
-                  <v-icon size="12">mdi-close</v-icon>
-                </button>
-              </span>
-              <input
-                v-if="addingTag"
-                ref="tagInputRef"
-                v-model="newTag"
-                @keydown.enter.prevent="confirmAddTag"
-                @keydown="handleTagBackspace"
-                @blur="cancelAddTag"
-                class="tag-add-input"
-                placeholder="New tag"
-              />
+                  <span
+                    v-for="tag in allImageTags"
+                    :key="`unassigned-${tag.id ?? tag.tag}`"
+                    :class="[
+                      'overlay-tag',
+                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                    ]"
+                    draggable="true"
+                    @dragstart="
+                      startTagDrag(tagLabel(tag), 'unassigned', null, $event)
+                    "
+                    @dragend="clearTagDrag"
+                  >
+                    {{ tagLabel(tag) }}
+                    <button
+                      v-if="isPictureTag(tag)"
+                      class="tag-delete-btn"
+                      @click.stop="removeTag(tag)"
+                      title="Remove tag"
+                    >
+                      <v-icon size="12">mdi-close</v-icon>
+                    </button>
+                  </span>
+                  <div v-if="!allImageTags.length" class="tag-drop-placeholder">
+                    Drop tags here
+                  </div>
+                  <input
+                    v-if="addingTag"
+                    ref="tagInputRef"
+                    v-model="newTag"
+                    @keydown.enter.prevent="confirmAddTag"
+                    @keydown="handleTagBackspace"
+                    @blur="cancelAddTag"
+                    class="tag-add-input"
+                    placeholder="New tag"
+                  />
+                </div>
+              </div>
+
+              <div
+                v-for="group in faceTagGroups"
+                :key="group.faceKey"
+                class="tag-section"
+              >
+                <div class="tag-section-title" :style="{ color: group.color }">
+                  {{ group.label }}
+                </div>
+                <div
+                  class="tag-drop-zone"
+                  :class="{
+                    'tag-drop-zone--active': isDragOver('face', group.face.id),
+                  }"
+                  @dragover.prevent="handleDragOver('face', group.face.id)"
+                  @dragenter.prevent="handleDragOver('face', group.face.id)"
+                  @dragleave="handleDragLeave('face', group.face.id)"
+                  @drop.prevent="handleDropToFace(group.face)"
+                >
+                  <span
+                    v-for="tag in group.tags"
+                    :key="`face-${group.faceKey}-${tag.id ?? tag.tag}`"
+                    :class="[
+                      'overlay-tag',
+                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                    ]"
+                    draggable="true"
+                    @dragstart="
+                      startTagDrag(tagLabel(tag), 'face', group.face.id, $event)
+                    "
+                    @dragend="clearTagDrag"
+                  >
+                    {{ tagLabel(tag) }}
+                    <button
+                      class="tag-delete-btn"
+                      @click.stop="removeTagFromFace(group.face, tag)"
+                      title="Remove tag"
+                    >
+                      <v-icon size="12">mdi-close</v-icon>
+                    </button>
+                  </span>
+                  <div v-if="!group.tags.length" class="tag-drop-placeholder">
+                    Drop tags here
+                  </div>
+                </div>
+              </div>
+
+              <div
+                v-for="group in handTagGroups"
+                :key="group.handKey"
+                class="tag-section"
+              >
+                <div class="tag-section-title" :style="{ color: group.color }">
+                  {{ group.label }}
+                </div>
+                <div
+                  class="tag-drop-zone"
+                  :class="{
+                    'tag-drop-zone--active': isDragOver('hand', group.hand.id),
+                  }"
+                  @dragover.prevent="handleDragOver('hand', group.hand.id)"
+                  @dragenter.prevent="handleDragOver('hand', group.hand.id)"
+                  @dragleave="handleDragLeave('hand', group.hand.id)"
+                  @drop.prevent="handleDropToHand(group.hand)"
+                >
+                  <span
+                    v-for="tag in group.tags"
+                    :key="`hand-${group.handKey}-${tag.id ?? tag.tag}`"
+                    :class="[
+                      'overlay-tag',
+                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                    ]"
+                    draggable="true"
+                    @dragstart="
+                      startTagDrag(tagLabel(tag), 'hand', group.hand.id, $event)
+                    "
+                    @dragend="clearTagDrag"
+                  >
+                    {{ tagLabel(tag) }}
+                    <button
+                      class="tag-delete-btn"
+                      @click.stop="removeTagFromHand(group.hand, tag)"
+                      title="Remove tag"
+                    >
+                      <v-icon size="12">mdi-close</v-icon>
+                    </button>
+                  </span>
+                  <div v-if="!group.tags.length" class="tag-drop-placeholder">
+                    Drop tags here
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -493,39 +642,55 @@ import {
   toRefs,
   watch,
 } from "vue";
-import { isSupportedVideoFile, getOverlayFormat } from "../utils/media.js";
+import {
+  isSupportedVideoFile,
+  getOverlayFormat,
+  buildMediaUrl,
+} from "../utils/media.js";
 import { apiClient } from "../utils/apiClient";
-import unknownPerson from "../assets/unknown-person.png";
+import AddToSetControl from "./AddToSetControl.vue";
+import StarRatingOverlay from "./StarRatingOverlay.vue";
+import { faceBoxColor, handBoxColor, toggleScore } from "../utils/utils.js";
+import {
+  dedupeTagList,
+  getTagId as tagId,
+  getTagLabel as tagLabel,
+  normalizeTagList,
+  tagMatches,
+} from "../utils/tags.js";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   initialImage: { type: Object, default: null },
   allImages: { type: Array, default: () => [] },
   backendUrl: { type: String, required: true },
+  tagsRefreshing: { type: Boolean, default: false },
+  tagUpdate: { type: Object, default: () => ({}) },
 });
 
-const { open, initialImage, allImages, backendUrl } = toRefs(props);
+const { open, initialImage, allImages, backendUrl, tagsRefreshing, tagUpdate } =
+  toRefs(props);
 
 const image = ref(null);
 const sidebarOpen = ref(true);
 const filmstripOpen = ref(false);
 const chromeHidden = ref(false);
 const zoomMode = ref("fit");
-const zoomSteps = ["fit", 0.75, 1, 1.5, 2];
+const zoomSteps = ["fit", 1.5, 2];
 const pan = reactive({ x: 0, y: 0 });
 const isPanning = ref(false);
 const lastPointer = ref({ x: 0, y: 0 });
-const idleTimeoutMs = 6000;
-let chromeIdleTimer = null;
-const chromeRevealTimestamp = ref(0);
 
 // Watch for changes to initialImage and update local image copy
 watch(
   () => initialImage.value,
   (newImg) => {
+    const previousId = image.value?.id ?? null;
     image.value = newImg ? { ...newImg } : null;
-    zoomMode.value = "fit";
-    resetPan();
+    if (newImg?.id !== previousId) {
+      zoomMode.value = "fit";
+      resetPan();
+    }
   },
   { immediate: true },
 );
@@ -539,6 +704,9 @@ const emit = defineEmits([
   "add-tag",
   "update-description",
   "refresh-image",
+  "image-change",
+  "tag-refresh-start",
+  "added-to-set",
 ]);
 
 const descriptionRef = ref(null);
@@ -570,23 +738,14 @@ const newTag = ref("");
 const tagInputRef = ref(null);
 const penalizedTags = ref(new Set());
 const penalizedTagsLoading = ref(false);
-
-const hasTags = computed(() => {
-  return !!(
-    image.value &&
-    Array.isArray(image.value.tags) &&
-    image.value.tags.length
-  );
-});
+const lastTagUpdateKey = ref(0);
+const addToSetControlKey = ref(0);
 
 watch(open, (value) => {
   if (!value) {
     resetTagInput();
     chromeHidden.value = false;
-    if (chromeIdleTimer) {
-      clearTimeout(chromeIdleTimer);
-      chromeIdleTimer = null;
-    }
+    addToSetControlKey.value += 1;
   } else {
     fetchCharacters();
     fetchPenalizedTags();
@@ -598,9 +757,15 @@ async function fetchPenalizedTags() {
   penalizedTagsLoading.value = true;
   try {
     const res = await apiClient.get("/users/me/config");
-    const list = Array.isArray(res.data?.smart_score_penalized_tags)
-      ? res.data.smart_score_penalized_tags
-      : [];
+    let list = [];
+    if (Array.isArray(res.data?.smart_score_penalized_tags)) {
+      list = res.data.smart_score_penalized_tags;
+    } else if (
+      res.data?.smart_score_penalized_tags &&
+      typeof res.data.smart_score_penalized_tags === "object"
+    ) {
+      list = Object.keys(res.data.smart_score_penalized_tags);
+    }
     const normalized = list
       .map((tag) =>
         String(tag || "")
@@ -617,25 +782,14 @@ async function fetchPenalizedTags() {
 }
 
 function isPenalizedTag(tag) {
-  const key = String(tag || "")
-    .trim()
-    .toLowerCase();
+  const key = tagLabel(tag).trim().toLowerCase();
   if (!key) return false;
   return penalizedTags.value.has(key);
 }
 
-function normalizePictureFormat(target) {
-  if (!target || !target.format) return "";
-  return String(target.format).trim().toLowerCase();
-}
-
 function getFullImageUrl(targetImage = null) {
   const data = targetImage || image.value;
-  if (!data || !data.id) return "";
-  const ext = normalizePictureFormat(data);
-  const suffix = ext ? `.${ext}` : "";
-  const cacheBuster = data.pixel_sha ? `?v=${data.pixel_sha}` : "";
-  return `${backendUrl.value}/pictures/${data.id}${suffix}${cacheBuster}`;
+  return buildMediaUrl({ backendUrl: backendUrl.value, image: data });
 }
 
 function getFilmstripThumbSrc(target) {
@@ -690,25 +844,42 @@ function confirmAddTag() {
     cancelAddTag();
     return;
   }
-  if (
-    image.value &&
-    Array.isArray(image.value.tags) &&
-    image.value.tags.includes(trimmed)
-  ) {
+  const currentTags = normalizeTagList(image.value?.tags);
+  if (currentTags.some((tag) => tag.tag === trimmed)) {
     cancelAddTag();
     return;
   }
   emit("add-tag", image.value.id, trimmed);
   if (image.value && Array.isArray(image.value.tags)) {
-    image.value.tags.push(trimmed);
-    image.value.tags.sort(); // Ensure tags remain sorted
+    const next = dedupeTagList([...currentTags, { id: null, tag: trimmed }]);
+    image.value.tags = next;
   }
   resetTagInput();
 }
 
+function handleOverlayAddToSet(payload) {
+  emit("added-to-set", payload);
+}
+
+async function clearTagsForImage() {
+  if (!image.value?.id || !backendUrl.value) return;
+  try {
+    emit("tag-refresh-start", image.value.id);
+    await apiClient.post(`${backendUrl.value}/pictures/clear_tags`, {
+      picture_ids: [image.value.id],
+    });
+    if (Array.isArray(image.value.tags)) {
+      image.value.tags = [];
+    }
+    emit("refresh-image", image.value.id);
+  } catch (err) {
+    alert(`Failed to clear tags: ${err?.message || err}`);
+  }
+}
+
 function setScore(n) {
   if (!image.value) return;
-  image.value.score = (image.value.score || 0) === n ? 0 : n;
+  image.value.score = toggleScore(image.value.score, n);
   emit("apply-score", image.value, image.value.score);
 }
 
@@ -719,6 +890,7 @@ function showPrevImage() {
   if (idx === -1) return;
   const prevIdx = (idx - 1 + sorted.length) % sorted.length;
   image.value = sorted[prevIdx];
+  emit("image-change", image.value);
 }
 
 function selectImageByIndex(idx) {
@@ -727,6 +899,7 @@ function selectImageByIndex(idx) {
   if (target) {
     image.value = target;
     resetPan();
+    emit("image-change", image.value);
   }
 }
 
@@ -737,6 +910,7 @@ function showNextImage() {
   if (idx === -1) return;
   const nextIdx = (idx + 1) % sorted.length;
   image.value = sorted[nextIdx];
+  emit("image-change", image.value);
 }
 
 function handleKeydown(e) {
@@ -779,7 +953,6 @@ const showFaceBbox = ref(false);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;
 const windowHeight = ref(0);
-const topbarRef = ref(null);
 const overlayMainRef = ref(null);
 const touchStart = ref({ x: 0, y: 0, time: 0 });
 const touchLatest = ref({ x: 0, y: 0 });
@@ -823,7 +996,7 @@ function showSwipeHint() {
   }
   swipeHintTimer = window.setTimeout(() => {
     swipeHintVisible.value = false;
-  }, 2000);
+  }, 3000);
 }
 
 function handleBackdropClick() {
@@ -831,16 +1004,7 @@ function handleBackdropClick() {
 }
 
 function handleUserActivity() {
-  if (chromeHidden.value) {
-    chromeRevealTimestamp.value = Date.now();
-  }
   chromeHidden.value = false;
-  if (chromeIdleTimer) {
-    clearTimeout(chromeIdleTimer);
-  }
-  chromeIdleTimer = window.setTimeout(() => {
-    chromeHidden.value = true;
-  }, idleTimeoutMs);
 }
 
 function handleOverlayClick(event) {
@@ -859,17 +1023,13 @@ function handleOverlayClick(event) {
   const interactiveSelector =
     "button, a, input, select, textarea, label, summary, details";
   const interactiveContainerSelector =
-    ".overlay-topbar, .overlay-sidebar, .overlay-rail, .overlay-nav";
+    ".overlay-sidebar, .overlay-rail, .overlay-nav";
   if (
     target.closest(interactiveSelector) ||
     target.closest(interactiveContainerSelector)
   ) {
     handleUserActivity();
     return;
-  }
-  if (chromeIdleTimer) {
-    clearTimeout(chromeIdleTimer);
-    chromeIdleTimer = null;
   }
   chromeHidden.value = true;
 }
@@ -888,18 +1048,6 @@ function openSidebarFromTeaser() {
   sidebarOpen.value = true;
   chromeHidden.value = false;
   startEditDescription();
-}
-
-function toggleFilmstrip() {
-  filmstripOpen.value = !filmstripOpen.value;
-}
-
-function openFilmstrip() {
-  if (!isMobile.value) filmstripOpen.value = true;
-}
-
-function closeFilmstrip() {
-  if (!isMobile.value) filmstripOpen.value = false;
 }
 
 function toggleZoom() {
@@ -1032,6 +1180,8 @@ function toggleFaceBbox() {
     showFaceBbox.value,
     "faceBboxes:",
     faceBboxes.value,
+    "handBboxes:",
+    handBboxes.value,
   );
   image.value = image.value ? { ...image.value } : null;
 }
@@ -1047,6 +1197,19 @@ const overlayDims = ref({
   naturalHeight: 1,
   offsetX: 0,
   offsetY: 0,
+});
+const overlayReady = computed(() => {
+  const dims = overlayDims.value;
+  return (
+    Number.isFinite(dims.width) &&
+    Number.isFinite(dims.height) &&
+    Number.isFinite(dims.naturalWidth) &&
+    Number.isFinite(dims.naturalHeight) &&
+    dims.width > 1 &&
+    dims.height > 1 &&
+    dims.naturalWidth > 1 &&
+    dims.naturalHeight > 1
+  );
 });
 let overlayResizeObserver = null;
 let mediaResizeObserver = null;
@@ -1125,10 +1288,6 @@ onUnmounted(() => {
     clearTimeout(swipeHintTimer);
     swipeHintTimer = null;
   }
-  if (chromeIdleTimer) {
-    clearTimeout(chromeIdleTimer);
-    chromeIdleTimer = null;
-  }
   resetCopyState();
   clearCharacterThumbnails();
 });
@@ -1188,6 +1347,15 @@ function onTouchEnd() {
 
 // Store multiple face bounding boxes (now full face objects)
 const faceBboxes = ref([]);
+const handBboxes = ref([]);
+const faceTagMap = ref({});
+const handTagMap = ref({});
+const dragState = reactive({
+  tag: null,
+  sourceType: null,
+  sourceId: null,
+});
+const dragOverTarget = ref({ type: null, id: null });
 const overlayThumbnail = ref(null);
 const overlayThumbnailDims = ref({ width: 256, height: 256 });
 const overlayThumbnailFaceMap = ref({});
@@ -1213,11 +1381,10 @@ async function fetchOverlayMetadata(imageId) {
     const data = await res.data;
     if (!data || Array.isArray(data)) return;
     const merged = { ...data, ...image.value };
-    const currentTags = Array.isArray(image.value?.tags)
-      ? image.value.tags
-      : [];
-    const dataTags = Array.isArray(data.tags) ? data.tags : [];
-    merged.tags = Array.from(new Set([...dataTags, ...currentTags])).sort();
+    const dataTags = normalizeTagList(data.tags);
+    if (data.tags !== undefined) {
+      merged.tags = dedupeTagList(dataTags);
+    }
     if (image.value?.description == null) {
       merged.description = data.description ?? null;
     }
@@ -1279,10 +1446,168 @@ async function fetchFaceBboxes(imageId) {
       }),
     );
     faceBboxes.value = firstFrameFaces;
+    await fetchFaceTagsForFaces(firstFrameFaces);
   } catch (e) {
     console.error("Error in fetchFaceBboxes:", e);
     faceBboxes.value = [];
   }
+}
+
+async function fetchHandBboxes(imageId) {
+  if (!imageId || !backendUrl.value) {
+    handBboxes.value = [];
+    return;
+  }
+  try {
+    const res = await apiClient.get(
+      `${backendUrl.value}/pictures/${imageId}/hands`,
+    );
+    const hands = await res.data;
+    const handArray = Array.isArray(hands) ? hands : hands.hands;
+    const firstFrameHands = (handArray || []).filter(
+      (h) =>
+        h.frame_index === 0 && Array.isArray(h.bbox) && h.bbox.length === 4,
+    );
+    handBboxes.value = firstFrameHands;
+    await fetchHandTagsForHands(firstFrameHands);
+  } catch (e) {
+    console.error("Error in fetchHandBboxes:", e);
+    handBboxes.value = [];
+  }
+}
+
+async function fetchFaceTagsForFaces(faces) {
+  if (!backendUrl.value || !Array.isArray(faces) || !faces.length) {
+    faceTagMap.value = {};
+    return;
+  }
+  const entries = await Promise.all(
+    faces.map(async (face) => {
+      try {
+        const res = await apiClient.get(
+          `${backendUrl.value}/faces/${face.id}/tags`,
+        );
+        const payload = await res.data;
+        const tags = Array.isArray(payload) ? payload : payload?.tags;
+        return [face.id, normalizeTagList(tags)];
+      } catch (e) {
+        return [face.id, []];
+      }
+    }),
+  );
+  const nextMap = {};
+  for (const [faceId, tags] of entries) {
+    nextMap[faceId] = dedupeTagList(tags);
+  }
+  faceTagMap.value = nextMap;
+}
+
+async function fetchHandTagsForHands(hands) {
+  if (!backendUrl.value || !Array.isArray(hands) || !hands.length) {
+    handTagMap.value = {};
+    return;
+  }
+  const entries = await Promise.all(
+    hands.map(async (hand) => {
+      try {
+        const res = await apiClient.get(
+          `${backendUrl.value}/hands/${hand.id}/tags`,
+        );
+        const payload = await res.data;
+        const tags = Array.isArray(payload) ? payload : payload?.tags;
+        return [hand.id, normalizeTagList(tags)];
+      } catch (e) {
+        return [hand.id, []];
+      }
+    }),
+  );
+  const nextMap = {};
+  for (const [handId, tags] of entries) {
+    nextMap[handId] = dedupeTagList(tags);
+  }
+  handTagMap.value = nextMap;
+}
+
+function ensureTagInImage(tag) {
+  if (!image.value) return;
+  const label = tagLabel(tag);
+  if (!label) return;
+  const tags = normalizeTagList(image.value.tags);
+  if (!tags.some((entry) => entry.tag === label)) {
+    const next = dedupeTagList([...tags, { id: null, tag: label }]);
+    image.value = { ...image.value, tags: next };
+    emit("add-tag", image.value.id, label);
+  }
+}
+
+async function assignTagToFace(face, tag) {
+  if (!face?.id || !tag || !backendUrl.value) return;
+  const label = tagLabel(tag);
+  if (!label) return;
+  ensureTagInImage(label);
+  const res = await apiClient.post(
+    `${backendUrl.value}/faces/${face.id}/tags`,
+    { tag: label },
+  );
+  const payload = await res.data;
+  const tags = Array.isArray(payload) ? payload : payload?.tags;
+  faceTagMap.value = {
+    ...faceTagMap.value,
+    [face.id]: normalizeTagList(tags),
+  };
+}
+
+async function removeTagFromFace(face, tag) {
+  if (!face?.id || !tag || !backendUrl.value) return;
+  const key = tagId(tag);
+  if (key == null) {
+    console.warn("Tag id is required to remove a face tag.", tag);
+    return;
+  }
+  const res = await apiClient.delete(
+    `${backendUrl.value}/faces/${face.id}/tags/${key}`,
+  );
+  const payload = await res.data;
+  const tags = Array.isArray(payload) ? payload : payload?.tags;
+  faceTagMap.value = {
+    ...faceTagMap.value,
+    [face.id]: normalizeTagList(tags),
+  };
+}
+
+async function assignTagToHand(hand, tag) {
+  if (!hand?.id || !tag || !backendUrl.value) return;
+  const label = tagLabel(tag);
+  if (!label) return;
+  ensureTagInImage(label);
+  const res = await apiClient.post(
+    `${backendUrl.value}/hands/${hand.id}/tags`,
+    { tag: label },
+  );
+  const payload = await res.data;
+  const tags = Array.isArray(payload) ? payload : payload?.tags;
+  handTagMap.value = {
+    ...handTagMap.value,
+    [hand.id]: normalizeTagList(tags),
+  };
+}
+
+async function removeTagFromHand(hand, tag) {
+  if (!hand?.id || !tag || !backendUrl.value) return;
+  const key = tagId(tag);
+  if (key == null) {
+    console.warn("Tag id is required to remove a hand tag.", tag);
+    return;
+  }
+  const res = await apiClient.delete(
+    `${backendUrl.value}/hands/${hand.id}/tags/${key}`,
+  );
+  const payload = await res.data;
+  const tags = Array.isArray(payload) ? payload : payload?.tags;
+  handTagMap.value = {
+    ...handTagMap.value,
+    [hand.id]: normalizeTagList(tags),
+  };
 }
 
 async function fetchOverlayThumbnail(imageId) {
@@ -1418,10 +1743,6 @@ function clearCharacterThumbnails() {
   characterThumbnails.value = {};
 }
 
-function getCharacterThumbSrc(characterId) {
-  return characterThumbnails.value[characterId] || unknownPerson;
-}
-
 function getFaceThumbStyle(face, idx) {
   const color = faceBoxColor(idx);
   const base = {
@@ -1552,11 +1873,24 @@ watch(
   () => image.value?.id,
   (newId) => {
     if (newId) {
+      overlayDims.value = {
+        width: 1,
+        height: 1,
+        naturalWidth: 1,
+        naturalHeight: 1,
+        offsetX: 0,
+        offsetY: 0,
+      };
+      scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
+      fetchHandBboxes(newId);
       fetchOverlayMetadata(newId);
       fetchOverlayThumbnail(newId);
     } else {
       faceBboxes.value = [];
+      handBboxes.value = [];
+      faceTagMap.value = {};
+      handTagMap.value = {};
       overlayThumbnail.value = null;
       overlayThumbnailFaceMap.value = {};
       overlayThumbnailDims.value = { width: 256, height: 256 };
@@ -1566,10 +1900,50 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => tagsRefreshing.value,
+  (isRefreshing, wasRefreshing) => {
+    if (!wasRefreshing && isRefreshing) {
+      if (image.value && Array.isArray(image.value.tags)) {
+        image.value.tags = [];
+      }
+      faceTagMap.value = {};
+      handTagMap.value = {};
+      return;
+    }
+    if (!isRefreshing && wasRefreshing && image.value?.id) {
+      fetchFaceTagsForFaces(faceBboxes.value);
+      fetchHandTagsForHands(handBboxes.value);
+    }
+  },
+);
+
+watch(
+  () => tagUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastTagUpdateKey.value) return;
+    lastTagUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds.map((id) => String(id))
+      : [];
+    const currentId = String(image.value.id);
+    if (pictureIds.length && !pictureIds.includes(currentId)) return;
+    if (faceBboxes.value.length) {
+      fetchFaceTagsForFaces(faceBboxes.value);
+    }
+    if (handBboxes.value.length) {
+      fetchHandTagsForHands(handBboxes.value);
+    }
+  },
+);
+
 function handleTagBackspace(event) {
   if (event.key !== "Backspace") return;
   if (newTag.value.trim()) return;
-  const tags = image.value?.tags || [];
+  const tags = normalizeTagList(image.value?.tags);
   if (!tags.length) return;
   removeTag(tags[tags.length - 1]);
 }
@@ -1589,6 +1963,144 @@ const faceAssignItems = computed(() => {
     label: `Face ${idx + 1}`,
   }));
 });
+
+const faceTagGroups = computed(() => {
+  const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
+  return faces.map((face, idx) => {
+    const characterName = face?.character_name;
+    const label = characterName ? `${characterName}'s face` : `Face ${idx + 1}`;
+    return {
+      face,
+      faceKey: face?.id ?? `face-${idx}`,
+      label,
+      tags: faceTagMap.value?.[face.id] || [],
+      color: faceBoxColor(idx),
+    };
+  });
+});
+
+const handTagGroups = computed(() => {
+  const hands = Array.isArray(handBboxes.value) ? handBboxes.value : [];
+  return hands.map((hand, idx) => ({
+    hand,
+    handKey: hand?.id ?? `hand-${idx}`,
+    label: handLabel(hand, idx),
+    tags: handTagMap.value?.[hand.id] || [],
+    color: handBoxColor(idx),
+  }));
+});
+
+const imageTags = computed(() => {
+  return dedupeTagList(normalizeTagList(image.value?.tags));
+});
+
+const faceTags = computed(() => {
+  const values = Object.values(faceTagMap.value || {});
+  const tags = values.flatMap((list) => normalizeTagList(list));
+  return dedupeTagList(tags);
+});
+
+const handTags = computed(() => {
+  const values = Object.values(handTagMap.value || {});
+  const tags = values.flatMap((list) => normalizeTagList(list));
+  return dedupeTagList(tags);
+});
+
+const allImageTags = computed(() => {
+  return dedupeTagList([
+    ...imageTags.value,
+    ...faceTags.value,
+    ...handTags.value,
+  ]);
+});
+
+function isPictureTag(tag) {
+  return imageTags.value.some((entry) => tagMatches(entry, tag));
+}
+
+function startTagDrag(tag, sourceType, sourceId, event) {
+  dragState.tag = tag;
+  dragState.sourceType = sourceType;
+  dragState.sourceId = sourceId;
+  if (event?.dataTransfer) {
+    event.dataTransfer.setData("text/plain", tag);
+    event.dataTransfer.effectAllowed = "move";
+  }
+}
+
+function clearTagDrag() {
+  dragState.tag = null;
+  dragState.sourceType = null;
+  dragState.sourceId = null;
+  dragOverTarget.value = { type: null, id: null };
+}
+
+function handleDragOver(type, id) {
+  dragOverTarget.value = { type, id };
+}
+
+function handleDragLeave(type, id) {
+  if (dragOverTarget.value?.type === type && dragOverTarget.value?.id === id) {
+    dragOverTarget.value = { type: null, id: null };
+  }
+}
+
+function isDragOver(type, id) {
+  return dragOverTarget.value?.type === type && dragOverTarget.value?.id === id;
+}
+
+async function handleTagDrop(targetType, targetId) {
+  const tag = dragState.tag;
+  const sourceType = dragState.sourceType;
+  const sourceId = dragState.sourceId;
+  if (!tag) return;
+  if (targetType === sourceType && targetId === sourceId) {
+    clearTagDrag();
+    return;
+  }
+
+  if (targetType === "unassigned") {
+    if (sourceType === "face" && sourceId != null) {
+      const face = faceBboxes.value.find((f) => f.id === sourceId);
+      if (face) await removeTagFromFace(face, tag);
+    }
+    if (sourceType === "hand" && sourceId != null) {
+      const hand = handBboxes.value.find((h) => h.id === sourceId);
+      if (hand) await removeTagFromHand(hand, tag);
+    }
+    clearTagDrag();
+    return;
+  }
+
+  if (targetType === "face") {
+    const face = faceBboxes.value.find((f) => f.id === targetId);
+    if (!face) return;
+    await assignTagToFace(face, tag);
+    clearTagDrag();
+    return;
+  }
+
+  if (targetType === "hand") {
+    const hand = handBboxes.value.find((h) => h.id === targetId);
+    if (!hand) return;
+    await assignTagToHand(hand, tag);
+    clearTagDrag();
+  }
+}
+
+async function handleDropToUnassigned() {
+  await handleTagDrop("unassigned", null);
+}
+
+async function handleDropToFace(face) {
+  if (!face?.id) return;
+  await handleTagDrop("face", face.id);
+}
+
+async function handleDropToHand(hand) {
+  if (!hand?.id) return;
+  await handleTagDrop("hand", hand.id);
+}
 
 const sortedCharacters = computed(() => {
   const list = Array.isArray(characters.value) ? characters.value : [];
@@ -1914,22 +2426,39 @@ async function copyMetadataValue(value) {
   }
 }
 
-// Add this helper below your script setup imports
-function faceBoxColor(idx) {
-  // Pick from a palette, cycle if more faces than colors
-  const palette = [
-    "#ff5252", // red
-    "#40c4ff", // blue
-    "#ffd740", // yellow
-    "#69f0ae", // green
-    "#d500f9", // purple
-    "#ffab40", // orange
-    "#00e676", // teal
-    "#ff4081", // pink
-    "#8d6e63", // brown
-    "#7c4dff", // indigo
-  ];
-  return palette[idx % palette.length];
+function handLabel(hand, idx) {
+  const handIndex = hand?.hand_index;
+  if (typeof handIndex === "number" && Number.isFinite(handIndex)) {
+    return `Hand ${handIndex + 1}`;
+  }
+  return `Hand ${idx + 1}`;
+}
+
+function isValidOverlayBBox(bbox) {
+  return Array.isArray(bbox) && bbox.length === 4;
+}
+
+function getOverlayBoxStyle(bbox, color) {
+  if (!overlayReady.value || !isValidOverlayBBox(bbox)) {
+    return { display: "none" };
+  }
+  const dims = overlayDims.value;
+  const x1 = bbox[0];
+  const y1 = bbox[1];
+  const x2 = bbox[2];
+  const y2 = bbox[3];
+  const left = (dims.offsetX || 0) + (x1 * dims.width) / dims.naturalWidth;
+  const top = (dims.offsetY || 0) + (y1 * dims.height) / dims.naturalHeight;
+  const width = ((x2 - x1) * dims.width) / dims.naturalWidth;
+  const height = ((y2 - y1) * dims.height) / dims.naturalHeight;
+  return {
+    border: `1px solid ${color}`,
+    background: `${color}22`,
+    left: `${left || 0}px`,
+    top: `${top || 0}px`,
+    width: `${width || 0}px`,
+    height: `${height || 0}px`,
+  };
 }
 
 function updateDescriptionScrollState() {
@@ -1941,16 +2470,6 @@ function updateDescriptionScrollState() {
 
   descriptionScrollMeta.hasOverflow = false; // Disable overflow logic
 }
-
-function handleDescriptionScroll() {
-  updateDescriptionScrollState();
-}
-
-const descriptionScrollClasses = computed(() => {
-  return {
-    "has-overflow": descriptionScrollMeta.hasOverflow,
-  };
-});
 
 function startEditDescription() {
   if (!image.value) return;
@@ -2053,20 +2572,16 @@ function handleDescriptionEditorKey(event) {
   }
 }
 
-function selectAllText() {
-  const input = descriptionEditorRef.value;
-  if (input) {
-    input.select();
-  }
-}
-
 function removeTag(tag) {
   if (!image.value || !Array.isArray(image.value.tags)) return;
-  const index = image.value.tags.indexOf(tag);
-  if (index !== -1) {
-    image.value.tags.splice(index, 1);
-    emit("remove-tag", image.value.id, tag); // Notify parent component
+  if (tagId(tag) == null) {
+    console.warn("Tag id is required to remove a picture tag.", tag);
+    return;
   }
+  const current = normalizeTagList(image.value.tags);
+  const next = current.filter((entry) => !tagMatches(entry, tag));
+  image.value.tags = next;
+  emit("remove-tag", image.value.id, tag); // Notify parent component
 }
 
 function downloadComfyWorkflow(workflow) {
@@ -2135,15 +2650,14 @@ function downloadComfyWorkflow(workflow) {
   border: none;
   background: rgba(var(--v-theme-primary), 0.7);
   color: #fff;
-  height: 32px;
-  padding: 0 10px;
+  padding: 6px 14px;
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   cursor: pointer;
-  font-size: 0.78rem;
+  font-size: 1em;
   font-weight: 600;
 }
 .overlay-close:hover {
@@ -2195,7 +2709,7 @@ function downloadComfyWorkflow(workflow) {
   top: auto;
   right: auto;
   z-index: auto;
-  padding: 4px 4px 4px 4px;
+  padding: 6px 14px;
   height: 32px;
   background: none;
   border-radius: 4px;
@@ -2209,15 +2723,15 @@ function downloadComfyWorkflow(workflow) {
   border: none;
   background: none;
   color: rgb(var(--v-theme-on-dark-surface));
-  width: 36px;
   height: 32px;
-  padding-left: 4px;
-  padding-right: 4px;
+  padding: 6px 14px;
+  min-width: 32px;
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  font-size: 1em;
 }
 .overlay-icon-btn:hover {
   background: rgba(var(--v-theme-primary), 0.6);
@@ -2226,7 +2740,7 @@ function downloadComfyWorkflow(workflow) {
 .zoom-btn {
   width: auto;
   min-width: 84px;
-  padding: 4px 10px;
+  padding: 6px 14px;
   gap: 6px;
   justify-content: flex-start;
 }
@@ -2467,8 +2981,10 @@ function downloadComfyWorkflow(workflow) {
 .overlay-sidebar.open {
   width: 320px;
   padding: 16px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .overlay-sidebar.hidden {
@@ -2478,6 +2994,13 @@ function downloadComfyWorkflow(workflow) {
 
 .sidebar-section {
   margin-bottom: 20px;
+}
+
+.sidebar-section--tags {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .section-header {
@@ -2506,6 +3029,13 @@ function downloadComfyWorkflow(workflow) {
   cursor: pointer;
 }
 
+.section-meta-btn--danger {
+  background: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-on-error));
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
 .section-meta-btn:disabled {
   cursor: default;
   opacity: 0.5;
@@ -2518,39 +3048,51 @@ function downloadComfyWorkflow(workflow) {
 
 .description-editor textarea {
   width: 100%;
-  min-height: 200px;
+  min-height: 120px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(0, 0, 0, 0.35);
   color: #fff;
-  padding: 8px;
+  padding: 6px;
   resize: vertical;
 }
 
 .description-actions {
-  margin-top: 8px;
+  margin-top: 6px;
   display: flex;
   gap: 8px;
 }
 
 .tag-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 2px 4px;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tag-refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  margin-right: 4px;
 }
 
 .overlay-tag {
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
-  border-radius: 8px;
-  padding: 2px 2px 2px 8px;
-  font-size: 0.8rem;
+  border-radius: 6px;
+  padding: 1px 2px 1px 6px;
+  font-size: 0.72rem;
   line-height: 1.2;
-  margin-bottom: 4px;
+  margin-bottom: 0px;
   margin-right: 0px;
   margin-left: 0px;
   justify-content: center;
   vertical-align: middle;
+  cursor: pointer;
 }
 
 .overlay-tag--penalized {
@@ -2561,7 +3103,7 @@ function downloadComfyWorkflow(workflow) {
 
 .tag-delete-btn {
   margin: 0px;
-  padding: 4px;
+  padding: 2px;
   background: transparent;
   border: none;
   color: rgb(var(--v-theme-primary));
@@ -2580,35 +3122,35 @@ function downloadComfyWorkflow(workflow) {
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: #fff;
   border-radius: 999px;
-  padding: 2px 8px;
-  font-size: 0.74rem;
+  padding: 1px 6px;
+  font-size: 0.7rem;
 }
 
 .face-assign-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 8px;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .face-assign-card {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
-  padding: 6px;
+  padding: 4px;
 }
 
 .face-assign-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .face-assign-thumb {
   border-radius: 2px;
   flex: 0 0 auto;
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2873,6 +3415,76 @@ function downloadComfyWorkflow(workflow) {
   position: absolute;
   pointer-events: none;
   z-index: 1000 !important;
+}
+
+.hand-bbox-overlay {
+  box-sizing: border-box;
+  position: absolute;
+  pointer-events: none;
+  z-index: 1000 !important;
+}
+
+.bbox-drop-target {
+  pointer-events: auto;
+}
+
+.bbox-drop-target:hover {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4);
+}
+
+.bbox-drop-active {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75);
+}
+
+.tag-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.tag-section-title {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.tag-drop-zone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  min-height: 26px;
+  max-height: 154px;
+  overflow-y: auto;
+}
+
+.tag-list > .tag-section:first-of-type .tag-drop-zone {
+  max-height: 242px;
+}
+
+.tag-drop-zone--active {
+  border-color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tag-drop-placeholder {
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.hand-bbox-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.75rem;
+  padding: 1px 4px;
+  border-bottom-right-radius: 6px;
 }
 
 @media (max-width: 720px) {

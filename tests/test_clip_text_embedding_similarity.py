@@ -253,11 +253,10 @@ def test_server_sqlite_cosine_similarity_matches_numpy():
     from sqlalchemy import text
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
 
         # This triggers _import_default_data
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             engine = server.vault.db._engine
             # Two known embeddings
             a = np.random.randn(384).astype(np.float32)
@@ -357,9 +356,8 @@ def test_picture_embedding_storage_and_retrieval():
 def test_server():
     # Force CPU for all models during test
     tmpdir = tempfile.mkdtemp()
-    config_path = os.path.join(tmpdir, "config.json")
     server_config_path = os.path.join(tmpdir, "server_config.json")
-    server = Server(config_path, server_config_path)
+    server = Server(server_config_path)
     yield server
     shutil.rmtree(tmpdir)
 

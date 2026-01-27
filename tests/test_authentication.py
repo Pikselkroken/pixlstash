@@ -6,10 +6,9 @@ from pixlvault.server import Server
 def test_authentication_without_login():
     """Test accessing a protected endpoint without logging in."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = f"{temp_dir}/config.json"
         server_config_path = f"{temp_dir}/server-config.json"
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             client = TestClient(server.api)
 
             # Access without a session cookie
@@ -21,10 +20,9 @@ def test_authentication_without_login():
 def test_authentication_with_password_setup():
     """Test setting up the password on first login."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = f"{temp_dir}/config.json"
         server_config_path = f"{temp_dir}/server-config.json"
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             client = TestClient(server.api)
 
             # First login to set the password
@@ -40,10 +38,9 @@ def test_authentication_with_password_setup():
 def test_authentication_with_valid_password():
     """Test logging in with the correct password after setup."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = f"{temp_dir}/config.json"
         server_config_path = f"{temp_dir}/server-config.json"
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             with TestClient(server.api) as client1:
                 # First login to set the password
                 response = client1.post(
@@ -72,10 +69,9 @@ def test_authentication_with_valid_password():
 def test_authentication_with_invalid_password():
     """Test logging in with an incorrect password."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = f"{temp_dir}/config.json"
         server_config_path = f"{temp_dir}/server-config.json"
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             with TestClient(server.api) as client1:
                 # First login to set the password
                 response = client1.post(
@@ -104,10 +100,9 @@ def test_authentication_with_invalid_password():
 def test_authentication_with_token_login():
     """Test creating a token and logging in with it."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = f"{temp_dir}/config.json"
         server_config_path = f"{temp_dir}/server-config.json"
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             with TestClient(server.api) as client1:
                 # First login to set the password
                 response = client1.post(

@@ -17,7 +17,8 @@ from pixlvault.picture_utils import PictureUtils
 
 # The following imports are required to register all models with SQLModel.
 # They may appear unused, but are necessary for correct table creation and ORM operation.
-from pixlvault.db_models import Character, Face  # noqa: F401
+from pixlvault.db_models import Character, Face, FaceTag  # noqa: F401
+from pixlvault.db_models import HandTag  # noqa: F401
 from pixlvault.db_models import PictureLikeness, PictureSet, Picture, Quality, Tag, User  # noqa: F401
 
 

@@ -1,5 +1,4 @@
 import gc
-import json
 import pytest
 import random
 import time
@@ -26,17 +25,9 @@ def test_order_stability(params):
     with tempfile.TemporaryDirectory() as temp_dir:
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        config_path = os.path.join(temp_dir, "config.json")
-        config = Server.create_config(
-            default_device="cpu",
-            image_roots=[image_root],
-            selected_image_root=image_root,
-        )
-        with open(config_path, "w") as f:
-            f.write(json.dumps(config, indent=2))
         server_config_path = os.path.join(temp_dir, "server-config.json")
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             server.vault.import_default_data(True)
             client = TestClient(server.api)
 

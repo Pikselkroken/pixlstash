@@ -15,7 +15,7 @@
   - For any class the code order must be:
     1. import statements
     2. Class definition
-    3. Class docstring
+    3. Class docstring (always in Google style)
     4. Class-level variables
     5. __init__ method including initialisation of object properties
     6. Properties (getters/setters)

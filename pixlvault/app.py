@@ -11,7 +11,6 @@ from pixlvault.server import Server
 logger = get_logger(__name__)
 
 APP_NAME = "pixlvault"
-CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "config.json")
 SERVER_CONFIG_PATH = os.path.join(user_config_dir(APP_NAME), "server-config.json")
 
 
@@ -42,12 +41,6 @@ def _resolve_log_level(value):
 
 def main():
     parser = argparse.ArgumentParser(description=f"Run the {APP_NAME} server.")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=CONFIG_PATH,
-        help="Path to remote configurable settings file.",
-    )
     parser.add_argument(
         "--server-config",
         type=str,
@@ -83,7 +76,7 @@ def main():
     else:
         setup_logging(log_level=log_level)
 
-    server = Server(config_path=args.config, server_config_path=args.server_config)
+    server = Server(server_config_path=args.server_config)
     if args.remove_password:
         server.remove_password_hash()
         # Continue running the server after removing the password hash

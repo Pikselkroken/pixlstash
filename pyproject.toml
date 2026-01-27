@@ -25,7 +25,7 @@ dependencies = [
     "python-multipart",
     "onnxruntime",
     "requests",
-    "transformers",
+    "transformers<5.0.0",
     "torch",
     "torchvision",
     "insightface",
@@ -40,6 +40,7 @@ dependencies = [
     "python-jose[cryptography]",
     "dotenv",
     "passlib",
+    "bcrypt<4.0.0",
 ]
 
 [project.optional-dependencies]

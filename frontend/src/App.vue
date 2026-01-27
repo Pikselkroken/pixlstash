@@ -4,7 +4,6 @@ import {
   computed,
   nextTick,
   onBeforeUnmount,
-  onBeforeMount,
   onMounted,
   reactive,
   ref,
@@ -15,6 +14,7 @@ import { apiClient, API_BASE_URL } from "./utils/apiClient";
 import SideBar from "./components/SideBar.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import SearchOverlay from "./components/SearchOverlay.vue";
+import Toolbar from "./components/Toolbar.vue";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -25,9 +25,11 @@ const gridContainer = ref(null);
 const selectedImageIds = ref([]);
 let lastSelectedIndex = null;
 const sidebarRef = ref(null);
+const toolbarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
+const selectedReferenceCharacter = ref(null);
 const selectedSort = ref("");
 const selectedDescending = ref(true);
 const stackThreshold = ref(null);
@@ -49,6 +51,10 @@ const filteredSearchHistory = computed(() => {
 });
 const showStars = ref(true);
 const showFaceBboxes = ref(false);
+const showHandBboxes = ref(false);
+const showFormat = ref(true);
+const showResolution = ref(true);
+const showProblemIcon = ref(true);
 
 const thumbnailSize = ref(256);
 const columns = ref(4); // Default columns
@@ -69,12 +75,15 @@ const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
+const wsTagUpdate = ref({ key: 0, pictureIds: [] });
 const columnsMenuOpen = ref(false);
+const overlaysMenuOpen = ref(false);
 const configLoaded = ref(false);
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 let columnsMenuCloseTimeout = null;
 const updatesSocket = ref(null);
 let updatesReconnectTimer = null;
+const configLoading = ref(false);
 
 function refreshGridVersion() {
   gridVersion.value++;
@@ -137,6 +146,12 @@ function connectUpdatesSocket() {
         wsUpdateKey.value = Date.now();
         refreshGridVersion();
       }
+    } else if (payload?.type === "tags_changed") {
+      const pictureIds = Array.isArray(payload.picture_ids)
+        ? payload.picture_ids
+        : [];
+      const nextKey = (wsTagUpdate.value?.key || 0) + 1;
+      wsTagUpdate.value = { key: nextKey, pictureIds };
     }
   };
 
@@ -165,6 +180,7 @@ function disconnectUpdatesSocket() {
 
 // --- Export Menu State ---
 const exportMenuOpen = ref(false);
+const exportType = ref("full");
 const exportCaptionMode = ref("description");
 const exportIncludeCharacterName = ref(true);
 const exportResolution = ref("original");
@@ -180,17 +196,40 @@ const exportCaptionOptions = [
   { title: "Description", value: "description" },
   { title: "Tags", value: "tags" },
 ];
+const exportTypeOptions = [
+  { title: "Full images", value: "full" },
+  { title: "Face crops", value: "face" },
+  { title: "Hand crops", value: "hand" },
+  { title: "Face & hand crops", value: "face_hand" },
+];
 const exportResolutionOptions = [
   { title: "Original", value: "original" },
   { title: "Half Size", value: "half" },
   { title: "Quarter Size", value: "quarter" },
 ];
+const exportTypeLocksCaptions = computed(() => exportType.value !== "full");
+
+watch(
+  exportType,
+  (value) => {
+    if (value !== "full") {
+      exportCaptionMode.value = "tags";
+      exportIncludeCharacterName.value = false;
+    }
+  },
+  { immediate: true },
+);
 
 // --- Config Dialog State ---
 const config = reactive({
   sort: "",
   thumbnail: 256,
   show_stars: true,
+  show_face_bboxes: false,
+  show_hand_bboxes: false,
+  show_format: true,
+  show_resolution: true,
+  show_problem_icon: true,
 });
 
 const loading = ref(false);
@@ -198,6 +237,10 @@ const error = ref(null);
 
 function refreshSidebar(options = {}) {
   sidebarRef.value?.refreshSidebar(options);
+}
+
+function openSettingsDialog() {
+  sidebarRef.value?.openSettingsDialog?.();
 }
 
 function updateIsMobile() {
@@ -248,25 +291,43 @@ async function handleSelectCharacter(charId) {
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
   if (charId == null) {
     selectedCharacter.value = null;
+    selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
   selectedCharacter.value = charId;
   selectedSet.value = null; // Clear set selection
+  selectedReferenceCharacter.value = null;
   searchQuery.value = ""; // Clear search query
   await nextTick(); // Ensure reactivity propagates the change
   console.log("[App.vue] searchQuery cleared:", searchQuery.value);
   closeSidebarIfMobile();
 }
 
+async function handleSelectReferencePictures(charId) {
+  if (charId == null) {
+    selectedReferenceCharacter.value = null;
+    await nextTick();
+    return;
+  }
+  selectedReferenceCharacter.value = charId;
+  selectedCharacter.value = null;
+  selectedSet.value = null;
+  searchQuery.value = "";
+  await nextTick();
+  closeSidebarIfMobile();
+}
+
 async function handleSelectSet(setId) {
   if (setId == null) {
     selectedSet.value = null;
+    selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
+  selectedReferenceCharacter.value = null;
   searchQuery.value = ""; // Clear search query
   closeSidebarIfMobile();
 }
@@ -306,6 +367,8 @@ function handleColumnsEnd() {
 }
 
 async function fetchConfig() {
+  if (configLoading.value) return;
+  configLoading.value = true;
   try {
     const res = await apiClient.get("/users/me/config");
     console.log("Fetched config:", res);
@@ -315,6 +378,21 @@ async function fetchConfig() {
     }
     if (typeof res.data.show_stars === "boolean")
       showStars.value = res.data.show_stars;
+    if (typeof res.data.show_face_bboxes === "boolean") {
+      showFaceBboxes.value = res.data.show_face_bboxes;
+    }
+    if (typeof res.data.show_hand_bboxes === "boolean") {
+      showHandBboxes.value = res.data.show_hand_bboxes;
+    }
+    if (typeof res.data.show_format === "boolean") {
+      showFormat.value = res.data.show_format;
+    }
+    if (typeof res.data.show_resolution === "boolean") {
+      showResolution.value = res.data.show_resolution;
+    }
+    if (typeof res.data.show_problem_icon === "boolean") {
+      showProblemIcon.value = res.data.show_problem_icon;
+    }
     if (typeof res.data.descending === "boolean") {
       selectedDescending.value = res.data.descending;
     }
@@ -328,24 +406,69 @@ async function fetchConfig() {
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
         : showStars.value;
+    config.show_face_bboxes =
+      typeof res.data.show_face_bboxes === "boolean"
+        ? res.data.show_face_bboxes
+        : showFaceBboxes.value;
+    config.show_hand_bboxes =
+      typeof res.data.show_hand_bboxes === "boolean"
+        ? res.data.show_hand_bboxes
+        : showHandBboxes.value;
+    config.show_format =
+      typeof res.data.show_format === "boolean"
+        ? res.data.show_format
+        : showFormat.value;
+    config.show_resolution =
+      typeof res.data.show_resolution === "boolean"
+        ? res.data.show_resolution
+        : showResolution.value;
+    config.show_problem_icon =
+      typeof res.data.show_problem_icon === "boolean"
+        ? res.data.show_problem_icon
+        : showProblemIcon.value;
     const similarityValue =
       res.data.similarity_character ?? res.data.selected_similarity_character;
     selectedSimilarityCharacter.value =
       similarityValue ?? selectedSimilarityCharacter.value ?? null;
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
-    configLoaded.value = true;
+    console.debug("[Config] Overlay settings applied", {
+      showFaceBboxes: showFaceBboxes.value,
+      showHandBboxes: showHandBboxes.value,
+      showFormat: showFormat.value,
+      showResolution: showResolution.value,
+      showProblemIcon: showProblemIcon.value,
+    });
   } catch (e) {
     console.error("Failed to fetch /users/me/config:", e);
+  } finally {
+    configLoading.value = false;
+    configLoaded.value = true;
   }
 }
 
 async function patchConfigUIOptions() {
+  if (!configLoaded.value || configLoading.value) return;
   // Only include fields the backend expects and that are not undefined/null/empty
   const patch = {};
   if (selectedSort.value) patch.sort = selectedSort.value;
   patch.descending = selectedDescending.value;
   if (columns.value) patch.columns = columns.value;
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
+  if (typeof showFaceBboxes.value === "boolean") {
+    patch.show_face_bboxes = showFaceBboxes.value;
+  }
+  if (typeof showHandBboxes.value === "boolean") {
+    patch.show_hand_bboxes = showHandBboxes.value;
+  }
+  if (typeof showFormat.value === "boolean") {
+    patch.show_format = showFormat.value;
+  }
+  if (typeof showResolution.value === "boolean") {
+    patch.show_resolution = showResolution.value;
+  }
+  if (typeof showProblemIcon.value === "boolean") {
+    patch.show_problem_icon = showProblemIcon.value;
+  }
   if (selectedSimilarityCharacter.value != null) {
     patch.similarity_character = selectedSimilarityCharacter.value;
   }
@@ -361,13 +484,6 @@ async function patchConfigUIOptions() {
   }
 }
 
-function handleGridBackgroundClick(e) {
-  if (!e.target.closest(".thumbnail-card")) {
-    selectedImageIds.value = [];
-    lastSelectedIndex = null;
-  }
-}
-
 function handleGlobalKeydown(e) {
   const keys = ["Home", "End", "PageUp", "PageDown"];
   if (keys.includes(e.key)) {
@@ -379,6 +495,9 @@ function handleGlobalKeydown(e) {
 }
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
+  if (selectedCharacter.value !== UNASSIGNED_PICTURES_ID || selectedSet.value) {
+    return;
+  }
   // Forward to ImageGrid via ref
   if (
     gridContainer.value &&
@@ -416,19 +535,10 @@ function refreshExportCount() {
   exportTotalCount.value = Number(counts.totalCount) || 0;
 }
 
-function handleImagesUploaded() {
-  // Called when images are imported
-  refreshGridVersion(); // Force grid and thumbnails to refresh
-  refreshSidebar(); // Optionally refresh sidebar counts
-}
-
-function cancelExportZip() {
-  exportMenuOpen.value = false;
-}
-
 function confirmExportZip() {
   console.log("Exporting current view to zip...");
   gridContainer.value?.exportCurrentViewToZip({
+    exportType: exportType.value,
     captionMode: exportCaptionMode.value,
     includeCharacterName: exportIncludeCharacterName.value,
     resolution: exportResolution.value,
@@ -458,10 +568,15 @@ function handleClearSearch() {
   refreshGridVersion(); // Force the ImageGrid to refresh
 }
 
+function blurSearchInput() {
+  toolbarRef.value?.blurSearchInput?.();
+}
+
 function blurSearch(event) {
   if (event && event.target) {
     event.target.blur();
   }
+  blurSearchInput();
 }
 
 function addToSearchHistory(query) {
@@ -482,6 +597,9 @@ function applySearchHistory(query) {
   searchInput.value = query;
   commitSearch();
   isSearchHistoryOpen.value = false;
+  nextTick(() => {
+    blurSearchInput();
+  });
 }
 
 function clearSearchHistory() {
@@ -503,6 +621,7 @@ function commitSearch() {
 function handleResetToAll() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
+  selectedReferenceCharacter.value = null;
   selectedSort.value = "DATE";
   selectedDescending.value = true;
   selectedSimilarityCharacter.value = null;
@@ -553,6 +672,27 @@ watch(showStars, () => {
   patchConfigUIOptions();
 });
 
+watch(
+  [showFaceBboxes, showHandBboxes, showFormat, showResolution, showProblemIcon],
+  () => {
+    patchConfigUIOptions();
+  },
+);
+
+watch(
+  [showFaceBboxes, showHandBboxes, showFormat, showResolution, showProblemIcon],
+  ([face, hand, format, resolution, problem]) => {
+    console.debug("[Config] Overlay settings changed", {
+      showFaceBboxes: face,
+      showHandBboxes: hand,
+      showFormat: format,
+      showResolution: resolution,
+      showProblemIcon: problem,
+    });
+  },
+  { immediate: true },
+);
+
 watch(selectedSimilarityCharacter, () => {
   patchConfigUIOptions();
 });
@@ -569,10 +709,8 @@ watch(exportMenuOpen, async (isOpen) => {
 });
 
 // --- Lifecycle ---
-onBeforeMount(() => {
-  fetchConfig();
-});
-onMounted(() => {
+onMounted(async () => {
+  await fetchConfig();
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
   window.addEventListener("keydown", handleGlobalKeydown);
@@ -603,5 +741,132 @@ onBeforeUnmount(() => {
 
 defineExpose({ sidebarVisible, mediaTypeFilter });
 </script>
-<template src="./App.template.html"></template>
+<template>
+  <v-app>
+    <div class="app-viewport">
+      <div class="file-manager">
+        <div
+          class="sidebar-shell"
+          :class="{ open: sidebarVisible }"
+          v-show="sidebarVisible || !isMobile"
+        >
+          <SideBar
+            ref="sidebarRef"
+            :collapsed="!sidebarVisible && !isMobile"
+            :selectedCharacter="selectedCharacter"
+            :selectedReferenceCharacter="selectedReferenceCharacter"
+            :allPicturesId="ALL_PICTURES_ID"
+            :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+            :selectedSet="selectedSet"
+            :searchQuery="searchQuery"
+            :selectedSort="selectedSort"
+            :selectedDescending="selectedDescending"
+            :backendUrl="BACKEND_URL"
+            :selectedSimilarityCharacter="selectedSimilarityCharacter"
+            :stackThreshold="stackThreshold"
+            @select-character="handleSelectCharacter"
+            @select-reference-pictures="handleSelectReferencePictures"
+            @select-set="handleSelectSet"
+            @images-assigned-to-character="handleImagesAssignedToCharacter"
+            @images-moved="handleImagesMovedToSet"
+            @faces-assigned-to-character="handleFacesAssignedToCharacter"
+            @toggle-sidebar="sidebarVisible = !sidebarVisible"
+            @update:selected-sort="handleUpdateSelectedSort"
+            @update:similarity-character="handleUpdateSimilarityCharacter"
+            @update:stack-threshold="handleUpdateStackThreshold"
+            @update:set-error="error = $event"
+            @update:set-loading="loading = $event"
+          />
+        </div>
+        <div
+          v-if="sidebarVisible && isMobile"
+          class="sidebar-backdrop"
+          @click="sidebarVisible = false"
+        ></div>
+        <main class="main-area" ref="mainAreaRef">
+          <Toolbar
+            ref="toolbarRef"
+            :isMobile="isMobile"
+            :searchOverlayVisible="searchOverlayVisible"
+            :filteredSearchHistory="filteredSearchHistory"
+            :minColumns="minColumns"
+            :maxColumns="maxColumns"
+            :exportCount="exportCount"
+            :exportCaptionOptions="exportCaptionOptions"
+            :exportTypeOptions="exportTypeOptions"
+            :exportResolutionOptions="exportResolutionOptions"
+            :exportTypeLocksCaptions="exportTypeLocksCaptions"
+            v-model:searchInput="searchInput"
+            v-model:isSearchHistoryOpen="isSearchHistoryOpen"
+            v-model:columnsMenuOpen="columnsMenuOpen"
+            v-model:overlaysMenuOpen="overlaysMenuOpen"
+            v-model:exportMenuOpen="exportMenuOpen"
+            v-model:columns="columns"
+            v-model:showStars="showStars"
+            v-model:showFaceBboxes="showFaceBboxes"
+            v-model:showHandBboxes="showHandBboxes"
+            v-model:showFormat="showFormat"
+            v-model:showResolution="showResolution"
+            v-model:showProblemIcon="showProblemIcon"
+            v-model:exportType="exportType"
+            v-model:exportCaptionMode="exportCaptionMode"
+            v-model:exportResolution="exportResolution"
+            v-model:exportIncludeCharacterName="exportIncludeCharacterName"
+            v-model:mediaTypeFilter="mediaTypeFilter"
+            @open-search-overlay="openSearchOverlay"
+            @commit-search="commitSearch"
+            @clear-search="handleClearSearch"
+            @apply-search-history="applySearchHistory"
+            @clear-search-history="clearSearchHistory"
+            @columns-end="handleColumnsEnd"
+            @confirm-export-zip="confirmExportZip"
+            @open-settings="openSettingsDialog"
+          />
+          <div
+            :class="['main-content', selectedCharacter ? 'accent-border' : '']"
+            style="margin-top: 0; padding-top: 0"
+          >
+            <ImageGrid
+              ref="gridContainer"
+              :thumbnailSize="thumbnailSize"
+              :sidebarVisible="sidebarVisible"
+              :backendUrl="BACKEND_URL"
+              :selectedCharacter="selectedCharacter"
+              :selectedReferenceCharacter="selectedReferenceCharacter"
+              :selectedSet="selectedSet"
+              :searchQuery="searchQuery"
+              :selectedSort="selectedSort"
+              :selectedDescending="selectedDescending"
+              :similarityCharacter="selectedSimilarityCharacter"
+              :stackThreshold="stackThreshold"
+              :showStars="showStars"
+              :gridVersion="gridVersion"
+              :wsUpdateKey="wsUpdateKey"
+              :wsTagUpdate="wsTagUpdate"
+              :mediaTypeFilter="mediaTypeFilter"
+              :showFaceBboxes="showFaceBboxes"
+              :showHandBboxes="showHandBboxes"
+              :showFormat="showFormat"
+              :showResolution="showResolution"
+              :showProblemIcon="showProblemIcon"
+              :allPicturesId="ALL_PICTURES_ID"
+              :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+              :columns="columns"
+              @clear-search="handleClearSearch"
+              @update:selected-sort="handleUpdateSelectedSort"
+              @refresh-sidebar="refreshSidebar"
+              @reset-to-all="handleResetToAll"
+            />
+          </div>
+        </main>
+      </div>
+      <SearchOverlay
+        v-if="searchOverlayVisible"
+        :modelValue="searchQuery"
+        @search="handleUpdateSearchQuery"
+        @close="closeSearchOverlay"
+      />
+    </div>
+  </v-app>
+</template>
 <style scoped src="./App.css"></style>

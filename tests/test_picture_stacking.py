@@ -7,7 +7,6 @@ from time import time
 
 from fastapi.testclient import TestClient
 
-from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
 from pixlvault.db_models.picture_likeness import PictureLikeness
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import WorkerType
@@ -21,7 +20,6 @@ def test_picture_stacking():
     """Test: Add all images from pictures folder, wait for tagging, perform semantic search, print results, assert count."""
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
 
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
@@ -31,10 +29,7 @@ def test_picture_stacking():
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
-        with Server(
-            config_path=config_path,
-            server_config_path=server_config_path,
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             # server.vault.import_default_data()
             client = TestClient(server.api)
             resp = client.post(
@@ -149,7 +144,6 @@ def test_character_likeness():
     """
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
 
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
@@ -159,10 +153,7 @@ def test_character_likeness():
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
-        with Server(
-            config_path=config_path,
-            server_config_path=server_config_path,
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             # server.vault.import_default_data()
             client = TestClient(server.api)
 
@@ -207,26 +198,6 @@ def test_character_likeness():
                 if filename.startswith("Reference"):
                     reference_picture_ids.append(id)
 
-            # Assign the reference pictures to the character's reference set using POST /picture_sets/{id}/members/{picture_id}
-            # First, get the character summary to retrieve the reference_picture_set_id
-            summary_resp = client.get(f"/characters/{char_id}/summary")
-            assert summary_resp.status_code == 200, (
-                f"Failed to get character summary: {summary_resp.text}"
-            )
-            reference_picture_set_id = summary_resp.json().get(
-                "reference_picture_set_id"
-            )
-            assert reference_picture_set_id, (
-                f"Character summary did not return reference_picture_set_id: {summary_resp.json()}"
-            )
-            for ref_pid in reference_picture_ids:
-                add_resp = client.post(
-                    f"/picture_sets/{reference_picture_set_id}/members/{ref_pid}"
-                )
-                assert add_resp.status_code == 200, (
-                    f"Failed to add picture {ref_pid} to reference set {reference_picture_set_id}: {add_resp.text}"
-                )
-
             all_face_ids = set()
             for pid in picture_ids:
                 logging.debug(f"Facial features processed for picture ID: {pid}")
@@ -267,47 +238,12 @@ def test_character_likeness():
                     f"Assigned {len(ref_face_ids)} faces from reference pictures to character {char_id}"
                 )
 
-            face_character_likeness_futures = []
-            for face_id in all_face_ids:
-                face_character_likeness_futures.append(
-                    (
-                        char_id,
-                        face_id,
-                        server.vault.get_worker_future(
-                            WorkerType.FACE_CHARACTER_LIKENESS,
-                            FaceCharacterLikeness,
-                            (char_id, face_id),
-                            "pair",
-                        ),
-                    )
-                )
-
-            # Start the FaceCharacterLikenessWorker
-            server.vault.start_workers({WorkerType.FACE_CHARACTER_LIKENESS})
-
-            logger.info("Waiting for facial likeness to be processed...")
-            face_character_likeness_pairs = []
-            # Debug logging for worker futures
-            logger.debug("FaceCharacterLikeness futures:")
-            for char_id, face_id, future in face_character_likeness_futures:
-                logger.debug(
-                    f"Future for pair (char_id={char_id}, face_id={face_id}): {future}"
-                )
-
-            # Debug logging before waiting for futures
-            logger.debug(
-                "Waiting for FaceCharacterLikenessWorker futures to complete..."
+            reference_resp = client.get(f"/characters/{char_id}/reference_pictures")
+            assert reference_resp.status_code == 200, (
+                f"Failed to get reference pictures: {reference_resp.text}"
             )
-            for char_id, face_id, future in face_character_likeness_futures:
-                logger.info(
-                    "Waiting for facial likeness pair: (%s, %s)", char_id, face_id
-                )
-                result = future.result(timeout=240)
-                assert result is not None, "FaceCharacterLikenessWorker timed out"
-                face_character_likeness_pairs.append(result)
-
-            assert len(face_character_likeness_pairs) == len(all_face_ids), (
-                "Not all face character likeness pairs were computed."
+            reference_picture_ids = reference_resp.json().get(
+                "reference_picture_ids", []
             )
 
             server.vault.stop_workers()

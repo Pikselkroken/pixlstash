@@ -18,7 +18,7 @@ tomli
 colorlog
 onnxruntime
 requests
-transformers
+transformers<5.0.0
 torch
 torchvision
 insightface
@@ -34,3 +34,5 @@ nltk
 python-jose[cryptography]
 dotenv
 passlib
+bcrypt<4.0.0
+ultralytics
