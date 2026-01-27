@@ -41,6 +41,7 @@ def _resolve_log_level(value):
 
 
 def main():
+
     parser = argparse.ArgumentParser(description=f"Run the {APP_NAME} server.")
     parser.add_argument(
         "--config",
@@ -58,6 +59,16 @@ def main():
         "--remove-password",
         action="store_true",
         help="Cause the server to recreate the password on next login.",
+    )
+    parser.add_argument(
+        "--retag-and-embed",
+        action="store_true",
+        help="Re-tag all images and refresh text embeddings in the database.",
+    )
+    parser.add_argument(
+        "--clear-embeddings",
+        action="store_true",
+        help="Clear all text embeddings for all images (does not touch tags).",
     )
     args = parser.parse_args()
 
@@ -77,6 +88,28 @@ def main():
     if args.remove_password:
         server.remove_password_hash()
         # Continue running the server after removing the password hash
+
+
+    if args.clear_embeddings:
+        # Clear all text embeddings for all images
+        from pixlvault.db_models.picture import Picture
+        from sqlmodel import select
+
+        vault = server.vault
+        logger.info("Clearing all text embeddings for all images...")
+
+        def clear_embeddings(session):
+            pictures = session.exec(select(Picture)).all()
+            logger.info(f"Found {len(pictures)} pictures to clear embeddings.")
+            for pic in pictures:
+                pic.text_embedding = None
+                pic.image_embedding = None
+                session.add(pic)
+            session.commit()
+            logger.info("All text and image embeddings cleared.")
+
+        vault.db.run_task(clear_embeddings, priority=1)
+        return
 
     server.vault.start_workers()
     server.run()
