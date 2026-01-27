@@ -206,56 +206,74 @@
                 gems and {{ roundPercent.trash }}% are 1★ trash. Do you agree?
               </div>
             </div>
-            <div class="scoring-grid-wrapper">
-              <div class="scoring-round-section" v-if="roundGems.length">
-                <div class="scoring-round-title">5★ Gems</div>
-                <div class="scoring-grid">
+            <div class="scoring-grid-flex-parent">
+              <div class="scoring-round-title">5★ Gems</div>
+              <div class="scoring-grid-flex-child gems">
+                <div class="scoring-grid-wrapper">
                   <div
-                    v-for="item in roundGems"
-                    :key="`gem-${item.id}`"
-                    class="scoring-grid-card"
-                    @click="openPreview(item)"
+                    class="scoring-round-section scoring-round-section-scroll"
+                    v-if="roundGems.length"
                   >
-                    <img
-                      class="scoring-grid-image"
-                      :src="getPreviewUrl(item)"
-                      :alt="`Image ${item.id}`"
-                    />
-                    <button
-                      class="scoring-round-toggle"
-                      type="button"
-                      @click.stop="toggleRoundExclude(item.id)"
-                    >
-                      {{
-                        roundExcludedIds.has(item.id) ? "Include" : "Exclude"
-                      }}
-                    </button>
+                    <div class="scoring-grid">
+                      <div
+                        v-for="item in roundGems"
+                        :key="`gem-${item.id}`"
+                        class="scoring-grid-card"
+                        @click="openPreview(item)"
+                      >
+                        <img
+                          class="scoring-grid-image"
+                          :src="getPreviewUrl(item)"
+                          :alt="`Image ${item.id}`"
+                        />
+                        <button
+                          class="scoring-round-toggle"
+                          type="button"
+                          @click.stop="toggleRoundExclude(item.id)"
+                        >
+                          {{
+                            roundExcludedIds.has(item.id)
+                              ? "Include"
+                              : "Exclude"
+                          }}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-              <div class="scoring-round-section" v-if="roundTrash.length">
+              <div class="scoring-grid-flex-child trash">
                 <div class="scoring-round-title">1★ Trash</div>
-                <div class="scoring-grid">
+                <div class="scoring-grid-wrapper">
                   <div
-                    v-for="item in roundTrash"
-                    :key="`trash-${item.id}`"
-                    class="scoring-grid-card"
-                    @click="openPreview(item)"
+                    class="scoring-round-section scoring-round-section-scroll"
+                    v-if="roundTrash.length"
                   >
-                    <img
-                      class="scoring-grid-image"
-                      :src="getPreviewUrl(item)"
-                      :alt="`Image ${item.id}`"
-                    />
-                    <button
-                      class="scoring-round-toggle"
-                      type="button"
-                      @click.stop="toggleRoundExclude(item.id)"
-                    >
-                      {{
-                        roundExcludedIds.has(item.id) ? "Include" : "Exclude"
-                      }}
-                    </button>
+                    <div class="scoring-grid">
+                      <div
+                        v-for="item in roundTrash"
+                        :key="`trash-${item.id}`"
+                        class="scoring-grid-card"
+                        @click="openPreview(item)"
+                      >
+                        <img
+                          class="scoring-grid-image"
+                          :src="getPreviewUrl(item)"
+                          :alt="`Image ${item.id}`"
+                        />
+                        <button
+                          class="scoring-round-toggle"
+                          type="button"
+                          @click.stop="toggleRoundExclude(item.id)"
+                        >
+                          {{
+                            roundExcludedIds.has(item.id)
+                              ? "Include"
+                              : "Exclude"
+                          }}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1614,24 +1632,37 @@ onUnmounted(() => {
 }
 
 .scoring-grid-wrapper {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   width: 100%;
   padding: 4px;
   border-radius: 12px;
   background: rgba(var(--v-theme-surface), 0.2);
   overflow-y: auto;
-  max-height: 70vh;
 }
 
-.scoring-review-actions {
-  margin-top: auto;
-  padding-top: 4px;
+.scoring-grid-flex-parent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 73vh; /* or adjust as needed for your overlay */
+  min-height: 0;
+}
+.scoring-grid-flex-child {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.scoring-grid-flex-child.gems {
+  flex: 5 1 0%; /* 70% of space */
+}
+.scoring-grid-flex-child.trash {
+  flex: 5 1 0%; /* 30% of space */
 }
 
 .scoring-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   width: 100%;
 }
