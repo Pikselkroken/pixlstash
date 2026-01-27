@@ -103,29 +103,25 @@ class WatchFolderWorker(BaseWorker):
 
                     for root, _, files in os.walk(folder):
                         for file_name in files:
-                            logger.info(f"Scanning file {file_name} in {folder}")
+                            logger.debug(f"Scanning file {file_name} in {folder}")
                             file_path = os.path.join(root, file_name)
                             try:
                                 mtime = os.path.getmtime(file_path)
                             except OSError:
                                 continue
                             if not self._is_supported_file(file_path):
-                                logger.warning(
-                                    "Unsupported file extension for watch import: %s",
-                                    file_path,
-                                )
                                 continue
                             if mtime > last_checked:
                                 candidate_files.append(file_path)
                             else:
-                                logger.info(
+                                logger.debug(
                                     f"File {file_name} not modified since last check."
                                 )
                             if mtime > latest_seen:
                                 latest_seen = mtime
 
                     for file_path in candidate_files:
-                        logger.info(f"##### Found new file {file_path}")
+                        logger.debug(f"# Found new file {file_path}")
                         try:
                             pixel_sha = PictureUtils.calculate_hash_from_file_path(
                                 file_path
@@ -143,7 +139,7 @@ class WatchFolderWorker(BaseWorker):
 
                         existing = self._db.run_task(find_existing, pixel_sha)
                         if existing:
-                            logger.info(
+                            logger.debug(
                                 "Already have picture with sha %s, skipping", pixel_sha
                             )
                             continue
