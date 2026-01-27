@@ -150,7 +150,7 @@ class ImageEmbeddingWorker(BaseWorker):
                 batch = self._db.run_immediate_read_task(self._fetch_work)
 
                 if not batch:
-                    logger.info(
+                    logger.debug(
                         "ImageEmbeddingWorker: No pictures need embeddings/aesthetic. Sleeping..."
                     )
                     self._wait()
@@ -158,7 +158,7 @@ class ImageEmbeddingWorker(BaseWorker):
 
                 self._ensure_model()
 
-                logger.info(f"ImageEmbeddingWorker: Processing {len(batch)} pictures.")
+                logger.debug(f"ImageEmbeddingWorker: Processing {len(batch)} pictures.")
 
                 flat_images = []
                 flat_pids = []
@@ -345,7 +345,7 @@ class ImageEmbeddingWorker(BaseWorker):
 
                 self._db.run_task(self._save_results, updates, priority=DBPriority.LOW)
 
-                logger.info(
+                logger.debug(
                     "ImageEmbeddingWorker: Processed %s pictures (embeddings%s).",
                     len(pid_updates),
                     " + aesthetic" if self.aesthetic_model is not None else "",
