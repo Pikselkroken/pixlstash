@@ -78,8 +78,36 @@ class PictureUtils:
         if not candidates:
             return np.array([])
 
-        # Extract candidate vectors
-        cand_vecs = [c["embedding"] for c in candidates]
+        # Extract candidate vectors with a consistent shape
+        target_shape = None
+        for c in candidates:
+            emb = c.get("embedding")
+            if isinstance(emb, np.ndarray) and emb.ndim == 1 and emb.size > 0:
+                target_shape = emb.shape
+                break
+
+        if target_shape is None:
+            return np.zeros(len(candidates))
+
+        invalid_embeddings = 0
+        cand_vecs = []
+        for c in candidates:
+            emb = c.get("embedding")
+            if (
+                isinstance(emb, np.ndarray)
+                and emb.ndim == 1
+                and emb.shape == target_shape
+            ):
+                cand_vecs.append(emb.astype(np.float32, copy=False))
+            else:
+                cand_vecs.append(np.zeros(target_shape, dtype=np.float32))
+                invalid_embeddings += 1
+
+        if invalid_embeddings:
+            logger.warning(
+                "[SMART SCORE] %s candidates had invalid/mismatched embeddings; using zeros.",
+                invalid_embeddings,
+            )
 
         # Aesthetic score: normalize using configured range (e.g. 3.0-6.5 -> 0-1)
         # DB stores raw outputs from aesthetic model (typically 1-10 scale)
@@ -134,10 +162,21 @@ class PictureUtils:
         good_component = np.zeros(len(candidates))
         raw_good_sim = np.zeros(len(candidates))
         if good_anchors:
-            good_vecs = [a["embedding"] for a in good_anchors]
-            good_weights = np.array([norm_weight(a["score"]) for a in good_anchors])
-            M_good = np.stack(good_vecs)
+            good_pairs = [
+                (a["embedding"], a.get("score", 0))
+                for a in good_anchors
+                if isinstance(a.get("embedding"), np.ndarray)
+                and a["embedding"].ndim == 1
+                and a["embedding"].shape == target_shape
+            ]
+            if good_pairs:
+                good_vecs = [p[0] for p in good_pairs]
+                good_weights = np.array([norm_weight(p[1]) for p in good_pairs])
+                M_good = np.stack(good_vecs)
+            else:
+                M_good = None
 
+        if good_anchors and M_good is not None:
             sims = sim01_batch(M_cand, M_good)
 
             # Max raw sim for gating
@@ -168,11 +207,22 @@ class PictureUtils:
         raw_bad_sim = np.zeros(len(candidates))
         mask_bad = np.zeros(len(candidates), dtype=bool)
         if bad_anchors:
-            bad_vecs = [a["embedding"] for a in bad_anchors]
-            # Bad weight is (1.0 - norm_score)
-            bad_weights = np.array([1.0 - norm_weight(a["score"]) for a in bad_anchors])
-            M_bad = np.stack(bad_vecs)
+            bad_pairs = [
+                (a["embedding"], a.get("score", 0))
+                for a in bad_anchors
+                if isinstance(a.get("embedding"), np.ndarray)
+                and a["embedding"].ndim == 1
+                and a["embedding"].shape == target_shape
+            ]
+            if bad_pairs:
+                bad_vecs = [p[0] for p in bad_pairs]
+                # Bad weight is (1.0 - norm_score)
+                bad_weights = np.array([1.0 - norm_weight(p[1]) for p in bad_pairs])
+                M_bad = np.stack(bad_vecs)
+            else:
+                M_bad = None
 
+        if bad_anchors and M_bad is not None:
             sims = sim01_batch(M_cand, M_bad)
 
             # Max raw sim for gating negative penalty
