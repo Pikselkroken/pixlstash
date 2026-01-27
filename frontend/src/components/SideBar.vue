@@ -40,6 +40,7 @@ const emit = defineEmits([
 
 const imageImporterRef = ref(null);
 const uploadInputRef = ref(null);
+const sortSelectRef = ref(null);
 
 const dragOverSet = ref(null);
 
@@ -445,6 +446,10 @@ const sortModel = computed({
       descending: descendingModel.value,
     }),
 });
+
+function handleSortChange() {
+  sortSelectRef.value?.blur();
+}
 
 const searchModel = computed({
   get: () => props.searchQuery,
@@ -1821,7 +1826,12 @@ defineExpose({ refreshSidebar });
       >
         <div style="display: flex; align-items: center; gap: 8px">
           <div style="flex: 1; min-width: 0; position: relative">
-            <select v-model="sortModel" class="sidebar-native-select">
+            <select
+              ref="sortSelectRef"
+              v-model="sortModel"
+              class="sidebar-native-select"
+              @change="handleSortChange"
+            >
               <option
                 v-for="opt in sortOptions"
                 :key="opt.value"
