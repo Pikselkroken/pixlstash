@@ -71,6 +71,7 @@ from pixlvault.watch_folder_worker import WatchFolderWorker
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
 DEFAULT_SMART_SCORE_PENALIZED_TAGS = [
     "incorrect reflection",
+    "fused fingers",
     "malformed eye",
     "bad anatomy",
     "extra digit",
