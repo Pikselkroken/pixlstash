@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from logging.config import fileConfig
@@ -22,7 +23,9 @@ if str(project_root) not in sys.path:
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        fileConfig(config.config_file_name)
 
 # Target metadata for 'autogenerate'
 target_metadata = SQLModel.metadata
