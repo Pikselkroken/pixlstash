@@ -41,7 +41,6 @@ def _resolve_log_level(value):
 
 
 def main():
-
     parser = argparse.ArgumentParser(description=f"Run the {APP_NAME} server.")
     parser.add_argument(
         "--config",
@@ -88,7 +87,6 @@ def main():
     if args.remove_password:
         server.remove_password_hash()
         # Continue running the server after removing the password hash
-
 
     if args.clear_embeddings:
         # Clear all text embeddings for all images

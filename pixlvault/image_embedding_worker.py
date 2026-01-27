@@ -7,7 +7,7 @@ import torch.nn as nn
 import numpy as np
 from PIL import Image
 from collections import defaultdict
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from sqlmodel import Session, select
 
 from pixlvault.database import DBPriority
@@ -53,6 +53,28 @@ class ImageEmbeddingWorker(BaseWorker):
 
     def worker_type(self) -> WorkerType:
         return WorkerType.IMAGE_EMBEDDING
+
+    def _count_remaining(self, session: Session):
+        """Count all pictures needing embeddings or aesthetic scores."""
+        if self._aesthetic_disabled:
+            condition = Picture.image_embedding.is_(None)
+        else:
+            from sqlalchemy import or_
+
+            condition = or_(
+                Picture.image_embedding.is_(None),
+                Picture.aesthetic_score.is_(None),
+            )
+        stmt = select(func.count()).select_from(Picture).where(condition)
+        result = session.exec(stmt).one()
+        if isinstance(result, tuple):
+            return result[0]
+        return result or 0
+
+    def _build_failure_updates(self, pids: set[int]):
+        empty_emb = pickle.dumps(np.array([], dtype=np.float32))
+        score = None if self._aesthetic_disabled else -1.0
+        return [(pid, empty_emb, score) for pid in pids]
 
     def _ensure_model(self):
         if self.aesthetic_model is not None:
@@ -118,6 +140,12 @@ class ImageEmbeddingWorker(BaseWorker):
 
         while not self._stop.is_set():
             try:
+                # Log how many images remain to be processed
+                remaining = self._db.run_immediate_read_task(self._count_remaining)
+                logger.info(
+                    f"ImageEmbeddingWorker: {remaining} images remain to be processed."
+                )
+
                 # Find pictures without image_embedding OR without aesthetic_score
                 batch = self._db.run_immediate_read_task(self._fetch_work)
 
@@ -134,6 +162,9 @@ class ImageEmbeddingWorker(BaseWorker):
 
                 flat_images = []
                 flat_pids = []
+                failed_files = []
+                batch_pids = {pid for pid, _ in batch}
+                batch_files = {pid: file_path for pid, file_path in batch}
 
                 for pid, file_path in batch:
                     try:
@@ -155,6 +186,7 @@ class ImageEmbeddingWorker(BaseWorker):
                                 logger.error(
                                     f"ImageEmbeddingWorker: PIL failed to open {file_path}: {e}"
                                 )
+                                failed_files.append(file_path)
                                 continue
 
                             if img.mode != "RGB":
@@ -166,127 +198,169 @@ class ImageEmbeddingWorker(BaseWorker):
                         logger.error(
                             f"ImageEmbeddingWorker: Error loading {file_path}: {e}"
                         )
-                        pass
+                        failed_files.append(file_path)
 
-                if flat_images:
-                    embeddings = None
+                if not flat_images:
+                    if not failed_files:
+                        failed_files = [batch_files[pid] for pid in batch_pids]
+                    failure_updates = self._build_failure_updates(batch_pids)
+                    self._db.run_task(
+                        self._save_results, failure_updates, priority=DBPriority.LOW
+                    )
+                    logger.warning(
+                        "ImageEmbeddingWorker: No images loaded for batch. Marked %s pictures as failed.",
+                        len(batch_pids),
+                    )
+                    logger.warning(
+                        f"ImageEmbeddingWorker: Failed to process {len(failed_files)} files in this batch: {failed_files}"
+                    )
+                    continue
 
-                    # 1. Try using PictureTagger's loaded CLIP model
-                    if self._picture_tagger and getattr(
-                        self._picture_tagger, "_clip_model", None
-                    ):
-                        try:
-                            # open_clip expects images as tensors
-                            # We can use the preprocess from PictureTagger
-                            preprocess = self._picture_tagger._clip_preprocess
-                            device = self._picture_tagger._clip_device
+                embeddings = None
 
-                            image_tensors = torch.stack(
-                                [preprocess(img) for img in flat_images]
-                            ).to(device)
-                            # Convert to fp16 if using CUDA (to match model weights)
-                            if device == "cuda":
-                                image_tensors = image_tensors.half()
+                # 1. Try using PictureTagger's loaded CLIP model
+                if self._picture_tagger and getattr(
+                    self._picture_tagger, "_clip_model", None
+                ):
+                    try:
+                        # open_clip expects images as tensors
+                        # We can use the preprocess from PictureTagger
+                        preprocess = self._picture_tagger._clip_preprocess
+                        device = self._picture_tagger._clip_device
 
-                            with torch.no_grad():
-                                features = (
-                                    self._picture_tagger._clip_model.encode_image(
-                                        image_tensors
-                                    )
+                        image_tensors = torch.stack(
+                            [preprocess(img) for img in flat_images]
+                        ).to(device)
+                        # Convert to fp16 if using CUDA (to match model weights)
+                        if device == "cuda":
+                            image_tensors = image_tensors.half()
+
+                        with torch.no_grad():
+                            features = self._picture_tagger._clip_model.encode_image(
+                                image_tensors
+                            )
+                            features /= features.norm(dim=-1, keepdim=True)
+                            embeddings = features.cpu().numpy()
+                    except Exception as e:
+                        logger.error(
+                            f"ImageEmbeddingWorker: Failed to use PictureTagger CLIP model: {e}"
+                        )
+                        embeddings = None
+
+                # 2. Fallback to local SentenceTransformer model
+                if embeddings is None and self.model:
+                    try:
+                        embeddings = self.model.encode(
+                            flat_images,
+                            batch_size=self.BATCH_SIZE,
+                            convert_to_numpy=True,
+                            normalize_embeddings=True,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"ImageEmbeddingWorker: Failed to use local CLIP model: {e}"
+                        )
+
+                if embeddings is None:
+                    if not failed_files:
+                        failed_files = [batch_files[pid] for pid in batch_pids]
+                    failure_updates = self._build_failure_updates(batch_pids)
+                    self._db.run_task(
+                        self._save_results, failure_updates, priority=DBPriority.LOW
+                    )
+                    logger.error(
+                        "ImageEmbeddingWorker: No embeddings generated. Marked %s pictures as failed.",
+                        len(batch_pids),
+                    )
+                    logger.warning(
+                        f"ImageEmbeddingWorker: Failed to process {len(failed_files)} files in this batch: {failed_files}"
+                    )
+                    continue
+
+                # Calculate Aesthetic Scores
+                aesthetic_scores = []
+                if self.aesthetic_model is not None:
+                    try:
+                        with torch.no_grad():
+                            emb_tensor = torch.from_numpy(embeddings).float()
+
+                            # Ensure tensor is on same device as aesthetic model
+                            if next(self.aesthetic_model.parameters()).is_cuda:
+                                emb_tensor = emb_tensor.to(
+                                    next(self.aesthetic_model.parameters()).device
                                 )
-                                features /= features.norm(dim=-1, keepdim=True)
-                                embeddings = features.cpu().numpy()
-                        except Exception as e:
-                            logger.error(
-                                f"ImageEmbeddingWorker: Failed to use PictureTagger CLIP model: {e}"
-                            )
-                            embeddings = None
 
-                    # 2. Fallback to local SentenceTransformer model
-                    if embeddings is None and self.model:
-                        try:
-                            embeddings = self.model.encode(
-                                flat_images,
-                                batch_size=self.BATCH_SIZE,
-                                convert_to_numpy=True,
-                                normalize_embeddings=True,
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"ImageEmbeddingWorker: Failed to use local CLIP model: {e}"
-                            )
+                            scores = self.aesthetic_model(emb_tensor).squeeze()
+                            if scores.ndim == 0:
+                                scores = scores.unsqueeze(0)
+                            scores = scores.cpu().numpy()
 
-                    if embeddings is not None:
-                        # Calculate Aesthetic Scores
+                            # Handle single item case (scalar)
+                            if scores.ndim == 0:
+                                scores = [float(scores)]
+                            aesthetic_scores = scores
+                    except Exception as e:
+                        logger.error(
+                            f"ImageEmbeddingWorker: Aesthetic scoring failed: {e}"
+                        )
                         aesthetic_scores = []
-                        if self.aesthetic_model is not None:
-                            try:
-                                with torch.no_grad():
-                                    emb_tensor = torch.from_numpy(embeddings).float()
 
-                                    # Ensure tensor is on same device as aesthetic model
-                                    if next(self.aesthetic_model.parameters()).is_cuda:
-                                        emb_tensor = emb_tensor.to(
-                                            next(
-                                                self.aesthetic_model.parameters()
-                                            ).device
-                                        )
+                # Group by PID and average
+                pid_updates = defaultdict(lambda: {"embs": [], "scores": []})
+                for pid, emb, score in zip(
+                    flat_pids,
+                    embeddings,
+                    aesthetic_scores
+                    if len(aesthetic_scores)
+                    else [None] * len(embeddings),
+                ):
+                    pid_updates[pid]["embs"].append(emb)
+                    if score is not None:
+                        pid_updates[pid]["scores"].append(score)
 
-                                    scores = self.aesthetic_model(emb_tensor).squeeze()
-                                    if scores.ndim == 0:
-                                        scores = scores.unsqueeze(0)
-                                    scores = scores.cpu().numpy()
+                updates = []
+                for pid, data in pid_updates.items():
+                    embs = data["embs"]
+                    scores = data["scores"]
 
-                                    # Handle single item case (scalar)
-                                    if scores.ndim == 0:
-                                        scores = [float(scores)]
-                                    aesthetic_scores = scores
-                            except Exception as e:
-                                logger.error(
-                                    f"ImageEmbeddingWorker: Aesthetic scoring failed: {e}"
-                                )
-                                aesthetic_scores = []
+                    if len(embs) == 1:
+                        final_emb = embs[0]
+                    else:
+                        avg = np.mean(embs, axis=0)
+                        norm = np.linalg.norm(avg)
+                        final_emb = avg / norm if norm > 0 else avg
 
-                        # Group by PID and average
-                        pid_updates = defaultdict(lambda: {"embs": [], "scores": []})
-                        for pid, emb, score in zip(
-                            flat_pids,
-                            embeddings,
-                            aesthetic_scores
-                            if len(aesthetic_scores)
-                            else [None] * len(embeddings),
-                        ):
-                            pid_updates[pid]["embs"].append(emb)
-                            if score is not None:
-                                pid_updates[pid]["scores"].append(score)
+                    final_score = None
+                    if scores:
+                        final_score = float(np.mean(scores))
 
-                        updates = []
-                        for pid, data in pid_updates.items():
-                            embs = data["embs"]
-                            scores = data["scores"]
+                    updates.append((pid, pickle.dumps(final_emb), final_score))
 
-                            if len(embs) == 1:
-                                final_emb = embs[0]
-                            else:
-                                avg = np.mean(embs, axis=0)
-                                norm = np.linalg.norm(avg)
-                                final_emb = avg / norm if norm > 0 else avg
+                processed_pids = set(pid_updates.keys())
+                failed_pids = batch_pids - processed_pids
+                if failed_pids:
+                    updates.extend(self._build_failure_updates(failed_pids))
+                    if not failed_files:
+                        failed_files = [batch_files[pid] for pid in failed_pids]
 
-                            final_score = None
-                            if scores:
-                                final_score = float(np.mean(scores))
+                self._db.run_task(self._save_results, updates, priority=DBPriority.LOW)
 
-                            updates.append((pid, pickle.dumps(final_emb), final_score))
+                logger.info(
+                    "ImageEmbeddingWorker: Processed %s pictures (embeddings%s).",
+                    len(pid_updates),
+                    " + aesthetic" if self.aesthetic_model is not None else "",
+                )
 
-                        self._db.run_task(
-                            self._save_results, updates, priority=DBPriority.LOW
-                        )
+                if failed_pids:
+                    logger.warning(
+                        "ImageEmbeddingWorker: Marked %s pictures as failed.",
+                        len(failed_pids),
+                    )
 
-                        logger.info(
-                            "ImageEmbeddingWorker: Processed %s pictures (embeddings%s).",
-                            len(updates),
-                            " + aesthetic" if self.aesthetic_model is not None else "",
-                        )
+                if failed_files:
+                    logger.warning(
+                        f"ImageEmbeddingWorker: Failed to process {len(failed_files)} files in this batch: {failed_files}"
+                    )
 
             except Exception as e:
                 logger.error(f"ImageEmbeddingWorker: Error in loop: {e}")
