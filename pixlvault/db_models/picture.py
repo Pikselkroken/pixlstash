@@ -218,15 +218,19 @@ class Picture(SQLModel, table=True):
         # 1. Generate SBERT embedding for tag search (Text-to-Text)
         query_embedding = text_to_embedding(query)
         if query_embedding is None:
-             logger.warning("Semantic search: Failed to generate SBERT embedding.")
-             query_embedding_bytes = None
+            logger.warning("Semantic search: Failed to generate SBERT embedding.")
+            query_embedding_bytes = None
         else:
-             query_embedding_bytes = query_embedding.tobytes()
+            query_embedding_bytes = query_embedding.tobytes()
 
         # 2. Generate CLIP embedding for visual search (Text-to-Image)
         if clip_text_to_embedding:
             clip_query_embedding = clip_text_to_embedding(query)
-            clip_query_embedding_bytes = clip_query_embedding.tobytes() if clip_query_embedding is not None else None
+            clip_query_embedding_bytes = (
+                clip_query_embedding.tobytes()
+                if clip_query_embedding is not None
+                else None
+            )
         else:
             clip_query_embedding_bytes = None
 
@@ -249,20 +253,34 @@ class Picture(SQLModel, table=True):
 
         # Calculate cosine similarity for both text (tags) and image (visuals) embeddings
         if query_embedding_bytes:
-            text_sim = func.coalesce(func.cosine_similarity(cls.text_embedding, query_embedding_bytes), 0.0) * 2.0
+            text_sim = (
+                func.coalesce(
+                    func.cosine_similarity(cls.text_embedding, query_embedding_bytes),
+                    0.0,
+                )
+                * 2.0
+            )
         else:
             text_sim = 0.0
-            
+
         if clip_query_embedding_bytes:
             # Boost logic: CLIP similarity for unrelated text-image pairs is low (0.1-0.2).
             # A good match is often 0.25-0.35.
             # Fuzzy match is 0.0 to 1.0 (usually 1.0 for matches).
             # To make CLIP comparable and impactful, we multiply by a factor (e.g., 2.5).
             # This brings 0.3 -> 0.75, which can rival a messy tag match.
-            image_sim = func.coalesce(func.cosine_similarity(cls.image_embedding, clip_query_embedding_bytes), 0.0) * 2.5
+            image_sim = (
+                func.coalesce(
+                    func.cosine_similarity(
+                        cls.image_embedding, clip_query_embedding_bytes
+                    ),
+                    0.0,
+                )
+                * 2.5
+            )
         else:
             image_sim = 0.0
-        
+
         # Combined embedding score: average of text and image similarity to capture both explicit tags and visual concepts
         embedding_score = (text_sim + image_sim) / 2.0
 

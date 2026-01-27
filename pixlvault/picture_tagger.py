@@ -39,14 +39,12 @@ GENERAL_THRESHOLD = 0.4
 UNDESIRED_TAGS = "solo, general, blurry, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
-CUSTOM_TAGGER_PATH = os.path.join(
-    os.path.dirname(__file__), "models", "best.pt"
-)
+CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "models", "best.pt")
 CUSTOM_TAGGER_THRESHOLD = 0.5
 CUSTOM_TAGGER_IMAGE_SIZE = 576
 CUSTOM_TAGGER_BATCH = 16
-CLIP_MODEL_NAME = "ViT-L-14"
-CLIP_MODEL_WEIGHTS = "laion2b_s32b_b82k"
+CLIP_MODEL_NAME = "ViT-B-32"
+CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
 
 
 class PictureTagger:
@@ -105,9 +103,7 @@ class PictureTagger:
         self._load_and_preprocess_tags()
 
         if self._use_custom_tagger and os.path.isfile(self._custom_tagger_path):
-            logger.info(
-                "Using custom tagger checkpoint: %s", self._custom_tagger_path
-            )
+            logger.info("Using custom tagger checkpoint: %s", self._custom_tagger_path)
             self._init_custom_tagger()
         # Load CLIP model at construction for efficiency
         # Upgraded to ViT-L-14 for better aesthetics and embedding quality
@@ -371,7 +367,9 @@ class PictureTagger:
             if ext in video_exts:
                 from pixlvault.picture_utils import PictureUtils
 
-                frames = PictureUtils.extract_representative_video_frames(image_path, count=3)
+                frames = PictureUtils.extract_representative_video_frames(
+                    image_path, count=3
+                )
                 for idx, pil_img in enumerate(frames):
                     # Resize large images to speed up processing
                     MAX_DIM = 640
@@ -800,7 +798,10 @@ class PictureTagger:
             for path, prob in zip(batch_paths, probs):
                 tag_probs = []
                 for label, p in zip(self._custom_labels, prob):
-                    if p >= self._custom_tagger_threshold and label not in undesired_tags:
+                    if (
+                        p >= self._custom_tagger_threshold
+                        and label not in undesired_tags
+                    ):
                         tag_probs.append((label, float(p)))
                 all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
                 results[path] = [tag for tag, _ in all_tags_sorted]
@@ -897,9 +898,7 @@ class PictureTagger:
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
             batch_result = self._run_batch(b_imgs, undesired_tags)
             if batch_result is None:
-                logger.error(
-                    f"Tagging failed for batch: {[p for p, _ in b_imgs]}"
-                )
+                logger.error(f"Tagging failed for batch: {[p for p, _ in b_imgs]}")
             else:
                 for k, tags in batch_result.items():
                     tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
@@ -1034,19 +1033,22 @@ class PictureTagger:
             return None
 
         import torch
-        try:
-             if not hasattr(self, "_clip_model") or self._clip_model is None:
-                 logger.warning("PictureTagger: CLIP model not available for text embedding.")
-                 return None
 
-             with torch.no_grad():
-                 text = self._clip_tokenizer([query]).to(self._clip_device)
-                 text_features = self._clip_model.encode_text(text)
-                 text_features /= text_features.norm(dim=-1, keepdim=True)
-                 return text_features.cpu().numpy()[0]
+        try:
+            if not hasattr(self, "_clip_model") or self._clip_model is None:
+                logger.warning(
+                    "PictureTagger: CLIP model not available for text embedding."
+                )
+                return None
+
+            with torch.no_grad():
+                text = self._clip_tokenizer([query]).to(self._clip_device)
+                text_features = self._clip_model.encode_text(text)
+                text_features /= text_features.norm(dim=-1, keepdim=True)
+                return text_features.cpu().numpy()[0]
         except Exception as e:
-             logger.error(f"PictureTagger: Failed to generate CLIP text embedding: {e}")
-             return None
+            logger.error(f"PictureTagger: Failed to generate CLIP text embedding: {e}")
+            return None
 
     def generate_facial_features(self, picture, face_bboxes):
         """

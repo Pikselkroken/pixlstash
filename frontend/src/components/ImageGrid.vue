@@ -192,6 +192,15 @@
               @dragstart.capture="handleContainerDragStart(img, $event)"
               @dragend.capture="handleContainerDragEnd(img, $event)"
             >
+              <div
+                v-if="hasPenalizedTags(img)"
+                class="penalized-tag-indicator"
+                :title="penalizedTagsTitle(img)"
+              >
+                <v-icon size="18" color="error"
+                  >mdi-emoticon-sad-outline</v-icon
+                >
+              </div>
               <!-- Movie icon overlay for videos -->
               <div
                 v-if="isVideo(img)"
@@ -470,7 +479,7 @@
               v-if="
                 typeof props.selectedSort === 'string' &&
                 props.selectedSort.includes('SMART_SCORE') &&
-                img.smartScore !== undefined
+                typeof img.smartScore === 'number'
               "
               class="likeness-score"
             >
@@ -2995,6 +3004,10 @@ async function fetchThumbnailsBatch(start, end) {
             : null;
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
+        gridImg.penalized_tags =
+          thumbObj && Array.isArray(thumbObj.penalized_tags)
+            ? thumbObj.penalized_tags
+            : [];
         if (thumbObj) {
           const thumbWidth = Number(thumbObj.thumbnail_width);
           const thumbHeight = Number(thumbObj.thumbnail_height);
@@ -3060,6 +3073,16 @@ function updateVisibleThumbnails() {
     console.log("[ImageGrid.vue] Fetching thumbnails batch:", { start, end });
     await fetchThumbnailsBatch(start, end);
   }, 80);
+}
+
+function hasPenalizedTags(img) {
+  return Array.isArray(img?.penalized_tags) && img.penalized_tags.length > 0;
+}
+
+function penalizedTagsTitle(img) {
+  const tags = Array.isArray(img?.penalized_tags) ? img.penalized_tags : [];
+  if (!tags.length) return "";
+  return `Penalized tags: ${tags.join(", ")}`;
 }
 
 function onGridScroll(e) {
@@ -4114,6 +4137,21 @@ function handleScoringClose() {
   top: -9999px;
   object-fit: cover;
   border-radius: 8px;
+}
+
+.penalized-tag-indicator {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border-radius: none;
+  z-index: 30;
+  pointer-events: auto;
 }
 
 /* Add a button to trigger the search overlay */

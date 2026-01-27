@@ -29,5 +29,3 @@ def order_stack_pictures(
     Return pictures sorted by best-to-worst (resolution, sharpness, noise).
     """
     return sorted(pictures, key=lambda pic: picture_order_key(pic, image_root))
-
-

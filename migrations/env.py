@@ -9,6 +9,9 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
+# Import models to register SQLModel metadata
+from pixlvault import db_models  # noqa: F401
+
 # Alembic Config object
 config = context.config
 
@@ -20,9 +23,6 @@ if str(project_root) not in sys.path:
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
-
-# Import models to register SQLModel metadata
-from pixlvault import db_models  # noqa: F401
 
 # Target metadata for 'autogenerate'
 target_metadata = SQLModel.metadata

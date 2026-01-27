@@ -638,9 +638,7 @@ function emitSessionUpdate() {
 function applyRoundOneMap(baseMap) {
   const map = { ...baseMap };
   const roundMap = roundOneMap.value || {};
-  const ids = new Set(
-    orderedItems.value.map((item) => String(item?.id ?? "")),
-  );
+  const ids = new Set(orderedItems.value.map((item) => String(item?.id ?? "")));
   for (const [id, stars] of Object.entries(roundMap)) {
     const key = String(id);
     if (!ids.has(key)) continue;

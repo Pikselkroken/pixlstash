@@ -5,6 +5,7 @@ Revises: 0beaf9bc3c44
 Create Date: 2026-01-24 00:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -48,7 +49,9 @@ def downgrade() -> None:
     with op.batch_alter_table("facelikeness", schema=None) as batch_op:
         batch_op.create_index("ix_face_likeness_a", ["face_id_a"], unique=False)
         batch_op.create_index("ix_face_likeness_b", ["face_id_b"], unique=False)
-        batch_op.create_index(batch_op.f("ix_facelikeness_likeness"), ["likeness"], unique=False)
+        batch_op.create_index(
+            batch_op.f("ix_facelikeness_likeness"), ["likeness"], unique=False
+        )
 
     op.create_table(
         "facelikenessfrontier",

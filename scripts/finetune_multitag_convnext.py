@@ -124,7 +124,9 @@ def build_label_vocab(samples: List[Sample]) -> List[str]:
     return sorted(labels)
 
 
-def split_samples(samples: List[Sample], val_ratio: float, test_ratio: float, seed: int):
+def split_samples(
+    samples: List[Sample], val_ratio: float, test_ratio: float, seed: int
+):
     set_seed(seed)
     shuffled = samples[:]
     random.shuffle(shuffled)
@@ -247,13 +249,11 @@ def predict_and_report(
                 images = images.to(device)
                 logits = model(images)
                 probs = torch.sigmoid(logits).cpu()
-                preds = (probs >= threshold)
+                preds = probs >= threshold
                 for i in range(len(paths)):
                     expected = set(t.strip().lower() for t in expected_tags[i])
                     predicted = {
-                        labels[j]
-                        for j, flag in enumerate(preds[i].tolist())
-                        if flag
+                        labels[j] for j, flag in enumerate(preds[i].tolist()) if flag
                     }
                     missing = expected - predicted
                     extra = predicted - expected
@@ -278,7 +278,9 @@ def main():
         help="Optional list of subfolders under --data to scan. If omitted, scans --data recursively.",
     )
     parser.add_argument("--out", default="runs/tagger", help="Output folder")
-    parser.add_argument("--arch", default="convnext_base", choices=["convnext_tiny", "convnext_base"])
+    parser.add_argument(
+        "--arch", default="convnext_base", choices=["convnext_tiny", "convnext_base"]
+    )
     parser.add_argument("--image-size", type=int, default=448)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=8)
@@ -333,9 +335,15 @@ def main():
     val_ds = TagDataset(val_samples, label_to_idx, transform)
     test_ds = TagDataset(test_samples, label_to_idx, transform)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=args.batch, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_ds, batch_size=args.batch, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(
+        train_ds, batch_size=args.batch, shuffle=True, num_workers=4, pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=args.batch, shuffle=False, num_workers=4, pin_memory=True
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=args.batch, shuffle=False, num_workers=4, pin_memory=True
+    )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.backends.cudnn.benchmark = False
@@ -350,7 +358,9 @@ def main():
         torch.cuda.synchronize()
 
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+    )
     scaler = torch.cuda.amp.GradScaler(enabled=device == "cuda")
     base_lr = args.lr
     min_lr = base_lr * 0.03125
@@ -438,9 +448,7 @@ def main():
                         new_lr = max(min_lr, current_lr * 0.5)
                         for group in optimizer.param_groups:
                             group["lr"] = new_lr
-                        print(
-                            f"Plateau detected. Reducing LR to {new_lr:.6g}."
-                        )
+                        print(f"Plateau detected. Reducing LR to {new_lr:.6g}.")
                         if extra_epochs_used < args.lr_extend_max:
                             add_epochs = min(
                                 args.lr_extend_epochs,
@@ -481,7 +489,9 @@ def main():
                         )
 
             write_per_class(os.path.join(args.out, "val_per_class.tsv"), val_per_class)
-            write_per_class(os.path.join(args.out, "test_per_class.tsv"), test_per_class)
+            write_per_class(
+                os.path.join(args.out, "test_per_class.tsv"), test_per_class
+            )
         torch.save(
             {
                 "model_state_dict": model.state_dict(),

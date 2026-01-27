@@ -378,7 +378,10 @@
               <span
                 v-for="tag in image?.tags || []"
                 :key="tag"
-                class="overlay-tag"
+                :class="[
+                  'overlay-tag',
+                  { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                ]"
               >
                 {{ tag }}
                 <button
@@ -565,6 +568,8 @@ let copyResetTimer = null;
 const addingTag = ref(false);
 const newTag = ref("");
 const tagInputRef = ref(null);
+const penalizedTags = ref(new Set());
+const penalizedTagsLoading = ref(false);
 
 const hasTags = computed(() => {
   return !!(
@@ -584,8 +589,40 @@ watch(open, (value) => {
     }
   } else {
     fetchCharacters();
+    fetchPenalizedTags();
   }
 });
+
+async function fetchPenalizedTags() {
+  if (penalizedTagsLoading.value) return;
+  penalizedTagsLoading.value = true;
+  try {
+    const res = await apiClient.get("/users/me/config");
+    const list = Array.isArray(res.data?.smart_score_penalized_tags)
+      ? res.data.smart_score_penalized_tags
+      : [];
+    const normalized = list
+      .map((tag) =>
+        String(tag || "")
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean);
+    penalizedTags.value = new Set(normalized);
+  } catch (e) {
+    penalizedTags.value = new Set();
+  } finally {
+    penalizedTagsLoading.value = false;
+  }
+}
+
+function isPenalizedTag(tag) {
+  const key = String(tag || "")
+    .trim()
+    .toLowerCase();
+  if (!key) return false;
+  return penalizedTags.value.has(key);
+}
 
 function normalizePictureFormat(target) {
   if (!target || !target.format) return "";
@@ -1058,6 +1095,7 @@ onMounted(() => {
   window.addEventListener("keydown", handleKeydown);
   window.addEventListener("resize", updateDescriptionScrollState);
   nextTick(updateDescriptionScrollState);
+  fetchPenalizedTags();
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
       scheduleOverlayDimsUpdate();
@@ -2513,6 +2551,12 @@ function downloadComfyWorkflow(workflow) {
   margin-left: 0px;
   justify-content: center;
   vertical-align: middle;
+}
+
+.overlay-tag--penalized {
+  color: rgb(var(--v-theme-error));
+  border: 1px solid rgba(var(--v-theme-error), 0.6);
+  background: rgba(var(--v-theme-error), 0.15);
 }
 
 .tag-delete-btn {

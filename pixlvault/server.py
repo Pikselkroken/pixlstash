@@ -70,6 +70,8 @@ from pixlvault.watch_folder_worker import WatchFolderWorker
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
 DEFAULT_SMART_SCORE_PENALIZED_TAGS = [
+    "incorrect reflection",
+    "malformed eye",
     "bad anatomy",
     "extra digit",
     "missing digit",
@@ -861,6 +863,7 @@ class Server:
         self, character_id, format, candidate_ids=None, penalized_tags=None
     ):
         """Fetch anchors, character references, and candidates for smart score calculation."""
+
         def fetch_data(session: Session):
             # Anchors
             good = session.exec(
@@ -881,9 +884,8 @@ class Server:
             ).all()
 
             # Candidates
-            query = (
-                select(Picture, Quality)
-                .outerjoin(Quality, Quality.picture_id == Picture.id)
+            query = select(Picture, Quality).outerjoin(
+                Quality, Quality.picture_id == Picture.id
             )
 
             if candidate_ids is not None:
@@ -935,15 +937,18 @@ class Server:
             candidate_id_list = []
             for pic, quality in candidate_rows:
                 aest = pic.aesthetic_score
-                if aest is None and quality is not None:
+                quality_score = None
+                if quality is not None:
                     try:
-                        aest = quality._calculate_heuristic_aesthetic_score()
+                        quality_score = quality.calculate_quality_score()
                     except Exception as e:
                         logger.warning(
-                            "Failed to compute heuristic aesthetic score for picture %s: %s",
+                            "Failed to compute heuristic quality score for picture %s: %s",
                             pic.id,
                             e,
                         )
+                if aest is None:
+                    aest = quality_score
                 candidates.append(
                     {
                         "id": pic.id,
@@ -979,8 +984,13 @@ class Server:
             if candidate_id_list:
                 try:
                     stmt = (
-                        select(Face.picture_id, func.max(FaceCharacterLikeness.likeness))
-                        .join(FaceCharacterLikeness, Face.id == FaceCharacterLikeness.face_id)
+                        select(
+                            Face.picture_id, func.max(FaceCharacterLikeness.likeness)
+                        )
+                        .join(
+                            FaceCharacterLikeness,
+                            Face.id == FaceCharacterLikeness.face_id,
+                        )
                         .where(Face.picture_id.in_(candidate_id_list))
                         .group_by(Face.picture_id)
                     )
@@ -993,10 +1003,62 @@ class Server:
 
         return self.vault.db.run_task(fetch_data, priority=DBPriority.IMMEDIATE)
 
+    def _fetch_smart_score_unscored_ids(
+        self, character_id, format, candidate_ids=None, descending=True
+    ):
+        def fetch_ids(session: Session):
+            query = select(Picture.id)
+
+            if candidate_ids is not None:
+                if not candidate_ids:
+                    return []
+                query = query.where(Picture.id.in_(candidate_ids))
+
+            if character_id == "UNASSIGNED":
+                query = query.where(
+                    ~exists(
+                        select(Face.id).where(
+                            Face.picture_id == Picture.id,
+                            Face.character_id.is_not(None),
+                        )
+                    ),
+                    ~exists(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.picture_id == Picture.id
+                        )
+                    ),
+                )
+            elif character_id and character_id != "ALL":
+                try:
+                    cid = int(character_id)
+                    character_picture_ids = session.exec(
+                        select(Face.picture_id).where(Face.character_id == cid)
+                    ).all()
+                    if not character_picture_ids:
+                        return []
+                    query = query.where(Picture.id.in_(character_picture_ids))
+                except ValueError:
+                    pass
+
+            if format:
+                query = query.where(Picture.format.in_(format))
+
+            query = query.where(Picture.image_embedding.is_(None))
+
+            if descending:
+                query = query.order_by(desc(Picture.created_at), desc(Picture.id))
+            else:
+                query = query.order_by(Picture.created_at, Picture.id)
+
+            return [row for row in session.exec(query).all()]
+
+        return self.vault.db.run_task(fetch_ids, priority=DBPriority.IMMEDIATE)
+
     def _prepare_smart_score_inputs(
         self, good_anchors, bad_anchors, candidates, pic_likeness_map
     ):
         """Unpickle embeddings and prepare lists of dictionaries for calculation."""
+
         def get_attr(item, key):
             if isinstance(item, dict):
                 return item.get(key)
@@ -1021,27 +1083,29 @@ class Server:
 
         good_list = process_list(good_anchors)
         bad_list = process_list(bad_anchors)
-        
+
         cand_list = []
         cand_ids = []
-        
+
         for p in candidates:
             pid = get_attr(p, "id")
             v = get_vec(get_attr(p, "image_embedding"))
             if v is not None:
                 cand_ids.append(pid)
-                cand_list.append({
-                    "id": pid,
-                    "embedding": v,
-                    "aesthetic_score": get_attr(p, "aesthetic_score"),
-                    "character_likeness": pic_likeness_map.get(pid, 0.0),
-                    "penalized_tag_count": get_attr(p, "penalized_tag_count") or 0,
-                    "width": get_attr(p, "width"),
-                    "height": get_attr(p, "height"),
-                    "noise_level": get_attr(p, "noise_level"),
-                    "edge_density": get_attr(p, "edge_density"),
-                })
-        
+                cand_list.append(
+                    {
+                        "id": pid,
+                        "embedding": v,
+                        "aesthetic_score": get_attr(p, "aesthetic_score"),
+                        "character_likeness": pic_likeness_map.get(pid, 0.0),
+                        "penalized_tag_count": get_attr(p, "penalized_tag_count") or 0,
+                        "width": get_attr(p, "width"),
+                        "height": get_attr(p, "height"),
+                        "noise_level": get_attr(p, "noise_level"),
+                        "edge_density": get_attr(p, "edge_density"),
+                    }
+                )
+
         return good_list, bad_list, cand_list, cand_ids
 
     def _find_pictures_by_smart_score(
@@ -1055,41 +1119,54 @@ class Server:
         penalized_tags=None,
     ):
         # 1. Fetch data
-        good_anchors, bad_anchors, candidates, pic_likeness_map = self._fetch_smart_score_data(
+        good_anchors, bad_anchors, candidates, pic_likeness_map = (
+            self._fetch_smart_score_data(
+                character_id,
+                format,
+                candidate_ids=candidate_ids,
+                penalized_tags=penalized_tags,
+            )
+        )
+
+        unscored_ids = self._fetch_smart_score_unscored_ids(
             character_id,
             format,
             candidate_ids=candidate_ids,
-            penalized_tags=penalized_tags,
+            descending=descending,
         )
 
-        if not candidates:
+        score_map = {}
+        scored_ids = []
+
+        if candidates:
+            # 2. Prepare inputs (unpickling)
+            good_list, bad_list, cand_list, cand_ids = self._prepare_smart_score_inputs(
+                good_anchors, bad_anchors, candidates, pic_likeness_map
+            )
+
+            if cand_list:
+                # 3. Calculate Scores (delegated to PictureUtils)
+                scores = PictureUtils.calculate_smart_score_batch_numpy(
+                    cand_list, good_list, bad_list
+                )
+
+                # 4. Sort and build scored id list
+                if descending:
+                    sorted_indices = np.argsort(-scores)
+                else:
+                    sorted_indices = np.argsort(scores)
+
+                scored_ids = [cand_ids[i] for i in sorted_indices]
+                score_map = {cand_ids[i]: float(scores[i]) for i in range(len(scores))}
+
+        combined_ids = scored_ids + unscored_ids
+        if not combined_ids:
             return []
 
-        # 2. Prepare inputs (unpickling)
-        good_list, bad_list, cand_list, cand_ids = self._prepare_smart_score_inputs(
-            good_anchors, bad_anchors, candidates, pic_likeness_map
-        )
+        final_ids = combined_ids[offset : offset + limit]
 
-        if not cand_list:
+        if len(final_ids) == 0:
             return []
-
-        # 3. Calculate Scores (delegated to PictureUtils)
-        scores = PictureUtils.calculate_smart_score_batch_numpy(
-            cand_list, good_list, bad_list
-        )
-
-        # 4. Sort and Paginate
-        if descending:
-            sorted_indices = np.argsort(-scores)
-        else:
-            sorted_indices = np.argsort(scores)
-
-        final_indices = sorted_indices[offset : offset + limit]
-
-        if len(final_indices) == 0:
-            return []
-
-        final_ids = [cand_ids[i] for i in final_indices]
 
         # 5. Fetch Final Objects
         def fetch_final_pics(session, ids):
@@ -1102,12 +1179,11 @@ class Server:
         metadata_fields = Picture.metadata_fields()
 
         results = []
-        for idx in final_indices:
-            pid = cand_ids[idx]
+        for pid in final_ids:
             if pid in pmap:
                 p = pmap[pid]
                 d = {field: getattr(p, field) for field in metadata_fields}
-                d["smartScore"] = float(scores[idx])
+                d["smartScore"] = score_map.get(pid)
                 results.append(d)
 
         return results
@@ -1498,8 +1574,14 @@ class Server:
 
                 def find_unassigned(session: Session):
                     # Find all pictures with no characters and not in any picture set
-                    pics = Picture.find(session, select_fields=["characters", "picture_sets"])
-                    return [pic for pic in pics if not pic.characters and not pic.picture_sets]
+                    pics = Picture.find(
+                        session, select_fields=["characters", "picture_sets"]
+                    )
+                    return [
+                        pic
+                        for pic in pics
+                        if not pic.characters and not pic.picture_sets
+                    ]
 
                 pics = self.vault.db.run_immediate_read_task(find_unassigned)
                 image_count = len(pics)
@@ -2143,7 +2225,12 @@ class Server:
         @self.api.post("/picture_sets/{id}/members/{picture_id}")
         async def add_picture_to_set(id: int, picture_id: str):
             """Add a picture to a set."""
-            from pixlvault.db_models import PictureSet, PictureSetMember, Picture, Character, FaceCharacterLikeness
+            from pixlvault.db_models import (
+                PictureSet,
+                PictureSetMember,
+                Picture,
+                FaceCharacterLikeness,
+            )
 
             # Find reference_character_id if this is a reference set
             reference_character_id = self._find_reference_character_id_for_set(id)
@@ -2421,6 +2508,37 @@ class Server:
             if not isinstance(ids, list):
                 raise HTTPException(status_code=400, detail="'ids' must be a list")
 
+            penalized_tags = self._get_smart_score_penalized_tags_from_request(request)
+            penalized_tag_set = {
+                str(tag).strip().lower() for tag in (penalized_tags or []) if tag
+            }
+            ids_int = []
+            for raw_id in ids:
+                try:
+                    ids_int.append(int(raw_id))
+                except (TypeError, ValueError):
+                    continue
+
+            penalized_tag_map = defaultdict(list)
+            if ids_int and penalized_tag_set:
+
+                def fetch_penalized_tags(session: Session):
+                    rows = session.exec(
+                        select(Tag.picture_id, Tag.tag).where(
+                            Tag.picture_id.in_(ids_int),
+                            Tag.tag.is_not(None),
+                            func.lower(Tag.tag).in_(penalized_tag_set),
+                        )
+                    ).all()
+                    return rows
+
+                rows = self.vault.db.run_task(
+                    fetch_penalized_tags, priority=DBPriority.IMMEDIATE
+                )
+                for pic_id, tag in rows or []:
+                    if tag:
+                        penalized_tag_map[pic_id].append(tag)
+
             def map_bbox_to_thumbnail(bbox, picture):
                 if not bbox or len(bbox) != 4:
                     return bbox, False
@@ -2515,12 +2633,19 @@ class Server:
                         "faces": face_data,
                         "thumbnail_width": 256 if mapped_any else None,
                         "thumbnail_height": 256 if mapped_any else None,
+                        "penalized_tags": list(
+                            dict.fromkeys(penalized_tag_map.get(pic.id, []))
+                        ),
                     }
                 except Exception as exc:
                     logger.error(
                         f"Picture not found or error for id={pic.id} (thumbnail request): {exc}"
                     )
-                    results[pic.id] = {"thumbnail": None, "faces": []}
+                    results[pic.id] = {
+                        "thumbnail": None,
+                        "faces": [],
+                        "penalized_tags": [],
+                    }
             response = JSONResponse(results)
             origin = request.headers.get("origin")
             if origin and (
@@ -2726,26 +2851,35 @@ class Server:
                                 )
                                 ext = os.path.splitext(full_path)[1]
                                 arcname = f"image_{idx:05d}{ext}"
-                                if scale_factor < 1.0 and not PictureUtils.is_video_file(
-                                    full_path
+                                if (
+                                    scale_factor < 1.0
+                                    and not PictureUtils.is_video_file(full_path)
                                 ):
                                     try:
                                         from PIL import Image
                                         from io import BytesIO
 
                                         with Image.open(full_path) as img:
-                                            new_width = max(1, int(img.width * scale_factor))
-                                            new_height = max(1, int(img.height * scale_factor))
+                                            new_width = max(
+                                                1, int(img.width * scale_factor)
+                                            )
+                                            new_height = max(
+                                                1, int(img.height * scale_factor)
+                                            )
                                             resized = img.resize(
                                                 (new_width, new_height),
                                                 resample=Image.LANCZOS,
                                             )
                                             buffer = BytesIO()
-                                            save_format = img.format or ext.lstrip(".").upper()
+                                            save_format = (
+                                                img.format or ext.lstrip(".").upper()
+                                            )
                                             if save_format.upper() in {"JPG", "JPEG"}:
                                                 resized = resized.convert("RGB")
                                             resized.save(buffer, format=save_format)
-                                            zip_file.writestr(arcname, buffer.getvalue())
+                                            zip_file.writestr(
+                                                arcname, buffer.getvalue()
+                                            )
                                     except Exception as exc:
                                         logger.warning(
                                             "Failed to resize %s (%s); falling back to original.",
@@ -3682,7 +3816,7 @@ class Server:
 
                     if sort_mech:
                         if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
-                            order_expr = (Picture.width * Picture.height)
+                            order_expr = Picture.width * Picture.height
                             query = query.order_by(
                                 order_expr.desc()
                                 if sort_mech.descending
