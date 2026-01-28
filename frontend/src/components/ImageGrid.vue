@@ -844,12 +844,7 @@ watch(
     if (!nextKey || nextKey === lastWsTagUpdateKey.value) return;
     lastWsTagUpdateKey.value = nextKey;
     if (!overlayOpen.value || !overlayImage.value?.id) return;
-    const pictureIds = Array.isArray(payload.pictureIds)
-      ? payload.pictureIds.map((id) => String(id))
-      : [];
-    if (pictureIds.includes(String(overlayImage.value.id))) {
-      refreshImageFromOverlay(overlayImage.value.id);
-    }
+    refreshImageFromOverlay({ imageId: overlayImage.value.id, force: true });
   },
 );
 
@@ -1668,6 +1663,9 @@ async function fetchImageInfo(imageId, options = {}) {
     if (options.smartScore) {
       params.set("smart_score", "true");
     }
+    if (options.force) {
+      params.set("cb", String(Date.now()));
+    }
     const query = params.toString();
     const url = query
       ? `${props.backendUrl}/pictures/${imageId}/metadata?${query}`
@@ -1765,6 +1763,10 @@ async function refreshImageFromOverlay(payload) {
     typeof payload === "object" && payload !== null ? payload.imageId : payload;
   const faces =
     typeof payload === "object" && payload !== null ? payload.faces : null;
+  const force =
+    typeof payload === "object" && payload !== null
+      ? Boolean(payload.force)
+      : false;
   if (!imageId) return;
   if (shouldRemoveFromCurrentView(faces)) {
     removeImagesById([imageId]);
@@ -1775,7 +1777,7 @@ async function refreshImageFromOverlay(payload) {
     (img) => img?.id === imageId,
   );
   if (existingIndex === -1) {
-    const latestInfo = await fetchImageInfo(imageId);
+    const latestInfo = await fetchImageInfo(imageId, { force });
     if (!latestInfo || Array.isArray(latestInfo)) return;
     addImageToGrid(latestInfo);
   } else if (!isSmartScoreSortActive()) {
@@ -1783,7 +1785,7 @@ async function refreshImageFromOverlay(payload) {
   }
 
   if (overlayOpen.value && overlayImage.value?.id === imageId) {
-    const latestInfo = await fetchImageInfo(imageId);
+    const latestInfo = await fetchImageInfo(imageId, { force });
     if (latestInfo && !Array.isArray(latestInfo)) {
       const merged = { ...latestInfo, ...overlayImage.value };
       if (overlayImage.value?.description == null) {

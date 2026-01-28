@@ -1,11 +1,14 @@
+import os
 import queue
 import time
+import urllib.request
+import uuid
 
 from sqlmodel import select, Session
 from sqlalchemy.orm import load_only, selectinload
 
 from pixlvault.event_types import EventType
-from pixlvault.picture_tagger import PictureTagger
+from pixlvault.picture_tagger import PictureTagger, MODEL_DIR
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
@@ -15,6 +18,11 @@ from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models import Character, Picture, Tag
 
 logger = get_logger(__name__)
+
+
+HAND_MODEL_NAME = "yolov8n-hand.pt"
+HAND_MODEL_URL = "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
+HAND_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, HAND_MODEL_NAME)
 
 
 class DescriptionWorker(BaseWorker):
@@ -145,6 +153,8 @@ class TagWorker(BaseWorker):
     Worker for generating tags for pictures with descriptions.
     """
 
+    _hand_model = None
+
     def worker_type(self) -> WorkerType:
         return WorkerType.TAGGER  # Or define a new WorkerType if desired
 
@@ -204,13 +214,13 @@ class TagWorker(BaseWorker):
                 statement = (
                     select(Picture)
                     .where(Picture.id.in_(picture_ids))
-                    .options(selectinload(Picture.tags))
+                    .options(selectinload(Picture.tags), selectinload(Picture.faces))
                 )
             else:
                 statement = (
                     select(Picture)
                     .where(~Picture.tags.any())
-                    .options(selectinload(Picture.tags))
+                    .options(selectinload(Picture.tags), selectinload(Picture.faces))
                 )
             result = session.exec(statement)
             return result.all()
@@ -218,6 +228,31 @@ class TagWorker(BaseWorker):
         return VaultDatabase.result_or_throw(
             self._db.submit_task(fetch_tags, picture_ids)
         )
+
+    def _ensure_hand_detector(self):
+        if TagWorker._hand_model is not None:
+            return TagWorker._hand_model
+        try:
+            from ultralytics import YOLO
+        except Exception as exc:
+            logger.warning("Ultralytics not available for hand detection: %s", exc)
+            return None
+
+        model_path = HAND_MODEL_PATH
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        if not os.path.exists(model_path):
+            try:
+                logger.info("Downloading hand model to %s", model_path)
+                urllib.request.urlretrieve(HAND_MODEL_URL, model_path)
+            except Exception as exc:
+                logger.warning("Failed to download hand model: %s", exc)
+                return None
+        try:
+            TagWorker._hand_model = YOLO(model_path)
+        except Exception as exc:
+            logger.warning("Failed to load hand model: %s", exc)
+            TagWorker._hand_model = None
+        return TagWorker._hand_model
 
     def _tag_pictures(self, missing_tags) -> int:
         """Tag all pictures missing tags."""
@@ -242,6 +277,171 @@ class TagWorker(BaseWorker):
             tag_results = self._picture_tagger.tag_images(
                 image_paths, stop_event=self._stop
             )
+            crop_tags_by_pic_id = {}
+            if self._picture_tagger.custom_tagger_ready():
+                try:
+                    import cv2
+                    from PIL import Image
+
+                    face_items = []
+                    hand_items = []
+                    item_to_pic_id = {}
+                    crop_debug_dir = "/tmp/pixlvault_crops"
+                    os.makedirs(crop_debug_dir, exist_ok=True)
+
+                    def save_crop_debug(crop, prefix, pic_id):
+                        if crop is None or crop.size == 0:
+                            return
+                        name = f"{prefix}_{pic_id}_{uuid.uuid4().hex[:8]}.png"
+                        path = os.path.join(crop_debug_dir, name)
+                        try:
+                            cv2.imwrite(path, crop)
+                            logger.info("Saved crop: %s", path)
+                        except Exception as exc:
+                            logger.warning("Failed to write crop %s: %s", path, exc)
+
+                    video_exts = {
+                        ".mp4",
+                        ".avi",
+                        ".mov",
+                        ".mkv",
+                        ".webm",
+                        ".flv",
+                        ".wmv",
+                    }
+                    hand_model = self._ensure_hand_detector()
+                    for pic in batch:
+                        if self._stop.is_set():
+                            break
+                        file_path = PictureUtils.resolve_picture_path(
+                            self._db.image_root, pic.file_path
+                        )
+                        ext = os.path.splitext(file_path)[1].lower()
+                        if ext in video_exts:
+                            continue
+                        frame = cv2.imread(file_path)
+                        if frame is None:
+                            logger.warning(
+                                "Failed to read image for face tagging: %s",
+                                file_path,
+                            )
+                            continue
+                        faces = getattr(pic, "faces", None) or []
+                        for face in faces:
+                            bbox = getattr(face, "bbox", None)
+                            crop = PictureUtils.crop_face_from_frame(frame, bbox)
+                            if crop is None:
+                                logger.warning(
+                                    "Face crop failed for %s bbox=%s",
+                                    file_path,
+                                    bbox,
+                                )
+                                continue
+                            save_crop_debug(crop, "face", pic.id)
+                            try:
+                                crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                                crop_img = Image.fromarray(crop_rgb)
+                            except Exception as e:
+                                logger.warning(
+                                    "Face crop conversion failed for %s bbox=%s: %s",
+                                    file_path,
+                                    bbox,
+                                    e,
+                                )
+                                continue
+                            key = f"{file_path}#face{face.id or face.face_index}"
+                            face_items.append((key, crop_img))
+                            item_to_pic_id[key] = pic.id
+
+                        if hand_model is not None:
+                            try:
+                                results = hand_model.predict(
+                                    frame,
+                                    imgsz=320,
+                                    conf=0.25,
+                                    max_det=4,
+                                    verbose=False,
+                                )
+                                boxes = list(results[0].boxes.xyxy.cpu().numpy())
+                            except Exception as e:
+                                logger.warning(
+                                    "Hand detection failed for %s: %s",
+                                    file_path,
+                                    e,
+                                )
+                                boxes = []
+                            if boxes:
+                                x_min = min(b[0] for b in boxes)
+                                y_min = min(b[1] for b in boxes)
+                                x_max = max(b[2] for b in boxes)
+                                y_max = max(b[3] for b in boxes)
+                                h, w = frame.shape[:2]
+                                x1 = max(0, min(w - 1, int(round(x_min))))
+                                y1 = max(0, min(h - 1, int(round(y_min))))
+                                x2 = max(0, min(w, int(round(x_max))))
+                                y2 = max(0, min(h, int(round(y_max))))
+                                if x2 > x1 and y2 > y1:
+                                    crop = frame[y1:y2, x1:x2]
+                                    if crop.size > 0:
+                                        save_crop_debug(crop, "hand", pic.id)
+                                        try:
+                                            crop_rgb = cv2.cvtColor(
+                                                crop, cv2.COLOR_BGR2RGB
+                                            )
+                                            crop_img = Image.fromarray(crop_rgb)
+                                            key = f"{file_path}#hand"
+                                            hand_items.append((key, crop_img))
+                                            item_to_pic_id[key] = pic.id
+                                        except Exception as e:
+                                            logger.warning(
+                                                "Hand crop conversion failed for %s: %s",
+                                                file_path,
+                                                e,
+                                            )
+
+                    if face_items and not self._stop.is_set():
+                        face_results = self._picture_tagger._tag_custom_items(
+                            face_items,
+                            stop_event=self._stop,
+                            threshold=self._picture_tagger.custom_tagger_threshold_face(),
+                            image_size=self._picture_tagger.custom_tagger_image_size_face(),
+                        )
+                        for key, tags in face_results.items():
+                            pic_id = item_to_pic_id.get(key)
+                            if pic_id is None or not tags:
+                                continue
+                            existing = crop_tags_by_pic_id.get(pic_id, [])
+                            existing.extend(tags)
+                            crop_tags_by_pic_id[pic_id] = existing
+
+                    if hand_items and not self._stop.is_set():
+                        hand_results = self._picture_tagger._tag_custom_items(
+                            hand_items,
+                            stop_event=self._stop,
+                            threshold=self._picture_tagger.custom_tagger_threshold_hand(),
+                            image_size=self._picture_tagger.custom_tagger_image_size_hand(),
+                        )
+                        for key, tags in hand_results.items():
+                            pic_id = item_to_pic_id.get(key)
+                            if pic_id is None or not tags:
+                                continue
+                            existing = crop_tags_by_pic_id.get(pic_id, [])
+                            existing.extend(tags)
+                            crop_tags_by_pic_id[pic_id] = existing
+                except Exception as e:
+                    logger.warning("Crop tagging failed: %s", e)
+
+            merged_results = {}
+            for path in image_paths:
+                pic = pic_by_path.get(path)
+                if not pic:
+                    continue
+                base_tags = tag_results.get(path, [])
+                extra_tags = crop_tags_by_pic_id.get(pic.id, [])
+                combined = sorted(set(base_tags) | set(extra_tags))
+                if combined:
+                    merged_results[path] = combined
+            tag_results = merged_results
             logger.debug(f"Got tag results for {len(tag_results)} images.")
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)

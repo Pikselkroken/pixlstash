@@ -31,7 +31,7 @@ FILES_ONNX = ["model.onnx"]
 SUB_DIR = "variables"
 SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
-MODEL_DIR = "wd14_tagger_model"
+MODEL_DIR = "downloaded_models"
 BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = 32
 MAX_CONCURRENT_IMAGES_CPU = 8
@@ -40,8 +40,12 @@ UNDESIRED_TAGS = "solo, general, blurry, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
 CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
-CUSTOM_TAGGER_THRESHOLD = 0.3
-CUSTOM_TAGGER_IMAGE_SIZE = 512
+CUSTOM_TAGGER_THRESHOLD_FULL = 0.6
+CUSTOM_TAGGER_THRESHOLD_FACE = 0.6
+CUSTOM_TAGGER_THRESHOLD_HAND = 0.5
+CUSTOM_TAGGER_IMAGE_SIZE_FULL = 512
+CUSTOM_TAGGER_IMAGE_SIZE_FACE = 384
+CUSTOM_TAGGER_IMAGE_SIZE_HAND = 192
 CUSTOM_TAGGER_BATCH = 16
 CLIP_MODEL_NAME = "ViT-B-32"
 CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
@@ -94,8 +98,12 @@ class PictureTagger:
 
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._use_custom_tagger = True
-        self._custom_tagger_threshold = CUSTOM_TAGGER_THRESHOLD
-        self._custom_tagger_image_size = CUSTOM_TAGGER_IMAGE_SIZE
+        self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
+        self._custom_tagger_threshold_face = CUSTOM_TAGGER_THRESHOLD_FACE
+        self._custom_tagger_threshold_hand = CUSTOM_TAGGER_THRESHOLD_HAND
+        self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
+        self._custom_tagger_image_size_face = CUSTOM_TAGGER_IMAGE_SIZE_FACE
+        self._custom_tagger_image_size_hand = CUSTOM_TAGGER_IMAGE_SIZE_HAND
         self._custom_tagger_batch = CUSTOM_TAGGER_BATCH
 
         self._ensure_model_files(force_download=force_download)
@@ -603,11 +611,15 @@ class PictureTagger:
         self._custom_model.load_state_dict(checkpoint["model_state_dict"])
         self._custom_model.to(self._device)
         self._custom_model.eval()
-        self._custom_transform = transforms.Compose(
+        self._custom_transform_cache = {}
+        self._custom_transform = self._build_custom_transform(
+            self._custom_tagger_image_size_full
+        )
+
+    def _build_custom_transform(self, image_size: int):
+        return transforms.Compose(
             [
-                transforms.Resize(
-                    (self._custom_tagger_image_size, self._custom_tagger_image_size)
-                ),
+                transforms.Resize((image_size, image_size)),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406],
@@ -749,6 +761,82 @@ class PictureTagger:
         ]
         return texts
 
+    def custom_tagger_ready(self) -> bool:
+        return bool(
+            self._use_custom_tagger
+            and hasattr(self, "_custom_transform")
+            and hasattr(self, "_custom_model")
+            and hasattr(self, "_custom_labels")
+        )
+
+    def custom_tagger_threshold_full(self) -> float:
+        return float(self._custom_tagger_threshold_full)
+
+    def custom_tagger_threshold_face(self) -> float:
+        return float(self._custom_tagger_threshold_face)
+
+    def custom_tagger_threshold_hand(self) -> float:
+        return float(self._custom_tagger_threshold_hand)
+
+    def custom_tagger_image_size_full(self) -> int:
+        return int(self._custom_tagger_image_size_full)
+
+    def custom_tagger_image_size_face(self) -> int:
+        return int(self._custom_tagger_image_size_face)
+
+    def custom_tagger_image_size_hand(self) -> int:
+        return int(self._custom_tagger_image_size_hand)
+
+    def _tag_custom_items(
+        self, items, stop_event=None, threshold=None, image_size=None
+    ):
+        if not items:
+            return {}
+
+        tag_threshold = (
+            float(threshold)
+            if threshold is not None and float(threshold) > 0
+            else self._custom_tagger_threshold_full
+        )
+        if image_size is None:
+            image_size = self._custom_tagger_image_size_full
+        transform = self._custom_transform_cache.get(image_size)
+        if transform is None:
+            transform = self._build_custom_transform(image_size)
+            self._custom_transform_cache[image_size] = transform
+
+        logger.info("Performing custom tagging on %d items...", len(items))
+        batch_size = max(1, self._custom_tagger_batch)
+        results = {}
+        for batch_start in range(0, len(items), batch_size):
+            if stop_event is not None and stop_event.is_set():
+                logger.info("Tagging interrupted by stop event.")
+                break
+            batch = items[batch_start : batch_start + batch_size]
+            batch_paths = []
+            batch_tensors = []
+            for path, image in batch:
+                try:
+                    batch_tensors.append(transform(image))
+                    batch_paths.append(path)
+                except Exception as e:
+                    logger.error("Custom tagger failed to preprocess %s: %s", path, e)
+            if not batch_tensors:
+                continue
+            inputs = torch.stack(batch_tensors).to(self._device)
+            with torch.inference_mode():
+                logits = self._custom_model(inputs)
+                probs = torch.sigmoid(logits).cpu().numpy()
+            for path, prob in zip(batch_paths, probs):
+                tag_probs = []
+                for label, p in zip(self._custom_labels, prob):
+                    if p >= tag_threshold:
+                        tag_probs.append((label, float(p)))
+                all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
+                results[path] = [tag for tag, _ in all_tags_sorted]
+
+        return self._naturalize_tags(results)
+
     def _tag_images_custom(self, image_paths, stop_event=None):
         from PIL import Image
 
@@ -785,37 +873,12 @@ class PictureTagger:
         if not items:
             return {}
 
-        logger.info("Performing custom tagging on %d items...", len(items))
-        batch_size = max(1, self._custom_tagger_batch)
-        results = {}
-        for batch_start in range(0, len(items), batch_size):
-            if stop_event is not None and stop_event.is_set():
-                logger.info("Tagging interrupted by stop event.")
-                break
-            batch = items[batch_start : batch_start + batch_size]
-            batch_paths = []
-            batch_tensors = []
-            for path, image in batch:
-                try:
-                    batch_tensors.append(self._custom_transform(image))
-                    batch_paths.append(path)
-                except Exception as e:
-                    logger.error("Custom tagger failed to preprocess %s: %s", path, e)
-            if not batch_tensors:
-                continue
-            inputs = torch.stack(batch_tensors).to(self._device)
-            with torch.inference_mode():
-                logits = self._custom_model(inputs)
-                probs = torch.sigmoid(logits).cpu().numpy()
-            for path, prob in zip(batch_paths, probs):
-                tag_probs = []
-                for label, p in zip(self._custom_labels, prob):
-                    if p >= self._custom_tagger_threshold:
-                        tag_probs.append((label, float(p)))
-                all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
-                results[path] = [tag for tag, _ in all_tags_sorted]
-
-        results = self._naturalize_tags(results)
+        results = self._tag_custom_items(
+            items,
+            stop_event=stop_event,
+            threshold=self._custom_tagger_threshold_full,
+            image_size=self._custom_tagger_image_size_full,
+        )
         return self._merge_video_frame_tags(results)
 
     def tag_images(self, image_paths, stop_event=None):

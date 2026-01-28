@@ -34,3 +34,4 @@ nltk
 python-jose[cryptography]
 dotenv
 passlib
+ultralytics
