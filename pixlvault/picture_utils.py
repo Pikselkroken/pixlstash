@@ -314,9 +314,9 @@ class PictureUtils:
         # Sort indices by final score descending
         sorted_indices = np.argsort(-final_scores)
 
-        logger.info(f"[SMART SCORE] Analyzed {len(candidates)} candidates. Breakdown:")
+        logger.debug(f"[SMART SCORE] Analyzed {len(candidates)} candidates. Breakdown:")
         for rank, i in enumerate(sorted_indices):
-            logger.info(
+            logger.debug(
                 f"[#{rank + 1}] ID={candidates[i]['id']} Score={final_scores[i]:.2f} "
                 f"Char={char_component[i]:.3f} (raw={char_raw[i]:.2f}) "
                 f"Good={good_component[i]:.3f} (maxSim={raw_good_sim[i]:.3f}) "

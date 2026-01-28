@@ -332,7 +332,7 @@ class Picture(SQLModel, table=True):
 
         # Log tag contribution for each result
         for result in results:
-            logger.info(
+            logger.debug(
                 f"Picture ID: {result.Picture.id}, "
                 f"Tag contribution: min_tag_dist={getattr(result, 'min_tag_dist', 'N/A')}, "
                 f"fuzzy_score={getattr(result, 'fuzzy_score', 'N/A')}, "
@@ -375,7 +375,7 @@ class Picture(SQLModel, table=True):
         """
         query = select(cls)
 
-        logger.info("Got search parameters: %s", search)
+        logger.debug("Got search parameters: %s", search)
         if select_fields:
             # Always include 'id' in select_fields
             select_fields = list(set(select_fields) | {"id"})

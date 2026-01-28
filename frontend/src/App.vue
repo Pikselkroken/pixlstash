@@ -35,6 +35,7 @@ const stackThreshold = ref(null);
 // --- Search & Filtering State ---
 const searchQuery = ref("");
 const searchInput = ref("");
+const searchInputField = ref(null);
 const searchHistory = ref([]);
 const isSearchHistoryOpen = ref(false);
 const MAX_SEARCH_HISTORY = 8;
@@ -458,10 +459,22 @@ function handleClearSearch() {
   refreshGridVersion(); // Force the ImageGrid to refresh
 }
 
+function blurSearchInput() {
+  const field = searchInputField.value;
+  if (field && field.$el) {
+    const input = field.$el.querySelector("input");
+    if (input) input.blur();
+  }
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+}
+
 function blurSearch(event) {
   if (event && event.target) {
     event.target.blur();
   }
+  blurSearchInput();
 }
 
 function addToSearchHistory(query) {
@@ -482,6 +495,9 @@ function applySearchHistory(query) {
   searchInput.value = query;
   commitSearch();
   isSearchHistoryOpen.value = false;
+  nextTick(() => {
+    blurSearchInput();
+  });
 }
 
 function clearSearchHistory() {

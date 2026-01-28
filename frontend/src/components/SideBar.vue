@@ -401,6 +401,11 @@ const stackThresholdModel = computed({
   set: (value) => emit("update:stack-threshold", value),
 });
 
+const isSearchActive = computed(() => {
+  const query = typeof props.searchQuery === "string" ? props.searchQuery : "";
+  return query.trim().length > 0;
+});
+
 const reactiveSelectedDescending = ref(props.selectedDescending);
 
 watch(
@@ -1811,7 +1816,7 @@ defineExpose({ refreshSidebar });
       </template>
 
       <div class="sidebar-section-header">
-        Sort by
+        {{ isSearchActive ? "Search Result" : "Sort by" }}
         <span style="flex: 1 1 auto"></span>
       </div>
 
@@ -1824,7 +1829,10 @@ defineExpose({ refreshSidebar });
           align-items: stretch;
         "
       >
-        <div style="display: flex; align-items: center; gap: 8px">
+        <div v-if="isSearchActive" class="sidebar-search-result-label">
+          Search Result
+        </div>
+        <div v-else style="display: flex; align-items: center; gap: 8px">
           <div style="flex: 1; min-width: 0; position: relative">
             <select
               ref="sortSelectRef"
@@ -1861,7 +1869,7 @@ defineExpose({ refreshSidebar });
             </v-icon>
           </v-btn>
         </div>
-        <div v-if="sortModel === SIMILARITY_SORT_KEY">
+        <div v-if="!isSearchActive && sortModel === SIMILARITY_SORT_KEY">
           <div class="sidebar-section-header">
             Similarity Character
             <span style="flex: 1 1 auto"></span>
@@ -1887,7 +1895,7 @@ defineExpose({ refreshSidebar });
             <div style="width: 34px"></div>
           </div>
         </div>
-        <div v-if="sortModel === STACKS_SORT_KEY">
+        <div v-if="!isSearchActive && sortModel === STACKS_SORT_KEY">
           <div class="sidebar-section-header">
             Stack Strictness
             <span style="flex: 1 1 auto"></span>
@@ -1959,6 +1967,19 @@ defineExpose({ refreshSidebar });
   align-items: center;
   height: 18px;
   z-index: 2;
+}
+
+.sidebar-search-result-label {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  margin-left: 6px;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-surface), 0.2);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  border: 1px dashed rgba(var(--v-theme-border), 0.5);
+  font-size: 0.95em;
 }
 /* Sidebar right edge for counts */
 .sidebar {

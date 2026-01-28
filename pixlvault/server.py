@@ -726,7 +726,7 @@ class Server:
                 select_fields=["reference_picture_set_id"],
                 reference_picture_set_id=picture_set_id,
             )
-            logger.info(
+            logger.debug(
                 f"Found reference character for set {picture_set_id}: {character}"
             )
             return character[0].id if character else None
@@ -1238,7 +1238,7 @@ class Server:
         async def get_pictures_sort_mechanisms():
             """Return available sorting mechanisms for pictures."""
             result = SortMechanism.all()
-            logger.info("Returning sort mechanisms: {}".format(result))
+            logger.debug("Returning sort mechanisms: {}".format(result))
             return result
 
         ###############################
@@ -1293,7 +1293,7 @@ class Server:
                 raise HTTPException(status_code=401, detail="Not authenticated")
 
             start_time = time.time()
-            logger.info(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
+            logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
             patch_data = await request.json()
             allowed_keys = {
                 "description",
@@ -1312,7 +1312,7 @@ class Server:
 
                 updated = False
                 for key, value in patch_data.items():
-                    logger.info(f"Updating config key '{key}' with value: {value}")
+                    logger.debug(f"Updating config key '{key}' with value: {value}")
                     if key not in allowed_keys:
                         raise HTTPException(
                             status_code=400,
@@ -1349,7 +1349,7 @@ class Server:
                     if key == "columns":
                         user.columns = int(value)
                         updated = True
-                        logger.info(f"Set user.columns to {user.columns}")
+                        logger.debug(f"Set user.columns to {user.columns}")
                         continue
                     current_value = getattr(user, key, None)
                     if current_value != value:
@@ -1366,7 +1366,7 @@ class Server:
                 update_user, user_id, priority=DBPriority.IMMEDIATE
             )
             elapsed = time.time() - start_time
-            logger.info(
+            logger.debug(
                 f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"
             )
             return {
@@ -1385,7 +1385,7 @@ class Server:
             if user_id is None:
                 raise HTTPException(status_code=401, detail="Not authenticated")
 
-            logger.info("Looking for user id: {}".format(user_id))
+            logger.debug("Looking for user id: {}".format(user_id))
             user = self.vault.db.run_task(
                 lambda session: session.get(User, user_id),
                 priority=DBPriority.IMMEDIATE,
@@ -1408,7 +1408,7 @@ class Server:
             def update_user(session: Session, user_id: int):
                 db_user = session.get(User, user_id)
                 if db_user is None:
-                    logger.info(f"User {user_id} not found in DB when updating")
+                    logger.debug(f"User {user_id} not found in DB when updating")
                     raise HTTPException(
                         status_code=404, detail="User not found when updating"
                     )
@@ -1568,7 +1568,7 @@ class Server:
                     Picture.find, select_fields=metadata_fields
                 )
                 image_count = len(pics)
-                logger.info("ALL pics count: {}".format(image_count))
+                logger.debug("ALL pics count: {}".format(image_count))
                 char_id = None
             elif id == "UNASSIGNED":
                 # Unassigned
@@ -1586,7 +1586,7 @@ class Server:
 
                 pics = self.vault.db.run_immediate_read_task(find_unassigned)
                 image_count = len(pics)
-                logger.info("UNASSIGNED pics count: {}".format(image_count))
+                logger.debug("UNASSIGNED pics count: {}".format(image_count))
                 char_id = None
             else:
 
@@ -1635,8 +1635,8 @@ class Server:
                 "reference_picture_set_id": reference_set_id,
             }
             elapsed = time.time() - start
-            logger.info(f"Category summary computed in {elapsed:.4f} seconds")
-            logger.info(f"Category summary: {summary}")
+            logger.debug(f"Category summary computed in {elapsed:.4f} seconds")
+            logger.debug(f"Category summary: {summary}")
             return summary
 
         @self.api.patch("/characters/{id}")
@@ -1773,7 +1773,7 @@ class Server:
                                 best_face = face
                                 break
                         if best_pic and best_face:
-                            logger.info("Found thumbnail from reference set!")
+                            logger.debug("Found thumbnail from reference set!")
                             break
                 # Fallback: use faces from char.faces, query their pictures
                 if not best_pic or not best_face:
@@ -1839,7 +1839,7 @@ class Server:
         @self.api.get("/characters")
         async def get_characters(name: str = Query(None)):
             try:
-                logger.info(f"Fetching characters with name: {name}")
+                logger.debug(f"Fetching characters with name: {name}")
                 characters = self.vault.db.run_immediate_read_task(
                     lambda session: Character.find(session, name=name)
                 )
@@ -2260,7 +2260,7 @@ class Server:
                             FaceCharacterLikeness.character_id == reference_character_id
                         )
                     )
-                    logger.info(
+                    logger.debug(
                         "Deleted FaceCharacterLikeness entries for character {}".format(
                             reference_character_id
                         )
@@ -2316,7 +2316,7 @@ class Server:
                             FaceCharacterLikeness.character_id == reference_character_id
                         )
                     )
-                    logger.info(
+                    logger.debug(
                         "Deleted FaceCharacterLikeness entries for character {}".format(
                             reference_character_id
                         )
@@ -2430,7 +2430,7 @@ class Server:
                 rows = session.exec(
                     select(PictureLikeness).where(PictureLikeness.likeness >= threshold)
                 ).all()
-                logger.info(
+                logger.debug(
                     "Fetched %d picture likeness rows above threshold=%s",
                     len(rows),
                     threshold,
@@ -2726,7 +2726,7 @@ class Server:
                             Picture.find, id=picture_ids, select_fields=select_fields
                         )
                     elif set_id is not None:
-                        logger.info("Exporting pictures set {} ".format(set_id))
+                        logger.debug("Exporting pictures set {} ".format(set_id))
 
                         def fetch_members(session, set_id):
                             members = session.exec(
@@ -2745,7 +2745,7 @@ class Server:
 
                         pics = self.vault.db.run_task(fetch_members, set_id)
                     elif character_id is not None:
-                        logger.info(
+                        logger.debug(
                             "Exporting pictures for character ID: {}".format(
                                 character_id
                             )
@@ -2766,7 +2766,7 @@ class Server:
 
                         pics = self.vault.db.run_task(fetch_by_character, character_id)
                     elif query:
-                        logger.info(
+                        logger.debug(
                             "Exporting pictures using search query: {}".format(query)
                         )
 
@@ -2789,7 +2789,7 @@ class Server:
 
                         pics = self.vault.db.run_task(find_by_text, query)
                     else:
-                        logger.info(
+                        logger.debug(
                             "Exporting pictures using filter parameters: {}".format(
                                 query_params
                             )
@@ -2805,7 +2805,7 @@ class Server:
                     self.export_tasks[task_id]["total"] = len(pics)
                     self.export_tasks[task_id]["processed"] = 0
 
-                    logger.info(
+                    logger.debug(
                         f"Export task {task_id}: {len(pics)} pictures to be added to the ZIP."
                     )
 
@@ -2939,7 +2939,7 @@ class Server:
                                 self.export_tasks[task_id]["processed"] += 1
 
                     zip_size = os.path.getsize(zip_path)
-                    logger.info(
+                    logger.debug(
                         f"Export task {task_id}: ZIP file created with size {zip_size} bytes."
                     )
 
@@ -3173,7 +3173,7 @@ class Server:
                 file_path = PictureUtils.resolve_picture_path(
                     self.vault.image_root, pic.file_path
                 )
-                logger.info(
+                logger.debug(
                     "[metadata] Extracting embedded metadata for id=%s path=%s",
                     pic.id,
                     file_path,
@@ -3189,7 +3189,7 @@ class Server:
             if embedded_metadata:
                 pic_dict["metadata"] = embedded_metadata
 
-            logger.info(
+            logger.debug(
                 "[metadata] id=%s fields=%d tags=%d embedded_keys=%d has_metadata=%s",
                 pic.id,
                 len(metadata_fields),
@@ -3198,13 +3198,13 @@ class Server:
                 "metadata" in pic_dict,
             )
             if embedded_metadata:
-                logger.info(
+                logger.debug(
                     "[metadata] id=%s embedded_top_keys=%s",
                     pic.id,
                     list(embedded_metadata.keys()),
                 )
 
-            logger.info("Returning dict: " + str(pic_dict))
+            logger.debug("Returning dict: " + str(pic_dict))
             return pic_dict
 
         @self.api.get("/pictures/{id}/character_likeness")
@@ -3351,7 +3351,7 @@ class Server:
                 pic_list = self.vault.db.run_task(
                     lambda session: Picture.find(session, id=id, select_fields=["tags"])
                 )
-                logger.info(
+                logger.debug(
                     f"Removing tag '{tag}' from picture id={id}. Found pics: {pic_list}"
                 )
                 if not pic_list:
@@ -3361,7 +3361,7 @@ class Server:
                 full_tag = Tag(tag=tag, picture_id=pic.id)
 
                 if full_tag in pic.tags:
-                    logger.info(
+                    logger.debug(
                         f"Tag {tag} found in picture tags {pic.tags}, proceeding to remove."
                     )
 
@@ -3378,9 +3378,9 @@ class Server:
                     self.vault.db.run_task(update_picture, pic.id, full_tag)
                     self.vault.notify(EventType.CHANGED_TAGS)
 
-                    logger.info(f"Remaining tags after removal: {pic.tags}")
+                    logger.debug(f"Remaining tags after removal: {pic.tags}")
                 else:
-                    logger.info(
+                    logger.debug(
                         f"Tag {tag} not found in picture tags {pic.tags}, nothing to remove."
                     )
 
@@ -3749,9 +3749,9 @@ class Server:
             query_params = {}
             format = None
             if request.query_params:
-                logger.info("Received query params: " + str(request.query_params))
+                logger.debug("Received query params: " + str(request.query_params))
                 format = request.query_params.getlist("format")
-                logger.info("Format param: " + str(format))
+                logger.debug("Format param: " + str(format))
                 query_params = dict(request.query_params)
                 query_params.pop("format", None)
                 sort = query_params.pop("sort", sort)
@@ -3926,7 +3926,7 @@ class Server:
 
             if request.url.path not in excluded_paths:
                 session_id = request.cookies.get("session_id")
-                logger.info(
+                logger.debug(
                     f"Retrieved session_id from cookies: {session_id}"
                 )  # Log for debugging
                 logger.debug(f"Current active_session_ids: {self.active_session_ids}")
@@ -4091,7 +4091,7 @@ class Server:
             session_id = request.cookies.get("session_id")
             if session_id in self.active_session_ids:
                 self.active_session_ids.pop(session_id, None)
-                logger.info(f"Session {session_id} invalidated.")
+                logger.debug(f"Session {session_id} invalidated.")
             response.delete_cookie("session_id", path="/")
             return {"message": "Logged out successfully."}
 

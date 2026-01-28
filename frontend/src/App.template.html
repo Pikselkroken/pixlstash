@@ -13,6 +13,7 @@
           :allPicturesId="ALL_PICTURES_ID"
           :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
           :selectedSet="selectedSet"
+          :searchQuery="searchQuery"
           :selectedSort="selectedSort"
           :selectedDescending="selectedDescending"
           :backendUrl="BACKEND_URL"
@@ -54,6 +55,7 @@
                   <v-text-field
                     v-bind="props"
                     v-model="searchInput"
+                    ref="searchInputField"
                     density="compact"
                     variant="solo-filled"
                     hide-details

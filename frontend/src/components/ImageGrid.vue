@@ -537,7 +537,21 @@
       v-if="props.searchQuery && props.searchQuery.length > 0"
       class="search-result-bar"
     >
-      <span> Search result found {{ allGridImages.length }} items </span>
+      <span class="search-result-status">
+        <template v-if="imagesLoading">
+          <v-progress-circular
+            indeterminate
+            size="16"
+            width="2"
+            color="primary"
+            class="search-result-spinner"
+          ></v-progress-circular>
+          <span>Searching…</span>
+        </template>
+        <template v-else>
+          Search result found {{ allGridImages.length }} items
+        </template>
+      </span>
       <v-btn color="primary" @click="clearSearchQuery">Clear</v-btn>
     </div>
     <div
@@ -4198,6 +4212,16 @@ function handleScoringClose() {
   justify-content: space-between;
   padding: 8px 16px;
   box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.search-result-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-result-spinner {
+  flex: 0 0 auto;
 }
 
 .smart-score-bar {
