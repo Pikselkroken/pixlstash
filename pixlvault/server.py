@@ -193,28 +193,41 @@ class Server:
             self.vault.close()
         gc.collect()
 
-    def _handle_vault_event(self, event_type: EventType):
+    def _handle_vault_event(self, event_type: EventType, data=None):
         if not self._ws_loop:
             return
         try:
+            logger.info("Got the following event from vault: %s", event_type)
             asyncio.run_coroutine_threadsafe(
-                self._broadcast_ws_event(event_type), self._ws_loop
+                self._broadcast_ws_event(event_type, data), self._ws_loop
             )
         except Exception as exc:
             logger.debug("Failed to dispatch websocket event: %s", exc)
 
     def _should_send_ws_update(self, event_type: EventType, filters: dict) -> bool:
-        return event_type == EventType.CHANGED_PICTURES
+        return event_type in (
+            EventType.CHANGED_PICTURES,
+            EventType.CHANGED_TAGS,
+            EventType.CLEARED_TAGS,
+        )
 
-    async def _broadcast_ws_event(self, event_type: EventType):
+    async def _broadcast_ws_event(self, event_type: EventType, data=None):
         with self._ws_clients_lock:
             clients = list(self._ws_clients)
         if not clients:
             return
-        payload = {
-            "type": "pictures_changed",
-            "event": event_type.name,
-        }
+        if event_type in (EventType.CHANGED_TAGS, EventType.CLEARED_TAGS):
+            picture_ids = data if isinstance(data, (list, tuple, set)) else []
+            payload = {
+                "type": "tags_changed",
+                "event": event_type.name,
+                "picture_ids": list(picture_ids),
+            }
+        else:
+            payload = {
+                "type": "pictures_changed",
+                "event": event_type.name,
+            }
         stale = []
         for client in clients:
             ws = client.get("ws")
@@ -225,6 +238,7 @@ class Server:
             if not self._should_send_ws_update(event_type, filters):
                 continue
             try:
+                logger.info("Sending websocket event: %s", payload)
                 await ws.send_json(payload)
             except Exception:
                 stale.append(client)

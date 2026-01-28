@@ -622,6 +622,10 @@ const props = defineProps({
   unassignedPicturesId: String,
   gridVersion: { type: Number, default: 0 },
   wsUpdateKey: { type: Number, default: 0 },
+  wsTagUpdate: {
+    type: Object,
+    default: () => ({ key: 0, pictureIds: [] }),
+  },
   mediaTypeFilter: { type: String, default: "all" },
   columns: { type: Number, required: true },
 });
@@ -668,6 +672,7 @@ const previousImageIds = new Set();
 const hasLoadedOnce = ref(false);
 const highlightNextFetch = ref(false);
 const lastWsUpdateKey = ref(0);
+const lastWsTagUpdateKey = ref(0);
 const preserveScrollOnNextFetch = ref(false);
 const pendingScrollTop = ref(null);
 const skipNextWsRefresh = ref(false);
@@ -828,6 +833,23 @@ watch(
     }
     highlightNextFetch.value = true;
     preserveScrollOnNextFetch.value = true;
+  },
+);
+
+watch(
+  () => props.wsTagUpdate,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastWsTagUpdateKey.value) return;
+    lastWsTagUpdateKey.value = nextKey;
+    if (!overlayOpen.value || !overlayImage.value?.id) return;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds.map((id) => String(id))
+      : [];
+    if (pictureIds.includes(String(overlayImage.value.id))) {
+      refreshImageFromOverlay(overlayImage.value.id);
+    }
   },
 );
 
@@ -1729,7 +1751,8 @@ function shouldCheckViewEligibility() {
 
 function shouldRemoveFromCurrentView(faces) {
   if (!shouldCheckViewEligibility()) return false;
-  const list = Array.isArray(faces) ? faces : [];
+  if (!Array.isArray(faces)) return false;
+  const list = faces;
   const selected = String(props.selectedCharacter);
   if (selected === props.unassignedPicturesId) {
     return list.some((face) => face?.character_id != null);
@@ -1757,6 +1780,25 @@ async function refreshImageFromOverlay(payload) {
     addImageToGrid(latestInfo);
   } else if (!isSmartScoreSortActive()) {
     await refreshGridImage(imageId);
+  }
+
+  if (overlayOpen.value && overlayImage.value?.id === imageId) {
+    const latestInfo = await fetchImageInfo(imageId);
+    if (latestInfo && !Array.isArray(latestInfo)) {
+      const merged = { ...latestInfo, ...overlayImage.value };
+      if (overlayImage.value?.description == null) {
+        merged.description = latestInfo.description ?? null;
+      }
+      const currentTags = Array.isArray(overlayImage.value?.tags)
+        ? overlayImage.value.tags
+        : [];
+      const dataTags = Array.isArray(latestInfo.tags) ? latestInfo.tags : null;
+      merged.tags = dataTags ? [...dataTags].sort() : [...currentTags];
+      if (overlayImage.value?.metadata == null) {
+        merged.metadata = latestInfo.metadata ?? {};
+      }
+      overlayImage.value = merged;
+    }
   }
 
   if (isSmartScoreSortActive()) {
@@ -2103,7 +2145,10 @@ async function applyScore(img, newScore) {
     if (isScoreSortActive()) {
       repositionImageByScore(imageId, newScore);
     }
-    if (isSmartScoreSortActive()) {
+    if (
+      !pictureIds.length ||
+      pictureIds.includes(String(overlayImage.value.id))
+    ) {
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
     } else {

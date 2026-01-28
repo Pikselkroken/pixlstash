@@ -70,6 +70,7 @@ const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
+const wsTagUpdate = ref({ key: 0, pictureIds: [] });
 const columnsMenuOpen = ref(false);
 const configLoaded = ref(false);
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
@@ -138,6 +139,12 @@ function connectUpdatesSocket() {
         wsUpdateKey.value = Date.now();
         refreshGridVersion();
       }
+    } else if (payload?.type === "tags_changed") {
+      const pictureIds = Array.isArray(payload.picture_ids)
+        ? payload.picture_ids
+        : [];
+      const nextKey = (wsTagUpdate.value?.key || 0) + 1;
+      wsTagUpdate.value = { key: nextKey, pictureIds };
     }
   };
 

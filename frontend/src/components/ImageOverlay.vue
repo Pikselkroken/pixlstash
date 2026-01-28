@@ -367,7 +367,7 @@
                   v-if="image"
                   class="section-meta-btn section-meta-btn--danger"
                   type="button"
-                  title="Clear tags"
+                  title="Clear tags (Causes the image to be re-tagged automatically)"
                   @click.stop="clearTagsForImage"
                 >
                   <v-icon size="16">mdi-refresh</v-icon>

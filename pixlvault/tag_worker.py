@@ -164,7 +164,8 @@ class TagWorker(BaseWorker):
                 logger.debug(f"TaggingWorker: Tagged {len(tagged_pictures)} pictures.")
                 timing = time.time() - start
                 if tagged_pictures:
-                    self._notify_others(EventType.CHANGED_TAGS)
+                    picture_ids = [pic_id for _, pic_id, _, _ in tagged_pictures]
+                    self._notify_others(EventType.CHANGED_TAGS, picture_ids)
                     logger.debug(
                         f"TaggingWorker: Done after {timing:.2f} seconds. Having updated {len(tagged_pictures)} pictures."
                     )

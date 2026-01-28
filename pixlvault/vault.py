@@ -141,7 +141,7 @@ class Vault:
             listeners = list(self._event_listeners)
         for listener in listeners:
             try:
-                listener(event_type)
+                listener(event_type, data)
             except Exception as exc:
                 logger.warning("Event listener failed for %s: %s", event_type, exc)
 

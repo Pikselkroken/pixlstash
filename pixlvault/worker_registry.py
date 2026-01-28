@@ -148,12 +148,12 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
             self._watched_ids[(cls, object_id, attr)] = future
         return future
 
-    def _notify_others(self, event_type: EventType):
+    def _notify_others(self, event_type: EventType, data=None):
         """
         Notify other components of an event.
         """
         if self._event_callback:
-            self._event_callback(event_type)
+            self._event_callback(event_type, data)
 
     def _notify_ids_processed(
         self, notification: List[Tuple[Type, object, str, object]]
