@@ -1,5 +1,6 @@
 from .character import Character  # noqa: F401
 from .face import Face  # noqa: F401
+from .hand import Hand  # noqa: F401
 from .face_character_likeness import FaceCharacterLikeness  # noqa: F401
 from .picture import Picture, SortMechanism  # noqa: F401
 from .picture_set import PictureSet, PictureSetMember  # noqa: F401

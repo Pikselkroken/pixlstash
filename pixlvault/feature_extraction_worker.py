@@ -20,10 +20,10 @@ logger = get_logger(__name__)
 
 
 HAND_MODEL_NAME = "yolov8n-hand.pt"
-HAND_MODEL_URL = (
-    "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
+HAND_MODEL_URL = "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
+HAND_MODEL_PATH = os.path.join(
+    os.path.dirname(__file__), "..", MODEL_DIR, HAND_MODEL_NAME
 )
-HAND_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, HAND_MODEL_NAME)
 
 
 class FeatureExtractionWorker(BaseWorker):
@@ -48,7 +48,10 @@ class FeatureExtractionWorker(BaseWorker):
                 logger.debug(
                     "FeatureExtractionWorker: Found %d pictures needing face bboxes: %s",
                     len(pics_needing_face_bboxes),
-                    [getattr(pic, "file_path", pic.id) for pic in pics_needing_face_bboxes],
+                    [
+                        getattr(pic, "file_path", pic.id)
+                        for pic in pics_needing_face_bboxes
+                    ],
                 )
                 if not pics_needing_face_bboxes:
                     self._wait()
@@ -206,13 +209,11 @@ class FeatureExtractionWorker(BaseWorker):
                             (
                                 thumbnail_bytes,
                                 thumbnail_crop,
-                            ) = (
-                                PictureUtils.generate_face_weighted_thumbnail_with_crop(
-                                    img,
-                                    bboxes,
-                                    min_side=256,
-                                    output_size=(256, 256),
-                                )
+                            ) = PictureUtils.generate_face_weighted_thumbnail_with_crop(
+                                img,
+                                bboxes,
+                                min_side=256,
+                                output_size=(256, 256),
                             )
 
                     if need_hands and hand_model is not None:
@@ -246,11 +247,11 @@ class FeatureExtractionWorker(BaseWorker):
                                 )
                             )
             elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
-                if need_faces:
+                if need_faces or need_hands:
                     cap = cv2.VideoCapture(file_path)
                     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                     if frame_count < 1:
-                        logger.warning(f"No frames found in video: {file_path}")
+                        logger.warning("No frames found in video: %s", file_path)
                         cap.release()
                     else:
                         first_frame = None
@@ -259,35 +260,69 @@ class FeatureExtractionWorker(BaseWorker):
                         ret, frame = cap.read()
                         if ret and frame is not None:
                             first_frame = frame
-                            frame_faces = self._insightface_app.get(frame)
-                            for face in frame_faces:
-                                expanded_bbox = Face.expand_face_bbox(
-                                    face.bbox, frame.shape[1], frame.shape[0], 0.1
-                                )
-                                features_bytes = None
-                                if (
-                                    hasattr(face, "embedding")
-                                    and face.embedding is not None
-                                ):
-                                    features_bytes = face.embedding.astype(
-                                        "float32"
-                                    ).tobytes()
-                                else:
+                            if need_faces:
+                                frame_faces = self._insightface_app.get(frame)
+                                for face in frame_faces:
+                                    expanded_bbox = Face.expand_face_bbox(
+                                        face.bbox, frame.shape[1], frame.shape[0], 0.1
+                                    )
+                                    features_bytes = None
+                                    if (
+                                        hasattr(face, "embedding")
+                                        and face.embedding is not None
+                                    ):
+                                        features_bytes = face.embedding.astype(
+                                            "float32"
+                                        ).tobytes()
+                                    else:
+                                        logger.warning(
+                                            "Face embedding missing for face in video %s, frame 0",
+                                            file_path,
+                                        )
+                                    first_bboxes.append(expanded_bbox)
+                                    face_objects.append(
+                                        Face(
+                                            picture_id=pic.id,
+                                            face_index=-1,  # will set after sorting
+                                            bbox=expanded_bbox,
+                                            character_id=None,
+                                            frame_index=0,
+                                            features=features_bytes,
+                                        )
+                                    )
+                            if need_hands and hand_model is not None:
+                                try:
+                                    results = hand_model.predict(
+                                        frame,
+                                        imgsz=320,
+                                        conf=0.25,
+                                        max_det=8,
+                                        verbose=False,
+                                    )
+                                    boxes = list(results[0].boxes.xyxy.cpu().numpy())
+                                except Exception as exc:
                                     logger.warning(
-                                        "Face embedding missing for face in video %s, frame 0",
+                                        "Hand detection failed for %s: %s",
                                         file_path,
+                                        exc,
                                     )
-                                first_bboxes.append(expanded_bbox)
-                                face_objects.append(
-                                    Face(
-                                        picture_id=pic.id,
-                                        face_index=-1,  # will set after sorting
-                                        bbox=expanded_bbox,
-                                        character_id=None,
-                                        frame_index=0,
-                                        features=features_bytes,
+                                    boxes = []
+                                for box in boxes:
+                                    x1, y1, x2, y2 = box
+                                    hand_objects.append(
+                                        Hand(
+                                            picture_id=pic.id,
+                                            hand_index=-1,
+                                            bbox=[
+                                                int(round(x1)),
+                                                int(round(y1)),
+                                                int(round(x2)),
+                                                int(round(y2)),
+                                            ],
+                                            frame_index=0,
+                                        )
                                     )
-                                )
+
                         step = max(1, frame_count // 3)
                         for frame_index in range(step, frame_count, step):
                             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
@@ -299,37 +334,70 @@ class FeatureExtractionWorker(BaseWorker):
                                     file_path,
                                 )
                                 continue
-                            frame_faces = self._insightface_app.get(frame)
-                            for face in frame_faces:
-                                expanded_bbox = Face.expand_face_bbox(
-                                    face.bbox, frame.shape[1], frame.shape[0], 0.1
-                                )
-                                features_bytes = None
-                                if (
-                                    hasattr(face, "embedding")
-                                    and face.embedding is not None
-                                ):
-                                    features_bytes = face.embedding.astype(
-                                        "float32"
-                                    ).tobytes()
-                                else:
+                            if need_faces:
+                                frame_faces = self._insightface_app.get(frame)
+                                for face in frame_faces:
+                                    expanded_bbox = Face.expand_face_bbox(
+                                        face.bbox, frame.shape[1], frame.shape[0], 0.1
+                                    )
+                                    features_bytes = None
+                                    if (
+                                        hasattr(face, "embedding")
+                                        and face.embedding is not None
+                                    ):
+                                        features_bytes = face.embedding.astype(
+                                            "float32"
+                                        ).tobytes()
+                                    else:
+                                        logger.warning(
+                                            "Face embedding missing for face in video %s, frame %s",
+                                            file_path,
+                                            frame_index,
+                                        )
+                                    face_objects.append(
+                                        Face(
+                                            picture_id=pic.id,
+                                            face_index=-1,  # will set after sorting
+                                            bbox=expanded_bbox,
+                                            character_id=None,
+                                            frame_index=frame_index,
+                                            features=features_bytes,
+                                        )
+                                    )
+                            if need_hands and hand_model is not None:
+                                try:
+                                    results = hand_model.predict(
+                                        frame,
+                                        imgsz=320,
+                                        conf=0.25,
+                                        max_det=8,
+                                        verbose=False,
+                                    )
+                                    boxes = list(results[0].boxes.xyxy.cpu().numpy())
+                                except Exception as exc:
                                     logger.warning(
-                                        "Face embedding missing for face in video %s, frame %s",
+                                        "Hand detection failed for %s: %s",
                                         file_path,
-                                        frame_index,
+                                        exc,
                                     )
-                                face_objects.append(
-                                    Face(
-                                        picture_id=pic.id,
-                                        face_index=-1,  # will set after sorting
-                                        bbox=expanded_bbox,
-                                        character_id=None,
-                                        frame_index=frame_index,
-                                        features=features_bytes,
+                                    boxes = []
+                                for box in boxes:
+                                    x1, y1, x2, y2 = box
+                                    hand_objects.append(
+                                        Hand(
+                                            picture_id=pic.id,
+                                            hand_index=-1,
+                                            bbox=[
+                                                int(round(x1)),
+                                                int(round(y1)),
+                                                int(round(x2)),
+                                                int(round(y2)),
+                                            ],
+                                            frame_index=frame_index,
+                                        )
                                     )
-                                )
                     cap.release()
-                    if first_frame is not None and first_bboxes:
+                    if need_faces and first_frame is not None and first_bboxes:
                         (
                             thumbnail_bytes,
                             thumbnail_crop,
@@ -341,7 +409,8 @@ class FeatureExtractionWorker(BaseWorker):
                         )
             else:
                 logger.warning(
-                    f"Unsupported file extension for face extraction: {file_path}"
+                    "Unsupported file extension for feature extraction: %s",
+                    file_path,
                 )
 
             # Sort faces by bbox: (y0, x0, y1, x1)
@@ -424,7 +493,7 @@ class FeatureExtractionWorker(BaseWorker):
                     hand.hand_index = idx
 
                 if not hand_objects:
-                    logger.warning(
+                    logger.debug(
                         "No hands found in %s for picture %s. Inserting sentinel record.",
                         file_path,
                         pic.id,

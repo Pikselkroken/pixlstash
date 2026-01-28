@@ -193,7 +193,7 @@
               @dragend.capture="handleContainerDragEnd(img, $event)"
             >
               <div
-                v-if="hasPenalizedTags(img)"
+                v-if="props.showProblemIcon && hasPenalizedTags(img)"
                 class="penalized-tag-indicator"
                 :title="penalizedTagsTitle(img)"
               >
@@ -235,9 +235,9 @@
                   <polygon points="10 9 16 12 10 15 10 9" fill="#ff9800" />
                 </svg>
               </div>
-              <!-- Resolution hover overlay -->
+              <!-- Resolution overlay -->
               <div
-                v-if="img._showRes && img.width && img.height"
+                v-if="props.showResolution && img.width && img.height"
                 class="resolution-hover-overlay"
                 :style="{
                   position: 'absolute',
@@ -418,7 +418,9 @@
                   </div>
                 </template>
                 <div
-                  v-if="img.format && img.format !== 'unknown'"
+                  v-if="
+                    props.showFormat && img.format && img.format !== 'unknown'
+                  "
                   class="thumbnail-id-overlay"
                   :style="{
                     position: 'absolute',
@@ -438,6 +440,20 @@
                 >
                   {{ img.format.toUpperCase() }}
                 </div>
+                <template
+                  v-if="
+                    props.showHandBboxes &&
+                    hasThumbnailRef(img.id) &&
+                    getThumbnailLoadedKey(img.id)
+                  "
+                >
+                  <div
+                    v-for="overlay in getHandBboxOverlays(img).value"
+                    :key="overlay.handKey + '-' + getThumbnailLoadedKey(img.id)"
+                    class="hand-bbox-overlay"
+                    :style="overlay.style"
+                  ></div>
+                </template>
               </template>
               <template v-else>
                 <div class="thumbnail-placeholder">
@@ -618,6 +634,10 @@ const props = defineProps({
   stackThreshold: { type: [String, Number, null], default: null },
   showStars: Boolean,
   showFaceBboxes: Boolean,
+  showHandBboxes: Boolean,
+  showFormat: Boolean,
+  showResolution: Boolean,
+  showProblemIcon: Boolean,
   allPicturesId: String,
   unassignedPicturesId: String,
   gridVersion: { type: Number, default: 0 },
@@ -773,6 +793,22 @@ async function handleFaceBboxCharacterChange(img, overlay, event) {
 function triggerFaceOverlayRedraw() {
   faceOverlayRedrawKey.value++;
 }
+
+watch(
+  () => props.showHandBboxes,
+  (enabled) => {
+    const images = allGridImages.value || [];
+    const withHands = images.filter(
+      (img) => Array.isArray(img?.hands) && img.hands.length > 0,
+    );
+    console.debug("[hand-bbox] Toggle", {
+      enabled,
+      totalImages: images.length,
+      imagesWithHands: withHands.length,
+    });
+    triggerFaceOverlayRedraw();
+  },
+);
 
 onMounted(() => {
   console.log(
@@ -1045,6 +1081,94 @@ function getFaceBboxOverlays(img) {
   });
 }
 
+function getHandBboxStyle(bbox, idx, img, containerEl) {
+  if (!bbox || bbox.length !== 4 || !containerEl) return null;
+  const containerWidth = containerEl.clientWidth;
+  const containerHeight = containerEl.clientHeight;
+  const naturalWidth = img.thumbnail_width || img.width || 1;
+  const naturalHeight = img.thumbnail_height || img.height || 1;
+  const scale = Math.max(
+    containerWidth / naturalWidth,
+    containerHeight / naturalHeight,
+  );
+  const displayWidth = naturalWidth * scale;
+  const displayHeight = naturalHeight * scale;
+  const offsetX = (containerWidth - displayWidth) / 2;
+  const offsetY = 0;
+  const left = offsetX + bbox[0] * scale;
+  const top = offsetY + bbox[1] * scale;
+  const width = (bbox[2] - bbox[0]) * scale;
+  const height = (bbox[3] - bbox[1]) * scale;
+  return {
+    position: "absolute",
+    border: "1.5px dashed rgba(0, 255, 255, 0.9)",
+    background: "rgba(255, 255, 255, 0.06)",
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${width}px`,
+    height: `${height}px`,
+  };
+}
+
+function getHandBboxOverlays(img) {
+  return computed(() => {
+    void faceOverlayRedrawKey.value;
+    void getThumbnailLoadedKey(img.id);
+    if (
+      !props.showHandBboxes ||
+      !img.hands ||
+      !img.hands.length ||
+      !(img.thumbnail_width || img.width) ||
+      !(img.thumbnail_height || img.height)
+    ) {
+      return [];
+    }
+    const el = thumbnailRefs[img.id];
+    if (!el) return [];
+    const firstFrameHands = img.hands
+        if (enabled) {
+          updateVisibleThumbnails();
+        }
+      .map((hand, handIdx) => ({ hand, handIdx }))
+      .filter(
+        (entry) =>
+          entry.hand.frame_index === 0 || entry.hand.frame_index == null,
+      );
+    if (firstFrameHands.length === 0) {
+      console.debug("[hand-bbox] No first-frame hands", {
+        imageId: img.id,
+        hands: img.hands?.map((hand) => ({
+          id: hand?.id,
+          frame_index: hand?.frame_index,
+          bbox: hand?.bbox,
+        })),
+      });
+    }
+    const overlays = firstFrameHands
+      .map((entry, idx) => ({
+        style: getHandBboxStyle(entry.hand.bbox, idx, img, el),
+        handKey: entry.hand.id ?? `hand-${entry.handIdx}`,
+        label: `Hand ${entry.handIdx + 1}`,
+      }))
+      .filter((entry) => entry.style != null);
+    if (!overlays.length && firstFrameHands.length) {
+      console.debug("[hand-bbox] Styles filtered", {
+        imageId: img.id,
+        hands: firstFrameHands.map((entry) => ({
+          id: entry.hand?.id,
+          frame_index: entry.hand?.frame_index,
+          bbox: entry.hand?.bbox,
+        })),
+        thumbnail: {
+          width: img.thumbnail_width,
+          height: img.thumbnail_height,
+        },
+      });
+    }
+    return overlays;
+  });
+}
+
 // Helper for face bbox color palette (copied from ImageOverlay.vue)
 function faceBoxColor(idx) {
   const palette = [
@@ -1066,12 +1190,10 @@ function faceBoxColor(idx) {
 const hoveredImageIdx = ref(null);
 
 function handleImageMouseEnter(img) {
-  img._showRes = true;
   prefetchFullImage(img);
   hoveredImageIdx.value = img.idx;
 }
 function handleImageMouseLeave(img) {
-  img._showRes = false;
   if (hoveredImageIdx.value === img.idx) hoveredImageIdx.value = null;
 }
 
@@ -3065,6 +3187,15 @@ async function fetchThumbnailsBatch(start, end) {
             : null;
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
+        gridImg.hands =
+          thumbObj && Array.isArray(thumbObj.hands) ? thumbObj.hands : [];
+        if (props.showHandBboxes && gridImg.hands.length) {
+          console.debug("[hand-bbox] Loaded hands", {
+            imageId: gridImg.id,
+            count: gridImg.hands.length,
+            first: gridImg.hands[0],
+          });
+        }
         gridImg.penalized_tags =
           thumbObj && Array.isArray(thumbObj.penalized_tags)
             ? thumbObj.penalized_tags
@@ -3958,6 +4089,15 @@ function handleScoringClose() {
 .face-bbox-select option {
   background: var(--face-frame-color, rgba(34, 34, 34, 0.95));
   color: #fff;
+}
+
+.hand-bbox-overlay {
+  box-sizing: border-box;
+  position: absolute;
+  pointer-events: none;
+  border: 2px dashed rgb(var(--v-theme-error));
+  display: block;
+  z-index: 30;
 }
 .grid-scroll-wrapper {
   height: calc(100vh - 60px);

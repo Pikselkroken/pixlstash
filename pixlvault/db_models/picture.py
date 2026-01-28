@@ -14,6 +14,7 @@ from typing import Optional, List, TYPE_CHECKING
 
 
 from .face import Face
+from .hand import Hand
 from .picture_set import PictureSet, PictureSetMember
 from .quality import Quality
 from .tag import Tag
@@ -124,6 +125,13 @@ class Picture(SQLModel, table=True):
         back_populates="picture",
         sa_relationship_kwargs={
             "overlaps": "characters",
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+        },
+    )
+    hands: List["Hand"] = Relationship(
+        back_populates="picture",
+        sa_relationship_kwargs={
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
         },

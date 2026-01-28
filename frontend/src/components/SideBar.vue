@@ -1791,7 +1791,7 @@ defineExpose({ refreshSidebar });
           @drop.prevent="handleDropOnSet(pset.id, $event)"
         >
           <span class="sidebar-list-icon">
-            <v-icon size="44">mdi-layers</v-icon>
+            <v-icon size="44">mdi-image-album</v-icon>
           </span>
           <span class="sidebar-list-label">
             <v-tooltip location="top">

@@ -50,6 +50,10 @@ const filteredSearchHistory = computed(() => {
 });
 const showStars = ref(true);
 const showFaceBboxes = ref(false);
+const showHandBboxes = ref(false);
+const showFormat = ref(true);
+const showResolution = ref(true);
+const showProblemIcon = ref(true);
 
 const thumbnailSize = ref(256);
 const columns = ref(4); // Default columns
@@ -72,6 +76,7 @@ const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
 const wsTagUpdate = ref({ key: 0, pictureIds: [] });
 const columnsMenuOpen = ref(false);
+const overlaysMenuOpen = ref(false);
 const configLoaded = ref(false);
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 let columnsMenuCloseTimeout = null;

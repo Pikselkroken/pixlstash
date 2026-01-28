@@ -2590,6 +2590,7 @@ class Server:
                         "id",
                         "thumbnail",
                         "faces",
+                        "hands",
                         "thumbnail_left",
                         "thumbnail_top",
                         "thumbnail_side",
@@ -2602,6 +2603,7 @@ class Server:
                     thumbnail_bytes = pic.thumbnail
                     # Gather face bboxes and ids
                     face_data = []
+                    hand_data = []
                     mapped_any = False
                     for face in getattr(pic, "faces", []):
                         # Defensive: ensure bbox is a list of 4 ints
@@ -2641,11 +2643,33 @@ class Server:
                                     "frame_index": getattr(face, "frame_index", None),
                                 }
                             )
+                    for hand in getattr(pic, "hands", []):
+                        bbox = None
+                        try:
+                            bbox = hand.bbox if hasattr(hand, "bbox") else None
+                            if bbox and isinstance(bbox, str):
+                                import ast
+
+                                bbox = ast.literal_eval(bbox)
+                        except Exception:
+                            bbox = None
+                        if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                            mapped_bbox, mapped = map_bbox_to_thumbnail(bbox, pic)
+                            mapped_any = mapped_any or mapped
+                            hand_data.append(
+                                {
+                                    "id": hand.id,
+                                    "bbox": mapped_bbox,
+                                    "frame_index": getattr(hand, "frame_index", None),
+                                    "hand_index": getattr(hand, "hand_index", None),
+                                }
+                            )
                     results[pic.id] = {
                         "thumbnail": base64.b64encode(thumbnail_bytes).decode("utf-8")
                         if thumbnail_bytes
                         else None,
                         "faces": face_data,
+                        "hands": hand_data,
                         "thumbnail_width": 256 if mapped_any else None,
                         "thumbnail_height": 256 if mapped_any else None,
                         "penalized_tags": list(
@@ -2659,6 +2683,7 @@ class Server:
                     results[pic.id] = {
                         "thumbnail": None,
                         "faces": [],
+                        "hands": [],
                         "penalized_tags": [],
                     }
             response = JSONResponse(results)

@@ -1,14 +1,13 @@
 import os
 import queue
 import time
-import urllib.request
 import uuid
 
 from sqlmodel import select, Session
 from sqlalchemy.orm import load_only, selectinload
 
 from pixlvault.event_types import EventType
-from pixlvault.picture_tagger import PictureTagger, MODEL_DIR
+from pixlvault.picture_tagger import PictureTagger
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
@@ -18,11 +17,6 @@ from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models import Character, Picture, Tag
 
 logger = get_logger(__name__)
-
-
-HAND_MODEL_NAME = "yolov8n-hand.pt"
-HAND_MODEL_URL = "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
-HAND_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, HAND_MODEL_NAME)
 
 
 class DescriptionWorker(BaseWorker):
@@ -153,8 +147,6 @@ class TagWorker(BaseWorker):
     Worker for generating tags for pictures with descriptions.
     """
 
-    _hand_model = None
-
     def worker_type(self) -> WorkerType:
         return WorkerType.TAGGER  # Or define a new WorkerType if desired
 
@@ -214,13 +206,21 @@ class TagWorker(BaseWorker):
                 statement = (
                     select(Picture)
                     .where(Picture.id.in_(picture_ids))
-                    .options(selectinload(Picture.tags), selectinload(Picture.faces))
+                    .options(
+                        selectinload(Picture.tags),
+                        selectinload(Picture.faces),
+                        selectinload(Picture.hands),
+                    )
                 )
             else:
                 statement = (
                     select(Picture)
                     .where(~Picture.tags.any())
-                    .options(selectinload(Picture.tags), selectinload(Picture.faces))
+                    .options(
+                        selectinload(Picture.tags),
+                        selectinload(Picture.faces),
+                        selectinload(Picture.hands),
+                    )
                 )
             result = session.exec(statement)
             return result.all()
@@ -228,31 +228,6 @@ class TagWorker(BaseWorker):
         return VaultDatabase.result_or_throw(
             self._db.submit_task(fetch_tags, picture_ids)
         )
-
-    def _ensure_hand_detector(self):
-        if TagWorker._hand_model is not None:
-            return TagWorker._hand_model
-        try:
-            from ultralytics import YOLO
-        except Exception as exc:
-            logger.warning("Ultralytics not available for hand detection: %s", exc)
-            return None
-
-        model_path = HAND_MODEL_PATH
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        if not os.path.exists(model_path):
-            try:
-                logger.info("Downloading hand model to %s", model_path)
-                urllib.request.urlretrieve(HAND_MODEL_URL, model_path)
-            except Exception as exc:
-                logger.warning("Failed to download hand model: %s", exc)
-                return None
-        try:
-            TagWorker._hand_model = YOLO(model_path)
-        except Exception as exc:
-            logger.warning("Failed to load hand model: %s", exc)
-            TagWorker._hand_model = None
-        return TagWorker._hand_model
 
     def _tag_pictures(self, missing_tags) -> int:
         """Tag all pictures missing tags."""
@@ -309,7 +284,6 @@ class TagWorker(BaseWorker):
                         ".flv",
                         ".wmv",
                     }
-                    hand_model = self._ensure_hand_detector()
                     for pic in batch:
                         if self._stop.is_set():
                             break
@@ -322,7 +296,7 @@ class TagWorker(BaseWorker):
                         frame = cv2.imread(file_path)
                         if frame is None:
                             logger.warning(
-                                "Failed to read image for face tagging: %s",
+                                "Failed to read image for crop tagging: %s",
                                 file_path,
                             )
                             continue
@@ -353,51 +327,32 @@ class TagWorker(BaseWorker):
                             face_items.append((key, crop_img))
                             item_to_pic_id[key] = pic.id
 
-                        if hand_model is not None:
-                            try:
-                                results = hand_model.predict(
-                                    frame,
-                                    imgsz=320,
-                                    conf=0.25,
-                                    max_det=4,
-                                    verbose=False,
+                        hands = getattr(pic, "hands", None) or []
+                        for hand in hands:
+                            bbox = getattr(hand, "bbox", None)
+                            crop = PictureUtils.crop_face_from_frame(frame, bbox)
+                            if crop is None:
+                                logger.warning(
+                                    "Hand crop failed for %s bbox=%s",
+                                    file_path,
+                                    bbox,
                                 )
-                                boxes = list(results[0].boxes.xyxy.cpu().numpy())
+                                continue
+                            save_crop_debug(crop, "hand", pic.id)
+                            try:
+                                crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                                crop_img = Image.fromarray(crop_rgb)
                             except Exception as e:
                                 logger.warning(
-                                    "Hand detection failed for %s: %s",
+                                    "Hand crop conversion failed for %s bbox=%s: %s",
                                     file_path,
+                                    bbox,
                                     e,
                                 )
-                                boxes = []
-                            if boxes:
-                                x_min = min(b[0] for b in boxes)
-                                y_min = min(b[1] for b in boxes)
-                                x_max = max(b[2] for b in boxes)
-                                y_max = max(b[3] for b in boxes)
-                                h, w = frame.shape[:2]
-                                x1 = max(0, min(w - 1, int(round(x_min))))
-                                y1 = max(0, min(h - 1, int(round(y_min))))
-                                x2 = max(0, min(w, int(round(x_max))))
-                                y2 = max(0, min(h, int(round(y_max))))
-                                if x2 > x1 and y2 > y1:
-                                    crop = frame[y1:y2, x1:x2]
-                                    if crop.size > 0:
-                                        save_crop_debug(crop, "hand", pic.id)
-                                        try:
-                                            crop_rgb = cv2.cvtColor(
-                                                crop, cv2.COLOR_BGR2RGB
-                                            )
-                                            crop_img = Image.fromarray(crop_rgb)
-                                            key = f"{file_path}#hand"
-                                            hand_items.append((key, crop_img))
-                                            item_to_pic_id[key] = pic.id
-                                        except Exception as e:
-                                            logger.warning(
-                                                "Hand crop conversion failed for %s: %s",
-                                                file_path,
-                                                e,
-                                            )
+                                continue
+                            key = f"{file_path}#hand{hand.id or hand.hand_index}"
+                            hand_items.append((key, crop_img))
+                            item_to_pic_id[key] = pic.id
 
                     if face_items and not self._stop.is_set():
                         face_results = self._picture_tagger._tag_custom_items(

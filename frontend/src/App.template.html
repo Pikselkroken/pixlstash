@@ -155,35 +155,91 @@
                 </div>
               </v-menu>
             </div>
-            <v-btn
-              icon
-              :color="showStars ? 'accent' : 'rgba(var(--v-theme-surface), 0.3)'"
-              @click="showStars = !showStars"
-              title="Toggle star ratings"
-              class="toolbar-btn app-btn-base"
-              style="margin-left: 4px"
+            <v-menu
+              v-model="overlaysMenuOpen"
+              offset-y
+              :close-on-content-click="false"
+              transition="scale-transition"
             >
-              <v-icon :color="showStars ? 'accent' : 'onBackground'"
-                >{{ showStars ? "mdi-star" : "mdi-star-outline" }}</v-icon
-              >
-            </v-btn>
-            <v-btn
-              icon
-              :color="showFaceBboxes ? 'primary' : 'surface'"
-              @click="showFaceBboxes = !showFaceBboxes"
-              title="Toggle face bounding boxes"
-              class="face-bbox-toggle-btn app-btn-base"
-              style="margin-left: 4px"
-            >
-              <span
-                :class="showFaceBboxes ? 'face-bbox-icon-wrapper-active' : 'face-bbox-icon-wrapper'"
-              >
-                <v-icon :color="showFaceBboxes ? 'secondary' : 'onBackground'"
-                  >{{ showFaceBboxes ? 'mdi-account' : 'mdi-account-outline'
-                  }}</v-icon
+              <template #activator="{ props }">
+                <v-btn
+                  icon
+                  v-bind="props"
+                  :color="props['aria-expanded'] === 'true' ? 'primary' : 'surface'"
+                  title="Overlay options"
+                  class="toolbar-btn app-btn-base"
+                  style="margin-left: 4px"
                 >
-              </span>
-            </v-btn>
+                  <v-icon :color="'onBackground'">mdi-layers-outline</v-icon>
+                </v-btn>
+              </template>
+              <div
+                style="
+                  padding: 10px 12px;
+                  min-width: 220px;
+                  background: rgba(var(--v-theme-background), 0.9);
+                  color: rgb(var(--v-theme-on-background));
+                  border-radius: 8px;
+                  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+                  display: flex;
+                  flex-direction: column;
+                  gap: 6px;
+                "
+              >
+                <div
+                  style="
+                    font-size: 1.02em;
+                    font-weight: 500;
+                    letter-spacing: 0.02em;
+                    margin-bottom: 4px;
+                  "
+                >
+                  Overlays
+                </div>
+                <v-switch
+                  v-model="showStars"
+                  label="Star ratings"
+                  color="accent"
+                  density="compact"
+                  hide-details
+                />
+                <v-switch
+                  v-model="showFaceBboxes"
+                  label="Face bounding boxes"
+                  color="primary"
+                  density="compact"
+                  hide-details
+                />
+                <v-switch
+                  v-model="showHandBboxes"
+                  label="Hand bounding boxes"
+                  color="primary"
+                  density="compact"
+                  hide-details
+                />
+                <v-switch
+                  v-model="showFormat"
+                  label="Image format"
+                  color="primary"
+                  density="compact"
+                  hide-details
+                />
+                <v-switch
+                  v-model="showResolution"
+                  label="Resolution"
+                  color="primary"
+                  density="compact"
+                  hide-details
+                />
+                <v-switch
+                  v-model="showProblemIcon"
+                  label="Image problems"
+                  color="primary"
+                  density="compact"
+                  hide-details
+                />
+              </div>
+            </v-menu>
             <v-menu
               v-model="exportMenuOpen"
               offset-y
@@ -266,7 +322,7 @@
               dense
             >
               <v-btn value="all" title="Show all media">
-                <v-icon>mdi-image-multiple</v-icon>
+                <v-icon>mdi-multimedia</v-icon>
               </v-btn>
               <v-btn value="images" title="Show images only">
                 <v-icon>mdi-image</v-icon>
@@ -299,6 +355,10 @@
             :wsTagUpdate="wsTagUpdate"
             :mediaTypeFilter="mediaTypeFilter"
             :showFaceBboxes="showFaceBboxes"
+            :showHandBboxes="showHandBboxes"
+            :showFormat="showFormat"
+            :showResolution="showResolution"
+            :showProblemIcon="showProblemIcon"
             :allPicturesId="ALL_PICTURES_ID"
             :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
             :columns="columns"
