@@ -39,9 +39,9 @@ GENERAL_THRESHOLD = 0.4
 UNDESIRED_TAGS = "solo, general, blurry, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
-CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "models", "best.pt")
-CUSTOM_TAGGER_THRESHOLD = 0.5
-CUSTOM_TAGGER_IMAGE_SIZE = 576
+CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
+CUSTOM_TAGGER_THRESHOLD = 0.3
+CUSTOM_TAGGER_IMAGE_SIZE = 512
 CUSTOM_TAGGER_BATCH = 16
 CLIP_MODEL_NAME = "ViT-B-32"
 CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
@@ -104,7 +104,17 @@ class PictureTagger:
 
         if self._use_custom_tagger and os.path.isfile(self._custom_tagger_path):
             logger.info("Using custom tagger checkpoint: %s", self._custom_tagger_path)
-            self._init_custom_tagger()
+            try:
+                self._init_custom_tagger()
+            except Exception as exc:
+                logger.error("Custom tagger initialization failed: %s", exc)
+                self._use_custom_tagger = False
+        else:
+            logger.warning(
+                "Custom tagger not found at %s, skipping initialization.",
+                self._custom_tagger_path,
+            )
+            self._use_custom_tagger = False
         # Load CLIP model at construction for efficiency
         # Upgraded to ViT-L-14 for better aesthetics and embedding quality
         self._clip_model, _, self._clip_preprocess = (
@@ -742,11 +752,12 @@ class PictureTagger:
     def _tag_images_custom(self, image_paths, stop_event=None):
         from PIL import Image
 
-        undesired_tags = UNDESIRED_TAGS.split(CAPTION_SEPARATOR.strip())
-        undesired_tags = set(
-            [tag.strip() for tag in undesired_tags if tag.strip() != ""]
-        )
-        logger.debug("Removing tags: " + ", ".join(undesired_tags))
+        if not hasattr(self, "_custom_transform"):
+            logger.warning("Custom tagger not initialized; skipping custom tags.")
+            return {}
+        if not hasattr(self, "_custom_model") or not hasattr(self, "_custom_labels"):
+            logger.warning("Custom tagger model not available; skipping custom tags.")
+            return {}
 
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
         items = []
@@ -774,6 +785,7 @@ class PictureTagger:
         if not items:
             return {}
 
+        logger.info("Performing custom tagging on %d items...", len(items))
         batch_size = max(1, self._custom_tagger_batch)
         results = {}
         for batch_start in range(0, len(items), batch_size):
@@ -798,10 +810,7 @@ class PictureTagger:
             for path, prob in zip(batch_paths, probs):
                 tag_probs = []
                 for label, p in zip(self._custom_labels, prob):
-                    if (
-                        p >= self._custom_tagger_threshold
-                        and label not in undesired_tags
-                    ):
+                    if p >= self._custom_tagger_threshold:
                         tag_probs.append((label, float(p)))
                 all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
                 results[path] = [tag for tag, _ in all_tags_sorted]
