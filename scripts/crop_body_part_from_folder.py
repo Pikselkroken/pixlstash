@@ -2,24 +2,14 @@ import os
 from pathlib import Path
 import cv2
 import argparse
-from ultralytics import YOLO
 import urllib.request
+from ultralytics import YOLO
 
 BODY_PART_MODELS = {
     "hand": {
         "model_path": "yolov8n-hand.pt",  # Download or specify your hand model
         "output_dir": "tmp/hand_crops",
         "label": "hand",
-    },
-    "breast": {
-        "model_path": "yolov8n-breast.pt",  # Download or specify your breast model
-        "output_dir": "tmp/breast_crops",
-        "label": "breast",
-    },
-    "mouth": {
-        "model_path": "yolov8n-mouth.pt",  # Download or specify your mouth model
-        "output_dir": "tmp/mouth_crops",
-        "label": "mouth",
     },
     "face": {
         "model_path": "yolov8n-face.pt",  # Download or specify your face model
@@ -134,19 +124,24 @@ HAND_KEYWORDS = {
     "waxy skin",
 }
 
-BREAST_KEYWORDS = {
-    "breast",
-    "breasts",
-    "large breasts",
-    "medium breasts",
-    "small breasts",
-    "cleavage",
-    "topless",
-    "nipples",
-    "malformed nipples",
-    "silicone breasts",
-    "mole on breast",
-    "chest",
+GENERIC_KEYWORDS = {
+    "photo",
+    "woman",
+    "man",
+    "indoors",
+    "outdoors",
+    "blurry background",
+    "depth of field",
+    "looking at the camera",
+    "solo focus",
+    "upper body",
+    "smile",
+    "grin",
+    "waxy skin",
+    "long hair",
+    "brown hair",
+    "blonde hair",
+    "black hair",
 }
 
 
@@ -176,18 +171,31 @@ def tag_matches_keywords(tag: str, keywords: set[str]) -> bool:
     return any(keyword in t for keyword in keywords)
 
 
-def split_tags(tags: list[str]) -> tuple[list[str], list[str], list[str]]:
+def split_tags(tags: list[str]) -> tuple[list[str], list[str]]:
     face_tags = []
     hand_tags = []
-    breast_tags = []
     for tag in tags:
         if tag_matches_keywords(tag, FACE_KEYWORDS):
             face_tags.append(tag)
         if tag_matches_keywords(tag, HAND_KEYWORDS):
             hand_tags.append(tag)
-        if tag_matches_keywords(tag, BREAST_KEYWORDS):
-            breast_tags.append(tag)
-    return face_tags, hand_tags, breast_tags
+    return face_tags, hand_tags
+
+
+def filter_tags(tags: list[str], keywords: set[str]) -> list[str]:
+    return [tag for tag in tags if tag_matches_keywords(tag, keywords)]
+
+
+def merge_tags(primary: list[str], extra: list[str]) -> list[str]:
+    seen = set()
+    merged = []
+    for tag in primary + extra:
+        key = tag.strip().lower()
+        if key in seen or not key:
+            continue
+        seen.add(key)
+        merged.append(tag)
+    return merged
 
 
 def write_caption_for_crop(out_path: Path, tags: list[str]) -> None:
@@ -213,13 +221,13 @@ def ensure_tags(tags: list[str], required_tags: list[str]) -> list[str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Crop body parts (hand/mouth) from images in a folder using YOLOv8."
+        description="Crop body parts (hand/face) from images in a folder using YOLOv8."
     )
     parser.add_argument(
         "--body_part",
         choices=BODY_PART_MODELS.keys(),
         default="hand",
-        help="Body part to crop (hand or mouth)",
+        help="Body part to crop (hand or face)",
     )
     parser.add_argument("--input_dir", default="pictures", help="Input image directory")
     parser.add_argument(
@@ -241,27 +249,36 @@ def main():
     # URLs for pretrained models (replace with actual URLs for your models)
     MODEL_URLS = {
         "yolov8n-hand.pt": "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt",
-        "yolov8n-breast.pt": "https://example.com/path/to/yolov8n-breast.pt",
-        "yolov8n-mouth.pt": "https://example.com/path/to/yolov8n-mouth.pt",
         "yolov8n-face.pt": "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8n.pt",
     }
 
-    def download_model_if_needed(path):
+    def download_model_if_needed(path, url_map=None):
         filename = os.path.basename(path)
         if not os.path.exists(path):
-            url = MODEL_URLS.get(filename)
-            if url:
-                print(f"Downloading {filename} from {url}...")
-                urllib.request.urlretrieve(url, path)
-                print(f"Downloaded {filename}.")
-            else:
+            urls = (url_map or MODEL_URLS).get(filename)
+            if not urls:
                 raise FileNotFoundError(
                     f"Model file {filename} not found and no download URL is set."
                 )
+            if isinstance(urls, str):
+                urls = [urls]
+            last_error = None
+            for url in urls:
+                try:
+                    print(f"Downloading {filename} from {url}...")
+                    urllib.request.urlretrieve(url, path)
+                    print(f"Downloaded {filename}.")
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    print(f"Failed to download from {url}: {exc}")
+            raise FileNotFoundError(
+                f"Model file {filename} could not be downloaded. Last error: {last_error}"
+            )
 
     os.makedirs(output_dir, exist_ok=True)
     download_model_if_needed(model_path)
-    model = YOLO(model_path)
+    yolo_model = YOLO(model_path)
 
     def bboxes_overlap(box1, box2):
         x1_min, y1_min, x1_max, y1_max = box1
@@ -303,78 +320,55 @@ def main():
             continue
         caption_path = img_path.with_suffix(".txt")
         all_tags = parse_tags_from_caption(caption_path)
-        face_tags, hand_tags, breast_tags = split_tags(all_tags)
+        face_tags, hand_tags = split_tags(all_tags)
+        generic_tags = filter_tags(all_tags, GENERIC_KEYWORDS)
         image = cv2.imread(str(img_path))
         if image is None:
             print(f"Failed to read {img_path}")
             continue
-        results = model(image)
+        results = yolo_model(image)
         boxes = list(results[0].boxes.xyxy.cpu().numpy())
         n = len(boxes)
         if n == 0:
             continue
         if label == "hand":
-            merged_boxes = merge_bboxes(boxes)
-            # If any merged box covers more than one original box, save as _hands.png
-            if len(merged_boxes) < n:
-                # Merge all overlapping hands into one crop
-                x_min = min(b[0] for b in boxes)
-                y_min = min(b[1] for b in boxes)
-                x_max = max(b[2] for b in boxes)
-                y_max = max(b[3] for b in boxes)
-                crop = image[int(y_min) : int(y_max), int(x_min) : int(x_max)]
-                out_name = f"{img_path.stem}_hands{img_path.suffix}"
+            x_min = min(b[0] for b in boxes)
+            y_min = min(b[1] for b in boxes)
+            x_max = max(b[2] for b in boxes)
+            y_max = max(b[3] for b in boxes)
+            crop = image[int(y_min) : int(y_max), int(x_min) : int(x_max)]
+            out_name = f"{img_path.stem}_hands{img_path.suffix}"
+            out_path = os.path.join(output_dir, out_name)
+            cv2.imwrite(out_path, crop)
+            print(f"Saved {out_path}")
+            fallback = ["hands"]
+            hand_base = merge_tags(hand_tags or fallback, generic_tags)
+            hand_caption = ensure_tags(hand_base, ["hands", "close-up"])
+            write_caption_for_crop(Path(out_path), hand_caption)
+        else:
+            if label == "face":
+                largest_box = max(
+                    boxes,
+                    key=lambda b: max(0, (b[2] - b[0])) * max(0, (b[3] - b[1])),
+                )
+                x_min, y_min, x_max, y_max = map(int, largest_box)
+                crop = image[y_min:y_max, x_min:x_max]
+                out_name = f"{img_path.stem}_face{img_path.suffix}"
                 out_path = os.path.join(output_dir, out_name)
                 cv2.imwrite(out_path, crop)
                 print(f"Saved {out_path}")
-                fallback = ["hands"]
-                hand_caption = ensure_tags(hand_tags or fallback, ["hands", "close-up"])
-                write_caption_for_crop(Path(out_path), hand_caption)
+                fallback = ["face"]
+                face_base = merge_tags(face_tags or fallback, generic_tags)
+                face_caption = ensure_tags(face_base, ["face", "close-up"])
+                write_caption_for_crop(Path(out_path), face_caption)
             else:
-                for i, box in enumerate(merged_boxes):
+                for i, box in enumerate(boxes):
                     x_min, y_min, x_max, y_max = map(int, box)
                     crop = image[y_min:y_max, x_min:x_max]
-                    out_name = f"{img_path.stem}_hand{i + 1}{img_path.suffix}"
+                    out_name = f"{img_path.stem}_{label}{i + 1}{img_path.suffix}"
                     out_path = os.path.join(output_dir, out_name)
                     cv2.imwrite(out_path, crop)
                     print(f"Saved {out_path}")
-                    fallback = ["hand"]
-                    hand_caption = ensure_tags(hand_tags or fallback, ["hand", "close-up"])
-                    write_caption_for_crop(Path(out_path), hand_caption)
-        else:
-            for i, box in enumerate(boxes):
-                x_min, y_min, x_max, y_max = map(int, box)
-                crop = image[y_min:y_max, x_min:x_max]
-                if label == "mouth":
-                    if n == 1:
-                        out_name = f"{img_path.stem}_mouth{img_path.suffix}"
-                    else:
-                        out_name = f"{img_path.stem}_mouth{i + 1}{img_path.suffix}"
-                elif label == "breast":
-                    if n == 1:
-                        out_name = f"{img_path.stem}_breast{img_path.suffix}"
-                    else:
-                        out_name = f"{img_path.stem}_breast{i + 1}{img_path.suffix}"
-                elif label == "face":
-                    if n == 1:
-                        out_name = f"{img_path.stem}_face{img_path.suffix}"
-                    else:
-                        out_name = f"{img_path.stem}_face{i + 1}{img_path.suffix}"
-                else:
-                    out_name = f"{img_path.stem}_{label}{i + 1}{img_path.suffix}"
-                out_path = os.path.join(output_dir, out_name)
-                cv2.imwrite(out_path, crop)
-                print(f"Saved {out_path}")
-                if label == "face":
-                    fallback = ["face"]
-                    face_caption = ensure_tags(face_tags or fallback, ["face", "close-up"])
-                    write_caption_for_crop(Path(out_path), face_caption)
-                elif label == "breast":
-                    fallback = ["breast"]
-                    breast_caption = ensure_tags(
-                        breast_tags or fallback, ["breast", "close-up"]
-                    )
-                    write_caption_for_crop(Path(out_path), breast_caption)
 
 
 if __name__ == "__main__":
