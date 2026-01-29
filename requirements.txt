@@ -18,7 +18,7 @@ tomli
 colorlog
 onnxruntime
 requests
-transformers
+transformers<5.0.0
 torch
 torchvision
 insightface
