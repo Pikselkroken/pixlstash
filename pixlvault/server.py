@@ -343,6 +343,11 @@ class Server:
             "descending": True,
             "thumbnail_size": "default",
             "show_stars": True,
+            "show_face_bboxes": False,
+            "show_hand_bboxes": False,
+            "show_format": True,
+            "show_resolution": True,
+            "show_problem_icon": True,
             "similarity_character": None,
             "smart_score_penalized_tags": DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         }
@@ -519,6 +524,11 @@ class Server:
                 descending=bool(defaults.get("descending", True)),
                 thumbnail_size=self._normalize_thumbnail_size(thumbnail_value),
                 show_stars=bool(defaults.get("show_stars", True)),
+                show_face_bboxes=defaults.get("show_face_bboxes", False),
+                show_hand_bboxes=defaults.get("show_hand_bboxes", False),
+                show_format=defaults.get("show_format", True),
+                show_resolution=defaults.get("show_resolution", True),
+                show_problem_icon=defaults.get("show_problem_icon", True),
                 similarity_character=defaults.get("similarity_character"),
                 smart_score_penalized_tags=json.dumps(
                     self._normalize_smart_score_penalized_tags(
@@ -553,6 +563,31 @@ class Server:
             "descending": bool(user.descending),
             "columns": int(user.columns),
             "show_stars": bool(user.show_stars),
+            "show_face_bboxes": bool(
+                user.show_face_bboxes
+                if user.show_face_bboxes is not None
+                else defaults.get("show_face_bboxes", False)
+            ),
+            "show_hand_bboxes": bool(
+                user.show_hand_bboxes
+                if user.show_hand_bboxes is not None
+                else defaults.get("show_hand_bboxes", False)
+            ),
+            "show_format": bool(
+                user.show_format
+                if user.show_format is not None
+                else defaults.get("show_format", True)
+            ),
+            "show_resolution": bool(
+                user.show_resolution
+                if user.show_resolution is not None
+                else defaults.get("show_resolution", True)
+            ),
+            "show_problem_icon": bool(
+                user.show_problem_icon
+                if user.show_problem_icon is not None
+                else defaults.get("show_problem_icon", True)
+            ),
             "similarity_character": user.similarity_character,
             "smart_score_penalized_tags": self._normalize_smart_score_penalized_tags(
                 user.smart_score_penalized_tags,
@@ -1315,6 +1350,11 @@ class Server:
                 "descending",
                 "columns",
                 "show_stars",
+                "show_face_bboxes",
+                "show_hand_bboxes",
+                "show_format",
+                "show_resolution",
+                "show_problem_icon",
                 "similarity_character",
                 "smart_score_penalized_tags",
             }

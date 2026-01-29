@@ -17,6 +17,11 @@ class User(SQLModel, table=True):
     descending: bool = Field(default=True)
     columns: Optional[int] = Field(default=None)
     show_stars: bool = Field(default=True)
+    show_face_bboxes: Optional[bool] = Field(default=None)
+    show_hand_bboxes: Optional[bool] = Field(default=None)
+    show_format: Optional[bool] = Field(default=None)
+    show_resolution: Optional[bool] = Field(default=None)
+    show_problem_icon: Optional[bool] = Field(default=None)
     similarity_character: Optional[int] = Field(default=None)
     smart_score_penalized_tags: Optional[str] = Field(default=None)
 
