@@ -4,12 +4,15 @@
     :initialImage="overlayImage"
     :allImages="allGridImages"
     :backendUrl="props.backendUrl"
+    :tagsRefreshing="overlayTagsRefreshing"
     @close="closeOverlay"
     @apply-score="applyScore"
     @add-tag="addTagToImage"
     @remove-tag="removeTagFromImage"
     @update-description="updateDescriptionForImage"
     @refresh-image="refreshImageFromOverlay"
+    @image-change="handleOverlayImageChange"
+    @tag-refresh-start="handleTagRefreshStart"
   />
   <InteractiveScoringOverlay
     :open="interactiveScoringOpen"
@@ -347,14 +350,16 @@
                   "
                 />
                 <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
-                <template
-                  v-if="
-                    hasThumbnailRef(img.id) && getThumbnailLoadedKey(img.id)
-                  "
-                >
+                <template v-if="isThumbnailReady(img.id) && img.thumbnail">
                   <div
                     v-for="overlay in getFaceBboxOverlays(img).value"
-                    :key="overlay.faceId + '-' + getThumbnailLoadedKey(img.id)"
+                    :key="
+                      overlay.faceId +
+                      '-' +
+                      img.id +
+                      '-' +
+                      (img.thumbnail ? 1 : 0)
+                    "
                     class="face-bbox-overlay"
                     :style="overlay.style"
                     draggable="true"
@@ -443,13 +448,19 @@
                 <template
                   v-if="
                     props.showHandBboxes &&
-                    hasThumbnailRef(img.id) &&
-                    getThumbnailLoadedKey(img.id)
+                    isThumbnailReady(img.id) &&
+                    img.thumbnail
                   "
                 >
                   <div
                     v-for="overlay in getHandBboxOverlays(img).value"
-                    :key="overlay.handKey + '-' + getThumbnailLoadedKey(img.id)"
+                    :key="
+                      overlay.handKey +
+                      '-' +
+                      img.id +
+                      '-' +
+                      (img.thumbnail ? 1 : 0)
+                    "
                     class="hand-bbox-overlay"
                     :style="overlay.style"
                   ></div>
@@ -659,6 +670,7 @@ const thumbnailRefs = {};
 const thumbnailContainerRefs = {};
 const dragPreviewRefs = {};
 const thumbnailLoadedMap = reactive({});
+const thumbnailReadyMap = reactive({});
 const PREFETCHED_FULL_IMAGE_LIMIT = 12;
 const fullImagePrefetchControllers = new Map();
 const prefetchedFullImageIds = new Set();
@@ -794,22 +806,6 @@ function triggerFaceOverlayRedraw() {
   faceOverlayRedrawKey.value++;
 }
 
-watch(
-  () => props.showHandBboxes,
-  (enabled) => {
-    const images = allGridImages.value || [];
-    const withHands = images.filter(
-      (img) => Array.isArray(img?.hands) && img.hands.length > 0,
-    );
-    console.debug("[hand-bbox] Toggle", {
-      enabled,
-      totalImages: images.length,
-      imagesWithHands: withHands.length,
-    });
-    triggerFaceOverlayRedraw();
-  },
-);
-
 onMounted(() => {
   console.log(
     "[ImageGrid.vue] Mounted with selectedDescending:",
@@ -820,6 +816,13 @@ onMounted(() => {
     gridImagesToRender.value,
   );
   console.log("[ImageGrid.vue] Initial allGridImages:", allGridImages.value);
+  console.debug("[ImageGrid.vue] Overlay props on mount", {
+    showFaceBboxes: props.showFaceBboxes,
+    showHandBboxes: props.showHandBboxes,
+    showFormat: props.showFormat,
+    showResolution: props.showResolution,
+    showProblemIcon: props.showProblemIcon,
+  });
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   fetchCharacters();
   fetchAllPicturesCount();
@@ -911,8 +914,14 @@ function onThumbnailLoad(id) {
 function setThumbnailRef(id, el) {
   if (el) {
     thumbnailRefs[id] = el;
+    if (!thumbnailReadyMap[id]) {
+      thumbnailReadyMap[id] = true;
+    }
   } else {
     delete thumbnailRefs[id];
+    if (thumbnailReadyMap[id]) {
+      delete thumbnailReadyMap[id];
+    }
   }
 }
 
@@ -934,6 +943,10 @@ function setThumbnailContainerRef(id, el) {
 
 function hasThumbnailRef(id) {
   return Boolean(id && thumbnailRefs[id]);
+}
+
+function isThumbnailReady(id) {
+  return Boolean(id && thumbnailReadyMap[id]);
 }
 
 function getThumbnailLoadedKey(id) {
@@ -1051,6 +1064,7 @@ function getFaceBboxOverlays(img) {
   return computed(() => {
     void faceOverlayRedrawKey.value; // depend on redraw key
     void selectedFaceIds.value;
+    void thumbnailReadyMap[img.id];
     if (
       !props.showFaceBboxes ||
       !img.faces ||
@@ -1126,9 +1140,6 @@ function getHandBboxOverlays(img) {
     const el = thumbnailRefs[img.id];
     if (!el) return [];
     const firstFrameHands = img.hands
-        if (enabled) {
-          updateVisibleThumbnails();
-        }
       .map((hand, handIdx) => ({ hand, handIdx }))
       .filter(
         (entry) =>
@@ -1715,6 +1726,19 @@ const hasMoreImages = ref(true);
 // Image overlay
 const overlayOpen = ref(false);
 const overlayImage = ref(null);
+const overlayTagsRefreshToken = ref(0);
+const overlayTagsRefreshInFlight = ref(false);
+const pendingTagRefreshIds = ref(new Set());
+const pendingTagRefreshTimeouts = new Map();
+const TAG_REFRESH_TIMEOUT_MS = 30000;
+
+const overlayTagsRefreshing = computed(() => {
+  const imageId = overlayImage.value?.id;
+  if (!imageId) return false;
+  return (
+    overlayTagsRefreshInFlight.value || pendingTagRefreshIds.value.has(imageId)
+  );
+});
 
 // Drag-and-drop overlay state
 const dragOverlayVisible = ref(false);
@@ -1890,73 +1914,96 @@ async function refreshImageFromOverlay(payload) {
       ? Boolean(payload.force)
       : false;
   if (!imageId) return;
-  if (shouldRemoveFromCurrentView(faces)) {
-    removeImagesById([imageId]);
-    return;
+  const overlayMatches =
+    overlayOpen.value && overlayImage.value?.id === imageId;
+  let refreshToken = null;
+  if (overlayMatches) {
+    overlayTagsRefreshInFlight.value = true;
+    overlayTagsRefreshToken.value += 1;
+    refreshToken = overlayTagsRefreshToken.value;
   }
-
-  const existingIndex = allGridImages.value.findIndex(
-    (img) => img?.id === imageId,
-  );
-  if (existingIndex === -1) {
-    const latestInfo = await fetchImageInfo(imageId, { force });
-    if (!latestInfo || Array.isArray(latestInfo)) return;
-    addImageToGrid(latestInfo);
-  } else if (!isSmartScoreSortActive()) {
-    await refreshGridImage(imageId);
-  }
-
-  if (overlayOpen.value && overlayImage.value?.id === imageId) {
-    const latestInfo = await fetchImageInfo(imageId, { force });
-    if (latestInfo && !Array.isArray(latestInfo)) {
-      const merged = { ...latestInfo, ...overlayImage.value };
-      if (overlayImage.value?.description == null) {
-        merged.description = latestInfo.description ?? null;
-      }
-      const currentTags = Array.isArray(overlayImage.value?.tags)
-        ? overlayImage.value.tags
-        : [];
-      const dataTags = Array.isArray(latestInfo.tags) ? latestInfo.tags : null;
-      merged.tags = dataTags ? [...dataTags].sort() : [...currentTags];
-      if (overlayImage.value?.metadata == null) {
-        merged.metadata = latestInfo.metadata ?? {};
-      }
-      overlayImage.value = merged;
-    }
-  }
-
-  if (isSmartScoreSortActive()) {
-    await refreshSmartScoreForImage(imageId);
-    return;
-  }
-
-  if (isCharacterLikenessSortActive()) {
-    const likenessPayload = await fetchCharacterLikenessForImage(imageId);
-    if (!likenessPayload) return;
-    if (likenessPayload.eligible === false) {
+  try {
+    if (shouldRemoveFromCurrentView(faces)) {
       removeImagesById([imageId]);
       return;
     }
-    const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
-    if (idx !== -1) {
-      allGridImages.value[idx] = {
-        ...allGridImages.value[idx],
-        character_likeness: likenessPayload.character_likeness ?? 0.0,
-      };
+
+    const existingIndex = allGridImages.value.findIndex(
+      (img) => img?.id === imageId,
+    );
+    if (existingIndex === -1) {
+      const latestInfo = await fetchImageInfo(imageId, { force });
+      if (!latestInfo || Array.isArray(latestInfo)) return;
+      addImageToGrid(latestInfo);
+    } else if (!isSmartScoreSortActive()) {
+      await refreshGridImage(imageId);
     }
-    repositionImageByLikeness(imageId);
-    return;
-  }
 
-  if (isScoreSortActive()) {
-    const gridImg = allGridImages.value.find((img) => img?.id === imageId);
-    repositionImageByScore(imageId, gridImg?.score ?? 0);
-    return;
-  }
+    if (overlayOpen.value && overlayImage.value?.id === imageId) {
+      const latestInfo = await fetchImageInfo(imageId, { force });
+      if (latestInfo && !Array.isArray(latestInfo)) {
+        const merged = { ...latestInfo, ...overlayImage.value };
+        if (overlayImage.value?.description == null) {
+          merged.description = latestInfo.description ?? null;
+        }
+        const currentTags = Array.isArray(overlayImage.value?.tags)
+          ? overlayImage.value.tags
+          : [];
+        const dataTags = Array.isArray(latestInfo.tags)
+          ? latestInfo.tags
+          : null;
+        merged.tags = dataTags ? [...dataTags].sort() : [...currentTags];
+        if (overlayImage.value?.metadata == null) {
+          merged.metadata = latestInfo.metadata ?? {};
+        }
+        overlayImage.value = merged;
+        if (Array.isArray(dataTags) && dataTags.length > 0) {
+          clearPendingTagRefresh(imageId);
+        }
+      }
+    }
 
-  if (isDateSortActive()) {
-    const gridImg = allGridImages.value.find((img) => img?.id === imageId);
-    repositionImageByDate(imageId, gridImg?.created_at);
+    if (isSmartScoreSortActive()) {
+      await refreshSmartScoreForImage(imageId);
+      return;
+    }
+
+    if (isCharacterLikenessSortActive()) {
+      const likenessPayload = await fetchCharacterLikenessForImage(imageId);
+      if (!likenessPayload) return;
+      if (likenessPayload.eligible === false) {
+        removeImagesById([imageId]);
+        return;
+      }
+      const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
+      if (idx !== -1) {
+        allGridImages.value[idx] = {
+          ...allGridImages.value[idx],
+          character_likeness: likenessPayload.character_likeness ?? 0.0,
+        };
+      }
+      repositionImageByLikeness(imageId);
+      return;
+    }
+
+    if (isScoreSortActive()) {
+      const gridImg = allGridImages.value.find((img) => img?.id === imageId);
+      repositionImageByScore(imageId, gridImg?.score ?? 0);
+      return;
+    }
+
+    if (isDateSortActive()) {
+      const gridImg = allGridImages.value.find((img) => img?.id === imageId);
+      repositionImageByDate(imageId, gridImg?.created_at);
+    }
+  } finally {
+    if (
+      overlayMatches &&
+      refreshToken != null &&
+      overlayTagsRefreshToken.value === refreshToken
+    ) {
+      overlayTagsRefreshInFlight.value = false;
+    }
   }
 }
 
@@ -1982,6 +2029,37 @@ async function openOverlay(img) {
     merged.metadata = latestInfo.metadata ?? {};
   }
   overlayImage.value = merged;
+}
+
+function handleTagRefreshStart(imageId) {
+  if (!imageId) return;
+  const next = new Set(pendingTagRefreshIds.value);
+  next.add(imageId);
+  pendingTagRefreshIds.value = next;
+  if (pendingTagRefreshTimeouts.has(imageId)) {
+    clearTimeout(pendingTagRefreshTimeouts.get(imageId));
+  }
+  const timeout = setTimeout(() => {
+    clearPendingTagRefresh(imageId);
+  }, TAG_REFRESH_TIMEOUT_MS);
+  pendingTagRefreshTimeouts.set(imageId, timeout);
+}
+
+function clearPendingTagRefresh(imageId) {
+  const next = new Set(pendingTagRefreshIds.value);
+  if (next.has(imageId)) {
+    next.delete(imageId);
+    pendingTagRefreshIds.value = next;
+  }
+  if (pendingTagRefreshTimeouts.has(imageId)) {
+    clearTimeout(pendingTagRefreshTimeouts.get(imageId));
+    pendingTagRefreshTimeouts.delete(imageId);
+  }
+}
+
+function handleOverlayImageChange(nextImage) {
+  if (!nextImage || !nextImage.id) return;
+  overlayImage.value = { ...nextImage };
 }
 
 function closeOverlay() {
@@ -3013,6 +3091,51 @@ const bottomSpacerHeight = computed(() => {
 // Compute grid images (id, idx, thumbnail)
 const allGridImages = ref([]);
 
+watch(
+  [() => props.showFaceBboxes, () => props.showHandBboxes],
+  ([faceEnabled, handEnabled]) => {
+    const images = allGridImages.value || [];
+    const withFaces = images.filter(
+      (img) => Array.isArray(img?.faces) && img.faces.length > 0,
+    );
+    const withHands = images.filter(
+      (img) => Array.isArray(img?.hands) && img.hands.length > 0,
+    );
+    console.debug("[bbox] Toggle", {
+      faceEnabled,
+      handEnabled,
+      totalImages: images.length,
+      imagesWithFaces: withFaces.length,
+      imagesWithHands: withHands.length,
+    });
+    if (faceEnabled || handEnabled) {
+      invalidateVisibleThumbnailRanges();
+    }
+    triggerFaceOverlayRedraw();
+  },
+  { immediate: true },
+);
+
+watch(
+  [
+    () => props.showFaceBboxes,
+    () => props.showHandBboxes,
+    () => allGridImages.value.length,
+  ],
+  ([faceEnabled, handEnabled, length], [prevFace, prevHand, prevLength]) => {
+    if (!faceEnabled && !handEnabled) return;
+    if (length <= 0) return;
+    if (
+      faceEnabled === prevFace &&
+      handEnabled === prevHand &&
+      length === prevLength
+    ) {
+      return;
+    }
+    invalidateVisibleThumbnailRanges();
+  },
+);
+
 function filterImagesByMediaType(images) {
   let filtered = images;
   if (props.mediaTypeFilter === "images") {
@@ -3161,6 +3284,7 @@ async function fetchThumbnailsBatch(start, end) {
     }));
     // Now fetch thumbnails for these IDs
     ids = ids.filter((id) => id !== null && id !== undefined);
+    let overlayNeedsRedraw = false;
     if (ids.length) {
       ids = Array.from(new Set(ids.map((id) => String(id))));
       const thumbRequestStart = performance.now();
@@ -3185,10 +3309,20 @@ async function fetchThumbnailsBatch(start, end) {
           thumbObj && thumbObj.thumbnail
             ? `data:image/png;base64,${thumbObj.thumbnail}`
             : null;
+        if (gridImg.id != null && thumbObj && thumbObj.thumbnail) {
+          thumbnailLoadedMap[gridImg.id] =
+            (thumbnailLoadedMap[gridImg.id] || 0) + 1;
+        }
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
         gridImg.hands =
           thumbObj && Array.isArray(thumbObj.hands) ? thumbObj.hands : [];
+        if (props.showFaceBboxes && gridImg.faces.length) {
+          overlayNeedsRedraw = true;
+        }
+        if (props.showHandBboxes && gridImg.hands.length) {
+          overlayNeedsRedraw = true;
+        }
         if (props.showHandBboxes && gridImg.hands.length) {
           console.debug("[hand-bbox] Loaded hands", {
             imageId: gridImg.id,
@@ -3223,6 +3357,9 @@ async function fetchThumbnailsBatch(start, end) {
       allGridImages.value[start + i] = img;
     }
     loadedRanges.value.push([start, end]);
+    if (overlayNeedsRedraw) {
+      triggerFaceOverlayRedraw();
+    }
     const batchEnd = performance.now();
     console.log("[ImageGrid.vue] fetchThumbnailsBatch total timing", {
       count: gridImages.length,

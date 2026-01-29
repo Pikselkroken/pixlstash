@@ -384,6 +384,14 @@
               </span>
             </div>
             <div class="tag-list">
+              <div v-if="tagsRefreshing" class="tag-refresh-indicator">
+                <v-progress-circular
+                  indeterminate
+                  size="16"
+                  width="2"
+                  color="primary"
+                />
+              </div>
               <span
                 v-for="tag in image?.tags || []"
                 :key="tag"
@@ -511,6 +519,7 @@ const props = defineProps({
   initialImage: { type: Object, default: null },
   allImages: { type: Array, default: () => [] },
   backendUrl: { type: String, required: true },
+  tagsRefreshing: { type: Boolean, default: false },
 });
 
 const { open, initialImage, allImages, backendUrl } = toRefs(props);
@@ -532,9 +541,12 @@ const chromeRevealTimestamp = ref(0);
 watch(
   () => initialImage.value,
   (newImg) => {
+    const previousId = image.value?.id ?? null;
     image.value = newImg ? { ...newImg } : null;
-    zoomMode.value = "fit";
-    resetPan();
+    if (newImg?.id !== previousId) {
+      zoomMode.value = "fit";
+      resetPan();
+    }
   },
   { immediate: true },
 );
@@ -548,6 +560,8 @@ const emit = defineEmits([
   "add-tag",
   "update-description",
   "refresh-image",
+  "image-change",
+  "tag-refresh-start",
 ]);
 
 const descriptionRef = ref(null);
@@ -718,6 +732,7 @@ function confirmAddTag() {
 async function clearTagsForImage() {
   if (!image.value?.id || !backendUrl.value) return;
   try {
+    emit("tag-refresh-start", image.value.id);
     await apiClient.post(`${backendUrl.value}/pictures/clear_tags`, {
       picture_ids: [image.value.id],
     });
@@ -743,6 +758,7 @@ function showPrevImage() {
   if (idx === -1) return;
   const prevIdx = (idx - 1 + sorted.length) % sorted.length;
   image.value = sorted[prevIdx];
+  emit("image-change", image.value);
 }
 
 function selectImageByIndex(idx) {
@@ -751,6 +767,7 @@ function selectImageByIndex(idx) {
   if (target) {
     image.value = target;
     resetPan();
+    emit("image-change", image.value);
   }
 }
 
@@ -761,6 +778,7 @@ function showNextImage() {
   if (idx === -1) return;
   const nextIdx = (idx + 1) % sorted.length;
   image.value = sorted[nextIdx];
+  emit("image-change", image.value);
 }
 
 function handleKeydown(e) {
@@ -2568,6 +2586,13 @@ function downloadComfyWorkflow(workflow) {
   display: flex;
   flex-wrap: wrap;
   gap: 2px 4px;
+}
+
+.tag-refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  margin-right: 4px;
 }
 
 .overlay-tag {

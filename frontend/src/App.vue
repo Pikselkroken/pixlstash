@@ -82,6 +82,7 @@ const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 let columnsMenuCloseTimeout = null;
 const updatesSocket = ref(null);
 let updatesReconnectTimer = null;
+const configLoading = ref(false);
 
 function refreshGridVersion() {
   gridVersion.value++;
@@ -204,6 +205,11 @@ const config = reactive({
   sort: "",
   thumbnail: 256,
   show_stars: true,
+  show_face_bboxes: false,
+  show_hand_bboxes: false,
+  show_format: true,
+  show_resolution: true,
+  show_problem_icon: true,
 });
 
 const loading = ref(false);
@@ -319,6 +325,8 @@ function handleColumnsEnd() {
 }
 
 async function fetchConfig() {
+  if (configLoading.value) return;
+  configLoading.value = true;
   try {
     const res = await apiClient.get("/users/me/config");
     console.log("Fetched config:", res);
@@ -328,6 +336,21 @@ async function fetchConfig() {
     }
     if (typeof res.data.show_stars === "boolean")
       showStars.value = res.data.show_stars;
+    if (typeof res.data.show_face_bboxes === "boolean") {
+      showFaceBboxes.value = res.data.show_face_bboxes;
+    }
+    if (typeof res.data.show_hand_bboxes === "boolean") {
+      showHandBboxes.value = res.data.show_hand_bboxes;
+    }
+    if (typeof res.data.show_format === "boolean") {
+      showFormat.value = res.data.show_format;
+    }
+    if (typeof res.data.show_resolution === "boolean") {
+      showResolution.value = res.data.show_resolution;
+    }
+    if (typeof res.data.show_problem_icon === "boolean") {
+      showProblemIcon.value = res.data.show_problem_icon;
+    }
     if (typeof res.data.descending === "boolean") {
       selectedDescending.value = res.data.descending;
     }
@@ -341,24 +364,69 @@ async function fetchConfig() {
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
         : showStars.value;
+    config.show_face_bboxes =
+      typeof res.data.show_face_bboxes === "boolean"
+        ? res.data.show_face_bboxes
+        : showFaceBboxes.value;
+    config.show_hand_bboxes =
+      typeof res.data.show_hand_bboxes === "boolean"
+        ? res.data.show_hand_bboxes
+        : showHandBboxes.value;
+    config.show_format =
+      typeof res.data.show_format === "boolean"
+        ? res.data.show_format
+        : showFormat.value;
+    config.show_resolution =
+      typeof res.data.show_resolution === "boolean"
+        ? res.data.show_resolution
+        : showResolution.value;
+    config.show_problem_icon =
+      typeof res.data.show_problem_icon === "boolean"
+        ? res.data.show_problem_icon
+        : showProblemIcon.value;
     const similarityValue =
       res.data.similarity_character ?? res.data.selected_similarity_character;
     selectedSimilarityCharacter.value =
       similarityValue ?? selectedSimilarityCharacter.value ?? null;
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
-    configLoaded.value = true;
+    console.debug("[Config] Overlay settings applied", {
+      showFaceBboxes: showFaceBboxes.value,
+      showHandBboxes: showHandBboxes.value,
+      showFormat: showFormat.value,
+      showResolution: showResolution.value,
+      showProblemIcon: showProblemIcon.value,
+    });
   } catch (e) {
     console.error("Failed to fetch /users/me/config:", e);
+  } finally {
+    configLoading.value = false;
+    configLoaded.value = true;
   }
 }
 
 async function patchConfigUIOptions() {
+  if (!configLoaded.value || configLoading.value) return;
   // Only include fields the backend expects and that are not undefined/null/empty
   const patch = {};
   if (selectedSort.value) patch.sort = selectedSort.value;
   patch.descending = selectedDescending.value;
   if (columns.value) patch.columns = columns.value;
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
+  if (typeof showFaceBboxes.value === "boolean") {
+    patch.show_face_bboxes = showFaceBboxes.value;
+  }
+  if (typeof showHandBboxes.value === "boolean") {
+    patch.show_hand_bboxes = showHandBboxes.value;
+  }
+  if (typeof showFormat.value === "boolean") {
+    patch.show_format = showFormat.value;
+  }
+  if (typeof showResolution.value === "boolean") {
+    patch.show_resolution = showResolution.value;
+  }
+  if (typeof showProblemIcon.value === "boolean") {
+    patch.show_problem_icon = showProblemIcon.value;
+  }
   if (selectedSimilarityCharacter.value != null) {
     patch.similarity_character = selectedSimilarityCharacter.value;
   }
@@ -581,6 +649,27 @@ watch(showStars, () => {
   patchConfigUIOptions();
 });
 
+watch(
+  [showFaceBboxes, showHandBboxes, showFormat, showResolution, showProblemIcon],
+  () => {
+    patchConfigUIOptions();
+  },
+);
+
+watch(
+  [showFaceBboxes, showHandBboxes, showFormat, showResolution, showProblemIcon],
+  ([face, hand, format, resolution, problem]) => {
+    console.debug("[Config] Overlay settings changed", {
+      showFaceBboxes: face,
+      showHandBboxes: hand,
+      showFormat: format,
+      showResolution: resolution,
+      showProblemIcon: problem,
+    });
+  },
+  { immediate: true },
+);
+
 watch(selectedSimilarityCharacter, () => {
   patchConfigUIOptions();
 });
@@ -597,10 +686,8 @@ watch(exportMenuOpen, async (isOpen) => {
 });
 
 // --- Lifecycle ---
-onBeforeMount(() => {
-  fetchConfig();
-});
-onMounted(() => {
+onMounted(async () => {
+  await fetchConfig();
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
   window.addEventListener("keydown", handleGlobalKeydown);
