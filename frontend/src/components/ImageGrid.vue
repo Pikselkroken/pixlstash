@@ -174,7 +174,7 @@
         </div>
         <div
           v-for="(img, idx) in gridImagesToRender"
-          :key="img.id ? `img-${img.id}` : `placeholder-${img.idx}`"
+          :key="img.id ? `img-${img.id}-${img.idx}` : `placeholder-${img.idx}`"
           :style="getStackCardStyle(img)"
           class="image-card"
           @click="handleImageCardClick(img, img.idx, $event)"
@@ -1831,7 +1831,10 @@ function invalidateThumbnailIndex(index) {
 
 async function refreshGridImage(imageId) {
   if (!imageId) return;
-  const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
+  const normalizedId = normalizePictureId(imageId);
+  const idx = allGridImages.value.findIndex(
+    (img) => normalizePictureId(img?.id) === normalizedId,
+  );
   if (idx === -1) return;
   const latestInfo = await fetchImageInfo(imageId, {
     smartScore: isSmartScoreSortActive(),
@@ -1851,6 +1854,23 @@ async function refreshGridImage(imageId) {
 function addImageToGrid(imageData) {
   if (!imageData?.id) return null;
   const items = allGridImages.value.slice();
+  const normalizedId = normalizePictureId(imageData.id);
+  const existingIndex = items.findIndex(
+    (img) => normalizePictureId(img?.id) === normalizedId,
+  );
+  if (existingIndex !== -1) {
+    const current = items[existingIndex] || {};
+    items[existingIndex] = {
+      ...current,
+      ...imageData,
+      idx: current.idx ?? existingIndex,
+      thumbnail: current.thumbnail ?? imageData.thumbnail ?? null,
+    };
+    allGridImages.value = items;
+    invalidateThumbnailIndex(existingIndex);
+    fetchThumbnailsBatch(existingIndex, existingIndex + 1);
+    return existingIndex;
+  }
   const newIndex = items.length;
   items.push({
     ...imageData,
@@ -1912,14 +1932,24 @@ async function refreshImageFromOverlay(payload) {
       ? Boolean(payload.force)
       : false;
   if (!imageId) return;
+  const normalizedId = normalizePictureId(imageId);
   const overlayMatches =
-    overlayOpen.value && overlayImage.value?.id === imageId;
+    overlayOpen.value &&
+    normalizePictureId(overlayImage.value?.id) === normalizedId;
   let refreshToken = null;
   if (overlayMatches) {
     overlayTagsRefreshInFlight.value = true;
     overlayTagsRefreshToken.value += 1;
     refreshToken = overlayTagsRefreshToken.value;
   }
+  const existingIndexBefore = allGridImages.value.findIndex(
+    (img) => normalizePictureId(img?.id) === normalizedId,
+  );
+  const previousScore =
+    existingIndexBefore !== -1
+      ? (allGridImages.value[existingIndexBefore]?.score ?? 0)
+      : null;
+
   try {
     if (shouldRemoveFromCurrentView(faces)) {
       removeImagesById([imageId]);
@@ -1927,7 +1957,7 @@ async function refreshImageFromOverlay(payload) {
     }
 
     const existingIndex = allGridImages.value.findIndex(
-      (img) => img?.id === imageId,
+      (img) => normalizePictureId(img?.id) === normalizedId,
     );
     if (existingIndex === -1) {
       const latestInfo = await fetchImageInfo(imageId, { force });
@@ -1937,7 +1967,10 @@ async function refreshImageFromOverlay(payload) {
       await refreshGridImage(imageId);
     }
 
-    if (overlayOpen.value && overlayImage.value?.id === imageId) {
+    if (
+      overlayOpen.value &&
+      normalizePictureId(overlayImage.value?.id) === normalizedId
+    ) {
       const latestInfo = await fetchImageInfo(imageId, { force });
       if (latestInfo && !Array.isArray(latestInfo)) {
         const merged = { ...latestInfo, ...overlayImage.value };
@@ -1973,7 +2006,9 @@ async function refreshImageFromOverlay(payload) {
         removeImagesById([imageId]);
         return;
       }
-      const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
+      const idx = allGridImages.value.findIndex(
+        (img) => normalizePictureId(img?.id) === normalizedId,
+      );
       if (idx !== -1) {
         allGridImages.value[idx] = {
           ...allGridImages.value[idx],
@@ -1985,13 +2020,20 @@ async function refreshImageFromOverlay(payload) {
     }
 
     if (isScoreSortActive()) {
-      const gridImg = allGridImages.value.find((img) => img?.id === imageId);
-      repositionImageByScore(imageId, gridImg?.score ?? 0);
+      const gridImg = allGridImages.value.find(
+        (img) => normalizePictureId(img?.id) === normalizedId,
+      );
+      const nextScore = gridImg?.score ?? 0;
+      if (previousScore === null || nextScore !== previousScore) {
+        repositionImageByScore(imageId, nextScore);
+      }
       return;
     }
 
     if (isDateSortActive()) {
-      const gridImg = allGridImages.value.find((img) => img?.id === imageId);
+      const gridImg = allGridImages.value.find(
+        (img) => normalizePictureId(img?.id) === normalizedId,
+      );
       repositionImageByDate(imageId, gridImg?.created_at);
     }
   } finally {
@@ -2107,7 +2149,10 @@ function invalidateVisibleThumbnailRanges() {
 
 function repositionImageByScore(imageId, newScore) {
   const items = allGridImages.value.slice();
-  const currentIndex = items.findIndex((item) => item.id === imageId);
+  const normalizedId = normalizePictureId(imageId);
+  const currentIndex = items.findIndex(
+    (item) => normalizePictureId(item?.id) === normalizedId,
+  );
   if (currentIndex === -1) return;
 
   const target = items[currentIndex];
@@ -2121,6 +2166,12 @@ function repositionImageByScore(imageId, newScore) {
     return descending ? score < targetScore : score > targetScore;
   });
   if (insertIndex === -1) insertIndex = items.length;
+  if (insertIndex === currentIndex) {
+    const updated = allGridImages.value.slice();
+    updated[currentIndex] = { ...target, idx: currentIndex };
+    allGridImages.value = updated;
+    return;
+  }
   items.splice(insertIndex, 0, target);
 
   for (let i = 0; i < items.length; i += 1) {
@@ -3805,11 +3856,14 @@ function removeImagesById(imageIds) {
     return;
   }
   console.log("Removing images by ID:", imageIds);
+  const normalizedIds = new Set(
+    imageIds.map((id) => normalizePictureId(id)).filter((id) => id !== null),
+  );
   allGridImages.value = allGridImages.value.filter(
-    (img) => !imageIds.includes(img.id),
+    (img) => !normalizedIds.has(normalizePictureId(img?.id)),
   );
   selectedImageIds.value = selectedImageIds.value.filter(
-    (id) => !imageIds.includes(id),
+    (id) => !normalizedIds.has(normalizePictureId(id)),
   );
   resetThumbnailState();
   updateVisibleThumbnails();

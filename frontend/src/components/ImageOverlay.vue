@@ -205,7 +205,11 @@
           <div class="filmstrip-list">
             <button
               v-for="item in filmstripWindow"
-              :key="item.id"
+              :key="
+                item.id
+                  ? `filmstrip-${item.id}-${item.index}`
+                  : `filmstrip-${item.index}`
+              "
               class="filmstrip-thumb"
               :class="{ active: item.isActive }"
               @click.stop="selectImageByIndex(item.index)"
