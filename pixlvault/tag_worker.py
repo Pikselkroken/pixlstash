@@ -15,6 +15,12 @@ from pixlvault.database import VaultDatabase
 from pixlvault.worker_registry import BaseWorker, WorkerType
 
 from pixlvault.db_models import Character, FaceTag, HandTag, Picture, Tag
+from pixlvault.feature_tag_blacklist import (
+    FACE_TAG_BLACKLIST,
+    HAND_TAG_BLACKLIST,
+    is_face_tag,
+    is_hand_tag,
+)
 
 logger = get_logger(__name__)
 
@@ -191,6 +197,16 @@ class TagWorker(BaseWorker):
                 break
         logger.info("Exiting TaggingWorker loop.")
 
+    def _load_feature_tag_blacklists(self):
+        cached = getattr(self, "_feature_tag_blacklists", None)
+        if cached is not None:
+            return cached
+
+        face_blacklist = set(FACE_TAG_BLACKLIST)
+        hand_blacklist = set(HAND_TAG_BLACKLIST)
+        self._feature_tag_blacklists = (face_blacklist, hand_blacklist)
+        return self._feature_tag_blacklists
+
     def _fetch_missing_tags(self):
         logger.debug("Starting the database fetch for missing tags")
 
@@ -261,6 +277,7 @@ class TagWorker(BaseWorker):
             crop_tags_by_pic_id = {}
             face_tags_by_face_id = {}
             hand_tags_by_hand_id = {}
+            face_blacklist, hand_blacklist = self._load_feature_tag_blacklists()
             if self._picture_tagger.custom_tagger_ready():
                 try:
                     import cv2
@@ -428,7 +445,8 @@ class TagWorker(BaseWorker):
                             face_id = item_to_face_id.get(key)
                             if face_id is not None:
                                 existing_face = face_tags_by_face_id.get(face_id, [])
-                                existing_face.extend(tags)
+                                filtered = [tag for tag in tags if is_face_tag(tag)]
+                                existing_face.extend(filtered)
                                 face_tags_by_face_id[face_id] = existing_face
 
                     if hand_items and not self._stop.is_set():
@@ -448,7 +466,8 @@ class TagWorker(BaseWorker):
                             hand_id = item_to_hand_id.get(key)
                             if hand_id is not None:
                                 existing_hand = hand_tags_by_hand_id.get(hand_id, [])
-                                existing_hand.extend(tags)
+                                filtered = [tag for tag in tags if is_hand_tag(tag)]
+                                existing_hand.extend(filtered)
                                 hand_tags_by_hand_id[hand_id] = existing_hand
                 except Exception as e:
                     logger.warning("Crop tagging failed: %s", e)
