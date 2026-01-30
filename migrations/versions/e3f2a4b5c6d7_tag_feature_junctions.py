@@ -37,8 +37,7 @@ def upgrade() -> None:
         if not table_exists(table_name):
             return set()
         return {
-            row[1]
-            for row in conn.execute(text(f"PRAGMA table_info('{table_name}')"))
+            row[1] for row in conn.execute(text(f"PRAGMA table_info('{table_name}')"))
         }
 
     has_tag = conn.execute(
@@ -50,9 +49,7 @@ def upgrade() -> None:
             sa.Column("id", sa.Integer(), primary_key=True, nullable=False),
             sa.Column("picture_id", sa.Integer(), nullable=False),
             sa.Column("tag", sa.String(), nullable=False),
-            sa.ForeignKeyConstraint(
-                ["picture_id"], ["picture.id"], ondelete="CASCADE"
-            ),
+            sa.ForeignKeyConstraint(["picture_id"], ["picture.id"], ondelete="CASCADE"),
             sa.UniqueConstraint("picture_id", "tag", name="uq_tag_picture_tag"),
         )
         existing_indexes = {
@@ -191,10 +188,7 @@ def downgrade() -> None:
         sa.ForeignKeyConstraint(["hand_id"], ["hand.id"], ondelete="CASCADE"),
     )
 
-    op.execute(
-        "INSERT INTO tag_old (picture_id, tag) "
-        "SELECT picture_id, tag FROM tag"
-    )
+    op.execute("INSERT INTO tag_old (picture_id, tag) SELECT picture_id, tag FROM tag")
     op.execute(
         "INSERT INTO tag_old (picture_id, face_id, tag) "
         "SELECT t.picture_id, ft.face_id, t.tag "

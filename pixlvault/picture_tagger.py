@@ -35,14 +35,14 @@ MODEL_DIR = "downloaded_models"
 BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = 32
 MAX_CONCURRENT_IMAGES_CPU = 8
-GENERAL_THRESHOLD = 0.4
+GENERAL_THRESHOLD = 0.5
 UNDESIRED_TAGS = "solo, general, blurry, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
 CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.85
 CUSTOM_TAGGER_THRESHOLD_FACE = 0.85
-CUSTOM_TAGGER_THRESHOLD_HAND = 0.35
+CUSTOM_TAGGER_THRESHOLD_HAND = 0.6
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 512
 CUSTOM_TAGGER_IMAGE_SIZE_FACE = 384
 CUSTOM_TAGGER_IMAGE_SIZE_HAND = 192
@@ -912,7 +912,7 @@ class PictureTagger:
                 max_concurrent, os.cpu_count() // 2 or 1, len(image_paths)
             )
 
-        logger.debug(
+        logger.info(
             "Starting tagger dataloader with worker count: "
             + str(worker_count)
             + " and dataset size: "
@@ -927,7 +927,7 @@ class PictureTagger:
             drop_last=False,
         )
 
-        logger.debug(f"Got some tags: {data}")
+        logger.info(f"Got some tags: {data}")
         b_imgs = []
         all_results = {}
 
@@ -978,12 +978,17 @@ class PictureTagger:
                     batch_result[k] = tags
                 all_results.update(batch_result)
 
-        logger.debug(f"Completed tagging for {len(all_results)} images.")
+        logger.info(f"Completed tagging for {len(all_results)} images.")
         wd14_results = self._merge_video_frame_tags(all_results)
+        for result in wd14_results.values():
+            logger.info(f"WD14 Tags: {result}")
         if not self._use_custom_tagger:
             return wd14_results
 
         custom_results = self._tag_images_custom(image_paths, stop_event=stop_event)
+        for result in custom_results.values():
+            logger.info(f"Custom Tags: {result}")
+
         combined_results = {}
         for path in set(wd14_results) | set(custom_results):
             combined_tags = set(wd14_results.get(path, []))

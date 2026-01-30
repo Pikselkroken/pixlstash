@@ -152,6 +152,17 @@ class DescriptionWorker(BaseWorker):
         return descriptions_generated
 
 
+def normalize_custom_tagger_tags(tags: list[str]) -> list[str]:
+    replacements = {
+        "extra fingers": "extra digit",
+        "malformed hands": "malformed hand",
+    }
+    normalized = []
+    for tag in tags:
+        normalized.append(replacements.get(tag, tag))
+    return normalized
+
+
 class TagWorker(BaseWorker):
     """
     Worker for generating tags for pictures with descriptions.
@@ -270,7 +281,7 @@ class TagWorker(BaseWorker):
         if image_paths:
             if self._stop.is_set():
                 return []
-            logger.debug(f"Tagging {len(image_paths)} images: {image_paths}")
+            logger.info(f"Tagging {len(image_paths)} images: {image_paths}")
             tag_results = self._picture_tagger.tag_images(
                 image_paths, stop_event=self._stop
             )
@@ -435,6 +446,7 @@ class TagWorker(BaseWorker):
                             threshold=self._picture_tagger.custom_tagger_threshold_face(),
                             image_size=self._picture_tagger.custom_tagger_image_size_face(),
                         )
+                        logger.info(f"Face crop tagging results: {face_results}")
                         for key, tags in face_results.items():
                             pic_id = item_to_pic_id.get(key)
                             if pic_id is None or not tags:
@@ -456,17 +468,21 @@ class TagWorker(BaseWorker):
                             threshold=self._picture_tagger.custom_tagger_threshold_hand(),
                             image_size=self._picture_tagger.custom_tagger_image_size_hand(),
                         )
+                        logger.info(f"Hand crop tagging results: {hand_results}")
                         for key, tags in hand_results.items():
                             pic_id = item_to_pic_id.get(key)
                             if pic_id is None or not tags:
                                 continue
+                            normalized_tags = normalize_custom_tagger_tags(tags)
                             existing = crop_tags_by_pic_id.get(pic_id, [])
-                            existing.extend(tags)
+                            existing.extend(normalized_tags)
                             crop_tags_by_pic_id[pic_id] = existing
                             hand_id = item_to_hand_id.get(key)
                             if hand_id is not None:
                                 existing_hand = hand_tags_by_hand_id.get(hand_id, [])
-                                filtered = [tag for tag in tags if is_hand_tag(tag)]
+                                filtered = [
+                                    tag for tag in normalized_tags if is_hand_tag(tag)
+                                ]
                                 existing_hand.extend(filtered)
                                 hand_tags_by_hand_id[hand_id] = existing_hand
                 except Exception as e:
@@ -489,24 +505,35 @@ class TagWorker(BaseWorker):
                 logger.debug(f"Processing tags for image at path: {path}: {tags}")
                 if tags:
                     face_map = {}
+                    requires_face_tags = {"face", "close-up"}
+                    inherits_photo_tag = "photo" in tags
+                    if inherits_photo_tag:
+                        requires_face_tags.add("photo")
+
                     for face in getattr(pic, "faces", []) or []:
                         if getattr(face, "face_index", 0) < 0:
                             continue
                         if face.id is None:
                             continue
                         raw = face_tags_by_face_id.get(face.id, [])
-                        if raw:
-                            face_map[face.id] = sorted(set(raw))
+                        combined = set(raw) | requires_face_tags
+                        if combined:
+                            face_map[face.id] = sorted(combined)
 
                     hand_map = {}
+                    requires_hand_tags = {"hand", "close-up"}
+                    if inherits_photo_tag:
+                        requires_hand_tags.add("photo")
+
                     for hand in getattr(pic, "hands", []) or []:
                         if getattr(hand, "hand_index", 0) < 0:
                             continue
                         if hand.id is None:
                             continue
                         raw = hand_tags_by_hand_id.get(hand.id, [])
-                        if raw:
-                            hand_map[hand.id] = sorted(set(raw))
+                        combined = set(raw) | requires_hand_tags
+                        if combined:
+                            hand_map[hand.id] = sorted(combined)
 
                     def add_tags(session: Session, pic_id, tags, face_map, hand_map):
                         tag_ids = session.exec(

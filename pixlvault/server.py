@@ -47,10 +47,12 @@ from pydantic import BaseModel, Field
 from pixlvault.db_models import (
     Character,
     Face,
+    FaceCharacterLikeness,
     FaceTag,
     Hand,
     HandTag,
     Picture,
+    PictureLikeness,
     PictureSet,
     PictureSetMember,
     Quality,
@@ -60,9 +62,6 @@ from pixlvault.db_models import (
     UserToken,
 )
 
-from pixlvault.db_models import PictureLikeness
-from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
-from pixlvault.db_models.tag import Tag
 from pixlvault.database import DBPriority
 from pixlvault.event_types import EventType
 from pixlvault.utils import safe_model_dict
@@ -89,6 +88,17 @@ DEFAULT_SMART_SCORE_PENALIZED_TAGS = [
     "waxy skin",
     "flux chin",
 ]
+TAG_EMPTY_SENTINEL = ""
+
+
+def serialize_tag_objects(tags: list[Tag] | None) -> list[dict]:
+    items = []
+    for tag in tags or []:
+        if not tag or tag.tag in (None, TAG_EMPTY_SENTINEL):
+            continue
+        items.append({"id": tag.id, "tag": tag.tag})
+    return items
+
 
 # Logging will be set up after config is loaded
 logger = get_logger(__name__)
@@ -2809,12 +2819,9 @@ class Server:
                     character_id = query_params.pop("character_id", None)
 
                     select_fields = Picture.metadata_fields()
-                    if (
-                        export_type_normalized == Picture.ExportType.FULL
-                        and (
-                            caption_mode_normalized == "tags"
-                            or include_character_name_enabled
-                        )
+                    if export_type_normalized == Picture.ExportType.FULL and (
+                        caption_mode_normalized == "tags"
+                        or include_character_name_enabled
                     ):
                         select_fields = select_fields | {"tags", "characters"}
 
@@ -3022,12 +3029,11 @@ class Server:
                             Picture.ExportType.FACE_HAND,
                         }
                         for pic in pics:
-                            if (
-                                not getattr(pic, "file_path", None)
-                                or not os.path.exists(
-                                    PictureUtils.resolve_picture_path(
-                                        self.vault.image_root, pic.file_path
-                                    )
+                            if not getattr(
+                                pic, "file_path", None
+                            ) or not os.path.exists(
+                                PictureUtils.resolve_picture_path(
+                                    self.vault.image_root, pic.file_path
                                 )
                             ):
                                 continue
@@ -3133,7 +3139,9 @@ class Server:
                                         for character in (
                                             getattr(pic, "characters", []) or []
                                         ):
-                                            name_value = getattr(character, "name", None)
+                                            name_value = getattr(
+                                                character, "name", None
+                                            )
                                             if name_value:
                                                 character_names.append(name_value)
                                         if character_names:
@@ -3146,8 +3154,7 @@ class Server:
                                                 else:
                                                     caption_text = prefix
                                             elif (
-                                                caption_mode_normalized
-                                                == "description"
+                                                caption_mode_normalized == "description"
                                             ):
                                                 prefix = "A picture of " + ", ".join(
                                                     character_names
@@ -3176,20 +3183,14 @@ class Server:
 
                                         with Image.open(full_path) as img:
                                             base_name = f"image_{idx:05d}"
-                                            export_faces = (
-                                                export_type_normalized
-                                                in {
-                                                    Picture.ExportType.FACE,
-                                                    Picture.ExportType.FACE_HAND,
-                                                }
-                                            )
-                                            export_hands = (
-                                                export_type_normalized
-                                                in {
-                                                    Picture.ExportType.HAND,
-                                                    Picture.ExportType.FACE_HAND,
-                                                }
-                                            )
+                                            export_faces = export_type_normalized in {
+                                                Picture.ExportType.FACE,
+                                                Picture.ExportType.FACE_HAND,
+                                            }
+                                            export_hands = export_type_normalized in {
+                                                Picture.ExportType.HAND,
+                                                Picture.ExportType.FACE_HAND,
+                                            }
 
                                             if export_faces:
                                                 faces = feature_faces_by_pic.get(
@@ -3197,7 +3198,10 @@ class Server:
                                                 )
                                                 face_count = 0
                                                 for face in faces:
-                                                    if getattr(face, "face_index", 0) < 0:
+                                                    if (
+                                                        getattr(face, "face_index", 0)
+                                                        < 0
+                                                    ):
                                                         continue
                                                     bbox = _clamp_bbox(
                                                         face.bbox, img.width, img.height
@@ -3213,7 +3217,12 @@ class Server:
                                                         f"{base_name}{suffix}{ext}"
                                                     )
                                                     crop = img.crop(
-                                                        (bbox[0], bbox[1], bbox[2], bbox[3])
+                                                        (
+                                                            bbox[0],
+                                                            bbox[1],
+                                                            bbox[2],
+                                                            bbox[3],
+                                                        )
                                                     )
                                                     buffer = BytesIO()
                                                     save_format = (
@@ -3225,12 +3234,14 @@ class Server:
                                                         "JPEG",
                                                     }:
                                                         crop = crop.convert("RGB")
-                                                    crop.save(buffer, format=save_format)
+                                                    crop.save(
+                                                        buffer, format=save_format
+                                                    )
                                                     zip_file.writestr(
                                                         arcname, buffer.getvalue()
                                                     )
-                                                    tags = (
-                                                        face_tags_by_face.get(face.id, [])
+                                                    tags = face_tags_by_face.get(
+                                                        face.id, []
                                                     )
                                                     caption_text = ", ".join(
                                                         dict.fromkeys(tags)
@@ -3249,14 +3260,19 @@ class Server:
                                                 )
                                                 fallback_index = 0
                                                 for hand in hands:
-                                                    if getattr(hand, "hand_index", 0) < 0:
+                                                    if (
+                                                        getattr(hand, "hand_index", 0)
+                                                        < 0
+                                                    ):
                                                         continue
                                                     bbox = _clamp_bbox(
                                                         hand.bbox, img.width, img.height
                                                     )
                                                     if not bbox:
                                                         continue
-                                                    hand_index = getattr(hand, "hand_index", None)
+                                                    hand_index = getattr(
+                                                        hand, "hand_index", None
+                                                    )
                                                     if hand_index is None:
                                                         fallback_index += 1
                                                         hand_number = fallback_index
@@ -3267,7 +3283,12 @@ class Server:
                                                         f"{base_name}{suffix}{ext}"
                                                     )
                                                     crop = img.crop(
-                                                        (bbox[0], bbox[1], bbox[2], bbox[3])
+                                                        (
+                                                            bbox[0],
+                                                            bbox[1],
+                                                            bbox[2],
+                                                            bbox[3],
+                                                        )
                                                     )
                                                     buffer = BytesIO()
                                                     save_format = (
@@ -3279,12 +3300,14 @@ class Server:
                                                         "JPEG",
                                                     }:
                                                         crop = crop.convert("RGB")
-                                                    crop.save(buffer, format=save_format)
+                                                    crop.save(
+                                                        buffer, format=save_format
+                                                    )
                                                     zip_file.writestr(
                                                         arcname, buffer.getvalue()
                                                     )
-                                                    tags = (
-                                                        hand_tags_by_hand.get(hand.id, [])
+                                                    tags = hand_tags_by_hand.get(
+                                                        hand.id, []
                                                     )
                                                     caption_text = ", ".join(
                                                         dict.fromkeys(tags)
@@ -3476,16 +3499,30 @@ class Server:
                 raise HTTPException(status_code=404, detail="Picture not found")
             pic = pics[0]
 
-            pic_tags = self.vault.db.run_task(
-                Picture.find, id=id, select_fields=["tags"]
-            )
-            pic_tags = pic_tags[0].tags if pic_tags else []
-            pic_dict = safe_model_dict(pic)
-            tags = []
-            for tag in pic_tags:
-                tags.append(tag.tag)
+            def fetch_image_only_tags(session: Session, pic_id: int):
+                face_tag_ids = (
+                    select(FaceTag.tag_id)
+                    .join(Tag, Tag.id == FaceTag.tag_id)
+                    .where(Tag.picture_id == pic_id)
+                )
+                hand_tag_ids = (
+                    select(HandTag.tag_id)
+                    .join(Tag, Tag.id == HandTag.tag_id)
+                    .where(Tag.picture_id == pic_id)
+                )
+                return session.exec(
+                    select(Tag).where(
+                        Tag.picture_id == pic_id,
+                        ~Tag.id.in_(face_tag_ids),
+                        ~Tag.id.in_(hand_tag_ids),
+                    )
+                ).all()
 
-            pic_dict["tags"] = tags
+            pic_tags = self.vault.db.run_task(fetch_image_only_tags, pic.id)
+            pic_dict = safe_model_dict(pic)
+            pic_dict["tags"] = serialize_tag_objects(pic_tags)
+
+            logger.info(f"Sending tags: {pic_dict['tags']} for picture id={pic.id}")
 
             if smart_score:
                 try:
@@ -3554,14 +3591,6 @@ class Server:
             if embedded_metadata:
                 pic_dict["metadata"] = embedded_metadata
 
-            logger.debug(
-                "[metadata] id=%s fields=%d tags=%d embedded_keys=%d has_metadata=%s",
-                pic.id,
-                len(metadata_fields),
-                len(tags),
-                len(embedded_metadata.keys()) if embedded_metadata else 0,
-                "metadata" in pic_dict,
-            )
             if embedded_metadata:
                 logger.debug(
                     "[metadata] id=%s embedded_top_keys=%s",
@@ -3693,6 +3722,12 @@ class Server:
                         pic = Picture.find(session, id=pic_id, select_fields=["tags"])[
                             0
                         ]
+                        sentinel = next(
+                            (t for t in pic.tags if t.tag == TAG_EMPTY_SENTINEL),
+                            None,
+                        )
+                        if sentinel is not None:
+                            pic.tags.remove(sentinel)
                         if not any(t.tag == tag for t in pic.tags):
                             pic.tags.append(Tag(tag=tag, picture_id=pic_id))
                         session.add(pic)
@@ -3700,59 +3735,64 @@ class Server:
                         session.refresh(pic)
                         return pic
 
-                    self.vault.db.run_task(update_picture, pic.id, tag)
+                    pic = self.vault.db.run_task(update_picture, pic.id, tag)
                     self.vault.notify(EventType.CHANGED_TAGS)
 
-                return {"status": "success", "tags": pic.tags}
+                return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
             except Exception as e:
                 logger.error(f"Failed to add tag: {e}")
                 raise HTTPException(status_code=500, detail="Failed to add tag")
 
-        @self.api.delete("/pictures/{id}/tags/{tag}")
-        async def remove_tag_from_picture(id: str, tag: str):
+        @self.api.delete("/pictures/{id}/tags/{tag_id}")
+        async def remove_tag_from_picture(id: str, tag_id: str):
             """
             Remove a tag from a picture.
             """
             try:
-                pic_list = self.vault.db.run_task(
-                    lambda session: Picture.find(session, id=id, select_fields=["tags"])
-                )
-                logger.debug(
-                    f"Removing tag '{tag}' from picture id={id}. Found pics: {pic_list}"
-                )
-                if not pic_list:
-                    raise HTTPException(status_code=404, detail="Picture not found")
-                pic = pic_list[0]
-
-                existing = next((t for t in pic.tags if t.tag == tag), None)
-
-                if existing is not None:
-                    logger.debug(
-                        f"Tag {tag} found in picture tags {pic.tags}, proceeding to remove."
+                if not tag_id.isdigit():
+                    raise HTTPException(
+                        status_code=400, detail="tag_id must be numeric"
                     )
+                tag_id_int = int(tag_id)
 
-                    def update_picture(session, pic_id, tag_value):
-                        pic = Picture.find(session, id=pic_id, select_fields=["tags"])[
-                            0
-                        ]
-                        target = next((t for t in pic.tags if t.tag == tag_value), None)
-                        if target is not None:
-                            pic.tags.remove(target)
-                        session.add(pic)
-                        session.commit()
-                        session.refresh(pic)
-                        return pic
+                def update_picture(session, pic_id, tag_id_value):
+                    pic = Picture.find(session, id=pic_id, select_fields=["tags"])[0]
+                    target = session.exec(
+                        select(Tag).where(
+                            Tag.picture_id == pic_id,
+                            Tag.id == tag_id_value,
+                        )
+                    ).first()
+                    if target is None:
+                        raise HTTPException(
+                            status_code=404, detail="Tag not found on picture"
+                        )
+                    session.delete(target)
+                    session.flush()
+                    remaining = session.exec(
+                        select(Tag).where(
+                            Tag.picture_id == pic_id,
+                            Tag.tag.is_not(None),
+                            Tag.tag != TAG_EMPTY_SENTINEL,
+                        )
+                    ).all()
+                    if not remaining:
+                        sentinel = session.exec(
+                            select(Tag).where(
+                                Tag.picture_id == pic_id,
+                                Tag.tag == TAG_EMPTY_SENTINEL,
+                            )
+                        ).first()
+                        if sentinel is None:
+                            session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
+                    session.commit()
+                    session.refresh(pic)
+                    return pic
 
-                    self.vault.db.run_task(update_picture, pic.id, tag)
-                    self.vault.notify(EventType.CHANGED_TAGS)
+                pic = self.vault.db.run_task(update_picture, id, tag_id_int)
+                self.vault.notify(EventType.CHANGED_TAGS)
 
-                    logger.debug(f"Remaining tags after removal: {pic.tags}")
-                else:
-                    logger.debug(
-                        f"Tag {tag} not found in picture tags {pic.tags}, nothing to remove."
-                    )
-
-                return {"status": "success", "tags": pic.tags}
+                return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
             except Exception as e:
                 logger.error(f"Failed to remove tag: {e}")
                 raise HTTPException(status_code=500, detail="Failed to remove tag")
@@ -3764,11 +3804,11 @@ class Server:
                 if face is None:
                     raise HTTPException(status_code=404, detail="Face not found")
                 rows = session.exec(
-                    select(Tag.tag)
+                    select(Tag)
                     .join(FaceTag, Tag.id == FaceTag.tag_id)
                     .where(FaceTag.face_id == face_id)
                 ).all()
-                return [row for row in rows if row]
+                return serialize_tag_objects(rows)
 
             tags = self.vault.db.run_task(fetch_tags, face_id)
             return {"tags": tags}
@@ -3784,6 +3824,14 @@ class Server:
                 if face is None:
                     raise HTTPException(status_code=404, detail="Face not found")
                 picture_id = face.picture_id
+                sentinel = session.exec(
+                    select(Tag).where(
+                        Tag.picture_id == picture_id,
+                        Tag.tag == TAG_EMPTY_SENTINEL,
+                    )
+                ).first()
+                if sentinel is not None:
+                    session.delete(sentinel)
                 tag = session.exec(
                     select(Tag).where(
                         Tag.picture_id == picture_id,
@@ -3799,7 +3847,7 @@ class Server:
                 session.add(face)
                 session.commit()
                 session.refresh(face)
-                return [t.tag for t in (face.tags or []) if t.tag]
+                return serialize_tag_objects(face.tags)
 
             tags = self.vault.db.run_task(update_face, face_id, tag_value)
             self.vault.notify(EventType.CHANGED_TAGS)
@@ -3811,15 +3859,27 @@ class Server:
                 face = session.get(Face, face_id)
                 if face is None:
                     raise HTTPException(status_code=404, detail="Face not found")
-                target = next(
-                    (t for t in (face.tags or []) if t.tag == tag_value), None
-                )
+                target = None
+                if tag_value.isdigit():
+                    target = next(
+                        (
+                            t
+                            for t in (face.tags or [])
+                            if t.id is not None and str(t.id) == tag_value
+                        ),
+                        None,
+                    )
+                if target is None:
+                    target = next(
+                        (t for t in (face.tags or []) if t.tag == tag_value),
+                        None,
+                    )
                 if target is not None:
                     face.tags.remove(target)
                 session.add(face)
                 session.commit()
                 session.refresh(face)
-                return [t.tag for t in (face.tags or []) if t.tag]
+                return serialize_tag_objects(face.tags)
 
             tags = self.vault.db.run_task(update_face, face_id, tag)
             self.vault.notify(EventType.CHANGED_TAGS)
@@ -3832,11 +3892,11 @@ class Server:
                 if hand is None:
                     raise HTTPException(status_code=404, detail="Hand not found")
                 rows = session.exec(
-                    select(Tag.tag)
+                    select(Tag)
                     .join(HandTag, Tag.id == HandTag.tag_id)
                     .where(HandTag.hand_id == hand_id)
                 ).all()
-                return [row for row in rows if row]
+                return serialize_tag_objects(rows)
 
             tags = self.vault.db.run_task(fetch_tags, hand_id)
             return {"tags": tags}
@@ -3852,6 +3912,14 @@ class Server:
                 if hand is None:
                     raise HTTPException(status_code=404, detail="Hand not found")
                 picture_id = hand.picture_id
+                sentinel = session.exec(
+                    select(Tag).where(
+                        Tag.picture_id == picture_id,
+                        Tag.tag == TAG_EMPTY_SENTINEL,
+                    )
+                ).first()
+                if sentinel is not None:
+                    session.delete(sentinel)
                 tag = session.exec(
                     select(Tag).where(
                         Tag.picture_id == picture_id,
@@ -3867,7 +3935,7 @@ class Server:
                 session.add(hand)
                 session.commit()
                 session.refresh(hand)
-                return [t.tag for t in (hand.tags or []) if t.tag]
+                return serialize_tag_objects(hand.tags)
 
             tags = self.vault.db.run_task(update_hand, hand_id, tag_value)
             self.vault.notify(EventType.CHANGED_TAGS)
@@ -3879,15 +3947,27 @@ class Server:
                 hand = session.get(Hand, hand_id)
                 if hand is None:
                     raise HTTPException(status_code=404, detail="Hand not found")
-                target = next(
-                    (t for t in (hand.tags or []) if t.tag == tag_value), None
-                )
+                target = None
+                if tag_value.isdigit():
+                    target = next(
+                        (
+                            t
+                            for t in (hand.tags or [])
+                            if t.id is not None and str(t.id) == tag_value
+                        ),
+                        None,
+                    )
+                if target is None:
+                    target = next(
+                        (t for t in (hand.tags or []) if t.tag == tag_value),
+                        None,
+                    )
                 if target is not None:
                     hand.tags.remove(target)
                 session.add(hand)
                 session.commit()
                 session.refresh(hand)
-                return [t.tag for t in (hand.tags or []) if t.tag]
+                return serialize_tag_objects(hand.tags)
 
             tags = self.vault.db.run_task(update_hand, hand_id, tag)
             self.vault.notify(EventType.CHANGED_TAGS)
@@ -3906,6 +3986,8 @@ class Server:
             if not picture_ids:
                 return {"status": "success", "picture_ids": []}
 
+            logger.info(f"Clearing tags for pictures: {picture_ids}")
+
             def clear_tags(session: Session, ids: list[str]):
                 session.exec(
                     delete(Tag).where(
@@ -3918,6 +4000,20 @@ class Server:
             cleared = self.vault.db.run_task(
                 clear_tags, picture_ids, priority=DBPriority.IMMEDIATE
             )
+
+            def check_tags(session: Session, ids: list[str]):
+                remaining = session.exec(
+                    select(Tag).where(Tag.picture_id.in_(ids))
+                ).all()
+                return len(remaining) == 0
+
+            all_cleared = self.vault.db.run_task(
+                check_tags, picture_ids, priority=DBPriority.IMMEDIATE
+            )
+            if not all_cleared:
+                logger.error(f"Failed to clear all tags for pictures: {picture_ids}")
+                raise HTTPException(status_code=500, detail="Failed to clear all tags")
+
             self.vault.notify(EventType.CLEARED_TAGS, picture_ids)
             return {"status": "success", "picture_ids": cleared}
 

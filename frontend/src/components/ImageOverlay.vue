@@ -423,16 +423,18 @@
                 >
                   <span
                     v-for="tag in unassignedTags"
-                    :key="`unassigned-${tag}`"
+                    :key="`unassigned-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
                       { 'overlay-tag--penalized': isPenalizedTag(tag) },
                     ]"
                     draggable="true"
-                    @dragstart="startTagDrag(tag, 'unassigned', null, $event)"
+                    @dragstart="
+                      startTagDrag(tagLabel(tag), 'unassigned', null, $event)
+                    "
                     @dragend="clearTagDrag"
                   >
-                    {{ tag }}
+                    {{ tagLabel(tag) }}
                     <button
                       class="tag-delete-btn"
                       @click.stop="removeTag(tag)"
@@ -480,18 +482,18 @@
                 >
                   <span
                     v-for="tag in group.tags"
-                    :key="`face-${group.faceKey}-${tag}`"
+                    :key="`face-${group.faceKey}-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
                       { 'overlay-tag--penalized': isPenalizedTag(tag) },
                     ]"
                     draggable="true"
                     @dragstart="
-                      startTagDrag(tag, 'face', group.face.id, $event)
+                      startTagDrag(tagLabel(tag), 'face', group.face.id, $event)
                     "
                     @dragend="clearTagDrag"
                   >
-                    {{ tag }}
+                    {{ tagLabel(tag) }}
                     <button
                       class="tag-delete-btn"
                       @click.stop="removeTagFromFace(group.face, tag)"
@@ -526,18 +528,18 @@
                 >
                   <span
                     v-for="tag in group.tags"
-                    :key="`hand-${group.handKey}-${tag}`"
+                    :key="`hand-${group.handKey}-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
                       { 'overlay-tag--penalized': isPenalizedTag(tag) },
                     ]"
                     draggable="true"
                     @dragstart="
-                      startTagDrag(tag, 'hand', group.hand.id, $event)
+                      startTagDrag(tagLabel(tag), 'hand', group.hand.id, $event)
                     "
                     @dragend="clearTagDrag"
                   >
-                    {{ tag }}
+                    {{ tagLabel(tag) }}
                     <button
                       class="tag-delete-btn"
                       @click.stop="removeTagFromHand(group.hand, tag)"
@@ -654,7 +656,8 @@ const props = defineProps({
   tagsRefreshing: { type: Boolean, default: false },
 });
 
-const { open, initialImage, allImages, backendUrl } = toRefs(props);
+const { open, initialImage, allImages, backendUrl, tagsRefreshing } =
+  toRefs(props);
 
 const image = ref(null);
 const sidebarOpen = ref(true);
@@ -665,9 +668,6 @@ const zoomSteps = ["fit", 0.75, 1, 1.5, 2];
 const pan = reactive({ x: 0, y: 0 });
 const isPanning = ref(false);
 const lastPointer = ref({ x: 0, y: 0 });
-const idleTimeoutMs = 6000;
-let chromeIdleTimer = null;
-const chromeRevealTimestamp = ref(0);
 
 // Watch for changes to initialImage and update local image copy
 watch(
@@ -738,10 +738,6 @@ watch(open, (value) => {
   if (!value) {
     resetTagInput();
     chromeHidden.value = false;
-    if (chromeIdleTimer) {
-      clearTimeout(chromeIdleTimer);
-      chromeIdleTimer = null;
-    }
   } else {
     fetchCharacters();
     fetchPenalizedTags();
@@ -772,11 +768,59 @@ async function fetchPenalizedTags() {
 }
 
 function isPenalizedTag(tag) {
-  const key = String(tag || "")
-    .trim()
-    .toLowerCase();
+  const key = tagLabel(tag).trim().toLowerCase();
   if (!key) return false;
   return penalizedTags.value.has(key);
+}
+
+function tagLabel(tag) {
+  if (typeof tag === "string") return tag;
+  if (tag && typeof tag === "object") return String(tag.tag || "");
+  return "";
+}
+
+function tagId(tag) {
+  if (tag && typeof tag === "object" && tag.id != null) {
+    return tag.id;
+  }
+  return null;
+}
+
+function normalizeTagItem(tag) {
+  const label = tagLabel(tag).trim();
+  if (!label) return null;
+  return { id: tagId(tag), tag: label };
+}
+
+function normalizeTagList(tags) {
+  return (Array.isArray(tags) ? tags : [])
+    .map(normalizeTagItem)
+    .filter(Boolean);
+}
+
+function dedupeTagList(tags) {
+  const byTag = new Map();
+  for (const tag of tags) {
+    if (!tag || !tag.tag) continue;
+    const existing = byTag.get(tag.tag);
+    if (!existing || (existing.id == null && tag.id != null)) {
+      byTag.set(tag.tag, tag);
+    }
+  }
+  return Array.from(byTag.values()).sort((a, b) =>
+    a.tag.localeCompare(b.tag, undefined, { sensitivity: "base" }),
+  );
+}
+
+function tagMatches(tag, target) {
+  if (!tag) return false;
+  const targetId = tagId(target);
+  if (tag.id != null && targetId != null) {
+    return String(tag.id) === String(targetId);
+  }
+  const targetLabel = tagLabel(target);
+  if (targetLabel) return tag.tag === targetLabel;
+  return false;
 }
 
 function normalizePictureFormat(target) {
@@ -845,18 +889,15 @@ function confirmAddTag() {
     cancelAddTag();
     return;
   }
-  if (
-    image.value &&
-    Array.isArray(image.value.tags) &&
-    image.value.tags.includes(trimmed)
-  ) {
+  const currentTags = normalizeTagList(image.value?.tags);
+  if (currentTags.some((tag) => tag.tag === trimmed)) {
     cancelAddTag();
     return;
   }
   emit("add-tag", image.value.id, trimmed);
   if (image.value && Array.isArray(image.value.tags)) {
-    image.value.tags.push(trimmed);
-    image.value.tags.sort(); // Ensure tags remain sorted
+    const next = dedupeTagList([...currentTags, { id: null, tag: trimmed }]);
+    image.value.tags = next;
   }
   resetTagInput();
 }
@@ -997,7 +1038,7 @@ function showSwipeHint() {
   }
   swipeHintTimer = window.setTimeout(() => {
     swipeHintVisible.value = false;
-  }, 2000);
+  }, 3000);
 }
 
 function handleBackdropClick() {
@@ -1005,16 +1046,7 @@ function handleBackdropClick() {
 }
 
 function handleUserActivity() {
-  if (chromeHidden.value) {
-    chromeRevealTimestamp.value = Date.now();
-  }
   chromeHidden.value = false;
-  if (chromeIdleTimer) {
-    clearTimeout(chromeIdleTimer);
-  }
-  chromeIdleTimer = window.setTimeout(() => {
-    chromeHidden.value = true;
-  }, idleTimeoutMs);
 }
 
 function handleOverlayClick(event) {
@@ -1040,10 +1072,6 @@ function handleOverlayClick(event) {
   ) {
     handleUserActivity();
     return;
-  }
-  if (chromeIdleTimer) {
-    clearTimeout(chromeIdleTimer);
-    chromeIdleTimer = null;
   }
   chromeHidden.value = true;
 }
@@ -1314,10 +1342,6 @@ onUnmounted(() => {
     clearTimeout(swipeHintTimer);
     swipeHintTimer = null;
   }
-  if (chromeIdleTimer) {
-    clearTimeout(chromeIdleTimer);
-    chromeIdleTimer = null;
-  }
   resetCopyState();
   clearCharacterThumbnails();
 });
@@ -1411,11 +1435,10 @@ async function fetchOverlayMetadata(imageId) {
     const data = await res.data;
     if (!data || Array.isArray(data)) return;
     const merged = { ...data, ...image.value };
-    const currentTags = Array.isArray(image.value?.tags)
-      ? image.value.tags
-      : [];
-    const dataTags = Array.isArray(data.tags) ? data.tags : [];
-    merged.tags = Array.from(new Set([...dataTags, ...currentTags])).sort();
+    const dataTags = normalizeTagList(data.tags);
+    if (data.tags !== undefined) {
+      merged.tags = dedupeTagList(dataTags);
+    }
     if (image.value?.description == null) {
       merged.description = data.description ?? null;
     }
@@ -1520,7 +1543,7 @@ async function fetchFaceTagsForFaces(faces) {
         );
         const payload = await res.data;
         const tags = Array.isArray(payload) ? payload : payload?.tags;
-        return [face.id, Array.isArray(tags) ? tags : []];
+        return [face.id, normalizeTagList(tags)];
       } catch (e) {
         return [face.id, []];
       }
@@ -1528,7 +1551,7 @@ async function fetchFaceTagsForFaces(faces) {
   );
   const nextMap = {};
   for (const [faceId, tags] of entries) {
-    nextMap[faceId] = Array.from(new Set(tags)).sort();
+    nextMap[faceId] = dedupeTagList(tags);
   }
   faceTagMap.value = nextMap;
 }
@@ -1546,7 +1569,7 @@ async function fetchHandTagsForHands(hands) {
         );
         const payload = await res.data;
         const tags = Array.isArray(payload) ? payload : payload?.tags;
-        return [hand.id, Array.isArray(tags) ? tags : []];
+        return [hand.id, normalizeTagList(tags)];
       } catch (e) {
         return [hand.id, []];
       }
@@ -1554,75 +1577,90 @@ async function fetchHandTagsForHands(hands) {
   );
   const nextMap = {};
   for (const [handId, tags] of entries) {
-    nextMap[handId] = Array.from(new Set(tags)).sort();
+    nextMap[handId] = dedupeTagList(tags);
   }
   handTagMap.value = nextMap;
 }
 
 function ensureTagInImage(tag) {
   if (!image.value) return;
-  const tags = Array.isArray(image.value.tags) ? image.value.tags : [];
-  if (!tags.includes(tag)) {
-    tags.push(tag);
-    tags.sort();
-    image.value = { ...image.value, tags };
-    emit("add-tag", image.value.id, tag);
+  const label = tagLabel(tag);
+  if (!label) return;
+  const tags = normalizeTagList(image.value.tags);
+  if (!tags.some((entry) => entry.tag === label)) {
+    const next = dedupeTagList([...tags, { id: null, tag: label }]);
+    image.value = { ...image.value, tags: next };
+    emit("add-tag", image.value.id, label);
   }
 }
 
 async function assignTagToFace(face, tag) {
   if (!face?.id || !tag || !backendUrl.value) return;
-  ensureTagInImage(tag);
+  const label = tagLabel(tag);
+  if (!label) return;
+  ensureTagInImage(label);
   const res = await apiClient.post(
     `${backendUrl.value}/faces/${face.id}/tags`,
-    { tag },
+    { tag: label },
   );
   const payload = await res.data;
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   faceTagMap.value = {
     ...faceTagMap.value,
-    [face.id]: Array.isArray(tags) ? tags : [],
+    [face.id]: normalizeTagList(tags),
   };
 }
 
 async function removeTagFromFace(face, tag) {
   if (!face?.id || !tag || !backendUrl.value) return;
+  const key = tagId(tag);
+  if (key == null) {
+    console.warn("Tag id is required to remove a face tag.", tag);
+    return;
+  }
   const res = await apiClient.delete(
-    `${backendUrl.value}/faces/${face.id}/tags/${encodeURIComponent(tag)}`,
+    `${backendUrl.value}/faces/${face.id}/tags/${key}`,
   );
   const payload = await res.data;
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   faceTagMap.value = {
     ...faceTagMap.value,
-    [face.id]: Array.isArray(tags) ? tags : [],
+    [face.id]: normalizeTagList(tags),
   };
 }
 
 async function assignTagToHand(hand, tag) {
   if (!hand?.id || !tag || !backendUrl.value) return;
-  ensureTagInImage(tag);
+  const label = tagLabel(tag);
+  if (!label) return;
+  ensureTagInImage(label);
   const res = await apiClient.post(
     `${backendUrl.value}/hands/${hand.id}/tags`,
-    { tag },
+    { tag: label },
   );
   const payload = await res.data;
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   handTagMap.value = {
     ...handTagMap.value,
-    [hand.id]: Array.isArray(tags) ? tags : [],
+    [hand.id]: normalizeTagList(tags),
   };
 }
 
 async function removeTagFromHand(hand, tag) {
   if (!hand?.id || !tag || !backendUrl.value) return;
+  const key = tagId(tag);
+  if (key == null) {
+    console.warn("Tag id is required to remove a hand tag.", tag);
+    return;
+  }
   const res = await apiClient.delete(
-    `${backendUrl.value}/hands/${hand.id}/tags/${encodeURIComponent(tag)}`,
+    `${backendUrl.value}/hands/${hand.id}/tags/${key}`,
   );
   const payload = await res.data;
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   handTagMap.value = {
     ...handTagMap.value,
-    [hand.id]: Array.isArray(tags) ? tags : [],
+    [hand.id]: normalizeTagList(tags),
   };
 }
 
@@ -1893,6 +1931,15 @@ watch(
   () => image.value?.id,
   (newId) => {
     if (newId) {
+      overlayDims.value = {
+        width: 1,
+        height: 1,
+        naturalWidth: 1,
+        naturalHeight: 1,
+        offsetX: 0,
+        offsetY: 0,
+      };
+      scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
       fetchHandBboxes(newId);
       fetchOverlayMetadata(newId);
@@ -1911,10 +1958,28 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => tagsRefreshing.value,
+  (isRefreshing, wasRefreshing) => {
+    if (!wasRefreshing && isRefreshing) {
+      if (image.value && Array.isArray(image.value.tags)) {
+        image.value.tags = [];
+      }
+      faceTagMap.value = {};
+      handTagMap.value = {};
+      return;
+    }
+    if (!isRefreshing && wasRefreshing && image.value?.id) {
+      fetchFaceTagsForFaces(faceBboxes.value);
+      fetchHandTagsForHands(handBboxes.value);
+    }
+  },
+);
+
 function handleTagBackspace(event) {
   if (event.key !== "Backspace") return;
   if (newTag.value.trim()) return;
-  const tags = image.value?.tags || [];
+  const tags = normalizeTagList(image.value?.tags);
   if (!tags.length) return;
   removeTag(tags[tags.length - 1]);
 }
@@ -1937,13 +2002,17 @@ const faceAssignItems = computed(() => {
 
 const faceTagGroups = computed(() => {
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
-  return faces.map((face, idx) => ({
-    face,
-    faceKey: face?.id ?? `face-${idx}`,
-    label: face?.character_name || `Face ${idx + 1}`,
-    tags: faceTagMap.value?.[face.id] || [],
-    color: faceBoxColor(idx),
-  }));
+  return faces.map((face, idx) => {
+    const characterName = face?.character_name;
+    const label = characterName ? `${characterName}'s face` : `Face ${idx + 1}`;
+    return {
+      face,
+      faceKey: face?.id ?? `face-${idx}`,
+      label,
+      tags: faceTagMap.value?.[face.id] || [],
+      color: faceBoxColor(idx),
+    };
+  });
 });
 
 const handTagGroups = computed(() => {
@@ -1958,8 +2027,7 @@ const handTagGroups = computed(() => {
 });
 
 const unassignedTags = computed(() => {
-  const tags = Array.isArray(image.value?.tags) ? image.value.tags : [];
-  return [...tags].sort();
+  return dedupeTagList(normalizeTagList(image.value?.tags));
 });
 
 function startTagDrag(tag, sourceType, sourceId, event) {
@@ -2567,11 +2635,14 @@ function selectAllText() {
 
 function removeTag(tag) {
   if (!image.value || !Array.isArray(image.value.tags)) return;
-  const index = image.value.tags.indexOf(tag);
-  if (index !== -1) {
-    image.value.tags.splice(index, 1);
-    emit("remove-tag", image.value.id, tag); // Notify parent component
+  if (tagId(tag) == null) {
+    console.warn("Tag id is required to remove a picture tag.", tag);
+    return;
   }
+  const current = normalizeTagList(image.value.tags);
+  const next = current.filter((entry) => !tagMatches(entry, tag));
+  image.value.tags = next;
+  emit("remove-tag", image.value.id, tag); // Notify parent component
 }
 
 function downloadComfyWorkflow(workflow) {
@@ -3039,7 +3110,7 @@ function downloadComfyWorkflow(workflow) {
 
 .description-editor textarea {
   width: 100%;
-  min-height: 160px;
+  min-height: 120px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(0, 0, 0, 0.35);
@@ -3083,6 +3154,7 @@ function downloadComfyWorkflow(workflow) {
   margin-left: 0px;
   justify-content: center;
   vertical-align: middle;
+  cursor: pointer;
 }
 
 .overlay-tag--penalized {

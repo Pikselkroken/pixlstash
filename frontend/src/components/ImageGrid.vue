@@ -1990,18 +1990,15 @@ async function refreshImageFromOverlay(payload) {
         if (overlayImage.value?.description == null) {
           merged.description = latestInfo.description ?? null;
         }
-        const currentTags = Array.isArray(overlayImage.value?.tags)
-          ? overlayImage.value.tags
-          : [];
-        const dataTags = Array.isArray(latestInfo.tags)
-          ? latestInfo.tags
-          : null;
-        merged.tags = dataTags ? [...dataTags].sort() : [...currentTags];
+        const dataTags = normalizeTagList(latestInfo.tags);
+        if (latestInfo.tags !== undefined) {
+          merged.tags = dedupeTagList(dataTags);
+        }
         if (overlayImage.value?.metadata == null) {
           merged.metadata = latestInfo.metadata ?? {};
         }
         overlayImage.value = merged;
-        if (Array.isArray(dataTags) && dataTags.length > 0) {
+        if (dataTags.length > 0) {
           clearPendingTagRefresh(imageId);
         }
       }
@@ -2073,11 +2070,10 @@ async function openOverlay(img) {
   if (overlayImage.value?.description == null) {
     merged.description = latestInfo.description ?? null;
   }
-  const currentTags = Array.isArray(overlayImage.value?.tags)
-    ? overlayImage.value.tags
-    : [];
-  const dataTags = Array.isArray(latestInfo.tags) ? latestInfo.tags : [];
-  merged.tags = Array.from(new Set([...dataTags, ...currentTags])).sort();
+  const dataTags = normalizeTagList(latestInfo.tags);
+  if (latestInfo.tags !== undefined) {
+    merged.tags = dedupeTagList(dataTags);
+  }
   if (overlayImage.value?.metadata == null) {
     merged.metadata = latestInfo.metadata ?? {};
   }
@@ -3166,6 +3162,55 @@ function normalizePictureId(id) {
   return String(id);
 }
 
+function getTagLabel(tag) {
+  if (typeof tag === "string") return tag;
+  if (tag && typeof tag === "object") return String(tag.tag || "");
+  return "";
+}
+
+function getTagId(tag) {
+  if (tag && typeof tag === "object" && tag.id != null) {
+    return tag.id;
+  }
+  return null;
+}
+
+function normalizeTagItem(tag) {
+  const label = getTagLabel(tag).trim();
+  if (!label) return null;
+  return { id: getTagId(tag), tag: label };
+}
+
+function normalizeTagList(tags) {
+  return (Array.isArray(tags) ? tags : [])
+    .map(normalizeTagItem)
+    .filter(Boolean);
+}
+
+function dedupeTagList(tags) {
+  const byTag = new Map();
+  for (const tag of tags) {
+    if (!tag || !tag.tag) continue;
+    const existing = byTag.get(tag.tag);
+    if (!existing || (existing.id == null && tag.id != null)) {
+      byTag.set(tag.tag, tag);
+    }
+  }
+  return Array.from(byTag.values()).sort((a, b) =>
+    a.tag.localeCompare(b.tag, undefined, { sensitivity: "base" }),
+  );
+}
+
+function tagMatches(tag, target) {
+  if (!tag) return false;
+  if (tag.id != null && target?.id != null) {
+    return String(tag.id) === String(target.id);
+  }
+  if (target?.tag) return tag.tag === target.tag;
+  if (typeof target === "string") return tag.tag === target;
+  return false;
+}
+
 watch(
   [
     () => props.showFaceBboxes,
@@ -3692,19 +3737,26 @@ async function removeTagFromImage(imageId, tag) {
   }
 
   try {
+    const tagId = getTagId(tag);
+    if (tagId == null) {
+      console.warn("Tag id is required to remove a tag.", tag);
+      return;
+    }
+    const tagKey = String(tagId);
     await apiClient.delete(
-      `${props.backendUrl}/pictures/${imageId}/tags/${tag}`,
+      `${props.backendUrl}/pictures/${imageId}/tags/${tagKey}`,
     );
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
     if (gridImg && Array.isArray(gridImg.tags)) {
-      gridImg.tags = gridImg.tags.filter((t) => t !== tag);
+      const normalized = normalizeTagList(gridImg.tags);
+      gridImg.tags = normalized.filter((t) => !tagMatches(t, tag));
     }
     if (overlayImage.value && overlayImage.value.id === imageId) {
-      const overlayTags = Array.isArray(overlayImage.value.tags)
-        ? overlayImage.value.tags.filter((t) => t !== tag)
-        : [];
+      const overlayTags = normalizeTagList(overlayImage.value.tags).filter(
+        (t) => !tagMatches(t, tag),
+      );
       overlayImage.value = { ...overlayImage.value, tags: overlayTags };
     }
     if (isSmartScoreSortActive()) {
@@ -3726,26 +3778,23 @@ async function addTagToImage(imageId, tag) {
       },
     );
     console.log(`Tag '${tag}' added to image ${imageId}`);
+    const responseTags = normalizeTagList(response?.data?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
     if (gridImg) {
-      const tags = Array.isArray(gridImg.tags) ? [...gridImg.tags] : [];
-      if (!tags.includes(tag)) {
-        tags.push(tag);
-        tags.sort();
-      }
-      gridImg.tags = tags;
+      const current = normalizeTagList(gridImg.tags);
+      const merged = responseTags.length
+        ? responseTags
+        : dedupeTagList([...current, { id: null, tag }]);
+      gridImg.tags = merged;
     }
     if (overlayImage.value && overlayImage.value.id === imageId) {
-      const tags = Array.isArray(overlayImage.value.tags)
-        ? [...overlayImage.value.tags]
-        : [];
-      if (!tags.includes(tag)) {
-        tags.push(tag);
-        tags.sort();
-      }
-      overlayImage.value = { ...overlayImage.value, tags };
+      const current = normalizeTagList(overlayImage.value.tags);
+      const merged = responseTags.length
+        ? responseTags
+        : dedupeTagList([...current, { id: null, tag }]);
+      overlayImage.value = { ...overlayImage.value, tags: merged };
     }
     if (isSmartScoreSortActive()) {
       await refreshSmartScoreForImage(imageId);

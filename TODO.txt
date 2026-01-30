@@ -1,6 +1,7 @@
-* Clean up code
-* Package better
-* One more "killer feature"
+1. Fix up scoring overlay
+2. Add scrap heap feature (automatic tossing of very poor smart score images)
+3. Clean up code
+4. Package better
 
 Eventually:
 * Multi-user
