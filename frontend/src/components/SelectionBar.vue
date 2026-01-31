@@ -13,6 +13,16 @@
         </span>
       </div>
       <div class="selection-bar-actions">
+        <button
+          v-if="selectedCount > 0"
+          class="refresh-btn"
+          type="button"
+          title="Refresh tags for selected images"
+          @click="$emit('refresh-tags')"
+        >
+          <v-icon size="16">mdi-refresh</v-icon>
+          <span>Refresh Tags</span>
+        </button>
         <AddToSetControl
           v-if="selectedCount > 0"
           :backend-url="backendUrl"
@@ -98,6 +108,21 @@ const props = defineProps({
   align-items: center;
   gap: 16px;
   margin-left: auto;
+}
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  color: rgba(var(--v-theme-on-surface), 0.85);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+.refresh-btn:hover {
+  background: rgba(var(--v-theme-on-surface), 0.16);
 }
 .clear-btn {
   background: rgb(var(--v-theme-primary));

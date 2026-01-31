@@ -758,9 +758,15 @@ async function fetchPenalizedTags() {
   penalizedTagsLoading.value = true;
   try {
     const res = await apiClient.get("/users/me/config");
-    const list = Array.isArray(res.data?.smart_score_penalized_tags)
-      ? res.data.smart_score_penalized_tags
-      : [];
+    let list = [];
+    if (Array.isArray(res.data?.smart_score_penalized_tags)) {
+      list = res.data.smart_score_penalized_tags;
+    } else if (
+      res.data?.smart_score_penalized_tags &&
+      typeof res.data.smart_score_penalized_tags === "object"
+    ) {
+      list = Object.keys(res.data.smart_score_penalized_tags);
+    }
     const normalized = list
       .map((tag) =>
         String(tag || "")

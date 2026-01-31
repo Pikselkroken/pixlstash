@@ -49,6 +49,7 @@
       :selected-image-ids="selectedImageIds"
       :visible="selectedImageIds.length > 0 || selectedFaceIds.length > 0"
       @clear-selection="clearSelection"
+      @refresh-tags="refreshTagsForSelection"
       @remove-from-group="removeFromGroup"
       @delete-selected="deleteSelected"
       @add-to-character="handleAddToCharacter"
@@ -1511,6 +1512,36 @@ function debugLogDataTransfer(label, dataTransfer) {
 function clearSelection() {
   selectedImageIds.value = [];
   clearFaceSelection();
+  lastSelectedImageId = null;
+}
+
+async function refreshTagsForSelection() {
+  if (!selectedImageIds.value.length) return;
+  const ids = selectedImageIds.value.slice();
+  const normalizedIds = new Set(ids.map((id) => normalizePictureId(id)));
+  try {
+    ids.forEach((id) => handleTagRefreshStart(id));
+    await apiClient.post(`${props.backendUrl}/pictures/clear_tags`, {
+      picture_ids: ids,
+    });
+    allGridImages.value = allGridImages.value.map((img) => {
+      if (!img || !normalizedIds.has(normalizePictureId(img.id))) {
+        return img;
+      }
+      return { ...img, tags: [] };
+    });
+    if (
+      overlayImage.value &&
+      normalizedIds.has(normalizePictureId(overlayImage.value.id))
+    ) {
+      overlayImage.value = { ...overlayImage.value, tags: [] };
+    }
+    for (const id of ids) {
+      refreshImageFromOverlay(id);
+    }
+  } catch (err) {
+    alert(`Failed to refresh tags: ${err?.message || err}`);
+  }
 }
 
 // Video refs for hover play/pause in grid
@@ -1593,7 +1624,7 @@ function removeFromGroup() {
         }
         selectedImageIds.value = [];
         clearFaceSelection();
-        lastSelectedIndex = null;
+        lastSelectedImageId = null;
         fetchAllGridImages().then(() => {
           loadedRanges.value = [];
           updateVisibleThumbnails();
@@ -1631,7 +1662,7 @@ function removeFromGroup() {
       );
       selectedImageIds.value = [];
       clearFaceSelection();
-      lastSelectedIndex = null;
+      lastSelectedImageId = null;
       await fetchAllGridImages();
       loadedRanges.value = [];
       updateVisibleThumbnails();
@@ -1663,7 +1694,7 @@ function handleAddToCharacter(payload) {
     removeImagesById(pictureIds);
   }
   clearSelection();
-  lastSelectedIndex = null;
+  lastSelectedImageId = null;
   emit("refresh-sidebar");
 }
 
@@ -1702,7 +1733,7 @@ function deleteSelected() {
       (img) => !selectedImageIds.value.includes(img.id),
     );
     selectedImageIds.value = [];
-    lastSelectedIndex = null;
+    lastSelectedImageId = null;
     updateVisibleThumbnails();
     emit("refresh-sidebar");
   });
@@ -1714,7 +1745,7 @@ async function handleImagesUploaded(newIds) {
   resetThumbnailState();
   allGridImages.value = [];
   selectedImageIds.value = [];
-  lastSelectedIndex = null;
+  lastSelectedImageId = null;
   fetchAllGridImages().then(() => {
     updateVisibleThumbnails();
   });
@@ -1744,7 +1775,7 @@ watch(
     if (!preserveScrollOnNextFetch.value) {
       allGridImages.value = [];
       selectedImageIds.value = [];
-      lastSelectedIndex = null;
+      lastSelectedImageId = null;
     }
     debouncedFetchAllGridImages();
     if (preserveScrollOnNextFetch.value) {
@@ -1834,7 +1865,7 @@ watch(
 // --- Multi-selection state ---
 // Local selection state (mirrors parent prop)
 const selectedImageIds = ref([]);
-let lastSelectedIndex = null;
+let lastSelectedImageId = null;
 
 watch(
   selectedImageIds,
@@ -3056,7 +3087,7 @@ watch(
     resetThumbnailState();
     allGridImages.value = [];
     selectedImageIds.value = [];
-    lastSelectedIndex = null;
+    lastSelectedImageId = null;
     initialRender.value = true;
     updateSelectedGroupName();
     debouncedFetchAllGridImages();
@@ -3070,7 +3101,7 @@ watch([() => props.mediaTypeFilter], () => {
   // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
   resetThumbnailState();
   selectedImageIds.value = [];
-  lastSelectedIndex = null;
+  lastSelectedImageId = null;
   visibleStart.value = 0;
   visibleEnd.value = 0;
   allGridImages.value = [];
@@ -3699,6 +3730,15 @@ function handleImageCardClick(img, idx, event) {
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
   let newSelection = [];
+  const visibleGrid = gridImagesToRender.value;
+  const anchorIndex =
+    lastSelectedImageId != null
+      ? visibleGrid.findIndex(
+          (item) =>
+            normalizePictureId(item?.id) ===
+            normalizePictureId(lastSelectedImageId),
+        )
+      : -1;
   if (isCtrl) {
     // Toggle selection
     newSelection = [...selectedImageIds.value];
@@ -3709,25 +3749,24 @@ function handleImageCardClick(img, idx, event) {
       console.debug("Selecting image ID:", img.id);
       newSelection.push(img.id);
     }
-    lastSelectedIndex = idx;
-  } else if (isShift && lastSelectedIndex !== null) {
+    lastSelectedImageId = img.id;
+  } else if (isShift && anchorIndex >= 0) {
     // Range select: select only the contiguous range between anchor and clicked item, using the visible grid
-    const start = Math.min(lastSelectedIndex, idx);
-    const end = Math.max(lastSelectedIndex, idx);
+    const start = Math.min(anchorIndex, idx);
+    const end = Math.max(anchorIndex, idx);
     // Use gridImagesToRender for visible grid selection
-    const visibleGrid = gridImagesToRender.value;
     newSelection = visibleGrid
       .slice(start, end + 1)
       .map((i) => i.id)
       .filter(Boolean);
     // Do NOT merge with previous selection; replace it
-  } else if (isShift && lastSelectedIndex === null) {
+  } else if (isShift && anchorIndex < 0) {
     newSelection = [img.id];
-    lastSelectedIndex = idx;
+    lastSelectedImageId = img.id;
   } else {
     // Single click (no ctrl/shift): select only this image
     newSelection = [img.id];
-    lastSelectedIndex = idx;
+    lastSelectedImageId = img.id;
   }
   selectedImageIds.value = newSelection;
   console.log("New selection:", newSelection);
@@ -3750,7 +3789,7 @@ function handleGridBackgroundClick(e) {
   if (!e.target.closest(".image-card")) {
     console.log("Clearing selection");
     selectedImageIds.value = [];
-    lastSelectedIndex = null;
+    lastSelectedImageId = null;
   }
 }
 
@@ -3861,7 +3900,7 @@ function handleKeyDown(event) {
   if (overlayOpen.value) return; // Ignore if overlay is open
   if (event.key === "Escape") {
     selectedImageIds.value = [];
-    lastSelectedIndex = null;
+    lastSelectedImageId = null;
     clearFaceSelection();
   } else if (event.key === "Delete" || event.key === "Backspace") {
     if (selectedImageIds.value.length > 0) {
@@ -3883,7 +3922,7 @@ function handleKeyDown(event) {
       .map((img) => img.id);
     selectedImageIds.value = Array.from(allIds);
     console.log("[CTRL+A] selectedImageIds:", selectedImageIds.value);
-    lastSelectedIndex = null;
+    lastSelectedImageId = null;
   } else if (
     (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
     !overlayOpen.value &&

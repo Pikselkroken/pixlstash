@@ -144,7 +144,11 @@ class PictureUtils:
         # We apply a hinge loss logic:
         # If likeness > pivot, gain small bonus.
         # If likeness < pivot, suffer heavy penalty.
-        char_raw = np.array([c.get("character_likeness", 0.0) for c in candidates])
+        char_raw_values = [c.get("character_likeness") for c in candidates]
+        char_mask = np.array([val is not None for val in char_raw_values])
+        char_raw = np.array(
+            [float(val) if val is not None else 0.0 for val in char_raw_values]
+        )
 
         # Calculate delta from pivot
         char_deltas = char_raw - cfg["char_pivot"]
@@ -155,6 +159,7 @@ class PictureUtils:
             char_deltas * cfg["w_char_bonus"],
             char_deltas * cfg["w_char_penalty"],
         )
+        char_component = np.where(char_mask, char_component, 0.0)
         scores += char_component
 
         # 2. Good Anchors
@@ -293,10 +298,10 @@ class PictureUtils:
         penalized_counts = np.array(
             [float(c.get("penalized_tag_count") or 0) for c in candidates]
         )
-        penalized_counts = np.clip(
-            penalized_counts, 0.0, float(cfg["penalized_tag_cap"])
+        penalized_equivalent = np.clip(
+            penalized_counts / 5.0, 0.0, float(cfg["penalized_tag_cap"])
         )
-        penalized_component = cfg["w_penalized_tag"] * penalized_counts
+        penalized_component = cfg["w_penalized_tag"] * penalized_equivalent
         scores -= penalized_component
 
         # Rescale [0, 1] to [1, 5] with optional spread adjustment
@@ -317,7 +322,7 @@ class PictureUtils:
         for rank, i in enumerate(sorted_indices):
             logger.debug(
                 f"[#{rank + 1}] ID={candidates[i]['id']} Score={final_scores[i]:.2f} "
-                f"Char={char_component[i]:.3f} (raw={char_raw[i]:.2f}) "
+                f"Char={char_component[i]:.3f} (raw={char_raw[i]:.2f},assigned={bool(char_mask[i])}) "
                 f"Good={good_component[i]:.3f} (maxSim={raw_good_sim[i]:.3f}) "
                 f"Bad={bad_component[i]:.3f} (maxSim={raw_bad_sim[i]:.3f}) "
                 f"Aest={aest_component[i]:.3f} (raw={raw_aest[i]:.2f}) "
@@ -327,6 +332,42 @@ class PictureUtils:
                 f"PenTags={penalized_component[i]:.3f} (count={int(penalized_counts[i])}) "
                 f"MaskBad={mask_bad[i]} PreClip={scores[i]:.3f} "
             )
+
+        low_score_mask = (final_scores <= 1.01) & (penalized_counts <= 0)
+        low_score_indices = np.where(low_score_mask)[0]
+        if low_score_indices.size:
+            logger.warning(
+                "[SMART SCORE] %s candidates scored ~1.0 with no penalized tags.",
+                int(low_score_indices.size),
+            )
+            for i in low_score_indices[:25]:
+                logger.warning(
+                    "[SMART SCORE LOW] ID=%s Score=%.2f PreClip=%.3f Char=%.3f(raw=%.2f,assigned=%s) "
+                    "Good=%.3f(maxSim=%.3f) Bad=%.3f(maxSim=%.3f,mask=%s) "
+                    "Aest=%.3f(raw=%.2f) Res=%.3f(mpx=%.2f) Noise=%.3f(raw=%.2f) "
+                    "Edge=%.3f(raw=%.2f) PenTags=%.3f(count=%d)",
+                    candidates[i]["id"],
+                    final_scores[i],
+                    scores[i],
+                    char_component[i],
+                    char_raw[i],
+                    bool(char_mask[i]),
+                    good_component[i],
+                    raw_good_sim[i],
+                    bad_component[i],
+                    raw_bad_sim[i],
+                    bool(mask_bad[i]),
+                    aest_component[i],
+                    raw_aest[i],
+                    res_component[i],
+                    mpx[i],
+                    noise_component[i],
+                    noise_vals[i],
+                    edge_component[i],
+                    edge_vals[i],
+                    penalized_component[i],
+                    int(penalized_counts[i]),
+                )
 
         return final_scores
 

@@ -132,18 +132,61 @@ function resetSettingsForm() {
   smartScoreTagsSuccess.value = "";
 }
 
+const smartScoreImportanceOptions = [
+  { value: 1, label: "Mild" },
+  { value: 2, label: "Low" },
+  { value: 3, label: "Moderate" },
+  { value: 4, label: "High" },
+  { value: 5, label: "Severe" },
+];
+
+function clampImportance(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 3;
+  return Math.min(5, Math.max(1, Math.round(num)));
+}
+
 function normalizeSmartScoreTags(tags) {
-  const list = Array.isArray(tags) ? tags : [];
-  const normalized = [];
-  const seen = new Set();
-  for (const tag of list) {
-    if (tag == null) continue;
-    const clean = String(tag).trim().toLowerCase();
-    if (!clean || seen.has(clean)) continue;
-    seen.add(clean);
-    normalized.push(clean);
+  const normalized = new Map();
+  if (Array.isArray(tags)) {
+    for (const item of tags) {
+      if (item == null) continue;
+      if (typeof item === "object") {
+        const clean = String(item.tag || "")
+          .trim()
+          .toLowerCase();
+        if (!clean) continue;
+        normalized.set(clean, clampImportance(item.weight));
+      } else {
+        const clean = String(item).trim().toLowerCase();
+        if (!clean) continue;
+        normalized.set(clean, 3);
+      }
+    }
+  } else if (tags && typeof tags === "object") {
+    for (const [tag, weight] of Object.entries(tags)) {
+      if (tag == null) continue;
+      const clean = String(tag).trim().toLowerCase();
+      if (!clean) continue;
+      const nextWeight = clampImportance(weight);
+      const existing = normalized.get(clean);
+      if (existing == null || nextWeight > existing) {
+        normalized.set(clean, nextWeight);
+      }
+    }
   }
-  return normalized;
+  return Array.from(normalized.entries())
+    .map(([tag, weight]) => ({ tag, weight }))
+    .sort((a, b) => a.tag.localeCompare(b.tag));
+}
+
+function serializeSmartScoreTags(entries) {
+  const normalized = normalizeSmartScoreTags(entries);
+  const payload = {};
+  for (const entry of normalized) {
+    payload[entry.tag] = clampImportance(entry.weight);
+  }
+  return { normalized, payload };
 }
 
 async function fetchSmartScoreSettings() {
@@ -166,9 +209,9 @@ async function saveSmartScoreTags(nextTags) {
   smartScoreTagsError.value = "";
   smartScoreTagsSuccess.value = "";
   try {
-    const normalized = normalizeSmartScoreTags(nextTags);
+    const { normalized, payload } = serializeSmartScoreTags(nextTags);
     await apiClient.patch("/users/me/config", {
-      smart_score_penalized_tags: normalized,
+      smart_score_penalized_tags: payload,
     });
     smartScorePenalizedTags.value = normalized;
     smartScoreTagsSuccess.value = "Saved.";
@@ -190,7 +233,7 @@ async function addSmartScoreTag() {
   if (!trimmed) return;
   const next = normalizeSmartScoreTags([
     ...smartScorePenalizedTags.value,
-    trimmed,
+    { tag: trimmed, weight: 3 },
   ]);
   smartScoreTagInput.value = "";
   await saveSmartScoreTags(next);
@@ -198,7 +241,16 @@ async function addSmartScoreTag() {
 
 async function removeSmartScoreTag(tag) {
   const next = normalizeSmartScoreTags(
-    smartScorePenalizedTags.value.filter((t) => t !== tag),
+    smartScorePenalizedTags.value.filter((t) => t.tag !== tag),
+  );
+  await saveSmartScoreTags(next);
+}
+
+async function updateSmartScoreTagWeight(tag, weight) {
+  const next = normalizeSmartScoreTags(
+    smartScorePenalizedTags.value.map((entry) =>
+      entry.tag === tag ? { ...entry, weight: clampImportance(weight) } : entry,
+    ),
   );
   await saveSmartScoreTags(next);
 }
@@ -1159,6 +1211,7 @@ defineExpose({ refreshSidebar });
                 <div class="settings-section-title">Smart Score</div>
                 <div class="settings-section-desc">
                   Tags listed here reduce Smart Score when present on a picture.
+                  Adjust the importance to control how much they hurt the score.
                 </div>
                 <div class="settings-form">
                   <v-text-field
@@ -1182,22 +1235,42 @@ defineExpose({ refreshSidebar });
                   <div v-if="smartScoreTagsError" class="settings-error">
                     {{ smartScoreTagsError }}
                   </div>
-                  <div v-if="smartScoreTagsSuccess" class="settings-success">
+                  <div
+                    v-else-if="smartScoreTagsSuccess"
+                    class="settings-success"
+                  >
                     {{ smartScoreTagsSuccess }}
+                  </div>
+                  <div v-else class="settings-success">
+                    {{ "&nbsp;" }}
                   </div>
                   <div class="settings-tag-list">
                     <div
-                      v-for="tag in smartScorePenalizedTags"
-                      :key="tag"
-                      class="settings-tag-chip"
+                      v-for="entry in smartScorePenalizedTags"
+                      :key="entry.tag"
+                      class="settings-tag-chip settings-tag-chip--row"
                     >
-                      <span class="settings-tag-label">{{ tag }}</span>
+                      <span class="settings-tag-label">{{ entry.tag }}</span>
+                      <v-select
+                        class="settings-tag-importance"
+                        :items="smartScoreImportanceOptions"
+                        item-title="label"
+                        item-value="value"
+                        density="compact"
+                        variant="solo"
+                        hide-details
+                        :disabled="smartScoreTagsLoading"
+                        :model-value="entry.weight"
+                        @update:model-value="
+                          (value) => updateSmartScoreTagWeight(entry.tag, value)
+                        "
+                      />
                       <v-btn
                         icon
                         variant="text"
                         class="settings-tag-delete"
                         :disabled="smartScoreTagsLoading"
-                        @click="removeSmartScoreTag(tag)"
+                        @click="removeSmartScoreTag(entry.tag)"
                       >
                         <v-icon size="16">mdi-close</v-icon>
                       </v-btn>
@@ -2379,38 +2452,75 @@ defineExpose({ refreshSidebar });
 
 .settings-tag-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .settings-tag-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 4px 4px 6px;
+  gap: 6px;
+  padding: 2px 6px;
   border-radius: 6px;
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  color: rgba(var(--v-theme-on-surface), 0.9);
+}
+
+.settings-tag-chip--row {
+  width: 100%;
+  justify-content: space-between;
+  padding-right: 4px;
+}
+
+.settings-tag-importance {
+  flex: 0 0 150px;
+  min-width: 150px;
+  max-width: 150px;
+}
+
+.settings-tag-importance .v-field {
+  min-height: 28px;
+  height: 28px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 0.9em;
+}
+
+.settings-tag-importance .v-field__input {
+  min-height: 28px;
+  height: 28px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 0.85rem;
+}
+
+:deep(.settings-tag-importance .v-select__selection-text) {
+  font-size: 0.85rem;
+  line-height: 1.1;
+}
+
+:deep(.settings-tag-importance .v-field__input input) {
+  font-size: 0.85rem;
 }
 
 .settings-tag-label {
   font-size: 1em;
+  flex: 1;
+  min-width: 0;
 }
 
 .settings-tag-delete {
-  color: rgba(var(--v-theme-on-primary), 0.9);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   min-width: 0;
-  height: 16px;
-  width: 16px;
-  padding: 0;
+  height: 12px;
+  width: 12px;
+  padding: 2;
 }
 
 .settings-tag-delete:hover {
   color: rgba(var(--v-theme-error), 0.9);
   min-width: 0;
-  height: 16px;
-  width: 16px;
-  padding: 0;
+  padding: 2;
 }
 
 .settings-token-dialog {
@@ -2420,7 +2530,7 @@ defineExpose({ refreshSidebar });
 .settings-token-warning {
   font-size: 0.9em;
   color: rgba(var(--v-theme-on-surface), 0.7);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .settings-token-value {
@@ -2428,7 +2538,7 @@ defineExpose({ refreshSidebar });
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   background: rgba(var(--v-theme-surface), 0.2);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 2px 4px;
 }
 
 .settings-section-divider {

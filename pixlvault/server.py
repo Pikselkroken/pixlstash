@@ -72,22 +72,23 @@ from pixlvault.worker_registry import WorkerType
 from pixlvault.watch_folder_worker import WatchFolderWorker
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
-DEFAULT_SMART_SCORE_PENALIZED_TAGS = [
-    "incorrect reflection",
-    "fused fingers",
-    "malformed eye",
-    "bad anatomy",
-    "extra digit",
-    "missing digit",
-    "extra limb",
-    "missing limb",
-    "malformed hand",
-    "malformed teeth",
-    "missing nipples",
-    "malformed nipples",
-    "waxy skin",
-    "flux chin",
-]
+DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT = 3
+DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
+    "incorrect reflection": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    "fused fingers": 5,
+    "malformed eye": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    "bad anatomy": 5,
+    "extra digit": 5,
+    "missing digit": 4,
+    "extra limb": 5,
+    "missing limb": 5,
+    "malformed hand": 5,
+    "malformed teeth": 4,
+    "missing nipples": 5,
+    "malformed nipples": 4,
+    "waxy skin": 2,
+    "flux chin": 1,
+}
 TAG_EMPTY_SENTINEL = ""
 
 
@@ -478,31 +479,43 @@ class Server:
         tags = None
         if isinstance(value, str):
             try:
-                parsed = json.loads(value)
+                tags = json.loads(value)
             except Exception:
                 return fallback
-            if isinstance(parsed, list):
-                tags = parsed
-            else:
-                return fallback
-        elif isinstance(value, list):
+        else:
             tags = value
+
+        if isinstance(tags, list):
+            normalized = {}
+            for tag in tags:
+                if tag is None:
+                    continue
+                clean = str(tag).strip().lower()
+                if not clean:
+                    continue
+                normalized[clean] = DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT
+        elif isinstance(tags, dict):
+            normalized = {}
+            for tag, weight in tags.items():
+                if tag is None:
+                    continue
+                clean = str(tag).strip().lower()
+                if not clean:
+                    continue
+                try:
+                    weight_value = int(float(weight))
+                except (TypeError, ValueError):
+                    weight_value = DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT
+                weight_value = max(1, min(5, weight_value))
+                existing = normalized.get(clean)
+                if existing is None or weight_value > existing:
+                    normalized[clean] = weight_value
         else:
             return fallback
 
-        normalized = []
-        seen = set()
-        for tag in tags:
-            if tag is None:
-                continue
-            clean = str(tag).strip().lower()
-            if not clean or clean in seen:
-                continue
-            seen.add(clean)
-            normalized.append(clean)
         if normalized:
             return normalized
-        return [] if allow_empty else fallback
+        return {} if allow_empty else fallback
 
     def _get_smart_score_penalized_tags_from_request(self, request: Request):
         session_id = request.cookies.get("session_id")
@@ -991,9 +1004,9 @@ class Server:
 
             candidate_rows = session.exec(query).all()
 
-            penalized_tags_set = {
-                str(tag).strip().lower()
-                for tag in (penalized_tags or [])
+            penalized_tag_weights = {
+                str(tag).strip().lower(): int(weight)
+                for tag, weight in (penalized_tags or {}).items()
                 if str(tag).strip()
             }
 
@@ -1027,15 +1040,19 @@ class Server:
                 candidate_id_list.append(pic.id)
 
             penalized_tag_map = defaultdict(int)
-            if penalized_tags_set and candidate_id_list:
+            if penalized_tag_weights and candidate_id_list:
                 tag_rows = session.exec(
                     select(Tag.picture_id, Tag.tag).where(
                         Tag.picture_id.in_(candidate_id_list),
                     )
                 ).all()
                 for pic_id, tag in tag_rows:
-                    if tag and tag.strip().lower() in penalized_tags_set:
-                        penalized_tag_map[pic_id] += 1
+                    if not tag:
+                        continue
+                    key = tag.strip().lower()
+                    weight = penalized_tag_weights.get(key)
+                    if weight is not None:
+                        penalized_tag_map[pic_id] += weight
 
                 if penalized_tag_map:
                     for candidate in candidates:
@@ -1045,7 +1062,13 @@ class Server:
 
             # Pre-fetch Max Face-Character Likeness Map for Candidates
             pic_likeness_map = {}
-            if candidate_id_list:
+            char_id = None
+            if character_id is not None:
+                try:
+                    char_id = int(character_id)
+                except (TypeError, ValueError):
+                    char_id = None
+            if candidate_id_list and char_id is not None:
                 try:
                     stmt = (
                         select(
@@ -1056,6 +1079,8 @@ class Server:
                             Face.id == FaceCharacterLikeness.face_id,
                         )
                         .where(Face.picture_id.in_(candidate_id_list))
+                        .where(Face.character_id == char_id)
+                        .where(FaceCharacterLikeness.character_id == char_id)
                         .group_by(Face.picture_id)
                     )
                     rows = session.exec(stmt).all()
@@ -1161,7 +1186,7 @@ class Server:
                         "id": pid,
                         "embedding": v,
                         "aesthetic_score": get_attr(p, "aesthetic_score"),
-                        "character_likeness": pic_likeness_map.get(pid, 0.0),
+                        "character_likeness": pic_likeness_map.get(pid),
                         "penalized_tag_count": get_attr(p, "penalized_tag_count") or 0,
                         "width": get_attr(p, "width"),
                         "height": get_attr(p, "height"),
@@ -1407,7 +1432,10 @@ class Server:
                             if normalized is None:
                                 raise HTTPException(
                                     status_code=400,
-                                    detail="smart_score_penalized_tags must be a JSON list",
+                                    detail=(
+                                        "smart_score_penalized_tags must be a JSON list"
+                                        " or object"
+                                    ),
                                 )
                             new_value = json.dumps(normalized)
                         if user.smart_score_penalized_tags != new_value:
@@ -2597,7 +2625,7 @@ class Server:
 
             penalized_tags = self._get_smart_score_penalized_tags_from_request(request)
             penalized_tag_set = {
-                str(tag).strip().lower() for tag in (penalized_tags or []) if tag
+                str(tag).strip().lower() for tag in (penalized_tags or {}).keys() if tag
             }
             ids_int = []
             for raw_id in ids:
