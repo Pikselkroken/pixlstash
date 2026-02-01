@@ -60,11 +60,19 @@ from pixlvault.db_models import (
     SortMechanism,
     User,
     UserToken,
+    DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+    DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    TAG_EMPTY_SENTINEL,
 )
 
 from pixlvault.database import DBPriority
 from pixlvault.event_types import EventType
-from pixlvault.utils import safe_model_dict
+from pixlvault.utils import (
+    safe_model_dict,
+    serialize_tag_objects,
+    normalize_thumbnail_size,
+    normalize_smart_score_penalized_tags,
+)
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
@@ -72,33 +80,6 @@ from pixlvault.worker_registry import WorkerType
 from pixlvault.watch_folder_worker import WatchFolderWorker
 
 DEFAULT_DESCRIPTION = "PixlVault default configuration"
-DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT = 3
-DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
-    "incorrect reflection": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
-    "fused fingers": 5,
-    "malformed eye": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
-    "bad anatomy": 5,
-    "extra digit": 5,
-    "missing digit": 4,
-    "extra limb": 5,
-    "missing limb": 5,
-    "malformed hand": 5,
-    "malformed teeth": 4,
-    "missing nipples": 5,
-    "malformed nipples": 4,
-    "waxy skin": 2,
-    "flux chin": 1,
-}
-TAG_EMPTY_SENTINEL = ""
-
-
-def serialize_tag_objects(tags: list[Tag] | None) -> list[dict]:
-    items = []
-    for tag in tags or []:
-        if not tag or tag.tag in (None, TAG_EMPTY_SENTINEL):
-            continue
-        items.append({"id": tag.id, "tag": tag.tag})
-    return items
 
 
 # Logging will be set up after config is loaded
@@ -457,66 +438,6 @@ class Server:
 
         return server_config
 
-    def _normalize_thumbnail_size(self, value):
-        if value is None:
-            return None
-        if isinstance(value, str):
-            if value.lower() == "default":
-                return None
-            if value.isdigit():
-                return int(value)
-            return None
-        if isinstance(value, (int, float)):
-            return int(value)
-        return None
-
-    def _normalize_smart_score_penalized_tags(
-        self, value, fallback=None, allow_empty: bool = False
-    ):
-        if value is None:
-            return fallback
-
-        tags = None
-        if isinstance(value, str):
-            try:
-                tags = json.loads(value)
-            except Exception:
-                return fallback
-        else:
-            tags = value
-
-        if isinstance(tags, list):
-            normalized = {}
-            for tag in tags:
-                if tag is None:
-                    continue
-                clean = str(tag).strip().lower()
-                if not clean:
-                    continue
-                normalized[clean] = DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT
-        elif isinstance(tags, dict):
-            normalized = {}
-            for tag, weight in tags.items():
-                if tag is None:
-                    continue
-                clean = str(tag).strip().lower()
-                if not clean:
-                    continue
-                try:
-                    weight_value = int(float(weight))
-                except (TypeError, ValueError):
-                    weight_value = DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT
-                weight_value = max(1, min(5, weight_value))
-                existing = normalized.get(clean)
-                if existing is None or weight_value > existing:
-                    normalized[clean] = weight_value
-        else:
-            return fallback
-
-        if normalized:
-            return normalized
-        return {} if allow_empty else fallback
-
     def _get_smart_score_penalized_tags_from_request(self, request: Request):
         session_id = request.cookies.get("session_id")
         if not session_id:
@@ -528,9 +449,10 @@ class Server:
             lambda session: session.get(User, user_id),
             priority=DBPriority.IMMEDIATE,
         )
-        return self._normalize_smart_score_penalized_tags(
+        return normalize_smart_score_penalized_tags(
             user.smart_score_penalized_tags if user else None,
             DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+            default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
         )
 
     def _ensure_user(self):
@@ -549,7 +471,7 @@ class Server:
                 description=defaults.get("description", DEFAULT_DESCRIPTION),
                 sort=defaults.get("sort", SortMechanism.Keys.DATE.name),
                 descending=bool(defaults.get("descending", True)),
-                thumbnail_size=self._normalize_thumbnail_size(thumbnail_value),
+                thumbnail_size=normalize_thumbnail_size(thumbnail_value),
                 show_stars=bool(defaults.get("show_stars", True)),
                 show_face_bboxes=defaults.get("show_face_bboxes", False),
                 show_hand_bboxes=defaults.get("show_hand_bboxes", False),
@@ -558,9 +480,10 @@ class Server:
                 show_problem_icon=defaults.get("show_problem_icon", True),
                 similarity_character=defaults.get("similarity_character"),
                 smart_score_penalized_tags=json.dumps(
-                    self._normalize_smart_score_penalized_tags(
+                    normalize_smart_score_penalized_tags(
                         defaults.get("smart_score_penalized_tags"),
                         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+                        default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
                     )
                 ),
             )
@@ -616,9 +539,10 @@ class Server:
                 else defaults.get("show_problem_icon", True)
             ),
             "similarity_character": user.similarity_character,
-            "smart_score_penalized_tags": self._normalize_smart_score_penalized_tags(
+            "smart_score_penalized_tags": normalize_smart_score_penalized_tags(
                 user.smart_score_penalized_tags,
                 DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+                default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
             ),
         }
 
@@ -1426,8 +1350,11 @@ class Server:
                         if value in ("", None):
                             new_value = None
                         else:
-                            normalized = self._normalize_smart_score_penalized_tags(
-                                value, None, allow_empty=True
+                            normalized = normalize_smart_score_penalized_tags(
+                                value,
+                                None,
+                                allow_empty=True,
+                                default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
                             )
                             if normalized is None:
                                 raise HTTPException(

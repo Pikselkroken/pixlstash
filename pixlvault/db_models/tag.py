@@ -12,6 +12,26 @@ if TYPE_CHECKING:
     from .hand import Hand
 
 
+DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT = 3
+DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
+    "incorrect reflection": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    "fused fingers": 5,
+    "malformed eye": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
+    "bad anatomy": 5,
+    "extra digit": 5,
+    "missing digit": 4,
+    "extra limb": 5,
+    "missing limb": 5,
+    "malformed hand": 5,
+    "malformed teeth": 4,
+    "missing nipples": 5,
+    "malformed nipples": 4,
+    "waxy skin": 2,
+    "flux chin": 1,
+}
+TAG_EMPTY_SENTINEL = ""
+
+
 class Tag(SQLModel, table=True):
     """
     SQLModel for the picture_tags table.

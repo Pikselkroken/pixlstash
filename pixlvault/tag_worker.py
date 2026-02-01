@@ -15,6 +15,8 @@ from pixlvault.database import VaultDatabase
 from pixlvault.worker_registry import BaseWorker, WorkerType
 
 from pixlvault.db_models import Character, Face, FaceTag, Hand, HandTag, Picture, Tag
+from pixlvault.db_models import TAG_EMPTY_SENTINEL
+
 from pixlvault.feature_tag_blacklist import (
     FACE_TAG_BLACKLIST,
     HAND_TAG_BLACKLIST,

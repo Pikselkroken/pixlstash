@@ -50,3 +50,77 @@ def safe_model_dict(obj) -> dict:
         else:
             result[field] = value
     return result
+
+
+def serialize_tag_objects(tags: list | None, empty_sentinel: str = "") -> list[dict]:
+    items = []
+    for tag in tags or []:
+        if not tag or getattr(tag, "tag", None) in (None, empty_sentinel):
+            continue
+        items.append({"id": getattr(tag, "id", None), "tag": tag.tag})
+    return items
+
+
+def normalize_thumbnail_size(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if value.lower() == "default":
+            return None
+        if value.isdigit():
+            return int(value)
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
+def normalize_smart_score_penalized_tags(
+    value,
+    fallback=None,
+    allow_empty: bool = False,
+    default_weight: int = 3,
+):
+    if value is None:
+        return fallback
+
+    tags = None
+    if isinstance(value, str):
+        try:
+            tags = json.loads(value)
+        except Exception:
+            return fallback
+    else:
+        tags = value
+
+    if isinstance(tags, list):
+        normalized = {}
+        for tag in tags:
+            if tag is None:
+                continue
+            clean = str(tag).strip().lower()
+            if not clean:
+                continue
+            normalized[clean] = default_weight
+    elif isinstance(tags, dict):
+        normalized = {}
+        for tag, weight in tags.items():
+            if tag is None:
+                continue
+            clean = str(tag).strip().lower()
+            if not clean:
+                continue
+            try:
+                weight_value = int(float(weight))
+            except (TypeError, ValueError):
+                weight_value = default_weight
+            weight_value = max(1, min(5, weight_value))
+            existing = normalized.get(clean)
+            if existing is None or weight_value > existing:
+                normalized[clean] = weight_value
+    else:
+        return fallback
+
+    if normalized:
+        return normalized
+    return {} if allow_empty else fallback
