@@ -16,6 +16,7 @@ from pixlvault.db_models import (
 from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_scoring import (
+    find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
     get_smart_score_penalized_tags_from_request,
 )
@@ -92,6 +93,8 @@ def create_router(server) -> APIRouter:
         sort: str = Query(None),
         descending: bool = Query(True),
         format: list[str] = Query(None),
+        character_id: str | None = Query(None),
+        reference_character_id: str | None = Query(None),
     ):
         sort_mech = None
         if sort:
@@ -134,6 +137,23 @@ def create_router(server) -> APIRouter:
                 descending,
                 candidate_ids=picture_ids,
                 penalized_tags=penalized_tags,
+            )
+            return {"pictures": pictures, "set": safe_model_dict(picture_set)}
+
+        if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
+            if not reference_character_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="reference_character_id is required for CHARACTER_LIKENESS sort",
+                )
+            pictures = find_pictures_by_character_likeness(
+                server,
+                character_id,
+                reference_character_id,
+                0,
+                sys.maxsize,
+                descending,
+                candidate_ids=picture_ids,
             )
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 

@@ -42,15 +42,27 @@ def get_smart_score_penalized_tags_from_request(server, request):
 
 
 def find_pictures_by_character_likeness(
-    server, character_id, reference_character_id, offset, limit, descending
+    server,
+    character_id,
+    reference_character_id,
+    offset,
+    limit,
+    descending,
+    candidate_ids=None,
 ):
+    """List pictures by likeness to a character.
+
+    Args:
+        server: The server object.
+        character_id: Character id to filter pictures by (or "ALL" or "UNASSIGNED").
+        reference_character_id: Character id to use as reference for likeness scoring.
+        offset: The number of items to skip before starting to collect the result set.
+        limit: The maximum number of items to return.
+        descending: Whether to sort in descending order.
+        candidate_ids: Optional list of candidate picture ids to filter by.
+    """
     reference_character_id = int(reference_character_id)
 
-    # List pictures by likeness to character
-    # 1. Fetch reference faces from the reference pictures set for character
-    # 2. Fetch all faces
-    # 3. Order them by average likeness to reference faces
-    # 4. Return pictures containing those faces in the same order as the faces
     def get_character_reference_faces(session, reference_character_id):
         # Need to get pictures in the reference set for this character
         character = Character.find(session, id=reference_character_id)
@@ -71,7 +83,6 @@ def find_pictures_by_character_likeness(
         faces = Face.find(session, picture_id=picture_ids)
         return faces
 
-    # 1. Get reference faces (use set of face IDs for uniqueness)
     reference_faces = server.vault.db.run_task(
         get_character_reference_faces,
         reference_character_id,
@@ -82,8 +93,7 @@ def find_pictures_by_character_likeness(
         logger.warning("No reference faces found for character id=%s", character_id)
         return []
 
-    # 2. Get all faces
-    def get_all_faces(session, character_id):
+    def get_all_faces(session, character_id, candidate_ids=None):
         query = select(Face)
         if character_id == "ALL" or character_id is None:
             pass
@@ -91,15 +101,20 @@ def find_pictures_by_character_likeness(
             query = query.where(Face.character_id.is_(None))
         else:
             query = query.where(Face.character_id == int(character_id))
+        if candidate_ids is not None:
+            if not candidate_ids:
+                return []
+            query = query.where(Face.picture_id.in_(candidate_ids))
         faces = session.exec(query).all()
         return faces
 
-    candidate_faces = server.vault.db.run_task(get_all_faces, character_id)
+    candidate_faces = server.vault.db.run_task(
+        get_all_faces, character_id, candidate_ids
+    )
     if not candidate_faces:
         logger.warning("No unassigned faces found")
         return []
 
-    # Fetch likeness scores directly from FaceCharacterLikeness
     def fetch_character_likeness(session, reference_character_id):
         rows = session.exec(
             select(FaceCharacterLikeness.face_id, FaceCharacterLikeness.likeness).where(
@@ -112,11 +127,6 @@ def find_pictures_by_character_likeness(
         fetch_character_likeness, reference_character_id
     )
 
-    # Debug logging for character likeness map
-    logger.debug("Character likeness map: %s", character_likeness_map)
-
-    # 3. Get unique picture IDs in that order
-    # For each picture, use the maximum character_likeness among all its unassigned faces
     picture_likeness_map = {}
     for face in candidate_faces:
         pic_id = face.picture_id
@@ -126,10 +136,6 @@ def find_pictures_by_character_likeness(
         else:
             picture_likeness_map[pic_id] = max(picture_likeness_map[pic_id], likeness)
 
-    # Debug logging for picture likeness map
-    logger.debug("Picture likeness map: %s", picture_likeness_map)
-
-    # Fetch Picture objects
     candidate_pics = server.vault.db.run_task(
         Picture.find,
         id=list(picture_likeness_map.keys()),
@@ -144,10 +150,11 @@ def find_pictures_by_character_likeness(
             if reference_character_id in character_ids or character_ids:
                 # Skip pictures that already have any characters assigned
                 continue
-            if getattr(pic, "picture_sets", None):
-                if pic.picture_sets:
-                    # Skip pictures that are already in a picture set
-                    continue
+            if candidate_ids is None:
+                if getattr(pic, "picture_sets", None):
+                    if pic.picture_sets:
+                        # Skip pictures that are already in a picture set
+                        continue
         pic_dict = safe_model_dict(pic)
         pic_id = pic_dict["id"]
         pic_dict["character_likeness"] = picture_likeness_map.get(pic_id, 0.0)
