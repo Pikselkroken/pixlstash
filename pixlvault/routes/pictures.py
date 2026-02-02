@@ -43,6 +43,13 @@ from pixlvault.db_models import (
 )
 from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
+from pixlvault.picture_scoring import (
+    fetch_smart_score_data,
+    find_pictures_by_character_likeness,
+    find_pictures_by_smart_score,
+    get_smart_score_penalized_tags_from_request,
+    prepare_smart_score_inputs,
+)
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.utils import safe_model_dict, serialize_tag_objects
 from pixlvault.worker_registry import WorkerType
@@ -265,7 +272,7 @@ def create_router(server) -> APIRouter:
         if not isinstance(ids, list):
             raise HTTPException(status_code=400, detail="'ids' must be a list")
 
-        penalized_tags = server._get_smart_score_penalized_tags_from_request(request)
+        penalized_tags = get_smart_score_penalized_tags_from_request(server, request)
         penalized_tag_set = {
             str(tag).strip().lower() for tag in (penalized_tags or {}).keys() if tag
         }
@@ -1112,15 +1119,16 @@ def create_router(server) -> APIRouter:
 
         if smart_score:
             try:
-                penalized_tags = server._get_smart_score_penalized_tags_from_request(
-                    request
+                penalized_tags = get_smart_score_penalized_tags_from_request(
+                    server, request
                 )
                 (
                     good_anchors,
                     bad_anchors,
                     candidates,
                     pic_likeness_map,
-                ) = server._fetch_smart_score_data(
+                ) = fetch_smart_score_data(
+                    server,
                     None,
                     None,
                     candidate_ids=[pic.id],
@@ -1133,7 +1141,7 @@ def create_router(server) -> APIRouter:
                         bad_list,
                         cand_list,
                         cand_ids,
-                    ) = server._prepare_smart_score_inputs(
+                    ) = prepare_smart_score_inputs(
                         good_anchors, bad_anchors, candidates, pic_likeness_map
                     )
                     if cand_list:
@@ -1616,15 +1624,21 @@ def create_router(server) -> APIRouter:
                     status_code=400,
                     detail="reference_character_id is required for CHARACTER_LIKENESS sort",
                 )
-            return server._find_pictures_by_character_likeness(
-                character_id, reference_character_id, offset, limit, descending
+            return find_pictures_by_character_likeness(
+                server,
+                character_id,
+                reference_character_id,
+                offset,
+                limit,
+                descending,
             )
 
         if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
-            penalized_tags = server._get_smart_score_penalized_tags_from_request(
-                request
+            penalized_tags = get_smart_score_penalized_tags_from_request(
+                server, request
             )
-            return server._find_pictures_by_smart_score(
+            return find_pictures_by_smart_score(
+                server,
                 character_id,
                 format,
                 offset,

@@ -15,6 +15,10 @@ from pixlvault.db_models import (
 )
 from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
+from pixlvault.picture_scoring import (
+    find_pictures_by_smart_score,
+    get_smart_score_penalized_tags_from_request,
+)
 from pixlvault.utils import safe_model_dict
 
 logger = get_logger(__name__)
@@ -118,10 +122,11 @@ def create_router(server) -> APIRouter:
             return set_dict
 
         if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
-            penalized_tags = server._get_smart_score_penalized_tags_from_request(
-                request
+            penalized_tags = get_smart_score_penalized_tags_from_request(
+                server, request
             )
-            pictures = server._find_pictures_by_smart_score(
+            pictures = find_pictures_by_smart_score(
+                server,
                 None,
                 format,
                 0,
