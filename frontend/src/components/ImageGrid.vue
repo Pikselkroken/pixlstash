@@ -2491,6 +2491,12 @@ async function applyScore(img, newScore) {
     if (isScoreSortActive()) {
       repositionImageByScore(imageId, newScore);
     }
+    if (isCharacterLikenessSortActive()) {
+      preserveScrollOnNextFetch.value = true;
+      debouncedFetchAllGridImages();
+      emit("refresh-sidebar");
+      return;
+    }
     const pictureIds = Array.isArray(props.wsTagUpdate?.pictureIds)
       ? props.wsTagUpdate.pictureIds
       : [];
@@ -2612,6 +2618,11 @@ async function applyScoresForSelection(imageIds, targetScore) {
     invalidateVisibleThumbnailRanges();
   } else {
     allGridImages.value = updatedImages;
+  }
+
+  if (isCharacterLikenessSortActive()) {
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
   }
 
   if (isSmartScoreSortActive()) {

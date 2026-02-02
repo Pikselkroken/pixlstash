@@ -41,7 +41,7 @@ def select_reference_faces_for_character(
         A list of Face objects to use as reference faces.
     """
 
-    target_count = min(5, max_refs)
+    min_refs = min(5, max_refs)
 
     base_query = (
         select(Face, Picture)
@@ -54,26 +54,50 @@ def select_reference_faces_for_character(
     )
 
     rows = session.exec(
-        base_query.where(Picture.score >= 4)
+        base_query.where(Picture.score >= 5)
         .order_by(Picture.created_at.asc(), Picture.id.asc())
-        .limit(target_count)
+        .limit(max_refs)
     ).all()
 
     logger.info(
-        "[reference_faces] character_id=%s target_count=%s scored_rows=%s",
+        "[reference_faces] character_id=%s target_count=%s five_star_rows=%s",
         character_id,
-        target_count,
+        max_refs,
         len(rows),
     )
 
     representatives = [face for face, _ in rows]
-    if len(representatives) >= target_count:
+    if len(representatives) >= max_refs:
         return representatives
 
     selected_face_ids = {face.id for face in representatives if face is not None}
     selected_picture_ids = {
         face.picture_id for face in representatives if face is not None
     }
+
+    remaining_rows = session.exec(
+        base_query.where(Picture.score >= 4)
+        .where(~Picture.id.in_(selected_picture_ids))
+        .order_by(Picture.created_at.asc(), Picture.id.asc())
+        .limit(max_refs - len(representatives))
+    ).all()
+    logger.info(
+        "[reference_faces] character_id=%s four_five_rows=%s selected_pictures=%s",
+        character_id,
+        len(remaining_rows),
+        len(selected_picture_ids),
+    )
+    if remaining_rows:
+        for face, _ in remaining_rows:
+            if len(representatives) >= max_refs:
+                break
+            if face.id in selected_face_ids:
+                continue
+            selected_face_ids.add(face.id)
+            representatives.append(face)
+
+    if len(representatives) >= min_refs:
+        return representatives
 
     remaining_rows = session.exec(
         base_query.where(~Picture.id.in_(selected_picture_ids))
@@ -120,15 +144,15 @@ def select_reference_faces_for_character(
             character_id,
             len(tag_weights),
         )
-        for face, picture in remaining_rows:
-            if len(representatives) >= target_count:
+        for face, _ in remaining_rows:
+            if len(representatives) >= min_refs:
                 break
             if face.id in selected_face_ids:
                 continue
             selected_face_ids.add(face.id)
             representatives.append(face)
 
-    if len(representatives) >= target_count:
+    if len(representatives) >= min_refs:
         return representatives
 
     fallback_row = session.exec(

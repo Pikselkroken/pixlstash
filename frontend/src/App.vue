@@ -307,7 +307,7 @@ async function handleSelectReferencePictures(charId) {
     return;
   }
   selectedReferenceCharacter.value = charId;
-  selectedCharacter.value = charId;
+  selectedCharacter.value = null;
   selectedSet.value = null;
   searchQuery.value = "";
   await nextTick();
