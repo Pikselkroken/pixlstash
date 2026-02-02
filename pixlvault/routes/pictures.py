@@ -22,7 +22,6 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import exists, func
-from sqlalchemy.orm import load_only, selectinload
 from sqlmodel import Session, select
 
 from pixlvault.database import DBPriority
@@ -105,6 +104,134 @@ def _create_picture_imports(server, uploaded_files, dest_folder):
         new_pictures = []
 
     return shas, existing_map, new_pictures
+
+
+def _select_pictures_for_listing(
+    *,
+    server,
+    request: Request,
+    sort,
+    descending,
+    offset,
+    limit,
+    metadata_fields,
+    return_ids_only: bool = False,
+    exclude_query_params: set[str] | None = None,
+):
+    def serialize_metadata(pictures):
+        return [
+            {field: safe_model_dict(pic).get(field) for field in metadata_fields}
+            for pic in pictures
+        ]
+
+    def parse_request_params():
+        query_params = {}
+        format = None
+        if request.query_params:
+            format = request.query_params.getlist("format")
+            query_params = dict(request.query_params)
+            query_params.pop("format", None)
+            if exclude_query_params:
+                for key in exclude_query_params:
+                    query_params.pop(key, None)
+            picture_ids = request.query_params.getlist("id")
+            if picture_ids:
+                query_params["id"] = picture_ids
+            else:
+                query_params.pop("id", None)
+        return format, query_params
+
+    def normalize_character_id(value):
+        if value == "ALL":
+            return None
+        if value is not None and value != "" and str(value).isdigit():
+            return int(value)
+        return value
+
+    format, query_params = parse_request_params()
+    sort = query_params.pop("sort", sort)
+    desc_val = query_params.pop("descending", descending)
+    descending = (
+        desc_val.lower() == "true" if isinstance(desc_val, str) else bool(desc_val)
+    )
+    offset = int(query_params.pop("offset", offset))
+    limit = int(query_params.pop("limit", limit))
+    character_id = normalize_character_id(query_params.pop("character_id", None))
+    reference_character_id = query_params.pop("reference_character_id", None)
+
+    try:
+        sort_mech = (
+            SortMechanism.from_string(sort, descending=descending) if sort else None
+        )
+    except ValueError as ve:
+        logger.error(f"Invalid sort mechanism: {sort} - {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    pics = []
+    if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
+        if not reference_character_id:
+            raise HTTPException(
+                status_code=400,
+                detail="reference_character_id is required for CHARACTER_LIKENESS sort",
+            )
+        pics = find_pictures_by_character_likeness(
+            server,
+            character_id,
+            reference_character_id,
+            offset,
+            limit,
+            descending,
+        )
+        if return_ids_only:
+            return [pic.get("id") for pic in pics if pic.get("id") is not None]
+        return pics
+    elif sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
+        penalized_tags = get_smart_score_penalized_tags_from_request(server, request)
+        pics = find_pictures_by_smart_score(
+            server,
+            format,
+            offset,
+            limit,
+            descending,
+            penalized_tags=penalized_tags,
+        )
+    elif character_id == "UNASSIGNED":
+        pics = server.vault.db.run_task(
+            Picture.find_unassigned,
+            sort_mech=sort_mech,
+            offset=offset,
+            limit=limit,
+            format=format,
+            metadata_fields=metadata_fields,
+        )
+    else:
+        if character_id is not None and character_id != "":
+
+            def get_picture_ids_for_character(session, character_id):
+                faces = session.exec(
+                    select(Face).where(Face.character_id == character_id)
+                ).all()
+                return list({face.picture_id for face in faces})
+
+            picture_ids = server.vault.db.run_task(
+                get_picture_ids_for_character, character_id
+            )
+            if not picture_ids:
+                return []
+            query_params["id"] = picture_ids
+
+        pics = server.vault.db.run_task(
+            Picture.find,
+            sort_mech=sort_mech,
+            offset=offset,
+            limit=limit,
+            select_fields=metadata_fields,
+            format=format,
+            **query_params,
+        )
+    if return_ids_only:
+        return [pic.id for pic in pics]
+    return serialize_metadata(pics)
 
 
 def create_router(server) -> APIRouter:
@@ -491,14 +618,6 @@ def create_router(server) -> APIRouter:
                 scale_factor = scale_map.get(resolution_normalized, 1.0)
 
                 picture_ids = request.query_params.getlist("id")
-                query_params = dict(request.query_params)
-                query_params.pop("query", None)
-                query_params.pop("set_id", None)
-                query_params.pop("threshold", None)
-                query_params.pop("caption_mode", None)
-                query_params.pop("include_character_name", None)
-                query_params.pop("export_type", None)
-                character_id = query_params.pop("character_id", None)
 
                 select_fields = Picture.metadata_fields()
                 if export_type_normalized == Picture.ExportType.FULL:
@@ -532,25 +651,6 @@ def create_router(server) -> APIRouter:
                         )
 
                     pics = server.vault.db.run_task(fetch_members, set_id)
-                elif character_id is not None:
-                    logger.debug(
-                        "Exporting pictures for character ID: {}".format(character_id)
-                    )
-
-                    def fetch_by_character(session, character_id):
-                        faces = session.exec(
-                            select(Face).where(Face.character_id == character_id)
-                        ).all()
-                        picture_ids = list({face.picture_id for face in faces})
-                        if not picture_ids:
-                            return []
-                        return Picture.find(
-                            session,
-                            id=picture_ids,
-                            select_fields=select_fields,
-                        )
-
-                    pics = server.vault.db.run_task(fetch_by_character, character_id)
                 elif query:
                     logger.debug(
                         "Exporting pictures using search query: {}".format(query)
@@ -575,18 +675,36 @@ def create_router(server) -> APIRouter:
 
                     pics = server.vault.db.run_task(find_by_text, query)
                 else:
-                    logger.debug(
-                        "Exporting pictures using filter parameters: {}".format(
-                            query_params
-                        )
-                    )
-                    pics = server.vault.db.run_task(
-                        Picture.find,
+                    logger.debug("Exporting pictures using list filters")
+                    ordered_ids = _select_pictures_for_listing(
+                        server=server,
+                        request=request,
+                        sort=None,
+                        descending=True,
                         offset=0,
                         limit=sys.maxsize,
-                        select_fields=select_fields,
-                        **query_params,
+                        metadata_fields=select_fields,
+                        return_ids_only=True,
+                        exclude_query_params={
+                            "query",
+                            "set_id",
+                            "threshold",
+                            "caption_mode",
+                            "include_character_name",
+                            "export_type",
+                            "resolution",
+                        },
                     )
+                    if ordered_ids:
+                        pics = server.vault.db.run_task(
+                            Picture.find,
+                            id=ordered_ids,
+                            select_fields=select_fields,
+                        )
+                        pic_map = {pic.id: pic for pic in pics}
+                        pics = [
+                            pic_map.get(pid) for pid in ordered_ids if pid in pic_map
+                        ]
 
                 logger.debug(
                     f"Export task {task_id}: {len(pics)} pictures to be added to the ZIP."
@@ -1612,178 +1730,15 @@ def create_router(server) -> APIRouter:
         limit: int = Query(sys.maxsize),
     ):
         metadata_fields = Picture.metadata_fields()
-
-        def serialize_metadata(pic: Picture):
-            data = safe_model_dict(pic)
-            return {field: data.get(field) for field in metadata_fields}
-
-        query_params = {}
-        format = None
-        if request.query_params:
-            logger.debug("Received query params: " + str(request.query_params))
-            format = request.query_params.getlist("format")
-            logger.debug("Format param: " + str(format))
-            query_params = dict(request.query_params)
-            query_params.pop("format", None)
-            picture_ids = request.query_params.getlist("id")
-            if picture_ids:
-                query_params["id"] = picture_ids
-            else:
-                query_params.pop("id", None)
-            sort = query_params.pop("sort", sort)
-            desc_val = query_params.pop("descending", descending)
-            if isinstance(desc_val, str):
-                descending = desc_val.lower() == "true"
-            else:
-                descending = bool(desc_val)
-            offset = int(query_params.pop("offset", offset))
-            limit = int(query_params.pop("limit", limit))
-
-        character_id = query_params.pop("character_id", None)
-        reference_character_id = query_params.pop("reference_character_id", None)
-
-        try:
-            sort_mech = (
-                SortMechanism.from_string(sort, descending=descending) if sort else None
-            )
-        except ValueError as ve:
-            logger.error(f"Invalid sort mechanism: {sort} - {ve}")
-            raise HTTPException(status_code=400, detail=str(ve))
-
-        if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
-            if not reference_character_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="reference_character_id is required for CHARACTER_LIKENESS sort",
-                )
-            return find_pictures_by_character_likeness(
-                server,
-                character_id,
-                reference_character_id,
-                offset,
-                limit,
-                descending,
-            )
-
-        if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
-            penalized_tags = get_smart_score_penalized_tags_from_request(
-                server, request
-            )
-            return find_pictures_by_smart_score(
-                server,
-                format,
-                offset,
-                limit,
-                descending,
-                penalized_tags=penalized_tags,
-            )
-
-        if character_id == "UNASSIGNED":
-
-            def find_unassigned(session: Session):
-                query = select(Picture)
-                unassigned_condition = ~exists(
-                    select(Face.id).where(
-                        Face.picture_id == Picture.id,
-                        Face.character_id.is_not(None),
-                    )
-                )
-                not_in_set_condition = ~exists(
-                    select(PictureSetMember.picture_id).where(
-                        PictureSetMember.picture_id == Picture.id
-                    )
-                )
-                query = query.where(unassigned_condition, not_in_set_condition)
-
-                if format:
-                    query = query.where(Picture.format.in_(format))
-
-                select_fields = Picture.metadata_fields()
-                if select_fields:
-                    select_fields = list(set(select_fields) | {"id"})
-                    scalar_attrs = [
-                        getattr(Picture, field)
-                        for field in Picture.scalar_fields().intersection(select_fields)
-                    ]
-                    if scalar_attrs:
-                        query = query.options(load_only(*scalar_attrs))
-                    rel_attrs = [
-                        getattr(Picture, field)
-                        for field in Picture.relationship_fields().intersection(
-                            select_fields
-                        )
-                    ]
-                    for rel_attr in rel_attrs:
-                        query = query.options(selectinload(rel_attr))
-
-                if sort_mech:
-                    if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
-                        order_expr = Picture.width * Picture.height
-                        query = query.order_by(
-                            order_expr.desc()
-                            if sort_mech.descending
-                            else order_expr.asc(),
-                            Picture.id.desc()
-                            if sort_mech.descending
-                            else Picture.id.asc(),
-                        )
-                    else:
-                        field = getattr(Picture, sort_mech.field, None)
-                        if field is not None:
-                            query = query.order_by(
-                                field.desc() if sort_mech.descending else field.asc(),
-                                Picture.id.desc()
-                                if sort_mech.descending
-                                else Picture.id.asc(),
-                            )
-
-                if offset > 0 or limit != sys.maxsize:
-                    query = query.offset(offset).limit(limit)
-
-                return session.exec(query).all()
-
-            pics = server.vault.db.run_task(find_unassigned)
-            return [serialize_metadata(pic) for pic in pics]
-
-        if character_id == "ALL":
-            character_id = None
-
-        if character_id is not None and character_id != "" and character_id.isdigit():
-            character_id = int(character_id)
-
-        if character_id is not None and character_id != "":
-
-            def get_picture_ids_for_character(session, character_id):
-                faces = session.exec(
-                    select(Face).where(Face.character_id == character_id)
-                ).all()
-                return list({face.picture_id for face in faces})
-
-            picture_ids = server.vault.db.run_task(
-                get_picture_ids_for_character, character_id
-            )
-            if not picture_ids:
-                return []
-            pics = server.vault.db.run_task(
-                Picture.find,
-                id=picture_ids,
-                sort_mech=sort_mech,
-                offset=offset,
-                limit=limit,
-                select_fields=Picture.metadata_fields(),
-                format=format,
-            )
-            return [serialize_metadata(pic) for pic in pics]
-        else:
-            pics = server.vault.db.run_task(
-                Picture.find,
-                sort_mech=sort_mech,
-                offset=offset,
-                limit=limit,
-                select_fields=Picture.metadata_fields(),
-                format=format,
-                **query_params,
-            )
-            return [serialize_metadata(pic) for pic in pics]
+        return _select_pictures_for_listing(
+            server=server,
+            request=request,
+            sort=sort,
+            descending=descending,
+            offset=offset,
+            limit=limit,
+            metadata_fields=metadata_fields,
+            return_ids_only=False,
+        )
 
     return router

@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import date, datetime
 from sqlmodel import SQLModel
 
 # Add import for SQLAlchemy CollectionAdapter
@@ -27,6 +28,8 @@ def safe_model_dict(obj) -> dict:
     if isinstance(obj, list):
         return [safe_model_dict(v) for v in obj]
     if isinstance(obj, (int, float, str, bool)) or obj is None:
+        return obj
+    if isinstance(obj, (datetime, date)):
         return obj
     result = {}
     for field, value in obj.__dict__.items():

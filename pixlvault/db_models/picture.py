@@ -9,7 +9,16 @@ from PIL import Image
 from sqlalchemy import desc, func
 from sqlalchemy.orm import load_only, selectinload
 from sqlalchemy.types import LargeBinary
-from sqlmodel import Column, DateTime, SQLModel, Field, Relationship, select, Session
+from sqlmodel import (
+    Column,
+    DateTime,
+    SQLModel,
+    Field,
+    Relationship,
+    exists,
+    select,
+    Session,
+)
 from typing import ClassVar, Optional, List, TYPE_CHECKING
 
 
@@ -512,3 +521,66 @@ class Picture(SQLModel, table=True):
                 setattr(pic, field_name, None)
         session.add_all(pictures)
         session.commit()
+
+    @classmethod
+    def find_unassigned(
+        cls,
+        session,
+        sort_mech: Optional[SortMechanism] = None,
+        offset: int = 0,
+        limit: int = sys.maxsize,
+        format: list[str] | None = None,
+        metadata_fields: list[str] | None = None,
+    ):
+        query = select(Picture)
+        unassigned_condition = ~exists(
+            select(Face.id).where(
+                Face.picture_id == Picture.id,
+                Face.character_id.is_not(None),
+            )
+        )
+        not_in_set_condition = ~exists(
+            select(PictureSetMember.picture_id).where(
+                PictureSetMember.picture_id == Picture.id
+            )
+        )
+        query = query.where(unassigned_condition, not_in_set_condition)
+
+        if format:
+            query = query.where(Picture.format.in_(format))
+
+        select_fields = cls.metadata_fields()
+        if select_fields:
+            select_fields = list(set(select_fields) | {"id"})
+            scalar_attrs = [
+                getattr(Picture, field)
+                for field in Picture.scalar_fields().intersection(select_fields)
+            ]
+            if scalar_attrs:
+                query = query.options(load_only(*scalar_attrs))
+            rel_attrs = [
+                getattr(Picture, field)
+                for field in Picture.relationship_fields().intersection(select_fields)
+            ]
+            for rel_attr in rel_attrs:
+                query = query.options(selectinload(rel_attr))
+
+        if sort_mech:
+            if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
+                order_expr = Picture.width * Picture.height
+                query = query.order_by(
+                    order_expr.desc() if sort_mech.descending else order_expr.asc(),
+                    Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                )
+            else:
+                field = getattr(Picture, sort_mech.field, None)
+                if field is not None:
+                    query = query.order_by(
+                        field.desc() if sort_mech.descending else field.asc(),
+                        Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                    )
+
+        if offset > 0 or limit != sys.maxsize:
+            query = query.offset(offset).limit(limit)
+
+        return session.exec(query).all()
