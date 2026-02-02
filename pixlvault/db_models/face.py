@@ -41,7 +41,6 @@ class Face(SQLModel, table=True):
     )
     bbox_: Optional[str] = Field(sa_column=Column("bbox", String, default=None))
     features: Optional[bytes] = None
-    likeness: Optional[float] = None
 
     # Relationships
     quality: Optional[Quality] = Relationship(
