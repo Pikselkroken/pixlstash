@@ -172,40 +172,6 @@
                   >mdi-emoticon-sad-outline</v-icon
                 >
               </div>
-              <!-- Movie icon overlay for videos -->
-              <div
-                v-if="isVideo(img)"
-                class="movie-icon-overlay"
-                :style="{
-                  position: 'absolute',
-                  bottom: '8px',
-                  left: '10px',
-                  background: 'rgba(0, 0, 0, 0.6)', // semi-transparent orange
-                  color: '#ff9800', // orange for border/outline
-                  padding: '2px 5px',
-                  borderRadius: '4px',
-                  fontSize: '1.0em',
-                  zIndex: 30,
-                  display: 'flex',
-                  alignItems: 'center',
-                  pointerEvents: 'none',
-                }"
-              >
-                <svg
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#ff9800"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  style="display: inline-block; vertical-align: middle"
-                >
-                  <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
-                  <polygon points="10 9 16 12 10 15 10 9" fill="#ff9800" />
-                </svg>
-              </div>
               <!-- Resolution overlay -->
               <div
                 v-if="props.showResolution && img.width && img.height"
@@ -3479,6 +3445,28 @@ function onGridScroll(e) {
 const isImageSelected = (id) =>
   selectedImageIds.value && selectedImageIds.value.includes(id);
 
+function setDragImageFromElement(event, element) {
+  if (!element || !event?.dataTransfer?.setDragImage) return;
+  const width = element.naturalWidth || element.width || 160;
+  const height = element.naturalHeight || element.height || 90;
+  event.dataTransfer.setDragImage(
+    element,
+    Math.max(1, width / 2),
+    Math.max(1, height / 2),
+  );
+}
+
+function setDragDataForImageIds(event, imageIds) {
+  if (!event?.dataTransfer) return;
+  event.dataTransfer.setData(
+    "application/json",
+    JSON.stringify({
+      type: "image-ids",
+      imageIds,
+    }),
+  );
+}
+
 function handleThumbnailNativeDragStart(img, event) {
   dragSource.value = "grid";
   const selectionIds = getDragSelectionIds(img);
@@ -3487,22 +3475,10 @@ function handleThumbnailNativeDragStart(img, event) {
     return;
   }
   const target = event?.target;
-  if (target instanceof HTMLImageElement && event?.dataTransfer?.setDragImage) {
-    const width = target.naturalWidth || target.width || 160;
-    const height = target.naturalHeight || target.height || 90;
-    event.dataTransfer.setDragImage(
-      target,
-      Math.max(1, width / 2),
-      Math.max(1, height / 2),
-    );
+  if (target instanceof HTMLImageElement) {
+    setDragImageFromElement(event, target);
   }
-  event.dataTransfer.setData(
-    "application/json",
-    JSON.stringify({
-      type: "image-ids",
-      imageIds: [img.id],
-    }),
-  );
+  setDragDataForImageIds(event, [img.id]);
 }
 
 function handleThumbnailNativeDragEnd(event) {
@@ -3524,35 +3500,13 @@ function handleContainerDragStart(img, event) {
   }
   const thumbEl = thumbnailRefs[img.id];
   if (!isVideo(img) && thumbEl instanceof HTMLImageElement) {
-    const width = thumbEl.naturalWidth || thumbEl.width || 160;
-    const height = thumbEl.naturalHeight || thumbEl.height || 90;
-    if (event.dataTransfer?.setDragImage) {
-      event.dataTransfer.setDragImage(
-        thumbEl,
-        Math.max(1, width / 2),
-        Math.max(1, height / 2),
-      );
-    }
+    setDragImageFromElement(event, thumbEl);
   }
   if (isVideo(img)) {
     const previewEl = dragPreviewRefs[img.id];
-    if (previewEl && event.dataTransfer?.setDragImage) {
-      const width = previewEl.naturalWidth || previewEl.width || 160;
-      const height = previewEl.naturalHeight || previewEl.height || 90;
-      event.dataTransfer.setDragImage(
-        previewEl,
-        Math.max(1, width / 2),
-        Math.max(1, height / 2),
-      );
-    }
+    setDragImageFromElement(event, previewEl);
   }
-  event.dataTransfer.setData(
-    "application/json",
-    JSON.stringify({
-      type: "image-ids",
-      imageIds: [img.id],
-    }),
-  );
+  setDragDataForImageIds(event, [img.id]);
 }
 
 function handleContainerDragEnd(img, event) {
@@ -4419,30 +4373,6 @@ function handleScoringClose() {
     transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
     box-shadow 0.18s;
 }
-/* Spinner for thumbnail loading */
-.thumbnail-loading {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 40px;
-  height: 40px;
-  border: 4px solid #eee;
-  border-top: 4px solid #1976d2;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  z-index: 10;
-}
-
-@keyframes spin {
-  0% {
-    transform: translate(-50%, -50%) rotate(0deg);
-  }
-  100% {
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
-}
-.thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {
   box-shadow: 2px 4px 12px rgba(0, 0, 0, 0.6);
@@ -4511,34 +4441,6 @@ function handleScoringClose() {
   border-radius: none;
   z-index: 30;
   pointer-events: auto;
-}
-
-/* Add a button to trigger the search overlay */
-.search-button {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  background: #007bff;
-  color: white;
-  border: none;
-  border-radius: 50%;
-  width: 50px;
-  height: 50px;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  cursor: pointer;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-
-.clear-search-btn {
-  position: absolute;
-  bottom: 16px;
-  left: 16px;
-  z-index: 1000;
-  background-color: red !important; /* Temporary debug styling */
-  color: white;
-  border: 2px solid black;
 }
 
 .search-result-bar {
