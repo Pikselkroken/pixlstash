@@ -484,39 +484,6 @@ const skipNextWsRefresh = ref(false);
 const faceOverlayRedrawKey = ref(0);
 let gridResizeObserver = null;
 
-const characters = ref([]);
-const charactersLoading = ref(false);
-
-const sortedCharacters = computed(() => {
-  const list = Array.isArray(characters.value) ? characters.value : [];
-  return [...list]
-    .filter((char) => char && typeof char.name === "string")
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-    )
-    .map((char) => ({
-      ...char,
-      displayName: char.name.charAt(0).toUpperCase() + char.name.slice(1),
-    }));
-});
-
-async function fetchCharacters(force = false) {
-  if (!props.backendUrl || charactersLoading.value) return;
-  if (!force && Array.isArray(characters.value) && characters.value.length)
-    return;
-  charactersLoading.value = true;
-  try {
-    const res = await apiClient.get(`${props.backendUrl}/characters`);
-    const data = await res.data;
-    characters.value = Array.isArray(data) ? data : [];
-  } catch (e) {
-    console.error("Failed to fetch characters:", e);
-    characters.value = [];
-  } finally {
-    charactersLoading.value = false;
-  }
-}
-
 function triggerFaceOverlayRedraw() {
   faceOverlayRedrawKey.value++;
 }
@@ -539,7 +506,6 @@ onMounted(() => {
     showProblemIcon: props.showProblemIcon,
   });
   window.addEventListener("resize", triggerFaceOverlayRedraw);
-  fetchCharacters();
   fetchAllPicturesCount();
   nextTick(() => {
     updateRowHeightFromGrid();
