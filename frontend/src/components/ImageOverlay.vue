@@ -735,14 +735,6 @@ const penalizedTags = ref(new Set());
 const penalizedTagsLoading = ref(false);
 const lastTagUpdateKey = ref(0);
 
-const hasTags = computed(() => {
-  return !!(
-    image.value &&
-    Array.isArray(image.value.tags) &&
-    image.value.tags.length
-  );
-});
-
 watch(open, (value) => {
   if (!value) {
     resetTagInput();
@@ -1013,7 +1005,6 @@ const showFaceBbox = ref(false);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;
 const windowHeight = ref(0);
-const topbarRef = ref(null);
 const overlayMainRef = ref(null);
 const touchStart = ref({ x: 0, y: 0, time: 0 });
 const touchLatest = ref({ x: 0, y: 0 });
@@ -1084,7 +1075,7 @@ function handleOverlayClick(event) {
   const interactiveSelector =
     "button, a, input, select, textarea, label, summary, details";
   const interactiveContainerSelector =
-    ".overlay-topbar, .overlay-sidebar, .overlay-rail, .overlay-nav";
+    ".overlay-sidebar, .overlay-rail, .overlay-nav";
   if (
     target.closest(interactiveSelector) ||
     target.closest(interactiveContainerSelector)
@@ -1109,18 +1100,6 @@ function openSidebarFromTeaser() {
   sidebarOpen.value = true;
   chromeHidden.value = false;
   startEditDescription();
-}
-
-function toggleFilmstrip() {
-  filmstripOpen.value = !filmstripOpen.value;
-}
-
-function openFilmstrip() {
-  if (!isMobile.value) filmstripOpen.value = true;
-}
-
-function closeFilmstrip() {
-  if (!isMobile.value) filmstripOpen.value = false;
 }
 
 function toggleZoom() {
@@ -1814,10 +1793,6 @@ function clearCharacterThumbnails() {
     }
   });
   characterThumbnails.value = {};
-}
-
-function getCharacterThumbSrc(characterId) {
-  return characterThumbnails.value[characterId] || unknownPerson;
 }
 
 function getFaceThumbStyle(face, idx) {
@@ -2580,16 +2555,6 @@ function updateDescriptionScrollState() {
   descriptionScrollMeta.hasOverflow = false; // Disable overflow logic
 }
 
-function handleDescriptionScroll() {
-  updateDescriptionScrollState();
-}
-
-const descriptionScrollClasses = computed(() => {
-  return {
-    "has-overflow": descriptionScrollMeta.hasOverflow,
-  };
-});
-
 function startEditDescription() {
   if (!image.value) return;
   syncDescriptionDraft();
@@ -2688,13 +2653,6 @@ function handleDescriptionEditorKey(event) {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     saveDescription();
-  }
-}
-
-function selectAllText() {
-  const input = descriptionEditorRef.value;
-  if (input) {
-    input.select();
   }
 }
 

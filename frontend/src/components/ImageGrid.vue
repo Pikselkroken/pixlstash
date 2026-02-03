@@ -95,7 +95,7 @@
       <div v-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
           <div class="empty-state-illustration" aria-hidden="true">
-            <img src="/public/Empty.png" alt="No images" style="width: 90%" />
+            <img src="/src/Empty.png" alt="No images" style="width: 90%" />
           </div>
           <div class="empty-state-title">
             {{ emptyStateTitle }}
@@ -176,15 +176,6 @@
               <div
                 v-if="props.showResolution && img.width && img.height"
                 class="resolution-hover-overlay thumbnail-badge thumbnail-badge--bottom-right"
-                :style="{
-                  position: 'absolute',
-                  bottom: '8px',
-                  right: '10px',
-                  padding: '2px 8px',
-                  fontSize: '0.8em',
-                  zIndex: 30,
-                  pointerEvents: 'none',
-                }"
               >
                 {{ img.width }}×{{ img.height }}
               </div>
@@ -222,44 +213,6 @@
                   :ref="(el) => setDragPreviewRef(img.id, el)"
                   alt=""
                 />
-                <div
-                  class="thumbnail-index-overlay"
-                  @pointerdown="prepareThumbnailNativeDrag(img, $event)"
-                  @pointerup="handleThumbnailPointerRelease($event)"
-                  @pointercancel="handleThumbnailPointerRelease($event)"
-                  :style="{
-                    position: 'absolute',
-                    left: '10px',
-                    color: 'red',
-                    fontWeight: 'bold',
-                    fontSize: '1.2em',
-                    textShadow: '0 0 2px #fff',
-                    zIndex: 20,
-                  }"
-                >
-                  {{ img.idx }}
-                </div>
-                <div
-                  v-if="img.id"
-                  class="thumbnail-id-overlay"
-                  :style="{
-                    position: 'absolute',
-                    left: '10px',
-                    bottom: '6px',
-                    color: '#fff',
-                    background: 'rgba(0, 0, 0, 0.6)',
-                    fontSize: '0.72em',
-                    padding: '2px 6px',
-                    borderRadius: '6px',
-                    zIndex: 20,
-                    maxWidth: '90%',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }"
-                >
-                  {{ img.id }}
-                </div>
               </template>
               <template v-else-if="img.thumbnail">
                 <img
@@ -328,18 +281,6 @@
                     props.showFormat && img.format && img.format !== 'unknown'
                   "
                   class="thumbnail-id-overlay thumbnail-badge thumbnail-badge--bottom-left"
-                  :style="{
-                    position: 'absolute',
-                    left: '10px',
-                    bottom: '6px',
-                    fontSize: '0.72em',
-                    padding: '2px 4px',
-                    zIndex: 20,
-                    maxWidth: '90%',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }"
                 >
                   {{ img.format.toUpperCase() }}
                 </div>
@@ -381,7 +322,7 @@
                   :color="
                     n <= (img.score || 0)
                       ? 'orange'
-                      : 'rgba(var(--v-theme-surface), 0.2)'
+                      : 'rgba(var(--v-theme-background), 0.1)'
                   "
                   style="cursor: pointer"
                   @click.stop="setScore(img, n)"
@@ -394,57 +335,11 @@
           <!-- Info row absolutely positioned below thumbnail -->
           <div class="thumbnail-info-row">
             <div
-              v-if="
-                typeof props.selectedSort === 'string' &&
-                props.selectedSort.includes('CHARACTER_LIKENESS') &&
-                img.character_likeness !== undefined
-              "
-              class="likeness-score"
-            >
-              Likeness: {{ img.character_likeness.toFixed(2) }}
-            </div>
-            <div
-              v-if="
-                typeof props.selectedSort === 'string' &&
-                props.selectedSort.includes('SMART_SCORE') &&
-                typeof img.smartScore === 'number'
-              "
-              class="likeness-score"
-            >
-              Smart Score: {{ img.smartScore.toFixed(2) }}
-            </div>
-            <div
-              v-if="
-                typeof props.searchQuery && img.likeness_score !== undefined
-              "
-              class="likeness-score"
-            >
-              Search likeness: {{ img.likeness_score.toFixed(2) }}
-            </div>
-            <div
-              v-else-if="
-                typeof props.selectedSort === 'string' &&
-                props.selectedSort.includes('DATE') &&
-                img.created_at
-              "
+              v-for="info in getThumbnailInfoItems(img)"
+              :key="`${info.key}-${img.id}`"
               class="thumbnail-info"
             >
-              {{ formatIsoDate(img.created_at) }}
-            </div>
-            <div
-              v-else-if="
-                props.selectedSort === STACKS_SORT_KEY &&
-                (typeof img.stackIndex === 'number' ||
-                  typeof img.stack_index === 'number')
-              "
-              class="thumbnail-info"
-            >
-              Stack
-              {{
-                typeof img.stackIndex === "number"
-                  ? img.stackIndex + 1
-                  : img.stack_index + 1
-              }}
+              {{ info.text }}
             </div>
           </div>
         </div>
@@ -511,7 +406,6 @@ import {
   isSupportedImageFile,
   dataTransferHasSupportedMedia,
   isSupportedVideoFile,
-  getOverlayFormat,
   PIL_IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
 } from "../utils/media.js";
@@ -638,55 +532,6 @@ async function fetchCharacters(force = false) {
     characters.value = [];
   } finally {
     charactersLoading.value = false;
-  }
-}
-
-function updateFaceCharacterLocal(img, faceId, characterId, characterName) {
-  if (!img || !Array.isArray(img.faces)) return;
-  img.faces = img.faces.map((face) => {
-    if (face?.id !== faceId) return face;
-    return {
-      ...face,
-      character_id: characterId,
-      character_name: characterName,
-    };
-  });
-}
-
-async function handleFaceBboxCharacterChange(img, overlay, event) {
-  const faceId = overlay?.faceId;
-  if (!faceId) return;
-  const nextValue = event?.target?.value ?? "";
-  const nextId = nextValue === "" ? null : nextValue;
-  const previousId = overlay?.face?.character_id ?? null;
-
-  try {
-    if (!nextId) {
-      if (previousId != null) {
-        await apiClient.delete(
-          `${props.backendUrl}/characters/${previousId}/faces`,
-          { data: { face_ids: [faceId] } },
-        );
-      }
-      updateFaceCharacterLocal(img, faceId, null, null);
-    } else {
-      await apiClient.post(`${props.backendUrl}/characters/${nextId}/faces`, {
-        face_ids: [faceId],
-      });
-      const selected = sortedCharacters.value.find(
-        (char) => String(char.id) === String(nextId),
-      );
-      updateFaceCharacterLocal(
-        img,
-        faceId,
-        Number(nextId),
-        selected?.displayName || selected?.name || null,
-      );
-    }
-  } catch (e) {
-    console.error("Failed to update face character:", e);
-  } finally {
-    refreshImageFromOverlay({ imageId: img.id, faces: img.faces });
   }
 }
 
@@ -1101,19 +946,62 @@ function formatIsoDate(dateStr) {
   )}:${pad(d.getMinutes())}`;
 }
 
+function getThumbnailInfoItems(img) {
+  if (!img) return [];
+  const items = [];
+  const selectedSort =
+    typeof props.selectedSort === "string" ? props.selectedSort : "";
+
+  if (
+    selectedSort.includes("CHARACTER_LIKENESS") &&
+    img.character_likeness !== undefined
+  ) {
+    items.push({
+      key: "character_likeness",
+      text: `Likeness: ${img.character_likeness.toFixed(2)}`,
+    });
+  }
+
+  if (
+    selectedSort.includes("SMART_SCORE") &&
+    typeof img.smartScore === "number"
+  ) {
+    items.push({
+      key: "smart_score",
+      text: `Smart Score: ${img.smartScore.toFixed(2)}`,
+    });
+  }
+
+  if (
+    typeof props.searchQuery === "string" &&
+    img.likeness_score !== undefined
+  ) {
+    items.push({
+      key: "search_likeness",
+      text: `Search likeness: ${img.likeness_score.toFixed(2)}`,
+    });
+  } else if (selectedSort.includes("DATE") && img.created_at) {
+    items.push({
+      key: "created_at",
+      text: formatIsoDate(img.created_at),
+    });
+  } else if (
+    props.selectedSort === STACKS_SORT_KEY &&
+    (typeof img.stackIndex === "number" || typeof img.stack_index === "number")
+  ) {
+    const stackIndex =
+      typeof img.stackIndex === "number" ? img.stackIndex : img.stack_index;
+    items.push({
+      key: "stack_index",
+      text: `Stack ${stackIndex + 1}`,
+    });
+  }
+  return items;
+}
+
 function getImageFormatExtension(img) {
   if (!img || !img.format) return "";
   return String(img.format).trim().toLowerCase();
-}
-
-function appendExtIfMissing(name, ext) {
-  if (!name) return null;
-  if (!ext) return name;
-  const normalized = ext.toLowerCase();
-  const lowerName = name.toLowerCase();
-  if (lowerName.endsWith(`.${normalized}`)) return name;
-  if (/\.[a-z0-9]+$/i.test(lowerName)) return name;
-  return `${name}.${normalized}`;
 }
 
 function getImageDownloadUrl(img) {
@@ -1316,10 +1204,11 @@ function pauseVideo(id) {
 function isVideo(img) {
   if (!img) return false;
   let name = "";
-  if (img.filename) {
-    name = img.filename;
-  } else if (img.id) {
+  if (img.id) {
     name = img.id;
+  }
+  if (img.format) {
+    name += `.${getImageFormatExtension(img)}`;
   }
   return isSupportedVideoFile(name);
 }
@@ -3124,7 +3013,7 @@ function filterImagesByMediaType(images) {
   if (props.mediaTypeFilter === "images") {
     filtered = filtered.filter((img) => {
       if (!img) return false;
-      const candidates = [img.filename, img.name, img.id, img.format]
+      const candidates = [img.name, img.id, img.format]
         .filter(Boolean)
         .map((v) => (typeof v === "string" ? v : ""));
       return candidates.some((val) => isSupportedImageFile(val));
@@ -3132,7 +3021,7 @@ function filterImagesByMediaType(images) {
   } else if (props.mediaTypeFilter === "videos") {
     filtered = filtered.filter((img) => {
       if (!img) return false;
-      const candidates = [img.filename, img.name, img.id, img.format]
+      const candidates = [img.name, img.id, img.format]
         .filter(Boolean)
         .map((v) => (typeof v === "string" ? v : ""));
       return candidates.some((val) => isSupportedVideoFile(val));
@@ -3214,11 +3103,6 @@ async function fetchThumbnailsBatch(start, end) {
 
   const requestEpoch = thumbnailRequestEpoch.value;
 
-  /* console.debug(
-    `[BATCH REQUEST] start=${start}, end=${end}, loadedRanges=${JSON.stringify(
-      loadedRanges.value
-    )}`
-  ); */
   if (rangeCovers(loadedRanges.value, start, end)) return;
   if (rangeCovers(pendingRanges, start, end)) return;
   pendingRanges.push([start, end]);
@@ -3254,10 +3138,6 @@ async function fetchThumbnailsBatch(start, end) {
       images = allGridImages.value.slice(start, end);
       ids = images.map((img) => img.id);
     }
-    /* console.debug(
-      `[BATCH RESPONSE] Received ${images.length} images:`,
-      images.map((img) => img.id)
-    ); */
     // Prepare grid image objects
     const gridImages = images.map((img, idx) => ({
       ...img,
@@ -3423,14 +3303,6 @@ function onGridScroll(e) {
     ) {
       visibleStart.value = newVisibleStart;
       visibleEnd.value = newVisibleEnd;
-      console.debug(
-        "[SCROLL] visibleStart:",
-        visibleStart.value,
-        "visibleEnd:",
-        visibleEnd.value,
-        "Client Height: ",
-        el.clientHeight,
-      );
       // Only trigger buffer expansion/fetch if user is near buffer end
       // Always fetch thumbnails for the current visible window
       updateVisibleThumbnails();
@@ -3694,19 +3566,14 @@ function handleKeyDown(event) {
   } else if ((event.ctrlKey || event.metaKey) && event.key === "a") {
     event.preventDefault();
     // Instrumentation: log allGridImages and selection
-    console.log("[CTRL+A] allGridImages length:", allGridImages.value.length);
     const ids = allGridImages.value.map((img) => img && img.id);
     const validIds = ids.filter((id) => !!id);
     const placeholderCount = ids.length - validIds.length;
-    console.log("[CTRL+A] valid image IDs count:", validIds.length);
-    console.log("[CTRL+A] placeholder count:", placeholderCount);
-    console.log("[CTRL+A] allGridImages IDs:", ids);
     // Select all images with valid IDs from allGridImages (not just visible)
     const allIds = allGridImages.value
       .filter((img) => img && img.id)
       .map((img) => img.id);
     selectedImageIds.value = Array.from(allIds);
-    console.log("[CTRL+A] selectedImageIds:", selectedImageIds.value);
     lastSelectedImageId = null;
   } else if (
     (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
@@ -4189,17 +4056,24 @@ function handleScoringClose() {
 }
 
 .thumbnail-badge {
-  background: rgba(0, 0, 0, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(var(--v-theme-dark-surface), 0.65);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
   border-radius: 6px;
-  color: #ffffff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  color: rgb(var(--v-theme-on-dark-surface));
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  font-size: 0.8em;
+  padding: 2px 4px;
+  z-index: 20;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thumbnail-badge--top-left {
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: 2px;
+  left: 2px;
 }
 
 .thumbnail-badge--top-right {
@@ -4210,14 +4084,14 @@ function handleScoringClose() {
 
 .thumbnail-badge--bottom-left {
   position: absolute;
-  left: 10px;
-  bottom: 6px;
+  left: 2px;
+  bottom: 2px;
 }
 
 .thumbnail-badge--bottom-right {
   position: absolute;
-  right: 10px;
-  bottom: 8px;
+  right: 2px;
+  bottom: 2px;
 }
 .face-bbox-label {
   font-size: 0.7em;
@@ -4344,21 +4218,21 @@ function handleScoringClose() {
   display: flex;
   flex-direction: row;
   box-shadow: none;
-  font-size: 0.85em;
-  margin: 4px 4px 4px 4px;
+  font-size: 0.65em;
+  margin: 2px 2px 2px 2px;
 }
 .star-overlay:hover {
-  background: rgba(255, 255, 255, 1);
+  filter: brightness(1.75);
 }
 .star-overlay .v-icon {
-  font-size: 20px !important;
-  width: 20px;
-  height: 20px;
+  font-size: 16px !important;
+  width: 16px;
+  height: 16px;
 }
 .star-overlay .v-icon:hover {
-  font-size: 20px !important;
-  width: 20px;
-  height: 20px;
+  font-size: 16px !important;
+  width: 16px;
+  height: 16px;
   color: rgba(var(--v-theme-accent), 0.5);
 }
 .thumbnail-info-row {
