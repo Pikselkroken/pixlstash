@@ -311,24 +311,14 @@
                 </div>
               </template>
               <!-- Score overlay -->
-              <div
+              <StarRatingOverlay
                 v-if="props.showStars"
-                class="star-overlay thumbnail-badge thumbnail-badge--top-right"
-              >
-                <v-icon
-                  v-for="n in 5"
-                  :key="n"
-                  large
-                  :color="
-                    n <= (img.score || 0)
-                      ? 'orange'
-                      : 'rgba(var(--v-theme-background), 0.1)'
-                  "
-                  style="cursor: pointer"
-                  @click.stop="setScore(img, n)"
-                  >mdi-star</v-icon
-                >
-              </div>
+                class="thumbnail-badge thumbnail-badge--top-right"
+                :score="img.score || 0"
+                :icon-size="16"
+                :compact="true"
+                @set-score="setScore(img, $event)"
+              />
             </div>
           </v-card>
           <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
@@ -399,6 +389,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 import InteractiveScoringOverlay from "./InteractiveScoringOverlay.vue";
 import SelectionBar from "./SelectionBar.vue";
 import SearchResultBar from "./SearchResultBar.vue";
+import StarRatingOverlay from "./StarRatingOverlay.vue";
 import { useSearchOverlay } from "../utils/useSearchOverlay";
 import { apiClient } from "../utils/apiClient";
 import { debounce, update } from "lodash-es";
@@ -4197,28 +4188,6 @@ function handleScoringClose() {
   min-width: 128px;
   padding: 4px;
   margin: 0;
-}
-.star-overlay {
-  z-index: 120;
-  display: flex;
-  flex-direction: row;
-  box-shadow: none;
-  font-size: 0.65em;
-  margin: 2px 2px 2px 2px;
-}
-.star-overlay:hover {
-  filter: brightness(1.75);
-}
-.star-overlay .v-icon {
-  font-size: 16px !important;
-  width: 16px;
-  height: 16px;
-}
-.star-overlay .v-icon:hover {
-  font-size: 16px !important;
-  width: 16px;
-  height: 16px;
-  color: rgba(var(--v-theme-accent), 0.5);
 }
 .thumbnail-info-row {
   margin-top: 2px;

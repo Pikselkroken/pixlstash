@@ -44,21 +44,13 @@
             :class="{ hidden: chromeHidden }"
             @added="handleOverlayAddToSet"
           />
-          <div
-            class="star-overlay"
+          <StarRatingOverlay
             v-if="image"
             :class="{ hidden: chromeHidden }"
-          >
-            <v-icon
-              v-for="n in 5"
-              :key="n"
-              large
-              :color="n <= (image?.score || 0) ? 'orange' : 'grey darken-2'"
-              style="cursor: pointer"
-              @click.stop="setScore(n)"
-              >mdi-star</v-icon
-            >
-          </div>
+            :score="image?.score || 0"
+            icon-size="large"
+            @set-score="setScore"
+          />
           <button
             class="overlay-icon-btn"
             type="button"
@@ -653,6 +645,7 @@ import { isSupportedVideoFile, getOverlayFormat } from "../utils/media.js";
 import { apiClient } from "../utils/apiClient";
 import unknownPerson from "../assets/unknown-person.png";
 import AddToSetControl from "./AddToSetControl.vue";
+import StarRatingOverlay from "./StarRatingOverlay.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
