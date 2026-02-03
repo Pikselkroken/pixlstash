@@ -402,42 +402,12 @@
                       }
                     "
                   >
-                    <select
-                      class="face-bbox-select"
-                      :value="
-                        overlay.face && overlay.face.character_id != null
-                          ? String(overlay.face.character_id)
-                          : ''
-                      "
-                      @change="
-                        handleFaceBboxCharacterChange(img, overlay, $event)
-                      "
-                      @pointerdown.stop
-                      @mousedown.stop
-                      @click.stop
+                    <div
+                      :style="{ color: overlay.color }"
+                      class="face-bbox-label"
                     >
-                      <option value="">Unassigned</option>
-                      <option
-                        v-if="
-                          overlay.face &&
-                          overlay.face.character_id != null &&
-                          !hasCharacterOption(overlay.face.character_id)
-                        "
-                        :value="String(overlay.face.character_id)"
-                      >
-                        {{
-                          overlay.face.character_name ||
-                          `Character ${overlay.face.character_id}`
-                        }}
-                      </option>
-                      <option
-                        v-for="char in sortedCharacters"
-                        :key="char.id"
-                        :value="String(char.id)"
-                      >
-                        {{ char.displayName }}
-                      </option>
-                    </select>
+                      {{ overlay.face.character_name }}
+                    </div>
                   </div>
                 </template>
                 <div
@@ -4498,38 +4468,13 @@ function handleScoringClose() {
 .export-progress-abort:hover {
   background: #b71c1c;
 }
-.face-bbox-select {
-  position: absolute;
-  left: 0;
-  top: 0;
-  background: var(--face-frame-color, rgba(34, 34, 34, 0.8));
-  color: #fff;
+.face-bbox-label {
   font-size: 0.7em;
-  padding: 1px 16px 1px 4px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 0;
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  appearance: none;
-  white-space: nowrap;
-  overflow: hidden;
+  background-color: rgba(0, 0, 0, 0.3);
+  color: rgb(var(--v-theme-on-surface));
   text-overflow: ellipsis;
-  background-image:
-    linear-gradient(45deg, transparent 50%, #fff 50%),
-    linear-gradient(135deg, #fff 50%, transparent 50%);
-  background-position:
-    calc(100% - 10px) 55%,
-    calc(100% - 5px) 55%;
-  background-size:
-    5px 5px,
-    5px 5px;
-  background-repeat: no-repeat;
-}
-
-.face-bbox-select option {
-  background: var(--face-frame-color, rgba(34, 34, 34, 0.95));
-  color: #fff;
+  overflow-y: hidden;
+  white-space: nowrap;
 }
 
 .hand-bbox-overlay {

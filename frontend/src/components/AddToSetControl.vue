@@ -1,9 +1,5 @@
 <template>
-  <div
-    ref="rootRef"
-    class="add-to-set"
-    :class="{ open: menuOpen, disabled }"
-  >
+  <div ref="rootRef" class="add-to-set" :class="{ open: menuOpen, disabled }">
     <button
       class="add-to-set-btn"
       type="button"
@@ -104,7 +100,9 @@ const filteredSets = computed(() => {
   const needle = searchQuery.value.trim().toLowerCase();
   if (!needle) return sets.value;
   return sets.value.filter((set) =>
-    String(set?.name || "").toLowerCase().includes(needle),
+    String(set?.name || "")
+      .toLowerCase()
+      .includes(needle),
   );
 });
 
@@ -206,9 +204,7 @@ async function addToSet(set) {
   const ids = normalizedPictureIds.value;
   if (!ids.length) return;
   const members = setMembersById.value?.[set.id];
-  const idsToAdd = members
-    ? ids.filter((id) => !members.has(String(id)))
-    : ids;
+  const idsToAdd = members ? ids.filter((id) => !members.has(String(id))) : ids;
   if (!idsToAdd.length) {
     statusMessage.value = "Already in set";
     return;
@@ -217,9 +213,7 @@ async function addToSet(set) {
   try {
     await Promise.all(
       idsToAdd.map((id) =>
-        apiClient.post(
-          resolveUrl(`/picture_sets/${set.id}/members/${id}`),
-        ),
+        apiClient.post(resolveUrl(`/picture_sets/${set.id}/members/${id}`)),
       ),
     );
     statusMessage.value = `Added to ${set.name}`;
@@ -266,9 +260,9 @@ watch(
 }
 
 .add-to-set-btn {
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: rgba(0, 0, 0, 0.25);
-  color: #fff;
+  background-color: rgba(var(--v-theme-dark-surface), 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
+  border: none;
   padding: 6px 14px;
   border-radius: 4px;
   display: inline-flex;
@@ -284,7 +278,8 @@ watch(
 }
 
 .add-to-set-btn:hover {
-  background: rgba(var(--v-theme-primary), 0.5);
+  filter: brightness(1.75);
+  border: none;
 }
 
 .add-to-set-label {
@@ -298,13 +293,15 @@ watch(
   min-width: 200px;
   padding: 10px;
   border-radius: 10px;
-  background: rgba(15, 15, 18, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: rgba(var(--v-theme-dark-surface), 0.9);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
   opacity: 0;
   transform: translateY(-6px);
   pointer-events: none;
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
   z-index: 6;
 }
 
@@ -319,7 +316,8 @@ watch(
   align-items: center;
   gap: 6px;
   font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(var(--v-theme-on-background), 0.7);
+  background: rgba(var(--v-theme-surface), 0.1);
   padding: 6px 8px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.06);

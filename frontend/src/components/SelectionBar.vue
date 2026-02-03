@@ -113,16 +113,15 @@ const props = defineProps({
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: rgba(var(--v-theme-on-surface), 0.08);
-  color: rgba(var(--v-theme-on-surface), 0.85);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  background-color: rgba(var(--v-theme-dark-surface), 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
+  border: none;
   padding: 6px 12px;
-  border-radius: 999px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 0.9em;
 }
 .refresh-btn:hover {
-  background: rgba(var(--v-theme-on-surface), 0.16);
+  filter: brightness(1.75);
 }
 .clear-btn {
   background: rgb(var(--v-theme-primary));

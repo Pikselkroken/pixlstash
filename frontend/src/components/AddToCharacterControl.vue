@@ -34,7 +34,10 @@
       <div v-if="isLoading" class="add-to-character-empty">
         Loading characters...
       </div>
-      <div v-else-if="filteredCharacters.length === 0" class="add-to-character-empty">
+      <div
+        v-else-if="filteredCharacters.length === 0"
+        class="add-to-character-empty"
+      >
         No characters found
       </div>
       <button
@@ -100,7 +103,9 @@ const filteredCharacters = computed(() => {
   const needle = searchQuery.value.trim().toLowerCase();
   if (!needle) return characters.value;
   return characters.value.filter((char) =>
-    String(char?.name || "").toLowerCase().includes(needle),
+    String(char?.name || "")
+      .toLowerCase()
+      .includes(needle),
   );
 });
 
@@ -206,9 +211,7 @@ async function addToCharacter(character) {
   const ids = normalizedPictureIds.value;
   if (!ids.length) return;
   const members = characterMembersById.value?.[character.id];
-  const idsToAdd = members
-    ? ids.filter((id) => !members.has(String(id)))
-    : ids;
+  const idsToAdd = members ? ids.filter((id) => !members.has(String(id))) : ids;
   if (!idsToAdd.length) {
     statusMessage.value = "Already assigned";
     return;
@@ -258,9 +261,9 @@ watch(
 }
 
 .add-to-character-btn {
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: rgba(0, 0, 0, 0.25);
-  color: #fff;
+  border: none;
+  background-color: rgba(var(--v-theme-dark-surface), 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
   padding: 6px 14px;
   border-radius: 4px;
   display: inline-flex;
@@ -276,7 +279,8 @@ watch(
 }
 
 .add-to-character-btn:hover {
-  background: rgba(var(--v-theme-primary), 0.5);
+  filter: brightness(1.75);
+  border: none;
 }
 
 .add-to-character-label {
@@ -290,13 +294,16 @@ watch(
   min-width: 220px;
   padding: 10px;
   border-radius: 10px;
-  background: rgba(15, 15, 18, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: rgba(var(--v-theme-dark-surface), 0.9);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
+
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
   opacity: 0;
   transform: translateY(-6px);
   pointer-events: none;
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
   z-index: 6;
 }
 
@@ -332,8 +339,8 @@ watch(
   padding: 6px 8px;
   border-radius: 6px;
   font-size: 0.78rem;
-  color: #fff;
-  background: transparent;
+  background-color: transparent;
+  color: rgba(var(--v-theme-on-dark-surface), 1);
   border: none;
   text-align: left;
   display: flex;
