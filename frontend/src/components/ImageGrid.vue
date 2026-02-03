@@ -165,7 +165,7 @@
             >
               <div
                 v-if="props.showProblemIcon && hasPenalizedTags(img)"
-                class="penalized-tag-indicator"
+                class="penalized-tag-indicator thumbnail-badge thumbnail-badge--top-left"
                 :title="penalizedTagsTitle(img)"
               >
                 <v-icon size="18" color="error"
@@ -175,15 +175,12 @@
               <!-- Resolution overlay -->
               <div
                 v-if="props.showResolution && img.width && img.height"
-                class="resolution-hover-overlay"
+                class="resolution-hover-overlay thumbnail-badge thumbnail-badge--bottom-right"
                 :style="{
                   position: 'absolute',
                   bottom: '8px',
                   right: '10px',
-                  background: 'rgba(0,0,0,0.5)',
-                  color: '#fff',
                   padding: '2px 8px',
-                  borderRadius: '6px',
                   fontSize: '0.8em',
                   zIndex: 30,
                   pointerEvents: 'none',
@@ -330,16 +327,13 @@
                   v-if="
                     props.showFormat && img.format && img.format !== 'unknown'
                   "
-                  class="thumbnail-id-overlay"
+                  class="thumbnail-id-overlay thumbnail-badge thumbnail-badge--bottom-left"
                   :style="{
                     position: 'absolute',
                     left: '10px',
                     bottom: '6px',
-                    color: '#fff',
-                    background: 'rgba(0, 0, 0, 0.4)',
                     fontSize: '0.72em',
                     padding: '2px 4px',
-                    borderRadius: '4px',
                     zIndex: 20,
                     maxWidth: '90%',
                     overflow: 'hidden',
@@ -376,7 +370,10 @@
                 </div>
               </template>
               <!-- Score overlay -->
-              <div v-if="props.showStars" class="star-overlay">
+              <div
+                v-if="props.showStars"
+                class="star-overlay thumbnail-badge thumbnail-badge--top-right"
+              >
                 <v-icon
                   v-for="n in 5"
                   :key="n"
@@ -4190,6 +4187,38 @@ function handleScoringClose() {
 .export-progress-abort:hover {
   background: #b71c1c;
 }
+
+.thumbnail-badge {
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.thumbnail-badge--top-left {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+}
+
+.thumbnail-badge--top-right {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+}
+
+.thumbnail-badge--bottom-left {
+  position: absolute;
+  left: 10px;
+  bottom: 6px;
+}
+
+.thumbnail-badge--bottom-right {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+}
 .face-bbox-label {
   font-size: 0.7em;
   background-color: rgba(0, 0, 0, 0.3);
@@ -4311,14 +4340,9 @@ function handleScoringClose() {
   margin: 0;
 }
 .star-overlay {
-  position: absolute;
-  top: 2px;
-  right: 2px;
   z-index: 120;
   display: flex;
   flex-direction: row;
-  background: rgba(var(--v-theme-background), 0.6);
-  border-radius: 4px;
   box-shadow: none;
   font-size: 0.85em;
   margin: 4px 4px 4px 4px;
@@ -4429,18 +4453,12 @@ function handleScoringClose() {
 }
 
 .penalized-tag-indicator {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  width: 15px;
-  height: 15px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: none;
-  border-radius: none;
   z-index: 30;
   pointer-events: auto;
+  padding: 2px;
 }
 
 .search-result-bar {
