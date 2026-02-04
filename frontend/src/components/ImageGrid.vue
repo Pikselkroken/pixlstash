@@ -1989,17 +1989,11 @@ async function applyScore(img, newScore) {
       emit("refresh-sidebar");
       return;
     }
-    const pictureIds = Array.isArray(props.wsTagUpdate?.pictureIds)
-      ? props.wsTagUpdate.pictureIds
-      : [];
-    if (
-      !pictureIds.length ||
-      pictureIds.includes(String(overlayImage.value.id))
-    ) {
+    if (isSmartScoreSortActive()) {
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
-    } else {
-      refreshGridImage(imageId);
+      emit("refresh-sidebar");
+      return;
     }
     emit("refresh-sidebar");
   } catch (e) {
