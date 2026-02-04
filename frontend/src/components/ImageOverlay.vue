@@ -647,10 +647,16 @@ import {
   buildMediaUrl,
 } from "../utils/media.js";
 import { apiClient } from "../utils/apiClient";
-import unknownPerson from "../assets/unknown-person.png";
 import AddToSetControl from "./AddToSetControl.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
-import { toggleScore } from "../utils/scoring";
+import { faceBoxColor, handBoxColor, toggleScore } from "../utils/utils.js";
+import {
+  dedupeTagList,
+  getTagId as tagId,
+  getTagLabel as tagLabel,
+  normalizeTagList,
+  tagMatches,
+} from "../utils/tags.js";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -776,56 +782,6 @@ function isPenalizedTag(tag) {
   const key = tagLabel(tag).trim().toLowerCase();
   if (!key) return false;
   return penalizedTags.value.has(key);
-}
-
-function tagLabel(tag) {
-  if (typeof tag === "string") return tag;
-  if (tag && typeof tag === "object") return String(tag.tag || "");
-  return "";
-}
-
-function tagId(tag) {
-  if (tag && typeof tag === "object" && tag.id != null) {
-    return tag.id;
-  }
-  return null;
-}
-
-function normalizeTagItem(tag) {
-  const label = tagLabel(tag).trim();
-  if (!label) return null;
-  return { id: tagId(tag), tag: label };
-}
-
-function normalizeTagList(tags) {
-  return (Array.isArray(tags) ? tags : [])
-    .map(normalizeTagItem)
-    .filter(Boolean);
-}
-
-function dedupeTagList(tags) {
-  const byTag = new Map();
-  for (const tag of tags) {
-    if (!tag || !tag.tag) continue;
-    const existing = byTag.get(tag.tag);
-    if (!existing || (existing.id == null && tag.id != null)) {
-      byTag.set(tag.tag, tag);
-    }
-  }
-  return Array.from(byTag.values()).sort((a, b) =>
-    a.tag.localeCompare(b.tag, undefined, { sensitivity: "base" }),
-  );
-}
-
-function tagMatches(tag, target) {
-  if (!tag) return false;
-  const targetId = tagId(target);
-  if (tag.id != null && targetId != null) {
-    return String(tag.id) === String(targetId);
-  }
-  const targetLabel = tagLabel(target);
-  if (targetLabel) return tag.tag === targetLabel;
-  return false;
 }
 
 function getFullImageUrl(targetImage = null) {
@@ -2465,38 +2421,6 @@ async function copyMetadataValue(value) {
   } catch (err) {
     console.warn("Failed to copy metadata value:", err);
   }
-}
-
-// Add this helper below your script setup imports
-function faceBoxColor(idx) {
-  // Pick from a palette, cycle if more faces than colors
-  const palette = [
-    "#ff5252", // red
-    "#40c4ff", // blue
-    "#ffd740", // yellow
-    "#69f0ae", // green
-    "#d500f9", // purple
-    "#ffab40", // orange
-    "#00e676", // teal
-    "#ff4081", // pink
-    "#8d6e63", // brown
-    "#7c4dff", // indigo
-  ];
-  return palette[idx % palette.length];
-}
-
-function handBoxColor(idx) {
-  const palette = [
-    "#00e5ff", // cyan
-    "#ff6d00", // orange
-    "#00e676", // green
-    "#f50057", // pink
-    "#651fff", // purple
-    "#c0ca33", // lime
-    "#ff1744", // red
-    "#18ffff", // teal
-  ];
-  return palette[idx % palette.length];
 }
 
 function handLabel(hand, idx) {

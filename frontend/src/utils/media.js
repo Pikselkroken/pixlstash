@@ -71,7 +71,12 @@ export function normalizeMediaFormat(source) {
   return '';
 }
 
-export function buildMediaUrl({ backendUrl, image, format } = {}) {
+export function normalizePictureId(id) {
+  if (id === null || id === undefined) return null;
+  return String(id);
+}
+
+export function buildMediaUrl({backendUrl, image, format} = {}) {
   if (!backendUrl || !image || !image.id) return '';
   const ext = normalizeMediaFormat(format || image);
   const suffix = ext ? `.${ext}` : '';

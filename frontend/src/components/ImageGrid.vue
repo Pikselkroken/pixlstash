@@ -362,6 +362,7 @@ import {
   dataTransferHasSupportedMedia,
   isSupportedVideoFile,
   normalizeMediaFormat,
+  normalizePictureId,
   buildMediaUrl,
   PIL_IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
@@ -372,8 +373,21 @@ import SelectionBar from "./SelectionBar.vue";
 import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import { apiClient } from "../utils/apiClient";
-import { toggleScore } from "../utils/scoring";
-import { debounce, update } from "lodash-es";
+import {
+  faceBoxColor,
+  formatIsoDate,
+  getStackColor,
+  handBoxColor,
+  normalizeStackThreshold,
+  toggleScore,
+} from "../utils/utils.js";
+import {
+  dedupeTagList,
+  getTagId,
+  normalizeTagList,
+  tagMatches,
+} from "../utils/tags.js";
+import { debounce } from "lodash-es";
 
 const emit = defineEmits([
   "open-overlay",
@@ -464,22 +478,6 @@ function triggerFaceOverlayRedraw() {
 }
 
 onMounted(() => {
-  console.log(
-    "[ImageGrid.vue] Mounted with selectedDescending:",
-    props.selectedDescending,
-  );
-  console.log(
-    "[ImageGrid.vue] Initial gridImagesToRender:",
-    gridImagesToRender.value,
-  );
-  console.log("[ImageGrid.vue] Initial allGridImages:", allGridImages.value);
-  console.debug("[ImageGrid.vue] Overlay props on mount", {
-    showFaceBboxes: props.showFaceBboxes,
-    showHandBboxes: props.showHandBboxes,
-    showFormat: props.showFormat,
-    showResolution: props.showResolution,
-    showProblemIcon: props.showProblemIcon,
-  });
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   fetchAllPicturesCount();
   nextTick(() => {
@@ -630,7 +628,6 @@ function clearFaceSelection() {
 
 function onFaceBboxDragStart(event, img, faceIdx, faceId) {
   // If this face is selected, drag all selected faces; else, drag just this one
-  console.log(`Dragging face bbox: imageId=${img.id}, faceIdx=${faceIdx}`);
   let facesToDrag = [];
   if (isFaceSelected(img.id, faceIdx) && selectedFaceIds.value.length > 0) {
     facesToDrag = selectedFaceIds.value.map((f) => ({
@@ -659,7 +656,6 @@ function onFaceBboxDragStart(event, img, faceIdx, faceId) {
     imageIds: Array.from(new Set(facesToDrag.map((f) => f.imageId))),
     faces: facesToDrag,
   });
-  console.log("[DRAG] onFaceBboxDragStart dragData:", dragDataStr);
   event.dataTransfer.setData("application/json", dragDataStr);
 
   // Restore other data types
@@ -756,15 +752,19 @@ function getHandBboxStyle(bbox, idx, img, containerEl) {
     containerHeight / naturalHeight,
   );
   const displayWidth = naturalWidth * scale;
-  const displayHeight = naturalHeight * scale;
   const offsetX = (containerWidth - displayWidth) / 2;
   const offsetY = 0;
   const left = offsetX + bbox[0] * scale;
   const top = offsetY + bbox[1] * scale;
   const width = (bbox[2] - bbox[0]) * scale;
   const height = (bbox[3] - bbox[1]) * scale;
+
+  const borderColor = handBoxColor(idx);
   return {
     position: "absolute",
+    border: `1.5px dashed ${borderColor}`,
+    background: `${borderColor}22`,
+    "--face-frame-color": `${borderColor}77`,
     left: `${left}px`,
     top: `${top}px`,
     width: `${width}px`,
@@ -828,23 +828,6 @@ function getHandBboxOverlays(img) {
   });
 }
 
-// Helper for face bbox color palette (copied from ImageOverlay.vue)
-function faceBoxColor(idx) {
-  const palette = [
-    "#ff5252", // red
-    "#40c4ff", // blue
-    "#ffd740", // yellow
-    "#69f0ae", // green
-    "#d500f9", // purple
-    "#ffab40", // orange
-    "#00e676", // teal
-    "#ff4081", // pink
-    "#8d6e63", // brown
-    "#7c4dff", // indigo
-  ];
-  return palette[idx % palette.length];
-}
-
 // Track which image is currently hovered
 const hoveredImageIdx = ref(null);
 
@@ -858,16 +841,6 @@ function handleImageMouseLeave(img) {
 
 // Number of images before/after viewport to load thumbnails for
 // Format date to ISO (YYYY-MM-DD HH:mm:ss)
-function formatIsoDate(dateStr) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}`;
-}
-
 function getThumbnailInfoItems(img) {
   if (!img) return [];
   const items = [];
@@ -1008,50 +981,6 @@ function prepareThumbnailNativeDrag(img, event) {
 
 function handleThumbnailPointerRelease(event) {
   if (dragSource.value === "grid") return;
-}
-
-function debugLogDataTransfer(label, dataTransfer) {
-  if (!dataTransfer) {
-    console.debug(`[DRAG] ${label}: no dataTransfer available`);
-    return;
-  }
-  const types = Array.from(dataTransfer.types || []);
-  console.debug(`[DRAG] ${label}: types`, types);
-
-  const itemsSummary = dataTransfer.items
-    ? Array.from(dataTransfer.items).map((item, idx) => ({
-        idx,
-        kind: item.kind,
-        type: item.type,
-      }))
-    : [];
-  if (itemsSummary.length) {
-    console.debug(`[DRAG] ${label}: items`, itemsSummary);
-  }
-
-  const interestingTypes = new Set([
-    "text/uri-list",
-    "text/html",
-    "text/plain",
-    "public.url",
-    "public.url-name",
-    "com.apple.pasteboard.promised-file-url",
-    "com.apple.pasteboard.promised-file-content-type",
-    "com.apple.pasteboard.promised-file-extension",
-  ]);
-
-  for (const type of types) {
-    if (typeof type !== "string") continue;
-    const shouldRead = type.startsWith("text/") || interestingTypes.has(type);
-    if (!shouldRead) continue;
-    try {
-      const value = dataTransfer.getData(type) || "";
-      const truncated = value.length > 200 ? `${value.slice(0, 200)}…` : value;
-      console.debug(`[DRAG] ${label}: payload (${type})`, truncated);
-    } catch (err) {
-      console.debug(`[DRAG] ${label}: unable to read ${type}`, err);
-    }
-  }
 }
 
 function clearSelection() {
@@ -1302,9 +1231,6 @@ const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
 watch(
   () => props.gridVersion,
   () => {
-    console.log(
-      "[ImageGrid.vue] Grid version changed, refreshing all thumbnails.",
-    );
     if (skipNextWsRefresh.value) {
       skipNextWsRefresh.value = false;
       return;
@@ -1967,6 +1893,80 @@ async function refreshSmartScoreForImage(imageId) {
   }
 }
 
+async function applyScoresByEntries(entries, options = {}) {
+  const { updateSort = true, emitRefreshSidebar = true } = options;
+  if (!Array.isArray(entries) || !entries.length) return;
+
+  const chunkSize = 50;
+  for (let i = 0; i < entries.length; i += chunkSize) {
+    const chunk = entries.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(([id, score]) =>
+        apiClient.patch(`${props.backendUrl}/pictures/${id}`, {
+          score,
+        }),
+      ),
+    );
+  }
+
+  const scoreMap = new Map(
+    entries.map(([id, score]) => [String(id), Number(score)]),
+  );
+
+  let updatedImages = allGridImages.value.map((img) => {
+    if (!img || img.id == null) return img;
+    const key = String(img.id);
+    if (!scoreMap.has(key)) return img;
+    return { ...img, score: scoreMap.get(key) };
+  });
+
+  if (
+    overlayOpen.value &&
+    overlayImage.value &&
+    scoreMap.has(String(overlayImage.value.id))
+  ) {
+    overlayImage.value = {
+      ...overlayImage.value,
+      score: scoreMap.get(String(overlayImage.value.id)),
+    };
+  }
+
+  if (updateSort && isScoreSortActive()) {
+    const descending = props.selectedDescending === true;
+    updatedImages = updatedImages
+      .slice()
+      .sort((a, b) => {
+        const aScore = a?.score ?? 0;
+        const bScore = b?.score ?? 0;
+        if (aScore === bScore) {
+          const aIdx = a?.idx ?? 0;
+          const bIdx = b?.idx ?? 0;
+          return aIdx - bIdx;
+        }
+        return descending ? bScore - aScore : aScore - bScore;
+      })
+      .map((img, idx) => (img ? { ...img, idx } : img));
+    allGridImages.value = updatedImages;
+    invalidateVisibleThumbnailRanges();
+  } else {
+    allGridImages.value = updatedImages;
+  }
+
+  if (updateSort && isCharacterLikenessSortActive()) {
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+  }
+
+  if (updateSort && isSmartScoreSortActive()) {
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+  }
+
+  if (emitRefreshSidebar) {
+    emit("refresh-sidebar");
+  }
+}
+
 async function applyScore(img, newScore) {
   console.debug("Applying score:", newScore);
   const imageId = img.id || (overlayImage.value && overlayImage.value.id);
@@ -1975,33 +1975,10 @@ async function applyScore(img, newScore) {
     return;
   }
   try {
-    console.debug(
-      "PATCH /pictures/",
-      imageId,
-      " body: { score:",
-      newScore,
-      "}",
-    );
-    const res = await apiClient.patch(
-      `${props.backendUrl}/pictures/${imageId}`,
-      {
-        score: newScore,
-      },
-    );
-
-    // Update score in allGridImages
-    const gridImg = allGridImages.value.find((i) => i.id === imageId);
-    if (gridImg) {
-      gridImg.score = newScore;
-    }
-    // Update overlay image if open and matches
-    if (
-      overlayOpen.value &&
-      overlayImage.value &&
-      overlayImage.value.id === imageId
-    ) {
-      overlayImage.value = { ...overlayImage.value, score: newScore };
-    }
+    await applyScoresByEntries([[String(imageId), newScore]], {
+      updateSort: false,
+      emitRefreshSidebar: false,
+    });
 
     if (isScoreSortActive()) {
       repositionImageByScore(imageId, newScore);
@@ -2053,72 +2030,10 @@ async function applyScoresForSelection(imageIds, targetScore) {
 
   if (!entries.length) return;
 
-  const chunkSize = 50;
-  for (let i = 0; i < entries.length; i += chunkSize) {
-    const chunk = entries.slice(i, i + chunkSize);
-    await Promise.all(
-      chunk.map(([id, score]) =>
-        apiClient.patch(`${props.backendUrl}/pictures/${id}`, {
-          score,
-        }),
-      ),
-    );
-  }
-
-  const scoreMap = new Map(
-    entries.map(([id, score]) => [String(id), Number(score)]),
-  );
-
-  let updatedImages = allGridImages.value.map((img) => {
-    if (!img || img.id == null) return img;
-    const key = String(img.id);
-    if (!scoreMap.has(key)) return img;
-    return { ...img, score: scoreMap.get(key) };
+  await applyScoresByEntries(entries, {
+    updateSort: true,
+    emitRefreshSidebar: true,
   });
-
-  if (
-    overlayOpen.value &&
-    overlayImage.value &&
-    scoreMap.has(String(overlayImage.value.id))
-  ) {
-    overlayImage.value = {
-      ...overlayImage.value,
-      score: scoreMap.get(String(overlayImage.value.id)),
-    };
-  }
-
-  if (isScoreSortActive()) {
-    const descending = props.selectedDescending === true;
-    updatedImages = updatedImages
-      .slice()
-      .sort((a, b) => {
-        const aScore = a?.score ?? 0;
-        const bScore = b?.score ?? 0;
-        if (aScore === bScore) {
-          const aIdx = a?.idx ?? 0;
-          const bIdx = b?.idx ?? 0;
-          return aIdx - bIdx;
-        }
-        return descending ? bScore - aScore : aScore - bScore;
-      })
-      .map((img, idx) => (img ? { ...img, idx } : img));
-    allGridImages.value = updatedImages;
-    invalidateVisibleThumbnailRanges();
-  } else {
-    allGridImages.value = updatedImages;
-  }
-
-  if (isCharacterLikenessSortActive()) {
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-  }
-
-  if (isSmartScoreSortActive()) {
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-  }
-
-  emit("refresh-sidebar");
 }
 
 // Drag-and-drop overlay handlers
@@ -2185,7 +2100,6 @@ function handleGridDragLeave(e) {
 
 function handleGridDrop(e) {
   dragOverlayVisible.value = false;
-  debugLogDataTransfer("drop", e.dataTransfer);
 
   // Ignore drag-and-drop if the source is the grid itself
   if (
@@ -2252,18 +2166,6 @@ const imagesLoading = ref(false);
 const imagesError = ref(null);
 const totalAllPicturesCount = ref(0);
 
-function normalizeStackThreshold(value) {
-  if (value === null || value === undefined || value === "") return 0.94;
-  const parsed = parseFloat(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return 0.94;
-  return Math.max(0.9, Math.min(0.98, parsed));
-}
-
-function getStackColor(stackIndex) {
-  const hue = (stackIndex * STACK_COLOR_STEP) % 360;
-  return `hsl(${hue} 70% 55%)`;
-}
-
 function getStackCardStyle(img) {
   if (!img) return {};
   const rawIndex =
@@ -2273,7 +2175,7 @@ function getStackCardStyle(img) {
         ? img.stack_index
         : null;
   if (rawIndex === null) return {};
-  const color = img.stackColor || getStackColor(rawIndex);
+  const color = img.stackColor || getStackColor(rawIndex, STACK_COLOR_STEP);
   return {
     backgroundColor: color,
     padding: "6px",
@@ -2328,10 +2230,6 @@ function buildPictureIdsQueryParams() {
   }
   // Add format filter for backend media type filtering
   if (props.mediaTypeFilter === "images") {
-    console.log(
-      "[ImageGrid.vue] Building query params for image formats only",
-      PIL_IMAGE_EXTENSIONS,
-    );
     for (const ext of PIL_IMAGE_EXTENSIONS) {
       params.append("format", ext.toUpperCase());
     }
@@ -2466,7 +2364,9 @@ async function fetchAllGridImages() {
           ...img,
           stackIndex,
           stackColor:
-            typeof stackIndex === "number" ? getStackColor(stackIndex) : null,
+            typeof stackIndex === "number"
+              ? getStackColor(stackIndex, STACK_COLOR_STEP)
+              : null,
         };
       });
     } else if (
@@ -2797,60 +2697,6 @@ const bottomSpacerHeight = computed(() => {
 
 // Compute grid images (id, idx, thumbnail)
 const allGridImages = ref([]);
-
-function normalizePictureId(id) {
-  if (id === null || id === undefined) return null;
-  return String(id);
-}
-
-function getTagLabel(tag) {
-  if (typeof tag === "string") return tag;
-  if (tag && typeof tag === "object") return String(tag.tag || "");
-  return "";
-}
-
-function getTagId(tag) {
-  if (tag && typeof tag === "object" && tag.id != null) {
-    return tag.id;
-  }
-  return null;
-}
-
-function normalizeTagItem(tag) {
-  const label = getTagLabel(tag).trim();
-  if (!label) return null;
-  return { id: getTagId(tag), tag: label };
-}
-
-function normalizeTagList(tags) {
-  return (Array.isArray(tags) ? tags : [])
-    .map(normalizeTagItem)
-    .filter(Boolean);
-}
-
-function dedupeTagList(tags) {
-  const byTag = new Map();
-  for (const tag of tags) {
-    if (!tag || !tag.tag) continue;
-    const existing = byTag.get(tag.tag);
-    if (!existing || (existing.id == null && tag.id != null)) {
-      byTag.set(tag.tag, tag);
-    }
-  }
-  return Array.from(byTag.values()).sort((a, b) =>
-    a.tag.localeCompare(b.tag, undefined, { sensitivity: "base" }),
-  );
-}
-
-function tagMatches(tag, target) {
-  if (!tag) return false;
-  if (tag.id != null && target?.id != null) {
-    return String(tag.id) === String(target.id);
-  }
-  if (target?.tag) return tag.tag === target.tag;
-  if (typeof target === "string") return tag.tag === target;
-  return false;
-}
 
 watch(
   [
@@ -4020,18 +3866,6 @@ function handleEmptyStateReset() {
   padding: 2px;
 }
 
-.smart-score-bar {
-  position: absolute;
-  left: 0;
-  width: 100%;
-  z-index: 190;
-  background-color: rgba(245, 245, 245, 0.95);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
-}
 .thumbnail-placeholder {
   width: 100%;
   height: 100%;
