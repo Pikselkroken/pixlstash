@@ -318,17 +318,16 @@ class Picture(SQLModel, table=True):
         # Combined embedding score: average of text and image similarity to capture both explicit tags and visual concepts
         embedding_score = (text_sim + image_sim) / 2.0
 
+        fuzzy_score = func.max(0.0, 1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0))
+
         # Main query: join pictures with tag_subq, compute combined score
         stmt = (
             select(
                 cls,
-                (
-                    fuzzy_weight * (1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0))
-                    + embedding_weight * embedding_score
-                ).label("combined_score"),
-                (1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0)).label(
-                    "fuzzy_score"
+                (fuzzy_weight * fuzzy_score + embedding_weight * embedding_score).label(
+                    "combined_score"
                 ),
+                fuzzy_score.label("fuzzy_score"),
                 embedding_score.label("embedding_score"),
                 tag_subq.c.min_tag_dist.label(
                     "min_tag_dist"

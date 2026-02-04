@@ -128,13 +128,13 @@ function openMenu() {
   menuOpen.value = true;
   fetchSets(true);
   nextTick(() => searchInputRef.value?.focus());
-  document.addEventListener("mousedown", handleOutsideClick);
+  document.addEventListener("pointerdown", handleOutsideClick, true);
 }
 
 function closeMenu() {
   menuOpen.value = false;
   searchQuery.value = "";
-  document.removeEventListener("mousedown", handleOutsideClick);
+  document.removeEventListener("pointerdown", handleOutsideClick, true);
 }
 
 function handleOutsideClick(event) {
@@ -238,7 +238,7 @@ async function addToSet(set) {
 
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
-  document.removeEventListener("mousedown", handleOutsideClick);
+  document.removeEventListener("pointerdown", handleOutsideClick, true);
 });
 
 watch(

@@ -198,26 +198,6 @@ def test_character_likeness():
                 if filename.startswith("Reference"):
                     reference_picture_ids.append(id)
 
-            # Assign the reference pictures to the character's reference set using POST /picture_sets/{id}/members/{picture_id}
-            # First, get the character summary to retrieve the reference_picture_set_id
-            summary_resp = client.get(f"/characters/{char_id}/summary")
-            assert summary_resp.status_code == 200, (
-                f"Failed to get character summary: {summary_resp.text}"
-            )
-            reference_picture_set_id = summary_resp.json().get(
-                "reference_picture_set_id"
-            )
-            assert reference_picture_set_id, (
-                f"Character summary did not return reference_picture_set_id: {summary_resp.json()}"
-            )
-            for ref_pid in reference_picture_ids:
-                add_resp = client.post(
-                    f"/picture_sets/{reference_picture_set_id}/members/{ref_pid}"
-                )
-                assert add_resp.status_code == 200, (
-                    f"Failed to add picture {ref_pid} to reference set {reference_picture_set_id}: {add_resp.text}"
-                )
-
             all_face_ids = set()
             for pid in picture_ids:
                 logging.debug(f"Facial features processed for picture ID: {pid}")
@@ -257,6 +237,14 @@ def test_character_likeness():
                 logger.info(
                     f"Assigned {len(ref_face_ids)} faces from reference pictures to character {char_id}"
                 )
+
+            reference_resp = client.get(f"/characters/{char_id}/reference_pictures")
+            assert reference_resp.status_code == 200, (
+                f"Failed to get reference pictures: {reference_resp.text}"
+            )
+            reference_picture_ids = reference_resp.json().get(
+                "reference_picture_ids", []
+            )
 
             server.vault.stop_workers()
 

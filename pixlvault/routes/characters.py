@@ -398,10 +398,10 @@ def create_router(server) -> APIRouter:
                             return 0
 
                     largest_face = max(faces, key=face_area)
-                    if largest_face.picture_id != pic_id:
-                        faces_to_assign.append(largest_face)
-                    else:
+                    if largest_face.character_id == character_id:
                         existing_faces.append(largest_face)
+                    else:
+                        faces_to_assign.append(largest_face)
             if face_ids:
                 for face_id in face_ids:
                     face = session.get(Face, face_id)
@@ -409,10 +409,10 @@ def create_router(server) -> APIRouter:
                         raise HTTPException(
                             status_code=404, detail=f"Face {face_id} not found"
                         )
-                    if face.picture_id != pic_id:
-                        faces_to_assign.append(face)
-                    else:
+                    if face.character_id == character_id:
                         existing_faces.append(face)
+                    else:
+                        faces_to_assign.append(face)
             unique_faces = {face.id: face for face in faces_to_assign}.values()
             for face in unique_faces:
                 face.character_id = character_id
@@ -420,19 +420,28 @@ def create_router(server) -> APIRouter:
             session.commit()
             for face in unique_faces:
                 session.refresh(face)
-            return list(unique_faces), existing_faces
+            faces_payload = [
+                {
+                    "id": face.id,
+                    "picture_id": face.picture_id,
+                    "character_id": face.character_id,
+                }
+                for face in unique_faces
+            ]
+            existing_face_ids = [face.id for face in existing_faces]
+            return faces_payload, existing_face_ids
 
-        faces, existing_faces = server.vault.db.run_task(
+        faces, existing_face_ids = server.vault.db.run_task(
             assign_faces,
             face_ids,
             picture_ids,
             character_id,
             priority=DBPriority.IMMEDIATE,
         )
-        if not faces and len(existing_faces) > 0:
-            if len(existing_faces) == 1:
+        if not faces and len(existing_face_ids) > 0:
+            if len(existing_face_ids) == 1:
                 detail = (
-                    f"Face {existing_faces[0].id} is already assigned to this character"
+                    f"Face {existing_face_ids[0]} is already assigned to this character"
                 )
             else:
                 detail = "All faces are already assigned to this character"
@@ -441,19 +450,23 @@ def create_router(server) -> APIRouter:
                 detail=detail,
             )
         server.vault.db.run_task(
-            Picture.clear_field, [face.picture_id for face in faces], "text_embedding"
+            Picture.clear_field,
+            [face["picture_id"] for face in faces],
+            "text_embedding",
         )
         for face in faces:
-            if face.character_id != character_id:
+            if face["character_id"] != character_id:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to set character {character_id} for face {face.id}",
+                    detail=(
+                        f"Failed to set character {character_id} for face {face['id']}"
+                    ),
                 )
         server.vault.notify(EventType.CHANGED_CHARACTERS)
         server.vault.notify(EventType.CHANGED_FACES)
         return {
             "status": "success",
-            "face_ids": [face.id for face in faces],
+            "face_ids": [face["id"] for face in faces],
             "character_id": character_id,
         }
 

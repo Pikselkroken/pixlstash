@@ -80,8 +80,8 @@ def test_face_extraction_speed_gpu():
             )
 
             start = time()
-            faces = worker._extract_faces(pictures)
+            features = worker._extract_features(pictures)
             end = time()
             logger.info(
-                f"Face extraction took {end - start} seconds for {len(pictures)} images and created {len(faces)} faces. Or {(end - start) / len(pictures)} seconds per image on average."
+                f"Face extraction took {end - start} seconds for {len(pictures)} images and created {len(features)} features. Or {(end - start) / len(pictures)} seconds per image on average."
             )

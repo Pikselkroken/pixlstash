@@ -1139,6 +1139,173 @@ def create_router(server) -> APIRouter:
         results = server.vault.db.run_task(find_by_text, query, offset, limit)
         return [Picture.serialize_with_likeness(r) for r in results]
 
+    @router.post("/pictures/import")
+    async def import_pictures(
+        background_tasks: BackgroundTasks,
+        file: list[UploadFile] = File(None),
+    ):
+        if not server.vault.is_worker_running(WorkerType.FACE):
+            raise HTTPException(
+                status_code=400,
+                detail="Face worker is not running. Start it before import.",
+            )
+
+        dest_folder = server.vault.image_root
+        logger.debug("Importing pictures to folder: " + str(dest_folder))
+        os.makedirs(dest_folder, exist_ok=True)
+        uploaded_files = []
+        if file is not None:
+            for upload in file:
+                if not upload.filename:
+                    continue
+                contents = await upload.read()
+                if not contents:
+                    continue
+                ext = os.path.splitext(upload.filename)[1].lower()
+                if ext not in {
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".webp",
+                    ".gif",
+                    ".bmp",
+                    ".tiff",
+                    ".tif",
+                    ".mp4",
+                    ".webm",
+                    ".mov",
+                    ".avi",
+                    ".mkv",
+                }:
+                    logger.error("Invalid file extension: %s", ext)
+                    raise HTTPException(
+                        status_code=400, detail="Invalid file extension"
+                    )
+                uploaded_files.append((contents, ext))
+        else:
+            logger.error("No files provided for import")
+            raise HTTPException(status_code=400, detail="No image provided")
+
+        task_id = str(uuid.uuid4())
+        server.import_tasks[task_id] = {
+            "status": "in_progress",
+            "total": len(uploaded_files),
+            "processed": 0,
+            "results": None,
+            "error": None,
+        }
+
+        def run_import_task(server):
+            try:
+                shas, existing_map, new_pictures = _create_picture_imports(
+                    server, uploaded_files, dest_folder
+                )
+
+                logger.debug(
+                    f"Importing {len(new_pictures)} new pictures out of {len(uploaded_files)} uploaded."
+                )
+
+                if new_pictures:
+
+                    def import_task(session):
+                        session.add_all(new_pictures)
+                        session.commit()
+                        for pic in new_pictures:
+                            session.refresh(pic)
+                        return new_pictures
+
+                    new_pictures = server.vault.db.run_task(import_task)
+                    logger.debug(
+                        f"Queuing likeness calculation for {len(new_pictures)} new pictures."
+                    )
+                else:
+                    logger.warning("No new pictures to import; all are duplicates.")
+                    new_pictures = []
+
+                results = []
+                duplicate_count = 0
+                index = 0
+                for _, sha in zip(uploaded_files, shas):
+                    if sha in existing_map:
+                        pic = existing_map[sha]
+                        results.append(
+                            {
+                                "status": "duplicate",
+                                "picture_id": pic.id,
+                                "file": pic.file_path,
+                            }
+                        )
+                        duplicate_count += 1
+                    else:
+                        pic = new_pictures[index]
+                        results.append(
+                            {
+                                "status": "success",
+                                "picture_id": pic.id,
+                                "file": pic.file_path,
+                            }
+                        )
+                        index += 1
+
+                if duplicate_count:
+                    logger.warning(
+                        "Import completed with %d duplicate(s) out of %d file(s).",
+                        duplicate_count,
+                        len(uploaded_files),
+                    )
+                server.import_tasks[task_id]["results"] = results
+                server.import_tasks[task_id]["processed"] = len(uploaded_files)
+                if new_pictures:
+                    server.import_tasks[task_id]["status"] = "processing_faces"
+                    face_futures = [
+                        server.vault.get_worker_future(
+                            WorkerType.FACE, Picture, pic.id, "faces"
+                        )
+                        for pic in new_pictures
+                    ]
+                    server.vault.notify(EventType.CHANGED_PICTURES)
+                    face_timeout_s = 120
+                    for pic, future in zip(new_pictures, face_futures):
+                        try:
+                            future.result(timeout=face_timeout_s)
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"Face extraction timed out for picture id={pic.id}"
+                            ) from exc
+                    server.import_tasks[task_id]["status"] = "completed"
+                else:
+                    server.import_tasks[task_id]["status"] = "completed"
+                    server.vault.notify(EventType.CHANGED_PICTURES)
+            except Exception as exc:
+                server.import_tasks[task_id]["status"] = "failed"
+                server.import_tasks[task_id]["error"] = str(exc)
+                logger.error(f"Import task {task_id} failed: {exc}")
+
+        background_tasks.add_task(run_import_task, server)
+        return {"task_id": task_id}
+
+    @router.get("/pictures/import/status")
+    async def import_status(task_id: str):
+        task = server.import_tasks.get(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        total = task.get("total") or 0
+        processed = task.get("processed") or 0
+        progress = (processed / total * 100.0) if total else 0.0
+
+        payload = {
+            "status": task["status"],
+            "total": total,
+            "processed": processed,
+            "progress": progress,
+        }
+        if task["status"] == "completed":
+            payload["results"] = task.get("results") or []
+        if task["status"] == "failed":
+            payload["error"] = task.get("error")
+        return payload
+
     @router.get("/pictures/{id}.{ext}")
     async def get_picture(request: Request, id: str, ext: str):
         if not isinstance(id, str):
@@ -1520,173 +1687,6 @@ def create_router(server) -> APIRouter:
             server.vault.notify(EventType.CHANGED_PICTURES)
 
         return {"status": "success", "picture": safe_model_dict(pic)}
-
-    @router.post("/pictures/import")
-    async def import_pictures(
-        background_tasks: BackgroundTasks,
-        file: list[UploadFile] = File(None),
-    ):
-        if not server.vault.is_worker_running(WorkerType.FACE):
-            raise HTTPException(
-                status_code=400,
-                detail="Face worker is not running. Start it before import.",
-            )
-
-        dest_folder = server.vault.image_root
-        logger.debug("Importing pictures to folder: " + str(dest_folder))
-        os.makedirs(dest_folder, exist_ok=True)
-        uploaded_files = []
-        if file is not None:
-            for upload in file:
-                if not upload.filename:
-                    continue
-                contents = await upload.read()
-                if not contents:
-                    continue
-                ext = os.path.splitext(upload.filename)[1].lower()
-                if ext not in {
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".webp",
-                    ".gif",
-                    ".bmp",
-                    ".tiff",
-                    ".tif",
-                    ".mp4",
-                    ".webm",
-                    ".mov",
-                    ".avi",
-                    ".mkv",
-                }:
-                    logger.error("Invalid file extension: %s", ext)
-                    raise HTTPException(
-                        status_code=400, detail="Invalid file extension"
-                    )
-                uploaded_files.append((contents, ext))
-        else:
-            logger.error("No files provided for import")
-            raise HTTPException(status_code=400, detail="No image provided")
-
-        task_id = str(uuid.uuid4())
-        server.import_tasks[task_id] = {
-            "status": "in_progress",
-            "total": len(uploaded_files),
-            "processed": 0,
-            "results": None,
-            "error": None,
-        }
-
-        def run_import_task():
-            try:
-                shas, existing_map, new_pictures = _create_picture_imports(
-                    uploaded_files, dest_folder
-                )
-
-                logger.debug(
-                    f"Importing {len(new_pictures)} new pictures out of {len(uploaded_files)} uploaded."
-                )
-
-                if new_pictures:
-
-                    def import_task(session):
-                        session.add_all(new_pictures)
-                        session.commit()
-                        for pic in new_pictures:
-                            session.refresh(pic)
-                        return new_pictures
-
-                    new_pictures = server.vault.db.run_task(import_task)
-                    logger.debug(
-                        f"Queuing likeness calculation for {len(new_pictures)} new pictures."
-                    )
-                else:
-                    logger.warning("No new pictures to import; all are duplicates.")
-                    new_pictures = []
-
-                results = []
-                duplicate_count = 0
-                index = 0
-                for _, sha in zip(uploaded_files, shas):
-                    if sha in existing_map:
-                        pic = existing_map[sha]
-                        results.append(
-                            {
-                                "status": "duplicate",
-                                "picture_id": pic.id,
-                                "file": pic.file_path,
-                            }
-                        )
-                        duplicate_count += 1
-                    else:
-                        pic = new_pictures[index]
-                        results.append(
-                            {
-                                "status": "success",
-                                "picture_id": pic.id,
-                                "file": pic.file_path,
-                            }
-                        )
-                        index += 1
-
-                if duplicate_count:
-                    logger.warning(
-                        "Import completed with %d duplicate(s) out of %d file(s).",
-                        duplicate_count,
-                        len(uploaded_files),
-                    )
-                server.import_tasks[task_id]["results"] = results
-                server.import_tasks[task_id]["processed"] = len(uploaded_files)
-                if new_pictures:
-                    server.import_tasks[task_id]["status"] = "processing_faces"
-                    face_futures = [
-                        server.vault.get_worker_future(
-                            WorkerType.FACE, Picture, pic.id, "faces"
-                        )
-                        for pic in new_pictures
-                    ]
-                    server.vault.notify(EventType.CHANGED_PICTURES)
-                    face_timeout_s = 120
-                    for pic, future in zip(new_pictures, face_futures):
-                        try:
-                            future.result(timeout=face_timeout_s)
-                        except Exception as exc:
-                            raise RuntimeError(
-                                f"Face extraction timed out for picture id={pic.id}"
-                            ) from exc
-                    server.import_tasks[task_id]["status"] = "completed"
-                else:
-                    server.import_tasks[task_id]["status"] = "completed"
-                    server.vault.notify(EventType.CHANGED_PICTURES)
-            except Exception as exc:
-                server.import_tasks[task_id]["status"] = "failed"
-                server.import_tasks[task_id]["error"] = str(exc)
-                logger.error(f"Import task {task_id} failed: {exc}")
-
-        background_tasks.add_task(run_import_task)
-        return {"task_id": task_id}
-
-    @router.get("/pictures/import/status")
-    async def import_status(task_id: str):
-        task = server.import_tasks.get(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        total = task.get("total") or 0
-        processed = task.get("processed") or 0
-        progress = (processed / total * 100.0) if total else 0.0
-
-        payload = {
-            "status": task["status"],
-            "total": total,
-            "processed": processed,
-            "progress": progress,
-        }
-        if task["status"] == "completed":
-            payload["results"] = task.get("results") or []
-        if task["status"] == "failed":
-            payload["error"] = task.get("error")
-        return payload
 
     @router.delete("/pictures/{id}")
     async def delete_picture(id: str):

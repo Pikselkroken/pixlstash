@@ -10,7 +10,6 @@ from sqlmodel import select
 
 from pixlvault.server import Server
 from pixlvault.db_models import Picture, Face, Character
-from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
 from pixlvault.database import DBPriority
 
 
@@ -70,13 +69,6 @@ def test_smart_score_consistency():
             session.add(f)
             session.commit()
             session.refresh(f)
-
-            # Likeness P1 -> C
-            fcl = FaceCharacterLikeness(
-                face_id=f.id, character_id=c.id, likeness=0.99, metric="cosine"
-            )
-            session.add(fcl)
-            session.commit()
 
             return p1.id, p2.id, c.id
 

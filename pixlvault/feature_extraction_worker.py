@@ -187,6 +187,12 @@ class FeatureExtractionWorker(BaseWorker):
         hand_model = self._ensure_hand_detector()
 
         for pic in pics:
+            if pic.id is None:
+                logger.warning(
+                    "Skipping feature extraction for %s: missing picture id",
+                    getattr(pic, "file_path", "<unknown>"),
+                )
+                continue
             pic_face_ids = []
             pic_hand_ids = []
             need_faces = not getattr(pic, "faces", None)
@@ -478,6 +484,10 @@ class FeatureExtractionWorker(BaseWorker):
                 updates.append((Picture, pic.id, "faces", pic_face_ids))
 
             if need_hands:
+                for hand in hand_objects:
+                    if hand.picture_id is None:
+                        hand.picture_id = pic.id
+
                 hand_objects.sort(
                     key=lambda h: (h.bbox[1], h.bbox[0], h.bbox[3], h.bbox[2])
                 )
@@ -509,18 +519,28 @@ class FeatureExtractionWorker(BaseWorker):
                     pic_hand_ids.append(hand_id)
                 else:
 
-                    def insert_hands(session, hands_to_insert):
+                    def insert_hands(session, hands_to_insert, picture_id):
                         hand_ids = []
                         for hand in hands_to_insert:
+                            if hand.picture_id is None:
+                                hand.picture_id = picture_id
+                            if hand.picture_id is None:
+                                logger.warning(
+                                    "Skipping hand insert for %s: missing picture_id",
+                                    file_path,
+                                )
+                                continue
                             session.add(hand)
                         session.commit()
                         for hand in hands_to_insert:
+                            if hand.picture_id is None:
+                                continue
                             session.refresh(hand)
                             hand_ids.append(hand.id)
                         return hand_ids
 
                     hand_ids = self._db.run_task(
-                        insert_hands, hand_objects, priority=DBPriority.HIGH
+                        insert_hands, hand_objects, pic.id, priority=DBPriority.HIGH
                     )
                     pic_hand_ids.extend(hand_ids)
 

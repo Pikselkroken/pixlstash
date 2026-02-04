@@ -39,6 +39,7 @@
         <div class="overlay-top-actions">
           <AddToSetControl
             v-if="image"
+            :key="addToSetControlKey"
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
             :class="{ hidden: chromeHidden }"
@@ -738,11 +739,13 @@ const tagInputRef = ref(null);
 const penalizedTags = ref(new Set());
 const penalizedTagsLoading = ref(false);
 const lastTagUpdateKey = ref(0);
+const addToSetControlKey = ref(0);
 
 watch(open, (value) => {
   if (!value) {
     resetTagInput();
     chromeHidden.value = false;
+    addToSetControlKey.value += 1;
   } else {
     fetchCharacters();
     fetchPenalizedTags();
