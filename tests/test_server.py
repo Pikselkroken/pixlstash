@@ -812,6 +812,41 @@ def test_semantic_search():
                 result_id = future.result(timeout=80)
                 logging.debug(f"Text embedding processed for picture ID: {result_id}")
 
+            def wait_for_semantic_ready(timeout_s=80, poll_interval=0.5):
+                start = time.time()
+                pending = set(picture_ids)
+                while pending and (time.time() - start) < timeout_s:
+                    completed = set()
+                    for pid in pending:
+                        meta_resp = client.get(f"/pictures/{pid}/metadata")
+                        if meta_resp.status_code != 200:
+                            continue
+                        meta = meta_resp.json()
+                        if not meta.get("description"):
+                            continue
+                        embed_resp = client.get(f"/pictures/{pid}/text_embedding")
+                        if embed_resp.status_code != 200:
+                            continue
+                        if embed_resp.json().get("text_embedding") is None:
+                            continue
+                        completed.add(pid)
+                    pending -= completed
+                    if pending:
+                        time.sleep(poll_interval)
+                assert not pending, (
+                    f"Timed out waiting for semantic readiness for picture ids: {sorted(pending)}"
+                )
+
+            wait_for_semantic_ready()
+
+            server.vault.stop_workers(
+                {
+                    WorkerType.TAGGER,
+                    WorkerType.DESCRIPTION,
+                    WorkerType.TEXT_EMBEDDING,
+                }
+            )
+
             # Inspect embeddings for each picture after embedding futures complete
             for pid in picture_ids:
                 meta_resp = client.get(f"/pictures/{pid}/text_embedding")
@@ -842,7 +877,7 @@ def test_semantic_search():
 
             for search_text in search_texts:
                 search_resp = client.get(
-                    f"/pictures/search?query={quote(search_text)}&threshold=0.2"
+                    f"/pictures/search?query={quote(search_text)}&threshold=0.4"
                 )
                 assert search_resp.status_code == 200
                 results = search_resp.json()
