@@ -34,22 +34,22 @@ def test_smart_score_consistency():
         # data setup
         def setup_data(session):
             emb_array = np.random.rand(128).astype(np.float32)
-            emb_bytes = pickle.dumps(emb_array)
+            emb_bytes = emb_array.tobytes()
 
-            # Picture 1: Has face, matches Char
+            # Picture 1
             p1 = Picture(
                 file_path="p1.jpg",
                 image_embedding=emb_bytes,
-                aesthetic_score=5.0,
+                aesthetic_score=5.5,
                 score=0,
             )
             session.add(p1)
 
-            # Picture 2: No face
+            # Picture 2
             p2 = Picture(
                 file_path="p2.jpg",
                 image_embedding=emb_bytes,
-                aesthetic_score=5.0,
+                aesthetic_score=4.5,
                 score=0,
             )
             session.add(p2)
