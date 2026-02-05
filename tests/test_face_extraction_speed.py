@@ -7,6 +7,7 @@ from time import time
 from pixlvault.feature_extraction_worker import FeatureExtractionWorker
 from pixlvault.db_models.picture import Picture
 from pixlvault.pixl_logging import get_logger
+from pixlvault.picture_utils import PictureUtils
 from pixlvault.server import Server
 
 logger = get_logger(__name__)
@@ -27,8 +28,21 @@ def test_face_extraction_speed_cpu():
 
         with Server(server_config_path=server_config_path) as server:
             pictures = []
+            image_root = server.vault.image_root
+            os.makedirs(image_root, exist_ok=True)
+
+            def add_picture(session, picture: Picture):
+                session.add(picture)
+                session.commit()
+                session.refresh(picture)
+                return picture
+
             for image_file in image_files:
-                pic = Picture(file_path=os.path.join(src_dir, image_file))
+                pic = PictureUtils.create_picture_from_file(
+                    image_root_path=image_root,
+                    source_file_path=os.path.join(src_dir, image_file),
+                )
+                pic = server.vault.db.run_task(add_picture, pic)
                 pictures.append(pic)
 
             def notify(event_type) -> None:
@@ -63,8 +77,21 @@ def test_face_extraction_speed_gpu():
 
         with Server(server_config_path=server_config_path) as server:
             pictures = []
+            image_root = server.vault.image_root
+            os.makedirs(image_root, exist_ok=True)
+
+            def add_picture(session, picture: Picture):
+                session.add(picture)
+                session.commit()
+                session.refresh(picture)
+                return picture
+
             for image_file in image_files:
-                pic = Picture(file_path=os.path.join(src_dir, image_file))
+                pic = PictureUtils.create_picture_from_file(
+                    image_root_path=image_root,
+                    source_file_path=os.path.join(src_dir, image_file),
+                )
+                pic = server.vault.db.run_task(add_picture, pic)
                 pictures.append(pic)
 
             def notify(event_type) -> None:
