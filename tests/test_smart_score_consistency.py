@@ -76,6 +76,19 @@ def test_smart_score_consistency():
             setup_data, priority=DBPriority.IMMEDIATE
         )
 
+        def fetch_embeddings(session, ids):
+            rows = session.exec(
+                select(Picture.id, Picture.image_embedding).where(Picture.id.in_(ids))
+            ).all()
+            return rows
+
+        emb_rows = server.vault.db.run_task(
+            fetch_embeddings, [p1_id, p2_id], priority=DBPriority.IMMEDIATE
+        )
+        for pid, emb in emb_rows:
+            assert emb is not None, f"image_embedding missing for picture id={pid}"
+            assert len(emb) > 0, f"image_embedding empty for picture id={pid}"
+
         # Helper to get score for a pic from response
         def get_score(resp_json, pid):
             for p in resp_json:
