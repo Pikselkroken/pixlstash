@@ -363,8 +363,9 @@ class Vault:
                     )
                     pic.description = os.path.basename(src_path)
                     assert pic.file_path
-                    self.db.submit_task(
-                        lambda session: (session.add(pic), session.commit()),
+                    self.db.run_task(
+                        add_picture,
+                        pic,
                         priority=DBPriority.IMMEDIATE,
                     )
                     logger.debug(f"Imported default picture: {pic.file_path}")
