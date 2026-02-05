@@ -527,11 +527,24 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
         return getattr(item, key, None)
 
     def get_vec(blob):
+        if blob is None:
+            return None
+        if isinstance(blob, memoryview):
+            blob = blob.tobytes()
         try:
             obj = pickle.loads(blob)
             if isinstance(obj, np.ndarray):
-                return obj
-            return np.array(obj)
+                if obj.ndim == 1 and obj.size > 0:
+                    return obj
+            else:
+                arr = np.array(obj)
+                if arr.ndim == 1 and arr.size > 0:
+                    return arr
+        except Exception:
+            pass
+        try:
+            arr = np.frombuffer(blob, dtype=np.float32)
+            return arr if arr.size else None
         except Exception:
             return None
 
