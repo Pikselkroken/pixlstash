@@ -350,6 +350,15 @@
             </v-btn-toggle>
           </div>
         </v-menu>
+        <v-btn
+          icon
+          title="Settings"
+          class="toolbar-action-btn"
+          style="margin-left: 4px"
+          @click="emit('open-settings')"
+        >
+          <v-icon :color="'onBackground'">mdi-cog</v-icon>
+        </v-btn>
       </div>
     </div>
   </div>
@@ -413,6 +422,7 @@ const emit = defineEmits([
   "clear-search-history",
   "columns-end",
   "confirm-export-zip",
+  "open-settings",
 ]);
 
 const searchInputField = ref(null);
@@ -646,7 +656,7 @@ defineExpose({ blurSearchInput });
 }
 
 .media-type-toggle .v-btn {
-  color: rgb(var(--v-theme-on-secondary)) !important;
+  color: rgb(var(--v-theme-on-primary)) !important;
   height: 32px;
   width: 32px;
   background-color: rgba(var(--v-theme-surface), 0.3) !important;
@@ -654,8 +664,8 @@ defineExpose({ blurSearchInput });
 }
 
 .media-type-toggle {
-  background-color: rgb(var(--v-theme-secondary)) !important;
-  color: white !important;
+  background-color: rgb(var(--v-theme-primary)) !important;
+  color: rgb(var(--v-theme-on-primary)) !important;
 }
 
 @media (max-width: 900px) {

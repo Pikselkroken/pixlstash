@@ -582,6 +582,10 @@ function closeSetEditor() {
   setEditorSet.value = null;
 }
 
+function openSettingsDialog() {
+  settingsDialogOpen.value = true;
+}
+
 function selectCharacter(id) {
   clearCountNew(id);
   emit("select-set", null);
@@ -1218,7 +1222,7 @@ watch(
   },
 );
 
-defineExpose({ refreshSidebar });
+defineExpose({ refreshSidebar, openSettingsDialog });
 </script>
 
 <template>
@@ -1644,14 +1648,6 @@ defineExpose({ refreshSidebar });
         >
           <v-icon>mdi-image-album</v-icon>
         </div>
-        <div class="sidebar-collapsed-divider"></div>
-        <div
-          class="sidebar-collapsed-item sidebar-settings-item"
-          title="Settings"
-          @click="settingsDialogOpen = true"
-        >
-          <v-icon>mdi-cog</v-icon>
-        </div>
       </div>
     </template>
     <template v-else>
@@ -2005,15 +2001,6 @@ defineExpose({ refreshSidebar });
         </div>
       </div>
       <div class="sidebar-footer-spacer"></div>
-      <div
-        class="sidebar-list-item sidebar-settings-item"
-        @click="settingsDialogOpen = true"
-      >
-        <span class="sidebar-list-icon">
-          <v-icon size="44">mdi-cog</v-icon>
-        </span>
-        <span class="sidebar-list-label">Settings</span>
-      </div>
     </template>
   </aside>
   <div

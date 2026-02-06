@@ -239,6 +239,10 @@ function refreshSidebar(options = {}) {
   sidebarRef.value?.refreshSidebar(options);
 }
 
+function openSettingsDialog() {
+  sidebarRef.value?.openSettingsDialog?.();
+}
+
 function updateIsMobile() {
   if (typeof window !== "undefined") {
     isMobile.value = window.innerWidth <= MOBILE_BREAKPOINT;
@@ -816,6 +820,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @clear-search-history="clearSearchHistory"
             @columns-end="handleColumnsEnd"
             @confirm-export-zip="confirmExportZip"
+            @open-settings="openSettingsDialog"
           />
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
