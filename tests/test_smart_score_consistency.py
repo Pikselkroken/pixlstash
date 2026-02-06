@@ -2,7 +2,6 @@ import gc
 import json
 import numpy as np
 import os
-import pickle
 import tempfile
 
 from fastapi.testclient import TestClient

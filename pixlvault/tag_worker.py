@@ -16,8 +16,6 @@ from pixlvault.worker_registry import BaseWorker, WorkerType
 
 from pixlvault.db_models import Character, Face, FaceTag, Hand, HandTag, Picture, Tag
 from pixlvault.feature_tag_blacklist import (
-    FACE_TAG_BLACKLIST,
-    HAND_TAG_BLACKLIST,
     is_face_tag,
     is_hand_tag,
 )
@@ -208,16 +206,6 @@ class TagWorker(BaseWorker):
                 break
         logger.info("Exiting TaggingWorker loop.")
 
-    def _load_feature_tag_blacklists(self):
-        cached = getattr(self, "_feature_tag_blacklists", None)
-        if cached is not None:
-            return cached
-
-        face_blacklist = set(FACE_TAG_BLACKLIST)
-        hand_blacklist = set(HAND_TAG_BLACKLIST)
-        self._feature_tag_blacklists = (face_blacklist, hand_blacklist)
-        return self._feature_tag_blacklists
-
     def _fetch_missing_tags(self):
         logger.debug("Starting the database fetch for missing tags")
 
@@ -251,9 +239,7 @@ class TagWorker(BaseWorker):
                     .where(
                         (~Picture.tags.any())
                         | Picture.faces.any((Face.face_index >= 0) & (~Face.tags.any()))
-                        | Picture.hands.any(
-                            (Hand.hand_index >= 0) & (~Hand.tags.any())
-                        )
+                        | Picture.hands.any((Hand.hand_index >= 0) & (~Hand.tags.any()))
                     )
                     .options(
                         selectinload(Picture.tags),
@@ -294,7 +280,6 @@ class TagWorker(BaseWorker):
             crop_tags_by_pic_id = {}
             face_tags_by_face_id = {}
             hand_tags_by_hand_id = {}
-            face_blacklist, hand_blacklist = self._load_feature_tag_blacklists()
             if self._picture_tagger.custom_tagger_ready():
                 try:
                     import cv2

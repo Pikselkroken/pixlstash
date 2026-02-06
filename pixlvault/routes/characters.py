@@ -218,7 +218,6 @@ def create_router(server) -> APIRouter:
             return char[0] if char else None
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
-        return char
 
     @router.get("/characters/{id}/{field}")
     async def get_character_field_by_id(id: int, field: str):
