@@ -14,6 +14,7 @@ import { apiClient, API_BASE_URL } from "./utils/apiClient";
 import SideBar from "./components/SideBar.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import SearchOverlay from "./components/SearchOverlay.vue";
+import Toolbar from "./components/Toolbar.vue";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -24,6 +25,7 @@ const gridContainer = ref(null);
 const selectedImageIds = ref([]);
 let lastSelectedIndex = null;
 const sidebarRef = ref(null);
+const toolbarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
@@ -35,7 +37,6 @@ const stackThreshold = ref(null);
 // --- Search & Filtering State ---
 const searchQuery = ref("");
 const searchInput = ref("");
-const searchInputField = ref(null);
 const searchHistory = ref([]);
 const isSearchHistoryOpen = ref(false);
 const MAX_SEARCH_HISTORY = 8;
@@ -564,14 +565,7 @@ function handleClearSearch() {
 }
 
 function blurSearchInput() {
-  const field = searchInputField.value;
-  if (field && field.$el) {
-    const input = field.$el.querySelector("input");
-    if (input) input.blur();
-  }
-  if (document.activeElement instanceof HTMLElement) {
-    document.activeElement.blur();
-  }
+  toolbarRef.value?.blurSearchInput?.();
 }
 
 function blurSearch(event) {
@@ -786,330 +780,43 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
           @click="sidebarVisible = false"
         ></div>
         <main class="main-area" ref="mainAreaRef">
-          <div class="top-toolbar">
-            <div class="toolbar-actions">
-              <div class="toolbar-search-slot">
-                <v-menu
-                  v-if="!isMobile"
-                  v-model="isSearchHistoryOpen"
-                  :close-on-content-click="false"
-                  :disabled="filteredSearchHistory.length === 0"
-                  open-on-focus
-                  transition="scale-transition"
-                  location="bottom"
-                  offset="6"
-                >
-                  <template #activator="{ props }">
-                    <v-text-field
-                      v-bind="props"
-                      v-model="searchInput"
-                      ref="searchInputField"
-                      density="compact"
-                      variant="solo-filled"
-                      hide-details
-                      clearable
-                      prepend-inner-icon="mdi-magnify"
-                      class="toolbar-search-field"
-                      autocomplete="off"
-                      @keydown.enter="
-                        blurSearch($event);
-                        commitSearch();
-                      "
-                      @click:prepend-inner="commitSearch"
-                      @click:clear="handleClearSearch"
-                    />
-                  </template>
-                  <v-list density="compact" class="search-history-list">
-                    <v-list-item
-                      v-for="item in filteredSearchHistory"
-                      :key="item"
-                      @click="applySearchHistory(item)"
-                    >
-                      <v-list-item-title>{{ item }}</v-list-item-title>
-                    </v-list-item>
-                    <v-divider />
-                    <v-list-item
-                      class="search-history-clear"
-                      @click="clearSearchHistory"
-                    >
-                      <v-list-item-title>Clear history</v-list-item-title>
-                    </v-list-item>
-                  </v-list>
-                </v-menu>
-              </div>
-              <div class="toolbar-controls">
-                <v-btn
-                  v-if="isMobile"
-                  icon
-                  :color="
-                    searchOverlayVisible
-                      ? 'primary'
-                      : 'rgba(var(--v-theme--background), 0.3)'
-                  "
-                  @click="openSearchOverlay"
-                  title="Search"
-                  class="toolbar-btn app-btn-base"
-                  style="margin-left: 4px"
-                >
-                  <v-icon>mdi-magnify</v-icon>
-                </v-btn>
-                <v-menu
-                  v-model="columnsMenuOpen"
-                  offset-y
-                  :close-on-content-click="false"
-                  transition="scale-transition"
-                >
-                  <template #activator="{ props }">
-                    <v-btn
-                      icon
-                      v-bind="props"
-                      :color="
-                        props['aria-expanded'] === 'true'
-                          ? 'primary'
-                          : 'undefined'
-                      "
-                      title="Set grid columns"
-                      class="toolbar-btn app-btn-base"
-                      style="margin-left: 4px"
-                    >
-                      <v-icon>mdi-view-grid</v-icon>
-                    </v-btn>
-                  </template>
-                  <div
-                    style="
-                      padding: 8px 8px;
-                      min-width: 200px;
-                      background: rgba(var(--v-theme-background), 0.9);
-                      border-radius: 8px;
-                      box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
-                      display: flex;
-                      flex-direction: column;
-                      align-items: center;
-                      min-height: 56px;
-                      justify-content: center;
-                    "
-                  >
-                    <span
-                      style="
-                        font-size: 1.08em;
-                        margin-bottom: 6px;
-                        color: rgb(var(--v-theme-on-background));
-                        font-weight: 500;
-                        letter-spacing: 0.02em;
-                      "
-                      >Columns: {{ columns }}</span
-                    >
-                    <v-slider
-                      v-model="columns"
-                      :min="minColumns"
-                      :max="maxColumns"
-                      :step="1"
-                      vertical
-                      style="height: 40px; width: 80%; margin-bottom: 0"
-                      hide-details
-                      track-color="#888"
-                      thumb-color="primary"
-                      @end="handleColumnsEnd"
-                    />
-                  </div>
-                </v-menu>
-              </div>
-              <v-menu
-                v-model="overlaysMenuOpen"
-                offset-y
-                :close-on-content-click="false"
-                transition="scale-transition"
-              >
-                <template #activator="{ props }">
-                  <v-btn
-                    icon
-                    v-bind="props"
-                    :color="
-                      props['aria-expanded'] === 'true' ? 'primary' : 'surface'
-                    "
-                    title="Overlay options"
-                    class="toolbar-btn app-btn-base"
-                    style="margin-left: 4px"
-                  >
-                    <v-icon :color="'onBackground'">mdi-layers-outline</v-icon>
-                  </v-btn>
-                </template>
-                <div
-                  style="
-                    padding: 10px 12px;
-                    min-width: 220px;
-                    background: rgba(var(--v-theme-background), 0.9);
-                    color: rgb(var(--v-theme-on-background));
-                    border-radius: 8px;
-                    box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
-                    display: flex;
-                    flex-direction: column;
-                    gap: 6px;
-                  "
-                >
-                  <div
-                    style="
-                      font-size: 1.02em;
-                      font-weight: 500;
-                      letter-spacing: 0.02em;
-                      margin-bottom: 4px;
-                    "
-                  >
-                    Image Information Overlays
-                  </div>
-                  <v-switch
-                    v-model="showStars"
-                    label="Star ratings"
-                    color="primary"
-                    density="compact"
-                    hide-details
-                  />
-                  <v-switch
-                    v-model="showFaceBboxes"
-                    label="Face bounding boxes"
-                    color="primary"
-                    density="compact"
-                    hide-details
-                  />
-                  <v-switch
-                    v-model="showHandBboxes"
-                    label="Hand bounding boxes"
-                    color="primary"
-                    density="compact"
-                    hide-details
-                  />
-                  <v-switch
-                    v-model="showFormat"
-                    label="Image format"
-                    color="primary"
-                    density="compact"
-                    hide-details
-                  />
-                  <v-switch
-                    v-model="showResolution"
-                    label="Resolution"
-                    color="primary"
-                    density="compact"
-                    hide-details
-                  />
-                  <v-switch
-                    v-model="showProblemIcon"
-                    label="Image problem indicator"
-                    color="primary"
-                    density="compact"
-                    hide-details
-                  />
-                </div>
-              </v-menu>
-              <v-menu
-                v-model="exportMenuOpen"
-                offset-y
-                :close-on-content-click="false"
-                transition="scale-transition"
-              >
-                <template #activator="{ props }">
-                  <v-btn
-                    icon
-                    v-bind="props"
-                    :color="
-                      props['aria-expanded'] === 'true' ? 'primary' : 'surface'
-                    "
-                    title="Export current grid to zip"
-                    class="toolbar-btn app-btn-base"
-                    style="margin-left: 4px"
-                  >
-                    <v-icon :color="'onBackground'">mdi-download</v-icon>
-                  </v-btn>
-                </template>
-                <div
-                  style="
-                    padding: 10px 12px;
-                    min-width: 240px;
-                    background: rgba(var(--v-theme-background), 0.9);
-                    color: rgb(var(--v-theme-on-background));
-                    border-radius: 8px;
-                    box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
-                    display: flex;
-                    flex-direction: column;
-                    gap: 10px;
-                  "
-                >
-                  <div
-                    style="
-                      font-size: 1.08em;
-                      color: rgb(var(--v-theme-on-background));
-                      font-weight: 500;
-                      letter-spacing: 0.02em;
-                    "
-                  >
-                    Export {{ exportCount }} picture{{
-                      exportCount === 1 ? "" : "s"
-                    }}
-                  </div>
-                  <v-select
-                    v-model="exportType"
-                    :background-color="'surface'"
-                    :color="'onSurface'"
-                    :items="exportTypeOptions"
-                    item-title="title"
-                    item-value="value"
-                    label="Export type"
-                    density="comfortable"
-                  />
-                  <v-select
-                    v-model="exportCaptionMode"
-                    :background-color="'surface'"
-                    :color="'onSurface'"
-                    :items="exportCaptionOptions"
-                    item-title="title"
-                    item-value="value"
-                    label="Captions"
-                    density="comfortable"
-                    :disabled="exportTypeLocksCaptions"
-                  />
-                  <v-select
-                    v-model="exportResolution"
-                    :background-color="'surface'"
-                    :color="'onSurface'"
-                    :items="exportResolutionOptions"
-                    item-title="title"
-                    item-value="value"
-                    label="Resolution"
-                    density="comfortable"
-                  />
-                  <v-switch
-                    v-model="exportIncludeCharacterName"
-                    label="Include character name"
-                    color="primary"
-                    density="comfortable"
-                    :disabled="
-                      exportCaptionMode === 'none' || exportTypeLocksCaptions
-                    "
-                  />
-                  <v-btn color="primary" @click="confirmExportZip">
-                    Export
-                  </v-btn>
-                </div>
-              </v-menu>
-
-              <v-btn-toggle
-                v-model="mediaTypeFilter"
-                mandatory
-                class="media-type-toggle"
-                dense
-              >
-                <v-btn value="all" title="Show all media">
-                  <v-icon>mdi-multimedia</v-icon>
-                </v-btn>
-                <v-btn value="images" title="Show images only">
-                  <v-icon>mdi-image</v-icon>
-                </v-btn>
-                <v-btn value="videos" title="Show videos only">
-                  <v-icon>mdi-video</v-icon>
-                </v-btn>
-              </v-btn-toggle>
-            </div>
-          </div>
+          <Toolbar
+            ref="toolbarRef"
+            :isMobile="isMobile"
+            :searchOverlayVisible="searchOverlayVisible"
+            :filteredSearchHistory="filteredSearchHistory"
+            :minColumns="minColumns"
+            :maxColumns="maxColumns"
+            :exportCount="exportCount"
+            :exportCaptionOptions="exportCaptionOptions"
+            :exportTypeOptions="exportTypeOptions"
+            :exportResolutionOptions="exportResolutionOptions"
+            :exportTypeLocksCaptions="exportTypeLocksCaptions"
+            v-model:searchInput="searchInput"
+            v-model:isSearchHistoryOpen="isSearchHistoryOpen"
+            v-model:columnsMenuOpen="columnsMenuOpen"
+            v-model:overlaysMenuOpen="overlaysMenuOpen"
+            v-model:exportMenuOpen="exportMenuOpen"
+            v-model:columns="columns"
+            v-model:showStars="showStars"
+            v-model:showFaceBboxes="showFaceBboxes"
+            v-model:showHandBboxes="showHandBboxes"
+            v-model:showFormat="showFormat"
+            v-model:showResolution="showResolution"
+            v-model:showProblemIcon="showProblemIcon"
+            v-model:exportType="exportType"
+            v-model:exportCaptionMode="exportCaptionMode"
+            v-model:exportResolution="exportResolution"
+            v-model:exportIncludeCharacterName="exportIncludeCharacterName"
+            v-model:mediaTypeFilter="mediaTypeFilter"
+            @open-search-overlay="openSearchOverlay"
+            @commit-search="commitSearch"
+            @clear-search="handleClearSearch"
+            @apply-search-history="applySearchHistory"
+            @clear-search-history="clearSearchHistory"
+            @columns-end="handleColumnsEnd"
+            @confirm-export-zip="confirmExportZip"
+          />
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
             style="margin-top: 0; padding-top: 0"
