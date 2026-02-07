@@ -4,7 +4,6 @@ import {
   computed,
   nextTick,
   onBeforeUnmount,
-  onBeforeMount,
   onMounted,
   reactive,
   ref,
@@ -28,6 +27,7 @@ const sidebarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
+const selectedReferenceCharacter = ref(null);
 const selectedSort = ref("");
 const selectedDescending = ref(true);
 const stackThreshold = ref(null);
@@ -179,6 +179,7 @@ function disconnectUpdatesSocket() {
 
 // --- Export Menu State ---
 const exportMenuOpen = ref(false);
+const exportType = ref("full");
 const exportCaptionMode = ref("description");
 const exportIncludeCharacterName = ref(true);
 const exportResolution = ref("original");
@@ -194,11 +195,29 @@ const exportCaptionOptions = [
   { title: "Description", value: "description" },
   { title: "Tags", value: "tags" },
 ];
+const exportTypeOptions = [
+  { title: "Full images", value: "full" },
+  { title: "Face crops", value: "face" },
+  { title: "Hand crops", value: "hand" },
+  { title: "Face & hand crops", value: "face_hand" },
+];
 const exportResolutionOptions = [
   { title: "Original", value: "original" },
   { title: "Half Size", value: "half" },
   { title: "Quarter Size", value: "quarter" },
 ];
+const exportTypeLocksCaptions = computed(() => exportType.value !== "full");
+
+watch(
+  exportType,
+  (value) => {
+    if (value !== "full") {
+      exportCaptionMode.value = "tags";
+      exportIncludeCharacterName.value = false;
+    }
+  },
+  { immediate: true },
+);
 
 // --- Config Dialog State ---
 const config = reactive({
@@ -267,25 +286,43 @@ async function handleSelectCharacter(charId) {
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
   if (charId == null) {
     selectedCharacter.value = null;
+    selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
   selectedCharacter.value = charId;
   selectedSet.value = null; // Clear set selection
+  selectedReferenceCharacter.value = null;
   searchQuery.value = ""; // Clear search query
   await nextTick(); // Ensure reactivity propagates the change
   console.log("[App.vue] searchQuery cleared:", searchQuery.value);
   closeSidebarIfMobile();
 }
 
+async function handleSelectReferencePictures(charId) {
+  if (charId == null) {
+    selectedReferenceCharacter.value = null;
+    await nextTick();
+    return;
+  }
+  selectedReferenceCharacter.value = charId;
+  selectedCharacter.value = null;
+  selectedSet.value = null;
+  searchQuery.value = "";
+  await nextTick();
+  closeSidebarIfMobile();
+}
+
 async function handleSelectSet(setId) {
   if (setId == null) {
     selectedSet.value = null;
+    selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
+  selectedReferenceCharacter.value = null;
   searchQuery.value = ""; // Clear search query
   closeSidebarIfMobile();
 }
@@ -442,13 +479,6 @@ async function patchConfigUIOptions() {
   }
 }
 
-function handleGridBackgroundClick(e) {
-  if (!e.target.closest(".thumbnail-card")) {
-    selectedImageIds.value = [];
-    lastSelectedIndex = null;
-  }
-}
-
 function handleGlobalKeydown(e) {
   const keys = ["Home", "End", "PageUp", "PageDown"];
   if (keys.includes(e.key)) {
@@ -460,6 +490,9 @@ function handleGlobalKeydown(e) {
 }
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
+  if (selectedCharacter.value !== UNASSIGNED_PICTURES_ID || selectedSet.value) {
+    return;
+  }
   // Forward to ImageGrid via ref
   if (
     gridContainer.value &&
@@ -497,19 +530,10 @@ function refreshExportCount() {
   exportTotalCount.value = Number(counts.totalCount) || 0;
 }
 
-function handleImagesUploaded() {
-  // Called when images are imported
-  refreshGridVersion(); // Force grid and thumbnails to refresh
-  refreshSidebar(); // Optionally refresh sidebar counts
-}
-
-function cancelExportZip() {
-  exportMenuOpen.value = false;
-}
-
 function confirmExportZip() {
   console.log("Exporting current view to zip...");
   gridContainer.value?.exportCurrentViewToZip({
+    exportType: exportType.value,
     captionMode: exportCaptionMode.value,
     includeCharacterName: exportIncludeCharacterName.value,
     resolution: exportResolution.value,
@@ -599,6 +623,7 @@ function commitSearch() {
 function handleResetToAll() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
+  selectedReferenceCharacter.value = null;
   selectedSort.value = "DATE";
   selectedDescending.value = true;
   selectedSimilarityCharacter.value = null;
@@ -718,5 +743,418 @@ onBeforeUnmount(() => {
 
 defineExpose({ sidebarVisible, mediaTypeFilter });
 </script>
-<template src="./App.template.html"></template>
+<template>
+  <v-app>
+    <div class="app-viewport">
+      <div class="file-manager">
+        <div
+          class="sidebar-shell"
+          :class="{ open: sidebarVisible }"
+          v-show="sidebarVisible || !isMobile"
+        >
+          <SideBar
+            ref="sidebarRef"
+            :collapsed="!sidebarVisible && !isMobile"
+            :selectedCharacter="selectedCharacter"
+            :selectedReferenceCharacter="selectedReferenceCharacter"
+            :allPicturesId="ALL_PICTURES_ID"
+            :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+            :selectedSet="selectedSet"
+            :searchQuery="searchQuery"
+            :selectedSort="selectedSort"
+            :selectedDescending="selectedDescending"
+            :backendUrl="BACKEND_URL"
+            :selectedSimilarityCharacter="selectedSimilarityCharacter"
+            :stackThreshold="stackThreshold"
+            @select-character="handleSelectCharacter"
+            @select-reference-pictures="handleSelectReferencePictures"
+            @select-set="handleSelectSet"
+            @images-assigned-to-character="handleImagesAssignedToCharacter"
+            @images-moved="handleImagesMovedToSet"
+            @faces-assigned-to-character="handleFacesAssignedToCharacter"
+            @toggle-sidebar="sidebarVisible = !sidebarVisible"
+            @update:selected-sort="handleUpdateSelectedSort"
+            @update:similarity-character="handleUpdateSimilarityCharacter"
+            @update:stack-threshold="handleUpdateStackThreshold"
+            @update:set-error="error = $event"
+            @update:set-loading="loading = $event"
+          />
+        </div>
+        <div
+          v-if="sidebarVisible && isMobile"
+          class="sidebar-backdrop"
+          @click="sidebarVisible = false"
+        ></div>
+        <main class="main-area" ref="mainAreaRef">
+          <div class="top-toolbar">
+            <div class="toolbar-actions">
+              <div class="toolbar-search-slot">
+                <v-menu
+                  v-if="!isMobile"
+                  v-model="isSearchHistoryOpen"
+                  :close-on-content-click="false"
+                  :disabled="filteredSearchHistory.length === 0"
+                  open-on-focus
+                  transition="scale-transition"
+                  location="bottom"
+                  offset="6"
+                >
+                  <template #activator="{ props }">
+                    <v-text-field
+                      v-bind="props"
+                      v-model="searchInput"
+                      ref="searchInputField"
+                      density="compact"
+                      variant="solo-filled"
+                      hide-details
+                      clearable
+                      prepend-inner-icon="mdi-magnify"
+                      class="toolbar-search-field"
+                      autocomplete="off"
+                      @keydown.enter="
+                        blurSearch($event);
+                        commitSearch();
+                      "
+                      @click:prepend-inner="commitSearch"
+                      @click:clear="handleClearSearch"
+                    />
+                  </template>
+                  <v-list density="compact" class="search-history-list">
+                    <v-list-item
+                      v-for="item in filteredSearchHistory"
+                      :key="item"
+                      @click="applySearchHistory(item)"
+                    >
+                      <v-list-item-title>{{ item }}</v-list-item-title>
+                    </v-list-item>
+                    <v-divider />
+                    <v-list-item
+                      class="search-history-clear"
+                      @click="clearSearchHistory"
+                    >
+                      <v-list-item-title>Clear history</v-list-item-title>
+                    </v-list-item>
+                  </v-list>
+                </v-menu>
+              </div>
+              <div class="toolbar-controls">
+                <v-btn
+                  v-if="isMobile"
+                  icon
+                  :color="
+                    searchOverlayVisible
+                      ? 'primary'
+                      : 'rgba(var(--v-theme--background), 0.3)'
+                  "
+                  @click="openSearchOverlay"
+                  title="Search"
+                  class="toolbar-btn app-btn-base"
+                  style="margin-left: 4px"
+                >
+                  <v-icon>mdi-magnify</v-icon>
+                </v-btn>
+                <v-menu
+                  v-model="columnsMenuOpen"
+                  offset-y
+                  :close-on-content-click="false"
+                  transition="scale-transition"
+                >
+                  <template #activator="{ props }">
+                    <v-btn
+                      icon
+                      v-bind="props"
+                      :color="
+                        props['aria-expanded'] === 'true'
+                          ? 'primary'
+                          : 'undefined'
+                      "
+                      title="Set grid columns"
+                      class="toolbar-btn app-btn-base"
+                      style="margin-left: 4px"
+                    >
+                      <v-icon>mdi-view-grid</v-icon>
+                    </v-btn>
+                  </template>
+                  <div
+                    style="
+                      padding: 8px 8px;
+                      min-width: 200px;
+                      background: rgba(var(--v-theme-background), 0.9);
+                      border-radius: 8px;
+                      box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+                      display: flex;
+                      flex-direction: column;
+                      align-items: center;
+                      min-height: 56px;
+                      justify-content: center;
+                    "
+                  >
+                    <span
+                      style="
+                        font-size: 1.08em;
+                        margin-bottom: 6px;
+                        color: rgb(var(--v-theme-on-background));
+                        font-weight: 500;
+                        letter-spacing: 0.02em;
+                      "
+                      >Columns: {{ columns }}</span
+                    >
+                    <v-slider
+                      v-model="columns"
+                      :min="minColumns"
+                      :max="maxColumns"
+                      :step="1"
+                      vertical
+                      style="height: 40px; width: 80%; margin-bottom: 0"
+                      hide-details
+                      track-color="#888"
+                      thumb-color="primary"
+                      @end="handleColumnsEnd"
+                    />
+                  </div>
+                </v-menu>
+              </div>
+              <v-menu
+                v-model="overlaysMenuOpen"
+                offset-y
+                :close-on-content-click="false"
+                transition="scale-transition"
+              >
+                <template #activator="{ props }">
+                  <v-btn
+                    icon
+                    v-bind="props"
+                    :color="
+                      props['aria-expanded'] === 'true' ? 'primary' : 'surface'
+                    "
+                    title="Overlay options"
+                    class="toolbar-btn app-btn-base"
+                    style="margin-left: 4px"
+                  >
+                    <v-icon :color="'onBackground'">mdi-layers-outline</v-icon>
+                  </v-btn>
+                </template>
+                <div
+                  style="
+                    padding: 10px 12px;
+                    min-width: 220px;
+                    background: rgba(var(--v-theme-background), 0.9);
+                    color: rgb(var(--v-theme-on-background));
+                    border-radius: 8px;
+                    box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                  "
+                >
+                  <div
+                    style="
+                      font-size: 1.02em;
+                      font-weight: 500;
+                      letter-spacing: 0.02em;
+                      margin-bottom: 4px;
+                    "
+                  >
+                    Image Information Overlays
+                  </div>
+                  <v-switch
+                    v-model="showStars"
+                    label="Star ratings"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                  />
+                  <v-switch
+                    v-model="showFaceBboxes"
+                    label="Face bounding boxes"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                  />
+                  <v-switch
+                    v-model="showHandBboxes"
+                    label="Hand bounding boxes"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                  />
+                  <v-switch
+                    v-model="showFormat"
+                    label="Image format"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                  />
+                  <v-switch
+                    v-model="showResolution"
+                    label="Resolution"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                  />
+                  <v-switch
+                    v-model="showProblemIcon"
+                    label="Image problem indicator"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                  />
+                </div>
+              </v-menu>
+              <v-menu
+                v-model="exportMenuOpen"
+                offset-y
+                :close-on-content-click="false"
+                transition="scale-transition"
+              >
+                <template #activator="{ props }">
+                  <v-btn
+                    icon
+                    v-bind="props"
+                    :color="
+                      props['aria-expanded'] === 'true' ? 'primary' : 'surface'
+                    "
+                    title="Export current grid to zip"
+                    class="toolbar-btn app-btn-base"
+                    style="margin-left: 4px"
+                  >
+                    <v-icon :color="'onBackground'">mdi-download</v-icon>
+                  </v-btn>
+                </template>
+                <div
+                  style="
+                    padding: 10px 12px;
+                    min-width: 240px;
+                    background: rgba(var(--v-theme-background), 0.9);
+                    color: rgb(var(--v-theme-on-background));
+                    border-radius: 8px;
+                    box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                  "
+                >
+                  <div
+                    style="
+                      font-size: 1.08em;
+                      color: rgb(var(--v-theme-on-background));
+                      font-weight: 500;
+                      letter-spacing: 0.02em;
+                    "
+                  >
+                    Export {{ exportCount }} picture{{
+                      exportCount === 1 ? "" : "s"
+                    }}
+                  </div>
+                  <v-select
+                    v-model="exportType"
+                    :background-color="'surface'"
+                    :color="'onSurface'"
+                    :items="exportTypeOptions"
+                    item-title="title"
+                    item-value="value"
+                    label="Export type"
+                    density="comfortable"
+                  />
+                  <v-select
+                    v-model="exportCaptionMode"
+                    :background-color="'surface'"
+                    :color="'onSurface'"
+                    :items="exportCaptionOptions"
+                    item-title="title"
+                    item-value="value"
+                    label="Captions"
+                    density="comfortable"
+                    :disabled="exportTypeLocksCaptions"
+                  />
+                  <v-select
+                    v-model="exportResolution"
+                    :background-color="'surface'"
+                    :color="'onSurface'"
+                    :items="exportResolutionOptions"
+                    item-title="title"
+                    item-value="value"
+                    label="Resolution"
+                    density="comfortable"
+                  />
+                  <v-switch
+                    v-model="exportIncludeCharacterName"
+                    label="Include character name"
+                    color="primary"
+                    density="comfortable"
+                    :disabled="
+                      exportCaptionMode === 'none' || exportTypeLocksCaptions
+                    "
+                  />
+                  <v-btn color="primary" @click="confirmExportZip">
+                    Export
+                  </v-btn>
+                </div>
+              </v-menu>
+
+              <v-btn-toggle
+                v-model="mediaTypeFilter"
+                mandatory
+                class="media-type-toggle"
+                dense
+              >
+                <v-btn value="all" title="Show all media">
+                  <v-icon>mdi-multimedia</v-icon>
+                </v-btn>
+                <v-btn value="images" title="Show images only">
+                  <v-icon>mdi-image</v-icon>
+                </v-btn>
+                <v-btn value="videos" title="Show videos only">
+                  <v-icon>mdi-video</v-icon>
+                </v-btn>
+              </v-btn-toggle>
+            </div>
+          </div>
+          <div
+            :class="['main-content', selectedCharacter ? 'accent-border' : '']"
+            style="margin-top: 0; padding-top: 0"
+          >
+            <ImageGrid
+              ref="gridContainer"
+              :thumbnailSize="thumbnailSize"
+              :sidebarVisible="sidebarVisible"
+              :backendUrl="BACKEND_URL"
+              :selectedCharacter="selectedCharacter"
+              :selectedReferenceCharacter="selectedReferenceCharacter"
+              :selectedSet="selectedSet"
+              :searchQuery="searchQuery"
+              :selectedSort="selectedSort"
+              :selectedDescending="selectedDescending"
+              :similarityCharacter="selectedSimilarityCharacter"
+              :stackThreshold="stackThreshold"
+              :showStars="showStars"
+              :gridVersion="gridVersion"
+              :wsUpdateKey="wsUpdateKey"
+              :wsTagUpdate="wsTagUpdate"
+              :mediaTypeFilter="mediaTypeFilter"
+              :showFaceBboxes="showFaceBboxes"
+              :showHandBboxes="showHandBboxes"
+              :showFormat="showFormat"
+              :showResolution="showResolution"
+              :showProblemIcon="showProblemIcon"
+              :allPicturesId="ALL_PICTURES_ID"
+              :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+              :columns="columns"
+              @clear-search="handleClearSearch"
+              @update:selected-sort="handleUpdateSelectedSort"
+              @refresh-sidebar="refreshSidebar"
+              @reset-to-all="handleResetToAll"
+            />
+          </div>
+        </main>
+      </div>
+      <SearchOverlay
+        v-if="searchOverlayVisible"
+        :modelValue="searchQuery"
+        @search="handleUpdateSearchQuery"
+        @close="closeSearchOverlay"
+      />
+    </div>
+  </v-app>
+</template>
 <style scoped src="./App.css"></style>

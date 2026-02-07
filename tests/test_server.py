@@ -86,11 +86,10 @@ def test_esmeralda_vault_character_and_logo():
     tracemalloc.start()
     log_resources("START test_esmeralda_vault_character_and_logo")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
 
         # This triggers _import_default_data
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             server.vault.import_default_data()
             client = TestClient(server.api)
 
@@ -164,11 +163,8 @@ def test_create_and_get_default_character():
     log_resources("START test_create_and_get_default_character")
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(
-            config_path=config_path, server_config_path=server_config_path
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             client = TestClient(server.api)
 
             # Get a valid token
@@ -209,11 +205,8 @@ def test_upload_existing_picture():
 
     log_resources("START test_upload_existing_picture")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(
-            config_path=config_path, server_config_path=server_config_path
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
             # Get a valid token
@@ -278,9 +271,8 @@ def test_favicon():
     """Test /favicon.ico endpoint returns 200 and PNG content."""
     log_resources("START test_favicon")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             client = TestClient(server.api)
             resp = client.get("/favicon.ico")
             assert resp.status_code == 200
@@ -294,7 +286,6 @@ def test_characters_summary():
     """Test /characters/summary endpoint returns 200 and valid structure."""
     log_resources("START test_characters_summary")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
         image_files = [
@@ -303,7 +294,7 @@ def test_characters_summary():
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             server.vault.import_default_data()
             client = TestClient(server.api)
             server.vault.start_workers({WorkerType.FACE})
@@ -398,9 +389,8 @@ def test_pictures_stacks():
     """Test /pictures/stacks endpoint returns 200 and valid structure."""
     log_resources("START test_pictures_stacks")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             client = TestClient(server.api)
 
             server.vault.start_workers({WorkerType.FACE})
@@ -421,9 +411,8 @@ def test_pictures_thumbnails():
     """Test /pictures/thumbnails endpoint returns 200 and valid structure."""
     log_resources("START test_pictures_thumbnails")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             client = TestClient(server.api)
 
             response = client.post(
@@ -444,9 +433,8 @@ def test_pictures_export():
 
     log_resources("START test_pictures_export")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             server.vault.import_default_data(add_tagger_test_images=True)
             client = TestClient(server.api)
 
@@ -544,11 +532,8 @@ def test_pictures_export():
 def test_post_logo_identical_upload():
     log_resources("START test_post_logo_identical_upload")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(
-            config_path=config_path, server_config_path=server_config_path
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             server.vault.import_default_data()
             server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
@@ -572,11 +557,8 @@ def test_post_logo_identical_upload():
 def test_post_logo_altered_pixel_upload():
     log_resources("START test_post_logo_altered_pixel_upload")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(
-            config_path=config_path, server_config_path=server_config_path
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
@@ -609,11 +591,8 @@ def test_post_logo_altered_pixel_upload():
 def test_read_root():
     log_resources("START test_read_root")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(
-            config_path=config_path, server_config_path=server_config_path
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             client = TestClient(server.api)
             response = client.get("/")
             assert response.status_code == 200
@@ -629,11 +608,8 @@ def test_read_root():
 def test_benchmark_add_images_by_binary_upload():
     log_resources("START test_benchmark_add_images_by_binary_upload")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        with Server(
-            config_path=config_path, server_config_path=server_config_path
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
@@ -678,7 +654,6 @@ def test_semantic_search():
 
     log_resources("START test_semantic_search")
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server_config.json")
 
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
@@ -688,10 +663,7 @@ def test_semantic_search():
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
 
-        with Server(
-            config_path=config_path,
-            server_config_path=server_config_path,
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             server.vault.import_default_data()
             client = TestClient(server.api)
             server.vault.start_workers({WorkerType.FACE})
@@ -840,6 +812,41 @@ def test_semantic_search():
                 result_id = future.result(timeout=80)
                 logging.debug(f"Text embedding processed for picture ID: {result_id}")
 
+            def wait_for_semantic_ready(timeout_s=80, poll_interval=0.5):
+                start = time.time()
+                pending = set(picture_ids)
+                while pending and (time.time() - start) < timeout_s:
+                    completed = set()
+                    for pid in pending:
+                        meta_resp = client.get(f"/pictures/{pid}/metadata")
+                        if meta_resp.status_code != 200:
+                            continue
+                        meta = meta_resp.json()
+                        if not meta.get("description"):
+                            continue
+                        embed_resp = client.get(f"/pictures/{pid}/text_embedding")
+                        if embed_resp.status_code != 200:
+                            continue
+                        if embed_resp.json().get("text_embedding") is None:
+                            continue
+                        completed.add(pid)
+                    pending -= completed
+                    if pending:
+                        time.sleep(poll_interval)
+                assert not pending, (
+                    f"Timed out waiting for semantic readiness for picture ids: {sorted(pending)}"
+                )
+
+            wait_for_semantic_ready()
+
+            server.vault.stop_workers(
+                {
+                    WorkerType.TAGGER,
+                    WorkerType.DESCRIPTION,
+                    WorkerType.TEXT_EMBEDDING,
+                }
+            )
+
             # Inspect embeddings for each picture after embedding futures complete
             for pid in picture_ids:
                 meta_resp = client.get(f"/pictures/{pid}/text_embedding")
@@ -870,7 +877,7 @@ def test_semantic_search():
 
             for search_text in search_texts:
                 search_resp = client.get(
-                    f"/pictures/search?query={quote(search_text)}&threshold=0.3"
+                    f"/pictures/search?query={quote(search_text)}&threshold=0.4"
                 )
                 assert search_resp.status_code == 200
                 results = search_resp.json()

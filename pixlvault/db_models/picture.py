@@ -9,8 +9,17 @@ from PIL import Image
 from sqlalchemy import desc, func
 from sqlalchemy.orm import load_only, selectinload
 from sqlalchemy.types import LargeBinary
-from sqlmodel import Column, DateTime, SQLModel, Field, Relationship, select, Session
-from typing import Optional, List, TYPE_CHECKING
+from sqlmodel import (
+    Column,
+    DateTime,
+    SQLModel,
+    Field,
+    Relationship,
+    exists,
+    select,
+    Session,
+)
+from typing import ClassVar, Optional, List, TYPE_CHECKING
 
 
 from .face import Face
@@ -92,7 +101,23 @@ class SortMechanism:
         raise ValueError(f"{key_string!r} is not a valid SortMechanism")
 
 
+class ExportType(Enum):
+    FULL = "full"
+    FACE = "face"
+    HAND = "hand"
+    FACE_HAND = "face_hand"
+
+    @classmethod
+    def from_string(cls, value: str) -> "ExportType":
+        normalized = (value or "").lower()
+        for member in cls:
+            if member.value == normalized:
+                return member
+        return cls.FULL
+
+
 class Picture(SQLModel, table=True):
+    ExportType: ClassVar[type[ExportType]] = ExportType
     id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None
@@ -141,6 +166,7 @@ class Picture(SQLModel, table=True):
         sa_relationship_kwargs={
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
+            "foreign_keys": "[Tag.picture_id]",
         },
     )
     characters: List["Character"] = Relationship(  # Many-to-many via Face
@@ -292,17 +318,16 @@ class Picture(SQLModel, table=True):
         # Combined embedding score: average of text and image similarity to capture both explicit tags and visual concepts
         embedding_score = (text_sim + image_sim) / 2.0
 
+        fuzzy_score = func.max(0.0, 1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0))
+
         # Main query: join pictures with tag_subq, compute combined score
         stmt = (
             select(
                 cls,
-                (
-                    fuzzy_weight * (1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0))
-                    + embedding_weight * embedding_score
-                ).label("combined_score"),
-                (1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0)).label(
-                    "fuzzy_score"
+                (fuzzy_weight * fuzzy_score + embedding_weight * embedding_score).label(
+                    "combined_score"
                 ),
+                fuzzy_score.label("fuzzy_score"),
                 embedding_score.label("embedding_score"),
                 tag_subq.c.min_tag_dist.label(
                     "min_tag_dist"
@@ -416,17 +441,19 @@ class Picture(SQLModel, table=True):
             if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
                 # Sort by width * height
                 if sort_mech.descending:
-                    query = query.order_by((cls.width * cls.height).desc())
+                    query = query.order_by(
+                        (cls.width * cls.height).desc(), cls.id.desc()
+                    )
                 else:
-                    query = query.order_by((cls.width * cls.height).asc())
+                    query = query.order_by((cls.width * cls.height).asc(), cls.id.asc())
             else:
                 field_name = sort_mech.field
                 field = getattr(cls, field_name, None)
                 if field is not None:
                     if sort_mech.descending:
-                        query = query.order_by(field.desc())
+                        query = query.order_by(field.desc(), cls.id.desc())
                     else:
-                        query = query.order_by(field.asc())
+                        query = query.order_by(field.asc(), cls.id.asc())
         if offset > 0 or limit != sys.maxsize:
             query = query.offset(offset).limit(limit)
 
@@ -493,3 +520,66 @@ class Picture(SQLModel, table=True):
                 setattr(pic, field_name, None)
         session.add_all(pictures)
         session.commit()
+
+    @classmethod
+    def find_unassigned(
+        cls,
+        session,
+        sort_mech: Optional[SortMechanism] = None,
+        offset: int = 0,
+        limit: int = sys.maxsize,
+        format: list[str] | None = None,
+        metadata_fields: list[str] | None = None,
+    ):
+        query = select(Picture)
+        unassigned_condition = ~exists(
+            select(Face.id).where(
+                Face.picture_id == Picture.id,
+                Face.character_id.is_not(None),
+            )
+        )
+        not_in_set_condition = ~exists(
+            select(PictureSetMember.picture_id).where(
+                PictureSetMember.picture_id == Picture.id
+            )
+        )
+        query = query.where(unassigned_condition, not_in_set_condition)
+
+        if format:
+            query = query.where(Picture.format.in_(format))
+
+        select_fields = cls.metadata_fields()
+        if select_fields:
+            select_fields = list(set(select_fields) | {"id"})
+            scalar_attrs = [
+                getattr(Picture, field)
+                for field in Picture.scalar_fields().intersection(select_fields)
+            ]
+            if scalar_attrs:
+                query = query.options(load_only(*scalar_attrs))
+            rel_attrs = [
+                getattr(Picture, field)
+                for field in Picture.relationship_fields().intersection(select_fields)
+            ]
+            for rel_attr in rel_attrs:
+                query = query.options(selectinload(rel_attr))
+
+        if sort_mech:
+            if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
+                order_expr = Picture.width * Picture.height
+                query = query.order_by(
+                    order_expr.desc() if sort_mech.descending else order_expr.asc(),
+                    Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                )
+            else:
+                field = getattr(Picture, sort_mech.field, None)
+                if field is not None:
+                    query = query.order_by(
+                        field.desc() if sort_mech.descending else field.asc(),
+                        Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                    )
+
+        if offset > 0 or limit != sys.maxsize:
+            query = query.offset(offset).limit(limit)
+
+        return session.exec(query).all()

@@ -24,9 +24,8 @@ def test_tag_worker_picture_tags():
     Test that tags are calculated and stored per Picture in picture_tags.
     """
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             server.vault.start_workers({WorkerType.FACE})
             client = TestClient(server.api)
 
@@ -82,18 +81,8 @@ def test_tag_worker_end_to_end():
     with tempfile.TemporaryDirectory() as temp_dir:
         image_root = os.path.join(temp_dir, "images")
         os.makedirs(image_root, exist_ok=True)
-        config_path = os.path.join(temp_dir, "config.json")
-        config = Server.create_config(
-            default_device="cpu",
-            image_roots=[image_root],
-            selected_image_root=image_root,
-        )
-        with open(config_path, "w") as f:
-            import json
-
-            f.write(json.dumps(config, indent=2))
         server_config_path = os.path.join(temp_dir, "server-config.json")
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             server.vault.start_workers({WorkerType.FACE})
 
             client = TestClient(server.api)
@@ -149,14 +138,11 @@ def test_tag_worker_end_to_end():
 def test_tagger_worker_adds_tags():
     """Test that uploading TaggerTest.png results in tags being added by the tag worker."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = os.path.join(temp_dir, "config.json")
         server_config_path = os.path.join(temp_dir, "server-config.json")
 
         # Copy TaggerTest.png into temp dir
         src_img = os.path.join(os.path.dirname(__file__), "../pictures/TaggerTest.png")
-        with Server(
-            config_path=config_path, server_config_path=server_config_path
-        ) as server:
+        with Server(server_config_path=server_config_path) as server:
             server.vault.start_workers({WorkerType.FACE})
 
             client = TestClient(server.api)

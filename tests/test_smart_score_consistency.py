@@ -1,15 +1,14 @@
 import gc
-import tempfile
-import os
 import json
-import pickle
 import numpy as np
+import os
+import tempfile
+
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from pixlvault.server import Server
 from pixlvault.db_models import Picture, Face, Character
-from pixlvault.db_models.face_character_likeness import FaceCharacterLikeness
 from pixlvault.database import DBPriority
 
 
@@ -17,18 +16,10 @@ def setup_server():
     temp_dir = tempfile.TemporaryDirectory()
     image_root = os.path.join(temp_dir.name, "images")
     os.makedirs(image_root, exist_ok=True)
-    config_path = os.path.join(temp_dir.name, "config.json")
-    config = Server.create_config(
-        default_device="cpu",
-        image_roots=[image_root],
-        selected_image_root=image_root,
-    )
-    with open(config_path, "w") as f:
-        f.write(json.dumps(config, indent=2))
     server_config_path = os.path.join(temp_dir.name, "server-config.json")
     with open(server_config_path, "w") as f:
         f.write(json.dumps({"port": 0}))
-    server = Server(config_path, server_config_path)
+    server = Server(server_config_path)
     client = TestClient(server.api)
 
     # Login
@@ -42,22 +33,22 @@ def test_smart_score_consistency():
         # data setup
         def setup_data(session):
             emb_array = np.random.rand(128).astype(np.float32)
-            emb_bytes = pickle.dumps(emb_array)
+            emb_bytes = emb_array.tobytes()
 
-            # Picture 1: Has face, matches Char
+            # Picture 1
             p1 = Picture(
                 file_path="p1.jpg",
                 image_embedding=emb_bytes,
-                aesthetic_score=5.0,
+                aesthetic_score=5.5,
                 score=0,
             )
             session.add(p1)
 
-            # Picture 2: No face
+            # Picture 2
             p2 = Picture(
                 file_path="p2.jpg",
                 image_embedding=emb_bytes,
-                aesthetic_score=5.0,
+                aesthetic_score=4.5,
                 score=0,
             )
             session.add(p2)
@@ -78,18 +69,24 @@ def test_smart_score_consistency():
             session.commit()
             session.refresh(f)
 
-            # Likeness P1 -> C
-            fcl = FaceCharacterLikeness(
-                face_id=f.id, character_id=c.id, likeness=0.99, metric="cosine"
-            )
-            session.add(fcl)
-            session.commit()
-
             return p1.id, p2.id, c.id
 
         p1_id, p2_id, c_id = server.vault.db.run_task(
             setup_data, priority=DBPriority.IMMEDIATE
         )
+
+        def fetch_embeddings(session, ids):
+            rows = session.exec(
+                select(Picture.id, Picture.image_embedding).where(Picture.id.in_(ids))
+            ).all()
+            return rows
+
+        emb_rows = server.vault.db.run_task(
+            fetch_embeddings, [p1_id, p2_id], priority=DBPriority.IMMEDIATE
+        )
+        for pid, emb in emb_rows:
+            assert emb is not None, f"image_embedding missing for picture id={pid}"
+            assert len(emb) > 0, f"image_embedding empty for picture id={pid}"
 
         # Helper to get score for a pic from response
         def get_score(resp_json, pid):

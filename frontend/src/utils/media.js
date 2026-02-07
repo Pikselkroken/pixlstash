@@ -54,17 +54,36 @@ export function dataTransferHasSupportedMedia(dataTransfer) {
   return false;
 }
 
+export function normalizeMediaFormat(source) {
+  if (!source) return '';
+  if (typeof source === 'string') {
+    const trimmed = source.trim().toLowerCase();
+    if (!trimmed) return '';
+    const stripped = trimmed.split('?')[0].split('#')[0];
+    if (!stripped) return '';
+    const parts = stripped.split('.');
+    return parts.length > 1 ? parts.pop() : stripped;
+  }
+  if (source.format) return normalizeMediaFormat(source.format);
+  if (source.filename) return normalizeMediaFormat(source.filename);
+  if (source.url) return normalizeMediaFormat(source.url);
+  if (source.id) return normalizeMediaFormat(source.id);
+  return '';
+}
+
+export function normalizePictureId(id) {
+  if (id === null || id === undefined) return null;
+  return String(id);
+}
+
+export function buildMediaUrl({backendUrl, image, format} = {}) {
+  if (!backendUrl || !image || !image.id) return '';
+  const ext = normalizeMediaFormat(format || image);
+  const suffix = ext ? `.${ext}` : '';
+  const cacheBuster = image.pixel_sha ? `?v=${image.pixel_sha}` : '';
+  return `${backendUrl}/pictures/${image.id}${suffix}${cacheBuster}`;
+}
+
 export function getOverlayFormat(overlayImage) {
-  if (!overlayImage) return '';
-  if (overlayImage.format) return overlayImage.format;
-  if (overlayImage.filename) {
-    return overlayImage.filename.split('.').pop().toLowerCase();
-  }
-  if (overlayImage.url) {
-    return overlayImage.url.split('.').pop().toLowerCase();
-  }
-  if (overlayImage.id) {
-    return String(overlayImage.id).split('.').pop().toLowerCase();
-  }
-  return 'png';
+  return normalizeMediaFormat(overlayImage) || 'png';
 }

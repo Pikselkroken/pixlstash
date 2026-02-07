@@ -14,7 +14,6 @@ from pixlvault.worker_registry import WorkerType
 def test_watch_folder():
     """Test watching a folder for changes."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = f"{temp_dir}/config.json"
         server_config_path = f"{temp_dir}/server-config.json"
         pictures_dir = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -27,7 +26,7 @@ def test_watch_folder():
         ]
         assert image_files, "No images found in pictures directory"
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             client = TestClient(server.api)
 
             # First login to set the password
@@ -76,7 +75,6 @@ def test_watch_folder():
 def test_watch_folder_delete_after_import():
     """Test watch folder delete_after_import removes source files after import."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        config_path = f"{temp_dir}/config.json"
         server_config_path = f"{temp_dir}/server-config.json"
         source_dir = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -94,7 +92,7 @@ def test_watch_folder_delete_after_import():
         for name in image_files:
             shutil.copy2(os.path.join(source_dir, name), watch_dir)
 
-        with Server(config_path, server_config_path) as server:
+        with Server(server_config_path) as server:
             client = TestClient(server.api)
 
             response = client.post(

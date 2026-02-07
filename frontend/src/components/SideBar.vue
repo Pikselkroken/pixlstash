@@ -1,5 +1,12 @@
 <script setup>
-import { computed, ref, onMounted, watch } from "vue";
+import {
+  computed,
+  ref,
+  onBeforeUnmount,
+  onMounted,
+  watch,
+  nextTick,
+} from "vue";
 import ImageImporter from "./ImageImporter.vue";
 import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
@@ -10,6 +17,7 @@ import { apiClient } from "../utils/apiClient";
 const props = defineProps({
   collapsed: { type: Boolean, default: false },
   selectedCharacter: { type: [String, Number, null], default: null },
+  selectedReferenceCharacter: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
   selectedSet: { type: [Number, null], default: null },
@@ -23,6 +31,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   "select-character",
+  "select-reference-pictures",
   "update:selected-sort",
   "update:search-query",
   "select-set",
@@ -41,6 +50,7 @@ const emit = defineEmits([
 const imageImporterRef = ref(null);
 const uploadInputRef = ref(null);
 const sortSelectRef = ref(null);
+const sidebarRootRef = ref(null);
 
 const dragOverSet = ref(null);
 
@@ -61,15 +71,11 @@ const knownCountIds = new Set();
 const characterThumbnails = ref({});
 const expandedCharacters = ref({});
 
-// Ensure collapsedCharacters is reactive and initialized for all characters
-const collapsedCharacters = ref({});
-
 const dragOverCharacter = ref(null);
 const nextCharacterNumber = ref(1);
 
 // --- Picture Sets State ---
 const pictureSets = ref([]);
-const referencePictureSetsByCharacter = ref({});
 
 // --- Character Editor State ---
 const characterEditorOpen = ref(false);
@@ -132,18 +138,61 @@ function resetSettingsForm() {
   smartScoreTagsSuccess.value = "";
 }
 
+const smartScoreImportanceOptions = [
+  { value: 1, label: "Mild" },
+  { value: 2, label: "Low" },
+  { value: 3, label: "Moderate" },
+  { value: 4, label: "High" },
+  { value: 5, label: "Severe" },
+];
+
+function clampImportance(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 3;
+  return Math.min(5, Math.max(1, Math.round(num)));
+}
+
 function normalizeSmartScoreTags(tags) {
-  const list = Array.isArray(tags) ? tags : [];
-  const normalized = [];
-  const seen = new Set();
-  for (const tag of list) {
-    if (tag == null) continue;
-    const clean = String(tag).trim().toLowerCase();
-    if (!clean || seen.has(clean)) continue;
-    seen.add(clean);
-    normalized.push(clean);
+  const normalized = new Map();
+  if (Array.isArray(tags)) {
+    for (const item of tags) {
+      if (item == null) continue;
+      if (typeof item === "object") {
+        const clean = String(item.tag || "")
+          .trim()
+          .toLowerCase();
+        if (!clean) continue;
+        normalized.set(clean, clampImportance(item.weight));
+      } else {
+        const clean = String(item).trim().toLowerCase();
+        if (!clean) continue;
+        normalized.set(clean, 3);
+      }
+    }
+  } else if (tags && typeof tags === "object") {
+    for (const [tag, weight] of Object.entries(tags)) {
+      if (tag == null) continue;
+      const clean = String(tag).trim().toLowerCase();
+      if (!clean) continue;
+      const nextWeight = clampImportance(weight);
+      const existing = normalized.get(clean);
+      if (existing == null || nextWeight > existing) {
+        normalized.set(clean, nextWeight);
+      }
+    }
   }
-  return normalized;
+  return Array.from(normalized.entries())
+    .map(([tag, weight]) => ({ tag, weight }))
+    .sort((a, b) => a.tag.localeCompare(b.tag));
+}
+
+function serializeSmartScoreTags(entries) {
+  const normalized = normalizeSmartScoreTags(entries);
+  const payload = {};
+  for (const entry of normalized) {
+    payload[entry.tag] = clampImportance(entry.weight);
+  }
+  return { normalized, payload };
 }
 
 async function fetchSmartScoreSettings() {
@@ -166,9 +215,9 @@ async function saveSmartScoreTags(nextTags) {
   smartScoreTagsError.value = "";
   smartScoreTagsSuccess.value = "";
   try {
-    const normalized = normalizeSmartScoreTags(nextTags);
+    const { normalized, payload } = serializeSmartScoreTags(nextTags);
     await apiClient.patch("/users/me/config", {
-      smart_score_penalized_tags: normalized,
+      smart_score_penalized_tags: payload,
     });
     smartScorePenalizedTags.value = normalized;
     smartScoreTagsSuccess.value = "Saved.";
@@ -190,7 +239,7 @@ async function addSmartScoreTag() {
   if (!trimmed) return;
   const next = normalizeSmartScoreTags([
     ...smartScorePenalizedTags.value,
-    trimmed,
+    { tag: trimmed, weight: 3 },
   ]);
   smartScoreTagInput.value = "";
   await saveSmartScoreTags(next);
@@ -198,7 +247,16 @@ async function addSmartScoreTag() {
 
 async function removeSmartScoreTag(tag) {
   const next = normalizeSmartScoreTags(
-    smartScorePenalizedTags.value.filter((t) => t !== tag),
+    smartScorePenalizedTags.value.filter((t) => t.tag !== tag),
+  );
+  await saveSmartScoreTags(next);
+}
+
+async function updateSmartScoreTagWeight(tag, weight) {
+  const next = normalizeSmartScoreTags(
+    smartScorePenalizedTags.value.map((entry) =>
+      entry.tag === tag ? { ...entry, weight: clampImportance(weight) } : entry,
+    ),
   );
   await saveSmartScoreTags(next);
 }
@@ -313,8 +371,48 @@ async function submitPasswordChange() {
 }
 
 const sidebarNotice = ref(null);
-const sidebarNoticeSetId = ref(null);
+const sidebarNoticeTargetId = ref(null);
+const sidebarNoticeTargetType = ref("set");
+const sidebarNoticePosition = ref(null);
+const setItemRefs = ref(new Map());
+const characterItemRefs = ref(new Map());
 let sidebarNoticeTimeout = null;
+
+function registerSetRef(setId, el) {
+  if (!setId) return;
+  if (el) {
+    setItemRefs.value.set(setId, el);
+  } else {
+    setItemRefs.value.delete(setId);
+  }
+}
+
+function registerCharacterRef(characterId, el) {
+  if (!characterId) return;
+  if (el) {
+    characterItemRefs.value.set(characterId, el);
+  } else {
+    characterItemRefs.value.delete(characterId);
+  }
+}
+
+function updateSidebarNoticePosition() {
+  if (!sidebarNotice.value || !sidebarNoticeTargetId.value) {
+    sidebarNoticePosition.value = null;
+    return;
+  }
+  const targetMap =
+    sidebarNoticeTargetType.value === "character"
+      ? characterItemRefs.value
+      : setItemRefs.value;
+  const target = targetMap.get(sidebarNoticeTargetId.value);
+  if (!target) return;
+  const rect = target.getBoundingClientRect();
+  sidebarNoticePosition.value = {
+    top: rect.top + rect.height / 2,
+    left: rect.right + 12,
+  };
+}
 
 function createSet() {
   setEditorSet.value = null;
@@ -490,6 +588,17 @@ function selectCharacter(id) {
   emit("select-character", id);
 }
 
+function selectReferencePictures(characterId) {
+  clearCountNew(characterId);
+  emit("select-set", null);
+  if (props.selectedReferenceCharacter === characterId) {
+    emit("select-reference-pictures", null);
+    emit("select-character", characterId);
+    return;
+  }
+  emit("select-reference-pictures", characterId);
+}
+
 function searchImages(query) {
   emit("search-images", query);
 }
@@ -560,16 +669,24 @@ function setError(message) {
   emit("set-error", message);
 }
 
-function showNotice(message, setId = null, duration = 4000) {
+function showNotice(
+  message,
+  targetId = null,
+  targetType = "set",
+  duration = 4000,
+) {
   if (sidebarNoticeTimeout) {
     clearTimeout(sidebarNoticeTimeout);
     sidebarNoticeTimeout = null;
   }
   sidebarNotice.value = message;
-  sidebarNoticeSetId.value = setId;
+  sidebarNoticeTargetId.value = targetId;
+  sidebarNoticeTargetType.value = targetType;
+  nextTick(() => updateSidebarNoticePosition());
   sidebarNoticeTimeout = setTimeout(() => {
     sidebarNotice.value = null;
-    sidebarNoticeSetId.value = null;
+    sidebarNoticeTargetId.value = null;
+    sidebarNoticePosition.value = null;
     sidebarNoticeTimeout = null;
   }, duration);
 }
@@ -580,23 +697,6 @@ function dragOverSetItem(setId) {
 
 function dragLeaveSetItem() {
   dragOverSet.value = null;
-}
-
-// Watch sortedCharacters and initialize collapse state for all characters
-watch(
-  () => sortedCharacters.value,
-  (chars) => {
-    chars.forEach((char) => {
-      if (!(char.id in collapsedCharacters.value)) {
-        collapsedCharacters.value[char.id] = true;
-      }
-    });
-  },
-  { immediate: true },
-);
-
-function toggleCharacterCollapse(charId) {
-  collapsedCharacters.value[charId] = !collapsedCharacters.value[charId];
 }
 
 function isCountSelected(id) {
@@ -765,15 +865,6 @@ async function fetchPictureSets() {
     const sets = await res.data; // Axios responses use `data` for the payload
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
     console.log("Found picture sets:", pictureSets.value);
-    referencePictureSetsByCharacter.value = pictureSets.value.reduce(
-      (acc, set) => {
-        if (set.reference_character) {
-          acc[set.reference_character.id] = set;
-        }
-        return acc;
-      },
-      {},
-    );
   } catch (e) {
     console.error("Error fetching picture sets:", e);
     pictureSets.value = [...pictureSets.value]; // force reactivity on error
@@ -892,7 +983,13 @@ async function onCharacterDrop(characterId, event) {
     }
     emit("images-assigned-to-character", { characterId, imageIds });
   } catch (e) {
-    console.error("Could not parse drag data:", e);
+    const detail = e?.response?.data?.detail || e?.message || String(e);
+    console.error("Error parsing drag data:", detail);
+    if (typeof detail === "string") {
+      showNotice(detail, characterId, "character");
+      return;
+    }
+    setError("Failed to add images to set: " + detail);
     return;
   }
 
@@ -938,7 +1035,14 @@ async function onCharacterDrop(characterId, event) {
     );
     emit("images-assigned-to-character", { characterId, imageIds });
   } catch (e) {
-    alert("Failed to assign images to character: " + (e.message || e));
+    const detail = e?.response?.data?.detail || e?.message || String(e);
+    console.error("Error assignning character:", detail);
+    if (typeof detail === "string") {
+      showNotice(detail, characterId, "character");
+      return;
+    }
+    setError("Failed to add images to set: " + detail);
+    return;
   }
 }
 
@@ -1025,6 +1129,27 @@ onMounted(() => {
     "[SideBar.vue] Initial descendingModel value:",
     descendingModel.value,
   );
+  const handleNoticeReflow = () => updateSidebarNoticePosition();
+  if (sidebarRootRef.value) {
+    sidebarRootRef.value.addEventListener("scroll", handleNoticeReflow, {
+      passive: true,
+    });
+  }
+  window.addEventListener("resize", handleNoticeReflow);
+  sidebarNoticeCleanup = () => {
+    if (sidebarRootRef.value) {
+      sidebarRootRef.value.removeEventListener("scroll", handleNoticeReflow);
+    }
+    window.removeEventListener("resize", handleNoticeReflow);
+  };
+});
+
+let sidebarNoticeCleanup = null;
+onBeforeUnmount(() => {
+  if (sidebarNoticeCleanup) {
+    sidebarNoticeCleanup();
+    sidebarNoticeCleanup = null;
+  }
 });
 
 // Ensure similarityCharacter is valid when switching to CHARACTER_LIKENESS
@@ -1159,6 +1284,7 @@ defineExpose({ refreshSidebar });
                 <div class="settings-section-title">Smart Score</div>
                 <div class="settings-section-desc">
                   Tags listed here reduce Smart Score when present on a picture.
+                  Adjust the importance to control how much they hurt the score.
                 </div>
                 <div class="settings-form">
                   <v-text-field
@@ -1182,22 +1308,42 @@ defineExpose({ refreshSidebar });
                   <div v-if="smartScoreTagsError" class="settings-error">
                     {{ smartScoreTagsError }}
                   </div>
-                  <div v-if="smartScoreTagsSuccess" class="settings-success">
+                  <div
+                    v-else-if="smartScoreTagsSuccess"
+                    class="settings-success"
+                  >
                     {{ smartScoreTagsSuccess }}
+                  </div>
+                  <div v-else class="settings-success">
+                    {{ "&nbsp;" }}
                   </div>
                   <div class="settings-tag-list">
                     <div
-                      v-for="tag in smartScorePenalizedTags"
-                      :key="tag"
-                      class="settings-tag-chip"
+                      v-for="entry in smartScorePenalizedTags"
+                      :key="entry.tag"
+                      class="settings-tag-chip settings-tag-chip--row"
                     >
-                      <span class="settings-tag-label">{{ tag }}</span>
+                      <span class="settings-tag-label">{{ entry.tag }}</span>
+                      <v-select
+                        class="settings-tag-importance"
+                        :items="smartScoreImportanceOptions"
+                        item-title="label"
+                        item-value="value"
+                        density="compact"
+                        variant="solo"
+                        hide-details
+                        :disabled="smartScoreTagsLoading"
+                        :model-value="entry.weight"
+                        @update:model-value="
+                          (value) => updateSmartScoreTagWeight(entry.tag, value)
+                        "
+                      />
                       <v-btn
                         icon
                         variant="text"
                         class="settings-tag-delete"
                         :disabled="smartScoreTagsLoading"
-                        @click="removeSmartScoreTag(tag)"
+                        @click="removeSmartScoreTag(entry.tag)"
                       >
                         <v-icon size="16">mdi-close</v-icon>
                       </v-btn>
@@ -1403,7 +1549,11 @@ defineExpose({ refreshSidebar });
     </v-card>
   </v-dialog>
 
-  <aside class="sidebar" :class="{ 'sidebar-collapsed': props.collapsed }">
+  <aside
+    ref="sidebarRootRef"
+    class="sidebar"
+    :class="{ 'sidebar-collapsed': props.collapsed }"
+  >
     <div class="sidebar-brand">
       <div class="sidebar-brand-left">
         <img
@@ -1461,6 +1611,7 @@ defineExpose({ refreshSidebar });
               droppable: dragOverCharacter === char.id,
             },
           ]"
+          :ref="(el) => registerCharacterRef(char.id, el)"
           :title="char.name || 'Character'"
           @click="selectCharacter(char.id)"
           @dragover.prevent="handleDragOverCharacter(char.id)"
@@ -1491,7 +1642,7 @@ defineExpose({ refreshSidebar });
           @dragleave="dragLeaveSetItem"
           @drop.prevent="handleDropOnSet(pset.id, $event)"
         >
-          <v-icon>mdi-layers</v-icon>
+          <v-icon>mdi-image-album</v-icon>
         </div>
         <div class="sidebar-collapsed-divider"></div>
         <div
@@ -1610,9 +1761,11 @@ defineExpose({ refreshSidebar });
             'sidebar-list-item',
             {
               active: selectedCharacter === char.id,
+              'reference-active': props.selectedReferenceCharacter === char.id,
               droppable: dragOverCharacter === char.id,
             },
           ]"
+          :ref="(el) => registerCharacterRef(char.id, el)"
           @click="selectCharacter(char.id)"
           @dragover.prevent="handleDragOverCharacter(char.id)"
           @dragleave="handleDragLeaveCharacter"
@@ -1643,98 +1796,32 @@ defineExpose({ refreshSidebar });
           </span>
           <span class="sidebar-character-actions">
             <v-icon
-              class="sidebar-character-toggle"
-              size="18"
-              :title="
-                collapsedCharacters[char.id]
-                  ? 'Show reference pictures'
-                  : 'Hide reference pictures'
-              "
-              @click.stop="toggleCharacterCollapse(char.id)"
+              :class="[
+                'sidebar-character-reference',
+                { active: props.selectedReferenceCharacter === char.id },
+              ]"
+              size="20"
+              :title="'Reference pictures'"
+              @click.stop="selectReferencePictures(char.id)"
             >
-              {{
-                collapsedCharacters[char.id]
-                  ? "mdi-chevron-right"
-                  : "mdi-chevron-down"
-              }}
+              mdi-image-multiple
             </v-icon>
             <span class="sidebar-list-count">
               <span v-if="isCountNew(char.id)" class="sidebar-new-tag">
                 new
               </span>
-              {{ categoryCounts[char.id] ?? "" }}
+              <span
+                v-if="props.selectedReferenceCharacter === char.id"
+                class="sidebar-reference-label"
+              >
+                Ref
+              </span>
+              <span v-else>
+                {{ categoryCounts[char.id] ?? "" }}
+              </span>
             </span>
           </span>
         </div>
-        <transition name="fade">
-          <div
-            v-show="!collapsedCharacters[char.id]"
-            class="sidebar-character-details"
-          >
-            <div class="sidebar-reference-pictures">
-              <template v-if="referencePictureSetsByCharacter[char.id]">
-                <div
-                  :class="[
-                    'sidebar-list-item',
-                    'sidebar-reference-set',
-                    {
-                      active:
-                        selectedSet ===
-                        referencePictureSetsByCharacter[char.id].id,
-                      droppable:
-                        dragOverSet ===
-                        referencePictureSetsByCharacter[char.id].id,
-                    },
-                  ]"
-                  @click="
-                    selectSet(referencePictureSetsByCharacter[char.id].id)
-                  "
-                  @dragover.prevent="
-                    dragOverSetItem(referencePictureSetsByCharacter[char.id].id)
-                  "
-                  @dragleave="dragLeaveSetItem"
-                  @drop.prevent="
-                    handleDropOnSet(
-                      referencePictureSetsByCharacter[char.id].id,
-                      $event,
-                    )
-                  "
-                >
-                  <v-icon size="22" class="sidebar-reference-icon"
-                    >mdi-layers</v-icon
-                  >
-                  <span class="sidebar-list-label">Reference Pictures</span>
-                  <span class="sidebar-list-count">
-                    {{
-                      referencePictureSetsByCharacter[char.id]?.picture_count ??
-                      ""
-                    }}
-                  </span>
-                  <span
-                    v-if="
-                      sidebarNotice &&
-                      sidebarNoticeSetId ===
-                        referencePictureSetsByCharacter[char.id].id
-                    "
-                    class="sidebar-inline-notice"
-                  >
-                    {{ sidebarNotice }}
-                  </span>
-                </div>
-              </template>
-              <template v-else>
-                <span
-                  style="
-                    color: rgb(var(--v-theme-on-accent));
-                    font-size: 0.9em;
-                    padding-left: 32px;
-                  "
-                  >No reference set found for this character</span
-                >
-              </template>
-            </div>
-          </div>
-        </transition>
       </div>
 
       <div class="sidebar-section-header">
@@ -1785,6 +1872,7 @@ defineExpose({ refreshSidebar });
               droppable: dragOverSet === pset.id,
             },
           ]"
+          :ref="(el) => registerSetRef(pset.id, el)"
           @click="selectSet(pset.id)"
           @dragover.prevent="dragOverSetItem(pset.id)"
           @dragleave="dragLeaveSetItem"
@@ -1805,12 +1893,6 @@ defineExpose({ refreshSidebar });
           </span>
           <span class="sidebar-list-count">
             {{ pset.picture_count ?? 0 }}
-          </span>
-          <span
-            v-if="sidebarNotice && sidebarNoticeSetId === pset.id"
-            class="sidebar-inline-notice"
-          >
-            {{ sidebarNotice }}
           </span>
         </div>
       </template>
@@ -1934,6 +2016,16 @@ defineExpose({ refreshSidebar });
       </div>
     </template>
   </aside>
+  <div
+    v-if="sidebarNotice && sidebarNoticePosition"
+    class="sidebar-inline-notice"
+    :style="{
+      top: `${sidebarNoticePosition.top}px`,
+      left: `${sidebarNoticePosition.left}px`,
+    }"
+  >
+    {{ sidebarNotice }}
+  </div>
 </template>
 
 <style scoped>
@@ -1996,6 +2088,7 @@ defineExpose({ refreshSidebar });
   min-height: 0;
   height: 100%;
   max-height: 100%;
+  overflow-x: visible;
   overflow-y: auto;
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(0, 0, 0, 0.15);
   box-sizing: border-box;
@@ -2003,6 +2096,7 @@ defineExpose({ refreshSidebar });
 
 .sidebar.sidebar-collapsed {
   width: 56px;
+  overflow-x: visible;
   overflow-y: hidden;
 }
 
@@ -2088,8 +2182,8 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-collapsed-item.active {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
 }
 
 .sidebar-collapsed-item.droppable {
@@ -2120,12 +2214,12 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-collapsed-thumb.active img {
-  outline: 4px solid rgb(var(--v-theme-accent));
+  outline: 4px solid rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-thumb:hover {
   filter: brightness(1.4);
-  outline: 4px solid rgba(var(--v-theme-accent), 0.4);
+  outline: 4px solid rgb(var(--v-theme-accent));
 }
 
 .sidebar-collapsed-thumb.droppable img {
@@ -2379,38 +2473,75 @@ defineExpose({ refreshSidebar });
 
 .settings-tag-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .settings-tag-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 4px 4px 6px;
+  gap: 6px;
+  padding: 2px 6px;
   border-radius: 6px;
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  background: rgba(var(--v-theme-on-surface), 0.06);
+  color: rgba(var(--v-theme-on-surface), 0.9);
+}
+
+.settings-tag-chip--row {
+  width: 100%;
+  justify-content: space-between;
+  padding-right: 4px;
+}
+
+.settings-tag-importance {
+  flex: 0 0 150px;
+  min-width: 150px;
+  max-width: 150px;
+}
+
+.settings-tag-importance .v-field {
+  min-height: 28px;
+  height: 28px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 0.9em;
+}
+
+.settings-tag-importance .v-field__input {
+  min-height: 28px;
+  height: 28px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 0.85rem;
+}
+
+:deep(.settings-tag-importance .v-select__selection-text) {
+  font-size: 0.85rem;
+  line-height: 1.1;
+}
+
+:deep(.settings-tag-importance .v-field__input input) {
+  font-size: 0.85rem;
 }
 
 .settings-tag-label {
   font-size: 1em;
+  flex: 1;
+  min-width: 0;
 }
 
 .settings-tag-delete {
-  color: rgba(var(--v-theme-on-primary), 0.9);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   min-width: 0;
-  height: 16px;
-  width: 16px;
-  padding: 0;
+  height: 12px;
+  width: 12px;
+  padding: 2;
 }
 
 .settings-tag-delete:hover {
   color: rgba(var(--v-theme-error), 0.9);
   min-width: 0;
-  height: 16px;
-  width: 16px;
-  padding: 0;
+  padding: 2;
 }
 
 .settings-token-dialog {
@@ -2420,7 +2551,7 @@ defineExpose({ refreshSidebar });
 .settings-token-warning {
   font-size: 0.9em;
   color: rgba(var(--v-theme-on-surface), 0.7);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .settings-token-value {
@@ -2428,7 +2559,7 @@ defineExpose({ refreshSidebar });
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   background: rgba(var(--v-theme-surface), 0.2);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 2px 4px;
 }
 
 .settings-section-divider {
@@ -2446,18 +2577,24 @@ defineExpose({ refreshSidebar });
 }
 
 .sidebar-list-item.active {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
+  background: rgba(var(--v-theme-primary), 0.6);
+  color: rgb(var(--v-theme-on-primary));
   border-right: 0;
   position: relative;
 }
 
+.sidebar-list-item.reference-active {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-primary), 0.35);
+}
+
 .sidebar-list-item:hover {
-  filter: brightness(1.1);
-  background: rgba(var(--v-theme-accent), 0.2);
+  background: rgba(var(--v-theme-accent), 0.6);
 }
 
 .sidebar-list-item.droppable {
+  filter: brightness(1.2);
   background: rgb(var(--v-theme-primary));
 }
 
@@ -2485,7 +2622,7 @@ defineExpose({ refreshSidebar });
 .sidebar-list-icon {
   display: flex;
   align-items: center;
-  margin-right: 12px;
+  margin-right: 8px;
   justify-content: center;
   width: 36px;
   height: 36px;
@@ -2528,14 +2665,16 @@ defineExpose({ refreshSidebar });
 .sidebar-list-count {
   font-size: 0.9em;
   color: rgb(var(--v-theme-on-surface));
-  min-width: 2.5em;
+  min-width: 2.6em;
+  width: 2.6em;
   text-align: right;
   margin: 0;
   font-weight: 400;
   opacity: 0.85;
   letter-spacing: 0.01em;
   align-self: center;
-  display: inline-block;
+  display: inline-flex;
+  justify-content: flex-end;
 }
 
 .sidebar-new-tag {
@@ -2702,56 +2841,55 @@ defineExpose({ refreshSidebar });
   align-items: center;
 }
 
-/* Reference set child entry styling */
-.sidebar-reference-set {
-  font-size: 0.88em;
-  padding-left: 40px;
-  position: relative;
-  overflow: visible;
-}
-
 .sidebar-set-item {
   position: relative;
   overflow: visible;
 }
 
-.sidebar-reference-set.active {
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  position: relative;
-  padding-left: 40px;
+.sidebar-character-reference {
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: transparent;
+  opacity: 0.65;
+  transition:
+    opacity 0.2s ease,
+    color 0.2s ease;
 }
 
-.sidebar-reference-set.active::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 20px;
-  height: 100%;
-  background: linear-gradient(
-    to right,
-    rgba(255, 165, 0, 0) 30%,
-    rgba(255, 165, 0, 1) 90%
-  );
-  pointer-events: none;
-  z-index: 2;
+.sidebar-character-reference:hover {
+  opacity: 1;
+  background: rgba(var(--v-theme-error), 0.16);
 }
 
-.sidebar-reference-set .sidebar-list-label {
-  font-size: 0.92em;
-  font-weight: 400;
+.sidebar-character-reference.active {
+  opacity: 1;
+  color: rgb(var(--v-theme-on-error));
+  background: rgba(var(--v-theme-error), 0.22);
 }
 
-.sidebar-reference-icon {
-  margin-right: 4px;
+.sidebar-reference-label {
+  display: inline-flex;
+  align-items: right;
+  justify-content: flex-end;
+  padding: 2px 4px;
+  margin-right: 0px;
+  border-radius: 999px;
+  color: rgb(var(--v-theme-on-error));
+  background: rgb(var(--v-theme-error));
+  font-weight: 700;
+  font-size: 0.7em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .sidebar-inline-notice {
-  position: absolute;
-  top: 50%;
-  right: -12px;
-  transform: translate(100%, -50%);
+  position: fixed;
+  transform: translateY(-50%);
   background: rgba(var(--v-theme-secondary), 0.75);
   color: rgb(var(--v-theme-on-secondary));
   padding: 6px 14px;
@@ -2759,7 +2897,7 @@ defineExpose({ refreshSidebar });
   font-size: 0.9em;
   white-space: nowrap;
   pointer-events: none;
-  z-index: 100 !important;
+  z-index: 1000 !important;
 }
 
 @media (max-width: 900px) {

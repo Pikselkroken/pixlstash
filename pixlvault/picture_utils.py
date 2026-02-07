@@ -144,7 +144,11 @@ class PictureUtils:
         # We apply a hinge loss logic:
         # If likeness > pivot, gain small bonus.
         # If likeness < pivot, suffer heavy penalty.
-        char_raw = np.array([c.get("character_likeness", 0.0) for c in candidates])
+        char_raw_values = [c.get("character_likeness") for c in candidates]
+        char_mask = np.array([val is not None for val in char_raw_values])
+        char_raw = np.array(
+            [float(val) if val is not None else 0.0 for val in char_raw_values]
+        )
 
         # Calculate delta from pivot
         char_deltas = char_raw - cfg["char_pivot"]
@@ -155,12 +159,11 @@ class PictureUtils:
             char_deltas * cfg["w_char_bonus"],
             char_deltas * cfg["w_char_penalty"],
         )
+        char_component = np.where(char_mask, char_component, 0.0)
         scores += char_component
 
         # 2. Good Anchors
-        mask_good = np.zeros(len(candidates), dtype=bool)
         good_component = np.zeros(len(candidates))
-        raw_good_sim = np.zeros(len(candidates))
         if good_anchors:
             good_pairs = [
                 (a["embedding"], a.get("score", 0))
@@ -181,7 +184,6 @@ class PictureUtils:
 
             # Max raw sim for gating
             max_raw = np.max(sims, axis=1)
-            raw_good_sim = max_raw
             mask_good = max_raw >= cfg["minSim"]
 
             # Weighted average of top K
@@ -204,7 +206,6 @@ class PictureUtils:
 
         # 3. Bad Anchors
         bad_component = np.zeros(len(candidates))
-        raw_bad_sim = np.zeros(len(candidates))
         mask_bad = np.zeros(len(candidates), dtype=bool)
         if bad_anchors:
             bad_pairs = [
@@ -227,7 +228,6 @@ class PictureUtils:
 
             # Max raw sim for gating negative penalty
             max_raw_bad = np.max(sims, axis=1)
-            raw_bad_sim = max_raw_bad
             mask_bad = max_raw_bad >= cfg["minBadSim"]
 
             weighted = sims * bad_weights
@@ -294,10 +294,10 @@ class PictureUtils:
         penalized_counts = np.array(
             [float(c.get("penalized_tag_count") or 0) for c in candidates]
         )
-        penalized_counts = np.clip(
-            penalized_counts, 0.0, float(cfg["penalized_tag_cap"])
+        penalized_equivalent = np.clip(
+            penalized_counts / 5.0, 0.0, float(cfg["penalized_tag_cap"])
         )
-        penalized_component = cfg["w_penalized_tag"] * penalized_counts
+        penalized_component = cfg["w_penalized_tag"] * penalized_equivalent
         scores -= penalized_component
 
         # Rescale [0, 1] to [1, 5] with optional spread adjustment
@@ -309,25 +309,6 @@ class PictureUtils:
             clipped = 0.5 + (clipped - 0.5) * spread
             clipped = np.clip(clipped, 0.0, 1.0)
         final_scores = 1.0 + (clipped * 4.0)
-
-        # Logging Breakdown for all candidates
-        # Sort indices by final score descending
-        sorted_indices = np.argsort(-final_scores)
-
-        logger.debug(f"[SMART SCORE] Analyzed {len(candidates)} candidates. Breakdown:")
-        for rank, i in enumerate(sorted_indices):
-            logger.debug(
-                f"[#{rank + 1}] ID={candidates[i]['id']} Score={final_scores[i]:.2f} "
-                f"Char={char_component[i]:.3f} (raw={char_raw[i]:.2f}) "
-                f"Good={good_component[i]:.3f} (maxSim={raw_good_sim[i]:.3f}) "
-                f"Bad={bad_component[i]:.3f} (maxSim={raw_bad_sim[i]:.3f}) "
-                f"Aest={aest_component[i]:.3f} (raw={raw_aest[i]:.2f}) "
-                f"Res={res_component[i]:.3f} (mpx={mpx[i]:.2f}) "
-                f"Noise={noise_component[i]:.3f} (raw={noise_vals[i]:.2f}) "
-                f"Edge={edge_component[i]:.3f} (raw={edge_vals[i]:.2f}) "
-                f"PenTags={penalized_component[i]:.3f} (count={int(penalized_counts[i])}) "
-                f"MaskBad={mask_bad[i]} PreClip={scores[i]:.3f} "
-            )
 
         return final_scores
 
@@ -649,7 +630,7 @@ class PictureUtils:
             return None
 
     @staticmethod
-    def generate_thumbnail_bytes(img, size=(256, 256)) -> Optional[bytes]:
+    def generate_thumbnail_bytes(img, size=(384, 384)) -> Optional[bytes]:
         """
         Crop to square (bottom-cropped for tall images) and resize longest edge to 256px.
         Accepts either a PIL Image or a numpy array (OpenCV image).

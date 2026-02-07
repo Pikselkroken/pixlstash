@@ -13,8 +13,11 @@ from sqlmodel import (
 )
 from typing import List, Optional, TYPE_CHECKING
 
+from pixlvault.db_models.hand_tag import HandTag
+
 if TYPE_CHECKING:
     from .picture import Picture
+    from .tag import Tag
 
 
 class Hand(SQLModel, table=True):
@@ -31,6 +34,11 @@ class Hand(SQLModel, table=True):
 
     # Relationships
     picture: Optional["Picture"] = Relationship(back_populates="hands")
+    tags: List["Tag"] = Relationship(
+        back_populates="hands",
+        link_model=HandTag,
+        sa_relationship_kwargs={"passive_deletes": True},
+    )
 
     __table_args__ = (UniqueConstraint("picture_id", "frame_index", "hand_index"),)
 

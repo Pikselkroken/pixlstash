@@ -142,7 +142,7 @@ class ImageEmbeddingWorker(BaseWorker):
             try:
                 # Log how many images remain to be processed
                 remaining = self._db.run_immediate_read_task(self._count_remaining)
-                logger.info(
+                logger.debug(
                     f"ImageEmbeddingWorker: {remaining} images remain to be processed."
                 )
 
