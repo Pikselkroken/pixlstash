@@ -153,7 +153,12 @@
               @dragend.capture="handleContainerDragEnd(img, $event)"
             >
               <div
-                v-if="props.showProblemIcon && hasPenalizedTags(img)"
+                v-if="
+                  props.showProblemIcon &&
+                  hasPenalizedTags(img) &&
+                  isThumbnailReady(img.id) &&
+                  img.thumbnail
+                "
                 class="penalized-tag-indicator thumbnail-badge thumbnail-badge--top-left"
                 :title="penalizedTagsTitle(img)"
               >
@@ -163,7 +168,13 @@
               </div>
               <!-- Resolution overlay -->
               <div
-                v-if="props.showResolution && img.width && img.height"
+                v-if="
+                  props.showResolution &&
+                  img.width &&
+                  img.height &&
+                  isThumbnailReady(img.id) &&
+                  img.thumbnail
+                "
                 class="resolution-hover-overlay thumbnail-badge thumbnail-badge--bottom-right"
               >
                 {{ img.width }}×{{ img.height }}
@@ -269,7 +280,11 @@
                 </template>
                 <div
                   v-if="
-                    props.showFormat && img.format && img.format !== 'unknown'
+                    props.showFormat &&
+                    img.format &&
+                    img.format !== 'unknown' &&
+                    isThumbnailReady(img.id) &&
+                    img.thumbnail
                   "
                   class="thumbnail-id-overlay thumbnail-badge thumbnail-badge--bottom-left"
                 >
@@ -298,12 +313,16 @@
               </template>
               <template v-else>
                 <div class="thumbnail-placeholder">
-                  <span> Image #{{ String(img.idx).padStart(5, "0") }} </span>
+                  <v-icon class="thumbnail-placeholder-icon"
+                    >mdi-loading</v-icon
+                  >
                 </div>
               </template>
               <!-- Score overlay -->
               <StarRatingOverlay
-                v-if="props.showStars"
+                v-if="
+                  props.showStars && isThumbnailReady(img.id) && img.thumbnail
+                "
                 class="thumbnail-badge thumbnail-badge--top-right"
                 :score="img.score || 0"
                 :icon-size="16"
@@ -2114,8 +2133,13 @@ function handleGridDrop(e) {
 function onGlobalKeyPress(key, event) {
   if (scrollWrapper.value) {
     let newScrollTop = scrollWrapper.value.scrollTop;
-    const maxScroll =
-      scrollWrapper.value.scrollHeight - scrollWrapper.value.clientHeight;
+    const maxScroll = (() => {
+      const total = allGridImages.value.length;
+      const cols = Math.max(1, props.columns || 1);
+      const totalRows = Math.ceil(total / cols);
+      const totalHeight = totalRows * rowHeight.value;
+      return Math.max(0, totalHeight - scrollWrapper.value.clientHeight);
+    })();
     if (key === "Home") {
       newScrollTop = 0;
     } else if (key === "End") {
@@ -2856,10 +2880,13 @@ async function fetchThumbnailsBatch(start, end) {
       }
       for (const gridImg of gridImages) {
         const thumbObj = thumbData[String(gridImg.id)];
-        gridImg.thumbnail =
-          thumbObj && thumbObj.thumbnail
-            ? `data:image/png;base64,${thumbObj.thumbnail}`
-            : null;
+        const thumbnailUrl =
+          thumbObj && thumbObj.thumbnail ? thumbObj.thumbnail : null;
+        gridImg.thumbnail = thumbnailUrl
+          ? thumbnailUrl.startsWith("http")
+            ? thumbnailUrl
+            : `${props.backendUrl}${thumbnailUrl}`
+          : null;
         if (gridImg.id != null && thumbObj && thumbObj.thumbnail) {
           thumbnailLoadedMap[gridImg.id] =
             (thumbnailLoadedMap[gridImg.id] || 0) + 1;
@@ -3844,10 +3871,24 @@ function handleEmptyStateReset() {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.5em;
   position: absolute;
   top: 0;
   left: 0;
   color: rgb(var(--v-theme-on-background));
+}
+
+.thumbnail-placeholder-icon {
+  font-size: 28px;
+  opacity: 0.7;
+  animation: thumbnailPlaceholderSpin 1.1s linear infinite;
+}
+
+@keyframes thumbnailPlaceholderSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

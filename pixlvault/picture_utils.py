@@ -20,6 +20,10 @@ from pixlvault.db_models.picture import Picture
 
 logger = get_logger(__name__)
 
+THUMBNAIL_FORMAT = "WEBP"
+THUMBNAIL_EXTENSION = ".webp"
+THUMBNAIL_QUALITY = 80
+
 
 class PictureUtils:
     @staticmethod
@@ -398,6 +402,87 @@ class PictureUtils:
         return os.path.join(image_root, file_path)
 
     @staticmethod
+    def get_thumbnail_path(
+        image_root: Optional[str], file_path: Optional[str]
+    ) -> Optional[str]:
+        resolved = PictureUtils.resolve_picture_path(image_root, file_path)
+        if not resolved:
+            return None
+        base, _ = os.path.splitext(resolved)
+        return f"{base}_thumb{THUMBNAIL_EXTENSION}"
+
+    @staticmethod
+    def read_thumbnail_bytes(
+        image_root: Optional[str], file_path: Optional[str]
+    ) -> Optional[bytes]:
+        thumb_path = PictureUtils.get_thumbnail_path(image_root, file_path)
+        if not thumb_path or not os.path.exists(thumb_path):
+            return None
+        try:
+            with open(thumb_path, "rb") as handle:
+                return handle.read()
+        except Exception as exc:
+            logger.warning("Failed to read thumbnail %s: %s", thumb_path, exc)
+            return None
+
+    @staticmethod
+    def write_thumbnail_bytes(
+        image_root: Optional[str], file_path: Optional[str], thumbnail: bytes
+    ) -> Optional[str]:
+        if not thumbnail:
+            return None
+        thumb_path = PictureUtils.get_thumbnail_path(image_root, file_path)
+        if not thumb_path:
+            return None
+        try:
+            os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
+            with open(thumb_path, "wb") as handle:
+                handle.write(thumbnail)
+            return thumb_path
+        except Exception as exc:
+            logger.warning("Failed to write thumbnail %s: %s", thumb_path, exc)
+            return None
+
+    @staticmethod
+    def load_image_or_video_bgr(file_path: str) -> Optional[np.ndarray]:
+        if not file_path or not os.path.exists(file_path):
+            return None
+        if PictureUtils.is_video_file(file_path):
+            cap = cv2.VideoCapture(file_path)
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                return frame
+            return None
+
+        img = cv2.imread(file_path)
+        if img is not None:
+            return img
+        try:
+            with Image.open(file_path) as pil_img:
+                if pil_img.mode not in ("RGB", "L"):
+                    pil_img = pil_img.convert("RGB")
+                rgb = np.array(pil_img)
+                return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _encode_thumbnail(pil_img: Image.Image) -> Optional[bytes]:
+        buf = BytesIO()
+        try:
+            pil_img.save(
+                buf,
+                format=THUMBNAIL_FORMAT,
+                quality=THUMBNAIL_QUALITY,
+                method=6,
+            )
+        except Exception as exc:
+            logger.error("Error encoding thumbnail bytes: %s", exc)
+            return None
+        return buf.getvalue()
+
+    @staticmethod
     def is_video_file(file_path: str) -> bool:
         """
         Returns True if the file is a supported video format.
@@ -660,9 +745,7 @@ class PictureUtils:
                 new_w = int(round(pil_img.width * scale))
                 new_h = int(round(pil_img.height * scale))
                 pil_img = pil_img.resize((new_w, new_h), resample=Image.LANCZOS)
-            buf = BytesIO()
-            pil_img.save(buf, format="PNG")
-            return buf.getvalue()
+            return PictureUtils._encode_thumbnail(pil_img)
         except Exception as e:
             logger.error(f"Error generating thumbnail bytes: {e}")
             return None
@@ -762,14 +845,15 @@ class PictureUtils:
             square_img = pil_img.crop((left, top, left + side, top + side))
             if output_size and square_img.size != output_size:
                 square_img = square_img.resize(output_size, resample=Image.LANCZOS)
-            buf = BytesIO()
-            square_img.save(buf, format="PNG")
             crop = {
                 "left": left,
                 "top": top,
                 "side": side,
             }
-            return buf.getvalue(), crop
+            thumbnail_bytes = PictureUtils._encode_thumbnail(square_img)
+            if thumbnail_bytes is None:
+                return None, None
+            return thumbnail_bytes, crop
         except Exception as e:
             logger.error(f"Error generating face-weighted thumbnail: {e}")
             return None, None
@@ -990,6 +1074,13 @@ class PictureUtils:
                 f.write(image_bytes)
             size_bytes = len(image_bytes)
 
+        if thumbnail_bytes:
+            saved_thumb = PictureUtils.write_thumbnail_bytes(
+                image_root_path, file_name, thumbnail_bytes
+            )
+            if not saved_thumb:
+                logger.warning("Failed to persist thumbnail for %s", file_name)
+
         if not created_at:
             created_at = PictureUtils.extract_created_at_from_metadata(
                 image_bytes, fallback_file_path=full_path
@@ -1004,7 +1095,6 @@ class PictureUtils:
             height=height,
             size_bytes=size_bytes,
             created_at=created_at,
-            thumbnail=thumbnail_bytes,
             pixel_sha=pixel_sha,
         )
         return pic

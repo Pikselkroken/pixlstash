@@ -5,7 +5,6 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto
-from PIL import Image
 from sqlalchemy import desc, func
 from sqlalchemy.orm import load_only, selectinload
 from sqlalchemy.types import LargeBinary
@@ -72,7 +71,7 @@ class SortMechanism:
         },
         Keys.IMAGE_SIZE: {
             "field": None,  # Special case, not a direct field
-            "description": "Image Size (width x height)",
+            "description": "Image Size",
         },
     }
 
@@ -133,9 +132,6 @@ class Picture(SQLModel, table=True):
     )
     image_embedding: Optional[np.ndarray] = Field(
         sa_column=Column("image_embedding", LargeBinary, default=None, nullable=True)
-    )
-    thumbnail: Optional[Image.Image] = Field(
-        sa_column=Column("thumbnail", LargeBinary, default=None, nullable=True)
     )
     thumbnail_left: Optional[int] = Field(default=None)
     thumbnail_top: Optional[int] = Field(default=None)

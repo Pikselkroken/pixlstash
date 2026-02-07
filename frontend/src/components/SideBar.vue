@@ -45,11 +45,11 @@ const emit = defineEmits([
   "update:similarity-character",
   "update:stack-threshold",
   "toggle-sidebar",
+  "update:sort-options",
 ]);
 
 const imageImporterRef = ref(null);
 const uploadInputRef = ref(null);
-const sortSelectRef = ref(null);
 const sidebarRootRef = ref(null);
 
 const dragOverSet = ref(null);
@@ -550,10 +550,6 @@ const sortModel = computed({
     }),
 });
 
-function handleSortChange() {
-  sortSelectRef.value?.blur();
-}
-
 const searchModel = computed({
   get: () => props.searchQuery,
   set: (value) => emit("update:search-query", value ?? ""),
@@ -845,9 +841,11 @@ async function fetchSortOptions() {
         ? sortOptions.value[0].value
         : null;
     }
+    emit("update:sort-options", sortOptions.value);
   } catch (e) {
     console.error("Error fetching sort options:", e);
     sortOptions.value = [];
+    emit("update:sort-options", []);
   }
 }
 
@@ -1893,11 +1891,6 @@ defineExpose({ refreshSidebar, openSettingsDialog });
         </div>
       </template>
 
-      <div class="sidebar-section-header">
-        {{ isSearchActive ? "Search Result" : "Sort by" }}
-        <span style="flex: 1 1 auto"></span>
-      </div>
-
       <div
         class="sidebar-searchbar-wrapper"
         style="
@@ -1909,43 +1902,6 @@ defineExpose({ refreshSidebar, openSettingsDialog });
       >
         <div v-if="isSearchActive" class="sidebar-search-result-label">
           Search Result
-        </div>
-        <div v-else style="display: flex; align-items: center; gap: 8px">
-          <div style="flex: 1; min-width: 0; position: relative">
-            <select
-              ref="sortSelectRef"
-              v-model="sortModel"
-              class="sidebar-native-select"
-              @change="handleSortChange"
-            >
-              <option
-                v-for="opt in sortOptions"
-                :key="opt.value"
-                :value="opt.value"
-              >
-                {{ opt.label }}
-              </option>
-            </select>
-            <span class="sidebar-native-select-chevron">
-              <v-icon size="18">mdi-menu-down</v-icon>
-            </span>
-          </div>
-          <v-btn
-            icon
-            class="sidebar-sort-direction-btn"
-            variant="plain"
-            size="small"
-            :color="null"
-            :title="descendingModel ? 'Descending' : 'Ascending'"
-            @click="descendingModel = !descendingModel"
-            style="margin-left: 2px; margin-right: 2px"
-          >
-            <v-icon size="18">
-              {{
-                descendingModel ? "mdi-sort-ascending" : "mdi-sort-descending"
-              }}
-            </v-icon>
-          </v-btn>
         </div>
         <div v-if="!isSearchActive && sortModel === SIMILARITY_SORT_KEY">
           <div class="sidebar-section-header">

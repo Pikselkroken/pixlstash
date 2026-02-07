@@ -110,6 +110,49 @@ def create_router(server) -> APIRouter:
             logger.error(f"Failed to remove tag: {e}")
             raise HTTPException(status_code=500, detail="Failed to remove tag")
 
+    @router.post("/pictures/{id}/tags/remove_all")
+    async def remove_tag_from_picture_everywhere(id: str, payload: dict = Body(...)):
+        tag_value = (payload or {}).get("tag")
+        if not tag_value:
+            raise HTTPException(status_code=400, detail="Tag is required")
+
+        def update_picture(session: Session, pic_id: str, tag_value: str):
+            pic_list = Picture.find(session, id=pic_id, select_fields=["tags"])
+            if not pic_list:
+                raise HTTPException(status_code=404, detail="Picture not found")
+            pic = pic_list[0]
+            tag_ids = [
+                t.id for t in pic.tags if t.tag == tag_value and t.id is not None
+            ]
+            if tag_ids:
+                session.exec(delete(FaceTag).where(FaceTag.tag_id.in_(tag_ids)))
+                session.exec(delete(HandTag).where(HandTag.tag_id.in_(tag_ids)))
+                session.exec(delete(Tag).where(Tag.id.in_(tag_ids)))
+            session.flush()
+            remaining = session.exec(
+                select(Tag).where(
+                    Tag.picture_id == pic_id,
+                    Tag.tag.is_not(None),
+                    Tag.tag != TAG_EMPTY_SENTINEL,
+                )
+            ).all()
+            if not remaining:
+                sentinel = session.exec(
+                    select(Tag).where(
+                        Tag.picture_id == pic_id,
+                        Tag.tag == TAG_EMPTY_SENTINEL,
+                    )
+                ).first()
+                if sentinel is None:
+                    session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
+            session.commit()
+            session.refresh(pic)
+            return pic
+
+        pic = server.vault.db.run_task(update_picture, id, tag_value)
+        server.vault.notify(EventType.CHANGED_TAGS)
+        return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
+
     @router.get("/faces/{face_id}/tags")
     async def list_face_tags(face_id: int):
         def fetch_tags(session: Session, face_id: int):

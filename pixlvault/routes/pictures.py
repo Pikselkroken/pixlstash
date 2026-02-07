@@ -9,6 +9,7 @@ import zipfile
 from collections import defaultdict, deque
 from email.utils import formatdate
 
+from PIL import Image
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -397,6 +398,61 @@ def create_router(server) -> APIRouter:
 
         return response
 
+    @router.get("/pictures/thumbnails/{id}.webp")
+    async def get_thumbnail(id: int):
+        def fetch_picture(session: Session, picture_id: int):
+            pics = Picture.find(
+                session,
+                id=picture_id,
+                select_fields=[
+                    "id",
+                    "file_path",
+                ],
+            )
+            return pics[0] if pics else None
+
+        pic = server.vault.db.run_immediate_read_task(fetch_picture, id)
+        if not pic or not getattr(pic, "file_path", None):
+            raise HTTPException(status_code=404, detail="Picture not found")
+
+        thumb_path = PictureUtils.get_thumbnail_path(
+            server.vault.image_root, pic.file_path
+        )
+        if thumb_path and os.path.exists(thumb_path):
+            return FileResponse(thumb_path, media_type="image/webp")
+
+        resolved_path = PictureUtils.resolve_picture_path(
+            server.vault.image_root, pic.file_path
+        )
+        if resolved_path and os.path.exists(resolved_path):
+            img = PictureUtils.load_image_or_video(resolved_path)
+            if img is not None:
+                if not isinstance(img, Image.Image):
+                    img = Image.fromarray(img)
+                thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(img)
+                if thumbnail_bytes:
+                    saved_thumb = PictureUtils.write_thumbnail_bytes(
+                        server.vault.image_root, pic.file_path, thumbnail_bytes
+                    )
+                    if saved_thumb and os.path.exists(saved_thumb):
+                        return FileResponse(saved_thumb, media_type="image/webp")
+                    logger.warning(
+                        "Failed to persist on-demand thumbnail for picture %s",
+                        pic.id,
+                    )
+            else:
+                logger.warning(
+                    "Failed to load image for on-demand thumbnail: %s",
+                    resolved_path,
+                )
+        else:
+            logger.warning(
+                "Missing source file for on-demand thumbnail: %s",
+                resolved_path,
+            )
+
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+
     @router.post("/pictures/thumbnails")
     async def get_thumbnails(request: Request, payload: dict = Body(...)):
         ids = payload.get("ids", [])
@@ -467,7 +523,7 @@ def create_router(server) -> APIRouter:
                 id=ids,
                 select_fields=[
                     "id",
-                    "thumbnail",
+                    "file_path",
                     "faces",
                     "hands",
                     "thumbnail_left",
@@ -479,10 +535,10 @@ def create_router(server) -> APIRouter:
         results = {}
         for pic in pics:
             try:
-                thumbnail_bytes = pic.thumbnail
-                face_data = []
-                hand_data = []
+                face_entries = []
+                hand_entries = []
                 mapped_any = False
+                raw_face_bboxes = []
                 for face in getattr(pic, "faces", []):
                     bbox = None
                     try:
@@ -492,8 +548,7 @@ def create_router(server) -> APIRouter:
                     except Exception:
                         bbox = None
                     if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                        mapped_bbox, mapped = map_bbox_to_thumbnail(bbox, pic)
-                        mapped_any = mapped_any or mapped
+                        raw_face_bboxes.append(list(bbox))
                         character = (
                             server.vault.db.run_task(
                                 lambda session: Character.find(
@@ -505,10 +560,10 @@ def create_router(server) -> APIRouter:
                             if face.character_id
                             else None
                         )
-                        face_data.append(
+                        face_entries.append(
                             {
                                 "id": face.id,
-                                "bbox": mapped_bbox,
+                                "bbox": list(bbox),
                                 "character_id": face.character_id,
                                 "character_name": getattr(character[0], "name", None)
                                 if character
@@ -525,20 +580,30 @@ def create_router(server) -> APIRouter:
                     except Exception:
                         bbox = None
                     if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                        mapped_bbox, mapped = map_bbox_to_thumbnail(bbox, pic)
-                        mapped_any = mapped_any or mapped
-                        hand_data.append(
+                        hand_entries.append(
                             {
                                 "id": hand.id,
-                                "bbox": mapped_bbox,
+                                "bbox": list(bbox),
                                 "frame_index": getattr(hand, "frame_index", None),
                                 "hand_index": getattr(hand, "hand_index", None),
                             }
                         )
+
+                face_data = []
+                hand_data = []
+                for entry in face_entries:
+                    mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
+                    mapped_any = mapped_any or mapped
+                    face_data.append({**entry, "bbox": mapped_bbox})
+
+                for entry in hand_entries:
+                    mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
+                    mapped_any = mapped_any or mapped
+                    hand_data.append({**entry, "bbox": mapped_bbox})
+
+                thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp"
                 results[pic.id] = {
-                    "thumbnail": base64.b64encode(thumbnail_bytes).decode("utf-8")
-                    if thumbnail_bytes
-                    else None,
+                    "thumbnail": thumbnail_url,
                     "faces": face_data,
                     "hands": hand_data,
                     "thumbnail_width": 256 if mapped_any else None,
@@ -1415,10 +1480,8 @@ def create_router(server) -> APIRouter:
                     good_anchors,
                     bad_anchors,
                     candidates,
-                    pic_likeness_map,
                 ) = fetch_smart_score_data(
                     server,
-                    None,
                     None,
                     candidate_ids=[pic.id],
                     penalized_tags=penalized_tags,
@@ -1431,7 +1494,7 @@ def create_router(server) -> APIRouter:
                         cand_list,
                         cand_ids,
                     ) = prepare_smart_score_inputs(
-                        good_anchors, bad_anchors, candidates, pic_likeness_map
+                        good_anchors, bad_anchors, candidates
                     )
                     if cand_list:
                         scores = PictureUtils.calculate_smart_score_batch_numpy(

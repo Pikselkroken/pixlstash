@@ -436,9 +436,8 @@
                   >
                     {{ tagLabel(tag) }}
                     <button
-                      v-if="isPictureTag(tag)"
                       class="tag-delete-btn"
-                      @click.stop="removeTag(tag)"
+                      @click.stop="removeAllTag(tag)"
                       title="Remove tag"
                     >
                       <v-icon size="12">mdi-close</v-icon>
@@ -1557,15 +1556,12 @@ async function assignTagToFace(face, tag) {
   };
 }
 
-async function removeTagFromFace(face, tag) {
+async function removeTagFromFace(face, tag, options = {}) {
   if (!face?.id || !tag || !backendUrl.value) return;
-  const key = tagId(tag);
-  if (key == null) {
-    console.warn("Tag id is required to remove a face tag.", tag);
-    return;
-  }
+  const key = tagId(tag) ?? tagLabel(tag).trim();
+  if (!key) return;
   const res = await apiClient.delete(
-    `${backendUrl.value}/faces/${face.id}/tags/${key}`,
+    `${backendUrl.value}/faces/${face.id}/tags/${encodeURIComponent(key)}`,
   );
   const payload = await res.data;
   const tags = Array.isArray(payload) ? payload : payload?.tags;
@@ -1573,6 +1569,9 @@ async function removeTagFromFace(face, tag) {
     ...faceTagMap.value,
     [face.id]: normalizeTagList(tags),
   };
+  if (!options.skipRefresh && image.value?.id) {
+    emit("refresh-image", image.value.id);
+  }
 }
 
 async function assignTagToHand(hand, tag) {
@@ -1592,15 +1591,12 @@ async function assignTagToHand(hand, tag) {
   };
 }
 
-async function removeTagFromHand(hand, tag) {
+async function removeTagFromHand(hand, tag, options = {}) {
   if (!hand?.id || !tag || !backendUrl.value) return;
-  const key = tagId(tag);
-  if (key == null) {
-    console.warn("Tag id is required to remove a hand tag.", tag);
-    return;
-  }
+  const key = tagId(tag) ?? tagLabel(tag).trim();
+  if (!key) return;
   const res = await apiClient.delete(
-    `${backendUrl.value}/hands/${hand.id}/tags/${key}`,
+    `${backendUrl.value}/hands/${hand.id}/tags/${encodeURIComponent(key)}`,
   );
   const payload = await res.data;
   const tags = Array.isArray(payload) ? payload : payload?.tags;
@@ -1608,6 +1604,9 @@ async function removeTagFromHand(hand, tag) {
     ...handTagMap.value,
     [hand.id]: normalizeTagList(tags),
   };
+  if (!options.skipRefresh && image.value?.id) {
+    emit("refresh-image", image.value.id);
+  }
 }
 
 async function fetchOverlayThumbnail(imageId) {
@@ -1630,8 +1629,11 @@ async function fetchOverlayThumbnail(imageId) {
       overlayThumbnailDims.value = { width: 256, height: 256 };
       return;
     }
-    overlayThumbnail.value = entry.thumbnail
-      ? `data:image/png;base64,${entry.thumbnail}`
+    const thumbnailUrl = entry.thumbnail || null;
+    overlayThumbnail.value = thumbnailUrl
+      ? thumbnailUrl.startsWith("http")
+        ? thumbnailUrl
+        : `${backendUrl.value}${thumbnailUrl}`
       : null;
     const width = Number(entry.thumbnail_width);
     const height = Number(entry.thumbnail_height);
@@ -2569,6 +2571,69 @@ function handleDescriptionEditorKey(event) {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
     saveDescription();
+  }
+}
+
+async function removeAllTag(tag) {
+  if (!tag) return;
+  const label = tagLabel(tag);
+  if (!label) return;
+  let didUpdate = false;
+  const imageMatch = imageTags.value.find((entry) => entry.tag === label);
+  if (imageMatch && imageMatch.id != null) {
+    if (image.value && Array.isArray(image.value.tags)) {
+      const current = normalizeTagList(image.value.tags);
+      image.value.tags = current.filter((entry) => entry.tag !== label);
+    }
+    didUpdate = true;
+  } else if (image.value && Array.isArray(image.value.tags)) {
+    const current = normalizeTagList(image.value.tags);
+    const next = current.filter((entry) => entry.tag !== label);
+    if (next.length !== current.length) {
+      image.value.tags = next;
+      didUpdate = true;
+    }
+  }
+
+  const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
+  for (const face of faces) {
+    const tags = normalizeTagList(faceTagMap.value?.[face.id]);
+    const nextTags = tags.filter((entry) => entry.tag !== label);
+    if (nextTags.length !== tags.length) {
+      faceTagMap.value = {
+        ...faceTagMap.value,
+        [face.id]: nextTags,
+      };
+      didUpdate = true;
+    }
+  }
+
+  const hands = Array.isArray(handBboxes.value) ? handBboxes.value : [];
+  for (const hand of hands) {
+    const tags = normalizeTagList(handTagMap.value?.[hand.id]);
+    const nextTags = tags.filter((entry) => entry.tag !== label);
+    if (nextTags.length !== tags.length) {
+      handTagMap.value = {
+        ...handTagMap.value,
+        [hand.id]: nextTags,
+      };
+      didUpdate = true;
+    }
+  }
+
+  if (image.value?.id && backendUrl.value) {
+    try {
+      await apiClient.post(
+        `${backendUrl.value}/pictures/${image.value.id}/tags/remove_all`,
+        { tag: label },
+      );
+    } catch (err) {
+      console.warn("Failed to remove tag everywhere:", err);
+    }
+  }
+
+  if (didUpdate && image.value?.id) {
+    emit("refresh-image", image.value.id);
   }
 }
 
