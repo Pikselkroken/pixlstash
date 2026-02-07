@@ -458,12 +458,19 @@ class FeatureExtractionWorker(BaseWorker):
                 pic_face_ids.extend(face_ids)
 
             if need_faces and thumbnail_bytes:
+                saved_thumb = PictureUtils.write_thumbnail_bytes(
+                    self._db.image_root, pic.file_path, thumbnail_bytes
+                )
+                if not saved_thumb:
+                    logger.warning(
+                        "Failed to persist thumbnail for picture %s",
+                        getattr(pic, "file_path", pic.id),
+                    )
 
-                def update_thumbnail(session, picture_id, thumbnail, crop):
+                def update_thumbnail_crop(session, picture_id, crop):
                     picture = session.get(Picture, picture_id)
                     if picture is None:
                         return None
-                    picture.thumbnail = thumbnail
                     if crop:
                         picture.thumbnail_left = crop.get("left")
                         picture.thumbnail_top = crop.get("top")
@@ -472,13 +479,13 @@ class FeatureExtractionWorker(BaseWorker):
                     session.commit()
                     return picture.id
 
-                self._db.run_task(
-                    update_thumbnail,
-                    pic.id,
-                    thumbnail_bytes,
-                    thumbnail_crop,
-                    priority=DBPriority.HIGH,
-                )
+                if thumbnail_crop:
+                    self._db.run_task(
+                        update_thumbnail_crop,
+                        pic.id,
+                        thumbnail_crop,
+                        priority=DBPriority.HIGH,
+                    )
 
             if need_faces:
                 updates.append((Picture, pic.id, "faces", pic_face_ids))

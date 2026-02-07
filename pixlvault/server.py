@@ -8,6 +8,7 @@ import threading
 
 
 from contextlib import asynccontextmanager
+from PIL import Image
 from fastapi import (
     FastAPI,
     Request,
@@ -20,7 +21,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pillow_heif import register_heif_opener
 
+from sqlmodel import select
+
 from pixlvault.db_models import (
+    Picture,
     User,
 )
 
@@ -34,6 +38,7 @@ from pixlvault.routes.characters import create_router as create_characters_route
 from pixlvault.routes.picture_sets import create_router as create_picture_sets_router
 from pixlvault.routes.tags import create_router as create_tags_router
 from pixlvault.routes.pictures import create_router as create_pictures_router
+from pixlvault.picture_utils import PictureUtils
 
 
 # Logging will be set up after config is loaded
@@ -191,6 +196,78 @@ class Server:
                     if client in self._ws_clients:
                         self._ws_clients.remove(client)
 
+    def _generate_missing_thumbnails(self):
+        def fetch_pictures(session):
+            return session.exec(select(Picture.id, Picture.file_path)).all()
+
+        rows = self.vault.db.run_immediate_read_task(fetch_pictures)
+        if not rows:
+            logger.info("No pictures found for thumbnail generation.")
+            return
+
+        missing = []
+        for row in rows:
+            pic_id, file_path = row
+            if not file_path:
+                continue
+            thumb_path = PictureUtils.get_thumbnail_path(
+                self.vault.image_root, file_path
+            )
+            if thumb_path and os.path.exists(thumb_path):
+                continue
+            missing.append((pic_id, file_path))
+
+        total = len(missing)
+        if total == 0:
+            logger.info("All thumbnails already exist.")
+            return
+
+        logger.info("Generating %s missing thumbnails at startup.", total)
+        generated = 0
+        skipped = 0
+        for index, (pic_id, file_path) in enumerate(missing, start=1):
+            resolved = PictureUtils.resolve_picture_path(
+                self.vault.image_root, file_path
+            )
+            if not resolved or not os.path.exists(resolved):
+                skipped += 1
+                logger.warning(
+                    "Missing source file for thumbnail generation: %s", resolved
+                )
+                continue
+            img = PictureUtils.load_image_or_video(resolved)
+            if img is None:
+                skipped += 1
+                logger.warning(
+                    "Failed to load image for thumbnail generation: %s", resolved
+                )
+                continue
+            if not isinstance(img, Image.Image):
+                img = Image.fromarray(img)
+            thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(img)
+            if not thumbnail_bytes:
+                skipped += 1
+                logger.warning(
+                    "Failed to generate thumbnail bytes for picture %s", pic_id
+                )
+                continue
+            saved = PictureUtils.write_thumbnail_bytes(
+                self.vault.image_root, file_path, thumbnail_bytes
+            )
+            if saved:
+                generated += 1
+            else:
+                skipped += 1
+                logger.warning("Failed to persist thumbnail for picture %s", pic_id)
+            if index % 250 == 0:
+                logger.info("Thumbnail generation progress: %s/%s", index, total)
+
+        logger.info(
+            "Thumbnail generation completed: %s generated, %s skipped.",
+            generated,
+            skipped,
+        )
+
     def run(self):
         self._shutdown_on_lifespan = True
         uvicorn_kwargs = dict(
@@ -210,6 +287,8 @@ class Server:
     async def lifespan(self, app):
         # Startup logic (if needed)
         self._ws_loop = asyncio.get_running_loop()
+        if self._server_config.get("generate_thumbnails_on_startup", True):
+            await self._ws_loop.run_in_executor(None, self._generate_missing_thumbnails)
         yield
         # Shutdown logic
         self._ws_loop = None
@@ -276,6 +355,8 @@ class Server:
                     server_config["USERNAME"] = None
                 if "watch_folders" not in server_config:
                     server_config["watch_folders"] = []
+                if "generate_thumbnails_on_startup" not in server_config:
+                    server_config["generate_thumbnails_on_startup"] = True
 
         return server_config
 

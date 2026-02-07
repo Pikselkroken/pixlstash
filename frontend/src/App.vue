@@ -33,6 +33,7 @@ const selectedReferenceCharacter = ref(null);
 const selectedSort = ref("");
 const selectedDescending = ref(true);
 const stackThreshold = ref(null);
+const sortOptions = ref([]);
 
 // --- Search & Filtering State ---
 const searchQuery = ref("");
@@ -58,12 +59,12 @@ const showProblemIcon = ref(true);
 
 const thumbnailSize = ref(256);
 const columns = ref(4); // Default columns
-const MIN_THUMBNAIL_SIZE = 128;
-const MAX_THUMBNAIL_SIZE = 320;
+const MIN_THUMBNAIL_SIZE = 96;
+const MAX_THUMBNAIL_SIZE = 384;
 const MIN_COLUMNS = 2;
-const MAX_COLUMNS = 10;
-const minColumns = ref(4);
-const maxColumns = ref(10);
+const MAX_COLUMNS = 14;
+const minColumns = ref(6);
+const maxColumns = ref(12);
 const mainAreaRef = ref(null);
 let mainAreaResizeObserver = null;
 const sidebarVisible = ref(true);
@@ -343,6 +344,10 @@ async function handleUpdateSelectedSort({ sort, descending }) {
   selectedSort.value = sort;
   selectedDescending.value = descending;
   closeSidebarIfMobile();
+}
+
+function handleUpdateSortOptions(options) {
+  sortOptions.value = Array.isArray(options) ? options : [];
 }
 
 function handleUpdateStackThreshold(value) {
@@ -764,6 +769,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :backendUrl="BACKEND_URL"
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
             :stackThreshold="stackThreshold"
+            @update:sort-options="handleUpdateSortOptions"
             @select-character="handleSelectCharacter"
             @select-reference-pictures="handleSelectReferencePictures"
             @select-set="handleSelectSet"
@@ -796,6 +802,9 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :exportTypeOptions="exportTypeOptions"
             :exportResolutionOptions="exportResolutionOptions"
             :exportTypeLocksCaptions="exportTypeLocksCaptions"
+            :sortOptions="sortOptions"
+            :selectedSort="selectedSort"
+            :selectedDescending="selectedDescending"
             v-model:searchInput="searchInput"
             v-model:isSearchHistoryOpen="isSearchHistoryOpen"
             v-model:columnsMenuOpen="columnsMenuOpen"
@@ -813,6 +822,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:exportResolution="exportResolution"
             v-model:exportIncludeCharacterName="exportIncludeCharacterName"
             v-model:mediaTypeFilter="mediaTypeFilter"
+            @update:selected-sort="handleUpdateSelectedSort"
             @open-search-overlay="openSearchOverlay"
             @commit-search="commitSearch"
             @clear-search="handleClearSearch"

@@ -47,6 +47,32 @@
           </v-list>
         </v-menu>
       </div>
+      <div class="toolbar-sort-controls">
+        <div class="toolbar-sort-select-wrapper">
+          <select v-model="sortModel" class="toolbar-sort-select">
+            <option
+              v-for="opt in sortOptions"
+              :key="opt.value"
+              :value="opt.value"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+          <span class="toolbar-sort-chevron">
+            <v-icon>mdi-menu-down</v-icon>
+          </span>
+        </div>
+        <v-btn
+          icon
+          class="toolbar-action-btn"
+          :title="descendingModel ? 'Descending' : 'Ascending'"
+          @click="toggleSortDirection"
+        >
+          <v-icon>
+            {{ descendingModel ? "mdi-sort-ascending" : "mdi-sort-descending" }}
+          </v-icon>
+        </v-btn>
+      </div>
       <div class="toolbar-controls">
         <v-btn
           v-if="isMobile"
@@ -59,7 +85,6 @@
           @click="emit('open-search-overlay')"
           title="Search"
           class="toolbar-action-btn"
-          style="margin-left: 4px"
         >
           <v-icon>mdi-magnify</v-icon>
         </v-btn>
@@ -78,7 +103,6 @@
               "
               title="Set grid columns"
               class="toolbar-action-btn"
-              style="margin-left: 4px"
             >
               <v-icon>mdi-view-grid</v-icon>
             </v-btn>
@@ -105,10 +129,10 @@
                 font-weight: 500;
                 letter-spacing: 0.02em;
               "
-              >Columns: {{ columns }}</span
+              >Columns: {{ pendingColumns }}</span
             >
             <v-slider
-              v-model="columnsModel"
+              v-model="pendingColumns"
               :min="minColumns"
               :max="maxColumns"
               :step="1"
@@ -117,7 +141,7 @@
               hide-details
               track-color="#888"
               thumb-color="primary"
-              @end="emit('columns-end')"
+              @end="commitColumns"
             />
           </div>
         </v-menu>
@@ -134,7 +158,6 @@
               :color="props['aria-expanded'] === 'true' ? 'primary' : 'surface'"
               title="Overlay options"
               class="toolbar-action-btn"
-              style="margin-left: 4px"
             >
               <v-icon :color="'onBackground'">mdi-layers-outline</v-icon>
             </v-btn>
@@ -219,7 +242,6 @@
               :color="props['aria-expanded'] === 'true' ? 'primary' : 'surface'"
               title="Export current grid to zip"
               class="toolbar-action-btn"
-              style="margin-left: 4px"
             >
               <v-icon :color="'onBackground'">mdi-download</v-icon>
             </v-btn>
@@ -305,7 +327,6 @@
               :color="props['aria-expanded'] === 'true' ? 'primary' : 'surface'"
               title="Filter media type"
               class="toolbar-action-btn"
-              style="margin-left: 4px"
             >
               <v-icon :color="'onBackground'">mdi-filter</v-icon>
             </v-btn>
@@ -352,9 +373,10 @@
         </v-menu>
         <v-btn
           icon
-          title="Settings"
+          v-bind="props"
+          :color="props['aria-expanded'] === 'true' ? 'primary' : 'surface'"
+          title="Filter media type"
           class="toolbar-action-btn"
-          style="margin-left: 4px"
           @click="emit('open-settings')"
         >
           <v-icon :color="'onBackground'">mdi-cog</v-icon>
@@ -365,7 +387,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 const props = defineProps({
   isMobile: { type: Boolean, default: false },
@@ -395,6 +417,9 @@ const props = defineProps({
   exportTypeOptions: { type: Array, default: () => [] },
   exportResolutionOptions: { type: Array, default: () => [] },
   mediaTypeFilter: { type: String, default: "all" },
+  sortOptions: { type: Array, default: () => [] },
+  selectedSort: { type: String, default: "" },
+  selectedDescending: { type: Boolean, default: true },
 });
 
 const emit = defineEmits([
@@ -423,6 +448,7 @@ const emit = defineEmits([
   "columns-end",
   "confirm-export-zip",
   "open-settings",
+  "update:selected-sort",
 ]);
 
 const searchInputField = ref(null);
@@ -456,6 +482,26 @@ const columnsModel = computed({
   get: () => props.columns,
   set: (value) => emit("update:columns", value),
 });
+
+const pendingColumns = ref(props.columns);
+
+watch(
+  () => props.columns,
+  (value) => {
+    if (!columnsMenuOpenModel.value) {
+      pendingColumns.value = value;
+    }
+  },
+);
+
+watch(
+  () => columnsMenuOpenModel.value,
+  (isOpen) => {
+    if (isOpen) {
+      pendingColumns.value = props.columns;
+    }
+  },
+);
 
 const showStarsModel = computed({
   get: () => props.showStars,
@@ -511,6 +557,33 @@ const mediaTypeFilterModel = computed({
   get: () => props.mediaTypeFilter,
   set: (value) => emit("update:mediaTypeFilter", value),
 });
+
+const sortModel = computed({
+  get: () => props.selectedSort,
+  set: (value) =>
+    emit("update:selected-sort", {
+      sort: value != null ? String(value) : "",
+      descending: descendingModel.value,
+    }),
+});
+
+const descendingModel = computed({
+  get: () => props.selectedDescending,
+  set: (value) =>
+    emit("update:selected-sort", {
+      sort: sortModel.value,
+      descending: Boolean(value),
+    }),
+});
+
+function toggleSortDirection() {
+  descendingModel.value = !descendingModel.value;
+}
+
+function commitColumns() {
+  emit("update:columns", pendingColumns.value);
+  emit("columns-end");
+}
 
 const mediaTypeFilterLabel = computed(() => {
   switch (props.mediaTypeFilter) {
@@ -586,6 +659,46 @@ defineExpose({ blurSearchInput });
   align-items: center;
   gap: 4px;
   margin-left: auto;
+}
+
+.toolbar-sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+.toolbar-sort-select-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.toolbar-sort-select {
+  appearance: none;
+  background: rgba(var(--v-theme-surface), 0.2);
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 8px;
+  border: 1px solid rgba(var(--v-theme-border), 0.5);
+  min-height: 32px;
+  height: 32px;
+  font-size: 0.95em;
+  padding: 0 26px 0 10px;
+  box-shadow: none;
+}
+
+.toolbar-sort-select:focus {
+  outline: none;
+  border: 1.5px solid rgb(var(--v-theme-accent));
+}
+
+.toolbar-sort-chevron {
+  position: absolute;
+  right: 6px;
+  pointer-events: none;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  display: inline-flex;
+  align-items: center;
 }
 
 .toolbar-search-field {
