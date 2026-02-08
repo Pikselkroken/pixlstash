@@ -55,7 +55,7 @@ def create_router(server) -> APIRouter:
                 members = session.exec(
                     select(PictureSetMember).where(PictureSetMember.set_id == s.id)
                 ).all()
-                count = len(members)
+                count = len({m.picture_id for m in members if m is not None})
                 set_dict = safe_model_dict(s)
                 set_dict["picture_count"] = count
                 result.append(set_dict)
@@ -110,7 +110,16 @@ def create_router(server) -> APIRouter:
             members = session.exec(
                 select(PictureSetMember).where(PictureSetMember.set_id == id)
             ).all()
-            picture_ids = [m.picture_id for m in members]
+            seen = set()
+            picture_ids = []
+            for member in members:
+                if not member:
+                    continue
+                pic_id = member.picture_id
+                if pic_id in seen:
+                    continue
+                seen.add(pic_id)
+                picture_ids.append(pic_id)
             return picture_set, picture_ids
 
         picture_set, picture_ids = server.vault.db.run_immediate_read_task(
@@ -233,7 +242,7 @@ def create_router(server) -> APIRouter:
             members = session.exec(
                 select(PictureSetMember).where(PictureSetMember.set_id == id)
             ).all()
-            return [m.picture_id for m in members]
+            return list({m.picture_id for m in members if m is not None})
 
         picture_ids = server.vault.db.run_immediate_read_task(fetch_members, id)
         if picture_ids is None:

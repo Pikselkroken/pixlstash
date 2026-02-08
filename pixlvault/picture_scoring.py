@@ -635,7 +635,17 @@ def find_pictures_by_smart_score(
     if not combined_ids:
         return []
 
-    final_ids = combined_ids[offset : offset + limit]
+    seen = set()
+    unique_ids = []
+    for pid in combined_ids:
+        if pid is None:
+            continue
+        if pid in seen:
+            continue
+        seen.add(pid)
+        unique_ids.append(pid)
+
+    final_ids = unique_ids[offset : offset + limit]
 
     if len(final_ids) == 0:
         return []

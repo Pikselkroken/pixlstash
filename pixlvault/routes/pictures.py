@@ -1542,6 +1542,60 @@ def create_router(server) -> APIRouter:
         logger.debug("Returning dict: " + str(pic_dict))
         return pic_dict
 
+    @router.delete("/pictures/{id}/face/{index}")
+    async def delete_picture_face(id: str, index: int):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        def delete_face(session: Session):
+            face = session.exec(
+                select(Face).where(
+                    Face.picture_id == pic_id,
+                    Face.frame_index == 0,
+                    Face.face_index == index,
+                )
+            ).first()
+            if not face:
+                return False
+            session.delete(face)
+            session.commit()
+            return True
+
+        deleted = server.vault.db.run_task(delete_face, priority=DBPriority.IMMEDIATE)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Face not found")
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return {"status": "success", "message": "Face deleted."}
+
+    @router.delete("/pictures/{id}/hand/{index}")
+    async def delete_picture_hand(id: str, index: int):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        def delete_hand(session: Session):
+            hand = session.exec(
+                select(Hand).where(
+                    Hand.picture_id == pic_id,
+                    Hand.frame_index == 0,
+                    Hand.hand_index == index,
+                )
+            ).first()
+            if not hand:
+                return False
+            session.delete(hand)
+            session.commit()
+            return True
+
+        deleted = server.vault.db.run_task(delete_hand, priority=DBPriority.IMMEDIATE)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Hand not found")
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return {"status": "success", "message": "Hand deleted."}
+
     @router.get("/pictures/{id}/character_likeness")
     async def get_picture_character_likeness(
         id: str,

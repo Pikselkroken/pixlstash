@@ -115,6 +115,7 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
     try:
         from alembic import command
         from alembic.config import Config
+        from alembic.util.exc import CommandError
     except Exception as exc:
         logger.error("Alembic is required for database migrations: %s", exc)
         raise
@@ -141,8 +142,30 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
         ]
         has_version = "alembic_version" in table_names
         if has_version:
-            command.upgrade(config, "head")
-            return
+            try:
+                command.upgrade(config, "head")
+                return
+            except CommandError as exc:
+                msg = str(exc)
+                if "Can't locate revision identified by" in msg:
+                    logger.warning(
+                        "Missing Alembic revision detected (%s). Stamping head.",
+                        msg,
+                    )
+                    try:
+                        command.stamp(config, "head")
+                    except CommandError as stamp_exc:
+                        if "Can't locate revision identified by" in str(stamp_exc):
+                            logger.warning(
+                                "Stamp failed due to missing revision; clearing alembic_version and retrying."
+                            )
+                            with engine.begin() as conn:
+                                conn.exec_driver_sql("DELETE FROM alembic_version")
+                            command.stamp(config, "head")
+                        else:
+                            raise
+                    return
+                raise
         if table_names:
             logger.info(
                 "Existing database without Alembic version table detected; stamping head."
@@ -150,7 +173,29 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
             command.stamp(config, "head")
             return
 
-    command.upgrade(config, "head")
+    try:
+        command.upgrade(config, "head")
+    except CommandError as exc:
+        msg = str(exc)
+        if "Can't locate revision identified by" in msg:
+            logger.warning(
+                "Missing Alembic revision detected (%s). Stamping head.",
+                msg,
+            )
+            try:
+                command.stamp(config, "head")
+            except CommandError as stamp_exc:
+                if "Can't locate revision identified by" in str(stamp_exc):
+                    logger.warning(
+                        "Stamp failed due to missing revision; clearing alembic_version and retrying."
+                    )
+                    with engine.begin() as conn:
+                        conn.exec_driver_sql("DELETE FROM alembic_version")
+                    command.stamp(config, "head")
+                else:
+                    raise
+            return
+        raise
 
 
 class VaultDatabase:
