@@ -127,6 +127,10 @@ class Picture(SQLModel, table=True):
     created_at: Optional[datetime] = Field(
         default=None, sa_column=Column("created_at", type_=DateTime, nullable=True)
     )
+    imported_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column("imported_at", type_=DateTime, nullable=True, index=True),
+    )
     text_embedding: Optional[np.ndarray] = Field(
         sa_column=Column("text_embedding", LargeBinary, default=None, nullable=True)
     )
@@ -243,6 +247,7 @@ class Picture(SQLModel, table=True):
         select_fields: Optional[List[str]] = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
+        include_unimported: bool = False,
     ) -> List["Picture"]:
         """
         Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
@@ -343,6 +348,9 @@ class Picture(SQLModel, table=True):
         elif not include_deleted:
             stmt = stmt.where(cls.deleted.is_(False))
 
+        if not include_unimported:
+            stmt = stmt.where(cls.imported_at.is_not(None))
+
         # Apply select_fields logic (like in find)
         if select_fields:
             select_fields = list(set(select_fields) | {"id"})
@@ -407,6 +415,7 @@ class Picture(SQLModel, table=True):
         format: Optional[List[str]] = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
+        include_unimported: bool = False,
         **search,
     ) -> List["Picture"]:
         """
@@ -437,6 +446,9 @@ class Picture(SQLModel, table=True):
             query = query.where(cls.deleted.is_(True))
         elif not include_deleted:
             query = query.where(cls.deleted.is_(False))
+
+        if not include_unimported:
+            query = query.where(cls.imported_at.is_not(None))
 
         for attr, value in search.items():
             if hasattr(cls, attr):
@@ -558,6 +570,7 @@ class Picture(SQLModel, table=True):
             unassigned_condition,
             not_in_set_condition,
             Picture.deleted.is_(False),
+            Picture.imported_at.is_not(None),
         )
 
         if format:

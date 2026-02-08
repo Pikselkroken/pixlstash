@@ -42,6 +42,7 @@
             :key="addToSetControlKey"
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
+            :include-deleted-members="true"
             :class="{ hidden: chromeHidden }"
             @added="handleOverlayAddToSet"
           />
@@ -729,7 +730,12 @@ import {
 import { apiClient } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
-import { faceBoxColor, handBoxColor, toggleScore } from "../utils/utils.js";
+import {
+  faceBoxColor,
+  formatIsoDate,
+  handBoxColor,
+  toggleScore,
+} from "../utils/utils.js";
 import {
   dedupeTagList,
   getTagId as tagId,
@@ -1267,7 +1273,6 @@ function toggleFaceBbox() {
     "handBboxes:",
     handBboxes.value,
   );
-  image.value = image.value ? { ...image.value } : null;
 }
 
 const drawMode = ref(null);
@@ -1474,24 +1479,26 @@ function scheduleOverlayDimsUpdate() {
 }
 
 function updateOverlayDims() {
-  const innerEl = mediaInnerRef.value;
-  const innerRect = innerEl?.getBoundingClientRect();
   if (imgRef.value) {
     const rect = imgRef.value.getBoundingClientRect();
-    overlayDims.value.width = rect.width || imgRef.value.clientWidth;
-    overlayDims.value.height = rect.height || imgRef.value.clientHeight;
+    const width = imgRef.value.clientWidth || rect.width || 1;
+    const height = imgRef.value.clientHeight || rect.height || 1;
+    overlayDims.value.width = width;
+    overlayDims.value.height = height;
     overlayDims.value.naturalWidth = imgRef.value.naturalWidth;
     overlayDims.value.naturalHeight = imgRef.value.naturalHeight;
-    overlayDims.value.offsetX = innerRect ? rect.left - innerRect.left : 0;
-    overlayDims.value.offsetY = innerRect ? rect.top - innerRect.top : 0;
+    overlayDims.value.offsetX = imgRef.value.offsetLeft || 0;
+    overlayDims.value.offsetY = imgRef.value.offsetTop || 0;
   } else if (videoRef.value) {
     const rect = videoRef.value.getBoundingClientRect();
-    overlayDims.value.width = rect.width || videoRef.value.clientWidth;
-    overlayDims.value.height = rect.height || videoRef.value.clientHeight;
+    const width = videoRef.value.clientWidth || rect.width || 1;
+    const height = videoRef.value.clientHeight || rect.height || 1;
+    overlayDims.value.width = width;
+    overlayDims.value.height = height;
     overlayDims.value.naturalWidth = videoRef.value.videoWidth;
     overlayDims.value.naturalHeight = videoRef.value.videoHeight;
-    overlayDims.value.offsetX = innerRect ? rect.left - innerRect.left : 0;
-    overlayDims.value.offsetY = innerRect ? rect.top - innerRect.top : 0;
+    overlayDims.value.offsetX = videoRef.value.offsetLeft || 0;
+    overlayDims.value.offsetY = videoRef.value.offsetTop || 0;
     const duration = Number.isFinite(videoRef.value.duration)
       ? videoRef.value.duration
       : null;
@@ -1643,13 +1650,16 @@ async function fetchOverlayMetadata(imageId) {
   const requestId = (metadataRequestId += 1);
   try {
     const res = await apiClient.get(
-      `${backendUrl.value}/pictures/${imageId}/metadata`,
+      `${backendUrl.value}/pictures/${imageId}/metadata?smart_score=true`,
     );
     if (metadataRequestId !== requestId) return;
     if (!image.value || image.value.id !== imageId) return;
     const data = await res.data;
     if (!data || Array.isArray(data)) return;
     const merged = { ...data, ...image.value };
+    if (Object.prototype.hasOwnProperty.call(data, "smartScore")) {
+      merged.smartScore = data.smartScore;
+    }
     const dataTags = normalizeTagList(data.tags);
     if (data.tags !== undefined) {
       merged.tags = dedupeTagList(dataTags);
@@ -2458,6 +2468,27 @@ const pictureInfoEntries = computed(() => {
     null;
   if (sizeBytes) {
     entries.push({ label: "MB", value: formatMegabytes(sizeBytes) });
+  }
+
+  const smartScoreValue =
+    typeof image.value.smartScore === "number"
+      ? image.value.smartScore
+      : typeof image.value.smart_score === "number"
+        ? image.value.smart_score
+        : null;
+  if (smartScoreValue != null) {
+    entries.push({
+      label: "Smart score",
+      value: smartScoreValue.toFixed(2),
+    });
+  }
+
+  const createdAt = image.value.created_at || image.value.createdAt;
+  if (createdAt) {
+    entries.push({
+      label: "Created",
+      value: formatIsoDate(createdAt),
+    });
   }
 
   const format = getOverlayFormat(image.value);
