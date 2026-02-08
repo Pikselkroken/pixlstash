@@ -29,7 +29,11 @@ class Face(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
 
     picture_id: int = Field(
-        sa_column=Column(Integer, ForeignKey("picture.id", ondelete="CASCADE")),
+        sa_column=Column(
+            Integer,
+            ForeignKey("picture.id", ondelete="CASCADE"),
+            index=True,
+        ),
         default=None,
     )
     frame_index: int = Field(default=0)

@@ -1,7 +1,15 @@
 <template>
   <div v-if="visible" class="selection-bar-overlay">
     <div class="selection-bar-content">
-      <div class="selection-bar-left"></div>
+      <div class="selection-bar-left">
+        <button
+          class="restore-btn"
+          :disabled="restoreDisabled"
+          @click="$emit('restore-scrapheap')"
+        >
+          Restore All
+        </button>
+      </div>
       <div class="selection-bar-actions">
         <button
           class="delete-btn"
@@ -19,6 +27,7 @@
 const props = defineProps({
   visible: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
+  restoreDisabled: { type: Boolean, default: false },
 });
 </script>
 
@@ -53,6 +62,23 @@ const props = defineProps({
   gap: 16px;
   margin-left: auto;
   flex-wrap: nowrap;
+}
+.restore-btn {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  border: none;
+  padding: 6px 18px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.restore-btn:hover {
+  filter: brightness(1.3);
+}
+.restore-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 .delete-btn {
   background: rgb(var(--v-theme-error));
