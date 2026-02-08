@@ -464,8 +464,18 @@
                 :key="group.faceKey"
                 class="tag-section"
               >
-                <div class="tag-section-title" :style="{ color: group.color }">
-                  {{ group.label }}
+                <div
+                  class="tag-section-title tag-section-title-row"
+                  :style="{ color: group.color }"
+                >
+                  <span>{{ group.label }}</span>
+                  <button
+                    class="tag-section-action"
+                    title="Remove face"
+                    @click.stop="removeFaceDetection(group.face)"
+                  >
+                    <v-icon size="14">mdi-delete</v-icon>
+                  </button>
                 </div>
                 <div
                   class="tag-drop-zone"
@@ -510,8 +520,18 @@
                 :key="group.handKey"
                 class="tag-section"
               >
-                <div class="tag-section-title" :style="{ color: group.color }">
-                  {{ group.label }}
+                <div
+                  class="tag-section-title tag-section-title-row"
+                  :style="{ color: group.color }"
+                >
+                  <span>{{ group.label }}</span>
+                  <button
+                    class="tag-section-action"
+                    title="Remove hand"
+                    @click.stop="removeHandDetection(group.hand)"
+                  >
+                    <v-icon size="14">mdi-delete</v-icon>
+                  </button>
                 </div>
                 <div
                   class="tag-drop-zone"
@@ -1609,6 +1629,39 @@ async function removeTagFromHand(hand, tag, options = {}) {
   }
 }
 
+async function removeFaceDetection(face) {
+  if (!face || !image.value?.id || !backendUrl.value) return;
+  const index = face.face_index ?? face.faceIdx ?? null;
+  if (index == null) return;
+  try {
+    await apiClient.delete(
+      `${backendUrl.value}/pictures/${image.value.id}/face/${index}`,
+    );
+    await fetchFaceBboxes(image.value.id);
+    emit("refresh-image", {
+      imageId: image.value.id,
+      faces: faceBboxes.value,
+    });
+  } catch (e) {
+    alert(`Failed to delete face: ${e?.message || e}`);
+  }
+}
+
+async function removeHandDetection(hand) {
+  if (!hand || !image.value?.id || !backendUrl.value) return;
+  const index = hand.hand_index ?? hand.handIdx ?? null;
+  if (index == null) return;
+  try {
+    await apiClient.delete(
+      `${backendUrl.value}/pictures/${image.value.id}/hand/${index}`,
+    );
+    await fetchHandBboxes(image.value.id);
+    emit("refresh-image", image.value.id);
+  } catch (e) {
+    alert(`Failed to delete hand: ${e?.message || e}`);
+  }
+}
+
 async function fetchOverlayThumbnail(imageId) {
   if (!imageId || !backendUrl.value) {
     overlayThumbnail.value = null;
@@ -2644,7 +2697,9 @@ function removeTag(tag) {
     return;
   }
   const current = normalizeTagList(image.value.tags);
-  const next = current.filter((entry) => !tagMatches(entry, tag));
+  const label = tagLabel(tag);
+  if (!label) return;
+  const next = current.filter((entry) => entry.tag !== label);
   image.value.tags = next;
   emit("remove-tag", image.value.id, tag); // Notify parent component
 }
@@ -3513,6 +3568,29 @@ function downloadComfyWorkflow(workflow) {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(255, 255, 255, 0.6);
+}
+
+.tag-section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.tag-section-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.tag-section-action:hover {
+  opacity: 1;
 }
 
 .tag-drop-zone {

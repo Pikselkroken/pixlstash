@@ -3099,10 +3099,10 @@ function handleImageCardClick(img, idx, event) {
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
   let newSelection = [];
-  const visibleGrid = gridImagesToRender.value;
+  const allGrid = allGridImages.value;
   const anchorIndex =
     lastSelectedImageId != null
-      ? visibleGrid.findIndex(
+      ? allGrid.findIndex(
           (item) =>
             normalizePictureId(item?.id) ===
             normalizePictureId(lastSelectedImageId),
@@ -3120,11 +3120,10 @@ function handleImageCardClick(img, idx, event) {
     }
     lastSelectedImageId = img.id;
   } else if (isShift && anchorIndex >= 0) {
-    // Range select: select only the contiguous range between anchor and clicked item, using the visible grid
+    // Range select: select only the contiguous range between anchor and clicked item
     const start = Math.min(anchorIndex, idx);
     const end = Math.max(anchorIndex, idx);
-    // Use gridImagesToRender for visible grid selection
-    newSelection = visibleGrid
+    newSelection = allGrid
       .slice(start, end + 1)
       .map((i) => i.id)
       .filter(Boolean);
