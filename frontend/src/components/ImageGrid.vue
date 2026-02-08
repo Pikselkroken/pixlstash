@@ -93,7 +93,7 @@
       <div v-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
           <div class="empty-state-illustration" aria-hidden="true">
-            <img src="/src/Empty.png" alt="No images" style="width: 90%" />
+            <img :src="emptyStateImage" :alt="emptyStateAlt" style="width: 90%" />
           </div>
           <div class="empty-state-title">
             {{ emptyStateTitle }}
@@ -2958,15 +2958,29 @@ const canShowAllPicturesButton = computed(() => {
 });
 
 const emptyStateTitle = computed(() => {
+  if (isScrapheapView.value) {
+    return "No pictures in the scrap heap";
+  }
   return totalAllPicturesCount.value > 0
     ? "No pictures match the current filters"
     : "No pictures in the database.";
 });
 
 const emptyStateSubtitle = computed(() => {
+  if (isScrapheapView.value) {
+    return "Are all your pictures that good?";
+  }
   return totalAllPicturesCount.value > 0
     ? "Try clearing filters, adjusting your search, or switching sets."
     : "Add pictures by dragging them here.";
+});
+
+const emptyStateImage = computed(() => {
+  return isScrapheapView.value ? "/src/EmptyTrash.png" : "/src/Empty.png";
+});
+
+const emptyStateAlt = computed(() => {
+  return isScrapheapView.value ? "Empty scrap heap" : "No images";
 });
 
 watch([imagesLoading, filteredGridCount], ([loading, count]) => {

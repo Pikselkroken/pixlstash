@@ -41,7 +41,9 @@ def create_router(server) -> APIRouter:
             char_id = None
         elif id == "SCRAPHEAP":
             pics = server.vault.db.run_immediate_read_task(
-                Picture.find, select_fields=["id"], only_deleted=True
+                Picture.find,
+                select_fields=["id"],
+                only_deleted=True,
             )
             image_count = len(pics)
             logger.debug("SCRAPHEAP pics count: {}".format(image_count))
@@ -69,6 +71,7 @@ def create_router(server) -> APIRouter:
                     .where(
                         Face.character_id == character_id,
                         Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
                     )
                 ).all()
                 return set(rows)

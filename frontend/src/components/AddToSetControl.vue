@@ -65,6 +65,7 @@ const props = defineProps({
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
   label: { type: String, default: "Add to set" },
+  includeDeletedMembers: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["added"]);
@@ -176,8 +177,11 @@ async function fetchSetMembers(list) {
   const entries = await Promise.all(
     list.map(async (set) => {
       try {
+        const query = props.includeDeletedMembers
+          ? "?include_deleted=true"
+          : "";
         const res = await apiClient.get(
-          resolveUrl(`/picture_sets/${set.id}/members`),
+          resolveUrl(`/picture_sets/${set.id}/members${query}`),
         );
         const data = await res.data;
         const pictureIds = Array.isArray(data?.picture_ids)

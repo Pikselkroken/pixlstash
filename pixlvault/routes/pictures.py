@@ -74,7 +74,7 @@ def _create_picture_imports(server, uploaded_files, dest_folder):
         )
 
     existing_pictures = server.vault.db.run_immediate_read_task(
-        lambda session: Picture.find(session, pixel_shas=shas)
+        lambda session: Picture.find(session, pixel_shas=shas, include_unimported=True)
     )
 
     existing_map = {pic.pixel_sha: pic for pic in existing_pictures}
@@ -181,7 +181,10 @@ def _select_pictures_for_listing(
         formats: list[str] | None,
     ):
         if deleted_only:
-            query = select(Picture.id).where(Picture.deleted.is_(True))
+            query = select(Picture.id).where(
+                Picture.deleted.is_(True),
+                Picture.imported_at.is_not(None),
+            )
         elif character_id_value == "UNASSIGNED":
             unassigned_condition = ~exists(
                 select(Face.id).where(
@@ -198,6 +201,7 @@ def _select_pictures_for_listing(
                 unassigned_condition,
                 not_in_set_condition,
                 Picture.deleted.is_(False),
+                Picture.imported_at.is_not(None),
             )
         elif character_id_value is None or character_id_value == "":
             return None
@@ -208,6 +212,7 @@ def _select_pictures_for_listing(
                 .where(
                     Face.character_id == character_id_value,
                     Picture.deleted.is_(False),
+                    Picture.imported_at.is_not(None),
                 )
             )
         else:
@@ -337,6 +342,7 @@ def create_router(server) -> APIRouter:
                     .where(
                         PictureSetMember.set_id == set_id,
                         Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
                     )
                 ).all()
                 return [row for row in members]
@@ -364,6 +370,7 @@ def create_router(server) -> APIRouter:
                         unassigned_condition,
                         not_in_set_condition,
                         Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
                     )
                     return list(session.exec(query).all())
 
@@ -376,7 +383,10 @@ def create_router(server) -> APIRouter:
 
                 def fetch_deleted_ids(session):
                     rows = session.exec(
-                        select(Picture.id).where(Picture.deleted.is_(True))
+                        select(Picture.id).where(
+                            Picture.deleted.is_(True),
+                            Picture.imported_at.is_not(None),
+                        )
                     ).all()
                     return list(rows)
 
@@ -396,6 +406,7 @@ def create_router(server) -> APIRouter:
                         select(Picture.id).where(
                             Picture.id.in_(picture_ids),
                             Picture.deleted.is_(False),
+                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -409,7 +420,10 @@ def create_router(server) -> APIRouter:
         if format:
 
             def fetch_format_ids(session, format, deleted_only: bool):
-                query = select(Picture.id).where(Picture.format.in_(format))
+                query = select(Picture.id).where(
+                    Picture.format.in_(format),
+                    Picture.imported_at.is_not(None),
+                )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
                 else:
@@ -431,7 +445,10 @@ def create_router(server) -> APIRouter:
 
                 def fetch_deleted_ids(session):
                     rows = session.exec(
-                        select(Picture.id).where(Picture.deleted.is_(True))
+                        select(Picture.id).where(
+                            Picture.deleted.is_(True),
+                            Picture.imported_at.is_not(None),
+                        )
                     ).all()
                     return list(rows)
 
@@ -442,7 +459,10 @@ def create_router(server) -> APIRouter:
 
                 def fetch_active_ids(session):
                     rows = session.exec(
-                        select(Picture.id).where(Picture.deleted.is_(False))
+                        select(Picture.id).where(
+                            Picture.deleted.is_(False),
+                            Picture.imported_at.is_not(None),
+                        )
                     ).all()
                     return list(rows)
 
@@ -1932,6 +1952,7 @@ def create_router(server) -> APIRouter:
                 select(Picture).where(
                     Picture.id == pic_id,
                     Picture.deleted.is_(False),
+                    Picture.imported_at.is_not(None),
                 )
             ).first()
             if not pic:

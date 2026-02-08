@@ -107,6 +107,11 @@ const smartScoreTagInput = ref("");
 const smartScoreTagsLoading = ref(false);
 const smartScoreTagsError = ref("");
 const smartScoreTagsSuccess = ref("");
+const smartScoreScrapheapThreshold = ref(1.25);
+const smartScoreScrapheapLookback = ref(30);
+const smartScoreScrapheapLoading = ref(false);
+const smartScoreScrapheapError = ref("");
+const smartScoreScrapheapSuccess = ref("");
 const settingsTab = ref("preferences");
 
 async function fetchSettingsAuth() {
@@ -138,6 +143,8 @@ function resetSettingsForm() {
   smartScoreTagInput.value = "";
   smartScoreTagsError.value = "";
   smartScoreTagsSuccess.value = "";
+  smartScoreScrapheapError.value = "";
+  smartScoreScrapheapSuccess.value = "";
 }
 
 const smartScoreImportanceOptions = [
@@ -205,10 +212,49 @@ async function fetchSmartScoreSettings() {
     smartScorePenalizedTags.value = normalizeSmartScoreTags(
       res.data?.smart_score_penalized_tags,
     );
+    const threshold = Number(res.data?.auto_scrapheap_smart_score_threshold);
+    if (Number.isFinite(threshold)) {
+      smartScoreScrapheapThreshold.value = threshold;
+    }
+    const lookback = Number(res.data?.auto_scrapheap_lookback_minutes);
+    if (Number.isFinite(lookback)) {
+      smartScoreScrapheapLookback.value = Math.max(1, Math.round(lookback));
+    }
   } catch (e) {
     smartScoreTagsError.value = "Failed to load smart score settings.";
   } finally {
     smartScoreTagsLoading.value = false;
+  }
+}
+
+async function saveSmartScoreScrapheapSettings() {
+  smartScoreScrapheapLoading.value = true;
+  smartScoreScrapheapError.value = "";
+  smartScoreScrapheapSuccess.value = "";
+  try {
+    const threshold = Number(smartScoreScrapheapThreshold.value);
+    const lookback = Number(smartScoreScrapheapLookback.value);
+    if (!Number.isFinite(threshold) || threshold <= 0) {
+      throw new Error("Threshold must be a positive number.");
+    }
+    if (!Number.isFinite(lookback) || lookback < 1) {
+      throw new Error("Lookback must be at least 1 minute.");
+    }
+    await apiClient.patch("/users/me/config", {
+      auto_scrapheap_smart_score_threshold: threshold,
+      auto_scrapheap_lookback_minutes: Math.round(lookback),
+    });
+    smartScoreScrapheapSuccess.value = "Saved.";
+  } catch (e) {
+    smartScoreScrapheapError.value =
+      e?.response?.data?.detail || e?.message || "Failed to update settings.";
+  } finally {
+    smartScoreScrapheapLoading.value = false;
+    if (smartScoreScrapheapSuccess.value) {
+      setTimeout(() => {
+        smartScoreScrapheapSuccess.value = "";
+      }, 2000);
+    }
   }
 }
 
@@ -730,7 +776,7 @@ function setCategoryCount(id, value, shouldFlash) {
     knownCountIds.add(id);
     return;
   }
-  if (shouldFlash && prevValue !== value) {
+  if (shouldFlash && typeof value === "number" && value > prevValue) {
     markCountNew(id);
   }
 }
@@ -1372,6 +1418,59 @@ defineExpose({ refreshSidebar, openSettingsDialog });
                       No penalized tags yet.
                     </div>
                   </div>
+                </div>
+              </div>
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">
+                  Auto Scrapheap (Smart Score)
+                </div>
+                <div class="settings-section-desc">
+                  Newly tagged pictures from the last 30 minutes can be
+                  auto-moved to the scrapheap when their smart score is below
+                  the threshold.
+                </div>
+                <div class="settings-form">
+                  <v-text-field
+                    v-model="smartScoreScrapheapThreshold"
+                    label="Smart score threshold"
+                    density="comfortable"
+                    variant="filled"
+                    type="number"
+                    step="0.05"
+                    min="0.1"
+                    :disabled="smartScoreScrapheapLoading"
+                  />
+                  <v-text-field
+                    v-model="smartScoreScrapheapLookback"
+                    label="Lookback window (minutes)"
+                    density="comfortable"
+                    variant="filled"
+                    type="number"
+                    step="1"
+                    min="1"
+                    :disabled="smartScoreScrapheapLoading"
+                  />
+                  <v-btn
+                    variant="outlined"
+                    color="primary"
+                    class="settings-action-btn"
+                    :loading="smartScoreScrapheapLoading"
+                    :disabled="smartScoreScrapheapLoading"
+                    @click="saveSmartScoreScrapheapSettings"
+                  >
+                    Save Auto Scrapheap
+                  </v-btn>
+                  <div v-if="smartScoreScrapheapError" class="settings-error">
+                    {{ smartScoreScrapheapError }}
+                  </div>
+                  <div
+                    v-else-if="smartScoreScrapheapSuccess"
+                    class="settings-success"
+                  >
+                    {{ smartScoreScrapheapSuccess }}
+                  </div>
+                  <div v-else class="settings-success">{{ "&nbsp;" }}</div>
                 </div>
               </div>
             </v-window-item>

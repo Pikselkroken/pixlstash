@@ -30,6 +30,8 @@ class User(SQLModel, table=True):
     smart_score_penalized_tags: Optional[str] = Field(
         default_factory=lambda: json.dumps(DEFAULT_SMART_SCORE_PENALIZED_TAGS)
     )
+    auto_scrapheap_smart_score_threshold: Optional[float] = Field(default=1.25)
+    auto_scrapheap_lookback_minutes: Optional[int] = Field(default=30)
 
     tokens: List["UserToken"] = Relationship(
         back_populates="user",

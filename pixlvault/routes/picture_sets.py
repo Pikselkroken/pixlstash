@@ -58,6 +58,7 @@ def create_router(server) -> APIRouter:
                     .where(
                         PictureSetMember.set_id == s.id,
                         Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
                     )
                 ).all()
                 count = len({m for m in members if m is not None})
@@ -118,6 +119,7 @@ def create_router(server) -> APIRouter:
                 .where(
                     PictureSetMember.set_id == id,
                     Picture.deleted.is_(False),
+                    Picture.imported_at.is_not(None),
                 )
             ).all()
             seen = set()
@@ -243,22 +245,30 @@ def create_router(server) -> APIRouter:
         return {"status": "success", "deleted_id": id}
 
     @router.get("/picture_sets/{id}/members")
-    async def get_picture_set_pictures(id: int):
-        def fetch_members(session, id):
+    async def get_picture_set_pictures(
+        id: int,
+        include_deleted: bool = Query(False),
+    ):
+        def fetch_members(session, id, include_deleted):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return None
+            filters = [
+                PictureSetMember.set_id == id,
+                Picture.imported_at.is_not(None),
+            ]
+            if not include_deleted:
+                filters.append(Picture.deleted.is_(False))
             members = session.exec(
                 select(PictureSetMember.picture_id)
                 .join(Picture, Picture.id == PictureSetMember.picture_id)
-                .where(
-                    PictureSetMember.set_id == id,
-                    Picture.deleted.is_(False),
-                )
+                .where(*filters)
             ).all()
             return list({m for m in members if m is not None})
 
-        picture_ids = server.vault.db.run_immediate_read_task(fetch_members, id)
+        picture_ids = server.vault.db.run_immediate_read_task(
+            fetch_members, id, include_deleted
+        )
         if picture_ids is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
         return {"picture_ids": picture_ids}

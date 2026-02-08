@@ -78,6 +78,8 @@ def serialize_user_config(user) -> dict:
         "show_resolution",
         "show_problem_icon",
         "similarity_character",
+        "auto_scrapheap_smart_score_threshold",
+        "auto_scrapheap_lookback_minutes",
     }
 
     config = {
@@ -111,6 +113,8 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "show_problem_icon",
         "similarity_character",
         "smart_score_penalized_tags",
+        "auto_scrapheap_smart_score_threshold",
+        "auto_scrapheap_lookback_minutes",
     }
 
     updated = False
@@ -145,6 +149,24 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = json.dumps(normalized)
             if user.smart_score_penalized_tags != new_value:
                 user.smart_score_penalized_tags = new_value
+                updated = True
+            continue
+        if key == "auto_scrapheap_smart_score_threshold":
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = float(value)
+            if user.auto_scrapheap_smart_score_threshold != new_value:
+                user.auto_scrapheap_smart_score_threshold = new_value
+                updated = True
+            continue
+        if key == "auto_scrapheap_lookback_minutes":
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = int(value)
+            if user.auto_scrapheap_lookback_minutes != new_value:
+                user.auto_scrapheap_lookback_minutes = new_value
                 updated = True
             continue
         if key == "columns":
