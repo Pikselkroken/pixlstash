@@ -1542,6 +1542,120 @@ def create_router(server) -> APIRouter:
         logger.debug("Returning dict: " + str(pic_dict))
         return pic_dict
 
+    @router.post("/pictures/{id}/face")
+    async def create_picture_face(id: str, payload: dict = Body(...)):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        bbox = payload.get("bbox") if isinstance(payload, dict) else None
+        frame_index = payload.get("frame_index", 0) if isinstance(payload, dict) else 0
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            raise HTTPException(status_code=400, detail="bbox must be [x1, y1, x2, y2]")
+        try:
+            bbox_vals = [int(round(float(v))) for v in bbox]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="bbox values must be numbers")
+        try:
+            frame_index = int(frame_index)
+        except (TypeError, ValueError):
+            frame_index = 0
+
+        def create_face(session: Session):
+            pic = session.get(Picture, pic_id)
+            if not pic:
+                return None
+            sentinel = session.exec(
+                select(Face).where(
+                    Face.picture_id == pic_id,
+                    Face.frame_index == frame_index,
+                    Face.face_index == -1,
+                )
+            ).first()
+            if sentinel is not None:
+                session.delete(sentinel)
+            max_index = session.exec(
+                select(func.max(Face.face_index)).where(
+                    Face.picture_id == pic_id,
+                    Face.frame_index == frame_index,
+                )
+            ).one()
+            next_index = (max_index or 0) + 1 if max_index is not None else 0
+            face = Face(
+                picture_id=pic_id,
+                frame_index=frame_index,
+                face_index=next_index,
+                bbox=bbox_vals,
+            )
+            session.add(face)
+            session.commit()
+            session.refresh(face)
+            return face
+
+        face = server.vault.db.run_task(create_face, priority=DBPriority.IMMEDIATE)
+        if not face:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return safe_model_dict(face)
+
+    @router.post("/pictures/{id}/hand")
+    async def create_picture_hand(id: str, payload: dict = Body(...)):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        bbox = payload.get("bbox") if isinstance(payload, dict) else None
+        frame_index = payload.get("frame_index", 0) if isinstance(payload, dict) else 0
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            raise HTTPException(status_code=400, detail="bbox must be [x1, y1, x2, y2]")
+        try:
+            bbox_vals = [int(round(float(v))) for v in bbox]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="bbox values must be numbers")
+        try:
+            frame_index = int(frame_index)
+        except (TypeError, ValueError):
+            frame_index = 0
+
+        def create_hand(session: Session):
+            pic = session.get(Picture, pic_id)
+            if not pic:
+                return None
+            sentinel = session.exec(
+                select(Hand).where(
+                    Hand.picture_id == pic_id,
+                    Hand.frame_index == frame_index,
+                    Hand.hand_index == -1,
+                )
+            ).first()
+            if sentinel is not None:
+                session.delete(sentinel)
+            max_index = session.exec(
+                select(func.max(Hand.hand_index)).where(
+                    Hand.picture_id == pic_id,
+                    Hand.frame_index == frame_index,
+                )
+            ).one()
+            next_index = (max_index or 0) + 1 if max_index is not None else 0
+            hand = Hand(
+                picture_id=pic_id,
+                frame_index=frame_index,
+                hand_index=next_index,
+                bbox=bbox_vals,
+            )
+            session.add(hand)
+            session.commit()
+            session.refresh(hand)
+            return hand
+
+        hand = server.vault.db.run_task(create_hand, priority=DBPriority.IMMEDIATE)
+        if not hand:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return safe_model_dict(hand)
+
     @router.delete("/pictures/{id}/face/{index}")
     async def delete_picture_face(id: str, index: int):
         try:
@@ -1560,6 +1674,37 @@ def create_router(server) -> APIRouter:
             if not face:
                 return False
             session.delete(face)
+            remaining = session.exec(
+                select(Face)
+                .where(
+                    Face.picture_id == pic_id,
+                    Face.frame_index == 0,
+                    Face.face_index >= 0,
+                )
+                .order_by(Face.face_index, Face.id)
+            ).all()
+            for next_idx, entry in enumerate(remaining):
+                if entry.face_index != next_idx:
+                    entry.face_index = next_idx
+                    session.add(entry)
+            if not remaining:
+                sentinel = session.exec(
+                    select(Face).where(
+                        Face.picture_id == pic_id,
+                        Face.frame_index == 0,
+                        Face.face_index == -1,
+                    )
+                ).first()
+                if sentinel is None:
+                    session.add(
+                        Face(
+                            picture_id=pic_id,
+                            frame_index=0,
+                            face_index=-1,
+                            character_id=None,
+                            bbox=None,
+                        )
+                    )
             session.commit()
             return True
 
@@ -1587,6 +1732,36 @@ def create_router(server) -> APIRouter:
             if not hand:
                 return False
             session.delete(hand)
+            remaining = session.exec(
+                select(Hand)
+                .where(
+                    Hand.picture_id == pic_id,
+                    Hand.frame_index == 0,
+                    Hand.hand_index >= 0,
+                )
+                .order_by(Hand.hand_index, Hand.id)
+            ).all()
+            for next_idx, entry in enumerate(remaining):
+                if entry.hand_index != next_idx:
+                    entry.hand_index = next_idx
+                    session.add(entry)
+            if not remaining:
+                sentinel = session.exec(
+                    select(Hand).where(
+                        Hand.picture_id == pic_id,
+                        Hand.frame_index == 0,
+                        Hand.hand_index == -1,
+                    )
+                ).first()
+                if sentinel is None:
+                    session.add(
+                        Hand(
+                            picture_id=pic_id,
+                            frame_index=0,
+                            hand_index=-1,
+                            bbox=None,
+                        )
+                    )
             session.commit()
             return True
 
