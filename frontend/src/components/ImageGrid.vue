@@ -24,9 +24,9 @@
     :unassignedPicturesId="props.unassignedPicturesId"
     @import-finished="handleImagesUploaded"
   />
-  <div style="position: relative">
+  <div :style="wrapperStyle">
     <SelectionBar
-      v-if="selectedImageIds.length > 0 || selectedFaceIds.length > 0"
+      v-if="showSelectionBar"
       :selectedCount="selectedImageIds.length"
       :selectedFaceCount="selectedFaceIds.length"
       :selectedCharacter="String(props.selectedCharacter)"
@@ -36,13 +36,18 @@
       :unassignedPicturesId="String(props.unassignedPicturesId)"
       :backend-url="props.backendUrl"
       :selected-image-ids="selectedImageIds"
-      :visible="selectedImageIds.length > 0 || selectedFaceIds.length > 0"
+      :visible="showSelectionBar"
       @clear-selection="clearSelection"
       @refresh-tags="refreshTagsForSelection"
       @remove-from-group="removeFromGroup"
       @delete-selected="deleteSelected"
       @add-to-character="handleAddToCharacter"
-      style="position: absolute; top: 0; left: 0; width: 100%; z-index: 100"
+    />
+    <EmptyScrapHeap
+      v-if="showScrapheapBar"
+      :visible="showScrapheapBar"
+      :disabled="scrapheapEmptyDisabled"
+      @empty-scrapheap="confirmEmptyScrapheap"
     />
     <div
       v-if="exportProgress.visible"
@@ -79,7 +84,7 @@
       class="grid-scroll-wrapper"
       ref="scrollWrapper"
       @scroll="onGridScroll"
-      style="position: relative"
+      :style="scrollWrapperStyle"
     >
       <div v-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
@@ -388,6 +393,7 @@ import {
 } from "../utils/media.js";
 import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
+import EmptyScrapHeap from "./EmptyScrapHeap.vue";
 import SelectionBar from "./SelectionBar.vue";
 import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
@@ -1227,12 +1233,31 @@ const isScrapheapView = computed(() => {
   return selected === scrapheapId;
 });
 const scrapheapEmptying = ref(false);
+const showSelectionBar = computed(() => {
+  return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
+});
+const isSelectionEmpty = computed(() => {
+  return !showSelectionBar.value;
+});
 const showScrapheapBar = computed(() => {
-  return (
-    isScrapheapView.value &&
-    selectedImageIds.value.length === 0 &&
-    selectedFaceIds.value.length === 0
-  );
+  return isScrapheapView.value && isSelectionEmpty.value;
+});
+const SCRAPHEAP_BAR_HEIGHT_PX = 48;
+const wrapperStyle = computed(() => {
+  return {
+    position: "relative",
+  };
+});
+const scrollWrapperStyle = computed(() => {
+  const offset =
+    showSelectionBar.value || showScrapheapBar.value
+      ? SCRAPHEAP_BAR_HEIGHT_PX
+      : 0;
+  return {
+    position: "relative",
+    paddingTop: `${offset}px`,
+    height: "calc(100vh - 60px)",
+  };
 });
 const scrapheapEmptyDisabled = computed(() => {
   return (
