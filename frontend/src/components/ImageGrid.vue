@@ -1490,6 +1490,10 @@ async function refreshImageFromOverlay(payload) {
     typeof payload === "object" && payload !== null
       ? Boolean(payload.force)
       : false;
+  const mergeTags =
+    typeof payload === "object" && payload !== null
+      ? Boolean(payload.mergeTags)
+      : false;
   if (!imageId) return;
   const normalizedId = normalizePictureId(imageId);
   const overlayMatches =
@@ -1523,7 +1527,27 @@ async function refreshImageFromOverlay(payload) {
       if (!latestInfo || Array.isArray(latestInfo)) return;
       addImageToGrid(latestInfo);
     } else if (!isSmartScoreSortActive()) {
-      await refreshGridImage(imageId);
+      if (mergeTags) {
+        const latestInfo = await fetchImageInfo(imageId, { force });
+        if (latestInfo && !Array.isArray(latestInfo)) {
+          const current = allGridImages.value[existingIndex] || {};
+          const dataTags = normalizeTagList(latestInfo.tags);
+          const nextTags =
+            latestInfo.tags !== undefined
+              ? dedupeTagList([...normalizeTagList(current.tags), ...dataTags])
+              : current.tags;
+          allGridImages.value[existingIndex] = {
+            ...current,
+            ...latestInfo,
+            tags: nextTags,
+            idx: current.idx ?? existingIndex,
+          };
+          invalidateThumbnailIndex(existingIndex);
+          fetchThumbnailsBatch(existingIndex, existingIndex + 1);
+        }
+      } else {
+        await refreshGridImage(imageId);
+      }
     }
 
     if (
@@ -1538,7 +1562,12 @@ async function refreshImageFromOverlay(payload) {
         }
         const dataTags = normalizeTagList(latestInfo.tags);
         if (latestInfo.tags !== undefined) {
-          merged.tags = dedupeTagList(dataTags);
+          merged.tags = mergeTags
+            ? dedupeTagList([
+                ...normalizeTagList(overlayImage.value?.tags),
+                ...dataTags,
+              ])
+            : dedupeTagList(dataTags);
         }
         if (overlayImage.value?.metadata == null) {
           merged.metadata = latestInfo.metadata ?? {};

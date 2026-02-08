@@ -58,9 +58,41 @@
             title="Toggle face/hand bounding boxes"
             aria-label="Toggle face/hand bounding boxes"
             @click.stop="toggleFaceBbox"
-            :class="{ hidden: chromeHidden }"
+            :class="{
+              hidden: chromeHidden,
+              'overlay-icon-btn--active': showFaceBbox,
+            }"
           >
-            <v-icon size="20">mdi-account</v-icon>
+            <v-icon size="20">mdi-face-recognition</v-icon>
+          </button>
+          <button
+            class="overlay-icon-btn"
+            type="button"
+            title="Draw face bounding box"
+            aria-label="Draw face bounding box"
+            @click.stop="beginDrawMode('face')"
+            :class="{
+              hidden: chromeHidden,
+              'overlay-icon-btn--active': drawMode === 'face',
+            }"
+          >
+            <v-icon size="20">mdi-account-plus</v-icon>
+          </button>
+          <button
+            class="overlay-icon-btn"
+            type="button"
+            title="Draw hand bounding box"
+            aria-label="Draw hand bounding box"
+            @click.stop="beginDrawMode('hand')"
+            :class="{
+              hidden: chromeHidden,
+              'overlay-icon-btn--active': drawMode === 'hand',
+            }"
+          >
+            <span class="overlay-hand-plus-icon">
+              <v-icon size="20">mdi-hand-back-left-outline</v-icon>
+              <v-icon size="13">mdi-plus</v-icon>
+            </span>
           </button>
 
           <button
@@ -135,7 +167,7 @@
                   @load="updateOverlayDims"
                 />
               </template>
-              <template v-if="showFaceBbox && overlayReady">
+              <template v-if="(showFaceBbox || dragState.tag) && overlayReady">
                 <div
                   v-if="faceBboxes.length === 0 && handBboxes.length === 0"
                   class="face-bbox-empty"
@@ -180,6 +212,34 @@
                 </div>
               </template>
             </div>
+          </div>
+
+          <div
+            v-if="drawMode"
+            class="overlay-draw-layer"
+            @pointerdown.prevent="onDrawStart"
+            @pointermove.prevent="onDrawMove"
+            @pointerup.prevent="onDrawEnd"
+            @pointercancel.prevent="onDrawCancel"
+            @pointerleave.prevent="onDrawCancel"
+          >
+            <div class="overlay-draw-hint">
+              <span>
+                Draw a bounding box to create the {{ drawModeLabel }}
+              </span>
+              <button
+                class="overlay-draw-cancel"
+                type="button"
+                @click.stop="clearDrawMode"
+              >
+                Cancel
+              </button>
+            </div>
+            <div
+              v-if="drawRectStyle"
+              class="overlay-draw-rect"
+              :style="drawRectStyle"
+            ></div>
           </div>
 
           <button
@@ -951,7 +1011,11 @@ function handleKeydown(e) {
 
   // Regular keydown behavior
   if (e.key === "Escape") {
-    emit("close");
+    if (drawMode.value) {
+      clearDrawMode();
+    } else {
+      emit("close");
+    }
   } else if (["ArrowLeft", "Left"].includes(e.key)) {
     showPrevImage();
   } else if (["ArrowRight", "Right"].includes(e.key)) {
@@ -1084,6 +1148,7 @@ function resetPan() {
 }
 
 function onPanStart(event) {
+  if (drawMode.value) return;
   if (!isZoomed.value) return;
   event.preventDefault();
   isPanning.value = true;
@@ -1205,6 +1270,47 @@ function toggleFaceBbox() {
   image.value = image.value ? { ...image.value } : null;
 }
 
+const drawMode = ref(null);
+const drawState = ref({
+  active: false,
+  startX: 0,
+  startY: 0,
+  currentX: 0,
+  currentY: 0,
+});
+const drawSubmitInFlight = ref(false);
+
+const drawModeLabel = computed(() => {
+  if (drawMode.value === "face") return "face";
+  if (drawMode.value === "hand") return "hand";
+  return "";
+});
+
+function beginDrawMode(mode) {
+  if (!mode) return;
+  showFaceBbox.value = true;
+  drawMode.value = mode;
+  drawState.value = {
+    active: false,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+  };
+}
+
+function clearDrawMode() {
+  drawMode.value = null;
+  drawSubmitInFlight.value = false;
+  drawState.value = {
+    active: false,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+  };
+}
+
 const imgRef = ref(null);
 const videoRef = ref(null);
 const mediaInnerRef = ref(null);
@@ -1230,6 +1336,132 @@ const overlayReady = computed(() => {
     dims.naturalHeight > 1
   );
 });
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getDrawPoint(event) {
+  if (!overlayReady.value) return null;
+  const innerEl = mediaInnerRef.value;
+  if (!innerEl) return null;
+  const rect = innerEl.getBoundingClientRect();
+  const dims = overlayDims.value;
+  const localX = event.clientX - rect.left - (dims.offsetX || 0);
+  const localY = event.clientY - rect.top - (dims.offsetY || 0);
+  const clampedX = clamp(localX, 0, dims.width);
+  const clampedY = clamp(localY, 0, dims.height);
+  const imgX = (clampedX * dims.naturalWidth) / dims.width;
+  const imgY = (clampedY * dims.naturalHeight) / dims.height;
+  return {
+    x: clamp(imgX, 0, dims.naturalWidth),
+    y: clamp(imgY, 0, dims.naturalHeight),
+  };
+}
+
+const drawRectStyle = computed(() => {
+  if (!drawMode.value) return null;
+  const state = drawState.value;
+  if (!state.active) return null;
+  const dims = overlayDims.value;
+  const x1 = Math.min(state.startX, state.currentX);
+  const y1 = Math.min(state.startY, state.currentY);
+  const x2 = Math.max(state.startX, state.currentX);
+  const y2 = Math.max(state.startY, state.currentY);
+  const left = (dims.offsetX || 0) + (x1 * dims.width) / dims.naturalWidth;
+  const top = (dims.offsetY || 0) + (y1 * dims.height) / dims.naturalHeight;
+  const width = ((x2 - x1) * dims.width) / dims.naturalWidth;
+  const height = ((y2 - y1) * dims.height) / dims.naturalHeight;
+  return {
+    left: `${left || 0}px`,
+    top: `${top || 0}px`,
+    width: `${width || 0}px`,
+    height: `${height || 0}px`,
+  };
+});
+
+function onDrawStart(event) {
+  if (!drawMode.value) return;
+  const point = getDrawPoint(event);
+  if (!point) return;
+  drawState.value = {
+    active: true,
+    startX: point.x,
+    startY: point.y,
+    currentX: point.x,
+    currentY: point.y,
+  };
+  if (event.currentTarget?.setPointerCapture) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+}
+
+function onDrawMove(event) {
+  if (!drawMode.value || !drawState.value.active) return;
+  const point = getDrawPoint(event);
+  if (!point) return;
+  drawState.value = {
+    ...drawState.value,
+    currentX: point.x,
+    currentY: point.y,
+  };
+}
+
+async function onDrawEnd(event) {
+  if (!drawMode.value || !drawState.value.active) return;
+  if (drawSubmitInFlight.value) return;
+  drawSubmitInFlight.value = true;
+  const state = drawState.value;
+  const x1 = Math.min(state.startX, state.currentX);
+  const y1 = Math.min(state.startY, state.currentY);
+  const x2 = Math.max(state.startX, state.currentX);
+  const y2 = Math.max(state.startY, state.currentY);
+  drawState.value = { ...drawState.value, active: false };
+  if (event.currentTarget?.releasePointerCapture) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+  if (Math.abs(x2 - x1) < 5 || Math.abs(y2 - y1) < 5) {
+    clearDrawMode();
+    return;
+  }
+  if (!image.value?.id || !backendUrl.value) {
+    clearDrawMode();
+    return;
+  }
+  const payload = { bbox: [x1, y1, x2, y2], frame_index: 0 };
+  try {
+    if (drawMode.value === "face") {
+      await apiClient.post(
+        `${backendUrl.value}/pictures/${image.value.id}/face`,
+        payload,
+      );
+      await fetchFaceBboxes(image.value.id);
+      emit("refresh-image", {
+        imageId: image.value.id,
+        faces: faceBboxes.value,
+        mergeTags: true,
+      });
+    } else if (drawMode.value === "hand") {
+      await apiClient.post(
+        `${backendUrl.value}/pictures/${image.value.id}/hand`,
+        payload,
+      );
+      await fetchHandBboxes(image.value.id);
+      emit("refresh-image", { imageId: image.value.id, mergeTags: true });
+    }
+  } catch (e) {
+    alert(`Failed to create ${drawModeLabel.value} box: ${e?.message || e}`);
+  } finally {
+    clearDrawMode();
+  }
+}
+
+function onDrawCancel(event) {
+  if (event?.currentTarget?.releasePointerCapture) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+  clearDrawMode();
+}
 let overlayResizeObserver = null;
 let mediaResizeObserver = null;
 
@@ -1387,6 +1619,24 @@ const FACE_THUMB_BASE = 34;
 const FACE_THUMB_MIN = 28;
 const FACE_THUMB_MAX = 60;
 let metadataRequestId = 0;
+let faceBboxesRequestId = 0;
+let handBboxesRequestId = 0;
+
+function dedupeDetections(items) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const id = item?.id;
+    const bbox = Array.isArray(item?.bbox) ? item.bbox.join(",") : "";
+    const frame = item?.frame_index ?? "";
+    const key = id != null ? `id:${id}` : `bbox:${frame}:${bbox}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
 
 async function fetchOverlayMetadata(imageId) {
   if (!imageId || !backendUrl.value) return;
@@ -1427,14 +1677,18 @@ async function fetchFaceBboxes(imageId) {
     faceBboxes.value = [];
     return;
   }
+  const requestId = (faceBboxesRequestId += 1);
+  const requestedImageId = imageId;
   try {
     const res = await apiClient.get(
       `${backendUrl.value}/pictures/${imageId}/faces`,
     );
     const faces = await res.data;
+    if (faceBboxesRequestId !== requestId) return;
+    if (!image.value || image.value.id !== requestedImageId) return;
     console.log("Faces: ", faces);
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
-    const firstFrameFaces = faceArray.filter(
+    const firstFrameFaces = dedupeDetections(faceArray).filter(
       (f) =>
         f.frame_index === 0 && Array.isArray(f.bbox) && f.bbox.length === 4,
     );
@@ -1464,6 +1718,8 @@ async function fetchFaceBboxes(imageId) {
         }
       }),
     );
+    if (faceBboxesRequestId !== requestId) return;
+    if (!image.value || image.value.id !== requestedImageId) return;
     faceBboxes.value = firstFrameFaces;
     await fetchFaceTagsForFaces(firstFrameFaces);
   } catch (e) {
@@ -1477,16 +1733,22 @@ async function fetchHandBboxes(imageId) {
     handBboxes.value = [];
     return;
   }
+  const requestId = (handBboxesRequestId += 1);
+  const requestedImageId = imageId;
   try {
     const res = await apiClient.get(
       `${backendUrl.value}/pictures/${imageId}/hands`,
     );
     const hands = await res.data;
+    if (handBboxesRequestId !== requestId) return;
+    if (!image.value || image.value.id !== requestedImageId) return;
     const handArray = Array.isArray(hands) ? hands : hands.hands;
-    const firstFrameHands = (handArray || []).filter(
+    const firstFrameHands = dedupeDetections(handArray || []).filter(
       (h) =>
         h.frame_index === 0 && Array.isArray(h.bbox) && h.bbox.length === 4,
     );
+    if (handBboxesRequestId !== requestId) return;
+    if (!image.value || image.value.id !== requestedImageId) return;
     handBboxes.value = firstFrameHands;
     await fetchHandTagsForHands(firstFrameHands);
   } catch (e) {
@@ -2857,6 +3119,11 @@ function downloadComfyWorkflow(workflow) {
   background: rgba(var(--v-theme-primary), 0.6);
 }
 
+.overlay-icon-btn--active {
+  background: rgba(var(--v-theme-primary), 0.25);
+  color: rgb(var(--v-theme-primary));
+}
+
 .zoom-btn {
   width: auto;
   min-width: 84px;
@@ -2927,6 +3194,7 @@ function downloadComfyWorkflow(workflow) {
   height: 100%;
   max-width: 100%;
   max-height: 100%;
+  z-index: 1;
 }
 
 .overlay-media.panning {
@@ -2944,6 +3212,8 @@ function downloadComfyWorkflow(workflow) {
   border-radius: 12px;
   background: #111;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  position: relative;
+  z-index: 1;
 }
 
 .overlay-nav {
@@ -3542,6 +3812,76 @@ function downloadComfyWorkflow(workflow) {
   position: absolute;
   pointer-events: none;
   z-index: 1000 !important;
+}
+
+.overlay-draw-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  z-index: 5000;
+  cursor: crosshair;
+}
+
+.overlay-draw-rect {
+  position: absolute;
+  border: 2px dashed rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.12);
+  box-sizing: border-box;
+  z-index: 2001;
+}
+
+.overlay-draw-hint {
+  position: absolute;
+  left: 50%;
+  top: 72px;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 2002;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.overlay-draw-cancel {
+  pointer-events: auto;
+  border: 0;
+  background: rgb(var(--v-theme-error));
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
+}
+
+.overlay-draw-cancel:hover {
+  filter: brightness(0.95);
+}
+
+.overlay-hand-plus-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.overlay-hand-plus-icon :nth-child(2) {
+  position: absolute;
+  left: -10px;
+  top: 3px;
+  text-shadow:
+    0 0 8px rgba(0, 0, 0, 0.75),
+    0 0 3px rgba(0, 0, 0, 0.75);
+  font-weight: 700;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.6));
 }
 
 .bbox-drop-target {
