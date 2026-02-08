@@ -93,7 +93,11 @@
       <div v-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
           <div class="empty-state-illustration" aria-hidden="true">
-            <img :src="emptyStateImage" :alt="emptyStateAlt" style="width: 90%" />
+            <img
+              :src="emptyStateImage"
+              :alt="emptyStateAlt"
+              style="width: 90%"
+            />
           </div>
           <div class="empty-state-title">
             {{ emptyStateTitle }}
@@ -1403,6 +1407,8 @@ watch(
       skipNextWsRefresh.value = false;
       return;
     }
+    gridReady.value = false;
+    emptyStateDelayPassed.value = false;
     if (preserveScrollOnNextFetch.value && scrollWrapper.value) {
       pendingScrollTop.value = scrollWrapper.value.scrollTop;
     } else {
@@ -2361,6 +2367,8 @@ function onGlobalKeyPress(key, event) {
 const imagesLoading = ref(false);
 const imagesError = ref(null);
 const totalAllPicturesCount = ref(0);
+const gridReady = ref(false);
+const gridLoadEpoch = ref(0);
 
 function getStackCardStyle(img) {
   if (!img) return {};
@@ -2470,6 +2478,8 @@ function buildStackQueryParams() {
 // Fetch total image count for current filters
 async function fetchAllGridImages() {
   console.log("[ImageGrid.vue] fetchAllGridImages called.");
+  const loadId = (gridLoadEpoch.value += 1);
+  gridReady.value = false;
   imagesLoading.value = true;
   imagesError.value = null;
   try {
@@ -2712,7 +2722,10 @@ async function fetchAllGridImages() {
     imagesError.value = e.message;
     allGridImages.value = [];
   } finally {
-    imagesLoading.value = false;
+    if (loadId === gridLoadEpoch.value) {
+      imagesLoading.value = false;
+      gridReady.value = true;
+    }
   }
   updateVisibleThumbnails();
   if (pendingScrollTop.value !== null && scrollWrapper.value) {
@@ -2755,6 +2768,8 @@ watch(
     console.log(
       "[ImageGrid.vue] Filters changed. Resetting state and fetching total image count.",
     );
+    gridReady.value = false;
+    emptyStateDelayPassed.value = false;
     resetThumbnailState();
     allGridImages.value = [];
     selectedImageIds.value = [];
@@ -2769,6 +2784,8 @@ watch([() => props.mediaTypeFilter], () => {
   console.log(
     "[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count.",
   );
+  gridReady.value = false;
+  emptyStateDelayPassed.value = false;
   // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
   resetThumbnailState();
   selectedImageIds.value = [];
@@ -2947,6 +2964,7 @@ let emptyStateDelayTimer = null;
 
 const showEmptyState = computed(() => {
   return (
+    gridReady.value &&
     !imagesLoading.value &&
     filteredGridCount.value === 0 &&
     emptyStateDelayPassed.value
@@ -3740,6 +3758,8 @@ function clearSearchQuery() {
 }
 
 function handleEmptyStateReset() {
+  gridReady.value = false;
+  emptyStateDelayPassed.value = false;
   emit("reset-to-all");
 }
 </script>
