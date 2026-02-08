@@ -19,6 +19,7 @@ import Toolbar from "./components/Toolbar.vue";
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
+const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 
 // --- Template & Component Refs ---
 const gridContainer = ref(null);
@@ -102,7 +103,8 @@ function shouldRefreshForPictureChange() {
   if (
     selectedChar &&
     selectedChar !== ALL_PICTURES_ID &&
-    selectedChar !== UNASSIGNED_PICTURES_ID
+    selectedChar !== UNASSIGNED_PICTURES_ID &&
+    selectedChar !== SCRAPHEAP_PICTURES_ID
   ) {
     return false;
   }
@@ -762,6 +764,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :selectedReferenceCharacter="selectedReferenceCharacter"
             :allPicturesId="ALL_PICTURES_ID"
             :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+            :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
             :selectedSet="selectedSet"
             :searchQuery="searchQuery"
             :selectedSort="selectedSort"
@@ -861,6 +864,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :showProblemIcon="showProblemIcon"
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+              :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
               :columns="columns"
               @clear-search="handleClearSearch"
               @update:selected-sort="handleUpdateSelectedSort"

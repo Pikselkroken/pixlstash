@@ -39,6 +39,13 @@ def create_router(server) -> APIRouter:
             image_count = len(pics)
             logger.debug("ALL pics count: {}".format(image_count))
             char_id = None
+        elif id == "SCRAPHEAP":
+            pics = server.vault.db.run_immediate_read_task(
+                Picture.find, select_fields=["id"], only_deleted=True
+            )
+            image_count = len(pics)
+            logger.debug("SCRAPHEAP pics count: {}".format(image_count))
+            char_id = None
         elif id == "UNASSIGNED":
 
             def find_unassigned(session: Session):
@@ -56,10 +63,15 @@ def create_router(server) -> APIRouter:
         else:
 
             def find_assigned(session: Session, character_id: int):
-                faces = session.exec(
-                    select(Face).filter(Face.character_id == character_id)
+                rows = session.exec(
+                    select(Face.picture_id)
+                    .join(Picture, Face.picture_id == Picture.id)
+                    .where(
+                        Face.character_id == character_id,
+                        Picture.deleted.is_(False),
+                    )
                 ).all()
-                return set(face.picture_id for face in faces)
+                return set(rows)
 
             faces = server.vault.db.run_immediate_read_task(
                 find_assigned, character_id=int(id)

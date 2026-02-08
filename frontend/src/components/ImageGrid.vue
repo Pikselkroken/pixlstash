@@ -437,6 +437,7 @@ const props = defineProps({
   showProblemIcon: Boolean,
   allPicturesId: String,
   unassignedPicturesId: String,
+  scrapheapPicturesId: String,
   gridVersion: { type: Number, default: 0 },
   wsUpdateKey: { type: Number, default: 0 },
   wsTagUpdate: {
@@ -1189,9 +1190,12 @@ function handleOverlayAddedToSet(payload) {
 
 function deleteSelected() {
   if (!selectedImageIds.value.length) return;
+  const isScrapheapSelection = isScrapheapView.value;
   if (
     !confirm(
-      `Delete ${selectedImageIds.value.length} selected image(s)? This cannot be undone.`,
+      isScrapheapSelection
+        ? `Delete ${selectedImageIds.value.length} selected image(s)?`
+        : `Move ${selectedImageIds.value.length} selected image(s) to the scrapheap?`,
     )
   )
     return;
@@ -1203,15 +1207,64 @@ function deleteSelected() {
       }),
     ),
   ).then(() => {
-    // Remove deleted images from grid and clear selection
-    allGridImages.value = allGridImages.value.filter(
-      (img) => !selectedImageIds.value.includes(img.id),
-    );
+    if (!isScrapheapSelection) {
+      allGridImages.value = allGridImages.value.filter(
+        (img) => !selectedImageIds.value.includes(img.id),
+      );
+    }
     selectedImageIds.value = [];
     lastSelectedImageId = null;
     updateVisibleThumbnails();
     emit("refresh-sidebar");
   });
+}
+
+const isScrapheapView = computed(() => {
+  const scrapheapId = String(
+    props.scrapheapPicturesId || "SCRAPHEAP",
+  ).toUpperCase();
+  const selected = String(props.selectedCharacter || "").toUpperCase();
+  return selected === scrapheapId;
+});
+const scrapheapEmptying = ref(false);
+const showScrapheapBar = computed(() => {
+  return (
+    isScrapheapView.value &&
+    selectedImageIds.value.length === 0 &&
+    selectedFaceIds.value.length === 0
+  );
+});
+const scrapheapEmptyDisabled = computed(() => {
+  return (
+    scrapheapEmptying.value ||
+    imagesLoading.value ||
+    filteredGridCount.value === 0
+  );
+});
+
+async function confirmEmptyScrapheap() {
+  if (scrapheapEmptyDisabled.value) return;
+  const confirmed = confirm(
+    "Empty scrapheap? This will permanently delete all pictures inside.",
+  );
+  if (!confirmed) return;
+  scrapheapEmptying.value = true;
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/scrapheap/empty`);
+    allGridImages.value = [];
+    selectedImageIds.value = [];
+    selectedFaceIds.value = [];
+    lastSelectedImageId = null;
+    updateVisibleThumbnails();
+    emit("refresh-sidebar");
+    fetchAllGridImages().then(() => {
+      updateVisibleThumbnails();
+    });
+  } catch (e) {
+    alert("Failed to empty scrapheap.");
+  } finally {
+    scrapheapEmptying.value = false;
+  }
 }
 
 const imageImporterRef = ref(null);

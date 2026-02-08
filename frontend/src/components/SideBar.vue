@@ -20,6 +20,7 @@ const props = defineProps({
   selectedReferenceCharacter: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
+  scrapheapPicturesId: { type: String, required: true },
   selectedSet: { type: [Number, null], default: null },
   searchQuery: { type: String, default: "" },
   selectedSort: { type: String, default: "" },
@@ -62,6 +63,7 @@ const characters = ref([]);
 const categoryCounts = ref({
   [props.allPicturesId]: 0,
   [props.unassignedPicturesId]: 0,
+  [props.scrapheapPicturesId]: 0,
 });
 
 const flashCountsNextFetch = ref(false);
@@ -433,7 +435,8 @@ const selectedCharacterObj = computed(() => {
   if (
     props.selectedCharacter &&
     props.selectedCharacter !== props.allPicturesId &&
-    props.selectedCharacter !== props.unassignedPicturesId
+    props.selectedCharacter !== props.unassignedPicturesId &&
+    props.selectedCharacter !== props.scrapheapPicturesId
   ) {
     const char =
       characters.value.find((c) => c.id === props.selectedCharacter) || null;
@@ -755,6 +758,15 @@ async function fetchSidebarData() {
     setCategoryCount(props.unassignedPicturesId, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching unassigned images summary:", e);
+  }
+  try {
+    const resScrapheap = await apiClient.get(
+      `${props.backendUrl}/characters/${props.scrapheapPicturesId}/summary`,
+    );
+    const data = await resScrapheap.data;
+    setCategoryCount(props.scrapheapPicturesId, data.image_count, shouldFlash);
+  } catch (e) {
+    console.warn("Error fetching scrapheap images summary:", e);
   }
   await Promise.all(
     characters.value.map(async (char) => {
@@ -1701,6 +1713,27 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           {{ categoryCounts[props.unassignedPicturesId] ?? "" }}
         </span>
       </div>
+      <div
+        :class="[
+          'sidebar-list-item',
+          { active: selectedCharacter === props.scrapheapPicturesId },
+        ]"
+        @click="selectCharacter(props.scrapheapPicturesId)"
+      >
+        <span class="sidebar-list-icon">
+          <v-icon size="44">mdi-trash-can-outline</v-icon>
+        </span>
+        <span class="sidebar-list-label">Scrapheap</span>
+        <span class="sidebar-list-count">
+          <span
+            v-if="isCountNew(props.scrapheapPicturesId)"
+            class="sidebar-new-tag"
+          >
+            new
+          </span>
+          {{ categoryCounts[props.scrapheapPicturesId] ?? "" }}
+        </span>
+      </div>
 
       <div class="sidebar-section-header">
         People
@@ -1718,7 +1751,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             v-if="
               props.selectedCharacter &&
               props.selectedCharacter !== props.allPicturesId &&
-              props.selectedCharacter !== props.unassignedPicturesId
+              props.selectedCharacter !== props.unassignedPicturesId &&
+              props.selectedCharacter !== props.scrapheapPicturesId
             "
             class="delete-character-inline"
             color="white"

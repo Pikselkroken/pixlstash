@@ -53,9 +53,14 @@ def create_router(server) -> APIRouter:
             result = []
             for s in sets:
                 members = session.exec(
-                    select(PictureSetMember).where(PictureSetMember.set_id == s.id)
+                    select(PictureSetMember.picture_id)
+                    .join(Picture, Picture.id == PictureSetMember.picture_id)
+                    .where(
+                        PictureSetMember.set_id == s.id,
+                        Picture.deleted.is_(False),
+                    )
                 ).all()
-                count = len({m.picture_id for m in members if m is not None})
+                count = len({m for m in members if m is not None})
                 set_dict = safe_model_dict(s)
                 set_dict["picture_count"] = count
                 result.append(set_dict)
@@ -108,14 +113,18 @@ def create_router(server) -> APIRouter:
             if not picture_set:
                 return None, None
             members = session.exec(
-                select(PictureSetMember).where(PictureSetMember.set_id == id)
+                select(PictureSetMember.picture_id)
+                .join(Picture, Picture.id == PictureSetMember.picture_id)
+                .where(
+                    PictureSetMember.set_id == id,
+                    Picture.deleted.is_(False),
+                )
             ).all()
             seen = set()
             picture_ids = []
-            for member in members:
-                if not member:
+            for pic_id in members:
+                if pic_id is None:
                     continue
-                pic_id = member.picture_id
                 if pic_id in seen:
                     continue
                 seen.add(pic_id)
@@ -240,9 +249,14 @@ def create_router(server) -> APIRouter:
             if not picture_set:
                 return None
             members = session.exec(
-                select(PictureSetMember).where(PictureSetMember.set_id == id)
+                select(PictureSetMember.picture_id)
+                .join(Picture, Picture.id == PictureSetMember.picture_id)
+                .where(
+                    PictureSetMember.set_id == id,
+                    Picture.deleted.is_(False),
+                )
             ).all()
-            return list({m.picture_id for m in members if m is not None})
+            return list({m for m in members if m is not None})
 
         picture_ids = server.vault.db.run_immediate_read_task(fetch_members, id)
         if picture_ids is None:
@@ -256,7 +270,7 @@ def create_router(server) -> APIRouter:
         def add_member(session, id, picture_id, reference_character_id=None):
             picture_set = session.get(PictureSet, id)
             picture = session.get(Picture, picture_id)
-            if not picture_set or not picture:
+            if not picture_set or not picture or picture.deleted:
                 return False
             exists = session.exec(
                 select(PictureSetMember).where(

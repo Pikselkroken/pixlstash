@@ -139,6 +139,7 @@ class Picture(SQLModel, table=True):
     score: Optional[int] = None
     aesthetic_score: Optional[float] = None
     pixel_sha: Optional[str] = Field(default=None, index=True)
+    deleted: bool = Field(default=False, index=True)
 
     # Relationships
     quality: Optional["Quality"] = Relationship(back_populates="picture")
@@ -240,6 +241,8 @@ class Picture(SQLModel, table=True):
         limit: int = sys.maxsize,
         format: Optional[List[str]] = None,
         select_fields: Optional[List[str]] = None,
+        include_deleted: bool = False,
+        only_deleted: bool = False,
     ) -> List["Picture"]:
         """
         Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
@@ -335,6 +338,11 @@ class Picture(SQLModel, table=True):
             .limit(limit)
         )
 
+        if only_deleted:
+            stmt = stmt.where(cls.deleted.is_(True))
+        elif not include_deleted:
+            stmt = stmt.where(cls.deleted.is_(False))
+
         # Apply select_fields logic (like in find)
         if select_fields:
             select_fields = list(set(select_fields) | {"id"})
@@ -397,6 +405,8 @@ class Picture(SQLModel, table=True):
         limit: int = sys.maxsize,
         select_fields: Optional[List[str]] = None,
         format: Optional[List[str]] = None,
+        include_deleted: bool = False,
+        only_deleted: bool = False,
         **search,
     ) -> List["Picture"]:
         """
@@ -422,6 +432,11 @@ class Picture(SQLModel, table=True):
             ]
             for rel_attr in rel_attrs:
                 query = query.options(selectinload(rel_attr))
+
+        if only_deleted:
+            query = query.where(cls.deleted.is_(True))
+        elif not include_deleted:
+            query = query.where(cls.deleted.is_(False))
 
         for attr, value in search.items():
             if hasattr(cls, attr):
@@ -539,7 +554,11 @@ class Picture(SQLModel, table=True):
                 PictureSetMember.picture_id == Picture.id
             )
         )
-        query = query.where(unassigned_condition, not_in_set_condition)
+        query = query.where(
+            unassigned_condition,
+            not_in_set_condition,
+            Picture.deleted.is_(False),
+        )
 
         if format:
             query = query.where(Picture.format.in_(format))

@@ -159,6 +159,7 @@ def _select_pictures_for_listing(
     limit = int(query_params.pop("limit", limit))
     character_id = normalize_character_id(query_params.pop("character_id", None))
     reference_character_id = query_params.pop("reference_character_id", None)
+    only_deleted = False
 
     try:
         sort_mech = (
@@ -169,6 +170,53 @@ def _select_pictures_for_listing(
         raise HTTPException(status_code=400, detail=str(ve))
 
     pics = []
+    if character_id == "SCRAPHEAP":
+        only_deleted = True
+        character_id = None
+
+    def fetch_smart_score_candidate_ids(
+        session: Session,
+        character_id_value,
+        deleted_only: bool,
+        formats: list[str] | None,
+    ):
+        if deleted_only:
+            query = select(Picture.id).where(Picture.deleted.is_(True))
+        elif character_id_value == "UNASSIGNED":
+            unassigned_condition = ~exists(
+                select(Face.id).where(
+                    Face.picture_id == Picture.id,
+                    Face.character_id.is_not(None),
+                )
+            )
+            not_in_set_condition = ~exists(
+                select(PictureSetMember.picture_id).where(
+                    PictureSetMember.picture_id == Picture.id
+                )
+            )
+            query = select(Picture.id).where(
+                unassigned_condition,
+                not_in_set_condition,
+                Picture.deleted.is_(False),
+            )
+        elif character_id_value is None or character_id_value == "":
+            return None
+        elif isinstance(character_id_value, int):
+            query = (
+                select(Picture.id)
+                .join(Face, Face.picture_id == Picture.id)
+                .where(
+                    Face.character_id == character_id_value,
+                    Picture.deleted.is_(False),
+                )
+            )
+        else:
+            return None
+
+        if formats:
+            query = query.where(Picture.format.in_(formats))
+        return list(session.exec(query).all())
+
     if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
         if not reference_character_id:
             raise HTTPException(
@@ -187,6 +235,14 @@ def _select_pictures_for_listing(
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
         return pics
     elif sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
+        candidate_ids = server.vault.db.run_task(
+            fetch_smart_score_candidate_ids,
+            character_id,
+            only_deleted,
+            format,
+        )
+        if candidate_ids is not None and not candidate_ids:
+            return []
         penalized_tags = get_smart_score_penalized_tags_from_request(server, request)
         pics = find_pictures_by_smart_score(
             server,
@@ -194,7 +250,9 @@ def _select_pictures_for_listing(
             offset,
             limit,
             descending,
+            candidate_ids=candidate_ids,
             penalized_tags=penalized_tags,
+            only_deleted=only_deleted,
         )
         if return_ids_only:
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
@@ -207,6 +265,17 @@ def _select_pictures_for_listing(
             limit=limit,
             format=format,
             metadata_fields=metadata_fields,
+        )
+    elif only_deleted:
+        pics = server.vault.db.run_task(
+            Picture.find,
+            sort_mech=sort_mech,
+            offset=offset,
+            limit=limit,
+            select_fields=metadata_fields,
+            format=format,
+            only_deleted=True,
+            **query_params,
         )
     else:
         if character_id is not None and character_id != "":
@@ -257,14 +326,20 @@ def create_router(server) -> APIRouter:
         format: list[str] = Query(None),
     ):
         candidate_ids = None
+        only_deleted = character_id == "SCRAPHEAP"
 
         if set_id is not None:
 
             def fetch_set_ids(session, set_id):
                 members = session.exec(
-                    select(PictureSetMember).where(PictureSetMember.set_id == set_id)
+                    select(PictureSetMember.picture_id)
+                    .join(Picture, Picture.id == PictureSetMember.picture_id)
+                    .where(
+                        PictureSetMember.set_id == set_id,
+                        Picture.deleted.is_(False),
+                    )
                 ).all()
-                return [m.picture_id for m in members]
+                return [row for row in members]
 
             candidate_ids = set(
                 server.vault.db.run_immediate_read_task(fetch_set_ids, set_id)
@@ -285,7 +360,11 @@ def create_router(server) -> APIRouter:
                             PictureSetMember.picture_id == Picture.id
                         )
                     )
-                    query = query.where(unassigned_condition, not_in_set_condition)
+                    query = query.where(
+                        unassigned_condition,
+                        not_in_set_condition,
+                        Picture.deleted.is_(False),
+                    )
                     return list(session.exec(query).all())
 
                 candidate_ids = set(
@@ -293,13 +372,33 @@ def create_router(server) -> APIRouter:
                 )
             elif character_id == "ALL" or character_id == "":
                 candidate_ids = None
+            elif character_id == "SCRAPHEAP":
+
+                def fetch_deleted_ids(session):
+                    rows = session.exec(
+                        select(Picture.id).where(Picture.deleted.is_(True))
+                    ).all()
+                    return list(rows)
+
+                candidate_ids = set(
+                    server.vault.db.run_immediate_read_task(fetch_deleted_ids)
+                )
             elif character_id.isdigit():
 
                 def fetch_character_ids(session, character_id):
                     faces = session.exec(
                         select(Face).where(Face.character_id == character_id)
                     ).all()
-                    return list({face.picture_id for face in faces})
+                    picture_ids = {face.picture_id for face in faces}
+                    if not picture_ids:
+                        return []
+                    rows = session.exec(
+                        select(Picture.id).where(
+                            Picture.id.in_(picture_ids),
+                            Picture.deleted.is_(False),
+                        )
+                    ).all()
+                    return list(rows)
 
                 candidate_ids = set(
                     server.vault.db.run_immediate_read_task(
@@ -309,18 +408,47 @@ def create_router(server) -> APIRouter:
 
         if format:
 
-            def fetch_format_ids(session, format):
-                rows = session.exec(
-                    select(Picture.id).where(Picture.format.in_(format))
-                ).all()
+            def fetch_format_ids(session, format, deleted_only: bool):
+                query = select(Picture.id).where(Picture.format.in_(format))
+                if deleted_only:
+                    query = query.where(Picture.deleted.is_(True))
+                else:
+                    query = query.where(Picture.deleted.is_(False))
+                rows = session.exec(query).all()
                 return list(rows)
 
             format_ids = set(
-                server.vault.db.run_immediate_read_task(fetch_format_ids, format)
+                server.vault.db.run_immediate_read_task(
+                    fetch_format_ids, format, only_deleted
+                )
             )
             candidate_ids = (
                 format_ids if candidate_ids is None else candidate_ids & format_ids
             )
+
+        if candidate_ids is None:
+            if only_deleted:
+
+                def fetch_deleted_ids(session):
+                    rows = session.exec(
+                        select(Picture.id).where(Picture.deleted.is_(True))
+                    ).all()
+                    return list(rows)
+
+                candidate_ids = set(
+                    server.vault.db.run_immediate_read_task(fetch_deleted_ids)
+                )
+            else:
+
+                def fetch_active_ids(session):
+                    rows = session.exec(
+                        select(Picture.id).where(Picture.deleted.is_(False))
+                    ).all()
+                    return list(rows)
+
+                candidate_ids = set(
+                    server.vault.db.run_immediate_read_task(fetch_active_ids)
+                )
 
         def fetch_likeness(session):
             rows = session.exec(
@@ -376,15 +504,16 @@ def create_router(server) -> APIRouter:
         if not ordered_ids:
             return []
 
-        def fetch_pictures(session, ids):
+        def fetch_pictures(session, ids, deleted_only: bool):
             return Picture.find(
                 session,
                 id=ids,
                 select_fields=Picture.metadata_fields(),
+                only_deleted=deleted_only,
             )
 
         ordered_pics = server.vault.db.run_immediate_read_task(
-            fetch_pictures, ordered_ids
+            fetch_pictures, ordered_ids, only_deleted
         )
         pics_by_id = {pic.id: pic for pic in ordered_pics}
         ordered_pics = [pics_by_id.get(pid) for pid in ordered_ids]
@@ -408,6 +537,7 @@ def create_router(server) -> APIRouter:
                     "id",
                     "file_path",
                 ],
+                include_deleted=True,
             )
             return pics[0] if pics else None
 
@@ -530,6 +660,7 @@ def create_router(server) -> APIRouter:
                     "thumbnail_top",
                     "thumbnail_side",
                 ],
+                include_deleted=True,
             )
         )
         results = {}
@@ -685,6 +816,8 @@ def create_router(server) -> APIRouter:
                 }
                 scale_factor = scale_map.get(resolution_normalized, 1.0)
 
+                only_deleted = request.query_params.get("character_id") == "SCRAPHEAP"
+
                 picture_ids = request.query_params.getlist("id")
 
                 select_fields = Picture.metadata_fields()
@@ -698,7 +831,10 @@ def create_router(server) -> APIRouter:
 
                 if picture_ids:
                     pics = server.vault.db.run_task(
-                        Picture.find, id=picture_ids, select_fields=select_fields
+                        Picture.find,
+                        id=picture_ids,
+                        select_fields=select_fields,
+                        include_deleted=only_deleted,
                     )
                 elif set_id is not None:
                     logger.debug("Exporting pictures set {} ".format(set_id))
@@ -738,6 +874,7 @@ def create_router(server) -> APIRouter:
                                 limit=sys.maxsize,
                                 threshold=threshold,
                                 select_fields=select_fields,
+                                only_deleted=only_deleted,
                             )
                         ]
 
@@ -768,6 +905,7 @@ def create_router(server) -> APIRouter:
                             Picture.find,
                             id=ordered_ids,
                             select_fields=select_fields,
+                            include_deleted=only_deleted,
                         )
                         pic_map = {pic.id: pic for pic in pics}
                         pics = [
@@ -1177,16 +1315,20 @@ def create_router(server) -> APIRouter:
     ):
         query_params = {}
         format = None
+        character_id = None
         if request.query_params:
             query_params = dict(request.query_params)
             query = query_params.pop("query", query)
             offset = int(query_params.pop("offset", offset))
             limit = int(query_params.pop("limit", limit))
+            character_id = query_params.pop("character_id", None)
             format = request.query_params.getlist("format")
         if not query:
             raise HTTPException(
                 status_code=400, detail="Query parameter is required for search"
             )
+
+        only_deleted = character_id == "SCRAPHEAP"
 
         def find_by_text(session, query, offset, limit):
             words = re.findall(r"\b\w+\b", query.lower())
@@ -1202,6 +1344,7 @@ def create_router(server) -> APIRouter:
                 threshold=threshold,
                 format=format,
                 select_fields=Picture.metadata_fields(),
+                only_deleted=only_deleted,
             )
 
         results = server.vault.db.run_task(find_by_text, query, offset, limit)
@@ -1385,7 +1528,9 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid picture extension")
         id = int(id)
 
-        pics = server.vault.db.run_task(lambda session: Picture.find(session, id=id))
+        pics = server.vault.db.run_task(
+            lambda session: Picture.find(session, id=id, include_deleted=True)
+        )
         if not pics:
             logger.error(f"Picture not found for id={id}")
             raise HTTPException(status_code=404, detail="Picture not found")
@@ -1439,7 +1584,7 @@ def create_router(server) -> APIRouter:
     ):
         metadata_fields = Picture.metadata_fields()
         pics = server.vault.db.run_task(
-            Picture.find, id=id, select_fields=metadata_fields
+            Picture.find, id=id, select_fields=metadata_fields, include_deleted=True
         )
         if not pics:
             logger.error(f"Picture not found for id={id}")
@@ -1783,7 +1928,12 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
         def fetch_picture_characters(session):
-            pic = session.exec(select(Picture).where(Picture.id == pic_id)).first()
+            pic = session.exec(
+                select(Picture).where(
+                    Picture.id == pic_id,
+                    Picture.deleted.is_(False),
+                )
+            ).first()
             if not pic:
                 return None
             char_ids = [c.id for c in pic.characters] if pic.characters else []
@@ -1873,7 +2023,12 @@ def create_router(server) -> APIRouter:
     @router.get("/pictures/{id}/{field}")
     async def get_picture_field(id: str, field: str):
         pics = server.vault.db.run_task(
-            lambda session: Picture.find(session, id=id, select_fields=[field])
+            lambda session: Picture.find(
+                session,
+                id=id,
+                select_fields=[field],
+                include_deleted=True,
+            )
         )
         if not pics:
             logger.error(f"Picture not found for id={id}")
@@ -1903,7 +2058,7 @@ def create_router(server) -> APIRouter:
 
         try:
             pic_list = server.vault.db.run_task(
-                lambda session: Picture.find(session, id=id)
+                lambda session: Picture.find(session, id=id, include_deleted=True)
             )
             if not pic_list:
                 raise HTTPException(status_code=404, detail="Picture not found")
@@ -1983,29 +2138,58 @@ def create_router(server) -> APIRouter:
 
         return {"status": "success", "picture": safe_model_dict(pic)}
 
+    @router.post("/pictures/scrapheap/empty")
+    async def empty_scrapheap():
+        def purge_scrapheap(session: Session):
+            pics = session.exec(select(Picture).where(Picture.deleted.is_(True))).all()
+            deleted_count = 0
+            for pic in pics:
+                file_path = PictureUtils.resolve_picture_path(
+                    server.vault.image_root, pic.file_path
+                )
+                if file_path and os.path.isfile(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to delete picture file %s: %s",
+                            file_path,
+                            e,
+                        )
+                thumb_path = PictureUtils.get_thumbnail_path(
+                    server.vault.image_root, pic.file_path
+                )
+                if thumb_path and os.path.isfile(thumb_path):
+                    try:
+                        os.remove(thumb_path)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to delete thumbnail %s: %s",
+                            thumb_path,
+                            e,
+                        )
+                session.delete(pic)
+                deleted_count += 1
+            session.commit()
+            return deleted_count
+
+        deleted_count = server.vault.db.run_task(
+            purge_scrapheap,
+            priority=DBPriority.IMMEDIATE,
+        )
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return {"status": "success", "deleted_count": deleted_count}
+
     @router.delete("/pictures/{id}")
     async def delete_picture(id: str):
         def delete_pic(session, id):
             pic = session.get(Picture, id)
             if not pic:
                 return False
-            file_path = PictureUtils.resolve_picture_path(
-                server.vault.image_root, pic.file_path
-            )
-            if not file_path or not os.path.isfile(file_path):
-                logger.error(
-                    f"File path missing or does not exist for picture id={pic.id}, file_path={pic.file_path}"
-                )
-                session.delete(pic)
-                session.commit()
+            if pic.deleted:
                 return True
-            session.delete(pic)
-            try:
-                os.remove(file_path)
-            except Exception as e:
-                logger.error(f"Failed to delete picture file {file_path}: {e}")
-                session.rollback()
-                return False
+            pic.deleted = True
+            session.add(pic)
             session.commit()
             return True
 

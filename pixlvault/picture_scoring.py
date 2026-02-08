@@ -50,6 +50,7 @@ def select_reference_faces_for_character(
             Face.character_id == character_id,
             Face.face_index == 0,
             Face.features.is_not(None),
+            Picture.deleted.is_(False),
         )
     )
 
@@ -355,6 +356,7 @@ def find_pictures_by_character_likeness(
                 .where(Picture.id.in_(picture_ids))
                 .where(~assigned_faces)
                 .where(~in_set)
+                .where(Picture.deleted.is_(False))
             ).all()
             return [row for row in rows]
 
@@ -394,7 +396,14 @@ def find_pictures_by_character_likeness(
     return results
 
 
-def fetch_smart_score_data(server, format, candidate_ids=None, penalized_tags=None):
+def fetch_smart_score_data(
+    server,
+    format,
+    candidate_ids=None,
+    penalized_tags=None,
+    include_deleted: bool = False,
+    only_deleted: bool = False,
+):
     """Fetch anchors, character references, and candidates for smart score calculation."""
 
     def fetch_data(session: Session):
@@ -403,6 +412,7 @@ def fetch_smart_score_data(server, format, candidate_ids=None, penalized_tags=No
             select(Picture.image_embedding, Picture.score)
             .where(Picture.score >= 4)
             .where(Picture.image_embedding.is_not(None))
+            .where(Picture.deleted.is_(False))
             .order_by(desc(Picture.score), desc(Picture.created_at))
             .limit(200)
         ).all()
@@ -412,6 +422,7 @@ def fetch_smart_score_data(server, format, candidate_ids=None, penalized_tags=No
             .where(Picture.score <= 1)
             .where(Picture.score > 0)
             .where(Picture.image_embedding.is_not(None))
+            .where(Picture.deleted.is_(False))
             .order_by(Picture.score, desc(Picture.created_at))
             .limit(200)
         ).all()
@@ -420,6 +431,10 @@ def fetch_smart_score_data(server, format, candidate_ids=None, penalized_tags=No
         query = select(Picture, Quality).outerjoin(
             Quality, Quality.picture_id == Picture.id
         )
+        if only_deleted:
+            query = query.where(Picture.deleted.is_(True))
+        elif not include_deleted:
+            query = query.where(Picture.deleted.is_(False))
 
         if candidate_ids is not None:
             if not candidate_ids:
@@ -494,9 +509,20 @@ def fetch_smart_score_data(server, format, candidate_ids=None, penalized_tags=No
     return server.vault.db.run_task(fetch_data, priority=DBPriority.IMMEDIATE)
 
 
-def fetch_smart_score_unscored_ids(server, format, candidate_ids=None, descending=True):
+def fetch_smart_score_unscored_ids(
+    server,
+    format,
+    candidate_ids=None,
+    descending=True,
+    include_deleted: bool = False,
+    only_deleted: bool = False,
+):
     def fetch_ids(session: Session):
         query = select(Picture.id)
+        if only_deleted:
+            query = query.where(Picture.deleted.is_(True))
+        elif not include_deleted:
+            query = query.where(Picture.deleted.is_(False))
 
         if candidate_ids is not None:
             if not candidate_ids:
@@ -591,6 +617,8 @@ def find_pictures_by_smart_score(
     descending,
     candidate_ids=None,
     penalized_tags=None,
+    include_deleted: bool = False,
+    only_deleted: bool = False,
 ):
     # 1. Fetch data
     good_anchors, bad_anchors, candidates = fetch_smart_score_data(
@@ -598,6 +626,8 @@ def find_pictures_by_smart_score(
         format,
         candidate_ids=candidate_ids,
         penalized_tags=penalized_tags,
+        include_deleted=include_deleted,
+        only_deleted=only_deleted,
     )
 
     unscored_ids = fetch_smart_score_unscored_ids(
@@ -605,6 +635,8 @@ def find_pictures_by_smart_score(
         format,
         candidate_ids=candidate_ids,
         descending=descending,
+        include_deleted=include_deleted,
+        only_deleted=only_deleted,
     )
 
     score_map = {}

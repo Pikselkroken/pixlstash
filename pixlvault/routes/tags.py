@@ -29,7 +29,12 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=400, detail="Tag is required")
 
             pic_list = server.vault.db.run_task(
-                lambda session: Picture.find(session, id=id, select_fields=["tags"])
+                lambda session: Picture.find(
+                    session,
+                    id=id,
+                    select_fields=["tags"],
+                    include_deleted=True,
+                )
             )
             if not pic_list:
                 raise HTTPException(status_code=404, detail="Picture not found")
@@ -39,7 +44,12 @@ def create_router(server) -> APIRouter:
             if existing is None:
 
                 def update_picture(session, pic_id, tag):
-                    pic = Picture.find(session, id=pic_id, select_fields=["tags"])[0]
+                    pic = Picture.find(
+                        session,
+                        id=pic_id,
+                        select_fields=["tags"],
+                        include_deleted=True,
+                    )[0]
                     sentinel = next(
                         (t for t in pic.tags if t.tag == TAG_EMPTY_SENTINEL),
                         None,
@@ -69,7 +79,12 @@ def create_router(server) -> APIRouter:
             tag_id_int = int(tag_id)
 
             def update_picture(session, pic_id, tag_id_value):
-                pic = Picture.find(session, id=pic_id, select_fields=["tags"])[0]
+                pic = Picture.find(
+                    session,
+                    id=pic_id,
+                    select_fields=["tags"],
+                    include_deleted=True,
+                )[0]
                 target = session.exec(
                     select(Tag).where(
                         Tag.picture_id == pic_id,
@@ -117,7 +132,12 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="Tag is required")
 
         def update_picture(session: Session, pic_id: str, tag_value: str):
-            pic_list = Picture.find(session, id=pic_id, select_fields=["tags"])
+            pic_list = Picture.find(
+                session,
+                id=pic_id,
+                select_fields=["tags"],
+                include_deleted=True,
+            )
             if not pic_list:
                 raise HTTPException(status_code=404, detail="Picture not found")
             pic = pic_list[0]
