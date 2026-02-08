@@ -17,5 +17,6 @@ class HandTag(SQLModel, table=True):
             Integer,
             ForeignKey("tag.id", ondelete="CASCADE"),
             primary_key=True,
+            index=True,
         )
     )

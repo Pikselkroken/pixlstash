@@ -14,7 +14,7 @@
       </div>
       <div class="selection-bar-actions">
         <button
-          v-if="selectedCount > 0"
+          v-if="selectedCount > 0 && !isScrapheapView"
           class="refresh-btn"
           type="button"
           title="Refresh tags for selected images"
@@ -24,26 +24,23 @@
           <span>Refresh Tags</span>
         </button>
         <AddToSetControl
-          v-if="selectedCount > 0"
+          v-if="selectedCount > 0 && !isScrapheapView"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
+          @added="$emit('added-to-set', $event)"
         />
         <AddToCharacterControl
-          v-if="selectedCount > 0"
+          v-if="selectedCount > 0 && !isScrapheapView"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           @added="$emit('add-to-character', $event)"
         />
         <button
-          v-if="
-            selectedCharacter &&
-            selectedCharacter !== $props.allPicturesId &&
-            selectedCharacter !== $props.unassignedPicturesId
-          "
+          v-if="showRemoveButton"
           class="remove-btn"
           @click="$emit('remove-from-group')"
         >
-          {{ `Remove from ${selectedGroupName ? selectedGroupName : "group"}` }}
+          {{ removeButtonLabel }}
         </button>
         <button
           v-if="selectedCount > 0"
@@ -58,6 +55,7 @@
 </template>
 
 <script setup>
+import { computed } from "vue";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToCharacterControl from "./AddToCharacterControl.vue";
 const props = defineProps({
@@ -69,8 +67,32 @@ const props = defineProps({
   visible: Boolean,
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
+  scrapheapPicturesId: { type: String, required: true },
   backendUrl: { type: String, required: true },
   selectedImageIds: { type: Array, default: () => [] },
+});
+
+const isScrapheapView = computed(() => {
+  const scrapheapId = String(
+    props.scrapheapPicturesId || "SCRAPHEAP",
+  ).toUpperCase();
+  const selected = String(props.selectedCharacter || "").toUpperCase();
+  return selected === scrapheapId;
+});
+
+const showRemoveButton = computed(() => {
+  if (props.selectedCount <= 0) return false;
+  if (isScrapheapView.value) return true;
+  return (
+    props.selectedCharacter &&
+    props.selectedCharacter !== props.allPicturesId &&
+    props.selectedCharacter !== props.unassignedPicturesId
+  );
+});
+
+const removeButtonLabel = computed(() => {
+  if (isScrapheapView.value) return "Restore Selected";
+  return `Remove from ${props.selectedGroupName ? props.selectedGroupName : "group"}`;
 });
 </script>
 

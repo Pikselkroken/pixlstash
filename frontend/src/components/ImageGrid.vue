@@ -34,11 +34,13 @@
       :selectedGroupName="selectedGroupName"
       :allPicturesId="String(props.allPicturesId)"
       :unassignedPicturesId="String(props.unassignedPicturesId)"
+      :scrapheapPicturesId="String(props.scrapheapPicturesId)"
       :backend-url="props.backendUrl"
       :selected-image-ids="selectedImageIds"
       :visible="showSelectionBar"
       @clear-selection="clearSelection"
       @refresh-tags="refreshTagsForSelection"
+      @added-to-set="handleSelectionAddedToSet"
       @remove-from-group="removeFromGroup"
       @delete-selected="deleteSelected"
       @add-to-character="handleAddToCharacter"
@@ -47,7 +49,9 @@
       v-if="showScrapheapBar"
       :visible="showScrapheapBar"
       :disabled="scrapheapEmptyDisabled"
+      :restoreDisabled="scrapheapRestoreDisabled"
       @empty-scrapheap="confirmEmptyScrapheap"
+      @restore-scrapheap="confirmRestoreScrapheap"
     />
     <div
       v-if="exportProgress.visible"
@@ -1081,6 +1085,34 @@ function removeFromGroup() {
     .map((entry) => entry.faceId)
     .filter((id) => id !== undefined && id !== null);
   const pictureIds = selectedImageIds.value.slice();
+  if (isScrapheapView.value) {
+    if (!pictureIds.length) {
+      clearFaceSelection();
+      return;
+    }
+    apiClient
+      .post(`${backendUrl}/pictures/scrapheap/restore`, {
+        picture_ids: pictureIds,
+      })
+      .catch((err) => {
+        alert(`Error restoring images: ${err.message}`);
+      })
+      .finally(() => {
+        allGridImages.value = allGridImages.value.filter(
+          (img) => !pictureIds.includes(img.id),
+        );
+        selectedImageIds.value = [];
+        clearFaceSelection();
+        lastSelectedImageId = null;
+        fetchAllGridImages().then(() => {
+          loadedRanges.value = [];
+          updateVisibleThumbnails();
+          emit("refresh-sidebar");
+        });
+        updateVisibleThumbnails();
+      });
+    return;
+  }
   // Remove from character
   if (
     props.selectedCharacter &&
@@ -1194,17 +1226,39 @@ function handleOverlayAddedToSet(payload) {
   emit("refresh-sidebar");
 }
 
+function handleSelectionAddedToSet(payload) {
+  handleOverlayAddedToSet(payload);
+}
+
+function handleAddToCharacter(payload) {
+  const pictureIds = Array.isArray(payload?.pictureIds)
+    ? payload.pictureIds
+    : [];
+  if (!pictureIds.length) return;
+  if (
+    props.selectedCharacter === props.unassignedPicturesId &&
+    !props.selectedSet
+  ) {
+    removeImagesById(pictureIds);
+    selectedImageIds.value = [];
+    clearFaceSelection();
+    lastSelectedImageId = null;
+    updateVisibleThumbnails();
+  }
+  emit("refresh-sidebar");
+}
+
 function deleteSelected() {
   if (!selectedImageIds.value.length) return;
   const isScrapheapSelection = isScrapheapView.value;
-  if (
-    !confirm(
-      isScrapheapSelection
-        ? `Delete ${selectedImageIds.value.length} selected image(s)?`
-        : `Move ${selectedImageIds.value.length} selected image(s) to the scrapheap?`,
-    )
-  )
-    return;
+  const idsToRemove = selectedImageIds.value.slice();
+  if (isScrapheapSelection) {
+    if (
+      !confirm(`Delete ${selectedImageIds.value.length} selected image(s)?`)
+    ) {
+      return;
+    }
+  }
   const backendUrl = props.backendUrl;
   Promise.all(
     selectedImageIds.value.map((id) =>
@@ -1214,13 +1268,13 @@ function deleteSelected() {
     ),
   ).then(() => {
     if (!isScrapheapSelection) {
-      allGridImages.value = allGridImages.value.filter(
-        (img) => !selectedImageIds.value.includes(img.id),
-      );
+      removeImagesById(idsToRemove);
     }
     selectedImageIds.value = [];
     lastSelectedImageId = null;
-    updateVisibleThumbnails();
+    if (isScrapheapSelection) {
+      updateVisibleThumbnails();
+    }
     emit("refresh-sidebar");
   });
 }
@@ -1266,6 +1320,14 @@ const scrapheapEmptyDisabled = computed(() => {
     filteredGridCount.value === 0
   );
 });
+const scrapheapRestoring = ref(false);
+const scrapheapRestoreDisabled = computed(() => {
+  return (
+    scrapheapRestoring.value ||
+    imagesLoading.value ||
+    filteredGridCount.value === 0
+  );
+});
 
 async function confirmEmptyScrapheap() {
   if (scrapheapEmptyDisabled.value) return;
@@ -1289,6 +1351,31 @@ async function confirmEmptyScrapheap() {
     alert("Failed to empty scrapheap.");
   } finally {
     scrapheapEmptying.value = false;
+  }
+}
+
+async function confirmRestoreScrapheap() {
+  if (scrapheapRestoreDisabled.value) return;
+  const confirmed = confirm(
+    "Restore all scrapheap pictures? This will make them visible again.",
+  );
+  if (!confirmed) return;
+  scrapheapRestoring.value = true;
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/scrapheap/restore`);
+    allGridImages.value = [];
+    selectedImageIds.value = [];
+    selectedFaceIds.value = [];
+    lastSelectedImageId = null;
+    updateVisibleThumbnails();
+    emit("refresh-sidebar");
+    fetchAllGridImages().then(() => {
+      updateVisibleThumbnails();
+    });
+  } catch (e) {
+    alert("Failed to restore scrapheap.");
+  } finally {
+    scrapheapRestoring.value = false;
   }
 }
 
@@ -3451,6 +3538,18 @@ defineExpose({
   clearFaceSelection,
 });
 
+function reindexGridImages() {
+  const items = allGridImages.value.slice();
+  for (let i = 0; i < items.length; i += 1) {
+    const current = items[i];
+    if (!current) continue;
+    if (current.idx !== i) {
+      items[i] = { ...current, idx: i };
+    }
+  }
+  allGridImages.value = items;
+}
+
 // Remove images by ID (for event-driven removal)
 function removeImagesById(imageIds) {
   if (!Array.isArray(imageIds) || !imageIds.length) {
@@ -3467,6 +3566,7 @@ function removeImagesById(imageIds) {
   selectedImageIds.value = selectedImageIds.value.filter(
     (id) => !normalizedIds.has(normalizePictureId(id)),
   );
+  reindexGridImages();
   resetThumbnailState();
   updateVisibleThumbnails();
 }

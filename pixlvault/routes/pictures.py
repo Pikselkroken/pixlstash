@@ -22,7 +22,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import exists, func
+from sqlalchemy import delete, exists, func
 from sqlmodel import Session, select
 
 from pixlvault.database import DBPriority
@@ -2139,14 +2139,23 @@ def create_router(server) -> APIRouter:
         return {"status": "success", "picture": safe_model_dict(pic)}
 
     @router.post("/pictures/scrapheap/empty")
-    async def empty_scrapheap():
-        def purge_scrapheap(session: Session):
-            pics = session.exec(select(Picture).where(Picture.deleted.is_(True))).all()
-            deleted_count = 0
-            for pic in pics:
-                file_path = PictureUtils.resolve_picture_path(
-                    server.vault.image_root, pic.file_path
-                )
+    async def empty_scrapheap(background_tasks: BackgroundTasks):
+        def fetch_deleted(session: Session):
+            rows = session.exec(
+                select(Picture.id, Picture.file_path).where(Picture.deleted.is_(True))
+            ).all()
+            return rows
+
+        rows = server.vault.db.run_task(fetch_deleted, priority=DBPriority.IMMEDIATE)
+        if not rows:
+            return {"status": "success", "deleted_count": 0}
+
+        picture_ids = [row[0] for row in rows if row[0] is not None]
+        file_paths = [row[1] for row in rows if row[1]]
+
+        def delete_files(image_root: str, paths: list[str]):
+            for rel_path in paths:
+                file_path = PictureUtils.resolve_picture_path(image_root, rel_path)
                 if file_path and os.path.isfile(file_path):
                     try:
                         os.remove(file_path)
@@ -2156,9 +2165,7 @@ def create_router(server) -> APIRouter:
                             file_path,
                             e,
                         )
-                thumb_path = PictureUtils.get_thumbnail_path(
-                    server.vault.image_root, pic.file_path
-                )
+                thumb_path = PictureUtils.get_thumbnail_path(image_root, rel_path)
                 if thumb_path and os.path.isfile(thumb_path):
                     try:
                         os.remove(thumb_path)
@@ -2168,17 +2175,61 @@ def create_router(server) -> APIRouter:
                             thumb_path,
                             e,
                         )
-                session.delete(pic)
-                deleted_count += 1
+
+        background_tasks.add_task(
+            delete_files,
+            server.vault.image_root,
+            file_paths,
+        )
+
+        def delete_rows(session: Session, ids: list[int]):
+            if not ids:
+                return 0
+            session.exec(delete(Picture).where(Picture.id.in_(ids)))
             session.commit()
-            return deleted_count
+            return len(ids)
 
         deleted_count = server.vault.db.run_task(
-            purge_scrapheap,
+            delete_rows,
+            picture_ids,
             priority=DBPriority.IMMEDIATE,
         )
         server.vault.notify(EventType.CHANGED_PICTURES)
         return {"status": "success", "deleted_count": deleted_count}
+
+    @router.post("/pictures/scrapheap/restore")
+    async def restore_scrapheap(payload: dict | None = Body(None)):
+        picture_ids = None
+        if payload:
+            ids = payload.get("picture_ids")
+            if ids is not None:
+                if not isinstance(ids, list) or not ids:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="picture_ids must be a non-empty list",
+                    )
+                picture_ids = ids
+
+        def restore_pictures(session: Session, ids: list[int] | None):
+            query = select(Picture).where(Picture.deleted.is_(True))
+            if ids is not None:
+                query = query.where(Picture.id.in_(ids))
+            pics = session.exec(query).all()
+            restored_count = 0
+            for pic in pics:
+                pic.deleted = False
+                session.add(pic)
+                restored_count += 1
+            session.commit()
+            return restored_count
+
+        restored_count = server.vault.db.run_task(
+            restore_pictures,
+            picture_ids,
+            priority=DBPriority.IMMEDIATE,
+        )
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return {"status": "success", "restored_count": restored_count}
 
     @router.delete("/pictures/{id}")
     async def delete_picture(id: str):
