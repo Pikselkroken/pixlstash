@@ -1,6 +1,6 @@
-1. Clean up code
-2. Add scrap heap feature (automatic tossing of very poor smart score images)
-3. Make Picture stacks work better
+1. Make Picture stacks work better
+2. Clean up code
+3. Optimise
 4. Package better
 
 Eventually:

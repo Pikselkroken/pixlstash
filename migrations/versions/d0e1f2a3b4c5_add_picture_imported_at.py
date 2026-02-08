@@ -23,9 +23,7 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("imported_at", sa.DateTime(), nullable=True))
         batch_op.create_index("ix_picture_imported_at", ["imported_at"], unique=False)
 
-    op.execute(
-        "UPDATE picture SET imported_at = created_at WHERE imported_at IS NULL"
-    )
+    op.execute("UPDATE picture SET imported_at = created_at WHERE imported_at IS NULL")
 
 
 def downgrade() -> None:

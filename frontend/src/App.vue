@@ -39,6 +39,9 @@ const sortOptions = ref([]);
 // --- Search & Filtering State ---
 const searchQuery = ref("");
 const searchInput = ref("");
+const lastSelectedCharacterLabel = ref("All Pictures");
+const lastSelectedSetLabel = ref("Picture Set");
+const lastSelectedReferenceLabel = ref("Reference Pictures");
 const searchHistory = ref([]);
 const isSearchHistoryOpen = ref(false);
 const MAX_SEARCH_HISTORY = 8;
@@ -58,6 +61,30 @@ const showFormat = ref(true);
 const showResolution = ref(true);
 const showProblemIcon = ref(true);
 
+const activeCategoryLabel = computed(() => {
+  if (selectedSet.value) {
+    return lastSelectedSetLabel.value || "Picture Set";
+  }
+  if (selectedReferenceCharacter.value) {
+    return lastSelectedReferenceLabel.value || "Reference Pictures";
+  }
+  if (selectedCharacter.value === ALL_PICTURES_ID) return "All Pictures";
+  if (selectedCharacter.value === UNASSIGNED_PICTURES_ID)
+    return "Unassigned Pictures";
+  if (selectedCharacter.value === SCRAPHEAP_PICTURES_ID) return "Scrapheap";
+  if (selectedCharacter.value) {
+    return lastSelectedCharacterLabel.value || "Category";
+  }
+  return "All Pictures";
+});
+
+const isAllPicturesActive = computed(
+  () =>
+    !selectedSet.value &&
+    !selectedReferenceCharacter.value &&
+    selectedCharacter.value === ALL_PICTURES_ID,
+);
+
 const thumbnailSize = ref(256);
 const columns = ref(4); // Default columns
 const MIN_THUMBNAIL_SIZE = 96;
@@ -70,7 +97,7 @@ const mainAreaRef = ref(null);
 let mainAreaResizeObserver = null;
 const sidebarVisible = ref(true);
 const isMobile = ref(false);
-const MOBILE_BREAKPOINT = 900;
+const MOBILE_BREAKPOINT = 1024;
 
 // --- Media Type Filter State ---
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
@@ -290,49 +317,89 @@ function closeSidebarIfMobile() {
   }
 }
 
-async function handleSelectCharacter(charId) {
+function normalizeSelectionPayload(payload) {
+  if (payload && typeof payload === "object") {
+    return {
+      id: payload.id ?? payload.value ?? null,
+      label: payload.label ?? payload.name ?? null,
+    };
+  }
+  return { id: payload ?? null, label: null };
+}
+
+function clearSearchForCategoryChange() {
+  if ((searchQuery.value || "").trim() || (searchInput.value || "").trim()) {
+    handleClearSearch();
+  }
+}
+
+async function handleSelectCharacter(payload) {
+  const { id: charId, label } = normalizeSelectionPayload(payload);
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
+  clearSearchForCategoryChange();
   if (charId == null) {
     selectedCharacter.value = null;
     selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
+  if (label) {
+    lastSelectedCharacterLabel.value = label;
+  } else if (charId === ALL_PICTURES_ID) {
+    lastSelectedCharacterLabel.value = "All Pictures";
+  } else if (charId === UNASSIGNED_PICTURES_ID) {
+    lastSelectedCharacterLabel.value = "Unassigned Pictures";
+  } else if (charId === SCRAPHEAP_PICTURES_ID) {
+    lastSelectedCharacterLabel.value = "Scrapheap";
+  }
   selectedCharacter.value = charId;
   selectedSet.value = null; // Clear set selection
   selectedReferenceCharacter.value = null;
-  searchQuery.value = ""; // Clear search query
   await nextTick(); // Ensure reactivity propagates the change
-  console.log("[App.vue] searchQuery cleared:", searchQuery.value);
+  console.log("[App.vue] searchQuery preserved:", searchQuery.value);
   closeSidebarIfMobile();
 }
 
-async function handleSelectReferencePictures(charId) {
+async function handleSelectReferencePictures(payload) {
+  const { id: charId, label } = normalizeSelectionPayload(payload);
+  clearSearchForCategoryChange();
   if (charId == null) {
     selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
+  lastSelectedReferenceLabel.value =
+    label || lastSelectedReferenceLabel.value || "Reference Pictures";
   selectedReferenceCharacter.value = charId;
   selectedCharacter.value = null;
   selectedSet.value = null;
-  searchQuery.value = "";
   await nextTick();
   closeSidebarIfMobile();
 }
 
-async function handleSelectSet(setId) {
+async function handleSelectSet(payload) {
+  const { id: setId, label } = normalizeSelectionPayload(payload);
+  clearSearchForCategoryChange();
   if (setId == null) {
     selectedSet.value = null;
     selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
+  if (label) {
+    lastSelectedSetLabel.value = label;
+  }
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
   selectedReferenceCharacter.value = null;
-  searchQuery.value = ""; // Clear search query
   closeSidebarIfMobile();
+}
+
+function handleSearchAllPictures() {
+  selectedCharacter.value = ALL_PICTURES_ID;
+  selectedSet.value = null;
+  selectedReferenceCharacter.value = null;
+  lastSelectedCharacterLabel.value = "All Pictures";
 }
 
 async function handleUpdateSearchQuery(value) {
@@ -357,10 +424,15 @@ function handleUpdateStackThreshold(value) {
 }
 
 const selectedSimilarityCharacter = ref(null);
+const similarityCharacterOptions = ref([]);
 function handleUpdateSimilarityCharacter(val) {
   selectedSimilarityCharacter.value = val;
   refreshGridVersion();
   closeSidebarIfMobile();
+}
+
+function handleUpdateSimilarityOptions(options) {
+  similarityCharacterOptions.value = Array.isArray(options) ? options : [];
 }
 
 function handleColumnsEnd() {
@@ -629,6 +701,7 @@ function handleResetToAll() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
   selectedReferenceCharacter.value = null;
+  lastSelectedCharacterLabel.value = "All Pictures";
   selectedSort.value = "DATE";
   selectedDescending.value = true;
   selectedSimilarityCharacter.value = null;
@@ -771,7 +844,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :selectedDescending="selectedDescending"
             :backendUrl="BACKEND_URL"
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
-            :stackThreshold="stackThreshold"
+            @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
             @select-character="handleSelectCharacter"
             @select-reference-pictures="handleSelectReferencePictures"
@@ -782,7 +855,6 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @toggle-sidebar="sidebarVisible = !sidebarVisible"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
-            @update:stack-threshold="handleUpdateStackThreshold"
             @update:set-error="error = $event"
             @update:set-loading="loading = $event"
           />
@@ -796,7 +868,9 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
           <Toolbar
             ref="toolbarRef"
             :isMobile="isMobile"
+            :sidebarVisible="sidebarVisible"
             :searchOverlayVisible="searchOverlayVisible"
+            :isSearchActive="Boolean(searchQuery && searchQuery.trim())"
             :filteredSearchHistory="filteredSearchHistory"
             :minColumns="minColumns"
             :maxColumns="maxColumns"
@@ -808,6 +882,9 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :sortOptions="sortOptions"
             :selectedSort="selectedSort"
             :selectedDescending="selectedDescending"
+            :similarityCharacterOptions="similarityCharacterOptions"
+            :selectedSimilarityCharacter="selectedSimilarityCharacter"
+            :stackThreshold="stackThreshold"
             v-model:searchInput="searchInput"
             v-model:isSearchHistoryOpen="isSearchHistoryOpen"
             v-model:columnsMenuOpen="columnsMenuOpen"
@@ -826,7 +903,10 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:exportIncludeCharacterName="exportIncludeCharacterName"
             v-model:mediaTypeFilter="mediaTypeFilter"
             @update:selected-sort="handleUpdateSelectedSort"
+            @update:similarity-character="handleUpdateSimilarityCharacter"
+            @update:stack-threshold="handleUpdateStackThreshold"
             @open-search-overlay="openSearchOverlay"
+            @toggle-sidebar="sidebarVisible = !sidebarVisible"
             @commit-search="commitSearch"
             @clear-search="handleClearSearch"
             @apply-search-history="applySearchHistory"
@@ -848,6 +928,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :selectedReferenceCharacter="selectedReferenceCharacter"
               :selectedSet="selectedSet"
               :searchQuery="searchQuery"
+              :activeCategoryLabel="activeCategoryLabel"
+              :isAllPicturesActive="isAllPicturesActive"
               :selectedSort="selectedSort"
               :selectedDescending="selectedDescending"
               :similarityCharacter="selectedSimilarityCharacter"
@@ -867,6 +949,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
               :columns="columns"
               @clear-search="handleClearSearch"
+              @search-all="handleSearchAllPictures"
               @update:selected-sort="handleUpdateSelectedSort"
               @refresh-sidebar="refreshSidebar"
               @reset-to-all="handleResetToAll"

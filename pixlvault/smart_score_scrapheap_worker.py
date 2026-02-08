@@ -133,9 +133,7 @@ class SmartScoreScrapheapWorker(BaseWorker):
             .where(Picture.imported_at.is_(None))
             .where(Picture.image_embedding.is_not(None))
             .where(tag_exists)
-            .where(
-                or_(Picture.aesthetic_score.is_not(None), Quality.id.is_not(None))
-            )
+            .where(or_(Picture.aesthetic_score.is_not(None), Quality.id.is_not(None)))
         )
 
         candidate_rows = session.exec(query).all()
@@ -182,7 +180,9 @@ class SmartScoreScrapheapWorker(BaseWorker):
                 key = str(tag).strip().lower()
                 weight = penalized_tag_weights.get(key)
                 if weight is not None:
-                    penalized_tag_map[pic_id] = penalized_tag_map.get(pic_id, 0) + weight
+                    penalized_tag_map[pic_id] = (
+                        penalized_tag_map.get(pic_id, 0) + weight
+                    )
 
             if penalized_tag_map:
                 for candidate in candidates:
@@ -241,7 +241,9 @@ class SmartScoreScrapheapWorker(BaseWorker):
 
         now = datetime.utcnow()
 
-        def mark_processed(session: Session, candidate_ids: list[int], low_ids: list[int]):
+        def mark_processed(
+            session: Session, candidate_ids: list[int], low_ids: list[int]
+        ):
             if not candidate_ids:
                 return 0, 0
             low_set = set(low_ids)

@@ -1,4 +1,3 @@
-import pickle
 import time
 import os
 import requests
@@ -9,6 +8,7 @@ from PIL import Image
 from collections import defaultdict
 from sqlalchemy import or_, func
 from sqlmodel import Session, select
+from typing import Optional
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models import Picture
@@ -72,9 +72,24 @@ class ImageEmbeddingWorker(BaseWorker):
         return result or 0
 
     def _build_failure_updates(self, pids: set[int]):
-        empty_emb = pickle.dumps(np.array([], dtype=np.float32))
+        empty_emb = np.array([], dtype=np.float32).tobytes()
         score = None if self._aesthetic_disabled else -1.0
-        return [(pid, empty_emb, score) for pid in pids]
+        return [(pid, empty_emb, score, None) for pid in pids]
+
+    @staticmethod
+    def _compute_dhash(image: Image.Image, hash_size: int = 8) -> Optional[str]:
+        try:
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            img = image.convert("L").resize((hash_size + 1, hash_size), resample)
+            pixels = np.asarray(img, dtype=np.int16)
+            diff = pixels[:, 1:] > pixels[:, :-1]
+            bits = diff.flatten()
+            value = 0
+            for bit in bits:
+                value = (value << 1) | int(bit)
+            return f"{value:0{hash_size * hash_size // 4}x}"
+        except Exception:
+            return None
 
     def _ensure_model(self):
         if self.aesthetic_model is not None:
@@ -162,6 +177,7 @@ class ImageEmbeddingWorker(BaseWorker):
 
                 flat_images = []
                 flat_pids = []
+                flat_hashes = []
                 failed_files = []
                 batch_pids = {pid for pid, _ in batch}
                 batch_files = {pid: file_path for pid, file_path in batch}
@@ -177,6 +193,9 @@ class ImageEmbeddingWorker(BaseWorker):
 
                             if pil_imgs:
                                 flat_images.extend(pil_imgs)
+                                flat_hashes.extend(
+                                    [self._compute_dhash(img) for img in pil_imgs]
+                                )
                                 flat_pids.extend([pid] * len(pil_imgs))
 
                         else:
@@ -192,6 +211,7 @@ class ImageEmbeddingWorker(BaseWorker):
                             if img.mode != "RGB":
                                 img = img.convert("RGB")
                             flat_images.append(img)
+                            flat_hashes.append(self._compute_dhash(img))
                             flat_pids.append(pid)
 
                     except Exception as e:
@@ -318,6 +338,11 @@ class ImageEmbeddingWorker(BaseWorker):
                     if score is not None:
                         pid_updates[pid]["scores"].append(score)
 
+                if flat_hashes:
+                    for pid, phash in zip(flat_pids, flat_hashes):
+                        if phash and pid_updates[pid].get("phash") is None:
+                            pid_updates[pid]["phash"] = phash
+
                 updates = []
                 for pid, data in pid_updates.items():
                     embs = data["embs"]
@@ -327,14 +352,18 @@ class ImageEmbeddingWorker(BaseWorker):
                         final_emb = embs[0]
                     else:
                         avg = np.mean(embs, axis=0)
-                        norm = np.linalg.norm(avg)
-                        final_emb = avg / norm if norm > 0 else avg
+                        final_emb = avg
+
+                    norm = np.linalg.norm(final_emb)
+                    if norm > 0:
+                        final_emb = final_emb / norm
 
                     final_score = None
                     if scores:
                         final_score = float(np.mean(scores))
 
-                    updates.append((pid, pickle.dumps(final_emb), final_score))
+                    emb_bytes = np.asarray(final_emb, dtype=np.float32).tobytes()
+                    updates.append((pid, emb_bytes, final_score, data.get("phash")))
 
                 processed_pids = set(pid_updates.keys())
                 failed_pids = batch_pids - processed_pids
@@ -387,10 +416,11 @@ class ImageEmbeddingWorker(BaseWorker):
         return results
 
     def _save_results(self, session: Session, updates):
-        for pid, emb_bytes, score in updates:
+        for pid, emb_bytes, score, phash in updates:
             pic = session.get(Picture, pid)
             if pic:
                 pic.image_embedding = emb_bytes
                 if score is not None:
                     pic.aesthetic_score = score
+                pic.perceptual_hash = phash
         session.commit()

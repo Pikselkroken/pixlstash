@@ -1336,12 +1336,23 @@ def create_router(server) -> APIRouter:
         query_params = {}
         format = None
         character_id = None
+        set_id = None
+        sort = None
+        descending = True
         if request.query_params:
             query_params = dict(request.query_params)
             query = query_params.pop("query", query)
             offset = int(query_params.pop("offset", offset))
             limit = int(query_params.pop("limit", limit))
             character_id = query_params.pop("character_id", None)
+            set_id = query_params.pop("set_id", None)
+            sort = query_params.pop("sort", None)
+            desc_val = query_params.pop("descending", descending)
+            descending = (
+                desc_val.lower() == "true"
+                if isinstance(desc_val, str)
+                else bool(desc_val)
+            )
             format = request.query_params.getlist("format")
         if not query:
             raise HTTPException(
@@ -1349,23 +1360,181 @@ def create_router(server) -> APIRouter:
             )
 
         only_deleted = character_id == "SCRAPHEAP"
+        candidate_ids = None
+        sort_mech = None
+
+        if sort:
+            try:
+                sort_mech = SortMechanism.from_string(sort, descending=descending)
+            except ValueError as ve:
+                logger.error("Invalid sort mechanism for search: %s", ve)
+                raise HTTPException(status_code=400, detail=str(ve))
+
+        if set_id is not None:
+            try:
+                set_id = int(set_id)
+            except (TypeError, ValueError):
+                set_id = None
+
+        if set_id is not None:
+
+            def fetch_set_ids(session, set_id_value):
+                members = session.exec(
+                    select(PictureSetMember.picture_id)
+                    .join(Picture, Picture.id == PictureSetMember.picture_id)
+                    .where(
+                        PictureSetMember.set_id == set_id_value,
+                        Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
+                    )
+                ).all()
+                return [row for row in members]
+
+            candidate_ids = set(
+                server.vault.db.run_immediate_read_task(fetch_set_ids, set_id)
+            )
+        elif character_id is not None:
+            if character_id == "UNASSIGNED":
+
+                def fetch_unassigned_ids(session):
+                    unassigned_condition = ~exists(
+                        select(Face.id).where(
+                            Face.picture_id == Picture.id,
+                            Face.character_id.is_not(None),
+                        )
+                    )
+                    not_in_set_condition = ~exists(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.picture_id == Picture.id
+                        )
+                    )
+                    query_stmt = select(Picture.id).where(
+                        unassigned_condition,
+                        not_in_set_condition,
+                        Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
+                    )
+                    return list(session.exec(query_stmt).all())
+
+                candidate_ids = set(
+                    server.vault.db.run_immediate_read_task(fetch_unassigned_ids)
+                )
+            elif character_id in ("ALL", ""):
+                candidate_ids = None
+            elif character_id == "SCRAPHEAP":
+                candidate_ids = None
+            elif str(character_id).isdigit():
+
+                def fetch_character_ids(session, character_id_value):
+                    faces = session.exec(
+                        select(Face).where(Face.character_id == character_id_value)
+                    ).all()
+                    picture_ids = {face.picture_id for face in faces}
+                    if not picture_ids:
+                        return []
+                    rows = session.exec(
+                        select(Picture.id).where(
+                            Picture.id.in_(picture_ids),
+                            Picture.deleted.is_(False),
+                            Picture.imported_at.is_not(None),
+                        )
+                    ).all()
+                    return list(rows)
+
+                candidate_ids = set(
+                    server.vault.db.run_immediate_read_task(
+                        fetch_character_ids, int(character_id)
+                    )
+                )
+
+        if candidate_ids is not None and not candidate_ids:
+            return []
 
         def find_by_text(session, query, offset, limit):
             words = re.findall(r"\b\w+\b", query.lower())
-            query = "A photo of " + query
-            return Picture.semantic_search(
+            semantic_offset = 0 if sort_mech else offset
+            semantic_limit = sys.maxsize if sort_mech else limit
+            candidate_size = len(candidate_ids) if candidate_ids else None
+
+            def log_semantic_results(label: str, rows):
+                if rows is None:
+                    return
+                if not rows:
+                    logger.info(
+                        "Semantic search %s: no results (query=%r, words=%s, threshold=%s, format=%s, only_deleted=%s, candidate_ids=%s)",
+                        label,
+                        query,
+                        words,
+                        threshold,
+                        format,
+                        only_deleted,
+                        candidate_size,
+                    )
+                    return
+                preview = [
+                    {
+                        "id": getattr(pic, "id", None),
+                        "score": round(float(score), 4),
+                    }
+                    for pic, score in rows[:10]
+                ]
+                logger.info(
+                    "Semantic search %s: results=%d (query=%r, words=%s, threshold=%s, format=%s, only_deleted=%s, candidate_ids=%s) top=%s",
+                    label,
+                    len(rows),
+                    query,
+                    words,
+                    threshold,
+                    format,
+                    only_deleted,
+                    candidate_size,
+                    preview,
+                )
+
+            results = Picture.semantic_search(
                 session,
                 query,
                 words,
                 text_to_embedding=server.vault.generate_text_embedding,
                 clip_text_to_embedding=server.vault.generate_clip_text_embedding,
-                offset=offset,
-                limit=limit,
+                offset=semantic_offset,
+                limit=semantic_limit,
                 threshold=threshold,
                 format=format,
                 select_fields=Picture.metadata_fields(),
                 only_deleted=only_deleted,
+                candidate_ids=list(candidate_ids) if candidate_ids else None,
             )
+
+            log_semantic_results("base", results)
+
+            if not sort_mech:
+                return results
+
+            if not results:
+                return []
+
+            score_map = {
+                pic.id: score
+                for pic, score in results
+                if pic is not None and getattr(pic, "id", None) is not None
+            }
+            if not score_map:
+                return []
+
+            sorted_pics = Picture.find(
+                session,
+                sort_mech=sort_mech,
+                offset=offset,
+                limit=limit,
+                select_fields=Picture.metadata_fields(),
+                format=format,
+                only_deleted=only_deleted,
+                id=list(score_map.keys()),
+            )
+            sorted_results = [(pic, score_map.get(pic.id, 0.0)) for pic in sorted_pics]
+            log_semantic_results(f"sorted_{sort_mech.key.name}", sorted_results)
+            return sorted_results
 
         results = server.vault.db.run_task(find_by_text, query, offset, limit)
         return [Picture.serialize_with_likeness(r) for r in results]

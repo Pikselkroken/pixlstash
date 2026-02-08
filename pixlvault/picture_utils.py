@@ -48,33 +48,28 @@ class PictureUtils:
 
         # Default configuration
         cfg = {
-            # Character Likeness Pivot:
-            "char_pivot": 0.75,
-            "w_char_bonus": 0.50,
-            "w_char_penalty": 2.0,
             "w_good": 0.60,
             "w_bad": 0.20,
-            "w_aest": 0.30,
+            "w_aest": 0.2,
             "w_resolution": 0.06,
-            "w_noise": 0.06,
-            "w_edge": 0.04,
+            "w_noise": 0.08,
+            "w_edge": 0.05,
+            "w_tags": 0.08,
             "w_penalized_tag": 0.40,
-            "penalized_tag_cap": 3,
+            "penalized_tag_cap": 3.5,
+            "tag_bonus_cap": 10,
             "topk": 3,
             "minSim": 0.75,
             "minBadSim": 0.88,
             # Normalization range for Neural Aesthetic Score
             # Adjusted based on user observation (Max ~4.5)
             # We set max to 5.0 to allow some headroom, but map 4.5 to a strong 0.75
-            "aest_min": 0.0,
+            "aest_min": 2.0,
             "aest_max": 7.0,
-            "aest_spread": 1.0,
             # Resolution scoring (megapixels)
             "res_min_mpx": 0.2,
             "res_max_mpx": 4.0,
             "res_use_log": True,
-            # Contrast/stretch for final smart score spread (1.0 = no change)
-            "score_spread": 1.15,
         }
         if config:
             cfg.update(config)
@@ -126,10 +121,6 @@ class PictureUtils:
         denom = max(0.1, a_max - a_min)
 
         cand_aest = np.clip((raw_aest - a_min) / denom, 0.0, 1.0)
-        aest_spread = float(cfg.get("aest_spread", 1.0) or 1.0)
-        if np.isfinite(aest_spread) and aest_spread > 0 and aest_spread != 1.0:
-            cand_aest = 0.5 + (cand_aest - 0.5) * aest_spread
-            cand_aest = np.clip(cand_aest, 0.0, 1.0)
 
         M_cand = np.stack(cand_vecs)
         scores = np.zeros(len(candidates))
@@ -144,27 +135,7 @@ class PictureUtils:
             # A: (N, D), B: (M, D) -> (N, M)
             return 0.5 * (1 + np.dot(A, B.T))
 
-        # 1. Character Similarity (Uses Pre-calculated Face-Character Likeness if available)
-        # We apply a hinge loss logic:
-        # If likeness > pivot, gain small bonus.
-        # If likeness < pivot, suffer heavy penalty.
-        char_raw_values = [c.get("character_likeness") for c in candidates]
-        char_mask = np.array([val is not None for val in char_raw_values])
-        char_raw = np.array(
-            [float(val) if val is not None else 0.0 for val in char_raw_values]
-        )
-
-        # Calculate delta from pivot
-        char_deltas = char_raw - cfg["char_pivot"]
-
-        # Apply different weights for positive vs negative deltas
-        char_component = np.where(
-            char_deltas > 0,
-            char_deltas * cfg["w_char_bonus"],
-            char_deltas * cfg["w_char_penalty"],
-        )
-        char_component = np.where(char_mask, char_component, 0.0)
-        scores += char_component
+        # 1. Character Similarity disabled (smart score independent of character likeness)
 
         # 2. Good Anchors
         good_component = np.zeros(len(candidates))
@@ -208,7 +179,6 @@ class PictureUtils:
                 good_component = cfg["w_good"] * (avg_good * mask_good)
                 scores += good_component
 
-        # 3. Bad Anchors
         bad_component = np.zeros(len(candidates))
         mask_bad = np.zeros(len(candidates), dtype=bool)
         if bad_anchors:
@@ -294,6 +264,15 @@ class PictureUtils:
         edge_component = cfg["w_edge"] * edge_vals
         scores += edge_component
 
+        # 4d. Tag richness bonus (more tags = slight positive signal)
+        tag_counts = np.array(
+            [float(c.get("tag_count") or 0) for c in candidates], dtype=np.float32
+        )
+        tag_cap = max(1.0, float(cfg.get("tag_bonus_cap", 10) or 10))
+        tag_norm = np.log1p(np.clip(tag_counts, 0.0, tag_cap)) / np.log1p(tag_cap)
+        tag_component = cfg["w_tags"] * np.clip(tag_norm, 0.0, 1.0)
+        scores += tag_component
+
         # 5. Penalized Tags
         penalized_counts = np.array(
             [float(c.get("penalized_tag_count") or 0) for c in candidates]
@@ -304,15 +283,37 @@ class PictureUtils:
         penalized_component = cfg["w_penalized_tag"] * penalized_equivalent
         scores -= penalized_component
 
-        # Rescale [0, 1] to [1, 5] with optional spread adjustment
+        # Rescale [0, 1] to [1, 5]
         clipped = np.clip(scores, 0.0, 1.0)
-        spread = float(cfg.get("score_spread", 1.0) or 1.0)
-        if not np.isfinite(spread) or spread <= 0:
-            spread = 1.0
-        if spread != 1.0:
-            clipped = 0.5 + (clipped - 0.5) * spread
-            clipped = np.clip(clipped, 0.0, 1.0)
         final_scores = 1.0 + (clipped * 4.0)
+
+        try:
+            for idx, candidate in enumerate(candidates):
+                penalized_count = float(penalized_counts[idx])
+                final_score = float(final_scores[idx])
+                if penalized_count <= 0 and final_score <= 1.5:
+                    logger.info(
+                        "[SMART SCORE][MIN] id=%s raw=%.4f clipped=%.4f final=%.4f "
+                        "good=%.4f bad=%.4f aest=%.4f res=%.4f noise=%.4f "
+                        "edge=%.4f tags=%.4f penalized=%.4f mpx=%.4f w=%s h=%s",
+                        candidate.get("id"),
+                        float(scores[idx]),
+                        float(clipped[idx]),
+                        final_score,
+                        float(good_component[idx]),
+                        float(bad_component[idx]),
+                        float(aest_component[idx]),
+                        float(res_component[idx]),
+                        float(noise_component[idx]),
+                        float(edge_component[idx]),
+                        float(tag_component[idx]),
+                        float(penalized_component[idx]),
+                        float(mpx[idx]),
+                        candidate.get("width"),
+                        candidate.get("height"),
+                    )
+        except Exception as exc:
+            logger.info("[SMART SCORE][MIN] logging failed: %s", exc)
 
         return final_scores
 

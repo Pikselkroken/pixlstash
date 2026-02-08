@@ -1,4 +1,3 @@
-import pickle
 import time
 from datetime import datetime
 from collections import defaultdict
@@ -509,6 +508,19 @@ def fetch_smart_score_data(
                         candidate["id"], 0
                     )
 
+        if candidate_id_list:
+            tag_count_rows = session.exec(
+                select(Tag.picture_id, func.count(Tag.id))
+                .where(
+                    Tag.picture_id.in_(candidate_id_list),
+                    Tag.tag.is_not(None),
+                )
+                .group_by(Tag.picture_id)
+            ).all()
+            tag_count_map = {pic_id: count for pic_id, count in tag_count_rows}
+            for candidate in candidates:
+                candidate["tag_count"] = tag_count_map.get(candidate["id"], 0)
+
         return good, bad, candidates
 
     return server.vault.db.run_task(fetch_data, priority=DBPriority.IMMEDIATE)
@@ -552,7 +564,7 @@ def fetch_smart_score_unscored_ids(
 
 
 def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
-    """Unpickle embeddings and prepare lists of dictionaries for calculation."""
+    """Decode embeddings and prepare lists of dictionaries for calculation."""
 
     def get_attr(item, key):
         if isinstance(item, dict):
@@ -562,22 +574,21 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
     def get_vec(blob):
         if blob is None:
             return None
-        if isinstance(blob, memoryview):
-            blob = blob.tobytes()
-        try:
-            obj = pickle.loads(blob)
-            if isinstance(obj, np.ndarray):
-                if obj.ndim == 1 and obj.size > 0:
-                    return obj
-            else:
-                arr = np.array(obj)
-                if arr.ndim == 1 and arr.size > 0:
-                    return arr
-        except Exception:
-            pass
+        if isinstance(blob, (memoryview, bytearray)):
+            blob = bytes(blob)
+        if isinstance(blob, np.ndarray):
+            arr = np.asarray(blob, dtype=np.float32)
+            return arr if arr.ndim == 1 and arr.size > 0 else None
+        if not isinstance(blob, (bytes, bytearray)):
+            try:
+                blob = bytes(blob)
+            except Exception:
+                return None
         try:
             arr = np.frombuffer(blob, dtype=np.float32)
-            return arr if arr.size else None
+            if arr.ndim != 1 or arr.size == 0:
+                return None
+            return arr.copy()
         except Exception:
             return None
 
@@ -610,6 +621,7 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
                     "height": get_attr(p, "height"),
                     "noise_level": get_attr(p, "noise_level"),
                     "edge_density": get_attr(p, "edge_density"),
+                    "tag_count": get_attr(p, "tag_count"),
                 }
             )
 
@@ -650,18 +662,15 @@ def find_pictures_by_smart_score(
     scored_ids = []
 
     if candidates:
-        # 2. Prepare inputs (unpickling)
         good_list, bad_list, cand_list, cand_ids = prepare_smart_score_inputs(
             good_anchors, bad_anchors, candidates
         )
 
         if cand_list:
-            # 3. Calculate Scores (delegated to PictureUtils)
             scores = PictureUtils.calculate_smart_score_batch_numpy(
                 cand_list, good_list, bad_list
             )
 
-            # 4. Sort and build scored id list
             if descending:
                 sorted_indices = np.argsort(-scores)
             else:
@@ -689,7 +698,6 @@ def find_pictures_by_smart_score(
     if len(final_ids) == 0:
         return []
 
-    # 5. Fetch Final Objects
     def fetch_final_pics(session, ids):
         return session.exec(select(Picture).where(Picture.id.in_(ids))).all()
 

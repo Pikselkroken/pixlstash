@@ -5,8 +5,6 @@ These are used to filter out tags that clearly do not belong to a feature crop.
 
 from __future__ import annotations
 
-import re
-
 FACE_TAG_BLACKLIST = {
     "abs",
     "back",
@@ -68,6 +66,7 @@ HAND_TAG_BLACKLIST = {
     "black hair",
     "blonde hair",
     "blue eyes",
+    "blurry",
     "blush",
     "bikini",
     "blue eyes",
@@ -188,96 +187,14 @@ HAND_TAG_BLACKLIST = {
     "upper body",
 }
 
-FACE_TAG_ALLOWLIST_PATTERNS = [
-    r"face",
-    r"head",
-    r"eye",
-    r"eyebrow",
-    r"eyelash",
-    r"eyeshadow",
-    r"eyewear",
-    r"lip",
-    r"lipstick",
-    r"mouth",
-    r"teeth",
-    r"tongue",
-    r"nose",
-    r"nostril",
-    r"cheek",
-    r"chin",
-    r"jaw",
-    r"beard",
-    r"mustache",
-    r"moustache",
-    r"ear",
-    r"earring",
-    r"hair",
-    r"bangs",
-    r"hairstyle",
-    r"freckle",
-    r"wrinkle",
-    r"scar",
-    r"blush",
-    r"makeup",
-    r"mascara",
-    r"smile",
-    r"grin",
-    r"expression",
-    r"tears",
-    r"yawn",
-    r"yawning",
-    r"glasses",
-    r"goggles",
-    r"mask",
-    r"helmet",
-    r"hood",
-    r"hat",
-    r"looking",
-    r"face paint",
-]
-
-HAND_TAG_ALLOWLIST_PATTERNS = [
-    r"hand",
-    r"hands",
-    r"finger",
-    r"fingers",
-    r"fingernail",
-    r"fingernails",
-    r"nail",
-    r"nails",
-    r"thumb",
-    r"palm",
-    r"wrist",
-    r"knuckle",
-    r"fist",
-    r"glove",
-    r"gloves",
-    r"ring",
-    r"bracelet",
-    r"wristband",
-    r"watch",
-]
-
-
-def _compile(patterns: list[str]) -> re.Pattern[str]:
-    return re.compile("(" + "|".join(patterns) + ")", re.IGNORECASE)
-
-
-_FACE_ALLOW_RE = _compile(FACE_TAG_ALLOWLIST_PATTERNS)
-_HAND_ALLOW_RE = _compile(HAND_TAG_ALLOWLIST_PATTERNS)
-
 
 def is_face_tag(tag: str) -> bool:
     if not tag:
         return False
-    if tag in FACE_TAG_BLACKLIST:
-        return False
-    return bool(_FACE_ALLOW_RE.search(tag))
+    return tag not in FACE_TAG_BLACKLIST
 
 
 def is_hand_tag(tag: str) -> bool:
     if not tag:
         return False
-    if tag in HAND_TAG_BLACKLIST:
-        return False
-    return bool(_HAND_ALLOW_RE.search(tag))
+    return tag not in HAND_TAG_BLACKLIST

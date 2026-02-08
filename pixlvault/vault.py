@@ -52,7 +52,10 @@ class Vault:
             WorkerType.DESCRIPTION,
         ],
         EventType.CHANGED_DESCRIPTIONS: [WorkerType.TEXT_EMBEDDING],
-        EventType.QUALITY_UPDATED: [WorkerType.LIKENESS, WorkerType.SMART_SCORE_SCRAPHEAP],
+        EventType.QUALITY_UPDATED: [
+            WorkerType.LIKENESS,
+            WorkerType.SMART_SCORE_SCRAPHEAP,
+        ],
         EventType.CLEARED_TAGS: [WorkerType.TAGGER, WorkerType.TEXT_EMBEDDING],
     }
 

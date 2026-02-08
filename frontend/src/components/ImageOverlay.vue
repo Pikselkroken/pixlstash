@@ -462,7 +462,7 @@
               </span>
             </div>
             <div class="tag-list">
-              <div v-if="tagsRefreshing" class="tag-refresh-indicator">
+              <div v-if="isTagsRefreshing" class="tag-refresh-indicator">
                 <v-progress-circular
                   indeterminate
                   size="16"
@@ -746,17 +746,17 @@ import {
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  initialImage: { type: Object, default: null },
+  initialImageId: { type: [String, Number, null], default: null },
   allImages: { type: Array, default: () => [] },
   backendUrl: { type: String, required: true },
-  tagsRefreshing: { type: Boolean, default: false },
   tagUpdate: { type: Object, default: () => ({}) },
 });
 
-const { open, initialImage, allImages, backendUrl, tagsRefreshing, tagUpdate } =
+const { open, initialImageId, allImages, backendUrl, tagUpdate } =
   toRefs(props);
 
 const image = ref(null);
+const isTagsRefreshing = ref(false);
 const sidebarOpen = ref(true);
 const filmstripOpen = ref(false);
 const chromeHidden = ref(false);
@@ -766,16 +766,31 @@ const pan = reactive({ x: 0, y: 0 });
 const isPanning = ref(false);
 const lastPointer = ref({ x: 0, y: 0 });
 
-// Watch for changes to initialImage and update local image copy
+function setOverlayImageById(nextId) {
+  if (nextId == null || nextId === "") {
+    image.value = null;
+    return;
+  }
+  const list = Array.isArray(allImages.value) ? allImages.value : [];
+  const target = list.find((item) => String(item?.id) === String(nextId));
+  if (target) {
+    image.value = {
+      ...target,
+      tags: [],
+    };
+  } else {
+    image.value = { id: nextId, tags: [] };
+  }
+  isTagsRefreshing.value = true;
+  zoomMode.value = "fit";
+  resetPan();
+}
+
+// Watch for changes to initialImageId and update local image copy
 watch(
-  () => initialImage.value,
-  (newImg) => {
-    const previousId = image.value?.id ?? null;
-    image.value = newImg ? { ...newImg } : null;
-    if (newImg?.id !== previousId) {
-      zoomMode.value = "fit";
-      resetPan();
-    }
+  () => initialImageId.value,
+  (newId) => {
+    setOverlayImageById(newId);
   },
   { immediate: true },
 );
@@ -788,9 +803,7 @@ const emit = defineEmits([
   "remove-tag",
   "add-tag",
   "update-description",
-  "refresh-image",
-  "image-change",
-  "tag-refresh-start",
+  "overlay-change",
   "added-to-set",
 ]);
 
@@ -948,17 +961,22 @@ function handleOverlayAddToSet(payload) {
 
 async function clearTagsForImage() {
   if (!image.value?.id || !backendUrl.value) return;
+  isTagsRefreshing.value = true;
   try {
-    emit("tag-refresh-start", image.value.id);
     await apiClient.post(`${backendUrl.value}/pictures/clear_tags`, {
       picture_ids: [image.value.id],
     });
     if (Array.isArray(image.value.tags)) {
       image.value.tags = [];
     }
-    emit("refresh-image", image.value.id);
+    emit("overlay-change", {
+      imageId: image.value.id,
+      fields: { tags: true, smartScore: true },
+    });
   } catch (err) {
     alert(`Failed to clear tags: ${err?.message || err}`);
+  } finally {
+    isTagsRefreshing.value = false;
   }
 }
 
@@ -974,17 +992,14 @@ function showPrevImage() {
   const idx = sorted.findIndex((i) => i.id === image.value.id);
   if (idx === -1) return;
   const prevIdx = (idx - 1 + sorted.length) % sorted.length;
-  image.value = sorted[prevIdx];
-  emit("image-change", image.value);
+  setOverlayImageById(sorted[prevIdx]?.id ?? null);
 }
 
 function selectImageByIndex(idx) {
   if (!Array.isArray(allImages.value)) return;
   const target = allImages.value[idx];
   if (target) {
-    image.value = target;
-    resetPan();
-    emit("image-change", image.value);
+    setOverlayImageById(target.id ?? null);
   }
 }
 
@@ -994,8 +1009,7 @@ function showNextImage() {
   const idx = sorted.findIndex((i) => i.id === image.value.id);
   if (idx === -1) return;
   const nextIdx = (idx + 1) % sorted.length;
-  image.value = sorted[nextIdx];
-  emit("image-change", image.value);
+  setOverlayImageById(sorted[nextIdx]?.id ?? null);
 }
 
 function handleKeydown(e) {
@@ -1441,10 +1455,9 @@ async function onDrawEnd(event) {
         payload,
       );
       await fetchFaceBboxes(image.value.id);
-      emit("refresh-image", {
+      emit("overlay-change", {
         imageId: image.value.id,
-        faces: faceBboxes.value,
-        mergeTags: true,
+        fields: { faces: true },
       });
     } else if (drawMode.value === "hand") {
       await apiClient.post(
@@ -1452,7 +1465,10 @@ async function onDrawEnd(event) {
         payload,
       );
       await fetchHandBboxes(image.value.id);
-      emit("refresh-image", { imageId: image.value.id, mergeTags: true });
+      emit("overlay-change", {
+        imageId: image.value.id,
+        fields: { hands: true },
+      });
     }
   } catch (e) {
     alert(`Failed to create ${drawModeLabel.value} box: ${e?.message || e}`);
@@ -1608,6 +1624,8 @@ const faceBboxes = ref([]);
 const handBboxes = ref([]);
 const faceTagMap = ref({});
 const handTagMap = ref({});
+const faceTagFetchInFlight = new Set();
+const handTagFetchInFlight = new Set();
 const dragState = reactive({
   tag: null,
   sourceType: null,
@@ -1628,6 +1646,8 @@ const FACE_THUMB_MAX = 60;
 let metadataRequestId = 0;
 let faceBboxesRequestId = 0;
 let handBboxesRequestId = 0;
+let faceTagsRequestId = 0;
+let handTagsRequestId = 0;
 
 function dedupeDetections(items) {
   if (!Array.isArray(items)) return [];
@@ -1648,6 +1668,7 @@ function dedupeDetections(items) {
 async function fetchOverlayMetadata(imageId) {
   if (!imageId || !backendUrl.value) return;
   const requestId = (metadataRequestId += 1);
+  isTagsRefreshing.value = true;
   try {
     const res = await apiClient.get(
       `${backendUrl.value}/pictures/${imageId}/metadata?smart_score=true`,
@@ -1678,6 +1699,10 @@ async function fetchOverlayMetadata(imageId) {
     syncDescriptionDraft();
   } catch (e) {
     console.error("Failed to fetch overlay metadata:", e);
+  } finally {
+    if (metadataRequestId === requestId) {
+      isTagsRefreshing.value = false;
+    }
   }
 }
 
@@ -1702,8 +1727,12 @@ async function fetchFaceBboxes(imageId) {
       (f) =>
         f.frame_index === 0 && Array.isArray(f.bbox) && f.bbox.length === 4,
     );
-    // For each face, fetch character name if character_id is present
-    await Promise.all(
+    if (faceBboxesRequestId !== requestId) return;
+    if (!image.value || image.value.id !== requestedImageId) return;
+    faceBboxes.value = firstFrameFaces;
+    fetchFaceTagsForFaces(firstFrameFaces);
+    // Fetch character names asynchronously to avoid delaying tag loading
+    Promise.all(
       firstFrameFaces.map(async (face) => {
         if (face.character_id) {
           try {
@@ -1712,26 +1741,18 @@ async function fetchFaceBboxes(imageId) {
             );
             const data = await res.data;
             face.character_name = data.name || null;
-            console.log(
-              `Fetched character_name for character_id ${face.character_id}:`,
-              face.character_name,
-            );
           } catch (e) {
             face.character_name = null;
-            console.error(
-              `Error fetching character_name for character_id ${face.character_id}:`,
-              e,
-            );
           }
         } else {
           face.character_name = null;
         }
       }),
-    );
-    if (faceBboxesRequestId !== requestId) return;
-    if (!image.value || image.value.id !== requestedImageId) return;
-    faceBboxes.value = firstFrameFaces;
-    await fetchFaceTagsForFaces(firstFrameFaces);
+    ).then(() => {
+      if (faceBboxesRequestId !== requestId) return;
+      if (!image.value || image.value.id !== requestedImageId) return;
+      faceBboxes.value = [...firstFrameFaces];
+    });
   } catch (e) {
     console.error("Error in fetchFaceBboxes:", e);
     faceBboxes.value = [];
@@ -1767,13 +1788,24 @@ async function fetchHandBboxes(imageId) {
   }
 }
 
-async function fetchFaceTagsForFaces(faces) {
+async function fetchFaceTagsForFaces(faces, options = {}) {
   if (!backendUrl.value || !Array.isArray(faces) || !faces.length) {
     faceTagMap.value = {};
     return;
   }
+  const requestId = faceTagsRequestId;
+  const expectedImageId = image.value?.id ?? null;
+  const force = Boolean(options.force);
+  const targets = faces.filter((face) => {
+    if (!face?.id) return false;
+    if (faceTagFetchInFlight.has(face.id)) return false;
+    if (!force && faceTagMap.value?.[face.id]) return false;
+    return true;
+  });
+  if (!targets.length) return;
+  targets.forEach((face) => faceTagFetchInFlight.add(face.id));
   const entries = await Promise.all(
-    faces.map(async (face) => {
+    targets.map(async (face) => {
       try {
         const res = await apiClient.get(
           `${backendUrl.value}/faces/${face.id}/tags`,
@@ -1783,23 +1815,38 @@ async function fetchFaceTagsForFaces(faces) {
         return [face.id, normalizeTagList(tags)];
       } catch (e) {
         return [face.id, []];
+      } finally {
+        faceTagFetchInFlight.delete(face.id);
       }
     }),
   );
-  const nextMap = {};
+  const nextMap = { ...faceTagMap.value };
   for (const [faceId, tags] of entries) {
     nextMap[faceId] = dedupeTagList(tags);
   }
+  if (requestId != faceTagsRequestId) return;
+  if (!image.value || image.value.id != expectedImageId) return;
   faceTagMap.value = nextMap;
 }
 
-async function fetchHandTagsForHands(hands) {
+async function fetchHandTagsForHands(hands, options = {}) {
   if (!backendUrl.value || !Array.isArray(hands) || !hands.length) {
     handTagMap.value = {};
     return;
   }
+  const requestId = handTagsRequestId;
+  const expectedImageId = image.value?.id ?? null;
+  const force = Boolean(options.force);
+  const targets = hands.filter((hand) => {
+    if (!hand?.id) return false;
+    if (handTagFetchInFlight.has(hand.id)) return false;
+    if (!force && handTagMap.value?.[hand.id]) return false;
+    return true;
+  });
+  if (!targets.length) return;
+  targets.forEach((hand) => handTagFetchInFlight.add(hand.id));
   const entries = await Promise.all(
-    hands.map(async (hand) => {
+    targets.map(async (hand) => {
       try {
         const res = await apiClient.get(
           `${backendUrl.value}/hands/${hand.id}/tags`,
@@ -1809,13 +1856,17 @@ async function fetchHandTagsForHands(hands) {
         return [hand.id, normalizeTagList(tags)];
       } catch (e) {
         return [hand.id, []];
+      } finally {
+        handTagFetchInFlight.delete(hand.id);
       }
     }),
   );
-  const nextMap = {};
+  const nextMap = { ...handTagMap.value };
   for (const [handId, tags] of entries) {
     nextMap[handId] = dedupeTagList(tags);
   }
+  if (requestId != handTagsRequestId) return;
+  if (!image.value || image.value.id != expectedImageId) return;
   handTagMap.value = nextMap;
 }
 
@@ -1862,7 +1913,10 @@ async function removeTagFromFace(face, tag, options = {}) {
     [face.id]: normalizeTagList(tags),
   };
   if (!options.skipRefresh && image.value?.id) {
-    emit("refresh-image", image.value.id);
+    emit("overlay-change", {
+      imageId: image.value.id,
+      fields: { tags: true, faces: true, smartScore: true },
+    });
   }
 }
 
@@ -1897,7 +1951,10 @@ async function removeTagFromHand(hand, tag, options = {}) {
     [hand.id]: normalizeTagList(tags),
   };
   if (!options.skipRefresh && image.value?.id) {
-    emit("refresh-image", image.value.id);
+    emit("overlay-change", {
+      imageId: image.value.id,
+      fields: { tags: true, hands: true, smartScore: true },
+    });
   }
 }
 
@@ -1910,9 +1967,9 @@ async function removeFaceDetection(face) {
       `${backendUrl.value}/pictures/${image.value.id}/face/${index}`,
     );
     await fetchFaceBboxes(image.value.id);
-    emit("refresh-image", {
+    emit("overlay-change", {
       imageId: image.value.id,
-      faces: faceBboxes.value,
+      fields: { faces: true },
     });
   } catch (e) {
     alert(`Failed to delete face: ${e?.message || e}`);
@@ -1928,7 +1985,10 @@ async function removeHandDetection(hand) {
       `${backendUrl.value}/pictures/${image.value.id}/hand/${index}`,
     );
     await fetchHandBboxes(image.value.id);
-    emit("refresh-image", image.value.id);
+    emit("overlay-change", {
+      imageId: image.value.id,
+      fields: { hands: true },
+    });
   } catch (e) {
     alert(`Failed to delete hand: ${e?.message || e}`);
   }
@@ -2137,9 +2197,9 @@ async function assignFaceToCharacter(face, character) {
       });
     }
     if (image.value?.id) {
-      emit("refresh-image", {
+      emit("overlay-change", {
         imageId: image.value.id,
-        faces: faceBboxes.value,
+        fields: { faces: true },
       });
     }
   } catch (e) {
@@ -2163,9 +2223,9 @@ async function unassignFaceCharacter(face) {
       });
     }
     if (image.value?.id) {
-      emit("refresh-image", {
+      emit("overlay-change", {
         imageId: image.value.id,
-        faces: faceBboxes.value,
+        fields: { faces: true },
       });
     }
   } catch (e) {
@@ -2200,6 +2260,12 @@ watch(
   () => image.value?.id,
   (newId) => {
     if (newId) {
+      faceTagsRequestId += 1;
+      handTagsRequestId += 1;
+      faceTagMap.value = {};
+      handTagMap.value = {};
+      faceTagFetchInFlight.clear();
+      handTagFetchInFlight.clear();
       overlayDims.value = {
         width: 1,
         height: 1,
@@ -2228,24 +2294,6 @@ watch(
 );
 
 watch(
-  () => tagsRefreshing.value,
-  (isRefreshing, wasRefreshing) => {
-    if (!wasRefreshing && isRefreshing) {
-      if (image.value && Array.isArray(image.value.tags)) {
-        image.value.tags = [];
-      }
-      faceTagMap.value = {};
-      handTagMap.value = {};
-      return;
-    }
-    if (!isRefreshing && wasRefreshing && image.value?.id) {
-      fetchFaceTagsForFaces(faceBboxes.value);
-      fetchHandTagsForHands(handBboxes.value);
-    }
-  },
-);
-
-watch(
   () => tagUpdate.value,
   (payload) => {
     if (!payload || typeof payload !== "object") return;
@@ -2258,11 +2306,12 @@ watch(
       : [];
     const currentId = String(image.value.id);
     if (pictureIds.length && !pictureIds.includes(currentId)) return;
+    fetchOverlayMetadata(image.value.id);
     if (faceBboxes.value.length) {
-      fetchFaceTagsForFaces(faceBboxes.value);
+      fetchFaceTagsForFaces(faceBboxes.value, { force: true });
     }
     if (handBboxes.value.length) {
-      fetchHandTagsForHands(handBboxes.value);
+      fetchHandTagsForHands(handBboxes.value, { force: true });
     }
   },
 );
@@ -2979,7 +3028,10 @@ async function removeAllTag(tag) {
   }
 
   if (didUpdate && image.value?.id) {
-    emit("refresh-image", image.value.id);
+    emit("overlay-change", {
+      imageId: image.value.id,
+      fields: { tags: true, smartScore: true },
+    });
   }
 }
 

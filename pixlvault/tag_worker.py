@@ -24,6 +24,7 @@ logger = get_logger(__name__)
 
 HAND_CROP_MIN_AREA_RATIO = 0.01
 HAND_CROP_MAX_PER_PICTURE = 2
+CROP_EXPAND_SCALE = 1.75
 CROP_DEBUG_ENABLED = False
 
 
@@ -273,7 +274,8 @@ class TagWorker(BaseWorker):
         if image_paths:
             if self._stop.is_set():
                 return []
-            logger.info(f"Tagging {len(image_paths)} images: {image_paths}")
+            logger.info("Tagging %s images", len(image_paths))
+            logger.debug("Tagging image paths: %s", image_paths)
             tag_results = self._picture_tagger.tag_images(
                 image_paths, stop_event=self._stop
             )
@@ -283,7 +285,7 @@ class TagWorker(BaseWorker):
             if self._picture_tagger.custom_tagger_ready():
                 try:
                     import cv2
-                    from PIL import Image
+                    from PIL import Image, ImageOps
 
                     enable_face_crops = True
                     enable_hand_crops = True
@@ -291,11 +293,11 @@ class TagWorker(BaseWorker):
                     hand_max_per_picture = HAND_CROP_MAX_PER_PICTURE
                     crop_debug_enabled = CROP_DEBUG_ENABLED
 
-                    face_items = []
-                    hand_items = []
+                    all_items = []
                     item_to_pic_id = {}
                     item_to_face_id = {}
                     item_to_hand_id = {}
+                    item_to_kind = {}
                     crop_debug_dir = "/tmp/pixlvault_crops"
                     if crop_debug_enabled:
                         os.makedirs(crop_debug_dir, exist_ok=True)
@@ -313,6 +315,42 @@ class TagWorker(BaseWorker):
                         except Exception as exc:
                             logger.warning("Failed to write crop %s: %s", path, exc)
 
+                    def pad_crop_to_square(pil_img):
+                        if pil_img is None:
+                            return None
+                        w, h = pil_img.size
+                        if w <= 0 or h <= 0:
+                            return None
+                        target = max(w, h)
+                        pad_x = max(0, target - w)
+                        pad_y = max(0, target - h)
+                        left = pad_x // 2
+                        right = pad_x - left
+                        top = pad_y // 2
+                        bottom = pad_y - top
+                        padded = ImageOps.expand(
+                            pil_img, border=(left, top, right, bottom), fill=0
+                        )
+                        return padded
+
+                    def expand_bbox(bbox, frame_w, frame_h, scale):
+                        if bbox is None or len(bbox) != 4:
+                            return None
+                        x1, y1, x2, y2 = bbox
+                        cx = (x1 + x2) / 2.0
+                        cy = (y1 + y2) / 2.0
+                        w = max(1.0, x2 - x1)
+                        h = max(1.0, y2 - y1)
+                        half_w = (w * scale) / 2.0
+                        half_h = (h * scale) / 2.0
+                        ex1 = int(max(0, min(frame_w - 1, round(cx - half_w))))
+                        ey1 = int(max(0, min(frame_h - 1, round(cy - half_h))))
+                        ex2 = int(max(0, min(frame_w, round(cx + half_w))))
+                        ey2 = int(max(0, min(frame_h, round(cy + half_h))))
+                        if ex2 <= ex1 or ey2 <= ey1:
+                            return None
+                        return [ex1, ey1, ex2, ey2]
+
                     video_exts = {
                         ".mp4",
                         ".avi",
@@ -325,6 +363,16 @@ class TagWorker(BaseWorker):
                     for pic in batch:
                         if self._stop.is_set():
                             break
+                        faces = getattr(pic, "faces", None) or []
+                        hands = getattr(pic, "hands", None) or []
+                        has_face_crops = enable_face_crops and any(
+                            getattr(face, "face_index", 0) >= 0 for face in faces
+                        )
+                        has_hand_crops = enable_hand_crops and any(
+                            getattr(hand, "hand_index", 0) >= 0 for hand in hands
+                        )
+                        if not has_face_crops and not has_hand_crops:
+                            continue
                         file_path = PictureUtils.resolve_picture_path(
                             self._db.image_root, pic.file_path
                         )
@@ -340,18 +388,27 @@ class TagWorker(BaseWorker):
                             continue
                         frame_h, frame_w = frame.shape[:2]
                         frame_area = max(1, frame_w * frame_h)
-                        if enable_face_crops:
-                            faces = getattr(pic, "faces", None) or []
+                        if has_face_crops:
                             for face in faces:
                                 if getattr(face, "face_index", 0) < 0:
                                     continue
                                 bbox = getattr(face, "bbox", None)
-                                crop = PictureUtils.crop_face_from_frame(frame, bbox)
+                                expanded = expand_bbox(
+                                    bbox,
+                                    frame_w,
+                                    frame_h,
+                                    CROP_EXPAND_SCALE,
+                                )
+                                if expanded is None:
+                                    continue
+                                crop = PictureUtils.crop_face_from_frame(
+                                    frame, expanded
+                                )
                                 if crop is None:
                                     logger.debug(
                                         "Face crop failed for %s bbox=%s",
                                         file_path,
-                                        bbox,
+                                        expanded,
                                     )
                                     continue
                                 save_crop_debug(crop, "face", pic.id)
@@ -362,18 +419,21 @@ class TagWorker(BaseWorker):
                                     logger.debug(
                                         "Face crop conversion failed for %s bbox=%s: %s",
                                         file_path,
-                                        bbox,
+                                        expanded,
                                         e,
                                     )
                                     continue
+                                padded = pad_crop_to_square(crop_img)
+                                if padded is None:
+                                    continue
                                 key = f"{file_path}#face{face.id or face.face_index}"
-                                face_items.append((key, crop_img))
+                                all_items.append((key, padded))
                                 item_to_pic_id[key] = pic.id
+                                item_to_kind[key] = "face"
                                 if face.id is not None:
                                     item_to_face_id[key] = face.id
 
-                        if enable_hand_crops:
-                            hands = getattr(pic, "hands", None) or []
+                        if has_hand_crops:
                             hand_candidates = []
                             for hand in hands:
                                 if getattr(hand, "hand_index", 0) < 0:
@@ -388,11 +448,20 @@ class TagWorker(BaseWorker):
                                 y2 = int(max(0, min(frame_h, round(y2))))
                                 if x2 <= x1 or y2 <= y1:
                                     continue
-                                area = (x2 - x1) * (y2 - y1)
+                                expanded = expand_bbox(
+                                    [x1, y1, x2, y2],
+                                    frame_w,
+                                    frame_h,
+                                    CROP_EXPAND_SCALE,
+                                )
+                                if expanded is None:
+                                    continue
+                                ex1, ey1, ex2, ey2 = expanded
+                                area = (ex2 - ex1) * (ey2 - ey1)
                                 if hand_min_area_ratio > 0:
                                     if area / frame_area < hand_min_area_ratio:
                                         continue
-                                hand_candidates.append((area, (x1, y1, x2, y2), hand))
+                                hand_candidates.append((area, expanded, hand))
 
                             if hand_candidates:
                                 hand_candidates.sort(
@@ -424,58 +493,65 @@ class TagWorker(BaseWorker):
                                         e,
                                     )
                                     continue
+                                padded = pad_crop_to_square(crop_img)
+                                if padded is None:
+                                    continue
                                 key = f"{file_path}#hand{hand.id or hand.hand_index}"
-                                hand_items.append((key, crop_img))
+                                all_items.append((key, padded))
                                 item_to_pic_id[key] = pic.id
+                                item_to_kind[key] = "hand"
                                 if hand.id is not None:
                                     item_to_hand_id[key] = hand.id
 
-                    if face_items and not self._stop.is_set():
-                        face_results = self._picture_tagger._tag_custom_items(
-                            face_items,
+                    if all_items and not self._stop.is_set():
+                        unified_results = self._picture_tagger._tag_custom_items(
+                            all_items,
                             stop_event=self._stop,
-                            threshold=self._picture_tagger.custom_tagger_threshold_face(),
-                            image_size=self._picture_tagger.custom_tagger_image_size_face(),
+                            threshold=self._picture_tagger.custom_tagger_threshold_crops(),
+                            image_size=self._picture_tagger.custom_tagger_image_size_crops(),
                         )
-                        logger.info(f"Face crop tagging results: {face_results}")
-                        for key, tags in face_results.items():
+                        logger.info(
+                            "Crop tagging results: %s items",
+                            len(unified_results or {}),
+                        )
+                        for key, tags in unified_results.items():
                             pic_id = item_to_pic_id.get(key)
                             if pic_id is None or not tags:
                                 continue
-                            existing = crop_tags_by_pic_id.get(pic_id, [])
-                            existing.extend(tags)
-                            crop_tags_by_pic_id[pic_id] = existing
-                            face_id = item_to_face_id.get(key)
-                            if face_id is not None:
-                                existing_face = face_tags_by_face_id.get(face_id, [])
-                                filtered = [tag for tag in tags if is_face_tag(tag)]
-                                existing_face.extend(filtered)
-                                face_tags_by_face_id[face_id] = existing_face
-
-                    if hand_items and not self._stop.is_set():
-                        hand_results = self._picture_tagger._tag_custom_items(
-                            hand_items,
-                            stop_event=self._stop,
-                            threshold=self._picture_tagger.custom_tagger_threshold_hand(),
-                            image_size=self._picture_tagger.custom_tagger_image_size_hand(),
-                        )
-                        logger.info(f"Hand crop tagging results: {hand_results}")
-                        for key, tags in hand_results.items():
-                            pic_id = item_to_pic_id.get(key)
-                            if pic_id is None or not tags:
-                                continue
-                            normalized_tags = normalize_custom_tagger_tags(tags)
-                            existing = crop_tags_by_pic_id.get(pic_id, [])
-                            existing.extend(normalized_tags)
-                            crop_tags_by_pic_id[pic_id] = existing
-                            hand_id = item_to_hand_id.get(key)
-                            if hand_id is not None:
-                                existing_hand = hand_tags_by_hand_id.get(hand_id, [])
+                            kind = item_to_kind.get(key)
+                            if "blurry" in tags:
+                                logger.info(
+                                    "[TAG SOURCE] pic_id=%s source=%s tag=blurry",
+                                    pic_id,
+                                    kind or "crop",
+                                )
+                            if kind == "hand":
+                                normalized_tags = normalize_custom_tagger_tags(tags)
                                 filtered = [
                                     tag for tag in normalized_tags if is_hand_tag(tag)
                                 ]
-                                existing_hand.extend(filtered)
-                                hand_tags_by_hand_id[hand_id] = existing_hand
+                                existing = crop_tags_by_pic_id.get(pic_id, [])
+                                existing.extend(filtered)
+                                crop_tags_by_pic_id[pic_id] = existing
+                                hand_id = item_to_hand_id.get(key)
+                                if hand_id is not None:
+                                    existing_hand = hand_tags_by_hand_id.get(
+                                        hand_id, []
+                                    )
+                                    existing_hand.extend(filtered)
+                                    hand_tags_by_hand_id[hand_id] = existing_hand
+                            else:
+                                existing = crop_tags_by_pic_id.get(pic_id, [])
+                                existing.extend(tags)
+                                crop_tags_by_pic_id[pic_id] = existing
+                                face_id = item_to_face_id.get(key)
+                                if face_id is not None:
+                                    existing_face = face_tags_by_face_id.get(
+                                        face_id, []
+                                    )
+                                    filtered = [tag for tag in tags if is_face_tag(tag)]
+                                    existing_face.extend(filtered)
+                                    face_tags_by_face_id[face_id] = existing_face
                 except Exception as e:
                     logger.warning("Crop tagging failed: %s", e)
 
@@ -485,12 +561,18 @@ class TagWorker(BaseWorker):
                 if not pic:
                     continue
                 base_tags = tag_results.get(path, [])
+                if "blurry" in base_tags:
+                    logger.info(
+                        "[TAG SOURCE] pic_id=%s source=full tag=blurry",
+                        pic.id,
+                    )
                 extra_tags = crop_tags_by_pic_id.get(pic.id, [])
                 combined = sorted(set(base_tags) | set(extra_tags))
                 if combined:
                     merged_results[path] = combined
             tag_results = merged_results
             logger.debug(f"Got tag results for {len(tag_results)} images.")
+            update_payloads = []
             for path, tags in tag_results.items():
                 pic = pic_by_path.get(path)
                 logger.debug(f"Processing tags for image at path: {path}: {tags}")
@@ -525,11 +607,47 @@ class TagWorker(BaseWorker):
                         combined = set(raw) | requires_hand_tags
                         if combined:
                             hand_map[hand.id] = sorted(combined)
+                    update_payloads.append(
+                        {
+                            "pic_id": pic.id,
+                            "tags": tags,
+                            "face_map": face_map,
+                            "hand_map": hand_map,
+                        }
+                    )
 
-                    def add_tags(session: Session, pic_id, tags, face_map, hand_map):
+            if update_payloads:
+
+                def add_tags_bulk(session: Session, updates: list[dict]):
+                    updated_ids = []
+                    for update in updates:
+                        pic_id = update.get("pic_id")
+                        if pic_id is None:
+                            continue
+                        tags = update.get("tags") or []
+                        face_map = update.get("face_map") or {}
+                        hand_map = update.get("hand_map") or {}
+
+                        existing_tags = session.exec(
+                            select(Tag.tag).where(Tag.picture_id == pic_id)
+                        ).all()
+                        existing_tag_set = {
+                            row[0] if isinstance(row, tuple) else row
+                            for row in existing_tags
+                            if row
+                        }
+                        if not face_map and not hand_map:
+                            if set(tags) == existing_tag_set:
+                                continue
+
                         tag_ids = session.exec(
                             select(Tag.id).where(Tag.picture_id == pic_id)
                         ).all()
+                        tag_ids = [
+                            row[0] if isinstance(row, tuple) else row
+                            for row in tag_ids
+                            if row is not None
+                        ]
                         if tag_ids:
                             session.exec(
                                 delete(FaceTag).where(FaceTag.tag_id.in_(tag_ids))
@@ -539,72 +657,51 @@ class TagWorker(BaseWorker):
                             )
                         session.exec(delete(Tag).where(Tag.picture_id == pic_id))
 
-                        pic = session.exec(
-                            select(Picture)
-                            .where(Picture.id == pic_id)
-                            .options(selectinload(Picture.tags))
-                        ).one()
-                        existing = {t.tag: t for t in pic.tags}
-                        for tag_value in tags:
-                            if tag_value in existing:
-                                continue
-                            new_tag = Tag(picture_id=pic_id, tag=tag_value)
-                            session.add(new_tag)
-                            existing[tag_value] = new_tag
+                        all_tag_values = set(tags)
+                        for face_tags in face_map.values():
+                            all_tag_values.update(face_tags)
+                        for hand_tags in hand_map.values():
+                            all_tag_values.update(hand_tags)
+
+                        tag_objs = {}
+                        for tag_value in all_tag_values:
+                            tag_obj = Tag(picture_id=pic_id, tag=tag_value)
+                            session.add(tag_obj)
+                            tag_objs[tag_value] = tag_obj
 
                         session.flush()
 
                         for face_id, face_tags in face_map.items():
                             for tag_value in face_tags:
-                                tag_obj = existing.get(tag_value)
+                                tag_obj = tag_objs.get(tag_value)
                                 if tag_obj is None:
-                                    tag_obj = Tag(picture_id=pic_id, tag=tag_value)
-                                    session.add(tag_obj)
-                                    session.flush()
-                                    existing[tag_value] = tag_obj
-                                exists = session.exec(
-                                    select(FaceTag).where(
-                                        FaceTag.face_id == face_id,
-                                        FaceTag.tag_id == tag_obj.id,
-                                    )
-                                ).first()
-                                if exists is None:
-                                    session.add(
-                                        FaceTag(face_id=face_id, tag_id=tag_obj.id)
-                                    )
+                                    continue
+                                session.add(FaceTag(face_id=face_id, tag_id=tag_obj.id))
 
                         for hand_id, hand_tags in hand_map.items():
                             for tag_value in hand_tags:
-                                tag_obj = existing.get(tag_value)
+                                tag_obj = tag_objs.get(tag_value)
                                 if tag_obj is None:
-                                    tag_obj = Tag(picture_id=pic_id, tag=tag_value)
-                                    session.add(tag_obj)
-                                    session.flush()
-                                    existing[tag_value] = tag_obj
-                                exists = session.exec(
-                                    select(HandTag).where(
-                                        HandTag.hand_id == hand_id,
-                                        HandTag.tag_id == tag_obj.id,
-                                    )
-                                ).first()
-                                if exists is None:
-                                    session.add(
-                                        HandTag(hand_id=hand_id, tag_id=tag_obj.id)
-                                    )
+                                    continue
+                                session.add(HandTag(hand_id=hand_id, tag_id=tag_obj.id))
 
-                        session.commit()
-                        session.refresh(pic)
-                        return pic
+                        updated_ids.append(pic_id)
 
-                    pic = self._db.run_task(
-                        add_tags,
-                        pic.id,
-                        tags,
-                        face_map,
-                        hand_map,
-                        priority=DBPriority.LOW,
-                    )
-                    tagged_pictures.append((Picture, pic.id, "tags", tags))
+                    session.commit()
+                    return updated_ids
+
+                updated_ids = self._db.run_task(
+                    add_tags_bulk,
+                    update_payloads,
+                    priority=DBPriority.LOW,
+                )
+                updated_set = set(updated_ids or [])
+                for update in update_payloads:
+                    pic_id = update.get("pic_id")
+                    if pic_id in updated_set:
+                        tagged_pictures.append(
+                            (Picture, pic_id, "tags", update.get("tags") or [])
+                        )
 
         return tagged_pictures
 

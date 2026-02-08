@@ -36,16 +36,14 @@ BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = 32
 MAX_CONCURRENT_IMAGES_CPU = 8
 GENERAL_THRESHOLD = 0.8
-UNDESIRED_TAGS = "solo, general, blurry, male_focus, meme, sensitive"
+UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
 CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
-CUSTOM_TAGGER_THRESHOLD_FULL = 0.85
-CUSTOM_TAGGER_THRESHOLD_FACE = 0.85
-CUSTOM_TAGGER_THRESHOLD_HAND = 0.75
-CUSTOM_TAGGER_IMAGE_SIZE_FULL = 512
-CUSTOM_TAGGER_IMAGE_SIZE_FACE = 384
-CUSTOM_TAGGER_IMAGE_SIZE_HAND = 192
+CUSTOM_TAGGER_THRESHOLD_FULL = 0.9
+CUSTOM_TAGGER_THRESHOLD_CROPS = 0.85
+CUSTOM_TAGGER_IMAGE_SIZE_FULL = 384
+CUSTOM_TAGGER_IMAGE_SIZE_CROPS = 224
 CUSTOM_TAGGER_BATCH = 16
 CLIP_MODEL_NAME = "ViT-B-32"
 CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
@@ -99,11 +97,9 @@ class PictureTagger:
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._use_custom_tagger = True
         self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
-        self._custom_tagger_threshold_face = CUSTOM_TAGGER_THRESHOLD_FACE
-        self._custom_tagger_threshold_hand = CUSTOM_TAGGER_THRESHOLD_HAND
+        self._custom_tagger_threshold_crops = CUSTOM_TAGGER_THRESHOLD_CROPS
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
-        self._custom_tagger_image_size_face = CUSTOM_TAGGER_IMAGE_SIZE_FACE
-        self._custom_tagger_image_size_hand = CUSTOM_TAGGER_IMAGE_SIZE_HAND
+        self._custom_tagger_image_size_crops = CUSTOM_TAGGER_IMAGE_SIZE_CROPS
         self._custom_tagger_batch = CUSTOM_TAGGER_BATCH
 
         self._ensure_model_files(force_download=force_download)
@@ -772,20 +768,14 @@ class PictureTagger:
     def custom_tagger_threshold_full(self) -> float:
         return float(self._custom_tagger_threshold_full)
 
-    def custom_tagger_threshold_face(self) -> float:
-        return float(self._custom_tagger_threshold_face)
-
-    def custom_tagger_threshold_hand(self) -> float:
-        return float(self._custom_tagger_threshold_hand)
+    def custom_tagger_threshold_crops(self) -> float:
+        return float(self._custom_tagger_threshold_crops)
 
     def custom_tagger_image_size_full(self) -> int:
         return int(self._custom_tagger_image_size_full)
 
-    def custom_tagger_image_size_face(self) -> int:
-        return int(self._custom_tagger_image_size_face)
-
-    def custom_tagger_image_size_hand(self) -> int:
-        return int(self._custom_tagger_image_size_hand)
+    def custom_tagger_image_size_crops(self) -> int:
+        return int(self._custom_tagger_image_size_crops)
 
     def _tag_custom_items(
         self, items, stop_event=None, threshold=None, image_size=None

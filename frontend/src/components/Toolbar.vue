@@ -48,32 +48,16 @@
         </v-menu>
       </div>
       <div class="toolbar-sort-controls">
-        <div class="toolbar-sort-select-wrapper">
-          <select v-model="sortModel" class="toolbar-sort-select">
-            <option
-              v-for="opt in sortOptions"
-              :key="opt.value"
-              :value="opt.value"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-          <span class="toolbar-sort-chevron">
-            <v-icon>mdi-menu-down</v-icon>
-          </span>
-        </div>
         <v-btn
+          v-if="isMobile"
           icon
+          :color="sidebarVisible ? 'primary' : 'surface'"
+          @click="emit('toggle-sidebar')"
+          title="Toggle sidebar"
           class="toolbar-action-btn"
-          :title="descendingModel ? 'Descending' : 'Ascending'"
-          @click="toggleSortDirection"
         >
-          <v-icon>
-            {{ descendingModel ? "mdi-sort-ascending" : "mdi-sort-descending" }}
-          </v-icon>
+          <v-icon>mdi-dock-left</v-icon>
         </v-btn>
-      </div>
-      <div class="toolbar-controls">
         <v-btn
           v-if="isMobile"
           icon
@@ -88,6 +72,170 @@
         >
           <v-icon>mdi-magnify</v-icon>
         </v-btn>
+
+        <v-menu
+          v-model="sortMenuOpen"
+          :close-on-content-click="false"
+          location="top start"
+          origin="bottom start"
+          transition="scale-transition"
+        >
+          <template #activator="{ props }">
+            <div
+              class="toolbar-split-button"
+              :class="{ 'toolbar-split-button--icon': isMobile }"
+            >
+              <v-btn
+                class="toolbar-action-btn toolbar-split-toggle"
+                :title="descendingModel ? 'Descending' : 'Ascending'"
+                @click.stop="toggleSortDirection"
+              >
+                <v-icon>{{ sortButtonIcon }}</v-icon>
+              </v-btn>
+              <v-btn
+                v-bind="props"
+                ref="sortButtonRef"
+                :icon="isMobile"
+                class="toolbar-action-btn toolbar-sort-activator toolbar-split-menu"
+                :title="sortButtonLabel"
+              >
+                <v-icon>{{ sortTypeIcon }}</v-icon>
+                <span v-if="!isMobile" class="toolbar-sort-activator-label">
+                  {{ sortButtonLabel }}
+                </span>
+                <v-icon v-if="!isMobile" size="18" class="toolbar-sort-chevron">
+                  mdi-menu-down
+                </v-icon>
+              </v-btn>
+            </div>
+          </template>
+          <div class="toolbar-sort-panel">
+            <div class="toolbar-sort-header">
+              <div class="toolbar-sort-panel-title">
+                Sort order
+                <span>Choose one</span>
+              </div>
+              <v-btn
+                class="toolbar-sort-direction"
+                variant="text"
+                :disabled="isSearchActive"
+                @click="toggleSortDirection"
+              >
+                <v-icon size="18">
+                  {{
+                    descendingModel
+                      ? "mdi-sort-descending"
+                      : "mdi-sort-ascending"
+                  }}
+                </v-icon>
+                <span>
+                  {{ descendingModel ? "Descending" : "Ascending" }}
+                </span>
+              </v-btn>
+            </div>
+            <div v-if="isSearchActive" class="toolbar-sort-search-note">
+              Search relevance (fixed)
+            </div>
+            <v-btn-toggle
+              v-model="sortModel"
+              mandatory
+              class="toolbar-sort-grid"
+              :disabled="isSearchActive"
+            >
+              <v-btn
+                v-for="opt in sortOptions"
+                :key="opt.value"
+                :value="opt.value"
+                class="toolbar-sort-grid-btn"
+                variant="text"
+              >
+                <v-icon size="18">{{ getSortIcon(opt.value) }}</v-icon>
+                <span class="toolbar-sort-grid-label">{{ opt.label }}</span>
+                <v-icon
+                  v-if="sortModel === opt.value"
+                  size="16"
+                  class="toolbar-sort-grid-selected"
+                >
+                  mdi-check-circle
+                </v-icon>
+              </v-btn>
+            </v-btn-toggle>
+
+            <div
+              v-if="sortModel === SIMILARITY_SORT_KEY"
+              class="toolbar-sort-similarity-row"
+            >
+              <span>Similarity to</span>
+              <div class="toolbar-similarity-scroll">
+                <v-btn-toggle
+                  v-model="similarityCharacterModel"
+                  class="toolbar-sort-grid"
+                  :disabled="!hasSimilarityOptions"
+                  mandatory
+                >
+                  <v-btn
+                    v-for="opt in similarityCharacterOptions"
+                    :key="opt.value"
+                    :value="opt.value"
+                    class="toolbar-sort-grid-btn"
+                    variant="text"
+                  >
+                    <img
+                      v-if="opt.thumbnail"
+                      :src="opt.thumbnail"
+                      class="toolbar-similarity-thumb"
+                      alt=""
+                    />
+                    <div
+                      v-else
+                      class="toolbar-similarity-thumb toolbar-similarity-thumb--placeholder"
+                    ></div>
+                    <span class="toolbar-sort-grid-label">{{ opt.text }}</span>
+                    <v-icon
+                      v-if="similarityCharacterModel === opt.value"
+                      size="16"
+                      class="toolbar-sort-grid-selected"
+                    >
+                      mdi-check-circle
+                    </v-icon>
+                  </v-btn>
+                </v-btn-toggle>
+              </div>
+            </div>
+            <div
+              v-if="sortModel === STACKS_SORT_KEY"
+              class="toolbar-sort-similarity-row"
+            >
+              <span>Stack strictness</span>
+              <div class="toolbar-similarity-scroll">
+                <v-btn-toggle
+                  v-model="stackThresholdModel"
+                  class="toolbar-sort-grid"
+                  mandatory
+                >
+                  <v-btn
+                    v-for="opt in stackThresholdOptions"
+                    :key="opt.value"
+                    :value="opt.value"
+                    class="toolbar-sort-grid-btn"
+                    variant="text"
+                  >
+                    <span class="toolbar-sort-grid-label">{{ opt.label }}</span>
+                    <v-icon
+                      v-if="stackThresholdModel === opt.value"
+                      size="16"
+                      class="toolbar-sort-grid-selected"
+                    >
+                      mdi-check-circle
+                    </v-icon>
+                  </v-btn>
+                </v-btn-toggle>
+              </div>
+            </div>
+          </div>
+        </v-menu>
+      </div>
+      <div class="toolbar-controls">
         <v-menu
           v-model="columnsMenuOpenModel"
           offset-y
@@ -391,7 +539,9 @@ import { computed, ref, watch } from "vue";
 
 const props = defineProps({
   isMobile: { type: Boolean, default: false },
+  sidebarVisible: { type: Boolean, default: true },
   searchOverlayVisible: { type: Boolean, default: false },
+  isSearchActive: { type: Boolean, default: false },
   searchInput: { type: String, default: "" },
   isSearchHistoryOpen: { type: Boolean, default: false },
   filteredSearchHistory: { type: Array, default: () => [] },
@@ -420,6 +570,9 @@ const props = defineProps({
   sortOptions: { type: Array, default: () => [] },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: true },
+  similarityCharacterOptions: { type: Array, default: () => [] },
+  selectedSimilarityCharacter: { type: [String, Number, null], default: null },
+  stackThreshold: { type: [String, Number, null], default: null },
 });
 
 const emit = defineEmits([
@@ -440,6 +593,8 @@ const emit = defineEmits([
   "update:exportResolution",
   "update:exportIncludeCharacterName",
   "update:mediaTypeFilter",
+  "update:similarity-character",
+  "update:stack-threshold",
   "open-search-overlay",
   "commit-search",
   "clear-search",
@@ -448,6 +603,7 @@ const emit = defineEmits([
   "columns-end",
   "confirm-export-zip",
   "open-settings",
+  "toggle-sidebar",
   "update:selected-sort",
 ]);
 
@@ -558,6 +714,9 @@ const mediaTypeFilterModel = computed({
   set: (value) => emit("update:mediaTypeFilter", value),
 });
 
+const sortMenuOpen = ref(false);
+const sortButtonRef = ref(null);
+
 const sortModel = computed({
   get: () => props.selectedSort,
   set: (value) =>
@@ -566,6 +725,104 @@ const sortModel = computed({
       descending: descendingModel.value,
     }),
 });
+
+const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS";
+const STACKS_SORT_KEY = "PICTURE_STACKS";
+
+const hasSimilarityOptions = computed(() => {
+  return (
+    Array.isArray(props.similarityCharacterOptions) &&
+    props.similarityCharacterOptions.length > 0
+  );
+});
+
+const similarityCharacterModel = computed({
+  get: () => props.selectedSimilarityCharacter,
+  set: (value) => emit("update:similarity-character", value ?? null),
+});
+
+const stackThresholdOptions = [
+  { label: "Very Loose", value: "0.90" },
+  { label: "Loose", value: "0.92" },
+  { label: "Medium", value: "0.94" },
+  { label: "Strict", value: "0.96" },
+  { label: "Very Strict", value: "0.98" },
+];
+
+const stackThresholdModel = computed({
+  get: () => {
+    if (props.stackThreshold == null || props.stackThreshold === "") {
+      return "0.90";
+    }
+    const parsed = parseFloat(String(props.stackThreshold));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return "0.90";
+    }
+    return String(props.stackThreshold);
+  },
+  set: (value) => emit("update:stack-threshold", value),
+});
+
+const selectedSimilarityOption = computed(() => {
+  return props.similarityCharacterOptions.find(
+    (opt) => opt.value === similarityCharacterModel.value,
+  );
+});
+
+const selectedSortOption = computed(() => {
+  return props.sortOptions.find((opt) => opt.value === sortModel.value);
+});
+
+const selectedStackThresholdOption = computed(() => {
+  return stackThresholdOptions.find(
+    (opt) => opt.value === stackThresholdModel.value,
+  );
+});
+
+const sortButtonLabel = computed(() => {
+  if (props.isSearchActive) {
+    return "Search relevance";
+  }
+  if (sortModel.value === SIMILARITY_SORT_KEY) {
+    return selectedSimilarityOption.value?.text
+      ? `Similarity: ${selectedSimilarityOption.value.text}`
+      : "Similarity";
+  }
+  if (sortModel.value === STACKS_SORT_KEY) {
+    return selectedStackThresholdOption.value?.label
+      ? `Stacks: ${selectedStackThresholdOption.value.label}`
+      : "Stacks";
+  }
+  return selectedSortOption.value?.label || "Sort";
+});
+
+const sortButtonIcon = computed(() => {
+  return descendingModel.value ? "mdi-sort-descending" : "mdi-sort-ascending";
+});
+
+const sortTypeIcon = computed(() => {
+  if (props.isSearchActive) {
+    return "mdi-magnify";
+  }
+  return getSortIcon(sortModel.value);
+});
+
+const SORT_ICON_MAP = {
+  DATE: "mdi-calendar",
+  CHARACTER_LIKENESS: "mdi-account-search",
+  SMART_SCORE: "mdi-brain",
+  SCORE: "mdi-star",
+  PICTURE_STACKS: "mdi-layers",
+  NAME: "mdi-sort-alphabetical",
+  IMAGE_SIZE: "mdi-image-size-select-large",
+  RANDOM: "mdi-shuffle",
+};
+
+function getSortIcon(value) {
+  if (!value) return "mdi-sort";
+  const key = String(value).toUpperCase();
+  return SORT_ICON_MAP[key] || "mdi-sort";
+}
 
 const descendingModel = computed({
   get: () => props.selectedDescending,
@@ -622,12 +879,13 @@ defineExpose({ blurSearchInput });
 .top-toolbar {
   background-color: rgb(var(--v-theme-toolbar)) !important;
   width: 100%;
-  min-height: 30px;
+  min-height: 38px;
   display: flex;
-  align-items: center;
+  vertical-align: top;
   padding: 4px 4px 4px 4px;
   z-index: 5;
   position: relative;
+  --toolbar-control-height: 44px;
 }
 
 .toolbar-actions {
@@ -668,37 +926,149 @@ defineExpose({ blurSearchInput });
   margin-left: 8px;
 }
 
-.toolbar-sort-select-wrapper {
-  position: relative;
+.toolbar-sort-panel {
+  padding: 8px;
+  min-width: 340px;
+  max-width: 340px;
+  width: 340px;
+  max-height: 70vh;
+  background: rgba(var(--v-theme-background), 0.92);
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 10px;
+  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.toolbar-sort-panel-title {
+  font-size: 1em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toolbar-sort-panel-title span {
+  font-size: 0.8em;
+  font-weight: 400;
+  color: rgba(var(--v-theme-on-background), 0.6);
+}
+
+.toolbar-sort-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.toolbar-sort-select {
-  appearance: none;
-  background: rgba(var(--v-theme-surface), 0.2);
-  color: rgb(var(--v-theme-on-background));
-  border-radius: 8px;
-  border: 1px solid rgba(var(--v-theme-border), 0.5);
-  min-height: 32px;
-  height: 32px;
-  font-size: 0.95em;
-  padding: 0 26px 0 10px;
-  box-shadow: none;
+.toolbar-sort-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(42px, auto);
+  gap: 6px;
+  align-content: start;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  padding-bottom: 4px;
 }
 
-.toolbar-sort-select:focus {
-  outline: none;
-  border: 1.5px solid rgb(var(--v-theme-accent));
+.toolbar-sort-grid-btn {
+  justify-content: flex-start;
+  gap: 4px;
+  text-transform: none;
+  border-radius: 4px;
+  min-height: var(--toolbar-control-height);
+  padding: 2px 2px;
+  background: rgba(var(--v-theme-surface), 0.2) !important;
+  color: rgb(var(--v-theme-on-background)) !important;
+  border: none;
 }
 
-.toolbar-sort-chevron {
-  position: absolute;
-  right: 6px;
-  pointer-events: none;
-  color: rgba(var(--v-theme-on-background), 0.7);
-  display: inline-flex;
+.toolbar-sort-grid-btn :deep(.v-btn__content) {
+  display: flex;
   align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.toolbar-sort-grid-btn.v-btn--active {
+  background: rgba(var(--v-theme-primary), 0.62) !important;
+  color: rgb(var(--v-theme-on-background)) !important;
+  border-color: rgba(var(--v-theme-primary), 0.6);
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-primary), 0.2);
+}
+
+.toolbar-sort-grid-btn.v-btn--active .toolbar-sort-grid-label {
+  font-weight: 600;
+}
+
+.toolbar-sort-grid-selected {
+  position: absolute;
+  right: 2px;
+  color: rgb(var(--v-theme-accent));
+}
+
+.toolbar-sort-grid-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.8em;
+}
+
+.toolbar-sort-similarity-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.toolbar-sort-similarity-row > span {
+  font-size: 0.85em;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  white-space: nowrap;
+}
+
+.toolbar-similarity-scroll {
+  width: 100%;
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.toolbar-similarity-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: rgba(var(--v-theme-surface), 0.35);
+}
+
+.toolbar-similarity-thumb--placeholder {
+  display: inline-block;
+}
+
+.toolbar-sort-direction {
+  align-self: center;
+  gap: 6px;
+  text-transform: none;
+  border-radius: 8px;
+  min-height: var(--toolbar-control-height);
+  padding: 6px 6px;
+  background: rgba(var(--v-theme-surface), 0.2) !important;
+  color: rgb(var(--v-theme-on-background)) !important;
+}
+
+.toolbar-sort-search-note {
+  font-size: 0.85em;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface), 0.2);
 }
 
 .toolbar-search-field {
@@ -712,11 +1082,24 @@ defineExpose({ blurSearchInput });
 
 .toolbar-search-field :deep(.v-input__control) {
   width: 100%;
+  min-height: var(--toolbar-control-height);
 }
 
 .toolbar-search-field :deep(.v-field) {
   border-radius: 8px;
   background: rgba(var(--v-theme-surface), 0.2);
+  min-height: var(--toolbar-control-height);
+  height: var(--toolbar-control-height);
+  align-items: center;
+  box-shadow: 2px 2px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+.toolbar-search-field :deep(.v-field__input) {
+  padding-top: 0;
+  padding-bottom: 0;
+  min-height: var(--toolbar-control-height);
+  display: flex;
+  align-items: center;
 }
 
 .toolbar-search-field :deep(.v-field__input) {
@@ -736,8 +1119,8 @@ defineExpose({ blurSearchInput });
 }
 
 .toolbar-action-btn {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: var(--toolbar-control-height);
+  min-height: var(--toolbar-control-height);
   padding: 0;
   border: none;
   border-radius: 8px;
@@ -759,7 +1142,73 @@ defineExpose({ blurSearchInput });
 }
 
 .toolbar-action-btn.v-btn--active {
-  border-color: rgba(var(--v-theme-surface), 0.2);
+  border-color: rgba(var(--v-theme-surface), 0.2) !important;
+}
+
+.toolbar-split-button {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(var(--v-theme-surface), 0.2) !important;
+  box-shadow: 2px 2px 2px rgba(0, 0, 0, 0.4) !important;
+  height: var(--toolbar-control-height);
+}
+
+.toolbar-split-button .toolbar-action-btn {
+  border-radius: 0;
+  height: var(--toolbar-control-height);
+}
+
+.toolbar-split-toggle {
+  border-right: 1px solid rgba(var(--v-theme-on-background), 0.1);
+  background: rgba(var(--v-theme-primary), 0.35) !important;
+  color: rgb(var(--v-theme-on-primary)) !important;
+}
+
+.toolbar-split-menu {
+  padding: 0 10px;
+}
+
+.toolbar-sort-activator {
+  padding: 0 10px;
+  min-width: var(--toolbar-control-height);
+  width: 190px;
+  justify-content: flex-start;
+}
+
+.toolbar-split-button .toolbar-sort-activator {
+  width: 190px;
+}
+
+.toolbar-split-button--icon .toolbar-sort-activator,
+.toolbar-split-button--icon .toolbar-split-menu {
+  width: auto;
+  padding: 0;
+}
+
+.toolbar-sort-activator :deep(.v-btn__content) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  justify-content: flex-start;
+  position: relative;
+  padding-right: 22px;
+}
+
+.toolbar-sort-chevron {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+}
+
+.toolbar-sort-activator-label {
+  font-size: 0.9em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .media-type-toggle {
@@ -770,8 +1219,8 @@ defineExpose({ blurSearchInput });
 
 .media-type-toggle .v-btn {
   color: rgb(var(--v-theme-on-primary)) !important;
-  height: 32px;
-  width: 32px;
+  height: var(--toolbar-control-height);
+  width: var(--toolbar-control-height);
   background-color: rgba(var(--v-theme-surface), 0.3) !important;
   align-items: center;
 }
