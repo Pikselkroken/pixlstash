@@ -1,19 +1,16 @@
 <template>
   <ImageOverlay
     :open="overlayOpen"
-    :initialImage="overlayImage"
+    :initialImageId="overlayImageId"
     :allImages="allGridImages"
     :backendUrl="props.backendUrl"
-    :tagsRefreshing="overlayTagsRefreshing"
     :tagUpdate="props.wsTagUpdate"
     @close="closeOverlay"
     @apply-score="applyScore"
     @add-tag="addTagToImage"
     @remove-tag="removeTagFromImage"
     @update-description="updateDescriptionForImage"
-    @refresh-image="refreshImageFromOverlay"
-    @image-change="handleOverlayImageChange"
-    @tag-refresh-start="handleTagRefreshStart"
+    @overlay-change="handleOverlayChange"
     @added-to-set="handleOverlayAddedToSet"
   />
   <ImageImporter
@@ -569,8 +566,15 @@ watch(
     const nextKey = payload.key || 0;
     if (!nextKey || nextKey === lastWsTagUpdateKey.value) return;
     lastWsTagUpdateKey.value = nextKey;
-    if (!overlayOpen.value || !overlayImage.value?.id) return;
-    refreshImageFromOverlay({ imageId: overlayImage.value.id, force: true });
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds
+      : [];
+    const normalizedPayloadIds = pictureIds
+      .map((id) => normalizePictureId(id))
+      .filter((id) => id != null);
+    for (const id of normalizedPayloadIds) {
+      refreshGridImage(id);
+    }
   },
 );
 
@@ -1028,7 +1032,6 @@ async function refreshTagsForSelection() {
   const ids = selectedImageIds.value.slice();
   const normalizedIds = new Set(ids.map((id) => normalizePictureId(id)));
   try {
-    ids.forEach((id) => handleTagRefreshStart(id));
     await apiClient.post(`${props.backendUrl}/pictures/clear_tags`, {
       picture_ids: ids,
     });
@@ -1038,14 +1041,8 @@ async function refreshTagsForSelection() {
       }
       return { ...img, tags: [] };
     });
-    if (
-      overlayImage.value &&
-      normalizedIds.has(normalizePictureId(overlayImage.value.id))
-    ) {
-      overlayImage.value = { ...overlayImage.value, tags: [] };
-    }
     for (const id of ids) {
-      refreshImageFromOverlay(id);
+      refreshGridImage(id);
     }
   } catch (err) {
     alert(`Failed to refresh tags: ${err?.message || err}`);
@@ -1445,20 +1442,7 @@ const hasMoreImages = ref(true);
 
 // Image overlay
 const overlayOpen = ref(false);
-const overlayImage = ref(null);
-const overlayTagsRefreshToken = ref(0);
-const overlayTagsRefreshInFlight = ref(false);
-const pendingTagRefreshIds = ref(new Set());
-const pendingTagRefreshTimeouts = new Map();
-const TAG_REFRESH_TIMEOUT_MS = 30000;
-
-const overlayTagsRefreshing = computed(() => {
-  const imageId = overlayImage.value?.id;
-  if (!imageId) return false;
-  return (
-    overlayTagsRefreshInFlight.value || pendingTagRefreshIds.value.has(imageId)
-  );
-});
+const overlayImageId = ref(null);
 
 // Drag-and-drop overlay state
 const dragOverlayVisible = ref(false);
@@ -1652,213 +1636,26 @@ function shouldRemoveFromCurrentView(faces) {
   return !list.some((face) => String(face?.character_id) === selected);
 }
 
-async function refreshImageFromOverlay(payload) {
-  const imageId =
-    typeof payload === "object" && payload !== null ? payload.imageId : payload;
-  const faces =
-    typeof payload === "object" && payload !== null ? payload.faces : null;
-  const force =
-    typeof payload === "object" && payload !== null
-      ? Boolean(payload.force)
-      : false;
-  const mergeTags =
-    typeof payload === "object" && payload !== null
-      ? Boolean(payload.mergeTags)
-      : false;
+function handleOverlayChange(payload) {
+  if (!payload) return;
+  const imageId = payload.imageId ?? payload.id ?? payload;
   if (!imageId) return;
-  const normalizedId = normalizePictureId(imageId);
-  const overlayMatches =
-    overlayOpen.value &&
-    normalizePictureId(overlayImage.value?.id) === normalizedId;
-  let refreshToken = null;
-  if (overlayMatches) {
-    overlayTagsRefreshInFlight.value = true;
-    overlayTagsRefreshToken.value += 1;
-    refreshToken = overlayTagsRefreshToken.value;
-  }
-  const existingIndexBefore = allGridImages.value.findIndex(
-    (img) => normalizePictureId(img?.id) === normalizedId,
-  );
-  const previousScore =
-    existingIndexBefore !== -1
-      ? (allGridImages.value[existingIndexBefore]?.score ?? 0)
-      : null;
-
-  try {
-    if (shouldRemoveFromCurrentView(faces)) {
-      removeImagesById([imageId]);
-      return;
-    }
-
-    const existingIndex = allGridImages.value.findIndex(
-      (img) => normalizePictureId(img?.id) === normalizedId,
-    );
-    if (existingIndex === -1) {
-      const latestInfo = await fetchImageInfo(imageId, { force });
-      if (!latestInfo || Array.isArray(latestInfo)) return;
-      addImageToGrid(latestInfo);
-    } else if (!isSmartScoreSortActive()) {
-      if (mergeTags) {
-        const latestInfo = await fetchImageInfo(imageId, { force });
-        if (latestInfo && !Array.isArray(latestInfo)) {
-          const current = allGridImages.value[existingIndex] || {};
-          const dataTags = normalizeTagList(latestInfo.tags);
-          const nextTags =
-            latestInfo.tags !== undefined
-              ? dedupeTagList([...normalizeTagList(current.tags), ...dataTags])
-              : current.tags;
-          allGridImages.value[existingIndex] = {
-            ...current,
-            ...latestInfo,
-            tags: nextTags,
-            idx: current.idx ?? existingIndex,
-          };
-          invalidateThumbnailIndex(existingIndex);
-          fetchThumbnailsBatch(existingIndex, existingIndex + 1);
-        }
-      } else {
-        await refreshGridImage(imageId);
-      }
-    }
-
-    if (
-      overlayOpen.value &&
-      normalizePictureId(overlayImage.value?.id) === normalizedId
-    ) {
-      const latestInfo = await fetchImageInfo(imageId, { force });
-      if (latestInfo && !Array.isArray(latestInfo)) {
-        const merged = { ...latestInfo, ...overlayImage.value };
-        if (overlayImage.value?.description == null) {
-          merged.description = latestInfo.description ?? null;
-        }
-        const dataTags = normalizeTagList(latestInfo.tags);
-        if (latestInfo.tags !== undefined) {
-          merged.tags = mergeTags
-            ? dedupeTagList([
-                ...normalizeTagList(overlayImage.value?.tags),
-                ...dataTags,
-              ])
-            : dedupeTagList(dataTags);
-        }
-        if (overlayImage.value?.metadata == null) {
-          merged.metadata = latestInfo.metadata ?? {};
-        }
-        overlayImage.value = merged;
-        if (dataTags.length > 0) {
-          clearPendingTagRefresh(imageId);
-        }
-      }
-    }
-
-    if (isSmartScoreSortActive()) {
-      await refreshSmartScoreForImage(imageId);
-      return;
-    }
-
-    if (isCharacterLikenessSortActive()) {
-      const likenessPayload = await fetchCharacterLikenessForImage(imageId);
-      if (!likenessPayload) return;
-      if (likenessPayload.eligible === false) {
-        removeImagesById([imageId]);
-        return;
-      }
-      const idx = allGridImages.value.findIndex(
-        (img) => normalizePictureId(img?.id) === normalizedId,
-      );
-      if (idx !== -1) {
-        allGridImages.value[idx] = {
-          ...allGridImages.value[idx],
-          character_likeness: likenessPayload.character_likeness ?? 0.0,
-        };
-      }
-      repositionImageByLikeness(imageId);
-      return;
-    }
-
-    if (isScoreSortActive()) {
-      const gridImg = allGridImages.value.find(
-        (img) => normalizePictureId(img?.id) === normalizedId,
-      );
-      const nextScore = gridImg?.score ?? 0;
-      if (previousScore === null || nextScore !== previousScore) {
-        repositionImageByScore(imageId, nextScore);
-      }
-      return;
-    }
-
-    if (isDateSortActive()) {
-      const gridImg = allGridImages.value.find(
-        (img) => normalizePictureId(img?.id) === normalizedId,
-      );
-      repositionImageByDate(imageId, gridImg?.created_at);
-    }
-  } finally {
-    if (
-      overlayMatches &&
-      refreshToken != null &&
-      overlayTagsRefreshToken.value === refreshToken
-    ) {
-      overlayTagsRefreshInFlight.value = false;
-    }
+  const fields = payload.fields || {};
+  refreshGridImage(imageId);
+  if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
+    refreshSmartScoreForImage(imageId);
   }
 }
 
 async function openOverlay(img) {
   if (!img || !img.id) return;
-  const requestedId = img.id;
-  overlayImage.value = { ...img };
+  overlayImageId.value = img.id;
   overlayOpen.value = true;
-
-  const latestInfo = await fetchImageInfo(requestedId);
-  if (!latestInfo || Array.isArray(latestInfo)) return;
-  if (!overlayImage.value || overlayImage.value.id !== requestedId) return;
-  const merged = { ...latestInfo, ...overlayImage.value };
-  if (overlayImage.value?.description == null) {
-    merged.description = latestInfo.description ?? null;
-  }
-  const dataTags = normalizeTagList(latestInfo.tags);
-  if (latestInfo.tags !== undefined) {
-    merged.tags = dedupeTagList(dataTags);
-  }
-  if (overlayImage.value?.metadata == null) {
-    merged.metadata = latestInfo.metadata ?? {};
-  }
-  overlayImage.value = merged;
-}
-
-function handleTagRefreshStart(imageId) {
-  if (!imageId) return;
-  const next = new Set(pendingTagRefreshIds.value);
-  next.add(imageId);
-  pendingTagRefreshIds.value = next;
-  if (pendingTagRefreshTimeouts.has(imageId)) {
-    clearTimeout(pendingTagRefreshTimeouts.get(imageId));
-  }
-  const timeout = setTimeout(() => {
-    clearPendingTagRefresh(imageId);
-  }, TAG_REFRESH_TIMEOUT_MS);
-  pendingTagRefreshTimeouts.set(imageId, timeout);
-}
-
-function clearPendingTagRefresh(imageId) {
-  const next = new Set(pendingTagRefreshIds.value);
-  if (next.has(imageId)) {
-    next.delete(imageId);
-    pendingTagRefreshIds.value = next;
-  }
-  if (pendingTagRefreshTimeouts.has(imageId)) {
-    clearTimeout(pendingTagRefreshTimeouts.get(imageId));
-    pendingTagRefreshTimeouts.delete(imageId);
-  }
-}
-
-function handleOverlayImageChange(nextImage) {
-  if (!nextImage || !nextImage.id) return;
-  overlayImage.value = { ...nextImage };
 }
 
 function closeOverlay() {
   overlayOpen.value = false;
+  overlayImageId.value = null;
 }
 
 async function setScore(img, n) {
@@ -2084,16 +1881,6 @@ async function refreshSmartScoreForImage(imageId) {
     await new Promise((resolve) => requestAnimationFrame(resolve));
     repositionImageBySmartScore(imageId, smartScore ?? 0, latestInfo);
   }
-
-  if (overlayImage.value && overlayImage.value.id === imageId) {
-    overlayImage.value = {
-      ...overlayImage.value,
-      smartScore:
-        typeof latestInfo.smartScore === "number"
-          ? latestInfo.smartScore
-          : null,
-    };
-  }
 }
 
 async function applyScoresByEntries(entries, options = {}) {
@@ -2122,17 +1909,6 @@ async function applyScoresByEntries(entries, options = {}) {
     if (!scoreMap.has(key)) return img;
     return { ...img, score: scoreMap.get(key) };
   });
-
-  if (
-    overlayOpen.value &&
-    overlayImage.value &&
-    scoreMap.has(String(overlayImage.value.id))
-  ) {
-    overlayImage.value = {
-      ...overlayImage.value,
-      score: scoreMap.get(String(overlayImage.value.id)),
-    };
-  }
 
   if (updateSort && isScoreSortActive()) {
     const descending = props.selectedDescending === true;
@@ -2172,7 +1948,7 @@ async function applyScoresByEntries(entries, options = {}) {
 
 async function applyScore(img, newScore) {
   console.debug("Applying score:", newScore);
-  const imageId = img.id || (overlayImage.value && overlayImage.value.id);
+  const imageId = img?.id;
   if (!imageId) {
     alert("Failed to set score: image id is missing.");
     return;
@@ -3417,12 +3193,6 @@ async function removeTagFromImage(imageId, tag) {
       const normalized = normalizeTagList(gridImg.tags);
       gridImg.tags = normalized.filter((t) => !tagMatches(t, tag));
     }
-    if (overlayImage.value && overlayImage.value.id === imageId) {
-      const overlayTags = normalizeTagList(overlayImage.value.tags).filter(
-        (t) => !tagMatches(t, tag),
-      );
-      overlayImage.value = { ...overlayImage.value, tags: overlayTags };
-    }
     if (isSmartScoreSortActive()) {
       await refreshSmartScoreForImage(imageId);
     } else {
@@ -3453,13 +3223,6 @@ async function addTagToImage(imageId, tag) {
         : dedupeTagList([...current, { id: null, tag }]);
       gridImg.tags = merged;
     }
-    if (overlayImage.value && overlayImage.value.id === imageId) {
-      const current = normalizeTagList(overlayImage.value.tags);
-      const merged = responseTags.length
-        ? responseTags
-        : dedupeTagList([...current, { id: null, tag }]);
-      overlayImage.value = { ...overlayImage.value, tags: merged };
-    }
     if (isSmartScoreSortActive()) {
       await refreshSmartScoreForImage(imageId);
     } else {
@@ -3474,9 +3237,6 @@ function updateDescriptionForImage(imageId, description) {
   const gridImg = allGridImages.value.find((img) => img && img.id === imageId);
   if (gridImg) {
     gridImg.description = description;
-  }
-  if (overlayImage.value && overlayImage.value.id === imageId) {
-    overlayImage.value = { ...overlayImage.value, description };
   }
   refreshGridImage(imageId);
 }
