@@ -308,9 +308,7 @@ class FeatureExtractionWorker(BaseWorker):
                             first_frame = frame
                             if need_faces:
                                 frame_faces = self._insightface_app.get(frame)
-                                face_expand_fraction = max(
-                                    0.0, CROP_EXPAND_SCALE - 1.0
-                                )
+                                face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
                                 for face in frame_faces:
                                     expanded_bbox = Face.expand_face_bbox(
                                         face.bbox,
@@ -379,9 +377,7 @@ class FeatureExtractionWorker(BaseWorker):
                                 continue
                             if need_faces:
                                 frame_faces = self._insightface_app.get(frame)
-                                face_expand_fraction = max(
-                                    0.0, CROP_EXPAND_SCALE - 1.0
-                                )
+                                face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
                                 for face in frame_faces:
                                     expanded_bbox = Face.expand_face_bbox(
                                         face.bbox,

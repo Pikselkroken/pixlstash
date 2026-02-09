@@ -389,9 +389,7 @@ class TagWorker(BaseWorker):
                                 clamped = clamp_bbox(bbox, frame_w, frame_h)
                                 if clamped is None:
                                     continue
-                                crop = PictureUtils.crop_face_from_frame(
-                                    frame, clamped
-                                )
+                                crop = PictureUtils.crop_face_from_frame(frame, clamped)
                                 if crop is None:
                                     logger.debug(
                                         "Face crop failed for %s bbox=%s",
@@ -405,9 +403,8 @@ class TagWorker(BaseWorker):
                                     crop_img = Image.fromarray(crop_rgb)
                                 except Exception as e:
                                     logger.debug(
-                                        "Face crop conversion failed for %s bbox=%s: %s",
+                                        "Face crop conversion failed for %s: %s",
                                         file_path,
-                                        expanded,
                                         e,
                                     )
                                     continue
