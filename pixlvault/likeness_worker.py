@@ -1,3 +1,4 @@
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
@@ -8,7 +9,8 @@ from typing import List, Optional, Tuple
 from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
 from pixlvault.worker_registry import BaseWorker, WorkerType
-from pixlvault.db_models.quality import Quality
+from pixlvault.db_models.face import Face
+from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.picture_likeness import (
     PictureLikeness,
     PictureLikenessFrontier,
@@ -20,6 +22,11 @@ logger = get_logger(__name__)
 class LikenessWorker(BaseWorker):
     BATCH_SIZE = 5000
     TOP_K = 200
+    FACE_COUNT_MAX_DIFF = 1
+    FACE_WEIGHT = 0.5
+    IMAGE_WEIGHT = 0.5
+    PHASH_BITS = 64
+    PHASH_STRONG_MATCH = 0.95
 
     def worker_type(self) -> WorkerType:
         return WorkerType.LIKENESS
@@ -28,14 +35,14 @@ class LikenessWorker(BaseWorker):
     def get_next_batch(cls, session: Session) -> Optional[Tuple[int, List[int]]]:
         """
         Return the next work chunk as (a, bs), where:
-        - a is the next picture_id_a with remaining work and quality ready,
-        - bs is a contiguous list of b ids (a < b) with quality ready,
+        - a is the next picture_id_a with remaining work and embedding ready,
+        - bs is a contiguous list of b ids (a < b) with embedding ready,
         - len(bs) <= batch_size and starts at the current frontier start_b.
         Returns None if nothing to do.
         """
 
         a = PictureLikenessFrontier.get_next_a_candidate(
-            session, quality_ready=Quality.quality_read_for_picture
+            session, quality_ready=cls._embedding_ready
         )
         if a is None:
             return None, None
@@ -50,27 +57,24 @@ class LikenessWorker(BaseWorker):
 
         start_b, end_b = rng
 
-        # Filter window to b with quality ready on both sides
-        # Note: we require Quality for 'a' (already checked) and for each 'b'
+        # Filter window to b with embedding ready on both sides
         # Query all b rows in one go for efficiency
         b_rows = session.exec(
-            select(Quality.picture_id)
+            select(Picture.id)
             .where(
-                (Quality.picture_id >= start_b)
-                & (Quality.picture_id <= end_b)
-                & (Quality.face_id.is_(None))
+                (Picture.id >= start_b)
+                & (Picture.id <= end_b)
+                & (Picture.image_embedding.is_not(None))
             )
-            .order_by(Quality.picture_id)
+            .order_by(Picture.id)
         ).all()
         eligible_bs_all = [int(pid) for pid in b_rows]
 
-        # Take the longest consecutive prefix from start_b
-        bs_prefix = PictureLikenessFrontier.consecutive_prefix(start_b, eligible_bs_all)
-
-        if not bs_prefix:
+        # Allow sparse ranges: take any eligible b values within the window
+        if not eligible_bs_all:
             return None, None  # No eligible b in the window
 
-        return a, bs_prefix[: cls.BATCH_SIZE]
+        return a, eligible_bs_all[: cls.BATCH_SIZE]
 
     def _run(self):
         logger.info("LikenessWorker: Likeness worker started.")
@@ -83,27 +87,46 @@ class LikenessWorker(BaseWorker):
             a, bs = self._db.run_immediate_read_task(LikenessWorker.get_next_batch)
 
             if not a or not bs:
-                logger.debug("LikenessWorker: No pending pairs. Sleeping...")
+                logger.info("LikenessWorker: No pending pairs. Sleeping...")
                 self._wait()
                 continue
 
-            logger.debug(f"LikenessWorker: Processing {len(bs)} pairs.")
+            logger.info(f"LikenessWorker: Processing {len(bs)} pairs.")
 
             pids_needed = set()
             for b in bs:
                 pids_needed.add(a)
                 pids_needed.add(b)
 
-            def fetch_quality(session, ids):
-                qualities = session.exec(
-                    select(Quality).where(
-                        Quality.picture_id.in_(ids) & (Quality.face_id.is_(None))
+            def fetch_embeddings_and_faces(session, ids):
+                embeddings = session.exec(
+                    select(Picture.id, Picture.image_embedding).where(
+                        Picture.id.in_(ids)
                     )
                 ).all()
-                return {quality.picture_id: quality for quality in qualities}
+                embedding_dict = {}
+                for pid, emb in embeddings:
+                    if isinstance(emb, (memoryview, bytearray)):
+                        emb = bytes(emb)
+                    embedding_dict[pid] = emb
 
-            quality_dict = self._db.run_task(
-                fetch_quality, list(pids_needed), priority=DBPriority.LOW
+                face_rows = session.exec(
+                    select(Face.picture_id, Face.features).where(
+                        Face.picture_id.in_(ids)
+                        & (Face.face_index != -1)
+                        & (Face.features.is_not(None))
+                    )
+                ).all()
+                face_dict = defaultdict(list)
+                for pic_id, features in face_rows:
+                    if isinstance(features, (memoryview, bytearray)):
+                        features = bytes(features)
+                    face_dict[pic_id].append(features)
+
+                return embedding_dict, face_dict
+
+            embedding_dict, face_dict = self._db.run_task(
+                fetch_embeddings_and_faces, list(pids_needed), priority=DBPriority.LOW
             )
 
             likeness_results = []
@@ -112,32 +135,39 @@ class LikenessWorker(BaseWorker):
                 if self._stop.is_set():
                     break
                 logger.debug(f"LikenessWorker: Processing pair (a={a}, b={b})")
-                quality_a_obj = quality_dict.get(a)
-                quality_b_obj = quality_dict.get(b)
-                if quality_a_obj is None or quality_b_obj is None:
+                embedding_a = embedding_dict.get(a)
+                embedding_b = embedding_dict.get(b)
+                if embedding_a is None or embedding_b is None:
                     logger.warning(
-                        "LikenessWorker: Missing quality for pair (a=%s, b=%s)",
+                        "LikenessWorker: Missing embeddings for pair (a=%s, b=%s)",
                         a,
                         b,
                     )
                     continue
-                quality_a = quality_a_obj.get_color_histogram()
-                quality_b = quality_b_obj.get_color_histogram()
-                if quality_a is None or quality_b is None:
+                emb_a = self._decode_embedding(embedding_a)
+                emb_b = self._decode_embedding(embedding_b)
+                if emb_a is None or emb_b is None:
                     logger.warning(
-                        "LikenessWorker: Missing color histogram for pair (a=%s, b=%s)",
+                        "LikenessWorker: Invalid embeddings for pair (a=%s, b=%s)",
                         a,
                         b,
                     )
                     continue
-                likeness = self._color_histogram_likeness(quality_a, quality_b)
+
+                face_features_a = face_dict.get(a, [])
+                face_features_b = face_dict.get(b, [])
+                likeness = self._embedding_likeness(
+                    emb_a, emb_b, face_features_a, face_features_b
+                )
+                if likeness is None:
+                    continue
 
                 likeness_results.append(
                     PictureLikeness(
                         picture_id_a=a,
                         picture_id_b=b,
                         likeness=likeness,
-                        metric="color_histogram",
+                        metric="image_face_embedding",
                     )
                 )
                 processed_notify_ids.append((PictureLikeness, (a, b), "pair", likeness))
@@ -173,9 +203,153 @@ class LikenessWorker(BaseWorker):
                 self._wait()
         logger.info("LikenessWorker: Likeness worker stopped.")
 
-    def _color_histogram_likeness(self, hist_a, hist_b):
-        if hist_a is None or hist_b is None:
+    @staticmethod
+    def _embedding_ready(session: Session, picture_id: int) -> bool:
+        return (
+            session.exec(
+                select(Picture.id).where(
+                    (Picture.id == picture_id)
+                    & (Picture.image_embedding.is_not(None))
+                )
+            ).first()
+            is not None
+        )
+
+    @staticmethod
+    def _decode_embedding(blob) -> Optional[np.ndarray]:
+        if blob is None:
+            return None
+        if isinstance(blob, (memoryview, bytearray)):
+            blob = bytes(blob)
+        if isinstance(blob, np.ndarray):
+            arr = np.asarray(blob, dtype=np.float32)
+            return arr if arr.size else None
+        if not isinstance(blob, (bytes, bytearray)):
+            try:
+                blob = bytes(blob)
+            except Exception:
+                return None
+        try:
+            arr = np.frombuffer(blob, dtype=np.float32)
+            if arr.size == 0:
+                return None
+            return arr.copy()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _cosine_similarity(vec_a: np.ndarray, vec_b: np.ndarray) -> Optional[float]:
+        if vec_a is None or vec_b is None:
+            return None
+        if vec_a.shape != vec_b.shape or vec_a.size == 0:
+            return None
+        norm_a = np.linalg.norm(vec_a)
+        norm_b = np.linalg.norm(vec_b)
+        if norm_a == 0 or norm_b == 0:
+            return None
+        sim = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
+        sim = float(np.clip(sim, -1.0, 1.0))
+        return 0.5 * (sim + 1.0)
+
+    def _decode_face_vectors(self, features_list: list[bytes]) -> list[np.ndarray]:
+        vectors = []
+        for blob in features_list:
+            arr = self._decode_embedding(blob)
+            if arr is None:
+                continue
+            if arr.ndim != 1:
+                arr = arr.ravel()
+            if arr.size == 0:
+                continue
+            vectors.append(arr)
+        if not vectors:
+            return []
+        target_size = vectors[0].size
+        return [vec for vec in vectors if vec.size == target_size]
+
+    @staticmethod
+    def _filter_common_face_vectors(
+        vecs_a: list[np.ndarray], vecs_b: list[np.ndarray]
+    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        if not vecs_a or not vecs_b:
+            return [], []
+        sizes_a = [vec.size for vec in vecs_a]
+        sizes_b = [vec.size for vec in vecs_b]
+        common_sizes = set(sizes_a) & set(sizes_b)
+        if not common_sizes:
+            return [], []
+        common_size = max(common_sizes, key=lambda s: sizes_a.count(s) + sizes_b.count(s))
+        return (
+            [vec for vec in vecs_a if vec.size == common_size],
+            [vec for vec in vecs_b if vec.size == common_size],
+        )
+
+    @staticmethod
+    def _max_face_similarity(vecs_a: list[np.ndarray], vecs_b: list[np.ndarray]) -> Optional[float]:
+        if not vecs_a or not vecs_b:
+            return None
+        a = np.stack(vecs_a)
+        b = np.stack(vecs_b)
+        if a.ndim == 1:
+            a = a.reshape(1, -1)
+        if b.ndim == 1:
+            b = b.reshape(1, -1)
+        if a.shape[1] != b.shape[1]:
+            return None
+        a_norm = a / np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-8)
+        b_norm = b / np.maximum(np.linalg.norm(b, axis=1, keepdims=True), 1e-8)
+        sims = a_norm @ b_norm.T
+        sim = float(np.max(sims))
+        sim = float(np.clip(sim, -1.0, 1.0))
+        return 0.5 * (sim + 1.0)
+
+    def _embedding_likeness(
+        self,
+        emb_a: np.ndarray,
+        emb_b: np.ndarray,
+        face_features_a: list[bytes],
+        face_features_b: list[bytes],
+    ) -> Optional[float]:
+        image_sim = self._cosine_similarity(emb_a, emb_b)
+        if image_sim is None:
+            return None
+
+        vecs_a = self._decode_face_vectors(face_features_a)
+        vecs_b = self._decode_face_vectors(face_features_b)
+        if vecs_a or vecs_b:
+            if not vecs_a or not vecs_b:
+                return 0.0
+            vecs_a, vecs_b = self._filter_common_face_vectors(vecs_a, vecs_b)
+            if not vecs_a or not vecs_b:
+                return 0.0
+            if abs(len(vecs_a) - len(vecs_b)) > self.FACE_COUNT_MAX_DIFF:
+                return 0.0
+            face_sim = self._max_face_similarity(vecs_a, vecs_b)
+            if face_sim is None:
+                return 0.0
+            likeness = (self.IMAGE_WEIGHT * image_sim) + (
+                self.FACE_WEIGHT * face_sim
+            )
+            return float(np.clip(likeness, 0.0, 1.0))
+
+        return float(np.clip(image_sim, 0.0, 1.0))
+
+    def _color_histogram_likeness(self, img_a, img_b, bins=32):
+        if img_a is None or img_b is None:
             return 0.0
+
+        def get_hist(img):
+            chans = cv2.split(img)
+            hist = [
+                cv2.calcHist([c], [0], None, [bins], [0, 256]).flatten()
+                for c in chans
+            ]
+            hist = np.concatenate(hist)
+            hist = hist / (np.sum(hist) + 1e-8)
+            return hist
+
+        hist_a = img_a if hasattr(img_a, "ndim") and img_a.ndim == 1 else get_hist(img_a)
+        hist_b = img_b if hasattr(img_b, "ndim") and img_b.ndim == 1 else get_hist(img_b)
         l1 = np.sum(np.abs(hist_a - hist_b))
         likeness = 1.0 - (l1 / 2.0)
         return float(np.clip(likeness, 0.0, 1.0))

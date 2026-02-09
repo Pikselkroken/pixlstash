@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto
-from sqlalchemy import desc, func
+from sqlalchemy import String, desc, func
 from sqlalchemy.orm import load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
@@ -18,7 +18,7 @@ from sqlmodel import (
     select,
     Session,
 )
-from typing import ClassVar, Optional, List, TYPE_CHECKING
+from typing import ClassVar, Optional, List, TYPE_CHECKING, Type
 
 
 from .face import Face
@@ -116,7 +116,7 @@ class ExportType(Enum):
 
 
 class Picture(SQLModel, table=True):
-    ExportType: ClassVar[type[ExportType]] = ExportType
+    ExportType: ClassVar[Type[ExportType]] = ExportType
     id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None
@@ -136,6 +136,10 @@ class Picture(SQLModel, table=True):
     )
     image_embedding: Optional[np.ndarray] = Field(
         sa_column=Column("image_embedding", LargeBinary, default=None, nullable=True)
+    )
+    perceptual_hash: Optional[str] = Field(
+        default=None,
+        sa_column=Column("perceptual_hash", String, default=None, nullable=True),
     )
     thumbnail_left: Optional[int] = Field(default=None)
     thumbnail_top: Optional[int] = Field(default=None)

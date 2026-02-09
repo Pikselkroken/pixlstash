@@ -1,4 +1,3 @@
-import pickle
 import time
 from datetime import datetime
 from collections import defaultdict
@@ -565,7 +564,7 @@ def fetch_smart_score_unscored_ids(
 
 
 def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
-    """Unpickle embeddings and prepare lists of dictionaries for calculation."""
+    """Decode embeddings and prepare lists of dictionaries for calculation."""
 
     def get_attr(item, key):
         if isinstance(item, dict):
@@ -575,22 +574,21 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
     def get_vec(blob):
         if blob is None:
             return None
-        if isinstance(blob, memoryview):
-            blob = blob.tobytes()
-        try:
-            obj = pickle.loads(blob)
-            if isinstance(obj, np.ndarray):
-                if obj.ndim == 1 and obj.size > 0:
-                    return obj
-            else:
-                arr = np.array(obj)
-                if arr.ndim == 1 and arr.size > 0:
-                    return arr
-        except Exception:
-            pass
+        if isinstance(blob, (memoryview, bytearray)):
+            blob = bytes(blob)
+        if isinstance(blob, np.ndarray):
+            arr = np.asarray(blob, dtype=np.float32)
+            return arr if arr.ndim == 1 and arr.size > 0 else None
+        if not isinstance(blob, (bytes, bytearray)):
+            try:
+                blob = bytes(blob)
+            except Exception:
+                return None
         try:
             arr = np.frombuffer(blob, dtype=np.float32)
-            return arr if arr.size else None
+            if arr.ndim != 1 or arr.size == 0:
+                return None
+            return arr.copy()
         except Exception:
             return None
 

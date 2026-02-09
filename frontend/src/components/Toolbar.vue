@@ -731,11 +731,11 @@ const stackThresholdOptions = [
 const stackThresholdModel = computed({
   get: () => {
     if (props.stackThreshold == null || props.stackThreshold === "") {
-      return "0.94";
+      return "0.90";
     }
     const parsed = parseFloat(String(props.stackThreshold));
     if (!Number.isFinite(parsed) || parsed <= 0) {
-      return "0.94";
+      return "0.90";
     }
     return String(props.stackThreshold);
   },
