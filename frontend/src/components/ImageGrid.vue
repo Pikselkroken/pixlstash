@@ -1618,33 +1618,18 @@ async function fetchCharacterLikenessForImage(imageId) {
   }
 }
 
-function shouldCheckViewEligibility() {
-  if (props.selectedSet) return false;
-  if (!props.selectedCharacter) return false;
-  if (props.selectedCharacter === props.allPicturesId) return false;
-  return true;
-}
-
-function shouldRemoveFromCurrentView(faces) {
-  if (!shouldCheckViewEligibility()) return false;
-  if (!Array.isArray(faces)) return false;
-  const list = faces;
-  const selected = String(props.selectedCharacter);
-  if (selected === props.unassignedPicturesId) {
-    return list.some((face) => face?.character_id != null);
-  }
-  return !list.some((face) => String(face?.character_id) === selected);
-}
-
 function handleOverlayChange(payload) {
   if (!payload) return;
   const imageId = payload.imageId ?? payload.id ?? payload;
   if (!imageId) return;
   const fields = payload.fields || {};
-  refreshGridImage(imageId);
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
-    refreshSmartScoreForImage(imageId);
+    refreshGridImage(imageId);
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+    return;
   }
+  refreshGridImage(imageId);
 }
 
 async function openOverlay(img) {
@@ -2457,6 +2442,13 @@ async function fetchAllGridImages() {
         ...img,
         idx: i,
         thumbnail: existing?.thumbnail ?? null,
+        penalized_tags: Array.isArray(existing?.penalized_tags)
+          ? existing.penalized_tags
+          : [],
+        faces: Array.isArray(existing?.faces) ? existing.faces : [],
+        hands: Array.isArray(existing?.hands) ? existing.hands : [],
+        thumbnail_width: existing?.thumbnail_width ?? img?.thumbnail_width,
+        thumbnail_height: existing?.thumbnail_height ?? img?.thumbnail_height,
       };
     });
     const mapEnd = performance.now();

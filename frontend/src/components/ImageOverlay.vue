@@ -773,7 +773,15 @@ function setOverlayImageById(nextId) {
   }
   const list = Array.isArray(allImages.value) ? allImages.value : [];
   const target = list.find((item) => String(item?.id) === String(nextId));
-  image.value = target ? { ...target } : { id: nextId };
+  if (target) {
+    image.value = {
+      ...target,
+      tags: [],
+    };
+  } else {
+    image.value = { id: nextId, tags: [] };
+  }
+  isTagsRefreshing.value = true;
   zoomMode.value = "fit";
   resetPan();
 }
