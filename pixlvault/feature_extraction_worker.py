@@ -29,6 +29,7 @@ HAND_DETECT_IMGSZ = 256
 HAND_DETECT_CONF = 0.3
 HAND_DETECT_MAX_DET = 4
 HAND_DETECT_VIDEO_FRAMES = 1
+CROP_EXPAND_SCALE = 1.75
 
 
 class FeatureExtractionWorker(BaseWorker):
@@ -159,6 +160,25 @@ class FeatureExtractionWorker(BaseWorker):
             logger.warning("Hand detection failed for %s: %s", file_path, exc)
             return []
 
+    @staticmethod
+    def _expand_bbox(bbox, frame_w, frame_h, scale):
+        if bbox is None or len(bbox) != 4:
+            return None
+        x1, y1, x2, y2 = bbox
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+        w = max(1.0, x2 - x1)
+        h = max(1.0, y2 - y1)
+        half_w = (w * scale) / 2.0
+        half_h = (h * scale) / 2.0
+        ex1 = int(max(0, min(frame_w - 1, round(cx - half_w))))
+        ey1 = int(max(0, min(frame_h - 1, round(cy - half_h))))
+        ex2 = int(max(0, min(frame_w, round(cx + half_w))))
+        ey2 = int(max(0, min(frame_h, round(cy + half_h))))
+        if ex2 <= ex1 or ey2 <= ey1:
+            return None
+        return [ex1, ey1, ex2, ey2]
+
     def close(self):
         """
         Clean up resources held by the worker.
@@ -214,9 +234,13 @@ class FeatureExtractionWorker(BaseWorker):
                         logger.debug(
                             "Found %d faces in image %s", len(faces), file_path
                         )
+                        face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
                         for face in faces:
                             expanded_bbox = Face.expand_face_bbox(
-                                face.bbox, img.shape[1], img.shape[0], 0.1
+                                face.bbox,
+                                img.shape[1],
+                                img.shape[0],
+                                face_expand_fraction,
                             )
                             features_bytes = None
                             if (
@@ -251,17 +275,19 @@ class FeatureExtractionWorker(BaseWorker):
                     if need_hands and hand_model is not None:
                         boxes = self._predict_hands(hand_model, img, file_path)
                         for box in boxes:
-                            x1, y1, x2, y2 = box
+                            expanded = self._expand_bbox(
+                                box,
+                                img.shape[1],
+                                img.shape[0],
+                                CROP_EXPAND_SCALE,
+                            )
+                            if expanded is None:
+                                continue
                             hand_objects.append(
                                 Hand(
                                     picture_id=pic.id,
                                     hand_index=-1,
-                                    bbox=[
-                                        int(round(x1)),
-                                        int(round(y1)),
-                                        int(round(x2)),
-                                        int(round(y2)),
-                                    ],
+                                    bbox=expanded,
                                     frame_index=0,
                                 )
                             )
@@ -282,9 +308,15 @@ class FeatureExtractionWorker(BaseWorker):
                             first_frame = frame
                             if need_faces:
                                 frame_faces = self._insightface_app.get(frame)
+                                face_expand_fraction = max(
+                                    0.0, CROP_EXPAND_SCALE - 1.0
+                                )
                                 for face in frame_faces:
                                     expanded_bbox = Face.expand_face_bbox(
-                                        face.bbox, frame.shape[1], frame.shape[0], 0.1
+                                        face.bbox,
+                                        frame.shape[1],
+                                        frame.shape[0],
+                                        face_expand_fraction,
                                     )
                                     features_bytes = None
                                     if (
@@ -317,17 +349,19 @@ class FeatureExtractionWorker(BaseWorker):
                                     )
                                     hand_frames_used += 1
                                     for box in boxes:
-                                        x1, y1, x2, y2 = box
+                                        expanded = self._expand_bbox(
+                                            box,
+                                            frame.shape[1],
+                                            frame.shape[0],
+                                            CROP_EXPAND_SCALE,
+                                        )
+                                        if expanded is None:
+                                            continue
                                         hand_objects.append(
                                             Hand(
                                                 picture_id=pic.id,
                                                 hand_index=-1,
-                                                bbox=[
-                                                    int(round(x1)),
-                                                    int(round(y1)),
-                                                    int(round(x2)),
-                                                    int(round(y2)),
-                                                ],
+                                                bbox=expanded,
                                                 frame_index=0,
                                             )
                                         )
@@ -345,9 +379,15 @@ class FeatureExtractionWorker(BaseWorker):
                                 continue
                             if need_faces:
                                 frame_faces = self._insightface_app.get(frame)
+                                face_expand_fraction = max(
+                                    0.0, CROP_EXPAND_SCALE - 1.0
+                                )
                                 for face in frame_faces:
                                     expanded_bbox = Face.expand_face_bbox(
-                                        face.bbox, frame.shape[1], frame.shape[0], 0.1
+                                        face.bbox,
+                                        frame.shape[1],
+                                        frame.shape[0],
+                                        face_expand_fraction,
                                     )
                                     features_bytes = None
                                     if (
@@ -380,17 +420,19 @@ class FeatureExtractionWorker(BaseWorker):
                                     )
                                     hand_frames_used += 1
                                     for box in boxes:
-                                        x1, y1, x2, y2 = box
+                                        expanded = self._expand_bbox(
+                                            box,
+                                            frame.shape[1],
+                                            frame.shape[0],
+                                            CROP_EXPAND_SCALE,
+                                        )
+                                        if expanded is None:
+                                            continue
                                         hand_objects.append(
                                             Hand(
                                                 picture_id=pic.id,
                                                 hand_index=-1,
-                                                bbox=[
-                                                    int(round(x1)),
-                                                    int(round(y1)),
-                                                    int(round(x2)),
-                                                    int(round(y2)),
-                                                ],
+                                                bbox=expanded,
                                                 frame_index=frame_index,
                                             )
                                         )

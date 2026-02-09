@@ -24,7 +24,6 @@ logger = get_logger(__name__)
 
 HAND_CROP_MIN_AREA_RATIO = 0.01
 HAND_CROP_MAX_PER_PICTURE = 2
-CROP_EXPAND_SCALE = 1.75
 CROP_DEBUG_ENABLED = False
 
 
@@ -333,23 +332,17 @@ class TagWorker(BaseWorker):
                         )
                         return padded
 
-                    def expand_bbox(bbox, frame_w, frame_h, scale):
+                    def clamp_bbox(bbox, frame_w, frame_h):
                         if bbox is None or len(bbox) != 4:
                             return None
                         x1, y1, x2, y2 = bbox
-                        cx = (x1 + x2) / 2.0
-                        cy = (y1 + y2) / 2.0
-                        w = max(1.0, x2 - x1)
-                        h = max(1.0, y2 - y1)
-                        half_w = (w * scale) / 2.0
-                        half_h = (h * scale) / 2.0
-                        ex1 = int(max(0, min(frame_w - 1, round(cx - half_w))))
-                        ey1 = int(max(0, min(frame_h - 1, round(cy - half_h))))
-                        ex2 = int(max(0, min(frame_w, round(cx + half_w))))
-                        ey2 = int(max(0, min(frame_h, round(cy + half_h))))
-                        if ex2 <= ex1 or ey2 <= ey1:
+                        x1 = int(max(0, min(frame_w - 1, round(x1))))
+                        y1 = int(max(0, min(frame_h - 1, round(y1))))
+                        x2 = int(max(0, min(frame_w, round(x2))))
+                        y2 = int(max(0, min(frame_h, round(y2))))
+                        if x2 <= x1 or y2 <= y1:
                             return None
-                        return [ex1, ey1, ex2, ey2]
+                        return [x1, y1, x2, y2]
 
                     video_exts = {
                         ".mp4",
@@ -393,22 +386,17 @@ class TagWorker(BaseWorker):
                                 if getattr(face, "face_index", 0) < 0:
                                     continue
                                 bbox = getattr(face, "bbox", None)
-                                expanded = expand_bbox(
-                                    bbox,
-                                    frame_w,
-                                    frame_h,
-                                    CROP_EXPAND_SCALE,
-                                )
-                                if expanded is None:
+                                clamped = clamp_bbox(bbox, frame_w, frame_h)
+                                if clamped is None:
                                     continue
                                 crop = PictureUtils.crop_face_from_frame(
-                                    frame, expanded
+                                    frame, clamped
                                 )
                                 if crop is None:
                                     logger.debug(
                                         "Face crop failed for %s bbox=%s",
                                         file_path,
-                                        expanded,
+                                        clamped,
                                     )
                                     continue
                                 save_crop_debug(crop, "face", pic.id)
@@ -439,29 +427,15 @@ class TagWorker(BaseWorker):
                                 if getattr(hand, "hand_index", 0) < 0:
                                     continue
                                 bbox = getattr(hand, "bbox", None)
-                                if bbox is None or len(bbox) != 4:
+                                clamped = clamp_bbox(bbox, frame_w, frame_h)
+                                if clamped is None:
                                     continue
-                                x1, y1, x2, y2 = bbox
-                                x1 = int(max(0, min(frame_w - 1, round(x1))))
-                                y1 = int(max(0, min(frame_h - 1, round(y1))))
-                                x2 = int(max(0, min(frame_w, round(x2))))
-                                y2 = int(max(0, min(frame_h, round(y2))))
-                                if x2 <= x1 or y2 <= y1:
-                                    continue
-                                expanded = expand_bbox(
-                                    [x1, y1, x2, y2],
-                                    frame_w,
-                                    frame_h,
-                                    CROP_EXPAND_SCALE,
-                                )
-                                if expanded is None:
-                                    continue
-                                ex1, ey1, ex2, ey2 = expanded
+                                ex1, ey1, ex2, ey2 = clamped
                                 area = (ex2 - ex1) * (ey2 - ey1)
                                 if hand_min_area_ratio > 0:
                                     if area / frame_area < hand_min_area_ratio:
                                         continue
-                                hand_candidates.append((area, expanded, hand))
+                                hand_candidates.append((area, clamped, hand))
 
                             if hand_candidates:
                                 hand_candidates.sort(
