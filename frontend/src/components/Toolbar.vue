@@ -48,6 +48,31 @@
         </v-menu>
       </div>
       <div class="toolbar-sort-controls">
+        <v-btn
+          v-if="isMobile"
+          icon
+          :color="sidebarVisible ? 'primary' : 'surface'"
+          @click="emit('toggle-sidebar')"
+          title="Toggle sidebar"
+          class="toolbar-action-btn"
+        >
+          <v-icon>mdi-dock-left</v-icon>
+        </v-btn>
+        <v-btn
+          v-if="isMobile"
+          icon
+          :color="
+            searchOverlayVisible
+              ? 'primary'
+              : 'rgba(var(--v-theme--background), 0.3)'
+          "
+          @click="emit('open-search-overlay')"
+          title="Search"
+          class="toolbar-action-btn"
+        >
+          <v-icon>mdi-magnify</v-icon>
+        </v-btn>
+
         <v-menu
           v-model="sortMenuOpen"
           :close-on-content-click="false"
@@ -59,11 +84,14 @@
             <v-btn
               v-bind="props"
               ref="sortButtonRef"
-              icon
-              class="toolbar-action-btn"
-              title="Sort options"
+              :icon="isMobile"
+              class="toolbar-action-btn toolbar-sort-activator"
+              :title="sortButtonLabel"
             >
-              <v-icon>mdi-sort</v-icon>
+              <v-icon>{{ sortButtonIcon }}</v-icon>
+              <span v-if="!isMobile" class="toolbar-sort-activator-label">
+                {{ sortButtonLabel }}
+              </span>
             </v-btn>
           </template>
           <div class="toolbar-sort-panel">
@@ -118,81 +146,76 @@
               class="toolbar-sort-similarity-row"
             >
               <span>Similarity to</span>
-              <v-btn-toggle
-                v-model="similarityCharacterModel"
-                class="toolbar-similarity-toggle"
-                :disabled="!hasSimilarityOptions"
-                mandatory
-              >
-                <v-btn
-                  v-for="opt in similarityCharacterOptions"
-                  :key="opt.value"
-                  :value="opt.value"
-                  class="toolbar-sort-grid-btn"
-                  variant="text"
+              <div class="toolbar-similarity-scroll">
+                <v-btn-toggle
+                  v-model="similarityCharacterModel"
+                  class="toolbar-sort-grid"
+                  :disabled="!hasSimilarityOptions"
+                  mandatory
                 >
-                  <img
-                    v-if="opt.thumbnail"
-                    :src="opt.thumbnail"
-                    class="toolbar-similarity-thumb"
-                    alt=""
-                  />
-                  <div
-                    v-else
-                    class="toolbar-similarity-thumb toolbar-similarity-thumb--placeholder"
-                  ></div>
-                  <span class="toolbar-sort-grid-label">{{ opt.text }}</span>
-                  <v-icon
-                    v-if="similarityCharacterModel === opt.value"
-                    size="16"
-                    class="toolbar-sort-grid-selected"
+                  <v-btn
+                    v-for="opt in similarityCharacterOptions"
+                    :key="opt.value"
+                    :value="opt.value"
+                    class="toolbar-sort-grid-btn"
+                    variant="text"
                   >
-                    mdi-check-circle
-                  </v-icon>
-                </v-btn>
-              </v-btn-toggle>
+                    <img
+                      v-if="opt.thumbnail"
+                      :src="opt.thumbnail"
+                      class="toolbar-similarity-thumb"
+                      alt=""
+                    />
+                    <div
+                      v-else
+                      class="toolbar-similarity-thumb toolbar-similarity-thumb--placeholder"
+                    ></div>
+                    <span class="toolbar-sort-grid-label">{{ opt.text }}</span>
+                    <v-icon
+                      v-if="similarityCharacterModel === opt.value"
+                      size="16"
+                      class="toolbar-sort-grid-selected"
+                    >
+                      mdi-check-circle
+                    </v-icon>
+                  </v-btn>
+                </v-btn-toggle>
+              </div>
             </div>
             <div
               v-if="sortModel === STACKS_SORT_KEY"
               class="toolbar-sort-similarity-row"
             >
               <span>Stack strictness</span>
-              <div class="toolbar-sort-select-wrapper" style="flex: 1 1 0">
-                <select
+              <div class="toolbar-similarity-scroll">
+                <v-btn-toggle
                   v-model="stackThresholdModel"
-                  class="toolbar-sort-select"
+                  class="toolbar-sort-grid"
+                  mandatory
                 >
-                  <option
+                  <v-btn
                     v-for="opt in stackThresholdOptions"
                     :key="opt.value"
                     :value="opt.value"
+                    class="toolbar-sort-grid-btn"
+                    variant="text"
                   >
-                    {{ opt.label }}
-                  </option>
-                </select>
-                <span class="toolbar-sort-chevron">
-                  <v-icon size="18">mdi-menu-down</v-icon>
-                </span>
+                    <span class="toolbar-sort-grid-label">{{ opt.label }}</span>
+                    <v-icon
+                      v-if="stackThresholdModel === opt.value"
+                      size="16"
+                      class="toolbar-sort-grid-selected"
+                    >
+                      mdi-check-circle
+                    </v-icon>
+                  </v-btn>
+                </v-btn-toggle>
               </div>
             </div>
           </div>
         </v-menu>
       </div>
       <div class="toolbar-controls">
-        <v-btn
-          v-if="isMobile"
-          icon
-          :color="
-            searchOverlayVisible
-              ? 'primary'
-              : 'rgba(var(--v-theme--background), 0.3)'
-          "
-          @click="emit('open-search-overlay')"
-          title="Search"
-          class="toolbar-action-btn"
-        >
-          <v-icon>mdi-magnify</v-icon>
-        </v-btn>
         <v-menu
           v-model="columnsMenuOpenModel"
           offset-y
@@ -496,6 +519,7 @@ import { computed, ref, watch } from "vue";
 
 const props = defineProps({
   isMobile: { type: Boolean, default: false },
+  sidebarVisible: { type: Boolean, default: true },
   searchOverlayVisible: { type: Boolean, default: false },
   searchInput: { type: String, default: "" },
   isSearchHistoryOpen: { type: Boolean, default: false },
@@ -558,6 +582,7 @@ const emit = defineEmits([
   "columns-end",
   "confirm-export-zip",
   "open-settings",
+  "toggle-sidebar",
   "update:selected-sort",
 ]);
 
@@ -723,6 +748,34 @@ const selectedSimilarityOption = computed(() => {
   );
 });
 
+const selectedSortOption = computed(() => {
+  return props.sortOptions.find((opt) => opt.value === sortModel.value);
+});
+
+const selectedStackThresholdOption = computed(() => {
+  return stackThresholdOptions.find(
+    (opt) => opt.value === stackThresholdModel.value,
+  );
+});
+
+const sortButtonLabel = computed(() => {
+  if (sortModel.value === SIMILARITY_SORT_KEY) {
+    return selectedSimilarityOption.value?.text
+      ? `Similarity: ${selectedSimilarityOption.value.text}`
+      : "Similarity";
+  }
+  if (sortModel.value === STACKS_SORT_KEY) {
+    return selectedStackThresholdOption.value?.label
+      ? `Stacks: ${selectedStackThresholdOption.value.label}`
+      : "Stacks";
+  }
+  return selectedSortOption.value?.label || "Sort";
+});
+
+const sortButtonIcon = computed(() => {
+  return descendingModel.value ? "mdi-sort-descending" : "mdi-sort-ascending";
+});
+
 const SORT_ICON_MAP = {
   DATE: "mdi-calendar",
   CHARACTER_LIKENESS: "mdi-account-search",
@@ -795,13 +848,13 @@ defineExpose({ blurSearchInput });
 .top-toolbar {
   background-color: rgb(var(--v-theme-toolbar)) !important;
   width: 100%;
-  min-height: 44px;
+  min-height: 38px;
   display: flex;
-  align-items: center;
+  vertical-align: top;
   padding: 4px 4px 4px 4px;
   z-index: 5;
   position: relative;
-  --toolbar-control-height: 41px;
+  --toolbar-control-height: 44px;
 }
 
 .toolbar-actions {
@@ -844,9 +897,9 @@ defineExpose({ blurSearchInput });
 
 .toolbar-sort-panel {
   padding: 8px;
-  min-width: 304px;
-  max-width: 304px;
-  width: 304px;
+  min-width: 340px;
+  max-width: 340px;
+  width: 340px;
   max-height: 70vh;
   background: rgba(var(--v-theme-background), 0.92);
   color: rgb(var(--v-theme-on-background));
@@ -924,7 +977,8 @@ defineExpose({ blurSearchInput });
 }
 
 .toolbar-sort-grid-selected {
-  margin-left: auto;
+  position: absolute;
+  right: 2px;
   color: rgb(var(--v-theme-accent));
 }
 
@@ -948,13 +1002,9 @@ defineExpose({ blurSearchInput });
   white-space: nowrap;
 }
 
-.toolbar-similarity-toggle {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+.toolbar-similarity-scroll {
   width: 100%;
   max-height: 400px;
-  min-height: 300px;
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -980,42 +1030,6 @@ defineExpose({ blurSearchInput });
   padding: 6px 6px;
   background: rgba(var(--v-theme-surface), 0.2) !important;
   color: rgb(var(--v-theme-on-background)) !important;
-}
-
-.toolbar-sort-select-wrapper {
-  position: relative;
-  display: flex;
-  align-items: center;
-  width: 100%;
-}
-
-.toolbar-sort-select {
-  appearance: none;
-  background: rgba(var(--v-theme-surface), 0.2);
-  color: rgb(var(--v-theme-on-background));
-  border-radius: 8px;
-  box-shadow: 2px 2px 2px rgba(0, 0, 0, 0.3);
-  border: 0px solid rgba(var(--v-theme-border), 0.5);
-  min-height: var(--toolbar-control-height);
-  height: var(--toolbar-control-height);
-  font-size: 0.85em;
-  padding: 0 32px 0 10px;
-}
-
-.toolbar-sort-select:focus {
-  outline: none;
-  border: 1.5px solid rgb(var(--v-theme-accent));
-}
-
-.toolbar-sort-chevron {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  color: rgba(var(--v-theme-on-background), 0.7);
-  display: inline-flex;
-  align-items: center;
 }
 
 .toolbar-search-field {
@@ -1077,6 +1091,26 @@ defineExpose({ blurSearchInput });
 
 .toolbar-action-btn.v-btn--active {
   border-color: rgba(var(--v-theme-surface), 0.2);
+}
+
+.toolbar-sort-activator {
+  padding: 0 10px;
+  min-width: var(--toolbar-control-height);
+  width: 190px;
+  justify-content: flex-start;
+}
+
+.toolbar-sort-activator :deep(.v-btn__content) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.toolbar-sort-activator-label {
+  font-size: 0.9em;
+  white-space: nowrap;
 }
 
 .media-type-toggle {

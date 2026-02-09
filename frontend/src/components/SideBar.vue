@@ -1698,6 +1698,16 @@ defineExpose({ refreshSidebar, openSettingsDialog });
         >
           <v-icon>mdi-help-circle-outline</v-icon>
         </div>
+        <div
+          :class="[
+            'sidebar-collapsed-item',
+            { active: props.selectedCharacter === props.scrapheapPicturesId },
+          ]"
+          title="Scrapheap"
+          @click="selectCharacter(props.scrapheapPicturesId)"
+        >
+          <v-icon>mdi-trash-can-outline</v-icon>
+        </div>
         <div class="sidebar-collapsed-divider"></div>
         <button
           v-for="char in sortedCharacters"

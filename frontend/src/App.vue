@@ -70,7 +70,7 @@ const mainAreaRef = ref(null);
 let mainAreaResizeObserver = null;
 const sidebarVisible = ref(true);
 const isMobile = ref(false);
-const MOBILE_BREAKPOINT = 900;
+const MOBILE_BREAKPOINT = 1024;
 
 // --- Media Type Filter State ---
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
@@ -800,6 +800,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
           <Toolbar
             ref="toolbarRef"
             :isMobile="isMobile"
+            :sidebarVisible="sidebarVisible"
             :searchOverlayVisible="searchOverlayVisible"
             :filteredSearchHistory="filteredSearchHistory"
             :minColumns="minColumns"
@@ -836,6 +837,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @update:stack-threshold="handleUpdateStackThreshold"
             @open-search-overlay="openSearchOverlay"
+            @toggle-sidebar="sidebarVisible = !sidebarVisible"
             @commit-search="commitSearch"
             @clear-search="handleClearSearch"
             @apply-search-history="applySearchHistory"
