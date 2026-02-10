@@ -348,8 +348,11 @@
               v-for="info in getThumbnailInfoItems(img)"
               :key="`${info.key}-${img.id}`"
               class="thumbnail-info"
+              :ref="(el) => setThumbnailInfoRef(img.id, info.key, info.text, el)"
+              :title="getThumbnailInfoTitle(img.id, info.key)"
+              @mouseenter="handleThumbnailInfoMouseEnter(img.id, info.key)"
             >
-              {{ info.text }}
+              {{ getThumbnailInfoDisplayText(img.id, info.key, info.text) }}
             </div>
           </div>
         </div>
@@ -473,6 +476,15 @@ const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 const thumbnailRefs = {};
 const thumbnailContainerRefs = {};
 const dragPreviewRefs = {};
+const thumbnailInfoRefs = {};
+const thumbnailInfoTitleMap = reactive({});
+const thumbnailInfoDisplayMap = reactive({});
+const thumbnailInfoFullMap = reactive({});
+const textMeasureCanvas =
+  typeof document !== "undefined" ? document.createElement("canvas") : null;
+const textMeasureContext = textMeasureCanvas
+  ? textMeasureCanvas.getContext("2d")
+  : null;
 const thumbnailLoadedMap = reactive({});
 const thumbnailReadyMap = reactive({});
 const PREFETCHED_FULL_IMAGE_LIMIT = 12;
@@ -512,6 +524,100 @@ let gridResizeObserver = null;
 
 function triggerFaceOverlayRedraw() {
   faceOverlayRedrawKey.value++;
+}
+
+function buildThumbnailInfoKey(imageId, infoKey) {
+  return `${imageId}-${infoKey}`;
+}
+
+function getInfoFont(el) {
+  if (typeof window === "undefined" || !el) return null;
+  const style = window.getComputedStyle(el);
+  return `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+}
+
+function measureTextWidth(text, el) {
+  if (!textMeasureContext || !el) return 0;
+  const font = getInfoFont(el);
+  if (font) {
+    textMeasureContext.font = font;
+  }
+  return textMeasureContext.measureText(text).width;
+}
+
+function truncateTextToFit(fullText, el) {
+  if (!fullText || !el) return "";
+  const maxWidth = el.clientWidth || 0;
+  if (!maxWidth) return fullText;
+  if (measureTextWidth(fullText, el) <= maxWidth) return fullText;
+  const words = fullText.split(/\s+/).filter(Boolean);
+  if (!words.length) return "";
+  let current = "";
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (measureTextWidth(next, el) <= maxWidth) {
+      current = next;
+    } else {
+      break;
+    }
+  }
+  return current || words[0] || "";
+}
+
+function updateThumbnailInfoDisplay(key, fullText, el) {
+  if (!el) return;
+  const truncated = truncateTextToFit(fullText, el);
+  if (truncated && truncated !== fullText) {
+    thumbnailInfoDisplayMap[key] = truncated;
+    thumbnailInfoTitleMap[key] = fullText;
+  } else {
+    thumbnailInfoDisplayMap[key] = fullText || "";
+    if (thumbnailInfoTitleMap[key]) {
+      delete thumbnailInfoTitleMap[key];
+    }
+  }
+}
+
+function setThumbnailInfoRef(imageId, infoKey, fullText, el) {
+  const key = buildThumbnailInfoKey(imageId, infoKey);
+  if (el) {
+    thumbnailInfoRefs[key] = el;
+    thumbnailInfoFullMap[key] = fullText || "";
+    updateThumbnailInfoDisplay(key, fullText || "", el);
+  } else {
+    delete thumbnailInfoRefs[key];
+    delete thumbnailInfoFullMap[key];
+    delete thumbnailInfoDisplayMap[key];
+    if (thumbnailInfoTitleMap[key]) {
+      delete thumbnailInfoTitleMap[key];
+    }
+  }
+}
+
+function getThumbnailInfoTitle(imageId, infoKey) {
+  const key = buildThumbnailInfoKey(imageId, infoKey);
+  return thumbnailInfoTitleMap[key] || "";
+}
+
+function getThumbnailInfoDisplayText(imageId, infoKey, fallbackText) {
+  const key = buildThumbnailInfoKey(imageId, infoKey);
+  return thumbnailInfoDisplayMap[key] ?? fallbackText ?? "";
+}
+
+function handleThumbnailInfoMouseEnter(imageId, infoKey) {
+  const key = buildThumbnailInfoKey(imageId, infoKey);
+  const el = thumbnailInfoRefs[key];
+  if (!el) return;
+  updateThumbnailInfoDisplay(key, thumbnailInfoFullMap[key] || "", el);
+}
+
+function refreshAllThumbnailInfoDisplays() {
+  for (const key of Object.keys(thumbnailInfoRefs)) {
+    const el = thumbnailInfoRefs[key];
+    const fullText = thumbnailInfoFullMap[key];
+    if (!el || fullText == null) continue;
+    updateThumbnailInfoDisplay(key, fullText, el);
+  }
 }
 
 onMounted(() => {
@@ -2648,6 +2754,7 @@ function getGridColumnWidth() {
 function updateRowHeightFromGrid() {
   const columnWidth = getGridColumnWidth();
   rowHeight.value = Math.round(columnWidth + THUMBNAIL_INFO_ROW_HEIGHT);
+  refreshAllThumbnailInfoDisplays();
 }
 
 // columns is now controlled by prop
@@ -3772,15 +3879,19 @@ function handleEmptyStateReset() {
   max-height: 24px;
   overflow: hidden;
   background: none;
+  width: 100%;
 }
 .thumbnail-info {
-  font-size: 1.1em;
+  font-size: 0.95em;
   color: rgb(var(--v-theme-on-background));
   text-align: center;
   line-height: 24px;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  padding: 0 8px;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.2);
 }
 .thumbnail-container {
