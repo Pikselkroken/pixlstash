@@ -327,9 +327,16 @@ function normalizeSelectionPayload(payload) {
   return { id: payload ?? null, label: null };
 }
 
+function clearSearchForCategoryChange() {
+  if ((searchQuery.value || "").trim() || (searchInput.value || "").trim()) {
+    handleClearSearch();
+  }
+}
+
 async function handleSelectCharacter(payload) {
   const { id: charId, label } = normalizeSelectionPayload(payload);
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
+  clearSearchForCategoryChange();
   if (charId == null) {
     selectedCharacter.value = null;
     selectedReferenceCharacter.value = null;
@@ -355,6 +362,7 @@ async function handleSelectCharacter(payload) {
 
 async function handleSelectReferencePictures(payload) {
   const { id: charId, label } = normalizeSelectionPayload(payload);
+  clearSearchForCategoryChange();
   if (charId == null) {
     selectedReferenceCharacter.value = null;
     await nextTick();
@@ -371,6 +379,7 @@ async function handleSelectReferencePictures(payload) {
 
 async function handleSelectSet(payload) {
   const { id: setId, label } = normalizeSelectionPayload(payload);
+  clearSearchForCategoryChange();
   if (setId == null) {
     selectedSet.value = null;
     selectedReferenceCharacter.value = null;
