@@ -3765,16 +3765,22 @@ function handleEmptyStateReset() {
   margin: 0;
 }
 .thumbnail-info-row {
-  margin-top: 2px;
+  margin-top: 0;
   text-align: center;
-  min-height: 1.2em;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  overflow: hidden;
   background: none;
 }
 .thumbnail-info {
   font-size: 1.1em;
   color: rgb(var(--v-theme-on-background));
   text-align: center;
-  word-break: break-all;
+  line-height: 24px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.2);
 }
 .thumbnail-container {
