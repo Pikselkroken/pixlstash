@@ -81,18 +81,33 @@
           transition="scale-transition"
         >
           <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              ref="sortButtonRef"
-              :icon="isMobile"
-              class="toolbar-action-btn toolbar-sort-activator"
-              :title="sortButtonLabel"
+            <div
+              class="toolbar-split-button"
+              :class="{ 'toolbar-split-button--icon': isMobile }"
             >
-              <v-icon>{{ sortButtonIcon }}</v-icon>
-              <span v-if="!isMobile" class="toolbar-sort-activator-label">
-                {{ sortButtonLabel }}
-              </span>
-            </v-btn>
+              <v-btn
+                class="toolbar-action-btn toolbar-split-toggle"
+                :title="descendingModel ? 'Descending' : 'Ascending'"
+                @click.stop="toggleSortDirection"
+              >
+                <v-icon>{{ sortButtonIcon }}</v-icon>
+              </v-btn>
+              <v-btn
+                v-bind="props"
+                ref="sortButtonRef"
+                :icon="isMobile"
+                class="toolbar-action-btn toolbar-sort-activator toolbar-split-menu"
+                :title="sortButtonLabel"
+              >
+                <v-icon>{{ sortTypeIcon }}</v-icon>
+                <span v-if="!isMobile" class="toolbar-sort-activator-label">
+                  {{ sortButtonLabel }}
+                </span>
+                <v-icon v-if="!isMobile" size="18" class="toolbar-sort-chevron">
+                  mdi-menu-down
+                </v-icon>
+              </v-btn>
+            </div>
           </template>
           <div class="toolbar-sort-panel">
             <div class="toolbar-sort-header">
@@ -776,6 +791,10 @@ const sortButtonIcon = computed(() => {
   return descendingModel.value ? "mdi-sort-descending" : "mdi-sort-ascending";
 });
 
+const sortTypeIcon = computed(() => {
+  return getSortIcon(sortModel.value);
+});
+
 const SORT_ICON_MAP = {
   DATE: "mdi-calendar",
   CHARACTER_LIKENESS: "mdi-account-search",
@@ -1043,11 +1062,24 @@ defineExpose({ blurSearchInput });
 
 .toolbar-search-field :deep(.v-input__control) {
   width: 100%;
+  min-height: var(--toolbar-control-height);
 }
 
 .toolbar-search-field :deep(.v-field) {
   border-radius: 8px;
   background: rgba(var(--v-theme-surface), 0.2);
+  min-height: var(--toolbar-control-height);
+  height: var(--toolbar-control-height);
+  align-items: center;
+  box-shadow: 2px 2px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+.toolbar-search-field :deep(.v-field__input) {
+  padding-top: 0;
+  padding-bottom: 0;
+  min-height: var(--toolbar-control-height);
+  display: flex;
+  align-items: center;
 }
 
 .toolbar-search-field :deep(.v-field__input) {
@@ -1090,7 +1122,32 @@ defineExpose({ blurSearchInput });
 }
 
 .toolbar-action-btn.v-btn--active {
-  border-color: rgba(var(--v-theme-surface), 0.2);
+  border-color: rgba(var(--v-theme-surface), 0.2) !important;
+}
+
+.toolbar-split-button {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(var(--v-theme-surface), 0.2) !important;
+  box-shadow: 2px 2px 2px rgba(0, 0, 0, 0.4) !important;
+  height: var(--toolbar-control-height);
+}
+
+.toolbar-split-button .toolbar-action-btn {
+  border-radius: 0;
+  height: var(--toolbar-control-height);
+}
+
+.toolbar-split-toggle {
+  border-right: 1px solid rgba(var(--v-theme-on-background), 0.1);
+  background: rgba(var(--v-theme-primary), 0.35) !important;
+  color: rgb(var(--v-theme-on-primary)) !important;
+}
+
+.toolbar-split-menu {
+  padding: 0 10px;
 }
 
 .toolbar-sort-activator {
@@ -1100,17 +1157,38 @@ defineExpose({ blurSearchInput });
   justify-content: flex-start;
 }
 
+.toolbar-split-button .toolbar-sort-activator {
+  width: 190px;
+}
+
+.toolbar-split-button--icon .toolbar-sort-activator,
+.toolbar-split-button--icon .toolbar-split-menu {
+  width: auto;
+  padding: 0;
+}
+
 .toolbar-sort-activator :deep(.v-btn__content) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   width: 100%;
   justify-content: flex-start;
+  position: relative;
+  padding-right: 22px;
+}
+
+.toolbar-sort-chevron {
+  position: absolute;
+  top: 2px;
+  right: 4px;
 }
 
 .toolbar-sort-activator-label {
   font-size: 0.9em;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .media-type-toggle {
