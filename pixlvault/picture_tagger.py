@@ -41,9 +41,9 @@ CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
 CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.9
-CUSTOM_TAGGER_THRESHOLD_CROPS = 0.85
-CUSTOM_TAGGER_IMAGE_SIZE_FULL = 384
-CUSTOM_TAGGER_IMAGE_SIZE_CROPS = 224
+CUSTOM_TAGGER_THRESHOLD_CROPS = 0.9
+CUSTOM_TAGGER_IMAGE_SIZE_FULL = 640
+CUSTOM_TAGGER_IMAGE_SIZE_CROPS = 384
 CUSTOM_TAGGER_BATCH = 16
 CLIP_MODEL_NAME = "ViT-B-32"
 CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
@@ -101,6 +101,7 @@ class PictureTagger:
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
         self._custom_tagger_image_size_crops = CUSTOM_TAGGER_IMAGE_SIZE_CROPS
         self._custom_tagger_batch = CUSTOM_TAGGER_BATCH
+        self._custom_device = self._device
 
         self._ensure_model_files(force_download=force_download)
         self._init_onnx_session()
@@ -596,7 +597,9 @@ class PictureTagger:
             raise FileNotFoundError(
                 f"Custom tagger checkpoint not found: {self._custom_tagger_path}"
             )
-        checkpoint = torch.load(self._custom_tagger_path, map_location=self._device)
+        checkpoint = torch.load(
+            self._custom_tagger_path, map_location=self._custom_device
+        )
         labels = checkpoint.get("labels")
         arch = checkpoint.get("arch", "convnext_base")
         if not labels:
@@ -605,12 +608,30 @@ class PictureTagger:
         self._custom_label_to_idx = {label: i for i, label in enumerate(labels)}
         self._custom_model = self._build_custom_tagger_model(arch, len(labels))
         self._custom_model.load_state_dict(checkpoint["model_state_dict"])
-        self._custom_model.to(self._device)
+        self._custom_model.to(self._custom_device)
         self._custom_model.eval()
         self._custom_transform_cache = {}
         self._custom_transform = self._build_custom_transform(
             self._custom_tagger_image_size_full
         )
+
+    def _reload_custom_tagger_on_cpu(self) -> bool:
+        logger.warning("Custom tagger GPU inference failed; reloading on CPU...")
+        try:
+            if hasattr(self, "_custom_model") and self._custom_model is not None:
+                self._custom_model.to("cpu")
+            self._custom_device = "cpu"
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            logger.debug("Custom tagger reloaded on CPU")
+            return True
+        except Exception as cpu_error:
+            logger.error(
+                "Failed to reload custom tagger on CPU: %s",
+                cpu_error,
+                exc_info=True,
+            )
+            return False
 
     def _build_custom_transform(self, image_size: int):
         return transforms.Compose(
@@ -813,10 +834,33 @@ class PictureTagger:
                     logger.error("Custom tagger failed to preprocess %s: %s", path, e)
             if not batch_tensors:
                 continue
-            inputs = torch.stack(batch_tensors).to(self._device)
-            with torch.inference_mode():
-                logits = self._custom_model(inputs)
-                probs = torch.sigmoid(logits).cpu().numpy()
+            inputs = torch.stack(batch_tensors)
+            custom_device = getattr(self, "_custom_device", self._device)
+            try:
+                inputs = inputs.to(custom_device)
+                with torch.inference_mode():
+                    logits = self._custom_model(inputs)
+                    probs = torch.sigmoid(logits).cpu().numpy()
+            except Exception as exc:
+                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
+                    "CUDA out of memory" in str(exc)
+                )
+                if is_cuda_oom and custom_device == "cuda":
+                    logger.warning(
+                        "Custom tagger CUDA OOM; falling back to CPU for this run."
+                    )
+                    if self._reload_custom_tagger_on_cpu():
+                        logger.warning("Custom tagger is now running on CPU.")
+                        inputs = inputs.to("cpu")
+                        with torch.inference_mode():
+                            logits = self._custom_model(inputs)
+                            probs = torch.sigmoid(logits).cpu().numpy()
+                    else:
+                        logger.error("Custom tagger CPU fallback failed.")
+                        break
+                else:
+                    logger.error("Custom tagger inference failed: %s", exc)
+                    break
             for path, prob in zip(batch_paths, probs):
                 tag_probs = []
                 for label, p in zip(self._custom_labels, prob):
