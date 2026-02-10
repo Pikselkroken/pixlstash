@@ -252,11 +252,14 @@ class Picture(SQLModel, table=True):
         include_deleted: bool = False,
         only_deleted: bool = False,
         include_unimported: bool = False,
+        candidate_ids: Optional[List[int]] = None,
     ) -> List["Picture"]:
         """
         Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
         Orders by combined score in SQL.
         """
+        if candidate_ids is not None and not candidate_ids:
+            return []
         # 1. Generate SBERT embedding for tag search (Text-to-Text)
         query_embedding = text_to_embedding(query)
         if query_embedding is None:
@@ -282,16 +285,17 @@ class Picture(SQLModel, table=True):
 
         query_str = " ".join(query_words)
         # Subquery: calculate levenshtein distance for all tags of each picture
-        tag_subq = (
-            select(
-                Tag.picture_id,
-                func.levenshtein(func.group_concat(Tag.tag, " "), query_str).label(
-                    "min_tag_dist"
-                ),
-            )
-            .group_by(Tag.picture_id)
-            .subquery()
-        )
+        tag_query = select(
+            Tag.picture_id,
+            func.levenshtein_with_id(
+                func.group_concat(Tag.tag, " "), query_str, Tag.picture_id
+            ).label("min_tag_dist"),
+        ).group_by(Tag.picture_id)
+
+        if candidate_ids:
+            tag_query = tag_query.where(Tag.picture_id.in_(candidate_ids))
+
+        tag_subq = tag_query.subquery()
 
         # Calculate cosine similarity for both text (tags) and image (visuals) embeddings
         if query_embedding_bytes:
@@ -324,9 +328,13 @@ class Picture(SQLModel, table=True):
             image_sim = 0.0
 
         # Combined embedding score: average of text and image similarity to capture both explicit tags and visual concepts
-        embedding_score = (text_sim + image_sim) / 2.0
+        embedding_score_raw = (text_sim + image_sim) / 2.0
+        embedding_score = func.sqrt(func.max(0.0, embedding_score_raw))
 
-        fuzzy_score = func.max(0.0, 1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0))
+        raw_fuzzy_score = func.max(
+            0.0, 1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0)
+        )
+        fuzzy_score = func.pow(raw_fuzzy_score, 2.2)
 
         # Main query: join pictures with tag_subq, compute combined score
         stmt = (
@@ -377,7 +385,31 @@ class Picture(SQLModel, table=True):
         if format:
             stmt = stmt.where(cls.format.in_(format))
 
+        if candidate_ids:
+            stmt = stmt.where(cls.id.in_(candidate_ids))
+
         results = session.exec(stmt).all()
+
+        if results:
+            top_rows = results[:20]
+            header = f"{'rank':>4} {'id':>6} {'combined':>9} {'fuzzy':>7} {'embed':>7} {'min_tag':>8}"
+            lines = [header]
+            for idx, row in enumerate(top_rows, start=1):
+                pic = row[0]
+                combined_score = row[1] if row[1] is not None else 0.0
+                fuzzy_val = row[2] if row[2] is not None else 0.0
+                embed_val = row[3] if row[3] is not None else 0.0
+                min_tag_val = row[4] if row[4] is not None else 0.0
+                pic_id = getattr(pic, "id", None)
+                lines.append(
+                    f"{idx:>4} {pic_id:>6} {float(combined_score):>9.4f} {float(fuzzy_val):>7.4f} {float(embed_val):>7.4f} {float(min_tag_val):>8.4f}"
+                )
+            logger.info(
+                "Semantic search score breakdown (top %d) query=%r:\n%s",
+                len(top_rows),
+                query,
+                "\n".join(lines),
+            )
 
         # Log tag contribution for each result
         for result in results:

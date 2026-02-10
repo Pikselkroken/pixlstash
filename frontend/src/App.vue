@@ -39,6 +39,9 @@ const sortOptions = ref([]);
 // --- Search & Filtering State ---
 const searchQuery = ref("");
 const searchInput = ref("");
+const lastSelectedCharacterLabel = ref("All Pictures");
+const lastSelectedSetLabel = ref("Picture Set");
+const lastSelectedReferenceLabel = ref("Reference Pictures");
 const searchHistory = ref([]);
 const isSearchHistoryOpen = ref(false);
 const MAX_SEARCH_HISTORY = 8;
@@ -57,6 +60,30 @@ const showHandBboxes = ref(false);
 const showFormat = ref(true);
 const showResolution = ref(true);
 const showProblemIcon = ref(true);
+
+const activeCategoryLabel = computed(() => {
+  if (selectedSet.value) {
+    return lastSelectedSetLabel.value || "Picture Set";
+  }
+  if (selectedReferenceCharacter.value) {
+    return lastSelectedReferenceLabel.value || "Reference Pictures";
+  }
+  if (selectedCharacter.value === ALL_PICTURES_ID) return "All Pictures";
+  if (selectedCharacter.value === UNASSIGNED_PICTURES_ID)
+    return "Unassigned Pictures";
+  if (selectedCharacter.value === SCRAPHEAP_PICTURES_ID) return "Scrapheap";
+  if (selectedCharacter.value) {
+    return lastSelectedCharacterLabel.value || "Category";
+  }
+  return "All Pictures";
+});
+
+const isAllPicturesActive = computed(
+  () =>
+    !selectedSet.value &&
+    !selectedReferenceCharacter.value &&
+    selectedCharacter.value === ALL_PICTURES_ID,
+);
 
 const thumbnailSize = ref(256);
 const columns = ref(4); // Default columns
@@ -290,7 +317,18 @@ function closeSidebarIfMobile() {
   }
 }
 
-async function handleSelectCharacter(charId) {
+function normalizeSelectionPayload(payload) {
+  if (payload && typeof payload === "object") {
+    return {
+      id: payload.id ?? payload.value ?? null,
+      label: payload.label ?? payload.name ?? null,
+    };
+  }
+  return { id: payload ?? null, label: null };
+}
+
+async function handleSelectCharacter(payload) {
+  const { id: charId, label } = normalizeSelectionPayload(payload);
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
   if (charId == null) {
     selectedCharacter.value = null;
@@ -298,41 +336,61 @@ async function handleSelectCharacter(charId) {
     await nextTick();
     return;
   }
+  if (label) {
+    lastSelectedCharacterLabel.value = label;
+  } else if (charId === ALL_PICTURES_ID) {
+    lastSelectedCharacterLabel.value = "All Pictures";
+  } else if (charId === UNASSIGNED_PICTURES_ID) {
+    lastSelectedCharacterLabel.value = "Unassigned Pictures";
+  } else if (charId === SCRAPHEAP_PICTURES_ID) {
+    lastSelectedCharacterLabel.value = "Scrapheap";
+  }
   selectedCharacter.value = charId;
   selectedSet.value = null; // Clear set selection
   selectedReferenceCharacter.value = null;
-  searchQuery.value = ""; // Clear search query
   await nextTick(); // Ensure reactivity propagates the change
-  console.log("[App.vue] searchQuery cleared:", searchQuery.value);
+  console.log("[App.vue] searchQuery preserved:", searchQuery.value);
   closeSidebarIfMobile();
 }
 
-async function handleSelectReferencePictures(charId) {
+async function handleSelectReferencePictures(payload) {
+  const { id: charId, label } = normalizeSelectionPayload(payload);
   if (charId == null) {
     selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
+  lastSelectedReferenceLabel.value =
+    label || lastSelectedReferenceLabel.value || "Reference Pictures";
   selectedReferenceCharacter.value = charId;
   selectedCharacter.value = null;
   selectedSet.value = null;
-  searchQuery.value = "";
   await nextTick();
   closeSidebarIfMobile();
 }
 
-async function handleSelectSet(setId) {
+async function handleSelectSet(payload) {
+  const { id: setId, label } = normalizeSelectionPayload(payload);
   if (setId == null) {
     selectedSet.value = null;
     selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
+  if (label) {
+    lastSelectedSetLabel.value = label;
+  }
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
   selectedReferenceCharacter.value = null;
-  searchQuery.value = ""; // Clear search query
   closeSidebarIfMobile();
+}
+
+function handleSearchAllPictures() {
+  selectedCharacter.value = ALL_PICTURES_ID;
+  selectedSet.value = null;
+  selectedReferenceCharacter.value = null;
+  lastSelectedCharacterLabel.value = "All Pictures";
 }
 
 async function handleUpdateSearchQuery(value) {
@@ -634,6 +692,7 @@ function handleResetToAll() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
   selectedReferenceCharacter.value = null;
+  lastSelectedCharacterLabel.value = "All Pictures";
   selectedSort.value = "DATE";
   selectedDescending.value = true;
   selectedSimilarityCharacter.value = null;
@@ -802,6 +861,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :isMobile="isMobile"
             :sidebarVisible="sidebarVisible"
             :searchOverlayVisible="searchOverlayVisible"
+            :isSearchActive="Boolean(searchQuery && searchQuery.trim())"
             :filteredSearchHistory="filteredSearchHistory"
             :minColumns="minColumns"
             :maxColumns="maxColumns"
@@ -859,6 +919,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :selectedReferenceCharacter="selectedReferenceCharacter"
               :selectedSet="selectedSet"
               :searchQuery="searchQuery"
+              :activeCategoryLabel="activeCategoryLabel"
+              :isAllPicturesActive="isAllPicturesActive"
               :selectedSort="selectedSort"
               :selectedDescending="selectedDescending"
               :similarityCharacter="selectedSimilarityCharacter"
@@ -878,6 +940,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
               :columns="columns"
               @clear-search="handleClearSearch"
+              @search-all="handleSearchAllPictures"
               @update:selected-sort="handleUpdateSelectedSort"
               @refresh-sidebar="refreshSidebar"
               @reset-to-all="handleResetToAll"

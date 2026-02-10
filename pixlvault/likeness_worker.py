@@ -208,8 +208,7 @@ class LikenessWorker(BaseWorker):
         return (
             session.exec(
                 select(Picture.id).where(
-                    (Picture.id == picture_id)
-                    & (Picture.image_embedding.is_not(None))
+                    (Picture.id == picture_id) & (Picture.image_embedding.is_not(None))
                 )
             ).first()
             is not None
@@ -278,14 +277,18 @@ class LikenessWorker(BaseWorker):
         common_sizes = set(sizes_a) & set(sizes_b)
         if not common_sizes:
             return [], []
-        common_size = max(common_sizes, key=lambda s: sizes_a.count(s) + sizes_b.count(s))
+        common_size = max(
+            common_sizes, key=lambda s: sizes_a.count(s) + sizes_b.count(s)
+        )
         return (
             [vec for vec in vecs_a if vec.size == common_size],
             [vec for vec in vecs_b if vec.size == common_size],
         )
 
     @staticmethod
-    def _max_face_similarity(vecs_a: list[np.ndarray], vecs_b: list[np.ndarray]) -> Optional[float]:
+    def _max_face_similarity(
+        vecs_a: list[np.ndarray], vecs_b: list[np.ndarray]
+    ) -> Optional[float]:
         if not vecs_a or not vecs_b:
             return None
         a = np.stack(vecs_a)
@@ -327,9 +330,7 @@ class LikenessWorker(BaseWorker):
             face_sim = self._max_face_similarity(vecs_a, vecs_b)
             if face_sim is None:
                 return 0.0
-            likeness = (self.IMAGE_WEIGHT * image_sim) + (
-                self.FACE_WEIGHT * face_sim
-            )
+            likeness = (self.IMAGE_WEIGHT * image_sim) + (self.FACE_WEIGHT * face_sim)
             return float(np.clip(likeness, 0.0, 1.0))
 
         return float(np.clip(image_sim, 0.0, 1.0))
@@ -341,15 +342,18 @@ class LikenessWorker(BaseWorker):
         def get_hist(img):
             chans = cv2.split(img)
             hist = [
-                cv2.calcHist([c], [0], None, [bins], [0, 256]).flatten()
-                for c in chans
+                cv2.calcHist([c], [0], None, [bins], [0, 256]).flatten() for c in chans
             ]
             hist = np.concatenate(hist)
             hist = hist / (np.sum(hist) + 1e-8)
             return hist
 
-        hist_a = img_a if hasattr(img_a, "ndim") and img_a.ndim == 1 else get_hist(img_a)
-        hist_b = img_b if hasattr(img_b, "ndim") and img_b.ndim == 1 else get_hist(img_b)
+        hist_a = (
+            img_a if hasattr(img_a, "ndim") and img_a.ndim == 1 else get_hist(img_a)
+        )
+        hist_b = (
+            img_b if hasattr(img_b, "ndim") and img_b.ndim == 1 else get_hist(img_b)
+        )
         l1 = np.sum(np.abs(hist_a - hist_b))
         likeness = 1.0 - (l1 / 2.0)
         return float(np.clip(likeness, 0.0, 1.0))

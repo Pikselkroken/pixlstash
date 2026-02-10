@@ -370,6 +370,9 @@
       v-if="props.searchQuery && props.searchQuery.length > 0"
       :images-loading="imagesLoading"
       :count="allGridImages.length"
+      :category-label="props.activeCategoryLabel"
+      :is-all-pictures-active="props.isAllPicturesActive"
+      @search-all="emit('search-all')"
       @clear="clearSearchQuery"
     />
   </div>
@@ -424,6 +427,7 @@ const emit = defineEmits([
   "refresh-sidebar",
   "clear-search",
   "reset-to-all",
+  "search-all",
   "update:selected-sort",
 ]);
 
@@ -436,6 +440,8 @@ const props = defineProps({
   selectedReferenceCharacter: { type: [String, Number, null], default: null },
   selectedSet: { type: [Number, String, null], default: null },
   searchQuery: String,
+  activeCategoryLabel: { type: String, default: "Category" },
+  isAllPicturesActive: { type: Boolean, default: false },
   selectedSort: String,
   selectedDescending: Boolean,
   similarityCharacter: { type: [String, Number, null], default: null },
@@ -2177,21 +2183,22 @@ function buildPictureIdsQueryParams() {
 
   if (props.searchQuery && props.searchQuery.trim()) {
     params.append("query", props.searchQuery.trim());
-  }
-  if (props.selectedSort && props.selectedSort.trim()) {
-    params.append("sort", props.selectedSort.trim());
-  }
-  if (typeof props.selectedDescending === "boolean") {
-    console.log(
-      "[ImageGrid.vue] Constructing query with descending:",
-      props.selectedDescending,
-    );
-    params.append("descending", props.selectedDescending ? "true" : "false");
   } else {
-    console.warn(
-      "[ImageGrid.vue] selectedDescending is not boolean, skipping param. Type:",
-      typeof props.selectedDescending,
-    );
+    if (props.selectedSort && props.selectedSort.trim()) {
+      params.append("sort", props.selectedSort.trim());
+    }
+    if (typeof props.selectedDescending === "boolean") {
+      console.log(
+        "[ImageGrid.vue] Constructing query with descending:",
+        props.selectedDescending,
+      );
+      params.append("descending", props.selectedDescending ? "true" : "false");
+    } else {
+      console.warn(
+        "[ImageGrid.vue] selectedDescending is not boolean, skipping param. Type:",
+        typeof props.selectedDescending,
+      );
+    }
   }
   // Add format filter for backend media type filtering
   if (props.mediaTypeFilter === "images") {
@@ -2336,6 +2343,25 @@ async function fetchAllGridImages() {
               : null,
         };
       });
+    } else if (props.searchQuery && props.searchQuery.trim()) {
+      // Use /pictures/search endpoint for text search
+      const params = buildPictureIdsQueryParams();
+      const url = `${
+        props.backendUrl
+      }/pictures/search?query=${encodeURIComponent(
+        props.searchQuery.trim(),
+      )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
+      const requestStart = performance.now();
+      const res = await apiClient.get(url);
+      const requestEnd = performance.now();
+      const data = await res.data;
+      const parseEnd = performance.now();
+      images = data;
+      console.log("[ImageGrid.vue] /pictures/search timing", {
+        count: Array.isArray(images) ? images.length : 0,
+        requestMs: (requestEnd - requestStart).toFixed(1),
+        totalMs: (parseEnd - requestStart).toFixed(1),
+      });
     } else if (
       props.selectedSet &&
       props.selectedSet !== props.allPicturesId &&
@@ -2353,25 +2379,6 @@ async function fetchAllGridImages() {
       images = data.pictures || [];
       console.log("[ImageGrid.vue] /picture_sets timing", {
         count: images.length,
-        requestMs: (requestEnd - requestStart).toFixed(1),
-        totalMs: (parseEnd - requestStart).toFixed(1),
-      });
-    } else if (props.searchQuery && props.searchQuery.trim()) {
-      // Use /pictures/search endpoint for text search
-      const params = buildPictureIdsQueryParams();
-      const url = `${
-        props.backendUrl
-      }/pictures/search?query=${encodeURIComponent(
-        props.searchQuery.trim(),
-      )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
-      const requestStart = performance.now();
-      const res = await apiClient.get(url);
-      const requestEnd = performance.now();
-      const data = await res.data;
-      const parseEnd = performance.now();
-      images = data;
-      console.log("[ImageGrid.vue] /pictures/search timing", {
-        count: Array.isArray(images) ? images.length : 0,
         requestMs: (requestEnd - requestStart).toFixed(1),
         totalMs: (parseEnd - requestStart).toFixed(1),
       });
@@ -2821,7 +2828,8 @@ async function fetchThumbnailsBatch(start, end) {
     if (
       props.selectedSet &&
       props.selectedSet !== props.allPicturesId &&
-      props.selectedSet !== props.unassignedPicturesId
+      props.selectedSet !== props.unassignedPicturesId &&
+      !(props.searchQuery && props.searchQuery.trim())
     ) {
       const params = buildPictureIdsQueryParams();
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${

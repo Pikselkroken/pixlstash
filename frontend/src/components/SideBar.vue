@@ -616,30 +616,37 @@ function openSettingsDialog() {
   settingsDialogOpen.value = true;
 }
 
-function selectCharacter(id) {
+function selectCharacter(id, label = null) {
   clearCountNew(id);
   emit("select-set", null);
-  emit("select-character", id);
+  emit("select-character", { id, label });
 }
 
-function selectReferencePictures(characterId) {
+function selectReferencePictures(
+  characterId,
+  characterLabel = null,
+  referenceLabel = null,
+) {
   clearCountNew(characterId);
   emit("select-set", null);
   if (props.selectedReferenceCharacter === characterId) {
     emit("select-reference-pictures", null);
-    emit("select-character", characterId);
+    emit("select-character", { id: characterId, label: characterLabel });
     return;
   }
-  emit("select-reference-pictures", characterId);
+  emit("select-reference-pictures", {
+    id: characterId,
+    label: referenceLabel || characterLabel,
+  });
 }
 
 function searchImages(query) {
   emit("search-images", query);
 }
 
-function selectSet(setId) {
+function selectSet(setId, label = null) {
   emit("select-character", null);
-  emit("select-set", setId);
+  emit("select-set", { id: setId, label });
 }
 
 async function deleteCharacter() {
@@ -1684,7 +1691,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             { active: props.selectedCharacter === props.allPicturesId },
           ]"
           title="All Pictures"
-          @click="selectCharacter(props.allPicturesId)"
+          @click="selectCharacter(props.allPicturesId, 'All Pictures')"
         >
           <v-icon>mdi-image-multiple</v-icon>
         </div>
@@ -1694,7 +1701,9 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             { active: props.selectedCharacter === props.unassignedPicturesId },
           ]"
           title="Unassigned Pictures"
-          @click="selectCharacter(props.unassignedPicturesId)"
+          @click="
+            selectCharacter(props.unassignedPicturesId, 'Unassigned Pictures')
+          "
         >
           <v-icon>mdi-help-circle-outline</v-icon>
         </div>
@@ -1704,7 +1713,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             { active: props.selectedCharacter === props.scrapheapPicturesId },
           ]"
           title="Scrapheap"
-          @click="selectCharacter(props.scrapheapPicturesId)"
+          @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
         >
           <v-icon>mdi-trash-can-outline</v-icon>
         </div>
@@ -1721,7 +1730,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           ]"
           :ref="(el) => registerCharacterRef(char.id, el)"
           :title="char.name || 'Character'"
-          @click="selectCharacter(char.id)"
+          @click="selectCharacter(char.id, char.name || 'Character')"
           @dragover.prevent="handleDragOverCharacter(char.id)"
           @dragleave="handleDragLeaveCharacter"
           @drop.prevent="
@@ -1745,7 +1754,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             },
           ]"
           :title="pset.name || 'Picture Set'"
-          @click="selectSet(pset.id)"
+          @click="selectSet(pset.id, pset.name || 'Picture Set')"
           @dragover.prevent="dragOverSetItem(pset.id)"
           @dragleave="dragLeaveSetItem"
           @drop.prevent="handleDropOnSet(pset.id, $event)"
@@ -1773,7 +1782,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           'sidebar-list-item',
           { active: props.selectedCharacter === props.allPicturesId },
         ]"
-        @click="selectCharacter(props.allPicturesId)"
+        @click="selectCharacter(props.allPicturesId, 'All Pictures')"
       >
         <span class="sidebar-list-icon">
           <v-icon size="44">mdi-image-multiple</v-icon>
@@ -1791,7 +1800,9 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           'sidebar-list-item',
           { active: selectedCharacter === props.unassignedPicturesId },
         ]"
-        @click="selectCharacter(props.unassignedPicturesId)"
+        @click="
+          selectCharacter(props.unassignedPicturesId, 'Unassigned Pictures')
+        "
       >
         <span class="sidebar-list-icon">
           <v-icon size="44">mdi-help-circle-outline</v-icon>
@@ -1812,7 +1823,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           'sidebar-list-item',
           { active: selectedCharacter === props.scrapheapPicturesId },
         ]"
-        @click="selectCharacter(props.scrapheapPicturesId)"
+        @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
       >
         <span class="sidebar-list-icon">
           <v-icon size="44">mdi-trash-can-outline</v-icon>
@@ -1888,7 +1899,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             },
           ]"
           :ref="(el) => registerCharacterRef(char.id, el)"
-          @click="selectCharacter(char.id)"
+          @click="selectCharacter(char.id, char.name || 'Character')"
           @dragover.prevent="handleDragOverCharacter(char.id)"
           @dragleave="handleDragLeaveCharacter"
           @drop.prevent="
@@ -1924,7 +1935,13 @@ defineExpose({ refreshSidebar, openSettingsDialog });
               ]"
               size="20"
               :title="'Reference pictures'"
-              @click.stop="selectReferencePictures(char.id)"
+              @click.stop="
+                selectReferencePictures(
+                  char.id,
+                  char.name || 'Character',
+                  `Reference: ${char.name || 'Character'}`,
+                )
+              "
             >
               mdi-image-multiple
             </v-icon>
@@ -1995,7 +2012,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             },
           ]"
           :ref="(el) => registerSetRef(pset.id, el)"
-          @click="selectSet(pset.id)"
+          @click="selectSet(pset.id, pset.name || 'Picture Set')"
           @dragover.prevent="dragOverSetItem(pset.id)"
           @dragleave="dragLeaveSetItem"
           @drop.prevent="handleDropOnSet(pset.id, $event)"
@@ -2027,11 +2044,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           gap: 2px;
           align-items: stretch;
         "
-      >
-        <div v-if="isSearchActive" class="sidebar-search-result-label">
-          Search Result
-        </div>
-      </div>
+      ></div>
       <div class="sidebar-footer-spacer"></div>
     </template>
   </aside>

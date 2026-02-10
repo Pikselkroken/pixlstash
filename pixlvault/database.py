@@ -45,6 +45,24 @@ class DatabaseTask:
 
 logger = get_logger(__name__)
 
+LEVENSHTEIN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "into",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+
 
 def levenshtein_function(a, b):
     try:
@@ -57,8 +75,6 @@ def levenshtein_function(a, b):
 
 
 def softmin(distances, beta=1.0):
-    import math
-
     if not distances:
         return float("inf")
     exp_neg_dists = [math.exp(-beta * d) for d in distances]
@@ -71,7 +87,7 @@ def softmin(distances, beta=1.0):
     return softmin_value
 
 
-def levenshtein(concatenated_tags, query):
+def _levenshtein_internal(concatenated_tags, query, picture_id=None):
     # Split the concatenated tags into tags
     tags = (
         concatenated_tags.split()
@@ -79,29 +95,105 @@ def levenshtein(concatenated_tags, query):
         else [concatenated_tags]
     )
     query_words = query.split() if isinstance(query, str) else [query]
+    normalized_query_words = [str(word).lower() for word in query_words]
+    filtered_query_words = [
+        word
+        for word in normalized_query_words
+        if len(word) > 2 and word not in LEVENSHTEIN_STOPWORDS
+    ]
+    if filtered_query_words:
+        normalized_query_words = filtered_query_words
 
-    dists = []
-    for tag in tags:
+    normalized_tags = [str(tag).lower() for tag in tags if tag is not None]
+
+    tag_dists = []
+    for tag_value in normalized_tags:
         min_dist = 1.0
-        for query_word in query_words:
+        for query_word in normalized_query_words:
             min_dist = min(
                 min_dist,
-                levenshtein_function(tag, query_word)
-                / max(len(tag), len(query_word), 1),
+                levenshtein_function(tag_value, query_word)
+                / max(len(tag_value), len(query_word), 1),
             )
-        dists.append(min_dist)
+        tag_dists.append(min_dist)
 
-    dists = sorted(dists)
+    query_dists = []
+    query_dist_map = {}
+    for query_word in normalized_query_words:
+        min_dist = 1.0
+        for tag_value in normalized_tags:
+            min_dist = min(
+                min_dist,
+                levenshtein_function(tag_value, query_word)
+                / max(len(tag_value), len(query_word), 1),
+            )
+        query_dists.append(min_dist)
+        query_dist_map[query_word] = min_dist
+
+    tag_dists = sorted(tag_dists)
+    best_k = min(5, len(tag_dists))
+    best_dists = tag_dists[:best_k]
+    softmin_value = softmin(best_dists, 2.5) if best_dists else 1.0
+    mean_best = (sum(best_dists) / best_k) if best_dists else 1.0
+    mean_query = (sum(query_dists) / len(query_dists)) if query_dists else 1.0
+    good_match_threshold = 0.25
+    exact_match_threshold = 0.05
+    matched_words = sum(1 for dist in query_dists if dist <= good_match_threshold)
+    exact_matches = sum(1 for dist in query_dists if dist <= exact_match_threshold)
+    coverage = matched_words / len(query_dists) if query_dists else 0.0
     logger.info(
-        f"Best Levenshtein distances for tags '{concatenated_tags}': {dists[:5]}"
+        "Best Levenshtein distances for tags '%s': %s (picture_id=%s, best_k=%d, total_tags=%d, mean_best=%.4f, mean_query=%.4f, softmin=%.4f, coverage=%.2f, exact=%d, query_words=%s)",
+        concatenated_tags,
+        best_dists,
+        picture_id,
+        best_k,
+        len(tags),
+        mean_best,
+        mean_query,
+        softmin_value,
+        coverage,
+        exact_matches,
+        normalized_query_words,
     )
+    if query_dist_map:
+        logger.info(
+            "Query word min distances (picture_id=%s): %s",
+            picture_id,
+            {word: round(dist, 4) for word, dist in query_dist_map.items()},
+        )
 
-    # Return softmin of these distances
-    return math.pow(softmin(dists, 2.5), 3.0) if dists else 1.0
+    # Prioritize query-word matches over non-matching tags.
+    base_score = 0.75 * mean_query + 0.15 * softmin_value + 0.10 * mean_best
+    if coverage < 1.0:
+        base_score *= 1.0 + (1.0 - coverage) * 0.4
+    else:
+        base_score *= 0.85
+
+    # Bonus for strong query-word matches (reduce distance when more words match well).
+    if coverage > 0.0:
+        bonus = min(0.12, 0.06 * coverage + 0.02 * exact_matches)
+        base_score = max(0.0, base_score * (1.0 - bonus))
+
+    # Apply a mild penalty for very few tags so single-tag matches don't dominate.
+    min_tags = 5
+    if len(tags) < min_tags and len(tags) > 0:
+        scarcity_penalty = min_tags / float(len(tags))
+        base_score = min(1.0, base_score * scarcity_penalty)
+
+    return base_score
+
+
+def levenshtein(concatenated_tags, query):
+    return _levenshtein_internal(concatenated_tags, query)
+
+
+def levenshtein_with_id(concatenated_tags, query, picture_id):
+    return _levenshtein_internal(concatenated_tags, query, picture_id)
 
 
 def init_database(dbapi_conn, conn_record):
     dbapi_conn.create_function("levenshtein", 2, levenshtein)
+    dbapi_conn.create_function("levenshtein_with_id", 3, levenshtein_with_id)
     dbapi_conn.create_function("cosine_similarity", 2, PictureUtils.cosine_similarity)
 
     cursor = dbapi_conn.cursor()

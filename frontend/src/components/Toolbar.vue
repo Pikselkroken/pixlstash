@@ -118,6 +118,7 @@
               <v-btn
                 class="toolbar-sort-direction"
                 variant="text"
+                :disabled="isSearchActive"
                 @click="toggleSortDirection"
               >
                 <v-icon size="18">
@@ -132,10 +133,14 @@
                 </span>
               </v-btn>
             </div>
+            <div v-if="isSearchActive" class="toolbar-sort-search-note">
+              Search relevance (fixed)
+            </div>
             <v-btn-toggle
               v-model="sortModel"
               mandatory
               class="toolbar-sort-grid"
+              :disabled="isSearchActive"
             >
               <v-btn
                 v-for="opt in sortOptions"
@@ -536,6 +541,7 @@ const props = defineProps({
   isMobile: { type: Boolean, default: false },
   sidebarVisible: { type: Boolean, default: true },
   searchOverlayVisible: { type: Boolean, default: false },
+  isSearchActive: { type: Boolean, default: false },
   searchInput: { type: String, default: "" },
   isSearchHistoryOpen: { type: Boolean, default: false },
   filteredSearchHistory: { type: Array, default: () => [] },
@@ -774,6 +780,9 @@ const selectedStackThresholdOption = computed(() => {
 });
 
 const sortButtonLabel = computed(() => {
+  if (props.isSearchActive) {
+    return "Search relevance";
+  }
   if (sortModel.value === SIMILARITY_SORT_KEY) {
     return selectedSimilarityOption.value?.text
       ? `Similarity: ${selectedSimilarityOption.value.text}`
@@ -792,6 +801,9 @@ const sortButtonIcon = computed(() => {
 });
 
 const sortTypeIcon = computed(() => {
+  if (props.isSearchActive) {
+    return "mdi-magnify";
+  }
   return getSortIcon(sortModel.value);
 });
 
@@ -1049,6 +1061,14 @@ defineExpose({ blurSearchInput });
   padding: 6px 6px;
   background: rgba(var(--v-theme-surface), 0.2) !important;
   color: rgb(var(--v-theme-on-background)) !important;
+}
+
+.toolbar-sort-search-note {
+  font-size: 0.85em;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-surface), 0.2);
 }
 
 .toolbar-search-field {
