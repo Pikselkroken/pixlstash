@@ -2,6 +2,8 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
+import os
+import time
 
 from sqlmodel import select, Session
 from typing import List, Optional, Tuple
@@ -20,19 +22,22 @@ logger = get_logger(__name__)
 
 
 class LikenessWorker(BaseWorker):
-    BATCH_SIZE = 5000
+    BATCH_SIZE = int(os.getenv("PIXL_LIKENESS_BATCH_SIZE", "5000"))
     TOP_K = 200
     FACE_COUNT_MAX_DIFF = 1
     FACE_WEIGHT = 0.5
     IMAGE_WEIGHT = 0.5
     PHASH_BITS = 64
     PHASH_STRONG_MATCH = 0.95
+    PHASH_MIN_SIM = 0.92
 
     def worker_type(self) -> WorkerType:
         return WorkerType.LIKENESS
 
     @classmethod
-    def get_next_batch(cls, session: Session) -> Optional[Tuple[int, List[int]]]:
+    def get_next_batch(
+        cls, session: Session
+    ) -> Optional[Tuple[int, List[int], int, int]]:
         """
         Return the next work chunk as (a, bs), where:
         - a is the next picture_id_a with remaining work and embedding ready,
@@ -45,7 +50,7 @@ class LikenessWorker(BaseWorker):
             session, quality_ready=cls._embedding_ready
         )
         if a is None:
-            return None, None
+            return None, None, None, None
 
         max_id = PictureLikenessFrontier.max_picture_id(session)
         # Ask the model to compute the next contiguous [start_b, end_b] window
@@ -53,7 +58,7 @@ class LikenessWorker(BaseWorker):
             session, a, max_id=max_id, batch_limit=cls.BATCH_SIZE
         )
         if not rng:
-            return None, None  # frontier already at max or race
+            return None, None, None, None  # frontier already at max or race
 
         start_b, end_b = rng
 
@@ -72,9 +77,9 @@ class LikenessWorker(BaseWorker):
 
         # Allow sparse ranges: take any eligible b values within the window
         if not eligible_bs_all:
-            return None, None  # No eligible b in the window
+            return None, None, None, None  # No eligible b in the window
 
-        return a, eligible_bs_all[: cls.BATCH_SIZE]
+        return a, eligible_bs_all[: cls.BATCH_SIZE], start_b, end_b
 
     def _run(self):
         logger.info("LikenessWorker: Likeness worker started.")
@@ -84,31 +89,92 @@ class LikenessWorker(BaseWorker):
         logger.info("LikenessWorker: PictureLikenessFrontier initialized.")
 
         while not self._stop.is_set():
-            a, bs = self._db.run_immediate_read_task(LikenessWorker.get_next_batch)
+            a, bs, start_b, end_b = self._db.run_immediate_read_task(
+                LikenessWorker.get_next_batch
+            )
 
             if not a or not bs:
                 logger.info("LikenessWorker: No pending pairs. Sleeping...")
                 self._wait()
                 continue
 
-            logger.info(f"LikenessWorker: Processing {len(bs)} pairs.")
+            logger.info(
+                "LikenessWorker: Processing %s pairs (a=%s, window=%s-%s).",
+                len(bs),
+                a,
+                start_b,
+                end_b,
+            )
+            batch_start = time.time()
 
             pids_needed = set()
             for b in bs:
                 pids_needed.add(a)
                 pids_needed.add(b)
 
-            def fetch_embeddings_and_faces(session, ids):
-                embeddings = session.exec(
-                    select(Picture.id, Picture.image_embedding).where(
+            def fetch_phashes(session, ids):
+                rows = session.exec(
+                    select(Picture.id, Picture.perceptual_hash).where(
                         Picture.id.in_(ids)
                     )
                 ).all()
+                return {pid: phash for pid, phash in rows}
+
+            phash_dict = self._db.run_task(
+                fetch_phashes, list(pids_needed), priority=DBPriority.LOW
+            )
+
+            phash_a = phash_dict.get(a)
+            candidate_bs = []
+            skipped_by_phash = 0
+            for b in bs:
+                phash_b = phash_dict.get(b)
+                if not phash_a or not phash_b:
+                    skipped_by_phash += 1
+                    continue
+                phash_sim = self._phash_similarity(phash_a, phash_b)
+                if phash_sim is None or phash_sim < self.PHASH_MIN_SIM:
+                    skipped_by_phash += 1
+                    continue
+                candidate_bs.append(b)
+
+            if not candidate_bs:
+
+                def advance_frontier_only(session, a, max_b):
+                    PictureLikenessFrontier.update(session, a, max_b)
+                    session.commit()
+
+                self._db.run_task(
+                    advance_frontier_only,
+                    a,
+                    max(bs),
+                    priority=DBPriority.LOW,
+                )
+                elapsed = time.time() - batch_start
+                logger.info(
+                    "LikenessWorker: Batch done (a=%s) elapsed=%.2fs total=%s scored=0 skipped_phash=%s missing_emb=0 invalid_emb=0",
+                    a,
+                    elapsed,
+                    len(bs),
+                    skipped_by_phash,
+                )
+                continue
+
+            pids_needed = {a, *candidate_bs}
+
+            def fetch_embeddings_and_faces(session, ids):
+                embeddings = session.exec(
+                    select(
+                        Picture.id, Picture.image_embedding, Picture.perceptual_hash
+                    ).where(Picture.id.in_(ids))
+                ).all()
                 embedding_dict = {}
-                for pid, emb in embeddings:
+                phash_dict = {}
+                for pid, emb, phash in embeddings:
                     if isinstance(emb, (memoryview, bytearray)):
                         emb = bytes(emb)
                     embedding_dict[pid] = emb
+                    phash_dict[pid] = phash
 
                 face_rows = session.exec(
                     select(Face.picture_id, Face.features).where(
@@ -123,21 +189,24 @@ class LikenessWorker(BaseWorker):
                         features = bytes(features)
                     face_dict[pic_id].append(features)
 
-                return embedding_dict, face_dict
+                return embedding_dict, face_dict, phash_dict
 
-            embedding_dict, face_dict = self._db.run_task(
+            embedding_dict, face_dict, phash_dict = self._db.run_task(
                 fetch_embeddings_and_faces, list(pids_needed), priority=DBPriority.LOW
             )
 
             likeness_results = []
             processed_notify_ids = []
-            for b in bs:
+            missing_embeddings = 0
+            invalid_embeddings = 0
+            for b in candidate_bs:
                 if self._stop.is_set():
                     break
                 logger.debug(f"LikenessWorker: Processing pair (a={a}, b={b})")
                 embedding_a = embedding_dict.get(a)
                 embedding_b = embedding_dict.get(b)
                 if embedding_a is None or embedding_b is None:
+                    missing_embeddings += 1
                     logger.warning(
                         "LikenessWorker: Missing embeddings for pair (a=%s, b=%s)",
                         a,
@@ -147,6 +216,7 @@ class LikenessWorker(BaseWorker):
                 emb_a = self._decode_embedding(embedding_a)
                 emb_b = self._decode_embedding(embedding_b)
                 if emb_a is None or emb_b is None:
+                    invalid_embeddings += 1
                     logger.warning(
                         "LikenessWorker: Invalid embeddings for pair (a=%s, b=%s)",
                         a,
@@ -201,6 +271,17 @@ class LikenessWorker(BaseWorker):
             else:
                 logger.debug("LikenessWorker: No likeness scores computed. Sleeping...")
                 self._wait()
+            elapsed = time.time() - batch_start
+            logger.info(
+                "LikenessWorker: Batch done (a=%s) elapsed=%.2fs total=%s scored=%s skipped_phash=%s missing_emb=%s invalid_emb=%s",
+                a,
+                elapsed,
+                len(bs),
+                len(likeness_results),
+                skipped_by_phash,
+                missing_embeddings,
+                invalid_embeddings,
+            )
         logger.info("LikenessWorker: Likeness worker stopped.")
 
     @staticmethod
@@ -235,6 +316,18 @@ class LikenessWorker(BaseWorker):
             return arr.copy()
         except Exception:
             return None
+
+    @classmethod
+    def _phash_similarity(cls, hash_a: str, hash_b: str) -> Optional[float]:
+        if not hash_a or not hash_b:
+            return None
+        try:
+            int_a = int(hash_a, 16)
+            int_b = int(hash_b, 16)
+        except Exception:
+            return None
+        distance = (int_a ^ int_b).bit_count()
+        return 1.0 - (distance / float(cls.PHASH_BITS))
 
     @staticmethod
     def _cosine_similarity(vec_a: np.ndarray, vec_b: np.ndarray) -> Optional[float]:
