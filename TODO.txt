@@ -1,7 +1,8 @@
 1. Make Picture stacks work better
 2. Clean up code
 3. Optimise
-4. Package better
+4. Report some progress on backend workers
+5. Package better
 
 Eventually:
 * Multi-user

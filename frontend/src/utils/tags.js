@@ -27,9 +27,11 @@ export function dedupeTagList(tags) {
   const byTag = new Map();
   for (const tag of tags) {
     if (!tag || !tag.tag) continue;
-    const existing = byTag.get(tag.tag);
+    const key = String(tag.tag).trim().toLowerCase();
+    if (!key) continue;
+    const existing = byTag.get(key);
     if (!existing || (existing.id == null && tag.id != null)) {
-      byTag.set(tag.tag, tag);
+      byTag.set(key, tag);
     }
   }
   return Array.from(byTag.values())
