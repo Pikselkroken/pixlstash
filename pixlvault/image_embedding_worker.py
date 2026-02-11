@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 from typing import Optional
 
 from pixlvault.database import DBPriority
-from pixlvault.db_models import Picture
+from pixlvault.db_models import Picture, PictureLikenessQueue
 from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_utils import PictureUtils
@@ -416,6 +416,7 @@ class ImageEmbeddingWorker(BaseWorker):
         return results
 
     def _save_results(self, session: Session, updates):
+        updated_ids = []
         for pid, emb_bytes, score, phash in updates:
             pic = session.get(Picture, pid)
             if pic:
@@ -423,4 +424,8 @@ class ImageEmbeddingWorker(BaseWorker):
                 if score is not None:
                     pic.aesthetic_score = score
                 pic.perceptual_hash = phash
+                updated_ids.append(pid)
         session.commit()
+        if updated_ids:
+            PictureLikenessQueue.enqueue(session, updated_ids)
+            session.commit()

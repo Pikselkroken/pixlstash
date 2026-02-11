@@ -20,7 +20,7 @@ export function normalizeStackThreshold(value) {
   if (value === null || value === undefined || value === '') return 0.9;
   const parsed = parseFloat(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return 0.9;
-  return Math.max(0.5, Math.min(0.95, parsed));
+  return Math.max(0.5, Math.min(0.99999, parsed));
 }
 
 export function getStackColor(stackIndex, step = 47) {

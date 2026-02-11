@@ -17,6 +17,7 @@ class WorkerType(str, Enum):
     QUALITY = "QualityWorker"
     FACE_QUALITY = "FaceQualityWorker"
     LIKENESS = "LikenessWorker"
+    LIKENESS_PARAMETERS = "LikenessParameterWorker"
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
     IMAGE_EMBEDDING = "ImageEmbeddingWorker"

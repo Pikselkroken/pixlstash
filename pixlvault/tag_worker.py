@@ -697,6 +697,13 @@ class EmbeddingWorker(BaseWorker):
                 logger.debug(
                     f"[EMBEDDING WORKER]  Got {len(pictures_to_embed)} pictures needing embeddings."
                 )
+                if not pictures_to_embed:
+                    timing = time.time() - start
+                    logger.debug(
+                        f"[EMBEDDING WORKER]  Sleeping after {timing:.2f} seconds. No work needed."
+                    )
+                    self._wait()
+                    continue
                 if self._stop.is_set():
                     break
                 embeddings_generated = self._generate_text_embeddings(pictures_to_embed)
@@ -713,11 +720,6 @@ class EmbeddingWorker(BaseWorker):
                     logger.debug(
                         f"[EMBEDDING WORKER]  Done after {timing:.2f} seconds. Having updated {embeddings_updated} pictures."
                     )
-                else:
-                    logger.debug(
-                        f"[EMBEDDING WORKER]  Sleeping after {timing:.2f} seconds. No work needed."
-                    )
-                    self._wait()
             except Exception as e:
                 logger.debug(
                     f"EmbeddingWorker thread exiting due to DB error (likely shutdown): {e}"

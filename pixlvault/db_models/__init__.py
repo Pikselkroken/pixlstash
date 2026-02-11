@@ -5,7 +5,7 @@ from .hand import Hand  # noqa: F401
 from .hand_tag import HandTag  # noqa: F401
 from .picture import Picture, SortMechanism  # noqa: F401
 from .picture_set import PictureSet, PictureSetMember  # noqa: F401
-from .picture_likeness import PictureLikeness  # noqa: F401
+from .picture_likeness import PictureLikeness, PictureLikenessQueue  # noqa: F401
 from .quality import Quality  # noqa: F401
 from .metadata import MetaData  # noqa: F401
 from .tag import (  # noqa: F401

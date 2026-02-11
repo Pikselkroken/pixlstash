@@ -742,21 +742,21 @@ const similarityCharacterModel = computed({
 });
 
 const stackThresholdOptions = [
-  { label: "Very Loose", value: "0.90" },
-  { label: "Loose", value: "0.92" },
-  { label: "Medium", value: "0.94" },
-  { label: "Strict", value: "0.96" },
-  { label: "Very Strict", value: "0.98" },
+  { label: "Very Loose", value: "0.92" },
+  { label: "Loose", value: "0.95" },
+  { label: "Medium", value: "0.97" },
+  { label: "Strict", value: "0.99" },
+  { label: "Very Strict", value: "0.995" },
 ];
 
 const stackThresholdModel = computed({
   get: () => {
     if (props.stackThreshold == null || props.stackThreshold === "") {
-      return "0.90";
+      return "0.92";
     }
     const parsed = parseFloat(String(props.stackThreshold));
     if (!Number.isFinite(parsed) || parsed <= 0) {
-      return "0.90";
+      return "0.92";
     }
     return String(props.stackThreshold);
   },

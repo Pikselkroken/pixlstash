@@ -1,5 +1,15 @@
+from datetime import datetime
+
 from sqlalchemy import Column, ForeignKey, Index, text
-from sqlmodel import CheckConstraint, SQLModel, Field, Relationship, Session, select
+from sqlmodel import (
+    CheckConstraint,
+    SQLModel,
+    Field,
+    Relationship,
+    Session,
+    select,
+    delete,
+)
 from typing import List, Optional, Tuple
 
 from .picture import Picture
@@ -157,6 +167,54 @@ class PictureLikeness(SQLModel, table=True):
             """),
             params={"a": picture_id_a, "top_k": top_k},
         )
+
+
+class PictureLikenessQueue(SQLModel, table=True):
+    """
+    Queue for pictures that need likeness pair recalculation.
+    """
+
+    picture_id: int = Field(
+        sa_column=Column(
+            "picture_id",
+            ForeignKey("picture.id", ondelete="CASCADE"),
+            primary_key=True,
+            index=True,
+        )
+    )
+    queued_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    __table_args__ = (Index("ix_picture_likeness_queue_queued_at", "queued_at"),)
+
+    @classmethod
+    def enqueue(cls, session: Session, picture_ids: List[int]) -> None:
+        if not picture_ids:
+            return
+        rows = [
+            {"picture_id": int(pid), "queued_at": datetime.utcnow()}
+            for pid in picture_ids
+            if pid is not None
+        ]
+        if not rows:
+            return
+        session.exec(
+            text(
+                """
+                INSERT OR IGNORE INTO picturelikenessqueue (picture_id, queued_at)
+                VALUES (:picture_id, :queued_at)
+                """
+            ),
+            params=rows,
+        )
+
+    @classmethod
+    def dequeue(cls, session: Session, picture_ids: List[int]) -> None:
+        if not picture_ids:
+            return
+        ids = [int(pid) for pid in picture_ids if pid is not None]
+        if not ids:
+            return
+        session.exec(delete(cls).where(cls.picture_id.in_(ids)))
 
 
 class PictureLikenessFrontier(SQLModel, table=True):

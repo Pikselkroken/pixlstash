@@ -3,7 +3,7 @@ import numpy as np
 import time
 import cv2
 
-from sqlmodel import Session, select
+from sqlmodel import Session, select, delete
 
 from pixlvault.database import DBPriority
 from pixlvault.event_types import EventType
@@ -25,7 +25,8 @@ class QualityWorker(BaseWorker):
 
     def _run(self):
         logger.info("Starting QualityWorker...")
-        BATCH_SIZE = 8
+        BATCH_SIZE = 64
+        FULL_IMAGE_MAX_SIDE = 512
         time.sleep(0.75)
         while not self._stop.is_set():
             start = time.time()
@@ -47,18 +48,58 @@ class QualityWorker(BaseWorker):
                         )
                         .where(Quality.id.is_(None))
                         .order_by(Picture.format, Picture.width, Picture.height)
+                        .limit(BATCH_SIZE * 8)
                     )
                     pics = result.all()
                     return pics
 
                 pics_missing_quality = self._db.run_task(find_pictures_missing_quality)
-                logger.debug(
+                logger.info(
                     f"Found {len(pics_missing_quality)} pictures missing quality metrics."
                 )
+                if pics_missing_quality:
+                    missing_ids = [int(pic.id) for pic in pics_missing_quality]
+                    sample_head = missing_ids[:5]
+                    sample_tail = missing_ids[-5:]
+                    logger.debug(
+                        "[QUALITY] Missing quality ids: count=%s min=%s max=%s head=%s tail=%s",
+                        len(missing_ids),
+                        min(missing_ids),
+                        max(missing_ids),
+                        sample_head,
+                        sample_tail,
+                    )
+                    sample_pics = pics_missing_quality[:3]
+                    for sample_pic in sample_pics:
+                        logger.info(
+                            "[QUALITY] Missing sample: id=%s format=%s width=%s height=%s file_path=%s",
+                            sample_pic.id,
+                            sample_pic.format,
+                            sample_pic.width,
+                            sample_pic.height,
+                            sample_pic.file_path,
+                        )
+                if not pics_missing_quality:
+                    logger.debug("[QUALITY] No pictures found missing quality metrics.")
+                    self._wait()
+                    continue
 
                 grouped_full = self._group_pictures_by_format_and_size(
                     pics_missing_quality
                 )
+                if grouped_full:
+                    logger.info(
+                        "[QUALITY] Grouped into %s batches (example key=%s size=%s)",
+                        len(grouped_full),
+                        next(iter(grouped_full.keys())),
+                        len(next(iter(grouped_full.values()))),
+                    )
+                else:
+                    logger.warning(
+                        f"[QUALITY] No groups formed from {len(pics_missing_quality)} pictures missing quality metrics."
+                    )
+                    self._wait()
+                    continue
 
                 if self._stop.is_set():
                     break
@@ -75,8 +116,10 @@ class QualityWorker(BaseWorker):
                         3,
                     )  # (height, width, channels)
                     valid_batch = []
+                    valid_loaded = []
                     skipped = []
-                    batch_shapes = []
+                    missing_load_ids = []
+                    shape_mismatch_ids = []
                     for pic in batch:
                         if self._stop.is_set():
                             break
@@ -85,17 +128,34 @@ class QualityWorker(BaseWorker):
                             self._db.image_root, pic.file_path
                         )
                         img = PictureUtils.load_image_or_video(file_path)
-                        shape = img.shape if img is not None else None
-                        batch_shapes.append(shape)
+                        if img is None:
+                            logger.warning(
+                                "Skipping image %s: failed to load (file_path=%s)",
+                                pic.id,
+                                pic.file_path,
+                            )
+                            missing_load_ids.append(int(pic.id))
+                            skipped.append(pic)
+                            continue
+                        shape = img.shape
                         if shape == expected_shape:
                             valid_batch.append(pic)
+                            valid_loaded.append(img)
                         else:
                             logger.warning(
-                                f"Skipping image {pic.id}: expected shape {expected_shape}, got {shape}"
+                                "Skipping image %s: expected shape %s, got %s",
+                                pic.id,
+                                expected_shape,
+                                shape,
                             )
+                            shape_mismatch_ids.append(int(pic.id))
                             skipped.append(pic)
                     if len(valid_batch) > 0:
-                        qualities = self._calculate_quality(valid_batch)
+                        qualities = self._calculate_quality(
+                            valid_batch,
+                            valid_loaded,
+                            max_side=FULL_IMAGE_MAX_SIDE,
+                        )
                         if qualities:
                             result = self._db.run_task(
                                 self._update_quality,
@@ -105,8 +165,44 @@ class QualityWorker(BaseWorker):
                             )
                             self._notify_ids_processed(result)
                             quality_updates += len(result)
+                            logger.info(
+                                "[QUALITY] Updated %s qualities for group=%s",
+                                len(result),
+                                group_key,
+                            )
                         else:
                             logger.warning("[QUALITY] No quality updates calculated.")
+                    if missing_load_ids or shape_mismatch_ids:
+                        logger.info(
+                            "[QUALITY] Batch diagnostics: missing_load=%s shape_mismatch=%s sample_missing=%s sample_shape=%s",
+                            len(missing_load_ids),
+                            len(shape_mismatch_ids),
+                            missing_load_ids[:5],
+                            shape_mismatch_ids[:5],
+                        )
+                    if skipped:
+                        sentinel_qualities = [
+                            Quality(
+                                sharpness=-1.0,
+                                edge_density=-1.0,
+                                contrast=-1.0,
+                                brightness=-1.0,
+                                noise_level=-1.0,
+                                colorfulness=-1.0,
+                                luminance_entropy=-1.0,
+                                dominant_hue=-1.0,
+                                color_histogram=None,
+                            )
+                            for _ in skipped
+                        ]
+                        result = self._db.run_task(
+                            self._update_quality,
+                            skipped,
+                            sentinel_qualities,
+                            priority=DBPriority.LOW,
+                        )
+                        self._notify_ids_processed(result)
+                        quality_updates += len(result)
 
             except Exception as e:
                 import traceback
@@ -157,7 +253,12 @@ class QualityWorker(BaseWorker):
 
         return groups
 
-    def _calculate_quality(self, pics: List[Picture]) -> List["Quality"]:
+    def _calculate_quality(
+        self,
+        pics: List[Picture],
+        loaded_pics: List[np.ndarray] = None,
+        max_side: int = None,
+    ) -> List["Quality"]:
         """
         Calculate quality metrics for a batch of images.
         Takes a list of pictures
@@ -168,17 +269,25 @@ class QualityWorker(BaseWorker):
         try:
             all_qualities = []
 
-            loaded_pics = []
-            for pic in pics:
-                file_path = PictureUtils.resolve_picture_path(
-                    self._db.image_root, pic.file_path
-                )
-                img = PictureUtils.load_image_or_video(file_path)
-                if img is None:
-                    logger.warning(
-                        f"Could not load image for picture_id={pic.id}, file_path={pic.file_path}"
+            if loaded_pics is None:
+                loaded_pics = []
+                for pic in pics:
+                    file_path = PictureUtils.resolve_picture_path(
+                        self._db.image_root, pic.file_path
                     )
-                loaded_pics.append(img)
+                    img = PictureUtils.load_image_or_video(file_path)
+                    if img is None:
+                        logger.warning(
+                            f"Could not load image for picture_id={pic.id}, file_path={pic.file_path}"
+                        )
+                    if img is not None and max_side:
+                        img = self._downscale_image(img, max_side)
+                    loaded_pics.append(img)
+            elif max_side:
+                loaded_pics = [
+                    self._downscale_image(img, max_side) if img is not None else None
+                    for img in loaded_pics
+                ]
 
             # Remove None images for batch processing, keep index mapping
             valid_indices = [i for i, img in enumerate(loaded_pics) if img is not None]
@@ -216,14 +325,46 @@ class QualityWorker(BaseWorker):
             )
             return [None] * len(pics)
 
+    @staticmethod
+    def _downscale_image(img: np.ndarray, max_side: int) -> np.ndarray:
+        try:
+            height, width = img.shape[:2]
+            if max(height, width) <= max_side:
+                return img
+            scale = max_side / float(max(height, width))
+            new_w = max(1, int(round(width * scale)))
+            new_h = max(1, int(round(height * scale)))
+            return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        except Exception as exc:
+            logger.warning("Failed to downscale image: %s", exc)
+            return img
+
     def _update_quality(
         self, session, pics: List[Picture], qualities: List["Quality"]
     ) -> List[Tuple[type, object, str]]:
         changed = []
         for pic, quality in zip(pics, qualities):
+            if quality is None:
+                quality = Quality(
+                    sharpness=-1.0,
+                    edge_density=-1.0,
+                    contrast=-1.0,
+                    brightness=-1.0,
+                    noise_level=-1.0,
+                    colorfulness=-1.0,
+                    luminance_entropy=-1.0,
+                    dominant_hue=-1.0,
+                    color_histogram=None,
+                )
+            session.exec(
+                delete(Quality).where(
+                    (Quality.picture_id == pic.id) & (Quality.face_id.is_(None))
+                )
+            )
+            quality.picture_id = pic.id
+            quality.face_id = None
             session.add(quality)
-            pic.quality = quality
-
+            pic.likeness_parameters = None
             session.add(pic)
             changed.append((Picture, pic.id, "quality", quality))
         session.commit()
@@ -236,7 +377,7 @@ class FaceQualityWorker(BaseWorker):
 
     def _run(self):
         logger.info("Starting FaceQualityWorker...")
-        BATCH_SIZE = 8
+        BATCH_SIZE = 32
         time.sleep(0.75)
         while not self._stop.is_set():
             start = time.time()
@@ -251,9 +392,11 @@ class FaceQualityWorker(BaseWorker):
                     statement = (
                         select(Face, Picture)
                         .join(Picture, Face.picture_id == Picture.id)
-                        .outerjoin(Quality, Quality.picture_id == Picture.id)
+                        .outerjoin(Quality, Quality.face_id == Face.id)
                         .where(Quality.id.is_(None))
+                        .where(Face.bbox_.is_not(None))
                         .order_by(Picture.format, Picture.width, Picture.height)
+                        .limit(BATCH_SIZE * 8)
                     )
                     result = session.exec(statement)
                     return result.all()
@@ -264,9 +407,30 @@ class FaceQualityWorker(BaseWorker):
                     f"Found {len(faces_missing_quality)} faces missing face quality metrics."
                 )
 
-                grouped_faces = self._group_faces_by_format_and_size(
+                grouped_faces, invalid_faces = self._group_faces_by_format_and_size(
                     faces_missing_quality
                 )
+
+                if invalid_faces:
+                    sentinel_qualities = [
+                        Quality(
+                            sharpness=-1.0,
+                            edge_density=-1.0,
+                            contrast=-1.0,
+                            brightness=-1.0,
+                            noise_level=-1.0,
+                            color_histogram=None,
+                        )
+                        for _ in invalid_faces
+                    ]
+                    result = self._db.run_task(
+                        self._update_face_quality,
+                        invalid_faces,
+                        sentinel_qualities,
+                        priority=DBPriority.LOW,
+                    )
+                    self._notify_ids_processed(result)
+                    quality_update_count += len(result)
 
                 for group in grouped_faces.values():
                     batch = group[:BATCH_SIZE]
@@ -306,13 +470,16 @@ class FaceQualityWorker(BaseWorker):
                 self._wait()
         logger.info("FaceQualityWorker: Stopped.")
 
-    def _group_faces_by_format_and_size(self, faces: List[Tuple[Face, Picture]]):
+    def _group_faces_by_format_and_size(
+        self, faces: List[Tuple[Face, Picture]]
+    ) -> Tuple[dict, List[Face]]:
         """
         Group pre-sorted pictures by (format, bbox_width, bbox_height).
         Input must be sorted by format, bbox_width, bbox_height.
         Returns: dict with (format, bbox_width, bbox_height) as keys and lists of pictures as values.
         """
         groups = {}
+        invalid_faces = []
         current_key = None
         current_group = []
 
@@ -324,6 +491,7 @@ class FaceQualityWorker(BaseWorker):
                     pic.id,
                     face.id,
                 )
+                invalid_faces.append(face)
                 continue
 
             x1, y1, x2, y2 = face.bbox
@@ -341,7 +509,7 @@ class FaceQualityWorker(BaseWorker):
 
         if current_group:
             groups[current_key] = current_group
-        return groups
+        return groups, invalid_faces
 
     def _calculate_face_quality(
         self, pics_and_faces: List[Tuple[Picture, Face]]
@@ -369,6 +537,7 @@ class FaceQualityWorker(BaseWorker):
                         target_height = bbox_height
                         break
 
+            image_cache = {}
             for pic, face in pics_and_faces:
                 if face.bbox is None or len(face.bbox) != 4:
                     logger.warning(
@@ -380,10 +549,14 @@ class FaceQualityWorker(BaseWorker):
                     continue
 
                 x1, y1, x2, y2 = face.bbox
-                file_path = PictureUtils.resolve_picture_path(
-                    self._db.image_root, pic.file_path
-                )
-                img = PictureUtils.load_image_or_video(file_path)
+                if pic.id in image_cache:
+                    img = image_cache[pic.id]
+                else:
+                    file_path = PictureUtils.resolve_picture_path(
+                        self._db.image_root, pic.file_path
+                    )
+                    img = PictureUtils.load_image_or_video(file_path)
+                    image_cache[pic.id] = img
                 if img is None:
                     logger.warning(
                         "Could not load image for face quality: picture_id=%s file_path=%s",

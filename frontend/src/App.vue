@@ -172,6 +172,14 @@ function connectUpdatesSocket() {
     }
     if (payload?.type === "pictures_changed") {
       refreshSidebar({ flashCounts: true });
+      const pictureIds = Array.isArray(payload.picture_ids)
+        ? payload.picture_ids
+        : [];
+      if (pictureIds.length > 0 && selectedSort.value === "PICTURE_STACKS") {
+        const nextKey = (wsTagUpdate.value?.key || 0) + 1;
+        wsTagUpdate.value = { key: nextKey, pictureIds };
+        return;
+      }
       if (shouldRefreshForPictureChange()) {
         wsUpdateKey.value = Date.now();
         refreshGridVersion();

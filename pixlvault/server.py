@@ -145,7 +145,7 @@ class Server:
         if not self._ws_loop:
             return
         try:
-            logger.info("Got the following event from vault: %s", event_type)
+            logger.debug("Got the following event from vault: %s", event_type)
             asyncio.run_coroutine_threadsafe(
                 self._broadcast_ws_event(event_type, data), self._ws_loop
             )
@@ -172,9 +172,11 @@ class Server:
                 "picture_ids": list(picture_ids),
             }
         else:
+            picture_ids = data if isinstance(data, (list, tuple, set)) else []
             payload = {
                 "type": "pictures_changed",
                 "event": event_type.name,
+                "picture_ids": list(picture_ids) if picture_ids else [],
             }
         stale = []
         for client in clients:

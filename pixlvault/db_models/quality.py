@@ -36,6 +36,9 @@ class Quality(SQLModel, table=True):
     contrast: Optional[float] = Field(default=None, index=True)
     brightness: Optional[float] = Field(default=None, index=True)
     noise_level: Optional[float] = Field(default=None, index=True)
+    colorfulness: Optional[float] = Field(default=None, index=True)
+    luminance_entropy: Optional[float] = Field(default=None, index=True)
+    dominant_hue: Optional[float] = Field(default=None, index=True)
 
     # Store color histogram as a binary blob (np.float32 array, serialized)
     color_histogram: Optional[bytes] = Field(
@@ -96,9 +99,50 @@ class Quality(SQLModel, table=True):
         brightness = images.mean(axis=(1, 2, 3)) / 255.0
         contrast = images.std(axis=(1, 2, 3)) / 255.0
         if images.shape[3] == 3:
+            rgb = images.astype(np.float32) / 255.0
+            rg = rgb[:, :, :, 0] - rgb[:, :, :, 1]
+            yb = 0.5 * (rgb[:, :, :, 0] + rgb[:, :, :, 1]) - rgb[:, :, :, 2]
+            std_rg = rg.std(axis=(1, 2))
+            std_yb = yb.std(axis=(1, 2))
+            mean_rg = rg.mean(axis=(1, 2))
+            mean_yb = yb.mean(axis=(1, 2))
+            colorfulness = np.sqrt(std_rg**2 + std_yb**2) + 0.3 * np.sqrt(
+                mean_rg**2 + mean_yb**2
+            )
+            colorfulness = np.clip(colorfulness, 0.0, 1.0)
+        else:
+            colorfulness = np.zeros((batch_size,), dtype=np.float32)
+        if images.shape[3] == 3:
             gray = images.mean(axis=3)
         else:
             gray = images.squeeze(axis=3) if images.shape[3] == 1 else images
+        luminance_entropy = np.zeros((batch_size,), dtype=np.float32)
+        for i in range(batch_size):
+            gray_uint8 = np.clip(gray[i], 0, 255).astype(np.uint8, copy=False)
+            hist = np.bincount(gray_uint8.ravel(), minlength=256).astype(np.float64)
+            total = hist.sum()
+            if total > 0:
+                probs = hist / total
+                probs = probs[probs > 0]
+                entropy = -np.sum(probs * np.log2(probs))
+                luminance_entropy[i] = float(entropy / np.log2(256))
+        if images.shape[3] == 3:
+            dominant_hue = np.zeros((batch_size,), dtype=np.float32)
+            for i in range(batch_size):
+                hsv = cv2.cvtColor(images[i].astype(np.uint8), cv2.COLOR_RGB2HSV)
+                hue = hsv[:, :, 0]
+                sat = hsv[:, :, 1]
+                val = hsv[:, :, 2]
+                mask = (sat > 20) & (val > 20)
+                if not np.any(mask):
+                    continue
+                hist = np.bincount(hue[mask].ravel(), minlength=180).astype(np.float64)
+                if hist.sum() == 0:
+                    continue
+                bin_idx = int(hist.argmax())
+                dominant_hue[i] = float((bin_idx + 0.5) / 180.0)
+        else:
+            dominant_hue = np.zeros((batch_size,), dtype=np.float32)
         laplacians = np.array(
             [
                 cv2.Laplacian(gray[i].astype(np.float32), cv2.CV_32F)
@@ -123,6 +167,9 @@ class Quality(SQLModel, table=True):
         contrast = fix_none(contrast)
         brightness = fix_none(brightness)
         noise_level = fix_none(noise_level)
+        colorfulness = fix_none(colorfulness)
+        luminance_entropy = fix_none(luminance_entropy)
+        dominant_hue = fix_none(dominant_hue)
         # Compute color histograms for each image (flattened, float32, normalized)
         if calculate_histograms:
             histograms = []
@@ -147,6 +194,9 @@ class Quality(SQLModel, table=True):
                     contrast=float(contrast[i]),
                     brightness=float(brightness[i]),
                     noise_level=float(noise_level[i]),
+                    colorfulness=float(colorfulness[i]),
+                    luminance_entropy=float(luminance_entropy[i]),
+                    dominant_hue=float(dominant_hue[i]),
                     color_histogram=histograms[i],
                 )
             )
@@ -189,6 +239,15 @@ class Quality(SQLModel, table=True):
         t0 = time.time()
         noise_level = Quality._calculate_noise_level(image)
         timings["noise_level"] = time.time() - t0
+        t0 = time.time()
+        colorfulness = Quality._calculate_colorfulness(image)
+        timings["colorfulness"] = time.time() - t0
+        t0 = time.time()
+        luminance_entropy = Quality._calculate_luminance_entropy(image)
+        timings["luminance_entropy"] = time.time() - t0
+        t0 = time.time()
+        dominant_hue = Quality._calculate_dominant_hue(image)
+        timings["dominant_hue"] = time.time() - t0
 
         # Post-calc None checks
         sharpness = -1.0 if sharpness is None else sharpness
@@ -196,12 +255,18 @@ class Quality(SQLModel, table=True):
         contrast = -1.0 if contrast is None else contrast
         brightness = -1.0 if brightness is None else brightness
         noise_level = -1.0 if noise_level is None else noise_level
+        colorfulness = -1.0 if colorfulness is None else colorfulness
+        luminance_entropy = -1.0 if luminance_entropy is None else luminance_entropy
+        dominant_hue = -1.0 if dominant_hue is None else dominant_hue
         return Quality(
             sharpness=float(sharpness),
             edge_density=float(edge_density),
             contrast=float(contrast),
             brightness=float(brightness),
             noise_level=float(noise_level),
+            colorfulness=float(colorfulness),
+            luminance_entropy=float(luminance_entropy),
+            dominant_hue=float(dominant_hue),
         )
 
     @staticmethod
@@ -276,6 +341,54 @@ class Quality(SQLModel, table=True):
         noise = diff.mean() / 255.0
         return min(noise, 1.0)
 
+    @staticmethod
+    def _calculate_colorfulness(image: np.ndarray) -> float:
+        if image.ndim != 3 or image.shape[2] != 3:
+            return 0.0
+        rgb = image.astype(np.float32) / 255.0
+        rg = rgb[:, :, 0] - rgb[:, :, 1]
+        yb = 0.5 * (rgb[:, :, 0] + rgb[:, :, 1]) - rgb[:, :, 2]
+        std_rg = rg.std()
+        std_yb = yb.std()
+        mean_rg = rg.mean()
+        mean_yb = yb.mean()
+        colorfulness = np.sqrt(std_rg**2 + std_yb**2) + 0.3 * np.sqrt(
+            mean_rg**2 + mean_yb**2
+        )
+        return float(min(max(colorfulness, 0.0), 1.0))
+
+    @staticmethod
+    def _calculate_luminance_entropy(image: np.ndarray) -> float:
+        if image.ndim == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image
+        hist = np.bincount(gray.ravel(), minlength=256).astype(np.float64)
+        total = hist.sum()
+        if total == 0:
+            return 0.0
+        probs = hist / total
+        probs = probs[probs > 0]
+        entropy = -np.sum(probs * np.log2(probs))
+        return float(min(max(entropy / np.log2(256), 0.0), 1.0))
+
+    @staticmethod
+    def _calculate_dominant_hue(image: np.ndarray) -> float:
+        if image.ndim != 3 or image.shape[2] != 3:
+            return 0.0
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        hue = hsv[:, :, 0]
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        mask = (sat > 20) & (val > 20)
+        if not np.any(mask):
+            return 0.0
+        hist = np.bincount(hue[mask].ravel(), minlength=180).astype(np.float64)
+        if hist.sum() == 0:
+            return 0.0
+        bin_idx = int(hist.argmax())
+        return float(min(max((bin_idx + 0.5) / 180.0, 0.0), 1.0))
+
     @classmethod
     def quality_metric_fields(cls) -> set[str]:
         """
@@ -287,6 +400,9 @@ class Quality(SQLModel, table=True):
             "contrast",
             "brightness",
             "noise_level",
+            "colorfulness",
+            "luminance_entropy",
+            "dominant_hue",
         ]
 
     @classmethod

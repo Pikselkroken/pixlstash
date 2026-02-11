@@ -1696,7 +1696,8 @@ async function refreshGridImage(imageId) {
   );
   if (idx === -1) return;
   const latestInfo = await fetchImageInfo(imageId, {
-    smartScore: isSmartScoreSortActive(),
+    smartScore:
+      isSmartScoreSortActive() || props.selectedSort === STACKS_SORT_KEY,
   });
   if (latestInfo && !Array.isArray(latestInfo)) {
     const current = allGridImages.value[idx] || {};
@@ -1706,8 +1707,55 @@ async function refreshGridImage(imageId) {
       idx: current.idx ?? idx,
     };
   }
+  if (props.selectedSort === STACKS_SORT_KEY) {
+    const stackIndex = getStackIndexFromItem(allGridImages.value[idx]);
+    if (typeof stackIndex === "number") {
+      reorderStackByScore(stackIndex);
+    }
+  }
   invalidateThumbnailIndex(idx);
   fetchThumbnailsBatch(idx, idx + 1);
+}
+
+function getStackIndexFromItem(item) {
+  if (!item) return null;
+  if (typeof item.stackIndex === "number") return item.stackIndex;
+  if (typeof item.stack_index === "number") return item.stack_index;
+  return null;
+}
+
+function reorderStackByScore(stackIndex) {
+  const items = allGridImages.value.slice();
+  const stackItems = items.filter(
+    (item) => getStackIndexFromItem(item) === stackIndex,
+  );
+  if (stackItems.length <= 1) return;
+  stackItems.sort((a, b) => {
+    const scoreA = a?.score ?? 0;
+    const scoreB = b?.score ?? 0;
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    const smartA = a?.smartScore ?? 0;
+    const smartB = b?.smartScore ?? 0;
+    if (smartA !== smartB) return smartB - smartA;
+    return (a?.id ?? 0) - (b?.id ?? 0);
+  });
+  const result = [];
+  let inserted = false;
+  for (const item of items) {
+    const idx = getStackIndexFromItem(item);
+    if (idx === stackIndex) {
+      if (inserted) continue;
+      result.push(...stackItems);
+      inserted = true;
+      continue;
+    }
+    result.push(item);
+  }
+  for (let i = 0; i < result.length; i += 1) {
+    result[i].idx = i;
+  }
+  allGridImages.value = result;
+  invalidateVisibleThumbnailRanges();
 }
 
 function addImageToGrid(imageData) {

@@ -21,6 +21,7 @@ from pixlvault.event_types import EventType
 from pixlvault.tag_worker import TagWorker, DescriptionWorker, EmbeddingWorker  # noqa: F401
 from pixlvault.feature_extraction_worker import FeatureExtractionWorker  # noqa: F401
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
+from pixlvault.likeness_parameter_worker import LikenessParameterWorker  # noqa: F401
 from pixlvault.image_embedding_worker import ImageEmbeddingWorker  # noqa: F401
 from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
 from pixlvault.smart_score_scrapheap_worker import (  # noqa: F401
@@ -41,6 +42,7 @@ class Vault:
             WorkerType.QUALITY,
             WorkerType.DESCRIPTION,
             WorkerType.IMAGE_EMBEDDING,
+            WorkerType.LIKENESS_PARAMETERS,
             WorkerType.SMART_SCORE_SCRAPHEAP,
         ],
         EventType.CHANGED_TAGS: [WorkerType.SMART_SCORE_SCRAPHEAP],
@@ -54,6 +56,7 @@ class Vault:
         EventType.CHANGED_DESCRIPTIONS: [WorkerType.TEXT_EMBEDDING],
         EventType.QUALITY_UPDATED: [
             WorkerType.LIKENESS,
+            WorkerType.LIKENESS_PARAMETERS,
             WorkerType.SMART_SCORE_SCRAPHEAP,
         ],
         EventType.CLEARED_TAGS: [WorkerType.TAGGER, WorkerType.TEXT_EMBEDDING],
