@@ -348,7 +348,9 @@
               v-for="info in getThumbnailInfoItems(img)"
               :key="`${info.key}-${img.id}`"
               class="thumbnail-info"
-              :ref="(el) => setThumbnailInfoRef(img.id, info.key, info.text, el)"
+              :ref="
+                (el) => setThumbnailInfoRef(img.id, info.key, info.text, el)
+              "
               :title="getThumbnailInfoTitle(img.id, info.key)"
               @mouseenter="handleThumbnailInfoMouseEnter(img.id, info.key)"
             >
@@ -487,6 +489,10 @@ const textMeasureContext = textMeasureCanvas
   : null;
 const thumbnailLoadedMap = reactive({});
 const thumbnailReadyMap = reactive({});
+const THUMBNAIL_RETRY_DELAY_MS = 10000;
+const THUMBNAIL_RETRY_LIMIT = 1;
+const thumbnailRetryTimers = new Map();
+const thumbnailRetryCounts = reactive({});
 const PREFETCHED_FULL_IMAGE_LIMIT = 12;
 const fullImagePrefetchControllers = new Map();
 const prefetchedFullImageIds = new Set();
@@ -712,6 +718,33 @@ function isImageRecentlyAdded(id) {
 
 function onThumbnailLoad(id) {
   thumbnailLoadedMap[id] = (thumbnailLoadedMap[id] || 0) + 1;
+  clearThumbnailRetry(id);
+}
+
+function clearThumbnailRetry(id) {
+  if (!id) return;
+  const timer = thumbnailRetryTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  thumbnailRetryTimers.delete(id);
+}
+
+function scheduleThumbnailRetry(id, index, requestEpoch) {
+  if (!id || index == null) return;
+  if ((thumbnailRetryCounts[id] || 0) >= THUMBNAIL_RETRY_LIMIT) return;
+  if (thumbnailRetryTimers.has(id)) return;
+  const timer = setTimeout(() => {
+    thumbnailRetryTimers.delete(id);
+    if (requestEpoch !== thumbnailRequestEpoch.value) return;
+    const current = allGridImages.value[index];
+    if (!current || current.id !== id) return;
+    if (current.thumbnail) return;
+    thumbnailRetryCounts[id] = (thumbnailRetryCounts[id] || 0) + 1;
+    invalidateThumbnailIndex(index);
+    fetchThumbnailsBatch(index, index + 1);
+  }, THUMBNAIL_RETRY_DELAY_MS);
+  thumbnailRetryTimers.set(id, timer);
 }
 
 function setThumbnailRef(id, el) {
@@ -2711,6 +2744,13 @@ function resetThumbnailState() {
   for (const key of Object.keys(thumbnailLoadedMap)) {
     delete thumbnailLoadedMap[key];
   }
+  for (const timer of thumbnailRetryTimers.values()) {
+    clearTimeout(timer);
+  }
+  thumbnailRetryTimers.clear();
+  for (const key of Object.keys(thumbnailRetryCounts)) {
+    delete thumbnailRetryCounts[key];
+  }
 }
 
 function rangeCovers(ranges, start, end) {
@@ -3035,6 +3075,11 @@ async function fetchThumbnailsBatch(start, end) {
       const img = gridImages[i];
       img.idx = start + i; // Redundant but explicit for safety
       allGridImages.value[start + i] = img;
+      if (img.thumbnail) {
+        clearThumbnailRetry(img.id);
+      } else {
+        scheduleThumbnailRetry(img.id, start + i, requestEpoch);
+      }
     }
     loadedRanges.value.push([start, end]);
     if (overlayNeedsRedraw) {
