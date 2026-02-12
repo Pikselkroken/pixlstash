@@ -86,6 +86,7 @@ class WatchFolderWorker(BaseWorker):
                 delete_paths = []
                 updated = False
                 now_ts = time.time()
+                total_candidates = 0
 
                 for entry in watch_folders:
                     folder = entry.get("folder")
@@ -119,6 +120,8 @@ class WatchFolderWorker(BaseWorker):
                                 )
                             if mtime > latest_seen:
                                 latest_seen = mtime
+
+                    total_candidates += len(candidate_files)
 
                     for file_path in candidate_files:
                         logger.debug(f"# Found new file {file_path}")
@@ -190,6 +193,12 @@ class WatchFolderWorker(BaseWorker):
                                     file_path,
                                     exc,
                                 )
+
+                self._set_progress(
+                    label="watch_folder_import",
+                    current=len(new_pictures),
+                    total=total_candidates,
+                )
 
                 if updated:
                     self._persist_watch_folders(watch_folders)

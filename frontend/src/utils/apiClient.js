@@ -1,7 +1,7 @@
 import axios from 'axios';
 import {ref} from 'vue';
 
-// Centralized authentication state
+// Centralised authentication state
 const isAuthenticated = ref(false);
 
 const DEFAULT_BACKEND_PORT = 9537;
@@ -92,8 +92,8 @@ apiClient.interceptors.response.use((response) => response, (error) => {
   if (error.response && error.response.status === 401) {
     const url = error?.config?.url || '';
     if (!url.includes('/users/me/auth')) {
-      console.error('Unauthorized! Logging out...');
-      logout();  // Call the centralized logout function
+      console.error('Unauthorised! Logging out...');
+      logout();  // Call the centralised logout function
     }
   }
   return Promise.reject(error);

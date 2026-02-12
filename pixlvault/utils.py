@@ -70,14 +70,18 @@ def serialize_user_config(user) -> dict:
         "sort",
         "descending",
         "columns",
+        "sidebar_thumbnail_size",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
         "show_format",
         "show_resolution",
         "show_problem_icon",
+        "date_format",
+        "theme_mode",
         "similarity_character",
         "stack_strictness",
+        "apply_tag_filter",
         "auto_scrapheap_smart_score_threshold",
         "auto_scrapheap_lookback_minutes",
     }
@@ -91,11 +95,20 @@ def serialize_user_config(user) -> dict:
         for key in allowed_fields
     }
 
-    config["smart_score_penalized_tags"] = normalize_smart_score_penalized_tags(
-        getattr(source, "smart_score_penalized_tags", None),
+    allowed_sidebar_sizes = tuple(range(32, 65, 8))
+    sidebar_size = _thumbnail_size(config.get("sidebar_thumbnail_size"))
+    if sidebar_size is None:
+        sidebar_size = default_user.sidebar_thumbnail_size
+    if sidebar_size not in allowed_sidebar_sizes:
+        sidebar_size = min(allowed_sidebar_sizes, key=lambda v: abs(v - sidebar_size))
+    config["sidebar_thumbnail_size"] = sidebar_size
+
+    config["smart_score_penalised_tags"] = _smart_score_penalised_tags(
+        getattr(source, "smart_score_penalised_tags", None),
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     )
+    config["hidden_tags"] = _normalize_hidden_tags(getattr(source, "hidden_tags", None))
     config["sort_order"] = config["sort"]
     return config
 
@@ -108,18 +121,34 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "sort",
         "descending",
         "columns",
+        "sidebar_thumbnail_size",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
         "show_format",
         "show_resolution",
         "show_problem_icon",
+        "date_format",
+        "theme_mode",
         "similarity_character",
         "stack_strictness",
-        "smart_score_penalized_tags",
+        "smart_score_penalised_tags",
+        "hidden_tags",
+        "apply_tag_filter",
         "auto_scrapheap_smart_score_threshold",
         "auto_scrapheap_lookback_minutes",
     }
+
+    allowed_date_formats = {
+        "locale",
+        "iso",
+        "eu",
+        "us",
+        "ymd-slash",
+        "ymd-dot",
+        "ymd-jp",
+    }
+    allowed_theme_modes = {"light", "dark"}
 
     updated = False
     for key, value in patch_data.items():
@@ -136,23 +165,66 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.similarity_character = new_value
                 updated = True
             continue
-        if key == "smart_score_penalized_tags":
+        if key == "smart_score_penalised_tags":
             if value in ("", None):
                 new_value = None
             else:
-                normalized = normalize_smart_score_penalized_tags(
+                d = _smart_score_penalised_tags(
                     value,
                     None,
                     allow_empty=True,
                     default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
                 )
-                if normalized is None:
+                if d is None:
                     raise ValueError(
-                        "smart_score_penalized_tags must be a JSON list or object"
+                        "smart_score_penalised_tags must be a JSON list or object"
                     )
-                new_value = json.dumps(normalized)
-            if user.smart_score_penalized_tags != new_value:
-                user.smart_score_penalized_tags = new_value
+                new_value = json.dumps(d)
+            if user.smart_score_penalised_tags != new_value:
+                user.smart_score_penalised_tags = new_value
+                updated = True
+            continue
+        if key == "hidden_tags":
+            if value in ("", None, "null"):
+                normalized = []
+            else:
+                normalized = _normalize_hidden_tags(value)
+                if normalized is None:
+                    raise ValueError("hidden_tags must be a JSON list of strings")
+            new_value = json.dumps(normalized)
+            if user.hidden_tags != new_value:
+                user.hidden_tags = new_value
+                updated = True
+            continue
+        if key == "apply_tag_filter":
+            if value in ("", None, "null"):
+                new_value = False
+            else:
+                new_value = bool(value)
+            if user.apply_tag_filter != new_value:
+                user.apply_tag_filter = new_value
+                updated = True
+            continue
+        if key == "date_format":
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = str(value)
+            if new_value is not None and new_value not in allowed_date_formats:
+                raise ValueError("date_format is not a supported value")
+            if user.date_format != new_value:
+                user.date_format = new_value
+                updated = True
+            continue
+        if key == "theme_mode":
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = str(value)
+            if new_value is not None and new_value not in allowed_theme_modes:
+                raise ValueError("theme_mode is not a supported value")
+            if user.theme_mode != new_value:
+                user.theme_mode = new_value
                 updated = True
             continue
         if key == "auto_scrapheap_smart_score_threshold":
@@ -188,6 +260,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.columns = new_value
                 updated = True
             continue
+        if key == "sidebar_thumbnail_size":
+            new_value = _thumbnail_size(value)
+            if new_value is None:
+                continue
+            allowed_sizes = tuple(range(32, 65, 8))
+            if new_value not in allowed_sizes:
+                new_value = min(allowed_sizes, key=lambda v: abs(v - new_value))
+            if user.sidebar_thumbnail_size != new_value:
+                user.sidebar_thumbnail_size = new_value
+                updated = True
+            continue
         current_value = getattr(user, key, None)
         if current_value != value:
             setattr(user, key, value)
@@ -204,7 +287,7 @@ def serialize_tag_objects(tags: list | None, empty_sentinel: str = "") -> list[d
     return items
 
 
-def normalize_thumbnail_size(value):
+def _thumbnail_size(value):
     if value is None:
         return None
     if isinstance(value, str):
@@ -218,7 +301,7 @@ def normalize_thumbnail_size(value):
     return None
 
 
-def normalize_smart_score_penalized_tags(
+def _smart_score_penalised_tags(
     value,
     fallback=None,
     allow_empty: bool = False,
@@ -237,16 +320,16 @@ def normalize_smart_score_penalized_tags(
         tags = value
 
     if isinstance(tags, list):
-        normalized = {}
+        d = {}
         for tag in tags:
             if tag is None:
                 continue
             clean = str(tag).strip().lower()
             if not clean:
                 continue
-            normalized[clean] = default_weight
+            d[clean] = default_weight
     elif isinstance(tags, dict):
-        normalized = {}
+        d = {}
         for tag, weight in tags.items():
             if tag is None:
                 continue
@@ -258,12 +341,42 @@ def normalize_smart_score_penalized_tags(
             except (TypeError, ValueError):
                 weight_value = default_weight
             weight_value = max(1, min(5, weight_value))
-            existing = normalized.get(clean)
+            existing = d.get(clean)
             if existing is None or weight_value > existing:
-                normalized[clean] = weight_value
+                d[clean] = weight_value
     else:
         return fallback
 
-    if normalized:
-        return normalized
+    if d:
+        return d
     return {} if allow_empty else fallback
+
+
+def _normalize_hidden_tags(value):
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        try:
+            tags = json.loads(value)
+        except Exception:
+            return None
+    else:
+        tags = value
+
+    if isinstance(tags, dict):
+        tags = list(tags.keys())
+    if not isinstance(tags, list):
+        return None
+
+    cleaned = []
+    seen = set()
+    for tag in tags:
+        if tag is None:
+            continue
+        clean = str(tag).strip().lower()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        cleaned.append(clean)
+    return cleaned

@@ -71,6 +71,13 @@ class ImageEmbeddingWorker(BaseWorker):
             return result[0]
         return result or 0
 
+    @staticmethod
+    def _count_total_pictures(session: Session) -> int:
+        result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
     def _build_failure_updates(self, pids: set[int]):
         empty_emb = np.array([], dtype=np.float32).tobytes()
         score = None if self._aesthetic_disabled else -1.0
@@ -157,6 +164,16 @@ class ImageEmbeddingWorker(BaseWorker):
             try:
                 # Log how many images remain to be processed
                 remaining = self._db.run_immediate_read_task(self._count_remaining)
+                total_pics = self._db.run_immediate_read_task(
+                    self._count_total_pictures
+                )
+                total = max(int(total_pics or 0), 0)
+                remaining_count = max(int(remaining or 0), 0)
+                self._set_progress(
+                    label="image_embeddings",
+                    current=max(total - remaining_count, 0),
+                    total=total,
+                )
                 logger.debug(
                     f"ImageEmbeddingWorker: {remaining} images remain to be processed."
                 )
@@ -274,7 +291,7 @@ class ImageEmbeddingWorker(BaseWorker):
                             flat_images,
                             batch_size=self.BATCH_SIZE,
                             convert_to_numpy=True,
-                            normalize_embeddings=True,
+                            _embeddings=True,
                         )
                     except Exception as e:
                         logger.error(

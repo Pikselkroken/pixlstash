@@ -10,7 +10,8 @@ import {
 import ImageImporter from "./ImageImporter.vue";
 import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
-import SearchOverlay from "./SearchOverlay.vue";
+import TaskManager from "./TaskManager.vue";
+import UserSettingsDialog from "./UserSettingsDialog.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import { apiClient } from "../utils/apiClient";
 
@@ -27,6 +28,9 @@ const props = defineProps({
   selectedDescending: { type: Boolean, default: false },
   selectedSimilarityCharacter: { type: [String, Number, null], default: null },
   backendUrl: { type: String, required: true },
+  sidebarThumbnailSize: { type: Number, default: 48 },
+  dateFormat: { type: String, default: "locale" },
+  themeMode: { type: String, default: "light" },
 });
 
 const emit = defineEmits([
@@ -44,13 +48,21 @@ const emit = defineEmits([
   "search-images",
   "update:similarity-character",
   "update:similarity-options",
+  "update:sidebar-thumbnail-size",
+  "update:date-format",
+  "update:theme-mode",
   "toggle-sidebar",
   "update:sort-options",
+  "update:hidden-tags",
+  "update:apply-tag-filter",
 ]);
 
 const imageImporterRef = ref(null);
 const uploadInputRef = ref(null);
 const sidebarRootRef = ref(null);
+const labelOverflow = ref({});
+const labelRefs = new Map();
+const labelObservers = new Map();
 
 const dragOverSet = ref(null);
 
@@ -70,6 +82,7 @@ const countNewTags = ref({});
 const knownCountIds = new Set();
 
 const characterThumbnails = ref({});
+const setThumbnails = ref({});
 const expandedCharacters = ref({});
 
 const dragOverCharacter = ref(null);
@@ -85,336 +98,197 @@ const characterEditorCharacter = ref(null);
 const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
 const settingsDialogOpen = ref(false);
-const settingsUsername = ref("");
-const settingsHasPassword = ref(false);
-const settingsLoading = ref(false);
-const settingsError = ref("");
-const settingsSuccess = ref("");
-const currentPassword = ref("");
-const newPassword = ref("");
-const showNewPassword = ref(false);
-const tokensLoading = ref(false);
-const tokensError = ref("");
-const tokens = ref([]);
-const tokenDescription = ref("");
-const newlyCreatedToken = ref("");
-const tokenDialogOpen = ref(false);
-const tokenDeleteDialogOpen = ref(false);
-const tokenToDelete = ref(null);
-const smartScorePenalizedTags = ref([]);
-const smartScoreTagInput = ref("");
-const smartScoreTagsLoading = ref(false);
-const smartScoreTagsError = ref("");
-const smartScoreTagsSuccess = ref("");
-const smartScoreScrapheapThreshold = ref(1.25);
-const smartScoreScrapheapLookback = ref(30);
-const smartScoreScrapheapLoading = ref(false);
-const smartScoreScrapheapError = ref("");
-const smartScoreScrapheapSuccess = ref("");
-const settingsTab = ref("preferences");
+const taskManagerOpen = ref(false);
+const taskIndicatorCanvasRef = ref(null);
+const taskIndicatorSeries = ref([]);
+const taskIndicatorRunning = ref(false);
+const taskIndicatorProgress = ref({ current: 0, total: 0 });
+const taskIndicatorLast = new Map();
+let taskIndicatorTimer = null;
+const TASK_INDICATOR_WINDOW_SECONDS = 180;
+const TASK_INDICATOR_POLL_MS = 2000;
 
-async function fetchSettingsAuth() {
-  settingsLoading.value = true;
-  settingsError.value = "";
-  try {
-    const res = await apiClient.get("/users/me/auth");
-    settingsUsername.value = res.data?.username || "";
-    settingsHasPassword.value = Boolean(res.data?.has_password);
-  } catch (e) {
-    settingsError.value = "Failed to load account settings.";
-  } finally {
-    settingsLoading.value = false;
+function getThemeRgb(name) {
+  if (typeof window === "undefined") return null;
+  const root = getComputedStyle(document.documentElement);
+  const value = root.getPropertyValue(`--v-theme-${name}`).trim();
+  return value || null;
+}
+
+function themeRgba(name, alpha, fallback = "0, 0, 0") {
+  const value = getThemeRgb(name) || fallback;
+  return `rgba(${value}, ${alpha})`;
+}
+
+function updateLabelOverflow(key, el = null) {
+  const element = el || labelRefs.get(key);
+  if (!element) return;
+  const width = element.clientWidth;
+  const isOverflowing = width > 0 && element.scrollWidth > width + 1;
+  if (labelOverflow.value[key] !== isOverflowing) {
+    labelOverflow.value = { ...labelOverflow.value, [key]: isOverflowing };
   }
 }
 
-function resetSettingsForm() {
-  settingsError.value = "";
-  settingsSuccess.value = "";
-  currentPassword.value = "";
-  newPassword.value = "";
-  showNewPassword.value = false;
-  tokensError.value = "";
-  tokenDescription.value = "";
-  newlyCreatedToken.value = "";
-  tokenDialogOpen.value = false;
-  tokenDeleteDialogOpen.value = false;
-  tokenToDelete.value = null;
-  smartScoreTagInput.value = "";
-  smartScoreTagsError.value = "";
-  smartScoreTagsSuccess.value = "";
-  smartScoreScrapheapError.value = "";
-  smartScoreScrapheapSuccess.value = "";
+function registerLabelRef(key, el) {
+  const existingObserver = labelObservers.get(key);
+  if (existingObserver) {
+    existingObserver.disconnect();
+    labelObservers.delete(key);
+  }
+
+  if (!el) {
+    labelRefs.delete(key);
+    if (labelOverflow.value[key] !== undefined) {
+      const next = { ...labelOverflow.value };
+      delete next[key];
+      labelOverflow.value = next;
+    }
+    return;
+  }
+
+  labelRefs.set(key, el);
+  const observer = new ResizeObserver(() => updateLabelOverflow(key, el));
+  observer.observe(el);
+  labelObservers.set(key, observer);
+  requestAnimationFrame(() => updateLabelOverflow(key, el));
 }
 
-const smartScoreImportanceOptions = [
-  { value: 1, label: "Mild" },
-  { value: 2, label: "Low" },
-  { value: 3, label: "Moderate" },
-  { value: 4, label: "High" },
-  { value: 5, label: "Severe" },
-];
-
-function clampImportance(value) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return 3;
-  return Math.min(5, Math.max(1, Math.round(num)));
+function labelNeedsTooltip(key) {
+  return Boolean(labelOverflow.value[key]);
 }
 
-function normalizeSmartScoreTags(tags) {
-  const normalized = new Map();
-  if (Array.isArray(tags)) {
-    for (const item of tags) {
-      if (item == null) continue;
-      if (typeof item === "object") {
-        const clean = String(item.tag || "")
-          .trim()
-          .toLowerCase();
-        if (!clean) continue;
-        normalized.set(clean, clampImportance(item.weight));
+function refreshLabelOverflows() {
+  for (const [key, el] of labelRefs.entries()) {
+    updateLabelOverflow(key, el);
+  }
+}
+
+function mergeTooltipRef(refProps, key) {
+  return (el) => {
+    if (refProps?.ref) {
+      if (typeof refProps.ref === "function") {
+        refProps.ref(el);
       } else {
-        const clean = String(item).trim().toLowerCase();
-        if (!clean) continue;
-        normalized.set(clean, 3);
+        refProps.ref.value = el;
       }
     }
-  } else if (tags && typeof tags === "object") {
-    for (const [tag, weight] of Object.entries(tags)) {
-      if (tag == null) continue;
-      const clean = String(tag).trim().toLowerCase();
-      if (!clean) continue;
-      const nextWeight = clampImportance(weight);
-      const existing = normalized.get(clean);
-      if (existing == null || nextWeight > existing) {
-        normalized.set(clean, nextWeight);
-      }
-    }
-  }
-  return Array.from(normalized.entries())
-    .map(([tag, weight]) => ({ tag, weight }))
-    .sort((a, b) => a.tag.localeCompare(b.tag));
+    registerLabelRef(key, el);
+  };
 }
 
-function serializeSmartScoreTags(entries) {
-  const normalized = normalizeSmartScoreTags(entries);
-  const payload = {};
-  for (const entry of normalized) {
-    payload[entry.tag] = clampImportance(entry.weight);
-  }
-  return { normalized, payload };
-}
-
-async function fetchSmartScoreSettings() {
-  smartScoreTagsLoading.value = true;
-  smartScoreTagsError.value = "";
-  try {
-    const res = await apiClient.get("/users/me/config");
-    smartScorePenalizedTags.value = normalizeSmartScoreTags(
-      res.data?.smart_score_penalized_tags,
-    );
-    const threshold = Number(res.data?.auto_scrapheap_smart_score_threshold);
-    if (Number.isFinite(threshold)) {
-      smartScoreScrapheapThreshold.value = threshold;
-    }
-    const lookback = Number(res.data?.auto_scrapheap_lookback_minutes);
-    if (Number.isFinite(lookback)) {
-      smartScoreScrapheapLookback.value = Math.max(1, Math.round(lookback));
-    }
-  } catch (e) {
-    smartScoreTagsError.value = "Failed to load smart score settings.";
-  } finally {
-    smartScoreTagsLoading.value = false;
-  }
-}
-
-async function saveSmartScoreScrapheapSettings() {
-  smartScoreScrapheapLoading.value = true;
-  smartScoreScrapheapError.value = "";
-  smartScoreScrapheapSuccess.value = "";
-  try {
-    const threshold = Number(smartScoreScrapheapThreshold.value);
-    const lookback = Number(smartScoreScrapheapLookback.value);
-    if (!Number.isFinite(threshold) || threshold <= 0) {
-      throw new Error("Threshold must be a positive number.");
-    }
-    if (!Number.isFinite(lookback) || lookback < 1) {
-      throw new Error("Lookback must be at least 1 minute.");
-    }
-    await apiClient.patch("/users/me/config", {
-      auto_scrapheap_smart_score_threshold: threshold,
-      auto_scrapheap_lookback_minutes: Math.round(lookback),
-    });
-    smartScoreScrapheapSuccess.value = "Saved.";
-  } catch (e) {
-    smartScoreScrapheapError.value =
-      e?.response?.data?.detail || e?.message || "Failed to update settings.";
-  } finally {
-    smartScoreScrapheapLoading.value = false;
-    if (smartScoreScrapheapSuccess.value) {
-      setTimeout(() => {
-        smartScoreScrapheapSuccess.value = "";
-      }, 2000);
-    }
-  }
-}
-
-async function saveSmartScoreTags(nextTags) {
-  smartScoreTagsLoading.value = true;
-  smartScoreTagsError.value = "";
-  smartScoreTagsSuccess.value = "";
-  try {
-    const { normalized, payload } = serializeSmartScoreTags(nextTags);
-    await apiClient.patch("/users/me/config", {
-      smart_score_penalized_tags: payload,
-    });
-    smartScorePenalizedTags.value = normalized;
-    smartScoreTagsSuccess.value = "Saved.";
-  } catch (e) {
-    smartScoreTagsError.value =
-      e?.response?.data?.detail || "Failed to update smart score tags.";
-  } finally {
-    smartScoreTagsLoading.value = false;
-    if (smartScoreTagsSuccess.value) {
-      setTimeout(() => {
-        smartScoreTagsSuccess.value = "";
-      }, 2000);
-    }
-  }
-}
-
-async function addSmartScoreTag() {
-  const trimmed = smartScoreTagInput.value.trim().toLowerCase();
-  if (!trimmed) return;
-  const next = normalizeSmartScoreTags([
-    ...smartScorePenalizedTags.value,
-    { tag: trimmed, weight: 3 },
-  ]);
-  smartScoreTagInput.value = "";
-  await saveSmartScoreTags(next);
-}
-
-async function removeSmartScoreTag(tag) {
-  const next = normalizeSmartScoreTags(
-    smartScorePenalizedTags.value.filter((t) => t.tag !== tag),
+function startTaskIndicatorPolling() {
+  if (taskIndicatorTimer) return;
+  fetchTaskIndicatorProgress();
+  taskIndicatorTimer = setInterval(
+    fetchTaskIndicatorProgress,
+    TASK_INDICATOR_POLL_MS,
   );
-  await saveSmartScoreTags(next);
 }
 
-async function updateSmartScoreTagWeight(tag, weight) {
-  const next = normalizeSmartScoreTags(
-    smartScorePenalizedTags.value.map((entry) =>
-      entry.tag === tag ? { ...entry, weight: clampImportance(weight) } : entry,
-    ),
-  );
-  await saveSmartScoreTags(next);
+function stopTaskIndicatorPolling() {
+  if (!taskIndicatorTimer) return;
+  clearInterval(taskIndicatorTimer);
+  taskIndicatorTimer = null;
 }
 
-function formatTokenTimestamp(value) {
-  if (!value) return "Never used";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Never used";
-  return date.toLocaleString();
-}
-
-async function fetchUserTokens() {
-  tokensLoading.value = true;
-  tokensError.value = "";
+async function fetchTaskIndicatorProgress() {
   try {
-    const res = await apiClient.get("/users/me/token");
-    tokens.value = Array.isArray(res.data) ? res.data : [];
-  } catch (e) {
-    tokensError.value = "Failed to load tokens.";
-  } finally {
-    tokensLoading.value = false;
-  }
-}
+    const res = await apiClient.get("/workers/progress");
+    const workers = res.data?.workers || {};
+    const now = Date.now() / 1000;
+    let combinedRate = 0;
+    let combinedCurrent = 0;
+    let combinedTotal = 0;
+    let running = false;
 
-async function createUserToken() {
-  tokensError.value = "";
-  const description = tokenDescription.value.trim() || null;
-  tokensLoading.value = true;
-  try {
-    const res = await apiClient.post("/users/me/token", { description });
-    newlyCreatedToken.value = res.data?.token || "";
-    tokenDialogOpen.value = Boolean(newlyCreatedToken.value);
-    tokenDescription.value = "";
-    await fetchUserTokens();
-  } catch (e) {
-    tokensError.value = e?.response?.data?.detail || "Failed to create token.";
-  } finally {
-    tokensLoading.value = false;
-  }
-}
-
-function confirmDeleteToken(token) {
-  tokenToDelete.value = token;
-  tokenDeleteDialogOpen.value = true;
-}
-
-async function deleteUserToken() {
-  if (!tokenToDelete.value) {
-    tokenDeleteDialogOpen.value = false;
-    return;
-  }
-  tokensLoading.value = true;
-  tokensError.value = "";
-  try {
-    await apiClient.delete(`/users/me/token/${tokenToDelete.value.id}`);
-    tokenDeleteDialogOpen.value = false;
-    tokenToDelete.value = null;
-    await fetchUserTokens();
-  } catch (e) {
-    tokensError.value = e?.response?.data?.detail || "Failed to delete token.";
-  } finally {
-    tokensLoading.value = false;
-  }
-}
-
-async function submitPasswordChange() {
-  settingsError.value = "";
-  settingsSuccess.value = "";
-  if (!newPassword.value || newPassword.value.trim().length < 8) {
-    settingsError.value = "New password must be at least 8 characters long.";
-    return;
-  }
-  if (settingsHasPassword.value && !currentPassword.value) {
-    settingsError.value = "Current password is required.";
-    return;
-  }
-  settingsLoading.value = true;
-  try {
-    const newPasswordValue = newPassword.value.trim();
-    await apiClient.post("/users/me/auth", {
-      current_password: currentPassword.value || null,
-      new_password: newPasswordValue,
-    });
-    settingsSuccess.value = "Password updated.";
-    currentPassword.value = "";
-    newPassword.value = "";
-    settingsHasPassword.value = true;
-    if (
-      typeof window !== "undefined" &&
-      "credentials" in navigator &&
-      "PasswordCredential" in window &&
-      settingsUsername.value &&
-      newPasswordValue
-    ) {
-      try {
-        const credential = new PasswordCredential({
-          id: settingsUsername.value,
-          name: settingsUsername.value,
-          password: newPasswordValue,
-        });
-        await navigator.credentials.store(credential);
-      } catch (credentialError) {
-        console.debug("Credential store failed:", credentialError);
+    for (const [key, snapshot] of Object.entries(workers)) {
+      const current = Number(snapshot.current || 0);
+      const total = Number(snapshot.total || 0);
+      const prev = taskIndicatorLast.get(key);
+      let rate = 0;
+      if (prev && now > prev.t) {
+        const delta = current - prev.current;
+        rate = delta > 0 ? delta / (now - prev.t) : 0;
       }
+      combinedRate += rate;
+      combinedCurrent += current;
+      combinedTotal += total;
+      if (snapshot.running) {
+        running = true;
+      }
+      taskIndicatorLast.set(key, { current, t: now });
     }
-  } catch (e) {
-    settingsError.value =
-      e?.response?.data?.detail || "Failed to update password.";
-  } finally {
-    settingsLoading.value = false;
+
+    taskIndicatorRunning.value = running;
+    taskIndicatorProgress.value = {
+      current: combinedCurrent,
+      total: combinedTotal,
+    };
+
+    const nextSeries = [...taskIndicatorSeries.value];
+    nextSeries.push({ t: now, rate: combinedRate });
+    const cutoff = now - TASK_INDICATOR_WINDOW_SECONDS;
+    taskIndicatorSeries.value = nextSeries.filter((item) => item.t >= cutoff);
+    drawTaskIndicator();
+  } catch (err) {
+    // keep last known samples
   }
+}
+
+function drawTaskIndicator() {
+  const canvas = taskIndicatorCanvasRef.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.floor(rect.width));
+  const height = Math.max(1, Math.floor(rect.height));
+  const dpr = window.devicePixelRatio || 1;
+  const targetWidth = Math.floor(width * dpr);
+  const targetHeight = Math.floor(height * dpr);
+  if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = themeRgba("shadow", 0.15, "0, 0, 0");
+  ctx.fillRect(0, 0, width, height);
+
+  const samples = taskIndicatorSeries.value || [];
+  if (!samples.length) {
+    const y = height - 3;
+    ctx.beginPath();
+    ctx.moveTo(2, y);
+    ctx.lineTo(width - 2, y);
+    ctx.strokeStyle = themeRgba("on-surface", 0.6, "255, 255, 255");
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    return;
+  }
+
+  const maxRate = Math.max(1, ...samples.map((s) => s.rate || 0));
+  const pad = 2;
+  const plotWidth = width - pad * 2;
+  const plotHeight = height - pad * 2;
+  const step = samples.length > 1 ? plotWidth / (samples.length - 1) : 0;
+
+  ctx.beginPath();
+  samples.forEach((sample, index) => {
+    const x = pad + step * index;
+    const y = pad + plotHeight * (1 - (sample.rate || 0) / maxRate);
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.strokeStyle = themeRgba("on-surface", 0.9, "255, 255, 255");
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
 }
 
 const sidebarNotice = ref(null);
@@ -424,6 +298,11 @@ const sidebarNoticePosition = ref(null);
 const setItemRefs = ref(new Map());
 const characterItemRefs = ref(new Map());
 let sidebarNoticeTimeout = null;
+const sidebarError = ref(null);
+const sidebarErrorTargetId = ref(null);
+const sidebarErrorTargetType = ref("set");
+const sidebarErrorPosition = ref(null);
+let sidebarErrorTimeout = null;
 
 function registerSetRef(setId, el) {
   if (!setId) return;
@@ -461,12 +340,32 @@ function updateSidebarNoticePosition() {
   };
 }
 
+function updateSidebarErrorPosition() {
+  if (!sidebarError.value || !sidebarErrorTargetId.value) {
+    sidebarErrorPosition.value = null;
+    return;
+  }
+  const targetMap =
+    sidebarErrorTargetType.value === "character"
+      ? characterItemRefs.value
+      : setItemRefs.value;
+  const target = targetMap.get(sidebarErrorTargetId.value);
+  if (!target) return;
+  const rect = target.getBoundingClientRect();
+  const sidebarRect = sidebarRootRef.value
+    ? sidebarRootRef.value.getBoundingClientRect()
+    : null;
+  const baseLeft = sidebarRect ? sidebarRect.right + 12 : rect.right + 12;
+  sidebarErrorPosition.value = {
+    top: rect.top + rect.height / 2,
+    left: baseLeft,
+  };
+}
+
 function createSet() {
   setEditorSet.value = null;
   setEditorOpen.value = true;
 }
-
-const sidebarError = ref(null);
 
 const sortedCharacters = computed(() => {
   return [...characters.value]
@@ -532,6 +431,35 @@ const similarityCharacterModel = computed({
   get: () => props.selectedSimilarityCharacter,
   set: (value) => emit("update:similarity-character", value ?? null),
 });
+
+const sidebarThumbnailSizeModel = computed({
+  get: () => props.sidebarThumbnailSize ?? 64,
+  set: (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const clamped = Math.min(64, Math.max(32, parsed));
+    const snapped = Math.round(clamped / 8) * 8;
+    emit("update:sidebar-thumbnail-size", snapped);
+  },
+});
+
+const dateFormatModel = computed({
+  get: () => props.dateFormat ?? "locale",
+  set: (value) => emit("update:date-format", value ?? "locale"),
+});
+
+const themeModeModel = computed({
+  get: () => props.themeMode ?? "light",
+  set: (value) => emit("update:theme-mode", value ?? "light"),
+});
+
+const sidebarThumbnailSizeLarge = computed(
+  () => sidebarThumbnailSizeModel.value + 8,
+);
+
+const sidebarThumbStyle = computed(() => ({
+  "--sidebar-thumb-size": `${sidebarThumbnailSizeModel.value}px`,
+}));
 
 const isSearchActive = computed(() => {
   const query = typeof props.searchQuery === "string" ? props.searchQuery : "";
@@ -684,8 +612,66 @@ function createCharacter() {
   });
 }
 
-function handleImportFinished() {
-  emit("import-finished");
+const pendingImportTarget = ref(null);
+
+function getImportedPictureIds(payload) {
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  return Array.from(
+    new Set(
+      results
+        .map((entry) => entry?.picture_id)
+        .filter((id) => id !== null && id !== undefined),
+    ),
+  );
+}
+
+async function associateImportedPictures(pictureIds, target) {
+  if (!target || !pictureIds.length) return;
+  if (target.type === "set") {
+    await Promise.all(
+      pictureIds.map((id) =>
+        apiClient.post(
+          `${props.backendUrl}/picture_sets/${target.id}/members/${id}`,
+        ),
+      ),
+    );
+    await fetchPictureSets();
+    return;
+  }
+  if (target.type === "character") {
+    await apiClient.post(`${props.backendUrl}/characters/${target.id}/faces`, {
+      picture_ids: pictureIds,
+    });
+    await fetchSidebarData();
+    await fetchCharacterThumbnail(target.id);
+  }
+}
+
+async function handleImportFinished(payload) {
+  emit("import-finished", payload);
+  const target = pendingImportTarget.value;
+  if (!target) return;
+  pendingImportTarget.value = null;
+  const pictureIds = getImportedPictureIds(payload);
+  if (!pictureIds.length) return;
+  try {
+    await associateImportedPictures(pictureIds, target);
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || String(e);
+    let targetName = "";
+    if (target.type === "character") {
+      targetName =
+        characters.value.find((c) => c.id === target.id)?.name || "Character";
+    } else if (target.type === "set") {
+      targetName =
+        pictureSets.value.find((s) => s.id === target.id)?.name || "Set";
+    }
+    const normalizedDetail = String(detail || "").toLowerCase();
+    const prefix = normalizedDetail.includes("already")
+      ? `Already associated with ${targetName}`
+      : `Failed to associate imported pictures with ${targetName}`;
+    setError(`${prefix}: ${detail}`, target.id, target.type);
+  }
 }
 
 function openUploadDialog() {
@@ -705,9 +691,22 @@ function setLoading(isLoading) {
   emit("set-loading", isLoading);
 }
 
-function setError(message) {
+function setError(message, targetId = null, targetType = "set") {
   sidebarError.value = message;
+  sidebarErrorTargetId.value = targetId;
+  sidebarErrorTargetType.value = targetType;
+  nextTick(() => updateSidebarErrorPosition());
   emit("set-error", message);
+  if (sidebarErrorTimeout) {
+    clearTimeout(sidebarErrorTimeout);
+    sidebarErrorTimeout = null;
+  }
+  sidebarErrorTimeout = setTimeout(() => {
+    sidebarError.value = null;
+    sidebarErrorTargetId.value = null;
+    sidebarErrorPosition.value = null;
+    sidebarErrorTimeout = null;
+  }, 3500);
 }
 
 function showNotice(
@@ -916,11 +915,49 @@ async function fetchPictureSets() {
 
     const sets = await res.data; // Axios responses use `data` for the payload
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
+    await updateSetThumbnails(pictureSets.value);
     console.log("Found picture sets:", pictureSets.value);
   } catch (e) {
     console.error("Error fetching picture sets:", e);
     pictureSets.value = [...pictureSets.value]; // force reactivity on error
   }
+}
+
+async function updateSetThumbnails(sets) {
+  const nextMap = {};
+  for (const set of sets || []) {
+    const baseUrl = set?.thumbnail_url || null;
+    if (!baseUrl) {
+      nextMap[set.id] = null;
+      continue;
+    }
+    const topIds = Array.isArray(set?.top_picture_ids)
+      ? set.top_picture_ids
+      : [];
+    const versionKey = topIds.length
+      ? topIds.join("-")
+      : (set.picture_count ?? 0);
+    const url = baseUrl.startsWith("http")
+      ? baseUrl
+      : `${props.backendUrl}${baseUrl}`;
+    nextMap[set.id] = `${url}?v=${encodeURIComponent(versionKey)}`;
+  }
+  setThumbnails.value = nextMap;
+}
+
+function getSetThumbnail(setId) {
+  return setThumbnails.value?.[setId] || null;
+}
+
+function hasSetThumbnail(pset) {
+  if (!pset || !pset.id) return false;
+  if (!pset.picture_count) return false;
+  return Boolean(getSetThumbnail(pset.id));
+}
+
+function handleSetThumbnailError(setId) {
+  if (!setId) return;
+  setThumbnails.value = { ...setThumbnails.value, [setId]: null };
 }
 
 function handleCreateSet() {
@@ -954,6 +991,12 @@ async function handleDeleteSet() {
 
 async function handleDropOnSet(setId, event) {
   dragOverSet.value = null;
+  if (event?.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+    const files = Array.from(event.dataTransfer.files);
+    pendingImportTarget.value = { type: "set", id: setId };
+    imageImporterRef.value?.startImport(files);
+    return;
+  }
   // Get the dragged image IDs from the drag event
   let draggedIds = [];
   try {
@@ -999,7 +1042,7 @@ async function handleDropOnSet(setId, event) {
       showNotice("Picture already in set", setId);
       return;
     }
-    setError("Failed to add images to set: " + detail);
+    setError("Failed to add images to set: " + detail, setId, "set");
   }
 }
 
@@ -1013,6 +1056,12 @@ function handleDragLeaveCharacter() {
 
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
+  if (event?.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+    const files = Array.from(event.dataTransfer.files);
+    pendingImportTarget.value = { type: "character", id: characterId };
+    imageImporterRef.value?.startImport(files);
+    return;
+  }
   // Accept faceIds or imageIds from drag event
   let faceIds = [];
   let imageIds = [];
@@ -1041,7 +1090,11 @@ async function onCharacterDrop(characterId, event) {
       showNotice(detail, characterId, "character");
       return;
     }
-    setError("Failed to add images to set: " + detail);
+    setError(
+      "Failed to add images to set: " + detail,
+      characterId,
+      "character",
+    );
     return;
   }
 
@@ -1093,7 +1146,11 @@ async function onCharacterDrop(characterId, event) {
       showNotice(detail, characterId, "character");
       return;
     }
-    setError("Failed to add images to set: " + detail);
+    setError(
+      "Failed to add images to set: " + detail,
+      characterId,
+      "character",
+    );
     return;
   }
 }
@@ -1179,7 +1236,12 @@ onMounted(() => {
     "[SideBar.vue] Initial descendingModel value:",
     descendingModel.value,
   );
-  const handleNoticeReflow = () => updateSidebarNoticePosition();
+  //refreshSidebar();
+  //startTaskIndicatorPolling();
+  const handleNoticeReflow = () => {
+    updateSidebarNoticePosition();
+    updateSidebarErrorPosition();
+  };
   if (sidebarRootRef.value) {
     sidebarRootRef.value.addEventListener("scroll", handleNoticeReflow, {
       passive: true,
@@ -1200,7 +1262,21 @@ onBeforeUnmount(() => {
     sidebarNoticeCleanup();
     sidebarNoticeCleanup = null;
   }
+  for (const observer of labelObservers.values()) {
+    observer.disconnect();
+  }
+  labelObservers.clear();
+  labelRefs.clear();
+  stopTaskIndicatorPolling();
 });
+
+watch(
+  [sortedCharacters, pictureSets],
+  () => {
+    nextTick(() => refreshLabelOverflows());
+  },
+  { deep: true },
+);
 
 // Ensure similarityCharacter is valid when switching to CHARACTER_LIKENESS
 watch(
@@ -1226,19 +1302,6 @@ watch(
   () => sortedCharacters.value.length,
   () => {
     fetchSortOptions();
-  },
-);
-
-watch(
-  () => settingsDialogOpen.value,
-  (isOpen) => {
-    if (isOpen) {
-      resetSettingsForm();
-      settingsTab.value = "preferences";
-      fetchSettingsAuth();
-      fetchUserTokens();
-      fetchSmartScoreSettings();
-    }
   },
 );
 
@@ -1302,360 +1365,24 @@ defineExpose({ refreshSidebar, openSettingsDialog });
     @close="closeSetEditor"
     @refresh-sidebar="refreshSidebar"
   />
-  <v-dialog
-    v-model="settingsDialogOpen"
-    width="620"
-    @click:outside="settingsDialogOpen = false"
-  >
-    <div class="settings-dialog-shell">
-      <v-btn
-        icon
-        size="36px"
-        class="settings-dialog-close"
-        @click="settingsDialogOpen = false"
-      >
-        <v-icon size="24px">mdi-close</v-icon>
-      </v-btn>
-      <v-card class="settings-dialog-card">
-        <v-card-title class="settings-dialog-title">Settings</v-card-title>
-        <v-tabs
-          v-model="settingsTab"
-          density="comfortable"
-          class="settings-tabs"
-        >
-          <v-tab value="preferences">User Preferences</v-tab>
-          <v-tab value="account">Account Settings</v-tab>
-        </v-tabs>
-        <v-card-text class="settings-dialog-body">
-          <v-window v-model="settingsTab" class="settings-tab-body">
-            <v-window-item value="preferences">
-              <v-divider class="settings-section-divider" />
-              <div class="settings-section">
-                <div class="settings-section-title">Smart Score</div>
-                <div class="settings-section-desc">
-                  Tags listed here reduce Smart Score when present on a picture.
-                  Adjust the importance to control how much they hurt the score.
-                </div>
-                <div class="settings-form">
-                  <v-text-field
-                    v-model="smartScoreTagInput"
-                    label="Add penalized tag"
-                    density="comfortable"
-                    variant="filled"
-                    :disabled="smartScoreTagsLoading"
-                    @keydown.enter.prevent="addSmartScoreTag"
-                  />
-                  <v-btn
-                    variant="outlined"
-                    color="primary"
-                    class="settings-action-btn"
-                    :loading="smartScoreTagsLoading"
-                    :disabled="smartScoreTagsLoading"
-                    @click="addSmartScoreTag"
-                  >
-                    Add Tag
-                  </v-btn>
-                  <div v-if="smartScoreTagsError" class="settings-error">
-                    {{ smartScoreTagsError }}
-                  </div>
-                  <div
-                    v-else-if="smartScoreTagsSuccess"
-                    class="settings-success"
-                  >
-                    {{ smartScoreTagsSuccess }}
-                  </div>
-                  <div v-else class="settings-success">
-                    {{ "&nbsp;" }}
-                  </div>
-                  <div class="settings-tag-list">
-                    <div
-                      v-for="entry in smartScorePenalizedTags"
-                      :key="entry.tag"
-                      class="settings-tag-chip settings-tag-chip--row"
-                    >
-                      <span class="settings-tag-label">{{ entry.tag }}</span>
-                      <v-select
-                        class="settings-tag-importance"
-                        :items="smartScoreImportanceOptions"
-                        item-title="label"
-                        item-value="value"
-                        density="compact"
-                        variant="solo"
-                        hide-details
-                        :disabled="smartScoreTagsLoading"
-                        :model-value="entry.weight"
-                        @update:model-value="
-                          (value) => updateSmartScoreTagWeight(entry.tag, value)
-                        "
-                      />
-                      <v-btn
-                        icon
-                        variant="text"
-                        class="settings-tag-delete"
-                        :disabled="smartScoreTagsLoading"
-                        @click="removeSmartScoreTag(entry.tag)"
-                      >
-                        <v-icon size="16">mdi-close</v-icon>
-                      </v-btn>
-                    </div>
-                    <div
-                      v-if="
-                        !smartScoreTagsLoading &&
-                        !smartScorePenalizedTags.length
-                      "
-                      class="settings-token-empty"
-                    >
-                      No penalized tags yet.
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <v-divider class="settings-section-divider" />
-              <div class="settings-section">
-                <div class="settings-section-title">
-                  Auto Scrapheap (Smart Score)
-                </div>
-                <div class="settings-section-desc">
-                  Newly tagged pictures from the last 30 minutes can be
-                  auto-moved to the scrapheap when their smart score is below
-                  the threshold.
-                </div>
-                <div class="settings-form">
-                  <v-text-field
-                    v-model="smartScoreScrapheapThreshold"
-                    label="Smart score threshold"
-                    density="comfortable"
-                    variant="filled"
-                    type="number"
-                    step="0.05"
-                    min="0.1"
-                    :disabled="smartScoreScrapheapLoading"
-                  />
-                  <v-text-field
-                    v-model="smartScoreScrapheapLookback"
-                    label="Lookback window (minutes)"
-                    density="comfortable"
-                    variant="filled"
-                    type="number"
-                    step="1"
-                    min="1"
-                    :disabled="smartScoreScrapheapLoading"
-                  />
-                  <v-btn
-                    variant="outlined"
-                    color="primary"
-                    class="settings-action-btn"
-                    :loading="smartScoreScrapheapLoading"
-                    :disabled="smartScoreScrapheapLoading"
-                    @click="saveSmartScoreScrapheapSettings"
-                  >
-                    Save Auto Scrapheap
-                  </v-btn>
-                  <div v-if="smartScoreScrapheapError" class="settings-error">
-                    {{ smartScoreScrapheapError }}
-                  </div>
-                  <div
-                    v-else-if="smartScoreScrapheapSuccess"
-                    class="settings-success"
-                  >
-                    {{ smartScoreScrapheapSuccess }}
-                  </div>
-                  <div v-else class="settings-success">{{ "&nbsp;" }}</div>
-                </div>
-              </div>
-            </v-window-item>
-            <v-window-item value="account">
-              <div class="settings-section">
-                <div class="settings-section-title">Account</div>
-                <div class="settings-section-desc">
-                  Change your password or manage sign-in options.
-                </div>
-                <div class="settings-account-meta">
-                  <span class="settings-account-label">Username</span>
-                  <span class="settings-account-value">
-                    {{ settingsUsername || "Not set" }}
-                  </span>
-                </div>
-                <div class="settings-form">
-                  <input
-                    v-if="settingsUsername"
-                    type="text"
-                    name="username"
-                    :value="settingsUsername"
-                    autocomplete="username"
-                    style="
-                      position: absolute;
-                      opacity: 0;
-                      height: 0;
-                      width: 0;
-                      pointer-events: none;
-                    "
-                    tabindex="-1"
-                  />
-                  <v-text-field
-                    v-if="settingsHasPassword"
-                    v-model="currentPassword"
-                    label="Current password"
-                    type="password"
-                    density="comfortable"
-                    variant="filled"
-                    autocomplete="current-password"
-                    name="current-password"
-                  />
-                  <v-text-field
-                    v-model="newPassword"
-                    label="New password"
-                    :type="showNewPassword ? 'text' : 'password'"
-                    density="comfortable"
-                    variant="filled"
-                    autocomplete="new-password"
-                    name="new-password"
-                    :append-inner-icon="
-                      showNewPassword ? 'mdi-eye-off' : 'mdi-eye'
-                    "
-                    @click:append-inner="showNewPassword = !showNewPassword"
-                  />
-                  <div v-if="settingsError" class="settings-error">
-                    {{ settingsError }}
-                  </div>
-                  <div v-if="settingsSuccess" class="settings-success">
-                    {{ settingsSuccess }}
-                  </div>
-                  <v-btn
-                    variant="outlined"
-                    color="primary"
-                    class="settings-action-btn"
-                    :loading="settingsLoading"
-                    :disabled="settingsLoading"
-                    @click="submitPasswordChange"
-                  >
-                    Update Password
-                  </v-btn>
-                </div>
-              </div>
-              <v-divider class="settings-section-divider" />
-              <div class="settings-section">
-                <div class="settings-section-title">API Tokens</div>
-                <div class="settings-section-desc">
-                  Manage tokens for authenticated API access.
-                </div>
-                <div class="settings-tokens">
-                  <v-text-field
-                    v-model="tokenDescription"
-                    label="Token description"
-                    density="comfortable"
-                    variant="filled"
-                    :disabled="tokensLoading"
-                  />
-                  <v-btn
-                    variant="outlined"
-                    color="primary"
-                    class="settings-action-btn"
-                    :loading="tokensLoading"
-                    :disabled="tokensLoading"
-                    @click="createUserToken"
-                  >
-                    Create Token
-                  </v-btn>
-                  <div v-if="tokensError" class="settings-error">
-                    {{ tokensError }}
-                  </div>
-                  <div v-if="tokensLoading" class="settings-token-loading">
-                    Loading tokens...
-                  </div>
-                  <div v-else class="settings-token-list">
-                    <div
-                      v-for="token in tokens"
-                      :key="token.id"
-                      class="settings-token-row"
-                    >
-                      <div class="settings-token-meta">
-                        <div class="settings-token-desc">
-                          {{ token.description || "Untitled token" }}
-                        </div>
-                        <div class="settings-token-sub">
-                          <span
-                            >Created:
-                            {{ formatTokenTimestamp(token.created_at) }}</span
-                          >
-                          <span
-                            >Last used:
-                            {{ formatTokenTimestamp(token.last_used_at) }}</span
-                          >
-                        </div>
-                      </div>
-                      <v-btn
-                        icon
-                        variant="text"
-                        class="settings-token-delete"
-                        :disabled="tokensLoading"
-                        @click="confirmDeleteToken(token)"
-                      >
-                        <v-icon size="20">mdi-trash-can-outline</v-icon>
-                      </v-btn>
-                    </div>
-                    <div v-if="!tokens.length" class="settings-token-empty">
-                      No tokens yet.
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </v-window-item>
-          </v-window>
-        </v-card-text>
-      </v-card>
-    </div>
-  </v-dialog>
+  <UserSettingsDialog
+    v-model:open="settingsDialogOpen"
+    v-model:sidebar-thumbnail-size="sidebarThumbnailSizeModel"
+    v-model:date-format="dateFormatModel"
+    v-model:theme-mode="themeModeModel"
+    @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
+    @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
+  />
 
-  <v-dialog v-model="tokenDialogOpen" width="520">
-    <v-card class="settings-token-dialog">
-      <v-card-title class="settings-dialog-title">New API Token</v-card-title>
-      <v-card-text class="settings-dialog-body">
-        <div class="settings-token-warning">
-          Copy this token now. You won’t be able to see it again.
-        </div>
-        <div class="settings-token-value">{{ newlyCreatedToken }}</div>
-      </v-card-text>
-      <v-card-actions class="settings-dialog-actions">
-        <v-spacer />
-        <v-btn
-          variant="outlined"
-          color="primary"
-          @click="tokenDialogOpen = false"
-        >
-          Close
-        </v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
-
-  <v-dialog v-model="tokenDeleteDialogOpen" width="420">
-    <v-card class="settings-token-dialog">
-      <v-card-title class="settings-dialog-title">Delete token?</v-card-title>
-      <v-card-text class="settings-dialog-body">
-        This will permanently revoke the selected token.
-      </v-card-text>
-      <v-card-actions class="settings-dialog-actions">
-        <v-spacer />
-        <v-btn variant="text" @click="tokenDeleteDialogOpen = false">
-          Cancel
-        </v-btn>
-        <v-btn
-          color="error"
-          variant="outlined"
-          :loading="tokensLoading"
-          @click="deleteUserToken"
-        >
-          Delete
-        </v-btn>
-      </v-card-actions>
-    </v-card>
+  <v-dialog v-model="taskManagerOpen" width="980">
+    <TaskManager :active="taskManagerOpen" @close="taskManagerOpen = false" />
   </v-dialog>
 
   <aside
     ref="sidebarRootRef"
     class="sidebar"
     :class="{ 'sidebar-collapsed': props.collapsed }"
+    :style="sidebarThumbStyle"
   >
     <div class="sidebar-brand">
       <div class="sidebar-brand-left">
@@ -1738,8 +1465,9 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           <img
             :src="characterThumbnails[char.id] || unknownPerson"
             alt=""
-            width="36"
-            height="36"
+            :width="sidebarThumbnailSizeModel"
+            :height="sidebarThumbnailSizeModel"
+            class="sidebar-character-thumb"
           />
         </button>
         <div
@@ -1762,7 +1490,24 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           @dragleave="dragLeaveSetItem"
           @drop.prevent="handleDropOnSet(pset.id, $event)"
         >
-          <v-icon>mdi-image-album</v-icon>
+          <img
+            v-if="hasSetThumbnail(pset)"
+            :src="getSetThumbnail(pset.id)"
+            alt=""
+            class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
+            :width="sidebarThumbnailSizeModel"
+            :height="sidebarThumbnailSizeModel"
+            @error="handleSetThumbnailError(pset.id)"
+          />
+          <v-icon width="40" size="40" v-else>mdi-image-album</v-icon>
+        </div>
+        <div class="sidebar-collapsed-spacer"></div>
+        <div
+          class="sidebar-collapsed-item"
+          title="Task Manager"
+          @click.stop="taskManagerOpen = true"
+        >
+          <v-icon>mdi-timeline-clock-outline</v-icon>
         </div>
       </div>
     </template>
@@ -1878,8 +1623,19 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           </v-icon>
         </div>
       </div>
-      <div v-if="sidebarError" class="sidebar-error">
-        {{ sidebarError.value }}
+      <div
+        v-if="sidebarError"
+        class="sidebar-error-bubble"
+        :style="
+          sidebarErrorPosition
+            ? {
+                top: `${sidebarErrorPosition.top}px`,
+                left: `${sidebarErrorPosition.left}px`,
+              }
+            : { top: '72px', left: '20px' }
+        "
+      >
+        {{ sidebarError }}
       </div>
       <div v-if="sortedCharacters.length === 0" class="sidebar-character-group">
         <div class="sidebar-list-item">
@@ -1917,15 +1673,22 @@ defineExpose({ refreshSidebar, openSettingsDialog });
                   : unknownPerson
               "
               alt=""
-              width="36"
-              height="36"
+              :width="sidebarThumbnailSizeModel"
+              :height="sidebarThumbnailSizeModel"
               class="sidebar-character-thumb"
             />
           </span>
           <span class="sidebar-list-label">
-            <v-tooltip location="top">
+            <v-tooltip
+              location="top"
+              :disabled="!labelNeedsTooltip(`char-${char.id}`)"
+            >
               <template #activator="{ props }">
-                <span v-bind="props" class="sidebar-list-label-text">
+                <span
+                  v-bind="props"
+                  :ref="mergeTooltipRef(props, `char-${char.id}`)"
+                  class="sidebar-list-label-text"
+                >
                   {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
                 </span>
               </template>
@@ -2023,12 +1786,28 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           @drop.prevent="handleDropOnSet(pset.id, $event)"
         >
           <span class="sidebar-list-icon">
-            <v-icon size="44">mdi-image-album</v-icon>
+            <img
+              v-if="hasSetThumbnail(pset)"
+              :src="getSetThumbnail(pset.id)"
+              alt=""
+              class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
+              :width="sidebarThumbnailSizeLarge"
+              :height="sidebarThumbnailSizeLarge"
+              @error="handleSetThumbnailError(pset.id)"
+            />
+            <v-icon v-else size="44">mdi-image-album</v-icon>
           </span>
           <span class="sidebar-list-label">
-            <v-tooltip location="top">
+            <v-tooltip
+              location="top"
+              :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
+            >
               <template #activator="{ props }">
-                <span v-bind="props" class="sidebar-list-label-text">
+                <span
+                  v-bind="props"
+                  :ref="mergeTooltipRef(props, `set-${pset.id}`)"
+                  class="sidebar-list-label-text"
+                >
                   {{ pset.name }}
                 </span>
               </template>
@@ -2051,6 +1830,20 @@ defineExpose({ refreshSidebar, openSettingsDialog });
         "
       ></div>
       <div class="sidebar-footer-spacer"></div>
+      <div class="sidebar-footer">
+        <div
+          class="sidebar-list-item sidebar-footer-item"
+          @click="taskManagerOpen = true"
+        >
+          <span class="sidebar-list-icon">
+            <canvas
+              ref="taskIndicatorCanvasRef"
+              class="sidebar-task-indicator-canvas"
+            ></canvas>
+          </span>
+          <span class="sidebar-list-label">Task Manager</span>
+        </div>
+      </div>
     </template>
   </aside>
   <div
@@ -2073,7 +1866,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   min-height: 32px;
   height: 32px;
   font-size: 1em;
-  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.2);
+  box-shadow: 2px 2px 6px rgba(var(--v-theme-shadow), 0.2);
   margin-left: 6px;
   box-sizing: border-box;
   padding-left: 8px;
@@ -2115,6 +1908,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   width: 280px;
   --sidebar-right-edge: 14px;
   --sidebar-header-action-right-edge: 0px;
+  --sidebar-thumb-size: 36px;
+  --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 8px);
   color: rgb(var(--v-theme-sidebar-text));
   background: rgb(var(--v-theme-sidebar));
   padding: 4px 0px 12px 0px;
@@ -2127,12 +1922,12 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   max-height: 100%;
   overflow-x: visible;
   overflow-y: auto;
-  scrollbar-color: rgb(var(--v-theme-accent)) rgba(0, 0, 0, 0.15);
+  scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
   box-sizing: border-box;
 }
 
 .sidebar.sidebar-collapsed {
-  width: 56px;
+  width: calc(var(--sidebar-thumb-size) + 20px);
   overflow-x: visible;
   overflow-y: hidden;
 }
@@ -2178,7 +1973,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .sidebar-brand-title {
   font-family: "PressStart2P", monospace;
   font-size: 0.95em;
-  color: rgb(var(--v-theme-on-primary));
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-brand-toggle {
@@ -2193,13 +1988,22 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   box-shadow: none;
 }
 
+.sidebar-brand-toggle:focus,
+.sidebar-brand-toggle:focus-visible,
+.sidebar-brand-toggle:active {
+  outline: none;
+  box-shadow: none;
+}
+
 .sidebar-collapsed-list {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 6px 0 12px;
+  gap: 6px;
+  padding: 4px 0 8px;
   overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .sidebar-collapsed-spacer {
@@ -2208,23 +2012,26 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar-collapsed-item {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 8px;
   cursor: pointer;
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-collapsed-item.active {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
+  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-item.droppable {
   background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-item:hover {
@@ -2233,41 +2040,92 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar-collapsed-thumb {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   border-radius: 8px;
   border: none;
   padding: 0;
   background: transparent;
   cursor: pointer;
+  outline: none;
+  box-shadow: none;
+  transition:
+    background 0.18s ease,
+    box-shadow 0.18s ease,
+    filter 0.18s ease;
 }
 
 .sidebar-collapsed-thumb img {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   object-fit: contain;
   border-radius: 8px;
   display: block;
+  position: relative;
+  z-index: 1;
 }
 
-.sidebar-collapsed-thumb.active img {
-  outline: 4px solid rgb(var(--v-theme-primary));
+.sidebar-collapsed-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 2;
+  box-shadow: inset 0 0 0 3px transparent;
+  transition:
+    box-shadow 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.sidebar-collapsed-thumb .sidebar-character-thumb {
+  filter: drop-shadow(0 2px 6px rgba(var(--v-theme-shadow), 0.35));
+}
+
+.sidebar-collapsed-thumb:focus,
+.sidebar-collapsed-thumb:focus-visible,
+.sidebar-collapsed-thumb:active,
+.sidebar-collapsed-thumb img:focus,
+.sidebar-collapsed-thumb img:focus-visible,
+.sidebar-collapsed-thumb img:active {
+  outline: none;
+  box-shadow: none;
+}
+
+.sidebar-collapsed-thumb.active {
+  background: rgb(var(--v-theme-primary));
+}
+
+.sidebar-collapsed-thumb.active::after {
+  opacity: 1;
+  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-thumb:hover {
-  filter: brightness(1.4);
-  outline: 4px solid rgb(var(--v-theme-accent));
+  filter: brightness(1.1);
+  background-color: rgba(var(--v-theme-accent), 0.4);
 }
 
-.sidebar-collapsed-thumb.droppable img {
-  outline: 4px solid rgb(var(--v-theme-primary));
+.sidebar-collapsed-thumb:hover::after {
+  opacity: 1;
+  box-shadow: inset 0 0 0 3px rgba(var(--v-theme-accent), 0.7);
+}
+
+.sidebar-collapsed-thumb.droppable {
+  background: rgb(var(--v-theme-primary));
+}
+
+.sidebar-collapsed-thumb.droppable::after {
+  opacity: 1;
+  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-divider {
   width: 100%;
   height: 1px;
-  margin-top: 2px;
-  margin-bottom: 2px;
+  margin-top: 1px;
+  margin-bottom: 1px;
   background: rgba(var(--v-theme-background), 0.3);
 }
 
@@ -2292,7 +2150,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(var(--v-theme-shadow), 0.15);
 }
 
 .sidebar-section-header {
@@ -2304,7 +2162,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   padding-right: var(--sidebar-header-action-right-edge) !important;
   display: flex;
   align-items: center;
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .fade-enter-active,
@@ -2321,8 +2179,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .sidebar-list-item.active {
   display: flex;
   align-items: center;
-  min-height: 48px;
-  padding: 2px 8px;
+  min-height: max(52px, calc(var(--sidebar-thumb-size) + 8px));
+  padding: 2px 6px;
   padding-right: var(--sidebar-right-edge) !important;
   cursor: pointer;
   border-radius: 0;
@@ -2330,7 +2188,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   font-size: 0.9em;
   font-weight: 500;
   background: transparent;
-  color: #fff;
+  color: rgb(var(--v-theme-sidebar-text));
   transition:
     background 0.18s,
     color 0.18s;
@@ -2341,280 +2199,29 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   flex: 1 1 auto;
 }
 
-.sidebar-settings-item {
-  margin-top: 6px;
+.sidebar-footer {
+  padding: 4px 0 0 0;
 }
 
-.settings-dialog-card {
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: 12px;
+.sidebar-footer-item {
+  margin-bottom: 0;
 }
 
-.settings-dialog-shell {
-  position: relative;
-  width: 100%;
-}
-
-.settings-dialog-close {
-  position: absolute;
-  top: -16px;
-  right: -16px;
-  background-color: rgb(var(--v-theme-primary));
-  border: none;
-  color: rgb(var(--v-theme-on-primary));
-  cursor: pointer;
-  z-index: 2;
-}
-
-.settings-dialog-close:hover {
-  background-color: rgb(var(--v-theme-accent));
-}
-
-.settings-dialog-title {
-  font-weight: 700;
-  font-size: 1.2rem;
-}
-
-.settings-tabs {
-  margin-top: 4px;
-}
-
-.settings-tab-body {
-  padding-top: 6px;
-}
-
-.settings-dialog-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  line-height: 1;
-}
-
-.settings-section {
-  display: flex;
-  line-height: 1;
-  flex-direction: column;
-  gap: 6px;
-}
-.settings-section-title {
-  font-weight: 600;
-}
-
-.settings-section-desc {
-  font-size: 0.92em;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.settings-account-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 0 2px;
-}
-
-.settings-account-label {
-  font-size: 0.85em;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.settings-account-value {
-  font-weight: 600;
-}
-
-.settings-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.settings-error {
-  color: rgb(var(--v-theme-error));
-  font-size: 0.9em;
-}
-
-.settings-success {
-  color: rgb(var(--v-theme-accent));
-  font-size: 0.9em;
-}
-
-.settings-action-btn {
-  align-self: flex-start;
-  background-color: rgb(var(--v-theme-primary)) !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
-  border: 1px rgb(var(--v-theme-on-primary)) !important;
-}
-.settings-action-btn:hover {
-  background-color: rgb(var(--v-theme-accent)) !important;
-  border: 1px rgb(var(--v-theme-on-primary)) !important;
-}
-
-.settings-tokens {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.settings-token-loading {
-  font-size: 0.9em;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.settings-token-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 220px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.settings-token-row {
+.sidebar-task-indicator {
+  margin-left: auto;
+  width: 64px;
+  height: 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(var(--v-theme-surface), 0.2);
+  justify-content: flex-end;
 }
 
-.settings-token-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.settings-token-desc {
-  font-weight: 600;
-}
-
-.settings-token-sub {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 0.8em;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.settings-token-delete {
-  color: rgba(var(--v-theme-error), 0.9);
-}
-
-.settings-token-empty {
-  font-size: 0.9em;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-}
-
-.settings-tag-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.settings-tag-list .settings-token-empty {
-  grid-column: 1 / -1;
-}
-
-.settings-tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 6px;
-  border-radius: 6px;
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  color: rgba(var(--v-theme-on-surface), 0.9);
-}
-
-.settings-tag-chip--row {
-  width: 100%;
-  justify-content: space-between;
-  padding-right: 4px;
-}
-
-.settings-tag-importance {
-  flex: 0 0 150px;
-  min-width: 150px;
-  max-width: 150px;
-}
-
-.settings-tag-importance .v-field {
-  min-height: 28px;
-  height: 28px;
-  padding-top: 0;
-  padding-bottom: 0;
-  font-size: 0.9em;
-}
-
-.settings-tag-importance .v-field__input {
-  min-height: 28px;
-  height: 28px;
-  padding-top: 0;
-  padding-bottom: 0;
-  font-size: 0.85rem;
-}
-
-:deep(.settings-tag-importance .v-select__selection-text) {
-  font-size: 0.85rem;
-  line-height: 1.1;
-}
-
-:deep(.settings-tag-importance .v-field__input input) {
-  font-size: 0.85rem;
-}
-
-.settings-tag-label {
-  font-size: 1em;
-  flex: 1;
-  min-width: 0;
-}
-
-.settings-tag-delete {
-  color: rgba(var(--v-theme-on-surface), 0.65);
-  min-width: 0;
-  height: 12px;
-  width: 12px;
-  padding: 2;
-}
-
-.settings-tag-delete:hover {
-  color: rgba(var(--v-theme-error), 0.9);
-  min-width: 0;
-  padding: 2;
-}
-
-.settings-token-dialog {
-  padding-bottom: 8px;
-}
-
-.settings-token-warning {
-  font-size: 0.9em;
-  color: rgba(var(--v-theme-on-surface), 0.7);
-  margin-bottom: 6px;
-}
-
-.settings-token-value {
-  word-break: break-all;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  background: rgba(var(--v-theme-surface), 0.2);
-  border-radius: 8px;
-  padding: 2px 4px;
-}
-
-.settings-section-divider {
-  margin: 4px 0 8px;
-}
-
-.settings-privacy-note {
-  font-size: 0.85em;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  margin-top: 4px;
-}
-
-.settings-dialog-actions {
-  padding-top: 0;
+.sidebar-task-indicator-canvas {
+  width: 36px;
+  height: 16px;
+  display: block;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-sidebar-text), 0.06);
 }
 
 .sidebar-list-item.active {
@@ -2622,6 +2229,11 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   color: rgb(var(--v-theme-on-primary));
   border-right: 0;
   position: relative;
+}
+
+.sidebar-list-item.active .sidebar-list-count,
+.sidebar-list-item.reference-active .sidebar-list-count {
+  color: rgb(var(--v-theme-on-primary));
 }
 
 .sidebar-list-item.reference-active {
@@ -2637,6 +2249,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .sidebar-list-item.droppable {
   filter: brightness(1.2);
   background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
 }
 
 .sidebar-header-spacer {
@@ -2658,34 +2271,80 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   min-height: 36px;
   justify-content: center;
   text-align: center;
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-list-icon {
   display: flex;
   align-items: center;
-  margin-right: 8px;
+  margin-right: 6px;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
+  overflow: visible;
+}
+
+.sidebar-list-icon .v-icon,
+.sidebar-collapsed-item .v-icon,
+.sidebar-brand-toggle .v-icon {
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-list-label {
   flex: 1;
   min-width: 0;
+  text-align: left;
+  padding-left: 4px;
+}
+
+.sidebar-list-label-text {
+  display: block;
+  width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: left;
-  padding-left: 6px;
 }
 
 .sidebar-character-thumb {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   object-fit: contain;
   border-radius: 6px;
   background: transparent;
   display: inline-block;
+  filter: drop-shadow(0 2px 6px rgba(var(--v-theme-shadow), 0.35));
+}
+
+.sidebar-set-thumb-image {
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
+  border-radius: 6px;
+  object-fit: cover;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  display: block;
+  box-sizing: border-box;
+}
+
+.sidebar-set-thumb-image--collapsed {
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
+  margin: 0;
+  border: none;
+  box-shadow: none;
+}
+
+.sidebar-set-thumb-image--large {
+  width: var(--sidebar-thumb-size-large);
+  height: var(--sidebar-thumb-size-large);
+  border-radius: 8px;
+}
+
+.sidebar-collapsed-item,
+.sidebar-collapsed-thumb {
+  position: relative;
+  overflow: hidden;
 }
 
 .sidebar-character-group {
@@ -2694,18 +2353,28 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   width: 100%;
 }
 
-.sidebar-error {
-  color: #ffcccc;
-  background: rgba(0, 0, 0, 0.25);
-  padding: 6px 12px;
-  border-radius: 6px;
-  margin: 8px 12px;
-  font-size: 0.95em;
+.sidebar-error-bubble {
+  position: fixed;
+  top: 72px;
+  left: 20px;
+  transform: translateY(-50%);
+  z-index: 1200;
+  color: rgb(var(--v-theme-on-error));
+  background: rgba(var(--v-theme-error), 0.8);
+  padding: 10px 16px;
+  border-radius: 14px;
+  font-size: 0.9em;
+  line-height: 1.3;
+  box-shadow: 0 8px 20px rgba(var(--v-theme-shadow), 0.25);
+  pointer-events: none;
+  max-width: 360px;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .sidebar-list-count {
   font-size: 0.9em;
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-sidebar-text));
   min-width: 2.6em;
   width: 2.6em;
   text-align: right;
@@ -2729,7 +2398,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   padding: 2px 2px;
   margin-right: 4px;
   border-radius: 4px;
-  color: #ffffff;
+  color: rgb(var(--v-theme-on-primary));
   background: rgba(var(--v-theme-primary), 0.7);
   position: relative;
   top: -2px;
@@ -2749,7 +2418,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 
 .sidebar-character-toggle {
   cursor: pointer;
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-sidebar-text));
   opacity: 0.8;
   margin-right: 4px;
 }
@@ -2760,7 +2429,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .add-character-inline {
-  color: rgb(var(--v-theme-on-surface)) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: 1.4rem;
   cursor: pointer;
   background: transparent;
@@ -2779,7 +2448,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 
 .edit-character-inline,
 .edit-set-inline {
-  color: rgb(var(--v-theme-on-surface)) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: 1.2rem;
   cursor: pointer;
   background: transparent;
@@ -2802,7 +2471,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .upload-pictures-inline {
-  color: rgb(var(--v-theme-on-surface)) !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: 1.2rem;
   cursor: pointer;
   background: transparent;
@@ -2825,7 +2494,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .delete-character-inline {
-  color: #fff !important;
+  color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: 1.1rem;
   cursor: pointer;
   background: transparent;
@@ -2842,7 +2511,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .delete-character-inline:hover {
-  background: #ff5252;
+  background: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-on-error)) !important;
 }
 
 .sidebar-sort {
@@ -2960,13 +2630,13 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   }
 
   .sidebar-list-icon {
-    width: 44px;
-    height: 44px;
+    width: var(--sidebar-thumb-size);
+    height: var(--sidebar-thumb-size);
   }
 
   .sidebar-character-thumb {
-    width: 44px;
-    height: 44px;
+    width: var(--sidebar-thumb-size);
+    height: var(--sidebar-thumb-size);
   }
 
   .add-character-inline,

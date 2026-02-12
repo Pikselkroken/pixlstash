@@ -20,7 +20,7 @@ body {
   width: 100vw;
   height: 100vh;
   z-index: 0;
-  background: rgba(255, 0, 0, 0.08);
+  background: rgba(var(--v-theme-error), 0.08);
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -69,8 +69,8 @@ body {
   position: relative;
   border-radius: 8px;
   background: rgba(var(--v-theme-background), 0.9);
-  color: rgb(var(--theme-on-background));
-  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+  color: rgb(var(--v-theme-on-background));
+  box-shadow: 2px 2px 12px rgba(var(--v-theme-shadow), 0.4);
 }
 
 .export-dialog-header {
@@ -124,7 +124,7 @@ body {
 }
 
 .empty-state {
-  color: #aaa;
+  color: rgba(var(--v-theme-on-background), 0.6);
   font-size: 1.2rem;
   margin-top: 32px;
   text-align: center;
@@ -219,7 +219,7 @@ body {
   box-shadow: none;
   border: none;
   background-color: transparent !important;
-  color: black !important;
+  color: rgb(var(--v-theme-on-background)) !important;
 }
 
 .app-btn-base:hover,
@@ -297,7 +297,7 @@ body {
 
 /* Darker overlay for dialogs/overlays */
 .v-overlay__scrim {
-  background: rgba(0, 0, 0, 0.8) !important;
+  background: rgba(var(--v-theme-scrim), 0.8) !important;
   opacity: 0.9 !important;
 }
 
@@ -316,7 +316,7 @@ button[disabled] {
 
 .thumbnail-info {
   font-size: 0.85em;
-  color: #666;
+  color: rgba(var(--v-theme-on-background), 0.6);
   margin-top: 2px;
   text-align: center;
   word-break: break-all;
@@ -347,8 +347,8 @@ button[disabled] {
   transform: translate(-50%, -50%);
   width: 40px;
   height: 40px;
-  border: 4px solid #eee;
-  border-top: 4px solid #1976d2;
+  border: 4px solid rgba(var(--v-theme-on-surface), 0.2);
+  border-top: 4px solid rgb(var(--v-theme-info));
   border-radius: 50%;
   animation: spin 1s linear infinite;
   z-index: 10;
@@ -366,8 +366,8 @@ button[disabled] {
 .thumbnail-container:focus-within .thumbnail-img {
   transform: scale(1.02);
   box-shadow:
-    0 4px 24px 0 rgba(25, 118, 210, 0.2),
-    0 1.5px 6px 0 rgba(0, 0, 0, 0.3);
+    0 4px 24px 0 rgba(var(--v-theme-info), 0.2),
+    0 1.5px 6px 0 rgba(var(--v-theme-shadow), 0.3);
   z-index: 2;
   transition:
     transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
@@ -405,7 +405,7 @@ button:focus:not(:focus-visible) {
 
 .media-type-toggle .v-btn--active {
   background-color: rgb(var(--v-theme-secondary)) !important;
-  color: white !important;
+  color: rgb(var(--v-theme-on-secondary)) !important;
 }
 .face-bbox-toggle-btn .face-bbox-icon-wrapper {
   display: inline-flex;
@@ -439,17 +439,18 @@ button:focus:not(:focus-visible) {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.9);
+  background: rgba(var(--v-theme-scrim), 0.9);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 1000;
 }
 .search-overlay-content {
-  background: white;
+  background: rgb(var(--v-theme-panel));
+  color: rgb(var(--v-theme-on-panel));
   padding: 20px;
   border-radius: 8px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 6px rgba(var(--v-theme-shadow), 0.1);
   display: flex;
   flex-direction: column;
   align-items: center;

@@ -35,6 +35,9 @@ MODEL_DIR = "downloaded_models"
 BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = 32
 MAX_CONCURRENT_IMAGES_CPU = 8
+FLORENCE_BATCH_SIZE_GPU = 4
+FLORENCE_BATCH_SIZE_CPU = 2
+TAGGER_DATALOADER_TIMEOUT = 30
 GENERAL_THRESHOLD = 0.8
 UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
@@ -92,7 +95,7 @@ class PictureTagger:
                 )
                 self._device = "cpu"
 
-        logger.info(f"PictureTagger initialized with device: {self._device}")
+        logger.info(f"PictureTagger initialised with device: {self._device}")
 
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._use_custom_tagger = True
@@ -145,6 +148,11 @@ class PictureTagger:
         self._florence_model_name = "microsoft/Florence-2-base"
 
         self._florence_max_tokens = 40 if PictureTagger.FAST_CAPTIONS else 120
+        self._florence_batch_size = (
+            FLORENCE_BATCH_SIZE_CPU
+            if self._device == "cpu"
+            else FLORENCE_BATCH_SIZE_GPU
+        )
 
         self._init_florence_captioning()
 
@@ -259,17 +267,20 @@ class PictureTagger:
                     "Device set to CPU, loading Florence-2 on CPU with FP32..."
                 )
                 self._load_florence_model(torch.device("cpu"), torch.float32)
+                self._florence_batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
             elif torch.cuda.is_available():
                 try:
                     logger.debug("Attempting to load Florence-2 on GPU with FP16...")
                     self._load_florence_model(torch.device("cuda"), torch.float16)
+                    self._florence_batch_size = FLORENCE_BATCH_SIZE_GPU
                     logger.debug("Florence-2 loaded successfully on GPU (~500MB VRAM)")
                 except Exception as gpu_error:
                     logger.warning(
                         f"GPU loading failed, falling back to CPU: {gpu_error}"
                     )
                     self._load_florence_model(torch.device("cpu"), torch.float32)
+                    self._florence_batch_size = FLORENCE_BATCH_SIZE_CPU
                     logger.debug("Florence-2 loaded successfully on CPU")
             else:
                 # No GPU available, use CPU
@@ -280,6 +291,7 @@ class PictureTagger:
                     else torch.device(self._device)
                 )
                 self._load_florence_model(device, torch.float32)
+                self._florence_batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
 
         except Exception as e:
@@ -346,6 +358,7 @@ class PictureTagger:
                 torch.cuda.empty_cache()
 
             self._load_florence_model(torch.device("cpu"), torch.float32)
+            self._florence_batch_size = FLORENCE_BATCH_SIZE_CPU
             logger.debug("Florence-2 reloaded on CPU")
             return True
         except Exception as cpu_error:
@@ -368,7 +381,7 @@ class PictureTagger:
             f"_generate_florence_caption called: image_path={image_path}, _retry_on_cpu={_retry_on_cpu}"
         )
         if self._florence_model is None:
-            logger.error("Florence-2 model is not initialized")
+            logger.error("Florence-2 model is not initialised")
             return None
 
         try:
@@ -387,7 +400,7 @@ class PictureTagger:
                 )
                 for idx, pil_img in enumerate(frames):
                     # Resize large images to speed up processing
-                    MAX_DIM = 640
+                    MAX_DIM = 512
                     if max(pil_img.size) > MAX_DIM:
                         aspect_ratio = pil_img.width / pil_img.height
                         if pil_img.width > pil_img.height:
@@ -400,7 +413,7 @@ class PictureTagger:
                             (new_width, new_height), Image.Resampling.LANCZOS
                         )
                         logger.debug(
-                            f"Resized video frame to {new_width}x{new_height} for faster processing"
+                            f"Resised video frame to {new_width}x{new_height} for faster processing"
                         )
                     inputs = self._florence_processor(
                         text="<MORE_DETAILED_CAPTION>",
@@ -467,7 +480,7 @@ class PictureTagger:
                         (new_width, new_height), Image.Resampling.LANCZOS
                     )
                     logger.debug(
-                        f"Resized image to {new_width}x{new_height} for faster processing"
+                        f"Resised image to {new_width}x{new_height} for faster processing"
                     )
                 inputs = self._florence_processor(
                     text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
@@ -539,6 +552,129 @@ class PictureTagger:
             logger.error(f"Florence-2 captioning failed for {image_path}: {e}")
             logger.debug(traceback.format_exc())
             return None
+
+    def _generate_florence_captions_batch(self, image_paths, _retry_on_cpu=True):
+        logger.debug(
+            "_generate_florence_captions_batch called: %d images", len(image_paths)
+        )
+        if self._florence_model is None:
+            logger.error("Florence-2 model is not initialised")
+            return {}
+
+        try:
+            from PIL import Image
+
+            valid_items = []
+            for image_path in image_paths:
+                try:
+                    image = Image.open(image_path).convert("RGB")
+                    MAX_DIM = 640
+                    if max(image.size) > MAX_DIM:
+                        aspect_ratio = image.width / image.height
+                        if image.width > image.height:
+                            new_width = MAX_DIM
+                            new_height = int(MAX_DIM / aspect_ratio)
+                        else:
+                            new_height = MAX_DIM
+                            new_width = int(MAX_DIM * aspect_ratio)
+                        image = image.resize(
+                            (new_width, new_height), Image.Resampling.LANCZOS
+                        )
+                        logger.debug(
+                            "Resised image to %dx%d for faster processing",
+                            new_width,
+                            new_height,
+                        )
+                    valid_items.append((image_path, image))
+                except Exception as image_error:
+                    logger.error(
+                        "Florence-2 failed to load image for batch %s: %s",
+                        image_path,
+                        image_error,
+                    )
+
+            if not valid_items:
+                return {}
+
+            images = [image for _, image in valid_items]
+            inputs = self._florence_processor(
+                text=["<MORE_DETAILED_CAPTION>"] * len(images),
+                images=images,
+                return_tensors="pt",
+                padding=True,
+            )
+            florence_device = getattr(self, "_florence_device", self._device)
+            target_dtype = (
+                self._florence_model.dtype
+                if hasattr(self._florence_model, "dtype")
+                else None
+            )
+            if target_dtype and target_dtype == torch.float16:
+                inputs = {
+                    k: v.to(florence_device).half()
+                    if torch.is_tensor(v) and v.dtype == torch.float32
+                    else v.to(florence_device)
+                    if torch.is_tensor(v)
+                    else v
+                    for k, v in inputs.items()
+                }
+            else:
+                inputs = {
+                    k: v.to(florence_device) if torch.is_tensor(v) else v
+                    for k, v in inputs.items()
+                }
+            logger.debug("Batch inputs moved to %s", florence_device)
+            with torch.inference_mode():
+                generated_ids = self._florence_model.generate(
+                    input_ids=inputs["input_ids"],
+                    pixel_values=inputs["pixel_values"],
+                    max_new_tokens=self._florence_max_tokens,
+                    early_stopping=False,
+                    do_sample=False,
+                    num_beams=1,
+                    use_cache=False,
+                    pad_token_id=self._florence_processor.tokenizer.pad_token_id,
+                )
+            generated_texts = self._florence_processor.batch_decode(
+                generated_ids, skip_special_tokens=False
+            )
+
+            captions = {}
+            for (image_path, _), generated_text in zip(valid_items, generated_texts):
+                caption = generated_text.replace("<s>", "").replace("</s>", "").strip()
+                last_punct = max([caption.rfind(p) for p in [".", "!", "?"]])
+                if last_punct != -1:
+                    caption = caption[: last_punct + 1].strip()
+                captions[image_path] = caption if caption else None
+            return captions
+
+        except Exception as e:
+            import traceback
+
+            is_cuda_issue = "cuda" in str(e).lower()
+            using_cuda = (
+                getattr(self, "_florence_device", None) is not None
+                and getattr(self._florence_device, "type", "") == "cuda"
+            )
+
+            if _retry_on_cpu and using_cuda and is_cuda_issue:
+                logger.warning(
+                    "Florence-2 batch captioning failed on GPU (%s); retrying on CPU.",
+                    e,
+                )
+                if self._reload_florence_on_cpu():
+                    return self._generate_florence_captions_batch(
+                        image_paths, _retry_on_cpu=False
+                    )
+
+            logger.error("Florence-2 batch captioning failed: %s", e)
+            logger.debug(traceback.format_exc())
+            captions = {}
+            for image_path in image_paths:
+                captions[image_path] = self._generate_florence_caption(
+                    image_path, _retry_on_cpu=False
+                )
+            return captions
 
     def _init_onnx_session(self):
         onnx_path = f"{self._model_location}/model.onnx"
@@ -875,7 +1011,7 @@ class PictureTagger:
         from PIL import Image
 
         if not hasattr(self, "_custom_transform"):
-            logger.warning("Custom tagger not initialized; skipping custom tags.")
+            logger.warning("Custom tagger not initialised; skipping custom tags.")
             return {}
         if not hasattr(self, "_custom_model") or not hasattr(self, "_custom_labels"):
             logger.warning("Custom tagger model not available; skipping custom tags.")
@@ -952,53 +1088,79 @@ class PictureTagger:
             + " and dataset size: "
             + str(len(dataset))
         )
-        data = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=BATCH_SIZE,
-            shuffle=False,
-            num_workers=worker_count,
-            collate_fn=self._collate_fn_remove_corrupted,
-            drop_last=False,
-        )
 
-        logger.info(f"Got some tags: {data}")
-        b_imgs = []
-        all_results = {}
+        def build_dataloader(worker_count_override: int):
+            data_timeout = TAGGER_DATALOADER_TIMEOUT if worker_count_override > 0 else 0
+            return torch.utils.data.DataLoader(
+                dataset,
+                batch_size=BATCH_SIZE,
+                shuffle=False,
+                num_workers=worker_count_override,
+                collate_fn=self._collate_fn_remove_corrupted,
+                drop_last=False,
+                timeout=data_timeout,
+            )
 
-        tagging_failed = False
-        for data_entry in tqdm(data, smoothing=0.0, disable=self._silent):
-            if stop_event is not None and stop_event.is_set():
-                logger.info("Tagging interrupted by stop event.")
-                break
-            if tagging_failed:
-                break
-
-            flat_data = self._flatten_data_entry(data_entry)
-
-            for data in flat_data:
+        def run_tagging(data_loader):
+            b_imgs_local = []
+            results_local = {}
+            tagging_failed_local = False
+            for data_entry in tqdm(data_loader, smoothing=0.0, disable=self._silent):
                 if stop_event is not None and stop_event.is_set():
                     logger.info("Tagging interrupted by stop event.")
-                    tagging_failed = True
                     break
-                if data is None:
-                    continue
-                image, image_path = data
-                b_imgs.append((image_path, image))
-                if len(b_imgs) >= BATCH_SIZE:
-                    b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
-                    batch_result = self._run_batch(
-                        b_imgs,
-                        undesired_tags,
-                    )
-                    if batch_result is None:
-                        logger.error(
-                            f"Tagging failed for batch: {[p for p, _ in b_imgs]}"
-                        )
-                        tagging_failed = True
-                        break
+                if tagging_failed_local:
+                    break
 
-                    all_results.update(self._naturalize_tags(batch_result))
-                    b_imgs.clear()
+                flat_data = self._flatten_data_entry(data_entry)
+
+                for data in flat_data:
+                    if stop_event is not None and stop_event.is_set():
+                        logger.info("Tagging interrupted by stop event.")
+                        tagging_failed_local = True
+                        break
+                    if data is None:
+                        continue
+                    image, image_path = data
+                    b_imgs_local.append((image_path, image))
+                    if len(b_imgs_local) >= BATCH_SIZE:
+                        b_imgs_local = [
+                            (str(image_path), image)
+                            for image_path, image in b_imgs_local
+                        ]
+                        batch_result = self._run_batch(
+                            b_imgs_local,
+                            undesired_tags,
+                        )
+                        if batch_result is None:
+                            logger.error(
+                                "Tagging failed for batch: %s",
+                                [p for p, _ in b_imgs_local],
+                            )
+                            tagging_failed_local = True
+                            break
+
+                        results_local.update(self._naturalize_tags(batch_result))
+                        b_imgs_local.clear()
+            return tagging_failed_local, b_imgs_local, results_local
+
+        data = build_dataloader(worker_count)
+        logger.info("Got some tags: %s", data)
+        b_imgs = []
+        all_results = {}
+        try:
+            _tagging_failed, b_imgs, all_results = run_tagging(data)
+        except RuntimeError as exc:
+            logger.warning("Tagging dataloader stalled: %s", exc)
+            if worker_count > 0 and (stop_event is None or not stop_event.is_set()):
+                logger.warning(
+                    "Retrying tagger dataloader with num_workers=0 for %s items",
+                    len(dataset),
+                )
+                data = build_dataloader(0)
+                _tagging_failed, b_imgs, all_results = run_tagging(data)
+            else:
+                _tagging_failed = True
 
         if len(b_imgs) > 0 and not (stop_event is not None and stop_event.is_set()):
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
@@ -1050,6 +1212,41 @@ class PictureTagger:
             )
             raise RuntimeError("Florence captioning failed.")
         return florence_caption
+
+    def generate_descriptions_batch(self, pictures: list[Picture]) -> dict[int, str]:
+        if not pictures:
+            return {}
+
+        from os import path as os_path
+
+        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+        results = {}
+        batch_items = []
+
+        for picture in pictures:
+            picture_path = self._resolve_picture_path(
+                getattr(picture, "file_path", None)
+            )
+            if not picture_path:
+                results[picture.id] = None
+                continue
+            ext = os_path.splitext(picture_path)[1].lower()
+            if ext in video_exts:
+                results[picture.id] = self._generate_florence_caption(
+                    picture_path, _retry_on_cpu=False
+                )
+            else:
+                batch_items.append((picture.id, picture_path))
+
+        batch_size = max(1, int(self._florence_batch_size))
+        for idx in range(0, len(batch_items), batch_size):
+            chunk = batch_items[idx : idx + batch_size]
+            chunk_paths = [picture_path for _, picture_path in chunk]
+            captions = self._generate_florence_captions_batch(chunk_paths)
+            for picture_id, picture_path in chunk:
+                results[picture_id] = captions.get(picture_path)
+
+        return results
 
     # Naive flatten
     @classmethod

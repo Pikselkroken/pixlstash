@@ -9,6 +9,7 @@ import {
   ref,
   watch,
 } from "vue";
+import { useTheme } from "vuetify";
 import { apiClient, API_BASE_URL } from "./utils/apiClient";
 
 import SideBar from "./components/SideBar.vue";
@@ -60,6 +61,9 @@ const showHandBboxes = ref(false);
 const showFormat = ref(true);
 const showResolution = ref(true);
 const showProblemIcon = ref(true);
+const dateFormat = ref("locale");
+const themeMode = ref("light");
+const theme = useTheme();
 
 const activeCategoryLabel = computed(() => {
   if (selectedSet.value) {
@@ -86,6 +90,7 @@ const isAllPicturesActive = computed(
 );
 
 const thumbnailSize = ref(256);
+const sidebarThumbnailSize = ref(48);
 const columns = ref(4); // Default columns
 const MIN_THUMBNAIL_SIZE = 96;
 const MAX_THUMBNAIL_SIZE = 384;
@@ -115,6 +120,8 @@ let updatesReconnectTimer = null;
 const configLoading = ref(false);
 const configApplying = ref(false);
 const configSnapshot = ref({});
+const hiddenTags = ref([]);
+const applyTagFilter = ref(false);
 
 function refreshGridVersion() {
   gridVersion.value++;
@@ -264,12 +271,15 @@ watch(
 const config = reactive({
   sort: "",
   thumbnail: 256,
+  sidebar_thumbnail_size: 64,
   show_stars: true,
   show_face_bboxes: false,
   show_hand_bboxes: false,
   show_format: true,
   show_resolution: true,
   show_problem_icon: true,
+  date_format: "locale",
+  theme_mode: "light",
   stack_strictness: 0.92,
 });
 
@@ -328,7 +338,7 @@ function closeSidebarIfMobile() {
   }
 }
 
-function normalizeSelectionPayload(payload) {
+function SelectionPayload(payload) {
   if (payload && typeof payload === "object") {
     return {
       id: payload.id ?? payload.value ?? null,
@@ -345,7 +355,7 @@ function clearSearchForCategoryChange() {
 }
 
 async function handleSelectCharacter(payload) {
-  const { id: charId, label } = normalizeSelectionPayload(payload);
+  const { id: charId, label } = SelectionPayload(payload);
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
   clearSearchForCategoryChange();
   if (charId == null) {
@@ -372,7 +382,7 @@ async function handleSelectCharacter(payload) {
 }
 
 async function handleSelectReferencePictures(payload) {
-  const { id: charId, label } = normalizeSelectionPayload(payload);
+  const { id: charId, label } = SelectionPayload(payload);
   clearSearchForCategoryChange();
   if (charId == null) {
     selectedReferenceCharacter.value = null;
@@ -389,7 +399,7 @@ async function handleSelectReferencePictures(payload) {
 }
 
 async function handleSelectSet(payload) {
-  const { id: setId, label } = normalizeSelectionPayload(payload);
+  const { id: setId, label } = SelectionPayload(payload);
   clearSearchForCategoryChange();
   if (setId == null) {
     selectedSet.value = null;
@@ -446,6 +456,30 @@ function handleUpdateSimilarityOptions(options) {
   similarityCharacterOptions.value = Array.isArray(options) ? options : [];
 }
 
+function handleUpdateHiddenTags(tags) {
+  hiddenTags.value = Array.isArray(tags) ? tags : [];
+}
+
+function handleUpdateApplyTagFilter(value) {
+  applyTagFilter.value = Boolean(value);
+}
+
+function handleUpdateDateFormat(value) {
+  if (value == null) return;
+  dateFormat.value = String(value);
+}
+
+function handleUpdateThemeMode(value) {
+  if (value == null) return;
+  themeMode.value = String(value);
+}
+
+function handleUpdateSidebarThumbnailSize(value) {
+  const nextValue = Number(value);
+  if (!Number.isFinite(nextValue)) return;
+  sidebarThumbnailSize.value = nextValue;
+}
+
 function handleColumnsEnd() {
   if (columnsMenuCloseTimeout) {
     clearTimeout(columnsMenuCloseTimeout);
@@ -484,11 +518,23 @@ async function fetchConfig() {
     if (typeof res.data.show_problem_icon === "boolean") {
       showProblemIcon.value = res.data.show_problem_icon;
     }
+    if (typeof res.data.date_format === "string" && res.data.date_format) {
+      dateFormat.value = res.data.date_format;
+    }
+    if (typeof res.data.theme_mode === "string" && res.data.theme_mode) {
+      themeMode.value = res.data.theme_mode;
+    }
+    if (typeof res.data.date_format === "string" && res.data.date_format) {
+      dateFormat.value = res.data.date_format;
+    }
     if (typeof res.data.descending === "boolean") {
       selectedDescending.value = res.data.descending;
     }
     if (typeof res.data.columns === "number") {
       columns.value = res.data.columns;
+    }
+    if (typeof res.data.sidebar_thumbnail_size === "number") {
+      sidebarThumbnailSize.value = res.data.sidebar_thumbnail_size;
     }
     if (res.data.stack_strictness != null) {
       stackThreshold.value = String(res.data.stack_strictness);
@@ -496,6 +542,7 @@ async function fetchConfig() {
     config.sort_order = sortValue || selectedSort.value;
     config.descending = selectedDescending.value;
     config.columns = columns.value;
+    config.sidebar_thumbnail_size = sidebarThumbnailSize.value;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
@@ -520,6 +567,8 @@ async function fetchConfig() {
       typeof res.data.show_problem_icon === "boolean"
         ? res.data.show_problem_icon
         : showProblemIcon.value;
+    config.date_format = dateFormat.value;
+    config.theme_mode = themeMode.value;
     config.stack_strictness =
       res.data.stack_strictness != null
         ? res.data.stack_strictness
@@ -528,22 +577,34 @@ async function fetchConfig() {
       res.data.similarity_character ?? res.data.selected_similarity_character;
     selectedSimilarityCharacter.value =
       similarityValue ?? selectedSimilarityCharacter.value ?? null;
+    hiddenTags.value = Array.isArray(res.data.hidden_tags)
+      ? res.data.hidden_tags
+      : [];
+    applyTagFilter.value = Boolean(res.data.apply_tag_filter);
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
     configSnapshot.value = {
       sort: selectedSort.value || "",
       descending: selectedDescending.value,
       columns: typeof columns.value === "number" ? columns.value : null,
+      sidebar_thumbnail_size:
+        typeof sidebarThumbnailSize.value === "number"
+          ? sidebarThumbnailSize.value
+          : null,
       show_stars: showStars.value,
       show_face_bboxes: showFaceBboxes.value,
       show_hand_bboxes: showHandBboxes.value,
       show_format: showFormat.value,
       show_resolution: showResolution.value,
       show_problem_icon: showProblemIcon.value,
+      date_format: dateFormat.value,
+      theme_mode: themeMode.value,
       similarity_character: selectedSimilarityCharacter.value,
       stack_strictness:
         res.data.stack_strictness != null
           ? Number(res.data.stack_strictness)
           : null,
+      hidden_tags: hiddenTags.value,
+      apply_tag_filter: applyTagFilter.value,
     };
     console.debug("[Config] Overlay settings applied", {
       showFaceBboxes: showFaceBboxes.value,
@@ -569,6 +630,9 @@ async function patchConfigUIOptions() {
   if (selectedSort.value) patch.sort = selectedSort.value;
   patch.descending = selectedDescending.value;
   if (columns.value) patch.columns = columns.value;
+  if (sidebarThumbnailSize.value) {
+    patch.sidebar_thumbnail_size = sidebarThumbnailSize.value;
+  }
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
   if (typeof showFaceBboxes.value === "boolean") {
     patch.show_face_bboxes = showFaceBboxes.value;
@@ -584,6 +648,12 @@ async function patchConfigUIOptions() {
   }
   if (typeof showProblemIcon.value === "boolean") {
     patch.show_problem_icon = showProblemIcon.value;
+  }
+  if (typeof dateFormat.value === "string" && dateFormat.value) {
+    patch.date_format = dateFormat.value;
+  }
+  if (typeof themeMode.value === "string" && themeMode.value) {
+    patch.theme_mode = themeMode.value;
   }
   if (selectedSimilarityCharacter.value != null) {
     patch.similarity_character = selectedSimilarityCharacter.value;
@@ -623,6 +693,10 @@ function handleGlobalKeydown(e) {
       grid.onGlobalKeyPress(e.key, e);
     }
   }
+}
+
+function resolveThemeName(mode) {
+  return mode === "dark" ? "pixlVaultDark" : "pixlVaultLight";
 }
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
@@ -791,6 +865,14 @@ watch([selectedSort, selectedDescending], () => {
   refreshGridVersion();
 });
 
+watch(hiddenTags, () => {
+  refreshGridVersion();
+});
+
+watch(applyTagFilter, () => {
+  refreshGridVersion();
+});
+
 watch([selectedCharacter, selectedSet, searchQuery], () => {
   sendUpdatesFilters();
 });
@@ -838,6 +920,27 @@ watch(columns, () => {
   if (!configLoaded.value) return;
   patchConfigUIOptions();
 });
+
+watch(sidebarThumbnailSize, () => {
+  if (!configLoaded.value) return;
+  patchConfigUIOptions();
+});
+
+watch(dateFormat, () => {
+  if (!configLoaded.value) return;
+  patchConfigUIOptions();
+  refreshGridVersion();
+});
+
+watch(
+  themeMode,
+  (value) => {
+    theme.global.name.value = resolveThemeName(value);
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+  { immediate: true },
+);
 
 watch(exportMenuOpen, async (isOpen) => {
   if (!isOpen) return;
@@ -901,8 +1004,16 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :selectedDescending="selectedDescending"
             :backendUrl="BACKEND_URL"
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
+            :sidebarThumbnailSize="sidebarThumbnailSize"
+            :dateFormat="dateFormat"
+            :themeMode="themeMode"
             @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
+            @update:hidden-tags="handleUpdateHiddenTags"
+            @update:apply-tag-filter="handleUpdateApplyTagFilter"
+            @update:date-format="handleUpdateDateFormat"
+            @update:theme-mode="handleUpdateThemeMode"
+            @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
             @select-character="handleSelectCharacter"
             @select-reference-pictures="handleSelectReferencePictures"
             @select-set="handleSelectSet"
@@ -1001,6 +1112,9 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :showFormat="showFormat"
               :showResolution="showResolution"
               :showProblemIcon="showProblemIcon"
+              :dateFormat="dateFormat"
+              :hiddenTags="hiddenTags"
+              :applyTagFilter="applyTagFilter"
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"

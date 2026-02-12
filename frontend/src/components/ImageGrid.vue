@@ -5,6 +5,9 @@
     :allImages="allGridImages"
     :backendUrl="props.backendUrl"
     :tagUpdate="props.wsTagUpdate"
+    :hiddenTags="props.hiddenTags"
+    :applyTagFilter="props.applyTagFilter"
+    :dateFormat="props.dateFormat"
     @close="closeOverlay"
     @apply-score="applyScore"
     @add-tag="addTagToImage"
@@ -87,6 +90,10 @@
       @scroll="onGridScroll"
       :style="scrollWrapperStyle"
     >
+      <!-- Drag overlay (visible viewport of grid) -->
+      <div v-if="dragOverlayVisible" class="drag-overlay">
+        <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
+      </div>
       <div v-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
           <div class="empty-state-illustration" aria-hidden="true">
@@ -135,10 +142,6 @@
             border: '0px solid blue',
           }"
         ></div>
-        <!-- Drag overlay -->
-        <div v-if="dragOverlayVisible" class="drag-overlay">
-          <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
-        </div>
         <div
           v-for="(img, idx) in gridImagesToRender"
           :key="img.id ? `img-${img.id}-${img.idx}` : `placeholder-${img.idx}`"
@@ -165,12 +168,12 @@
               <div
                 v-if="
                   props.showProblemIcon &&
-                  hasPenalizedTags(img) &&
+                  hasPenalisedTags(img) &&
                   isThumbnailReady(img.id) &&
                   img.thumbnail
                 "
-                class="penalized-tag-indicator thumbnail-badge thumbnail-badge--top-left"
-                :title="penalizedTagsTitle(img)"
+                class="penalised-tag-indicator thumbnail-badge thumbnail-badge--top-left"
+                :title="penalisedTagsTitle(img)"
               >
                 <v-icon size="18" color="error"
                   >mdi-emoticon-sad-outline</v-icon
@@ -398,8 +401,8 @@ import {
   isSupportedImageFile,
   dataTransferHasSupportedMedia,
   isSupportedVideoFile,
-  normalizeMediaFormat,
-  normalizePictureId,
+  MediaFormat,
+  PictureId,
   buildMediaUrl,
   PIL_IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
@@ -413,18 +416,13 @@ import StarRatingOverlay from "./StarRatingOverlay.vue";
 import { apiClient } from "../utils/apiClient";
 import {
   faceBoxColor,
-  formatIsoDate,
+  formatUserDate,
   getStackColor,
   handBoxColor,
-  normalizeStackThreshold,
+  StackThreshold,
   toggleScore,
 } from "../utils/utils.js";
-import {
-  dedupeTagList,
-  getTagId,
-  normalizeTagList,
-  tagMatches,
-} from "../utils/tags.js";
+import { dedupeTagList, getTagId, TagList, tagMatches } from "../utils/tags.js";
 import { debounce } from "lodash-es";
 
 const emit = defineEmits([
@@ -457,6 +455,7 @@ const props = defineProps({
   showFormat: Boolean,
   showResolution: Boolean,
   showProblemIcon: Boolean,
+  dateFormat: { type: String, default: "locale" },
   allPicturesId: String,
   unassignedPicturesId: String,
   scrapheapPicturesId: String,
@@ -468,6 +467,8 @@ const props = defineProps({
   },
   mediaTypeFilter: { type: String, default: "all" },
   columns: { type: Number, required: true },
+  hiddenTags: { type: Array, default: () => [] },
+  applyTagFilter: { type: Boolean, default: false },
 });
 const STACKS_SORT_KEY = "PICTURE_STACKS";
 const STACK_COLOR_STEP = 47;
@@ -626,17 +627,38 @@ function refreshAllThumbnailInfoDisplays() {
   }
 }
 
+let initialFetchTimer = null;
+
 onMounted(() => {
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   fetchAllPicturesCount();
+  const mountFetchKey = buildGridFetchKey();
   if (!hasLoadedOnce.value && !imagesLoading.value) {
     if (
       !Array.isArray(allGridImages.value) ||
       allGridImages.value.length === 0
     ) {
-      fetchAllGridImages().then(() => {
-        updateVisibleThumbnails();
-      });
+      if (initialFetchTimer) {
+        clearTimeout(initialFetchTimer);
+      }
+      initialFetchTimer = setTimeout(() => {
+        initialFetchTimer = null;
+        const currentKey = buildGridFetchKey();
+        if (currentKey !== mountFetchKey) {
+          return;
+        }
+        if (hasLoadedOnce.value || imagesLoading.value) {
+          return;
+        }
+        if (
+          !Array.isArray(allGridImages.value) ||
+          allGridImages.value.length === 0
+        ) {
+          fetchAllGridImages().then(() => {
+            updateVisibleThumbnails();
+          });
+        }
+      }, 80);
     }
   }
   nextTick(() => {
@@ -655,6 +677,10 @@ onUnmounted(() => {
   if (gridResizeObserver) {
     gridResizeObserver.disconnect();
     gridResizeObserver = null;
+  }
+  if (initialFetchTimer) {
+    clearTimeout(initialFetchTimer);
+    initialFetchTimer = null;
   }
   fullImagePrefetchControllers.clear();
   prefetchedFullImageIds.clear();
@@ -697,10 +723,10 @@ watch(
     const pictureIds = Array.isArray(payload.pictureIds)
       ? payload.pictureIds
       : [];
-    const normalizedPayloadIds = pictureIds
-      .map((id) => normalizePictureId(id))
+    const dPayloadIds = pictureIds
+      .map((id) => PictureId(id))
       .filter((id) => id != null);
-    for (const id of normalizedPayloadIds) {
+    for (const id of dPayloadIds) {
       refreshGridImage(id);
     }
   },
@@ -1071,7 +1097,7 @@ function getThumbnailInfoItems(img) {
   } else if (selectedSort.includes("DATE") && img.created_at) {
     items.push({
       key: "created_at",
-      text: formatIsoDate(img.created_at),
+      text: formatUserDate(img.created_at, props.dateFormat),
     });
   } else if (
     selectedSort === STACKS_SORT_KEY &&
@@ -1185,13 +1211,13 @@ function clearSelection() {
 async function refreshTagsForSelection() {
   if (!selectedImageIds.value.length) return;
   const ids = selectedImageIds.value.slice();
-  const normalizedIds = new Set(ids.map((id) => normalizePictureId(id)));
+  const dIds = new Set(ids.map((id) => PictureId(id)));
   try {
     await apiClient.post(`${props.backendUrl}/pictures/clear_tags`, {
       picture_ids: ids,
     });
     allGridImages.value = allGridImages.value.map((img) => {
-      if (!img || !normalizedIds.has(normalizePictureId(img.id))) {
+      if (!img || !dIds.has(PictureId(img.id))) {
         return img;
       }
       return { ...img, tags: [] };
@@ -1227,7 +1253,7 @@ function pauseVideo(id) {
 
 function isVideo(img) {
   if (!img) return false;
-  const format = normalizeMediaFormat(img);
+  const format = MediaFormat(img);
   if (format) {
     return isSupportedVideoFile(`file.${format}`);
   }
@@ -1537,7 +1563,43 @@ async function confirmRestoreScrapheap() {
 
 const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
-async function handleImagesUploaded(newIds) {
+async function handleImagesUploaded(payload) {
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  const pictureIds = Array.from(
+    new Set(
+      results
+        .map((entry) => entry?.picture_id)
+        .filter((id) => id !== null && id !== undefined),
+    ),
+  );
+  if (pictureIds.length) {
+    try {
+      const selectedSetId = props.selectedSet;
+      const selectedCharacterId = props.selectedCharacter;
+      const selectedCharacterKey = String(selectedCharacterId ?? "");
+      const skipCharacter = [
+        String(props.allPicturesId),
+        String(props.unassignedPicturesId),
+        String(props.scrapheapPicturesId),
+      ].includes(selectedCharacterKey);
+      if (selectedSetId != null && selectedSetId !== "") {
+        await Promise.all(
+          pictureIds.map((id) =>
+            apiClient.post(
+              `${props.backendUrl}/picture_sets/${selectedSetId}/members/${id}`,
+            ),
+          ),
+        );
+      } else if (!skipCharacter && selectedCharacterId != null) {
+        await apiClient.post(
+          `${props.backendUrl}/characters/${selectedCharacterId}/faces`,
+          { picture_ids: pictureIds },
+        );
+      }
+    } catch (e) {
+      console.error("Failed to associate imported pictures:", e);
+    }
+  }
   resetThumbnailState();
   allGridImages.value = [];
   selectedImageIds.value = [];
@@ -1550,11 +1612,17 @@ async function handleImagesUploaded(newIds) {
 
 // Adjust debounce timing to 200ms for better responsiveness
 const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
+const lastGridVersionRefreshAt = ref(0);
 
 // Debounced version of fetchAllGridImages
 watch(
   () => props.gridVersion,
   () => {
+    const now = Date.now();
+    if (now - lastGridVersionRefreshAt.value < 1200) {
+      return;
+    }
+    lastGridVersionRefreshAt.value = now;
     if (skipNextWsRefresh.value) {
       skipNextWsRefresh.value = false;
       return;
@@ -1601,7 +1669,7 @@ const overlayImageId = ref(null);
 
 // Drag-and-drop overlay state
 const dragOverlayVisible = ref(false);
-const dragOverlayMessage = ref("");
+const dragOverlayMessage = ref("Drop files here to import");
 const dragSource = ref(null);
 
 const selectedGroupName = ref("");
@@ -1700,9 +1768,9 @@ function invalidateThumbnailIndex(index) {
 
 async function refreshGridImage(imageId) {
   if (!imageId) return;
-  const normalizedId = normalizePictureId(imageId);
+  const dId = PictureId(imageId);
   const idx = allGridImages.value.findIndex(
-    (img) => normalizePictureId(img?.id) === normalizedId,
+    (img) => PictureId(img?.id) === dId,
   );
   if (idx === -1) return;
   const latestInfo = await fetchImageInfo(imageId, {
@@ -1771,10 +1839,8 @@ function reorderStackByScore(stackIndex) {
 function addImageToGrid(imageData) {
   if (!imageData?.id) return null;
   const items = allGridImages.value.slice();
-  const normalizedId = normalizePictureId(imageData.id);
-  const existingIndex = items.findIndex(
-    (img) => normalizePictureId(img?.id) === normalizedId,
-  );
+  const dId = PictureId(imageData.id);
+  const existingIndex = items.findIndex((img) => PictureId(img?.id) === dId);
   if (existingIndex !== -1) {
     const current = items[existingIndex] || {};
     items[existingIndex] = {
@@ -1889,10 +1955,8 @@ function invalidateVisibleThumbnailRanges() {
 
 function repositionImageByScore(imageId, newScore) {
   const items = allGridImages.value.slice();
-  const normalizedId = normalizePictureId(imageId);
-  const currentIndex = items.findIndex(
-    (item) => normalizePictureId(item?.id) === normalizedId,
-  );
+  const dId = PictureId(imageId);
+  const currentIndex = items.findIndex((item) => PictureId(item?.id) === dId);
   if (currentIndex === -1) return;
 
   const target = items[currentIndex];
@@ -2198,64 +2262,35 @@ async function applyScoresForSelection(imageIds, targetScore) {
 }
 
 // Drag-and-drop overlay handlers
-async function handleGridDragEnter(e) {
-  if (
-    e.relatedTarget &&
-    gridContainer.value &&
-    gridContainer.value.contains(e.relatedTarget)
-  )
-    return;
+function isFileDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+  return types.includes("Files") || types.includes("application/x-moz-file");
+}
+
+function handleGridDragEnter(e) {
   if (!e.dataTransfer) return;
-
-  // Log dataTransfer contents for debugging
-  console.debug("[DEBUG] dataTransfer types:", e.dataTransfer.types);
-  console.debug("[DEBUG] dataTransfer items:", e.dataTransfer.items);
-
-  // Focus on standard dataTransfer types for inspection
-  const standardTypesToInspect = ["text/uri-list", "text/html", "text/plain"];
-  for (const type of standardTypesToInspect) {
-    if (e.dataTransfer.types.includes(type)) {
-      const data = e.dataTransfer.getData(type);
-      console.debug(`[DEBUG] dataTransfer content for ${type}:`, data);
-    }
-  }
-
-  const hasSupported = dataTransferHasSupportedMedia(e.dataTransfer);
-  if (!hasSupported) return;
+  const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
+  if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
   dragOverlayVisible.value = true;
-
-  const itemCount = e.dataTransfer.items.length;
-  if (
-    props.selectedCharacter &&
-    props.selectedCharacter !== props.allPicturesId &&
-    props.selectedCharacter !== props.unassignedPicturesId
-  ) {
-    const groupLabel = selectedGroupName.value
-      ? "for " + selectedGroupName.value
-      : "";
-    dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s) ${groupLabel}`;
-  } else {
-    dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s)`;
-  }
+  dragOverlayMessage.value = "Drop files here to import";
   e.preventDefault();
-  console.debug("Overlay shown");
 }
 
 function handleGridDragOver(e) {
-  if (dataTransferHasSupportedMedia(e.dataTransfer)) {
-    if (!dragOverlayVisible.value) {
-      dragOverlayVisible.value = true;
-      dragOverlayMessage.value = "Drop files here to import";
-    }
-    e.preventDefault();
+  if (!e.dataTransfer) return;
+  const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
+  if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
+  if (!dragOverlayVisible.value) {
+    dragOverlayVisible.value = true;
+    dragOverlayMessage.value = "Drop files here to import";
   }
+  e.preventDefault();
 }
 
 function handleGridDragLeave(e) {
   if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
     dragOverlayVisible.value = false;
-  } else {
-    console.debug("Drag still inside grid, overlay remains");
   }
 }
 
@@ -2333,6 +2368,23 @@ const imagesError = ref(null);
 const totalAllPicturesCount = ref(0);
 const gridReady = ref(false);
 const gridLoadEpoch = ref(0);
+const lastFetchKey = ref("");
+const lastFetchError = ref({ key: "", at: 0 });
+const lastFetchSuccess = ref({ key: "", at: 0 });
+
+function buildGridFetchKey() {
+  return JSON.stringify({
+    selectedCharacter: props.selectedCharacter ?? null,
+    selectedReferenceCharacter: props.selectedReferenceCharacter ?? null,
+    selectedSet: props.selectedSet ?? null,
+    searchQuery: props.searchQuery ?? "",
+    selectedSort: props.selectedSort ?? "",
+    selectedDescending: props.selectedDescending ?? null,
+    stackThreshold: props.stackThreshold ?? null,
+    mediaTypeFilter: props.mediaTypeFilter ?? "all",
+    similarityCharacter: props.similarityCharacter ?? null,
+  });
+}
 
 function getStackCardStyle(img) {
   if (!img) return {};
@@ -2444,6 +2496,24 @@ function buildStackQueryParams() {
 // Fetch total image count for current filters
 async function fetchAllGridImages() {
   console.log("[ImageGrid.vue] fetchAllGridImages called.");
+  const fetchKey = buildGridFetchKey();
+  const now = Date.now();
+  if (imagesLoading.value && lastFetchKey.value === fetchKey) {
+    return;
+  }
+  if (
+    lastFetchSuccess.value.key === fetchKey &&
+    now - lastFetchSuccess.value.at < 1200
+  ) {
+    return;
+  }
+  if (
+    lastFetchError.value.key === fetchKey &&
+    now - lastFetchError.value.at < 2500
+  ) {
+    return;
+  }
+  lastFetchKey.value = fetchKey;
   const loadId = (gridLoadEpoch.value += 1);
   gridReady.value = false;
   imagesLoading.value = true;
@@ -2496,10 +2566,10 @@ async function fetchAllGridImages() {
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         const picList = Array.isArray(picsData) ? picsData : [];
         const picsById = new Map(
-          picList.map((img) => [normalizePictureId(img?.id), img]),
+          picList.map((img) => [PictureId(img?.id), img]),
         );
         images = referenceIds
-          .map((id) => picsById.get(normalizePictureId(id)))
+          .map((id) => picsById.get(PictureId(id)))
           .filter(Boolean);
         console.log("[ImageGrid.vue] /pictures by reference ids timing", {
           count: images.length,
@@ -2508,7 +2578,7 @@ async function fetchAllGridImages() {
         });
       }
     } else if (props.selectedSort === STACKS_SORT_KEY) {
-      const threshold = normalizeStackThreshold(props.stackThreshold);
+      const threshold = StackThreshold(props.stackThreshold);
       const stackParams = buildStackQueryParams();
       const url = `${props.backendUrl}/pictures/stacks?threshold=${encodeURIComponent(
         threshold,
@@ -2601,9 +2671,7 @@ async function fetchAllGridImages() {
     const shouldHighlight = highlightNextFetch.value && hasLoadedOnce.value;
     const nextIdSet = new Set(
       Array.isArray(images)
-        ? images
-            .map((img) => normalizePictureId(img?.id))
-            .filter((id) => id !== null)
+        ? images.map((img) => PictureId(img?.id)).filter((id) => id !== null)
         : [],
     );
     if (shouldHighlight) {
@@ -2625,13 +2693,13 @@ async function fetchAllGridImages() {
     const existingById = new Map(
       allGridImages.value
         .filter((img) => img && img.id != null)
-        .map((img) => [normalizePictureId(img.id), img]),
+        .map((img) => [PictureId(img.id), img]),
     );
     const uniqueImages = Array.isArray(images)
       ? (() => {
           const seen = new Set();
           return images.filter((img) => {
-            const id = normalizePictureId(img?.id);
+            const id = PictureId(img?.id);
             if (id == null) return true;
             if (seen.has(id)) return false;
             seen.add(id);
@@ -2640,15 +2708,13 @@ async function fetchAllGridImages() {
         })()
       : [];
     const newImages = uniqueImages.map((img, i) => {
-      const existing = img?.id
-        ? existingById.get(normalizePictureId(img.id))
-        : null;
+      const existing = img?.id ? existingById.get(PictureId(img.id)) : null;
       return {
         ...img,
         idx: i,
         thumbnail: existing?.thumbnail ?? null,
-        penalized_tags: Array.isArray(existing?.penalized_tags)
-          ? existing.penalized_tags
+        penalised_tags: Array.isArray(existing?.penalised_tags)
+          ? existing.penalised_tags
           : [],
         faces: Array.isArray(existing?.faces) ? existing.faces : [],
         hands: Array.isArray(existing?.hands) ? existing.hands : [],
@@ -2692,9 +2758,11 @@ async function fetchAllGridImages() {
         updateVisibleThumbnails();
       }
     });
+    lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
   } catch (e) {
     imagesError.value = e.message;
     allGridImages.value = [];
+    lastFetchError.value = { key: fetchKey, at: Date.now() };
   } finally {
     if (loadId === gridLoadEpoch.value) {
       imagesLoading.value = false;
@@ -3112,9 +3180,9 @@ async function fetchThumbnailsBatch(start, end) {
         if (props.showHandBboxes && gridImg.hands.length) {
           overlayNeedsRedraw = true;
         }
-        gridImg.penalized_tags =
-          thumbObj && Array.isArray(thumbObj.penalized_tags)
-            ? thumbObj.penalized_tags
+        gridImg.penalised_tags =
+          thumbObj && Array.isArray(thumbObj.penalised_tags)
+            ? thumbObj.penalised_tags
             : [];
         if (thumbObj) {
           const thumbWidth = Number(thumbObj.thumbnail_width);
@@ -3191,14 +3259,14 @@ function updateVisibleThumbnails() {
   }, 80);
 }
 
-function hasPenalizedTags(img) {
-  return Array.isArray(img?.penalized_tags) && img.penalized_tags.length > 0;
+function hasPenalisedTags(img) {
+  return Array.isArray(img?.penalised_tags) && img.penalised_tags.length > 0;
 }
 
-function penalizedTagsTitle(img) {
-  const tags = Array.isArray(img?.penalized_tags) ? img.penalized_tags : [];
+function penalisedTagsTitle(img) {
+  const tags = Array.isArray(img?.penalised_tags) ? img.penalised_tags : [];
   if (!tags.length) return "";
-  return `Penalized tags: ${tags.join(", ")}`;
+  return `Penalised tags: ${tags.join(", ")}`;
 }
 
 function onGridScroll(e) {
@@ -3319,9 +3387,7 @@ function handleImageCardClick(img, idx, event) {
   const anchorIndex =
     lastSelectedImageId != null
       ? allGrid.findIndex(
-          (item) =>
-            normalizePictureId(item?.id) ===
-            normalizePictureId(lastSelectedImageId),
+          (item) => PictureId(item?.id) === PictureId(lastSelectedImageId),
         )
       : -1;
   if (isCtrl) {
@@ -3404,8 +3470,8 @@ async function removeTagFromImage(imageId, tag) {
       (img) => img && img.id === imageId,
     );
     if (gridImg && Array.isArray(gridImg.tags)) {
-      const normalized = normalizeTagList(gridImg.tags);
-      gridImg.tags = normalized.filter((t) => !tagMatches(t, tag));
+      const d = TagList(gridImg.tags);
+      gridImg.tags = d.filter((t) => !tagMatches(t, tag));
     }
     if (isSmartScoreSortActive()) {
       await refreshSmartScoreForImage(imageId);
@@ -3426,12 +3492,12 @@ async function addTagToImage(imageId, tag) {
       },
     );
     console.log(`Tag '${tag}' added to image ${imageId}`);
-    const responseTags = normalizeTagList(response?.data?.tags);
+    const responseTags = TagList(response?.data?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
     if (gridImg) {
-      const current = normalizeTagList(gridImg.tags);
+      const current = TagList(gridImg.tags);
       const merged = responseTags.length
         ? responseTags
         : dedupeTagList([...current, { id: null, tag }]);
@@ -3563,14 +3629,14 @@ function removeImagesById(imageIds) {
     return;
   }
   console.log("Removing images by ID:", imageIds);
-  const normalizedIds = new Set(
-    imageIds.map((id) => normalizePictureId(id)).filter((id) => id !== null),
+  const dIds = new Set(
+    imageIds.map((id) => PictureId(id)).filter((id) => id !== null),
   );
   allGridImages.value = allGridImages.value.filter(
-    (img) => !normalizedIds.has(normalizePictureId(img?.id)),
+    (img) => !dIds.has(PictureId(img?.id)),
   );
   selectedImageIds.value = selectedImageIds.value.filter(
-    (id) => !normalizedIds.has(normalizePictureId(id)),
+    (id) => !dIds.has(PictureId(id)),
   );
   reindexGridImages();
   resetThumbnailState();
@@ -3740,23 +3806,32 @@ function handleEmptyStateReset() {
 
 <style scoped>
 .drag-overlay {
-  position: fixed;
-  inset: 0;
+  position: sticky;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   background: rgba(var(--v-theme-accent), 0.2);
-  z-index: 9999;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: all;
+  pointer-events: none;
   border: 8px solid rgb(var(--v-theme-accent));
   border-radius: 16px; /* rounded corners */
   box-sizing: border-box;
   transition:
     border-color 0.2s,
     background 0.2s;
-  color: #ffffff;
+  color: rgb(var(--v-theme-on-accent));
   font-size: 3em;
   font-weight: bold;
+}
+
+.drag-overlay-message {
+  padding: 6px 14px;
+  background: rgba(var(--v-theme-shadow), 0.35);
+  border-radius: 12px;
 }
 
 .export-progress {
@@ -3764,16 +3839,16 @@ function handleEmptyStateReset() {
   top: 10px;
   right: 12px;
   z-index: 120;
-  background: rgba(20, 20, 20, 0.9);
-  color: #fff;
+  background: rgba(var(--v-theme-dark-surface), 0.9);
+  color: rgb(var(--v-theme-on-dark-surface));
   padding: 10px 12px;
   border-radius: 8px;
   min-width: 220px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 14px rgba(var(--v-theme-shadow), 0.3);
 }
 
 .export-progress-error {
-  background: rgba(140, 20, 20, 0.95);
+  background: rgba(var(--v-theme-error), 0.95);
 }
 
 .export-progress-title {
@@ -3784,7 +3859,7 @@ function handleEmptyStateReset() {
 .export-progress-bar {
   width: 100%;
   height: 8px;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(var(--v-theme-on-dark-surface), 0.15);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -3805,8 +3880,8 @@ function handleEmptyStateReset() {
 .export-progress-abort {
   margin-top: 10px;
   width: 100%;
-  background: #c62828;
-  color: #fff;
+  background: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-on-error));
   border: none;
   border-radius: 6px;
   padding: 6px 10px;
@@ -3817,7 +3892,7 @@ function handleEmptyStateReset() {
 }
 
 .export-progress-abort:hover {
-  background: #b71c1c;
+  background: rgba(var(--v-theme-error), 0.85);
 }
 
 .thumbnail-badge {
@@ -3825,7 +3900,7 @@ function handleEmptyStateReset() {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
   border-radius: 6px;
   color: rgb(var(--v-theme-on-dark-surface));
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   font-size: 0.8em;
   padding: 2px 4px;
   z-index: 20;
@@ -3860,7 +3935,7 @@ function handleEmptyStateReset() {
 }
 .face-bbox-label {
   font-size: 0.7em;
-  background-color: rgba(0, 0, 0, 0.3);
+  background-color: rgba(var(--v-theme-shadow), 0.3);
   color: rgb(var(--v-theme-on-surface));
   text-overflow: ellipsis;
   overflow-y: hidden;
@@ -3899,16 +3974,16 @@ function handleEmptyStateReset() {
   gap: 10px;
   padding: 26px 30px;
   border-radius: 18px;
-  border: 1px dashed rgba(0, 0, 0, 0.25);
-  background: rgba(255, 255, 255, 0.72);
+  border: 1px dashed rgba(var(--v-theme-border), 0.5);
+  background: rgba(var(--v-theme-panel), 0.72);
   color: rgb(var(--v-theme-on-background));
   text-align: center;
   max-width: 420px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 10px 30px rgba(var(--v-theme-shadow), 0.08);
   pointer-events: auto;
 }
 .empty-state-illustration {
-  color: rgba(0, 0, 0, 0.45);
+  color: rgba(var(--v-theme-on-panel), 0.45);
 }
 .empty-state-title {
   font-size: 1.2em;
@@ -3940,7 +4015,7 @@ function handleEmptyStateReset() {
   border-radius: 8px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-track {
-  background: rgb(var(--v-theme-on-accent));
+  background: rgba(var(--v-theme-shadow), 0.15);
 }
 .image-card {
   min-width: 0;
@@ -3962,7 +4037,7 @@ function handleEmptyStateReset() {
 .selection-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(25, 118, 210, 0.62); /* semi-transparent blue */
+  background: rgba(var(--v-theme-info), 0.62);
   pointer-events: none;
   z-index: 2;
 }
@@ -4000,7 +4075,7 @@ function handleEmptyStateReset() {
   padding: 0 8px;
   white-space: nowrap;
   overflow: hidden;
-  text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.2);
+  text-shadow: 1px 1px 1px rgba(var(--v-theme-shadow), 0.2);
 }
 .thumbnail-container {
   width: 100%;
@@ -4020,14 +4095,14 @@ function handleEmptyStateReset() {
   top: 0;
   left: 0;
   z-index: 1;
-  box-shadow: 1px 2px 3px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.4);
   transition:
     transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
     box-shadow 0.18s;
 }
 .thumbnail-container:hover .thumbnail-img,
 .thumbnail-container:focus-within .thumbnail-img {
-  box-shadow: 2px 4px 12px rgba(0, 0, 0, 0.6);
+  box-shadow: 2px 4px 12px rgba(var(--v-theme-shadow), 0.6);
   transform: scale(1.02);
   z-index: 2;
   transition:
@@ -4080,7 +4155,7 @@ function handleEmptyStateReset() {
   border-radius: 8px;
 }
 
-.penalized-tag-indicator {
+.penalised-tag-indicator {
   display: flex;
   align-items: center;
   justify-content: center;

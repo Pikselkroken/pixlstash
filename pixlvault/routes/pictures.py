@@ -47,15 +47,53 @@ from pixlvault.picture_scoring import (
     fetch_smart_score_data,
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
-    get_smart_score_penalized_tags_from_request,
+    get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
     select_reference_faces_for_character,
 )
 from pixlvault.picture_utils import PictureUtils
-from pixlvault.utils import safe_model_dict, serialize_tag_objects
+from pixlvault.utils import (
+    safe_model_dict,
+    serialize_tag_objects,
+    _normalize_hidden_tags,
+)
 from pixlvault.worker_registry import WorkerType
 
 logger = get_logger(__name__)
+
+
+def _get_hidden_tags_from_request(server, request: Request) -> list[str]:
+    try:
+        user = server.auth.get_user_for_request(request)
+    except HTTPException:
+        user = server.auth.get_user()
+    if not user:
+        return []
+    if not getattr(user, "apply_tag_filter", False):
+        return []
+    normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
+    return normalized or []
+
+
+def _fetch_hidden_picture_ids(server, request: Request, picture_ids: list[int]):
+    hidden_tags = _get_hidden_tags_from_request(server, request)
+    if not hidden_tags or not picture_ids:
+        return set()
+    hidden_tag_set = {str(tag).strip().lower() for tag in hidden_tags if tag}
+
+    def fetch_hidden(session: Session, ids: list[int], tags: set[str]):
+        rows = session.exec(
+            select(Tag.picture_id).where(
+                Tag.picture_id.in_(ids),
+                Tag.tag.is_not(None),
+                func.lower(Tag.tag).in_(tags),
+            )
+        ).all()
+        return {row for row in rows if row is not None}
+
+    return server.vault.db.run_immediate_read_task(
+        fetch_hidden, list(picture_ids), hidden_tag_set
+    )
 
 
 def _create_picture_imports(server, uploaded_files, dest_folder):
@@ -142,7 +180,7 @@ def _select_pictures_for_listing(
                 query_params.pop("id", None)
         return format, query_params
 
-    def normalize_character_id(value):
+    def _character_id(value):
         if value == "ALL":
             return None
         if value is not None and value != "" and str(value).isdigit():
@@ -157,7 +195,7 @@ def _select_pictures_for_listing(
     )
     offset = int(query_params.pop("offset", offset))
     limit = int(query_params.pop("limit", limit))
-    character_id = normalize_character_id(query_params.pop("character_id", None))
+    character_id = _character_id(query_params.pop("character_id", None))
     reference_character_id = query_params.pop("reference_character_id", None)
     only_deleted = False
 
@@ -236,6 +274,18 @@ def _select_pictures_for_listing(
             limit,
             descending,
         )
+        if pics:
+            hidden_ids = _fetch_hidden_picture_ids(
+                server,
+                request,
+                [pic.get("id") for pic in pics if pic.get("id") is not None],
+            )
+            if hidden_ids:
+                pics = [
+                    pic
+                    for pic in pics
+                    if pic.get("id") is None or pic.get("id") not in hidden_ids
+                ]
         if return_ids_only:
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
         return pics
@@ -248,7 +298,7 @@ def _select_pictures_for_listing(
         )
         if candidate_ids is not None and not candidate_ids:
             return []
-        penalized_tags = get_smart_score_penalized_tags_from_request(server, request)
+        penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
         pics = find_pictures_by_smart_score(
             server,
             format,
@@ -256,9 +306,21 @@ def _select_pictures_for_listing(
             limit,
             descending,
             candidate_ids=candidate_ids,
-            penalized_tags=penalized_tags,
+            penalised_tags=penalised_tags,
             only_deleted=only_deleted,
         )
+        if pics:
+            hidden_ids = _fetch_hidden_picture_ids(
+                server,
+                request,
+                [pic.get("id") for pic in pics if pic.get("id") is not None],
+            )
+            if hidden_ids:
+                pics = [
+                    pic
+                    for pic in pics
+                    if pic.get("id") is None or pic.get("id") not in hidden_ids
+                ]
         if return_ids_only:
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
         return pics
@@ -307,6 +369,14 @@ def _select_pictures_for_listing(
             format=format,
             **query_params,
         )
+    if pics:
+        hidden_ids = _fetch_hidden_picture_ids(
+            server,
+            request,
+            [pic.id for pic in pics if getattr(pic, "id", None) is not None],
+        )
+        if hidden_ids:
+            pics = [pic for pic in pics if pic.id not in hidden_ids]
     if return_ids_only:
         return [pic.id for pic in pics]
     return serialize_metadata(pics)
@@ -525,6 +595,12 @@ def create_router(server) -> APIRouter:
         if not ordered_ids:
             return []
 
+        hidden_ids = _fetch_hidden_picture_ids(server, request, ordered_ids)
+        if hidden_ids:
+            ordered_ids = [pid for pid in ordered_ids if pid not in hidden_ids]
+            if not ordered_ids:
+                return []
+
         def fetch_pictures(session, ids, deleted_only: bool):
             return Picture.find(
                 session,
@@ -543,14 +619,14 @@ def create_router(server) -> APIRouter:
         smart_score_by_id = {}
         if ordered_pics:
             try:
-                penalized_tags = get_smart_score_penalized_tags_from_request(
+                penalised_tags = get_smart_score_penalised_tags_from_request(
                     server, request
                 )
                 good_anchors, bad_anchors, candidates = fetch_smart_score_data(
                     server,
                     None,
                     candidate_ids=ordered_ids,
-                    penalized_tags=penalized_tags,
+                    penalised_tags=penalised_tags,
                 )
                 if candidates:
                     good_list, bad_list, cand_list, cand_ids = (
@@ -657,9 +733,9 @@ def create_router(server) -> APIRouter:
         if not isinstance(ids, list):
             raise HTTPException(status_code=400, detail="'ids' must be a list")
 
-        penalized_tags = get_smart_score_penalized_tags_from_request(server, request)
-        penalized_tag_set = {
-            str(tag).strip().lower() for tag in (penalized_tags or {}).keys() if tag
+        penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
+        penalised_tag_set = {
+            str(tag).strip().lower() for tag in (penalised_tags or {}).keys() if tag
         }
         ids_int = []
         for raw_id in ids:
@@ -668,25 +744,25 @@ def create_router(server) -> APIRouter:
             except (TypeError, ValueError):
                 continue
 
-        penalized_tag_map = defaultdict(list)
-        if ids_int and penalized_tag_set:
+        penalised_tag_map = defaultdict(list)
+        if ids_int and penalised_tag_set:
 
-            def fetch_penalized_tags(session: Session):
+            def fetch_penalised_tags(session: Session):
                 rows = session.exec(
                     select(Tag.picture_id, Tag.tag).where(
                         Tag.picture_id.in_(ids_int),
                         Tag.tag.is_not(None),
-                        func.lower(Tag.tag).in_(penalized_tag_set),
+                        func.lower(Tag.tag).in_(penalised_tag_set),
                     )
                 ).all()
                 return rows
 
             rows = server.vault.db.run_task(
-                fetch_penalized_tags, priority=DBPriority.IMMEDIATE
+                fetch_penalised_tags, priority=DBPriority.IMMEDIATE
             )
             for pic_id, tag in rows or []:
                 if tag:
-                    penalized_tag_map[pic_id].append(tag)
+                    penalised_tag_map[pic_id].append(tag)
 
         def map_bbox_to_thumbnail(bbox, picture):
             if not bbox or len(bbox) != 4:
@@ -816,8 +892,8 @@ def create_router(server) -> APIRouter:
                     "hands": hand_data,
                     "thumbnail_width": 256 if mapped_any else None,
                     "thumbnail_height": 256 if mapped_any else None,
-                    "penalized_tags": list(
-                        dict.fromkeys(penalized_tag_map.get(pic.id, []))
+                    "penalised_tags": list(
+                        dict.fromkeys(penalised_tag_map.get(pic.id, []))
                     ),
                 }
             except Exception as exc:
@@ -828,7 +904,7 @@ def create_router(server) -> APIRouter:
                     "thumbnail": None,
                     "faces": [],
                     "hands": [],
-                    "penalized_tags": [],
+                    "penalised_tags": [],
                 }
         response = JSONResponse(results)
         origin = request.headers.get("origin")
@@ -871,35 +947,33 @@ def create_router(server) -> APIRouter:
                     or request.query_params.get("exportType")
                     or export_type
                 )
-                export_type_normalized = Picture.ExportType.from_string(
-                    export_type_value
-                )
-                caption_mode_normalized = (caption_mode or "description").lower()
-                if caption_mode_normalized not in {"none", "description", "tags"}:
-                    caption_mode_normalized = "description"
+                export_type_d = Picture.ExportType.from_string(export_type_value)
+                caption_mode_d = (caption_mode or "description").lower()
+                if caption_mode_d not in {"none", "description", "tags"}:
+                    caption_mode_d = "description"
                 include_character_name_enabled = (
-                    bool(include_character_name) and caption_mode_normalized != "none"
+                    bool(include_character_name) and caption_mode_d != "none"
                 )
-                if export_type_normalized != Picture.ExportType.FULL:
-                    caption_mode_normalized = "tags"
+                if export_type_d != Picture.ExportType.FULL:
+                    caption_mode_d = "tags"
                     include_character_name_enabled = False
-                resolution_normalized = (resolution or "original").lower()
-                if resolution_normalized not in {"original", "half", "quarter"}:
-                    resolution_normalized = "original"
+                resolution_d = (resolution or "original").lower()
+                if resolution_d not in {"original", "half", "quarter"}:
+                    resolution_d = "original"
                 scale_map = {
                     "original": 1.0,
                     "half": 0.5,
                     "quarter": 0.25,
                 }
-                scale_factor = scale_map.get(resolution_normalized, 1.0)
+                scale_factor = scale_map.get(resolution_d, 1.0)
 
                 only_deleted = request.query_params.get("character_id") == "SCRAPHEAP"
 
                 picture_ids = request.query_params.getlist("id")
 
                 select_fields = Picture.metadata_fields()
-                if export_type_normalized == Picture.ExportType.FULL:
-                    if caption_mode_normalized != "none":
+                if export_type_d == Picture.ExportType.FULL:
+                    if caption_mode_d != "none":
                         select_fields = select_fields | {"tags"}
                     if include_character_name_enabled:
                         select_fields = select_fields | {"characters"}
@@ -1029,7 +1103,7 @@ def create_router(server) -> APIRouter:
                     y_max = max(y_min + 1, min(y_max, height))
                     return [x_min, y_min, x_max, y_max]
 
-                if export_type_normalized != Picture.ExportType.FULL:
+                if export_type_d != Picture.ExportType.FULL:
 
                     def fetch_features(session: Session, picture_ids):
                         faces = session.exec(
@@ -1089,15 +1163,15 @@ def create_router(server) -> APIRouter:
                         [pic.id for pic in pics],
                     )
 
-                if export_type_normalized == Picture.ExportType.FULL:
+                if export_type_d == Picture.ExportType.FULL:
                     total_items = len(pics)
                 else:
                     total_items = 0
-                    export_faces = export_type_normalized in {
+                    export_faces = export_type_d in {
                         Picture.ExportType.FACE,
                         Picture.ExportType.FACE_HAND,
                     }
-                    export_hands = export_type_normalized in {
+                    export_hands = export_type_d in {
                         Picture.ExportType.HAND,
                         Picture.ExportType.FACE_HAND,
                     }
@@ -1148,14 +1222,14 @@ def create_router(server) -> APIRouter:
                                 server.vault.image_root, pic.file_path
                             )
                             ext = os.path.splitext(full_path)[1]
-                            if export_type_normalized == Picture.ExportType.FULL:
+                            if export_type_d == Picture.ExportType.FULL:
                                 arcname = f"image_{idx:05d}{ext}"
                                 if (
                                     scale_factor < 1.0
                                     and not PictureUtils.is_video_file(full_path)
                                 ):
                                     try:
-                                        from PIL import Image
+                                        from PIL import Image, PngImagePlugin
                                         from io import BytesIO
 
                                         with Image.open(full_path) as img:
@@ -1165,7 +1239,7 @@ def create_router(server) -> APIRouter:
                                             new_height = max(
                                                 1, int(img.height * scale_factor)
                                             )
-                                            resized = img.resize(
+                                            resised = img.resize(
                                                 (new_width, new_height),
                                                 resample=Image.LANCZOS,
                                             )
@@ -1173,12 +1247,46 @@ def create_router(server) -> APIRouter:
                                             save_format = (
                                                 img.format or ext.lstrip(".").upper()
                                             )
-                                            if save_format.upper() in {"JPG", "JPEG"}:
-                                                resized.save(
-                                                    buffer, format="JPEG", quality=95
+                                            save_format_upper = save_format.upper()
+                                            save_kwargs = {}
+                                            exif_bytes = img.info.get("exif")
+                                            if exif_bytes:
+                                                save_kwargs["exif"] = exif_bytes
+                                            icc_profile = img.info.get("icc_profile")
+                                            if icc_profile:
+                                                save_kwargs["icc_profile"] = icc_profile
+                                            if save_format_upper == "PNG":
+                                                pnginfo = PngImagePlugin.PngInfo()
+                                                for key, value in (
+                                                    img.info or {}
+                                                ).items():
+                                                    if key in {"exif", "icc_profile"}:
+                                                        continue
+                                                    if isinstance(value, str):
+                                                        pnginfo.add_text(key, value)
+                                                    elif isinstance(value, bytes):
+                                                        try:
+                                                            pnginfo.add_text(
+                                                                key,
+                                                                value.decode("utf-8"),
+                                                            )
+                                                        except Exception:
+                                                            continue
+                                                save_kwargs["pnginfo"] = pnginfo
+
+                                            if save_format_upper in {"JPG", "JPEG"}:
+                                                resised.save(
+                                                    buffer,
+                                                    format="JPEG",
+                                                    quality=95,
+                                                    **save_kwargs,
                                                 )
                                             else:
-                                                resized.save(buffer, format=save_format)
+                                                resised.save(
+                                                    buffer,
+                                                    format=save_format,
+                                                    **save_kwargs,
+                                                )
 
                                         zip_file.writestr(arcname, buffer.getvalue())
                                     except Exception as exc:
@@ -1201,11 +1309,11 @@ def create_router(server) -> APIRouter:
                                     return ", ".join(tags)
 
                                 caption_text = None
-                                if caption_mode_normalized == "description":
+                                if caption_mode_d == "description":
                                     caption_text = pic.description or ""
                                     if not caption_text:
                                         caption_text = build_tag_caption(pic)
-                                elif caption_mode_normalized == "tags":
+                                elif caption_mode_d == "tags":
                                     caption_text = build_tag_caption(pic)
 
                                 if include_character_name_enabled:
@@ -1218,11 +1326,11 @@ def create_router(server) -> APIRouter:
                                             character_names.append(name_value)
 
                                     if character_names:
-                                        if caption_mode_normalized == "tags":
+                                        if caption_mode_d == "tags":
                                             caption_text = ", ".join(
                                                 character_names + [caption_text]
                                             )
-                                        elif caption_mode_normalized == "description":
+                                        elif caption_mode_d == "description":
                                             caption_text = (
                                                 ", ".join(character_names)
                                                 + ": "
@@ -1230,7 +1338,7 @@ def create_router(server) -> APIRouter:
                                             )
 
                                 if (
-                                    caption_mode_normalized != "none"
+                                    caption_mode_d != "none"
                                     and caption_text is not None
                                 ):
                                     zip_file.writestr(
@@ -1247,11 +1355,11 @@ def create_router(server) -> APIRouter:
 
                                     with Image.open(full_path) as img:
                                         base_name = f"image_{idx:05d}"
-                                        export_faces = export_type_normalized in {
+                                        export_faces = export_type_d in {
                                             Picture.ExportType.FACE,
                                             Picture.ExportType.FACE_HAND,
                                         }
-                                        export_hands = export_type_normalized in {
+                                        export_hands = export_type_d in {
                                             Picture.ExportType.HAND,
                                             Picture.ExportType.FACE_HAND,
                                         }
@@ -1594,6 +1702,23 @@ def create_router(server) -> APIRouter:
             return sorted_results
 
         results = server.vault.db.run_task(find_by_text, query, offset, limit)
+        if results:
+            hidden_ids = _fetch_hidden_picture_ids(
+                server,
+                request,
+                [
+                    getattr(pic, "id", None)
+                    for pic, _score in results
+                    if pic is not None and getattr(pic, "id", None) is not None
+                ],
+            )
+            if hidden_ids:
+                results = [
+                    result
+                    for result in results
+                    if result[0] is not None
+                    and getattr(result[0], "id", None) not in hidden_ids
+                ]
         return [Picture.serialize_with_likeness(r) for r in results]
 
     @router.post("/pictures/import")
@@ -1886,7 +2011,7 @@ def create_router(server) -> APIRouter:
 
         if smart_score:
             try:
-                penalized_tags = get_smart_score_penalized_tags_from_request(
+                penalised_tags = get_smart_score_penalised_tags_from_request(
                     server, request
                 )
                 (
@@ -1897,7 +2022,7 @@ def create_router(server) -> APIRouter:
                     server,
                     None,
                     candidate_ids=[pic.id],
-                    penalized_tags=penalized_tags,
+                    penalised_tags=penalised_tags,
                 )
                 smart_score_value = None
                 if candidates:

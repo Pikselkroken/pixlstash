@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from sqlmodel import Session, delete, select
+from sqlalchemy import func
 from PIL import Image
 
 from pixlvault.database import DBPriority
@@ -66,6 +67,15 @@ class LikenessParameterWorker(BaseWorker):
             )
 
         while not self._stop.is_set():
+            total_pics = submit_low(LikenessParameterWorker._count_total_pictures)
+            pending = submit_low(LikenessParameterWorker._count_pending_parameters)
+            total = max(int(total_pics or 0), 0)
+            missing = max(int(pending or 0), 0)
+            self._set_progress(
+                label="likeness_parameters",
+                current=max(total - missing, 0),
+                total=total,
+            )
             work = submit_low(
                 LikenessParameterWorker._find_next_work,
                 self.BATCH_SIZE,
@@ -177,6 +187,27 @@ class LikenessParameterWorker(BaseWorker):
         return None
 
     @staticmethod
+    def _count_total_pictures(session: Session) -> int:
+        result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_pending_parameters(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(
+                (Picture.likeness_parameters.is_(None))
+                | (Picture.size_bin_index.is_(None))
+            )
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
     def _find_size_bin_batch(
         session: Session, batch_size: int
     ) -> Optional[Tuple[int, int, List[int]]]:
@@ -214,68 +245,73 @@ class LikenessParameterWorker(BaseWorker):
         batch_size: int,
         scan_limit: int,
     ) -> Optional[Tuple[int, List[int], int]]:
-        rows = session.exec(
-            select(Picture.id, Picture.size_bin_index, Picture.likeness_parameters)
-            .where(Picture.size_bin_index.is_not(None))
-            .order_by(Picture.size_bin_index, Picture.id)
-            .limit(scan_limit)
-        ).all()
-        if not rows:
-            return None
+        offset = 0
+        while True:
+            rows = session.exec(
+                select(Picture.id, Picture.size_bin_index, Picture.likeness_parameters)
+                .where(Picture.size_bin_index.is_not(None))
+                .order_by(Picture.size_bin_index, Picture.id)
+                .limit(scan_limit)
+                .offset(offset)
+            ).all()
+            if not rows:
+                return None
 
-        quality_ids: set[int] = set()
-        if param in QUALITY_PARAM_FIELDS:
-            pic_ids = [int(row[0]) for row in rows]
-            if pic_ids:
-                quality_rows = session.exec(
-                    select(Quality.picture_id).where(
-                        Quality.face_id.is_(None),
-                        Quality.picture_id.in_(pic_ids),
-                    )
-                ).all()
-                quality_ids = {
-                    int(row[0]) if isinstance(row, (tuple, list)) else int(row)
-                    for row in quality_rows
-                }
-
-        missing_by_bin: Dict[int, List[int]] = {}
-        quality_param_indices = {
-            int(param_key) for param_key in QUALITY_PARAM_FIELDS.keys()
-        }
-        picture_param_indices = {
-            int(param_key) for param_key in PICTURE_PARAM_FIELDS.keys()
-        }
-
-        for pic_id, size_bin_index, param_blob in rows:
-            size_bin = int(size_bin_index)
-            vec = LikenessParameterWorker._decode_parameters(
-                param_blob, len(LikenessParameter)
-            )
+            quality_ids: set[int] = set()
             if param in QUALITY_PARAM_FIELDS:
-                missing_quality = any(
-                    vec[idx] == LIKENESS_PARAMETER_SENTINEL
-                    for idx in quality_param_indices
-                )
-                if missing_quality and int(pic_id) in quality_ids:
-                    missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
-                continue
-            if param in PICTURE_PARAM_FIELDS:
-                missing_picture = any(
-                    vec[idx] == LIKENESS_PARAMETER_SENTINEL
-                    for idx in picture_param_indices
-                )
-                if missing_picture:
-                    missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
-                continue
-            if vec[int(param)] == LIKENESS_PARAMETER_SENTINEL:
-                missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
+                pic_ids = [int(row[0]) for row in rows]
+                if pic_ids:
+                    quality_rows = session.exec(
+                        select(Quality.picture_id).where(
+                            Quality.face_id.is_(None),
+                            Quality.picture_id.in_(pic_ids),
+                        )
+                    ).all()
+                    quality_ids = {
+                        int(row[0]) if isinstance(row, (tuple, list)) else int(row)
+                        for row in quality_rows
+                    }
 
-        if not missing_by_bin:
-            return None
+            missing_by_bin: Dict[int, List[int]] = {}
+            quality_param_indices = {
+                int(param_key) for param_key in QUALITY_PARAM_FIELDS.keys()
+            }
+            picture_param_indices = {
+                int(param_key) for param_key in PICTURE_PARAM_FIELDS.keys()
+            }
 
-        size_bin, ids = max(missing_by_bin.items(), key=lambda item: len(item[1]))
-        remaining_in_bin = len(ids)
-        return size_bin, ids[:batch_size], remaining_in_bin
+            for pic_id, size_bin_index, param_blob in rows:
+                size_bin = int(size_bin_index)
+                vec = LikenessParameterWorker._decode_parameters(
+                    param_blob, len(LikenessParameter)
+                )
+                if param in QUALITY_PARAM_FIELDS:
+                    missing_quality = any(
+                        vec[idx] == LIKENESS_PARAMETER_SENTINEL
+                        for idx in quality_param_indices
+                    )
+                    if missing_quality and int(pic_id) in quality_ids:
+                        missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
+                    continue
+                if param in PICTURE_PARAM_FIELDS:
+                    missing_picture = any(
+                        vec[idx] == LIKENESS_PARAMETER_SENTINEL
+                        for idx in picture_param_indices
+                    )
+                    if missing_picture:
+                        missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
+                    continue
+                if vec[int(param)] == LIKENESS_PARAMETER_SENTINEL:
+                    missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
+
+            if missing_by_bin:
+                size_bin, ids = max(
+                    missing_by_bin.items(), key=lambda item: len(item[1])
+                )
+                remaining_in_bin = len(ids)
+                return size_bin, ids[:batch_size], remaining_in_bin
+
+            offset += scan_limit
 
     @staticmethod
     def _update_size_bin(

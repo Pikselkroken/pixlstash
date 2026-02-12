@@ -487,7 +487,7 @@
                     :key="`unassigned-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
-                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
                     ]"
                     draggable="true"
                     @dragstart="
@@ -553,7 +553,7 @@
                     :key="`face-${group.faceKey}-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
-                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
                     ]"
                     draggable="true"
                     @dragstart="
@@ -609,7 +609,7 @@
                     :key="`hand-${group.handKey}-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
-                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
                     ]"
                     draggable="true"
                     @dragstart="
@@ -732,7 +732,7 @@ import AddToSetControl from "./AddToSetControl.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import {
   faceBoxColor,
-  formatIsoDate,
+  formatUserDate,
   handBoxColor,
   toggleScore,
 } from "../utils/utils.js";
@@ -740,7 +740,7 @@ import {
   dedupeTagList,
   getTagId as tagId,
   getTagLabel as tagLabel,
-  normalizeTagList,
+  TagList,
   tagMatches,
 } from "../utils/tags.js";
 
@@ -750,10 +750,20 @@ const props = defineProps({
   allImages: { type: Array, default: () => [] },
   backendUrl: { type: String, required: true },
   tagUpdate: { type: Object, default: () => ({}) },
+  hiddenTags: { type: Array, default: () => [] },
+  applyTagFilter: { type: Boolean, default: false },
+  dateFormat: { type: String, default: "locale" },
 });
 
-const { open, initialImageId, allImages, backendUrl, tagUpdate } =
-  toRefs(props);
+const {
+  open,
+  initialImageId,
+  allImages,
+  backendUrl,
+  tagUpdate,
+  hiddenTags,
+  applyTagFilter,
+} = toRefs(props);
 
 const image = ref(null);
 const isTagsRefreshing = ref(false);
@@ -834,8 +844,8 @@ let copyResetTimer = null;
 const addingTag = ref(false);
 const newTag = ref("");
 const tagInputRef = ref(null);
-const penalizedTags = ref(new Set());
-const penalizedTagsLoading = ref(false);
+const penalisedTags = ref(new Set());
+const penalisedTagsLoading = ref(false);
 const lastTagUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 
@@ -846,43 +856,43 @@ watch(open, (value) => {
     addToSetControlKey.value += 1;
   } else {
     fetchCharacters();
-    fetchPenalizedTags();
+    fetchPenalisedTags();
   }
 });
 
-async function fetchPenalizedTags() {
-  if (penalizedTagsLoading.value) return;
-  penalizedTagsLoading.value = true;
+async function fetchPenalisedTags() {
+  if (penalisedTagsLoading.value) return;
+  penalisedTagsLoading.value = true;
   try {
     const res = await apiClient.get("/users/me/config");
     let list = [];
-    if (Array.isArray(res.data?.smart_score_penalized_tags)) {
-      list = res.data.smart_score_penalized_tags;
+    if (Array.isArray(res.data?.smart_score_penalised_tags)) {
+      list = res.data.smart_score_penalised_tags;
     } else if (
-      res.data?.smart_score_penalized_tags &&
-      typeof res.data.smart_score_penalized_tags === "object"
+      res.data?.smart_score_penalised_tags &&
+      typeof res.data.smart_score_penalised_tags === "object"
     ) {
-      list = Object.keys(res.data.smart_score_penalized_tags);
+      list = Object.keys(res.data.smart_score_penalised_tags);
     }
-    const normalized = list
+    const d = list
       .map((tag) =>
         String(tag || "")
           .trim()
           .toLowerCase(),
       )
       .filter(Boolean);
-    penalizedTags.value = new Set(normalized);
+    penalisedTags.value = new Set(d);
   } catch (e) {
-    penalizedTags.value = new Set();
+    penalisedTags.value = new Set();
   } finally {
-    penalizedTagsLoading.value = false;
+    penalisedTagsLoading.value = false;
   }
 }
 
-function isPenalizedTag(tag) {
+function isPenalisedTag(tag) {
   const key = tagLabel(tag).trim().toLowerCase();
   if (!key) return false;
-  return penalizedTags.value.has(key);
+  return penalisedTags.value.has(key);
 }
 
 function getFullImageUrl(targetImage = null) {
@@ -942,7 +952,7 @@ function confirmAddTag() {
     cancelAddTag();
     return;
   }
-  const currentTags = normalizeTagList(image.value?.tags);
+  const currentTags = TagList(image.value?.tags);
   if (currentTags.some((tag) => tag.tag === trimmed)) {
     cancelAddTag();
     return;
@@ -1532,7 +1542,7 @@ onMounted(() => {
   window.addEventListener("keydown", handleKeydown);
   window.addEventListener("resize", updateDescriptionScrollState);
   nextTick(updateDescriptionScrollState);
-  fetchPenalizedTags();
+  fetchPenalisedTags();
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
       scheduleOverlayDimsUpdate();
@@ -1681,7 +1691,7 @@ async function fetchOverlayMetadata(imageId) {
     if (Object.prototype.hasOwnProperty.call(data, "smartScore")) {
       merged.smartScore = data.smartScore;
     }
-    const dataTags = normalizeTagList(data.tags);
+    const dataTags = TagList(data.tags);
     if (data.tags !== undefined) {
       merged.tags = dedupeTagList(dataTags);
     }
@@ -1812,7 +1822,7 @@ async function fetchFaceTagsForFaces(faces, options = {}) {
         );
         const payload = await res.data;
         const tags = Array.isArray(payload) ? payload : payload?.tags;
-        return [face.id, normalizeTagList(tags)];
+        return [face.id, TagList(tags)];
       } catch (e) {
         return [face.id, []];
       } finally {
@@ -1853,7 +1863,7 @@ async function fetchHandTagsForHands(hands, options = {}) {
         );
         const payload = await res.data;
         const tags = Array.isArray(payload) ? payload : payload?.tags;
-        return [hand.id, normalizeTagList(tags)];
+        return [hand.id, TagList(tags)];
       } catch (e) {
         return [hand.id, []];
       } finally {
@@ -1874,7 +1884,7 @@ function ensureTagInImage(tag) {
   if (!image.value) return;
   const label = tagLabel(tag);
   if (!label) return;
-  const tags = normalizeTagList(image.value.tags);
+  const tags = TagList(image.value.tags);
   if (!tags.some((entry) => entry.tag === label)) {
     const next = dedupeTagList([...tags, { id: null, tag: label }]);
     image.value = { ...image.value, tags: next };
@@ -1895,7 +1905,7 @@ async function assignTagToFace(face, tag) {
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   faceTagMap.value = {
     ...faceTagMap.value,
-    [face.id]: normalizeTagList(tags),
+    [face.id]: TagList(tags),
   };
 }
 
@@ -1910,7 +1920,7 @@ async function removeTagFromFace(face, tag, options = {}) {
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   faceTagMap.value = {
     ...faceTagMap.value,
-    [face.id]: normalizeTagList(tags),
+    [face.id]: TagList(tags),
   };
   if (!options.skipRefresh && image.value?.id) {
     emit("overlay-change", {
@@ -1933,7 +1943,7 @@ async function assignTagToHand(hand, tag) {
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   handTagMap.value = {
     ...handTagMap.value,
-    [hand.id]: normalizeTagList(tags),
+    [hand.id]: TagList(tags),
   };
 }
 
@@ -1948,7 +1958,7 @@ async function removeTagFromHand(hand, tag, options = {}) {
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   handTagMap.value = {
     ...handTagMap.value,
-    [hand.id]: normalizeTagList(tags),
+    [hand.id]: TagList(tags),
   };
   if (!options.skipRefresh && image.value?.id) {
     emit("overlay-change", {
@@ -2322,13 +2332,13 @@ watch(
 function handleTagBackspace(event) {
   if (event.key !== "Backspace") return;
   if (newTag.value.trim()) return;
-  const tags = normalizeTagList(image.value?.tags);
+  const tags = TagList(image.value?.tags);
   if (!tags.length) return;
   removeTag(tags[tags.length - 1]);
 }
 
 const metadataEntries = computed(() => {
-  const base = normalizeMetadata(image.value?.metadata);
+  const base = Metadata(image.value?.metadata);
   const entries = Object.entries(stripComfyMetadata(base) || {});
   return entries.map(([key, value]) => ({ key, value }));
 });
@@ -2352,7 +2362,7 @@ const faceTagGroups = computed(() => {
       face,
       faceKey: face?.id ?? `face-${idx}`,
       label,
-      tags: faceTagMap.value?.[face.id] || [],
+      tags: filterHiddenTags(TagList(faceTagMap.value?.[face.id])),
       color: faceBoxColor(idx),
     };
   });
@@ -2364,25 +2374,47 @@ const handTagGroups = computed(() => {
     hand,
     handKey: hand?.id ?? `hand-${idx}`,
     label: handLabel(hand, idx),
-    tags: handTagMap.value?.[hand.id] || [],
+    tags: filterHiddenTags(TagList(handTagMap.value?.[hand.id])),
     color: handBoxColor(idx),
   }));
 });
 
+const hiddenTagSet = computed(() => {
+  const values = Array.isArray(hiddenTags.value) ? hiddenTags.value : [];
+  const cleaned = values
+    .map((tag) =>
+      String(tag || "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+  return new Set(cleaned);
+});
+
+function filterHiddenTags(tags) {
+  if (!applyTagFilter.value) return tags;
+  const set = hiddenTagSet.value;
+  if (!set || set.size === 0) return tags;
+  return (tags || []).filter((tag) => {
+    const key = tagLabel(tag).trim().toLowerCase();
+    return key && !set.has(key);
+  });
+}
+
 const imageTags = computed(() => {
-  return dedupeTagList(normalizeTagList(image.value?.tags));
+  return filterHiddenTags(dedupeTagList(TagList(image.value?.tags)));
 });
 
 const faceTags = computed(() => {
   const values = Object.values(faceTagMap.value || {});
-  const tags = values.flatMap((list) => normalizeTagList(list));
-  return dedupeTagList(tags);
+  const tags = values.flatMap((list) => TagList(list));
+  return filterHiddenTags(dedupeTagList(tags));
 });
 
 const handTags = computed(() => {
   const values = Object.values(handTagMap.value || {});
-  const tags = values.flatMap((list) => normalizeTagList(list));
-  return dedupeTagList(tags);
+  const tags = values.flatMap((list) => TagList(list));
+  return filterHiddenTags(dedupeTagList(tags));
 });
 
 const allImageTags = computed(() => {
@@ -2539,7 +2571,7 @@ const pictureInfoEntries = computed(() => {
   if (createdAt) {
     entries.push({
       label: "Created",
-      value: formatIsoDate(createdAt),
+      value: formatUserDate(createdAt, props.dateFormat),
     });
   }
 
@@ -2582,7 +2614,7 @@ const pictureInfoEntries = computed(() => {
 });
 
 const comfyMetadata = computed(() => {
-  const base = normalizeMetadata(image.value?.metadata);
+  const base = Metadata(image.value?.metadata);
   if (!base || !Object.keys(base).length) return null;
 
   const png = base.png && typeof base.png === "object" ? base.png : {};
@@ -2615,7 +2647,7 @@ const comfyMetadata = computed(() => {
   };
 });
 
-function normalizeMetadata(input) {
+function Metadata(input) {
   if (!input || typeof input !== "object") return {};
   const output = {};
   Object.entries(input).forEach(([key, value]) => {
@@ -2686,13 +2718,13 @@ function parseMetadataValue(value) {
 
 function findFirstComfyWorkflow(values) {
   for (const value of values) {
-    const candidate = normalizeComfyWorkflowCandidate(value);
+    const candidate = ComfyWorkflowCandidate(value);
     if (isComfyWorkflow(candidate)) return candidate;
   }
   return null;
 }
 
-function normalizeComfyWorkflowCandidate(value) {
+function ComfyWorkflowCandidate(value) {
   if (!value) return null;
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -2710,7 +2742,7 @@ function normalizeComfyWorkflowCandidate(value) {
   }
   if (value && typeof value === "object") {
     if (value.workflow) {
-      return normalizeComfyWorkflowCandidate(value.workflow) || value;
+      return ComfyWorkflowCandidate(value.workflow) || value;
     }
     return value;
   }
@@ -2980,12 +3012,12 @@ async function removeAllTag(tag) {
   const imageMatch = imageTags.value.find((entry) => entry.tag === label);
   if (imageMatch && imageMatch.id != null) {
     if (image.value && Array.isArray(image.value.tags)) {
-      const current = normalizeTagList(image.value.tags);
+      const current = TagList(image.value.tags);
       image.value.tags = current.filter((entry) => entry.tag !== label);
     }
     didUpdate = true;
   } else if (image.value && Array.isArray(image.value.tags)) {
-    const current = normalizeTagList(image.value.tags);
+    const current = TagList(image.value.tags);
     const next = current.filter((entry) => entry.tag !== label);
     if (next.length !== current.length) {
       image.value.tags = next;
@@ -2995,7 +3027,7 @@ async function removeAllTag(tag) {
 
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
   for (const face of faces) {
-    const tags = normalizeTagList(faceTagMap.value?.[face.id]);
+    const tags = TagList(faceTagMap.value?.[face.id]);
     const nextTags = tags.filter((entry) => entry.tag !== label);
     if (nextTags.length !== tags.length) {
       faceTagMap.value = {
@@ -3008,7 +3040,7 @@ async function removeAllTag(tag) {
 
   const hands = Array.isArray(handBboxes.value) ? handBboxes.value : [];
   for (const hand of hands) {
-    const tags = normalizeTagList(handTagMap.value?.[hand.id]);
+    const tags = TagList(handTagMap.value?.[hand.id]);
     const nextTags = tags.filter((entry) => entry.tag !== label);
     if (nextTags.length !== tags.length) {
       handTagMap.value = {
@@ -3044,7 +3076,7 @@ function removeTag(tag) {
     console.warn("Tag id is required to remove a picture tag.", tag);
     return;
   }
-  const current = normalizeTagList(image.value.tags);
+  const current = TagList(image.value.tags);
   const label = tagLabel(tag);
   if (!label) return;
   const next = current.filter((entry) => entry.tag !== label);
@@ -3073,7 +3105,7 @@ function downloadComfyWorkflow(workflow) {
 .image-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.92);
+  background: rgba(var(--v-theme-scrim), 0.92);
   z-index: 1000;
 }
 
@@ -3117,7 +3149,7 @@ function downloadComfyWorkflow(workflow) {
 .overlay-close {
   border: none;
   background: rgba(var(--v-theme-primary), 0.7);
-  color: #fff;
+  color: rgb(var(--v-theme-on-primary));
   padding: 6px 14px;
   border-radius: 4px;
   display: flex;
@@ -3151,7 +3183,7 @@ function downloadComfyWorkflow(workflow) {
 .overlay-desc-teaser {
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
   text-align: left;
   font-size: 0.9rem;
   white-space: nowrap;
@@ -3296,8 +3328,8 @@ function downloadComfyWorkflow(workflow) {
   height: auto;
   object-fit: contain;
   border-radius: 12px;
-  background: #111;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  background: rgb(var(--v-theme-dark-surface));
+  box-shadow: 0 12px 30px rgba(var(--v-theme-shadow), 0.45);
   position: relative;
   z-index: 1;
 }
@@ -3309,9 +3341,9 @@ function downloadComfyWorkflow(workflow) {
   width: 44px;
   height: 44px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(0, 0, 0, 0.35);
-  color: #fff;
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
+  background: rgba(var(--v-theme-shadow), 0.35);
+  color: rgb(var(--v-theme-on-dark-surface));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3339,8 +3371,8 @@ function downloadComfyWorkflow(workflow) {
   right: 16px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+  background: rgba(var(--v-theme-shadow), 0.55);
+  color: rgb(var(--v-theme-on-dark-surface));
   font-size: 0.75rem;
   transition: opacity 0.2s ease;
   z-index: 4;
@@ -3360,8 +3392,8 @@ function downloadComfyWorkflow(workflow) {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+  background: rgba(var(--v-theme-shadow), 0.55);
+  color: rgb(var(--v-theme-on-dark-surface));
   border-radius: 999px;
   font-size: 0.85rem;
   z-index: 4;
@@ -3374,7 +3406,7 @@ function downloadComfyWorkflow(workflow) {
   bottom: 0;
   width: var(--filmstrip-rail-width, var(--rail-open-width));
   background: rgba(var(--v-theme-dark-surface), 0.9);
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid rgba(var(--v-theme-on-dark-surface), 0.08);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3418,8 +3450,8 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .filmstrip-thumb.active {
-  border-color: rgba(255, 183, 77, 0.9);
-  box-shadow: 0 0 0 2px rgba(255, 183, 77, 0.35);
+  border-color: rgba(var(--v-theme-accent), 0.9);
+  box-shadow: 0 0 0 2px rgba(var(--v-theme-accent), 0.35);
 }
 
 .filmstrip-thumb img {
@@ -3435,8 +3467,8 @@ function downloadComfyWorkflow(workflow) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.85);
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+  color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
 
 .overlay-sidebar {
@@ -3485,7 +3517,7 @@ function downloadComfyWorkflow(workflow) {
   justify-content: space-between;
   font-weight: 600;
   margin-bottom: 8px;
-  color: #fff;
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .section-meta-group {
@@ -3497,7 +3529,7 @@ function downloadComfyWorkflow(workflow) {
 .section-meta-btn {
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
   padding: 2px;
   display: inline-flex;
   align-items: center;
@@ -3519,16 +3551,16 @@ function downloadComfyWorkflow(workflow) {
 
 .section-meta {
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .description-editor textarea {
   width: 100%;
   min-height: 120px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(0, 0, 0, 0.35);
-  color: #fff;
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
+  background: rgba(var(--v-theme-shadow), 0.35);
+  color: rgb(var(--v-theme-on-dark-surface));
   padding: 6px;
   resize: vertical;
 }
@@ -3557,8 +3589,8 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .overlay-tag {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+  color: rgb(var(--v-theme-on-dark-surface));
   border-radius: 6px;
   padding: 1px 2px 1px 6px;
   font-size: 0.72rem;
@@ -3571,7 +3603,7 @@ function downloadComfyWorkflow(workflow) {
   cursor: pointer;
 }
 
-.overlay-tag--penalized {
+.overlay-tag--penalised {
   color: rgb(var(--v-theme-error));
   border: 1px solid rgba(var(--v-theme-error), 0.6);
   background: rgba(var(--v-theme-error), 0.15);
@@ -3594,9 +3626,9 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .tag-add-input {
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #fff;
+  background: rgba(var(--v-theme-shadow), 0.4);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
   border-radius: 999px;
   padding: 1px 6px;
   font-size: 0.7rem;
@@ -3610,8 +3642,8 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .face-assign-card {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(var(--v-theme-on-dark-surface), 0.06);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
   border-radius: 6px;
   padding: 4px;
 }
@@ -3652,7 +3684,7 @@ function downloadComfyWorkflow(workflow) {
 
 .face-assign-label {
   font-size: 0.78rem;
-  color: rgba(255, 255, 255, 0.9);
+  color: rgba(var(--v-theme-on-dark-surface), 0.9);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3660,9 +3692,9 @@ function downloadComfyWorkflow(workflow) {
 
 .face-assign-select {
   width: 100%;
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #fff;
+  background: rgba(var(--v-theme-shadow), 0.45);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
+  color: rgb(var(--v-theme-on-dark-surface));
   border-radius: 8px;
   padding: 2px 6px;
   font-size: 0.75rem;
@@ -3675,13 +3707,13 @@ function downloadComfyWorkflow(workflow) {
 
 .face-assign-empty {
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
   padding: 4px 6px;
 }
 
 .metadata-empty {
   font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .metadata-list {
@@ -3696,13 +3728,13 @@ function downloadComfyWorkflow(workflow) {
   gap: 8px;
   padding: 10px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--v-theme-on-dark-surface), 0.06);
 }
 
 .metadata-info-header {
   font-size: 0.84rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
 
 .metadata-info-grid {
@@ -3720,12 +3752,12 @@ function downloadComfyWorkflow(workflow) {
 
 .metadata-info-label {
   font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .metadata-info-value {
   font-size: 0.8rem;
-  color: #fff;
+  color: rgb(var(--v-theme-on-dark-surface));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3737,7 +3769,7 @@ function downloadComfyWorkflow(workflow) {
   gap: 10px;
   padding: 10px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--v-theme-on-dark-surface), 0.06);
 }
 
 .metadata-comfy-header {
@@ -3746,17 +3778,17 @@ function downloadComfyWorkflow(workflow) {
   gap: 4px;
   font-weight: 600;
   font-size: 0.74rem;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
 
 .metadata-comfy-subtitle {
   font-size: 0.78rem;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.65);
+  color: rgba(var(--v-theme-on-dark-surface), 0.65);
 }
 
 .metadata-comfy-details {
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(var(--v-theme-shadow), 0.25);
   border-radius: 8px;
   padding: 8px 10px;
 }
@@ -3764,7 +3796,7 @@ function downloadComfyWorkflow(workflow) {
 .metadata-comfy-details summary {
   cursor: pointer;
   font-size: 0.78rem;
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(var(--v-theme-on-dark-surface), 0.75);
 }
 
 .metadata-comfy-details summary::-webkit-details-marker {
@@ -3791,7 +3823,7 @@ function downloadComfyWorkflow(workflow) {
   gap: 2px;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(var(--v-theme-on-dark-surface), 0.75);
   font-size: 0.72rem;
   padding: 2px 2px;
   border-radius: 4px;
@@ -3799,8 +3831,8 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .metadata-comfy-workflow-action:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  background: rgba(var(--v-theme-on-dark-surface), 0.12);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .metadata-comfy-textarea {
@@ -3811,9 +3843,9 @@ function downloadComfyWorkflow(workflow) {
   min-height: 160px;
   max-height: 280px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(0, 0, 0, 0.35);
-  color: #fff;
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
+  background: rgba(var(--v-theme-shadow), 0.35);
+  color: rgb(var(--v-theme-on-dark-surface));
   font-size: 0.74rem;
   line-height: 1.4;
   padding: 8px;
@@ -3832,7 +3864,7 @@ function downloadComfyWorkflow(workflow) {
   grid-template-columns: 1fr auto;
   gap: 8px;
   align-items: start;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(var(--v-theme-on-dark-surface), 0.05);
   padding: 8px;
   border-radius: 8px;
 }
@@ -3840,12 +3872,12 @@ function downloadComfyWorkflow(workflow) {
 .metadata-key {
   font-weight: 600;
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
 
 .metadata-value {
   font-size: 0.8rem;
-  color: #fff;
+  color: rgb(var(--v-theme-on-dark-surface));
   word-break: break-word;
 }
 

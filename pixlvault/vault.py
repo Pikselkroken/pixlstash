@@ -293,6 +293,26 @@ class Vault:
         worker = self._workers.get(worker_type)
         return worker is not None and worker.is_alive()
 
+    def get_worker_progress(self) -> dict:
+        progress = {}
+        for worker_type in WorkerType.all():
+            worker = self._workers.get(worker_type)
+            if worker:
+                snapshot = worker.get_progress()
+                snapshot["running"] = worker.is_alive()
+            else:
+                snapshot = {
+                    "label": "uninitialized",
+                    "current": 0,
+                    "total": 0,
+                    "remaining": 0,
+                    "updated_at": None,
+                    "status": "uninitialized",
+                    "running": False,
+                }
+            progress[worker_type.value] = snapshot
+        return progress
+
     def import_default_data(self, add_tagger_test_images: bool = False):
         """
         Import default data into the vault.

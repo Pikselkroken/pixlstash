@@ -1,8 +1,13 @@
+import json
+import os
 import sys
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import selectinload
-from sqlmodel import select
+from sqlmodel import Session, select
+from sqlalchemy import desc, func, nullslast
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models import (
@@ -11,21 +16,51 @@ from pixlvault.db_models import (
     PictureSet,
     PictureSetMember,
     SortMechanism,
+    Tag,
 )
 from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_scoring import (
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
-    get_smart_score_penalized_tags_from_request,
+    get_smart_score_penalised_tags_from_request,
 )
-from pixlvault.utils import safe_model_dict
+from pixlvault.picture_utils import PictureUtils
+from pixlvault.utils import safe_model_dict, _normalize_hidden_tags
 
 logger = get_logger(__name__)
 
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
+
+    def _get_hidden_tags_from_request(request: Request) -> list[str]:
+        try:
+            user = server.auth.get_user_for_request(request)
+        except HTTPException:
+            user = server.auth.get_user()
+        if not user:
+            return []
+        if not getattr(user, "apply_tag_filter", False):
+            return []
+        normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
+        return normalized or []
+
+    def _filter_hidden_picture_ids(
+        session, picture_ids: list[int], hidden_tags: list[str]
+    ) -> list[int]:
+        if not picture_ids or not hidden_tags:
+            return picture_ids
+        hidden_tag_set = {str(tag).strip().lower() for tag in hidden_tags if tag}
+        rows = session.exec(
+            select(Tag.picture_id).where(
+                Tag.picture_id.in_(picture_ids),
+                Tag.tag.is_not(None),
+                func.lower(Tag.tag).in_(hidden_tag_set),
+            )
+        ).all()
+        hidden_ids = {row for row in rows if row is not None}
+        return [pic_id for pic_id in picture_ids if pic_id not in hidden_ids]
 
     def _find_reference_character_id_for_set(picture_set_id):
         # Find reference_character_id if this is a reference set
@@ -45,7 +80,9 @@ def create_router(server) -> APIRouter:
         )
 
     @router.get("/picture_sets")
-    async def get_picture_sets():
+    async def get_picture_sets(request: Request):
+        hidden_tags = _get_hidden_tags_from_request(request)
+
         def fetch_sets(session):
             sets = session.exec(
                 select(PictureSet).options(selectinload(PictureSet.reference_character))
@@ -61,9 +98,30 @@ def create_router(server) -> APIRouter:
                         Picture.imported_at.is_not(None),
                     )
                 ).all()
-                count = len({m for m in members if m is not None})
+                filtered_ids = _filter_hidden_picture_ids(
+                    session,
+                    [m for m in members if m is not None],
+                    hidden_tags,
+                )
+                count = len(set(filtered_ids))
                 set_dict = safe_model_dict(s)
                 set_dict["picture_count"] = count
+                top_picture_ids = []
+                if filtered_ids:
+                    top_rows = session.exec(
+                        select(Picture.id)
+                        .where(Picture.id.in_(filtered_ids))
+                        .order_by(
+                            nullslast(desc(Picture.score)),
+                            nullslast(desc(Picture.aesthetic_score)),
+                            nullslast(desc(Picture.imported_at)),
+                            desc(Picture.id),
+                        )
+                        .limit(3)
+                    ).all()
+                    top_picture_ids = [row for row in top_rows if row is not None]
+                set_dict["top_picture_ids"] = top_picture_ids
+                set_dict["thumbnail_url"] = f"/picture_sets/{s.id}/thumbnail"
                 result.append(set_dict)
             return result
 
@@ -89,6 +147,203 @@ def create_router(server) -> APIRouter:
             create_set, name, description, priority=DBPriority.IMMEDIATE
         )
         return {"status": "success", "picture_set": set_dict}
+
+    @router.get("/picture_sets/{id}/thumbnail")
+    async def get_picture_set_thumbnail(id: int, request: Request):
+        thumbnail_cache_version = 16
+        cache_dir = os.path.join(server.vault.image_root, "tmp", "set_thumbnails")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, f"picture_set_{id}.png")
+        meta_path = os.path.join(cache_dir, f"picture_set_{id}.json")
+
+        def fetch_top_picture_ids(session: Session, set_id: int):
+            rows = session.exec(
+                select(Picture.id)
+                .join(PictureSetMember, PictureSetMember.picture_id == Picture.id)
+                .where(
+                    PictureSetMember.set_id == set_id,
+                    Picture.deleted.is_(False),
+                    Picture.imported_at.is_not(None),
+                )
+                .order_by(
+                    nullslast(desc(Picture.score)),
+                    nullslast(desc(Picture.aesthetic_score)),
+                    nullslast(desc(Picture.imported_at)),
+                    desc(Picture.id),
+                )
+                .limit(3)
+            ).all()
+            return [row for row in rows if row is not None]
+
+        top_ids = server.vault.db.run_immediate_read_task(
+            fetch_top_picture_ids, set_id=id
+        )
+        if not top_ids:
+            raise HTTPException(status_code=404, detail="No pictures found for set")
+
+        if os.path.exists(cache_path) and os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as handle:
+                    meta = json.load(handle)
+                if (
+                    meta.get("version") == thumbnail_cache_version
+                    and meta.get("picture_ids") == top_ids
+                ):
+                    return FileResponse(cache_path, media_type="image/png")
+            except Exception:
+                pass
+
+        def fetch_picture_paths(session: Session, picture_ids: list[int]):
+            rows = session.exec(
+                select(Picture.id, Picture.file_path).where(Picture.id.in_(picture_ids))
+            ).all()
+            return {int(row[0]): row[1] for row in rows if row and row[0] is not None}
+
+        path_map = server.vault.db.run_immediate_read_task(
+            fetch_picture_paths, picture_ids=top_ids
+        )
+        target_size = 64
+        work_size = 256
+        card_height = int(target_size * 0.75)
+        card_width = max(1, int(card_height * 0.7))
+        card_size = (card_width, card_height)
+        angles = [20, 5, -20]
+        offsets = [(0, 0), (0, 0), (0, -4)]
+        base = Image.new("RGBA", (work_size, work_size), (0, 0, 0, 0))
+        pivot_x = work_size // 2
+        pivot_y = work_size // 2
+
+        def build_card(image: Image.Image | None):
+            if image is None:
+                card = Image.new("RGBA", card_size, (255, 255, 255, 255))
+            else:
+                card = ImageOps.fit(image, card_size, Image.LANCZOS)
+                if card.mode != "RGBA":
+                    card = card.convert("RGBA")
+            mask = Image.new("L", card_size, 0)
+            draw = ImageDraw.Draw(mask)
+            draw.rounded_rectangle(
+                (0, 0, card_size[0], card_size[1]), radius=6, fill=255
+            )
+            card.putalpha(mask)
+            draw = ImageDraw.Draw(card)
+            draw.rounded_rectangle(
+                (-2, -2, card_size[0] + 1, card_size[1] + 1),
+                radius=7,
+                outline=(170, 170, 170, 255),
+                width=2,
+            )
+            return card
+
+        cards = []
+        for picture_id in top_ids:
+            file_path = path_map.get(picture_id)
+            resolved_path = (
+                PictureUtils.resolve_picture_path(server.vault.image_root, file_path)
+                if file_path
+                else None
+            )
+            if not resolved_path:
+                cards.append(build_card(None))
+                continue
+            try:
+                img = Image.open(resolved_path).convert("RGB")
+            except Exception:
+                img = None
+            cards.append(build_card(img))
+
+        while len(cards) < 3:
+            cards.append(build_card(None))
+
+        # Map highest score to right/front, then middle, then left/back
+        right_card = cards[0]
+        middle_card = cards[1]
+        left_card = cards[2]
+        cards = [left_card, middle_card, right_card]
+
+        # Layering: left (bottom), middle, right (top)
+        layer_order = [0, 1, 2]
+
+        for layer_index, card_index in enumerate(layer_order):
+            card = cards[card_index]
+            angle = angles[card_index]
+            offset = offsets[card_index]
+            layer = Image.new("RGBA", (work_size, work_size), (0, 0, 0, 0))
+            paste_x = pivot_x + offset[0]
+            paste_y = pivot_y - card_size[1] + offset[1]
+            layer.paste(card, (paste_x, paste_y), card)
+            rotated_layer = layer.rotate(
+                angle,
+                resample=Image.BICUBIC,
+                expand=False,
+                center=(pivot_x, pivot_y),
+                fillcolor=(0, 0, 0, 0),
+            )
+            base.alpha_composite(rotated_layer)
+
+        alpha = base.split()[-1]
+        bbox = alpha.getbbox()
+        if bbox:
+            pad = 0
+            left = max(0, bbox[0] - pad)
+            top = max(0, bbox[1] - pad)
+            right = min(work_size, bbox[2] + pad)
+            bottom = min(work_size, bbox[3] + pad)
+            base = base.crop((left, top, right, bottom))
+
+        # Add a subtle drop shadow behind the whole fan
+        shadow_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        shadow_alpha = base.split()[-1]
+        shadow_layer.putalpha(shadow_alpha)
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=4))
+        shadow_tint = Image.new("RGBA", base.size, (0, 0, 0, 90))
+        shadow = Image.composite(
+            shadow_tint,
+            Image.new("RGBA", base.size, (0, 0, 0, 0)),
+            shadow_layer.split()[-1],
+        )
+        fan_with_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        fan_with_shadow.alpha_composite(shadow, (2, 3))
+        fan_with_shadow.alpha_composite(base, (0, 0))
+        base = fan_with_shadow
+
+        shadow_alpha = base.split()[-1]
+        shadow_bbox = shadow_alpha.getbbox()
+        if shadow_bbox:
+            shadow_pad = 0
+            left = max(0, shadow_bbox[0] - shadow_pad)
+            top = max(0, shadow_bbox[1] - shadow_pad)
+            right = min(base.width, shadow_bbox[2] + shadow_pad)
+            bottom = min(base.height, shadow_bbox[3] + shadow_pad)
+            base = base.crop((left, top, right, bottom))
+
+        final_img = ImageOps.fit(
+            base,
+            (target_size, target_size),
+            Image.LANCZOS,
+            centering=(0.5, 0.5),
+        )
+
+        try:
+            final_img.save(cache_path, format="PNG")
+            try:
+                with open(meta_path, "w", encoding="utf-8") as handle:
+                    json.dump(
+                        {
+                            "version": thumbnail_cache_version,
+                            "picture_ids": top_ids,
+                        },
+                        handle,
+                    )
+            except Exception:
+                pass
+            return FileResponse(cache_path, media_type="image/png")
+        except Exception:
+            from io import BytesIO
+
+            buf = BytesIO()
+            final_img.save(buf, format="PNG")
+            return Response(content=buf.getvalue(), media_type="image/png")
 
     @router.get("/picture_sets/{id}")
     async def get_picture_set(
@@ -138,13 +393,22 @@ def create_router(server) -> APIRouter:
         )
         if not picture_set:
             raise HTTPException(status_code=404, detail="Picture set not found")
+        hidden_tags = _get_hidden_tags_from_request(request)
+
+        def filter_hidden_ids(session, ids):
+            return _filter_hidden_picture_ids(session, ids, hidden_tags)
+
+        picture_ids = server.vault.db.run_immediate_read_task(
+            filter_hidden_ids, picture_ids
+        )
+
         if info:
             set_dict = picture_set.dict()
             set_dict["picture_count"] = len(picture_ids)
             return set_dict
 
         if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
-            penalized_tags = get_smart_score_penalized_tags_from_request(
+            penalised_tags = get_smart_score_penalised_tags_from_request(
                 server, request
             )
             pictures = find_pictures_by_smart_score(
@@ -154,7 +418,7 @@ def create_router(server) -> APIRouter:
                 sys.maxsize,
                 descending,
                 candidate_ids=picture_ids,
-                penalized_tags=penalized_tags,
+                penalised_tags=penalised_tags,
             )
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 

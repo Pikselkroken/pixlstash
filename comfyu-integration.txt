@@ -1,0 +1,31 @@
+ComfyUI integration sketch (PixlVault)
+
+1) Workflow storage & validation
+- Users upload T2I workflow JSON in Settings (store per-user in DB + file store).
+- Validate JSON structure and whitelist nodes.
+- Require a custom node (pixlvault_import) to be present; reject if missing.
+
+2) UI/UX flow
+- ImageOverlay: dropdown “Run ComfyUI workflow on Image”.
+- Populate from the user’s saved workflows.
+- When a workflow is selected, show a parameter form derived from pixlvault_import inputs.
+
+3) Run pipeline
+- Upload image to ComfyUI (/upload/image).
+- Inject returned filename + user parameters into workflow JSON.
+- POST workflow to /prompt.
+- Track progress via /ws (WebSocket) or poll /history/{prompt_id}.
+- Fetch outputs via /view?filename=...&type=output.
+
+4) Custom nodes
+- pixlvault_import:
+  - Standardized inputs (image + user-defined params).
+  - Allows auto-generated UI and validation.
+- pixlvault_export:
+  - Upload outputs back to PixlVault, enabling round-trip workflows.
+
+5) Benefits
+- Stable contract between PixlVault and ComfyUI.
+- Safe validation surface for user workflows.
+- Easy parameter UI generation.
+- Optional automated output ingestion.

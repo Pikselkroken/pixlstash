@@ -313,6 +313,7 @@ async function startImport(files, options = {}) {
       importedCount,
       total: files.length,
       phase: importPhase.value,
+      results: allResults,
     });
   } catch (error) {
     const message = error?.message || String(error);
@@ -376,7 +377,7 @@ defineExpose({ startImport });
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(32, 32, 32, 0.65);
+  background: rgba(var(--v-theme-scrim), 0.65);
   z-index: 99999;
   display: flex;
   align-items: center;
@@ -385,11 +386,11 @@ defineExpose({ startImport });
 }
 
 .import-progress-content {
-  background: #222;
-  color: #fff8e1;
+  background: rgb(var(--v-theme-dark-surface));
+  color: rgb(var(--v-theme-on-dark-surface));
   padding: 32px 48px;
   border-radius: 16px;
-  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.65);
+  box-shadow: 0 4px 32px rgba(var(--v-theme-shadow), 0.65);
   min-width: 320px;
   display: flex;
   flex-direction: column;
@@ -405,7 +406,7 @@ defineExpose({ startImport });
 .import-progress-bar-bg {
   width: 100%;
   height: 18px;
-  background: #444;
+  background: rgba(var(--v-theme-on-surface), 0.2);
   border-radius: 9px;
   overflow: hidden;
   margin-bottom: 16px;
@@ -413,7 +414,11 @@ defineExpose({ startImport });
 
 .import-progress-bar {
   height: 100%;
-  background: linear-gradient(90deg, #ff9800 0%, #ffc107 100%);
+  background: linear-gradient(
+    90deg,
+    rgb(var(--v-theme-warning)) 0%,
+    rgb(var(--v-theme-accent)) 100%
+  );
   border-radius: 9px 0 0 9px;
   transition: width 0.2s;
 }
@@ -424,7 +429,7 @@ defineExpose({ startImport });
 }
 
 .import-progress-error {
-  color: #ff5252;
+  color: rgb(var(--v-theme-error));
   margin-left: 12px;
 }
 
@@ -433,24 +438,24 @@ defineExpose({ startImport });
   padding: 8px 18px;
   border-radius: 999px;
   border: none;
-  background: #ff7043;
-  color: #fff;
+  background: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-on-error));
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s;
 }
 
 .cancel-button:hover {
-  background: #ff5722;
+  background: rgba(var(--v-theme-error), 0.85);
 }
 
 .cancel-button:focus {
-  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline: 2px solid rgba(var(--v-theme-on-error), 0.5);
   outline-offset: 2px;
 }
 
 .cancel-button:disabled {
-  background: #999;
+  background: rgba(var(--v-theme-on-surface), 0.4);
   cursor: not-allowed;
 }
 </style>

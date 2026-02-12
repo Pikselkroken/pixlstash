@@ -440,10 +440,13 @@ class AuthService:
             "/check-session",
             "/logout",
         ]
+        excluded_prefixes = ["/assets/"]
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        if request.url.path not in excluded_paths:
+        if request.url.path not in excluded_paths and not any(
+            request.url.path.startswith(prefix) for prefix in excluded_prefixes
+        ):
             session_id = request.cookies.get("session_id")
             self._logger.debug("Retrieved session_id from cookies: %s", session_id)
             self._logger.debug(

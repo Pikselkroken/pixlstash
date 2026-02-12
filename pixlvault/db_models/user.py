@@ -20,17 +20,22 @@ class User(SQLModel, table=True):
     sort: Optional[str] = Field(default=SortMechanism.Keys.DATE.name)
     descending: bool = Field(default=True)
     columns: Optional[int] = Field(default=4)
+    sidebar_thumbnail_size: Optional[int] = Field(default=48)
     show_stars: bool = Field(default=True)
     show_face_bboxes: Optional[bool] = Field(default=False)
     show_hand_bboxes: Optional[bool] = Field(default=False)
     show_format: Optional[bool] = Field(default=True)
     show_resolution: Optional[bool] = Field(default=True)
     show_problem_icon: Optional[bool] = Field(default=True)
+    date_format: Optional[str] = Field(default="locale")
+    theme_mode: Optional[str] = Field(default="light")
     similarity_character: Optional[int] = Field(default=None)
     stack_strictness: Optional[float] = Field(default=0.92)
-    smart_score_penalized_tags: Optional[str] = Field(
+    smart_score_penalised_tags: Optional[str] = Field(
         default_factory=lambda: json.dumps(DEFAULT_SMART_SCORE_PENALIZED_TAGS)
     )
+    hidden_tags: Optional[str] = Field(default_factory=lambda: json.dumps([]))
+    apply_tag_filter: bool = Field(default=False)
     auto_scrapheap_smart_score_threshold: Optional[float] = Field(default=1.25)
     auto_scrapheap_lookback_minutes: Optional[int] = Field(default=30)
 

@@ -4,6 +4,7 @@ import time
 import cv2
 
 from sqlmodel import Session, select, delete
+from sqlalchemy import func
 
 from pixlvault.database import DBPriority
 from pixlvault.event_types import EventType
@@ -54,6 +55,19 @@ class QualityWorker(BaseWorker):
                     return pics
 
                 pics_missing_quality = self._db.run_task(find_pictures_missing_quality)
+                total_pics = self._db.run_immediate_read_task(
+                    self._count_total_pictures
+                )
+                total_missing = self._db.run_immediate_read_task(
+                    self._count_missing_quality
+                )
+                total = max(int(total_pics or 0), 0)
+                missing = max(int(total_missing or 0), 0)
+                self._set_progress(
+                    label="quality_scored",
+                    current=max(total - missing, 0),
+                    total=total,
+                )
                 logger.info(
                     f"Found {len(pics_missing_quality)} pictures missing quality metrics."
                 )
@@ -253,6 +267,28 @@ class QualityWorker(BaseWorker):
 
         return groups
 
+    @staticmethod
+    def _count_total_pictures(session: Session) -> int:
+        result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_quality(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .outerjoin(
+                Quality,
+                (Quality.picture_id == Picture.id) & (Quality.face_id.is_(None)),
+            )
+            .where(Quality.id.is_(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
     def _calculate_quality(
         self,
         pics: List[Picture],
@@ -403,6 +439,18 @@ class FaceQualityWorker(BaseWorker):
 
                 faces_missing_quality = self._db.run_task(find_faces_missing_quality)
 
+                total_faces = self._db.run_immediate_read_task(self._count_total_faces)
+                total_missing = self._db.run_immediate_read_task(
+                    self._count_missing_face_quality
+                )
+                total = max(int(total_faces or 0), 0)
+                missing = max(int(total_missing or 0), 0)
+                self._set_progress(
+                    label="face_quality_scored",
+                    current=max(total - missing, 0),
+                    total=total,
+                )
+
                 logger.debug(
                     f"Found {len(faces_missing_quality)} faces missing face quality metrics."
                 )
@@ -510,6 +558,28 @@ class FaceQualityWorker(BaseWorker):
         if current_group:
             groups[current_key] = current_group
         return groups, invalid_faces
+
+    @staticmethod
+    def _count_total_faces(session: Session) -> int:
+        result = session.exec(
+            select(func.count()).select_from(Face).where(Face.bbox_.is_not(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_face_quality(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Face)
+            .outerjoin(Quality, Quality.face_id == Face.id)
+            .where(Quality.id.is_(None))
+            .where(Face.bbox_.is_not(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
 
     def _calculate_face_quality(
         self, pics_and_faces: List[Tuple[Picture, Face]]

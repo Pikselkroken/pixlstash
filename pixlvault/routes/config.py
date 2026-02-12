@@ -94,4 +94,10 @@ def create_router(server) -> APIRouter:
     async def delete_me_token(token_id: int, request: Request):
         return server.auth.delete_token(request, token_id)
 
+    @router.get("/workers/progress")
+    async def get_workers_progress(request: Request):
+        _ensure_secure_when_required(request)
+        server.auth.require_user_id(request)
+        return {"status": "success", "workers": server.vault.get_worker_progress()}
+
     return router

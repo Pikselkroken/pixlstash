@@ -1,8 +1,5 @@
-1. Make Picture stacks work better
+1. Package better (pyinstaller and pypi)
 2. Clean up code
-3. Optimise
-4. Report some progress on backend workers
-5. Package better
 
 Eventually:
 * Multi-user

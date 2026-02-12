@@ -55,12 +55,12 @@ const showSearchAll = computed(
   left: 0;
   width: 100%;
   z-index: 200;
-  background-color: #f5f5f5;
+  background-color: rgb(var(--v-theme-panel));
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
-  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 -2px 4px rgba(var(--v-theme-shadow), 0.1);
 }
 
 .search-result-status {
@@ -74,7 +74,7 @@ const showSearchAll = computed(
 }
 
 .search-result-scope {
-  color: rgba(0, 0, 0, 0.6);
+  color: rgba(var(--v-theme-on-panel), 0.6);
 }
 
 .search-result-actions {
