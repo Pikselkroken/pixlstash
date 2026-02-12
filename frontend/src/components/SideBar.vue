@@ -2509,9 +2509,13 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .settings-tag-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-tag-list .settings-token-empty {
+  grid-column: 1 / -1;
 }
 
 .settings-tag-chip {
