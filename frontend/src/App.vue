@@ -328,7 +328,7 @@ function closeSidebarIfMobile() {
   }
 }
 
-function normalizeSelectionPayload(payload) {
+function SelectionPayload(payload) {
   if (payload && typeof payload === "object") {
     return {
       id: payload.id ?? payload.value ?? null,
@@ -345,7 +345,7 @@ function clearSearchForCategoryChange() {
 }
 
 async function handleSelectCharacter(payload) {
-  const { id: charId, label } = normalizeSelectionPayload(payload);
+  const { id: charId, label } = SelectionPayload(payload);
   console.log("[App.vue] handleSelectCharacter called with charId:", charId);
   clearSearchForCategoryChange();
   if (charId == null) {
@@ -372,7 +372,7 @@ async function handleSelectCharacter(payload) {
 }
 
 async function handleSelectReferencePictures(payload) {
-  const { id: charId, label } = normalizeSelectionPayload(payload);
+  const { id: charId, label } = SelectionPayload(payload);
   clearSearchForCategoryChange();
   if (charId == null) {
     selectedReferenceCharacter.value = null;
@@ -389,7 +389,7 @@ async function handleSelectReferencePictures(payload) {
 }
 
 async function handleSelectSet(payload) {
-  const { id: setId, label } = normalizeSelectionPayload(payload);
+  const { id: setId, label } = SelectionPayload(payload);
   clearSearchForCategoryChange();
   if (setId == null) {
     selectedSet.value = null;

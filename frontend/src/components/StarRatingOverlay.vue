@@ -5,7 +5,7 @@
       :key="n"
       :size="iconSize"
       :color="
-        n <= normalizedScore
+        n <= dScore
           ? 'rgba(var(--v-theme-accent))'
           : 'rgba(var(--v-theme-background), 0.1)'
       "
@@ -28,7 +28,7 @@ const props = defineProps({
 
 const emit = defineEmits(["set-score"]);
 
-const normalizedScore = computed(() => Math.max(0, props.score || 0));
+const dScore = computed(() => Math.max(0, props.score || 0));
 
 function handleClick(n) {
   emit("set-score", n);

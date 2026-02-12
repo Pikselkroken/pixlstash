@@ -108,7 +108,7 @@ class PictureUtils:
                 invalid_embeddings,
             )
 
-        # Aesthetic score: normalize using configured range (e.g. 3.0-6.5 -> 0-1)
+        # Aesthetic score:  using configured range (e.g. 3.0-6.5 -> 0-1)
         # DB stores raw outputs from aesthetic model (typically 1-10 scale)
         raw_aest = np.array(
             [float(c.get("aesthetic_score") or 5.0) for c in candidates]

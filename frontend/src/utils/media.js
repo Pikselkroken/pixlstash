@@ -54,7 +54,7 @@ export function dataTransferHasSupportedMedia(dataTransfer) {
   return false;
 }
 
-export function normalizeMediaFormat(source) {
+export function MediaFormat(source) {
   if (!source) return '';
   if (typeof source === 'string') {
     const trimmed = source.trim().toLowerCase();
@@ -64,26 +64,26 @@ export function normalizeMediaFormat(source) {
     const parts = stripped.split('.');
     return parts.length > 1 ? parts.pop() : stripped;
   }
-  if (source.format) return normalizeMediaFormat(source.format);
-  if (source.filename) return normalizeMediaFormat(source.filename);
-  if (source.url) return normalizeMediaFormat(source.url);
-  if (source.id) return normalizeMediaFormat(source.id);
+  if (source.format) return MediaFormat(source.format);
+  if (source.filename) return MediaFormat(source.filename);
+  if (source.url) return MediaFormat(source.url);
+  if (source.id) return MediaFormat(source.id);
   return '';
 }
 
-export function normalizePictureId(id) {
+export function PictureId(id) {
   if (id === null || id === undefined) return null;
   return String(id);
 }
 
 export function buildMediaUrl({backendUrl, image, format} = {}) {
   if (!backendUrl || !image || !image.id) return '';
-  const ext = normalizeMediaFormat(format || image);
+  const ext = MediaFormat(format || image);
   const suffix = ext ? `.${ext}` : '';
   const cacheBuster = image.pixel_sha ? `?v=${image.pixel_sha}` : '';
   return `${backendUrl}/pictures/${image.id}${suffix}${cacheBuster}`;
 }
 
 export function getOverlayFormat(overlayImage) {
-  return normalizeMediaFormat(overlayImage) || 'png';
+  return MediaFormat(overlayImage) || 'png';
 }

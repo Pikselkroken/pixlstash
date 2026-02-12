@@ -274,7 +274,7 @@ class ImageEmbeddingWorker(BaseWorker):
                             flat_images,
                             batch_size=self.BATCH_SIZE,
                             convert_to_numpy=True,
-                            normalize_embeddings=True,
+                            _embeddings=True,
                         )
                     except Exception as e:
                         logger.error(

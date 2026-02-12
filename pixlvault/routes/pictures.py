@@ -142,7 +142,7 @@ def _select_pictures_for_listing(
                 query_params.pop("id", None)
         return format, query_params
 
-    def normalize_character_id(value):
+    def _character_id(value):
         if value == "ALL":
             return None
         if value is not None and value != "" and str(value).isdigit():
@@ -157,7 +157,7 @@ def _select_pictures_for_listing(
     )
     offset = int(query_params.pop("offset", offset))
     limit = int(query_params.pop("limit", limit))
-    character_id = normalize_character_id(query_params.pop("character_id", None))
+    character_id = _character_id(query_params.pop("character_id", None))
     reference_character_id = query_params.pop("reference_character_id", None)
     only_deleted = False
 
@@ -871,35 +871,33 @@ def create_router(server) -> APIRouter:
                     or request.query_params.get("exportType")
                     or export_type
                 )
-                export_type_normalized = Picture.ExportType.from_string(
-                    export_type_value
-                )
-                caption_mode_normalized = (caption_mode or "description").lower()
-                if caption_mode_normalized not in {"none", "description", "tags"}:
-                    caption_mode_normalized = "description"
+                export_type_d = Picture.ExportType.from_string(export_type_value)
+                caption_mode_d = (caption_mode or "description").lower()
+                if caption_mode_d not in {"none", "description", "tags"}:
+                    caption_mode_d = "description"
                 include_character_name_enabled = (
-                    bool(include_character_name) and caption_mode_normalized != "none"
+                    bool(include_character_name) and caption_mode_d != "none"
                 )
-                if export_type_normalized != Picture.ExportType.FULL:
-                    caption_mode_normalized = "tags"
+                if export_type_d != Picture.ExportType.FULL:
+                    caption_mode_d = "tags"
                     include_character_name_enabled = False
-                resolution_normalized = (resolution or "original").lower()
-                if resolution_normalized not in {"original", "half", "quarter"}:
-                    resolution_normalized = "original"
+                resolution_d = (resolution or "original").lower()
+                if resolution_d not in {"original", "half", "quarter"}:
+                    resolution_d = "original"
                 scale_map = {
                     "original": 1.0,
                     "half": 0.5,
                     "quarter": 0.25,
                 }
-                scale_factor = scale_map.get(resolution_normalized, 1.0)
+                scale_factor = scale_map.get(resolution_d, 1.0)
 
                 only_deleted = request.query_params.get("character_id") == "SCRAPHEAP"
 
                 picture_ids = request.query_params.getlist("id")
 
                 select_fields = Picture.metadata_fields()
-                if export_type_normalized == Picture.ExportType.FULL:
-                    if caption_mode_normalized != "none":
+                if export_type_d == Picture.ExportType.FULL:
+                    if caption_mode_d != "none":
                         select_fields = select_fields | {"tags"}
                     if include_character_name_enabled:
                         select_fields = select_fields | {"characters"}
@@ -1029,7 +1027,7 @@ def create_router(server) -> APIRouter:
                     y_max = max(y_min + 1, min(y_max, height))
                     return [x_min, y_min, x_max, y_max]
 
-                if export_type_normalized != Picture.ExportType.FULL:
+                if export_type_d != Picture.ExportType.FULL:
 
                     def fetch_features(session: Session, picture_ids):
                         faces = session.exec(
@@ -1089,15 +1087,15 @@ def create_router(server) -> APIRouter:
                         [pic.id for pic in pics],
                     )
 
-                if export_type_normalized == Picture.ExportType.FULL:
+                if export_type_d == Picture.ExportType.FULL:
                     total_items = len(pics)
                 else:
                     total_items = 0
-                    export_faces = export_type_normalized in {
+                    export_faces = export_type_d in {
                         Picture.ExportType.FACE,
                         Picture.ExportType.FACE_HAND,
                     }
-                    export_hands = export_type_normalized in {
+                    export_hands = export_type_d in {
                         Picture.ExportType.HAND,
                         Picture.ExportType.FACE_HAND,
                     }
@@ -1148,7 +1146,7 @@ def create_router(server) -> APIRouter:
                                 server.vault.image_root, pic.file_path
                             )
                             ext = os.path.splitext(full_path)[1]
-                            if export_type_normalized == Picture.ExportType.FULL:
+                            if export_type_d == Picture.ExportType.FULL:
                                 arcname = f"image_{idx:05d}{ext}"
                                 if (
                                     scale_factor < 1.0
@@ -1201,11 +1199,11 @@ def create_router(server) -> APIRouter:
                                     return ", ".join(tags)
 
                                 caption_text = None
-                                if caption_mode_normalized == "description":
+                                if caption_mode_d == "description":
                                     caption_text = pic.description or ""
                                     if not caption_text:
                                         caption_text = build_tag_caption(pic)
-                                elif caption_mode_normalized == "tags":
+                                elif caption_mode_d == "tags":
                                     caption_text = build_tag_caption(pic)
 
                                 if include_character_name_enabled:
@@ -1218,11 +1216,11 @@ def create_router(server) -> APIRouter:
                                             character_names.append(name_value)
 
                                     if character_names:
-                                        if caption_mode_normalized == "tags":
+                                        if caption_mode_d == "tags":
                                             caption_text = ", ".join(
                                                 character_names + [caption_text]
                                             )
-                                        elif caption_mode_normalized == "description":
+                                        elif caption_mode_d == "description":
                                             caption_text = (
                                                 ", ".join(character_names)
                                                 + ": "
@@ -1230,7 +1228,7 @@ def create_router(server) -> APIRouter:
                                             )
 
                                 if (
-                                    caption_mode_normalized != "none"
+                                    caption_mode_d != "none"
                                     and caption_text is not None
                                 ):
                                     zip_file.writestr(
@@ -1247,11 +1245,11 @@ def create_router(server) -> APIRouter:
 
                                     with Image.open(full_path) as img:
                                         base_name = f"image_{idx:05d}"
-                                        export_faces = export_type_normalized in {
+                                        export_faces = export_type_d in {
                                             Picture.ExportType.FACE,
                                             Picture.ExportType.FACE_HAND,
                                         }
-                                        export_hands = export_type_normalized in {
+                                        export_hands = export_type_d in {
                                             Picture.ExportType.HAND,
                                             Picture.ExportType.FACE_HAND,
                                         }

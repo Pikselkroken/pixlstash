@@ -19,7 +19,7 @@ from pixlvault.event_types import EventType
 from pixlvault.picture_scoring import prepare_smart_score_inputs
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger
-from pixlvault.utils import normalize_smart_score_penalized_tags
+from pixlvault.utils import _smart_score_penalized_tags
 from pixlvault.worker_registry import BaseWorker, WorkerType
 
 logger = get_logger(__name__)
@@ -82,7 +82,7 @@ class SmartScoreScrapheapWorker(BaseWorker):
                 if user and user.auto_scrapheap_lookback_minutes is not None
                 else DEFAULT_SMART_SCORE_SCRAPHEAP_LOOKBACK_MINUTES
             )
-            penalized_tags = normalize_smart_score_penalized_tags(
+            penalized_tags = _smart_score_penalized_tags(
                 getattr(user, "smart_score_penalized_tags", None) if user else None,
                 DEFAULT_SMART_SCORE_PENALIZED_TAGS,
                 default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,

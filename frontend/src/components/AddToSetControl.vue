@@ -88,13 +88,13 @@ function resolveUrl(path) {
   return baseUrl.value ? `${baseUrl.value}${path}` : path;
 }
 
-const normalizedPictureIds = computed(() =>
+const normalisedPictureIds = computed(() =>
   (Array.isArray(props.pictureIds) ? props.pictureIds : [])
     .map((id) => String(id))
     .filter(Boolean),
 );
 
-const normalizedIdsKey = computed(() => normalizedPictureIds.value.join("|"));
+const normalisedIdsKey = computed(() => normalisedPictureIds.value.join("|"));
 const lastFetchKey = ref("");
 
 const filteredSets = computed(() => {
@@ -108,7 +108,7 @@ const filteredSets = computed(() => {
 });
 
 function isSetDisabled(set) {
-  const ids = normalizedPictureIds.value;
+  const ids = normalisedPictureIds.value;
   if (!ids.length) return true;
   const members = setMembersById.value?.[set.id];
   if (!members || members.size === 0) return false;
@@ -147,7 +147,7 @@ function handleOutsideClick(event) {
 
 async function fetchSets(force = false) {
   if (!props.backendUrl || isLoading.value) return;
-  const key = normalizedIdsKey.value;
+  const key = normalisedIdsKey.value;
   if (!force && key === lastFetchKey.value && sets.value.length) {
     return;
   }
@@ -169,7 +169,7 @@ async function fetchSets(force = false) {
 }
 
 async function fetchSetMembers(list) {
-  const ids = normalizedPictureIds.value;
+  const ids = normalisedPictureIds.value;
   if (!props.backendUrl || !ids.length) {
     setMembersById.value = {};
     return;
@@ -205,7 +205,7 @@ async function fetchSetMembers(list) {
 async function addToSet(set) {
   if (!set?.id) return;
   if (isSetDisabled(set)) return;
-  const ids = normalizedPictureIds.value;
+  const ids = normalisedPictureIds.value;
   if (!ids.length) return;
   const members = setMembersById.value?.[set.id];
   const idsToAdd = members ? ids.filter((id) => !members.has(String(id))) : ids;
@@ -246,7 +246,7 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => normalizedIdsKey.value,
+  () => normalisedIdsKey.value,
   () => {
     if (menuOpen.value) {
       fetchSets();

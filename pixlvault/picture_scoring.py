@@ -19,7 +19,7 @@ from pixlvault.db_models import (
 )
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger
-from pixlvault.utils import normalize_smart_score_penalized_tags, safe_model_dict
+from pixlvault.utils import _smart_score_penalized_tags, safe_model_dict
 
 logger = get_logger(__name__)
 
@@ -110,7 +110,7 @@ def select_reference_faces_for_character(
         len(selected_picture_ids),
     )
     if remaining_rows:
-        penalized_tags = normalize_smart_score_penalized_tags(
+        penalized_tags = _smart_score_penalized_tags(
             None,
             DEFAULT_SMART_SCORE_PENALIZED_TAGS,
             default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
@@ -181,7 +181,7 @@ def get_smart_score_penalized_tags_from_request(server, request):
         lambda session: session.get(User, user_id),
         priority=DBPriority.IMMEDIATE,
     )
-    return normalize_smart_score_penalized_tags(
+    return _smart_score_penalized_tags(
         user.smart_score_penalized_tags if user else None,
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,

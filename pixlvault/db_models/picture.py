@@ -131,9 +131,9 @@ class ExportType(Enum):
 
     @classmethod
     def from_string(cls, value: str) -> "ExportType":
-        normalized = (value or "").lower()
+        d = (value or "").lower()
         for member in cls:
-            if member.value == normalized:
+            if member.value == d:
                 return member
         return cls.FULL
 
