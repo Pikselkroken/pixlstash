@@ -268,6 +268,7 @@ const config = reactive({
   show_format: true,
   show_resolution: true,
   show_problem_icon: true,
+  stack_strictness: 0.92,
 });
 
 const loading = ref(false);
@@ -486,6 +487,9 @@ async function fetchConfig() {
     if (typeof res.data.columns === "number") {
       columns.value = res.data.columns;
     }
+    if (res.data.stack_strictness != null) {
+      stackThreshold.value = String(res.data.stack_strictness);
+    }
     config.sort_order = sortValue || selectedSort.value;
     config.descending = selectedDescending.value;
     config.columns = columns.value;
@@ -513,6 +517,10 @@ async function fetchConfig() {
       typeof res.data.show_problem_icon === "boolean"
         ? res.data.show_problem_icon
         : showProblemIcon.value;
+    config.stack_strictness =
+      res.data.stack_strictness != null
+        ? res.data.stack_strictness
+        : config.stack_strictness;
     const similarityValue =
       res.data.similarity_character ?? res.data.selected_similarity_character;
     selectedSimilarityCharacter.value =
@@ -558,6 +566,12 @@ async function patchConfigUIOptions() {
   }
   if (selectedSimilarityCharacter.value != null) {
     patch.similarity_character = selectedSimilarityCharacter.value;
+  }
+  if (stackThreshold.value != null && stackThreshold.value !== "") {
+    const parsed = parseFloat(String(stackThreshold.value));
+    if (Number.isFinite(parsed)) {
+      patch.stack_strictness = parsed;
+    }
   }
 
   console.log("PATCH /users/me/config payload:", patch);
@@ -782,6 +796,11 @@ watch(
 );
 
 watch(selectedSimilarityCharacter, () => {
+  patchConfigUIOptions();
+});
+
+watch(stackThreshold, () => {
+  if (!configLoaded.value) return;
   patchConfigUIOptions();
 });
 
