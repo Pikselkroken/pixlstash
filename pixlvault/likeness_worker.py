@@ -78,7 +78,7 @@ class LikenessWorker(BaseWorker):
             )
 
         submit_low(LikenessWorker._seed_queue)
-        logger.info("LikenessWorker: queue initialized.")
+        logger.info("LikenessWorker: queue initialised.")
 
         param_thresholds = submit_low(
             LikenessWorker._compute_param_gap_thresholds,

@@ -47,7 +47,7 @@ from pixlvault.picture_scoring import (
     fetch_smart_score_data,
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
-    get_smart_score_penalized_tags_from_request,
+    get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
     select_reference_faces_for_character,
 )
@@ -248,7 +248,7 @@ def _select_pictures_for_listing(
         )
         if candidate_ids is not None and not candidate_ids:
             return []
-        penalized_tags = get_smart_score_penalized_tags_from_request(server, request)
+        penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
         pics = find_pictures_by_smart_score(
             server,
             format,
@@ -256,7 +256,7 @@ def _select_pictures_for_listing(
             limit,
             descending,
             candidate_ids=candidate_ids,
-            penalized_tags=penalized_tags,
+            penalised_tags=penalised_tags,
             only_deleted=only_deleted,
         )
         if return_ids_only:
@@ -543,14 +543,14 @@ def create_router(server) -> APIRouter:
         smart_score_by_id = {}
         if ordered_pics:
             try:
-                penalized_tags = get_smart_score_penalized_tags_from_request(
+                penalised_tags = get_smart_score_penalised_tags_from_request(
                     server, request
                 )
                 good_anchors, bad_anchors, candidates = fetch_smart_score_data(
                     server,
                     None,
                     candidate_ids=ordered_ids,
-                    penalized_tags=penalized_tags,
+                    penalised_tags=penalised_tags,
                 )
                 if candidates:
                     good_list, bad_list, cand_list, cand_ids = (
@@ -657,9 +657,9 @@ def create_router(server) -> APIRouter:
         if not isinstance(ids, list):
             raise HTTPException(status_code=400, detail="'ids' must be a list")
 
-        penalized_tags = get_smart_score_penalized_tags_from_request(server, request)
-        penalized_tag_set = {
-            str(tag).strip().lower() for tag in (penalized_tags or {}).keys() if tag
+        penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
+        penalised_tag_set = {
+            str(tag).strip().lower() for tag in (penalised_tags or {}).keys() if tag
         }
         ids_int = []
         for raw_id in ids:
@@ -668,25 +668,25 @@ def create_router(server) -> APIRouter:
             except (TypeError, ValueError):
                 continue
 
-        penalized_tag_map = defaultdict(list)
-        if ids_int and penalized_tag_set:
+        penalised_tag_map = defaultdict(list)
+        if ids_int and penalised_tag_set:
 
-            def fetch_penalized_tags(session: Session):
+            def fetch_penalised_tags(session: Session):
                 rows = session.exec(
                     select(Tag.picture_id, Tag.tag).where(
                         Tag.picture_id.in_(ids_int),
                         Tag.tag.is_not(None),
-                        func.lower(Tag.tag).in_(penalized_tag_set),
+                        func.lower(Tag.tag).in_(penalised_tag_set),
                     )
                 ).all()
                 return rows
 
             rows = server.vault.db.run_task(
-                fetch_penalized_tags, priority=DBPriority.IMMEDIATE
+                fetch_penalised_tags, priority=DBPriority.IMMEDIATE
             )
             for pic_id, tag in rows or []:
                 if tag:
-                    penalized_tag_map[pic_id].append(tag)
+                    penalised_tag_map[pic_id].append(tag)
 
         def map_bbox_to_thumbnail(bbox, picture):
             if not bbox or len(bbox) != 4:
@@ -816,8 +816,8 @@ def create_router(server) -> APIRouter:
                     "hands": hand_data,
                     "thumbnail_width": 256 if mapped_any else None,
                     "thumbnail_height": 256 if mapped_any else None,
-                    "penalized_tags": list(
-                        dict.fromkeys(penalized_tag_map.get(pic.id, []))
+                    "penalised_tags": list(
+                        dict.fromkeys(penalised_tag_map.get(pic.id, []))
                     ),
                 }
             except Exception as exc:
@@ -828,7 +828,7 @@ def create_router(server) -> APIRouter:
                     "thumbnail": None,
                     "faces": [],
                     "hands": [],
-                    "penalized_tags": [],
+                    "penalised_tags": [],
                 }
         response = JSONResponse(results)
         origin = request.headers.get("origin")
@@ -1163,7 +1163,7 @@ def create_router(server) -> APIRouter:
                                             new_height = max(
                                                 1, int(img.height * scale_factor)
                                             )
-                                            resized = img.resize(
+                                            resised = img.resize(
                                                 (new_width, new_height),
                                                 resample=Image.LANCZOS,
                                             )
@@ -1172,11 +1172,11 @@ def create_router(server) -> APIRouter:
                                                 img.format or ext.lstrip(".").upper()
                                             )
                                             if save_format.upper() in {"JPG", "JPEG"}:
-                                                resized.save(
+                                                resised.save(
                                                     buffer, format="JPEG", quality=95
                                                 )
                                             else:
-                                                resized.save(buffer, format=save_format)
+                                                resised.save(buffer, format=save_format)
 
                                         zip_file.writestr(arcname, buffer.getvalue())
                                     except Exception as exc:
@@ -1884,7 +1884,7 @@ def create_router(server) -> APIRouter:
 
         if smart_score:
             try:
-                penalized_tags = get_smart_score_penalized_tags_from_request(
+                penalised_tags = get_smart_score_penalised_tags_from_request(
                     server, request
                 )
                 (
@@ -1895,7 +1895,7 @@ def create_router(server) -> APIRouter:
                     server,
                     None,
                     candidate_ids=[pic.id],
-                    penalized_tags=penalized_tags,
+                    penalised_tags=penalised_tags,
                 )
                 smart_score_value = None
                 if candidates:

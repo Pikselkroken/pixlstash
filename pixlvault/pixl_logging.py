@@ -1,15 +1,15 @@
 import logging as logging_
 import time
-from uvicorn.logging import ColourizedFormatter
+from uvicorn.logging import ColourisedFormatter
 
 LOG_FORMAT = "%(asctime)s %(levelprefix)s %(name)s: %(message)s"
 LOG_LEVEL = logging_.INFO
 
 
-class PixlVaultColourizedHandler(logging_.StreamHandler):
+class PixlVaultColourisedHandler(logging_.StreamHandler):
     def __init__(self, stream=None):
         super().__init__(stream)
-        formatter = ColourizedFormatter(fmt=LOG_FORMAT, use_colors=True)
+        formatter = ColourisedFormatter(fmt=LOG_FORMAT, use_colors=True)
         formatter.converter = time.gmtime  # Use UTC for asctime if desired
         self.setFormatter(formatter)
 
@@ -31,7 +31,7 @@ def setup_logging(log_file=None, log_level=LOG_LEVEL):
         )
         handler.setFormatter(formatter)
     else:
-        handler = PixlVaultColourizedHandler()
+        handler = PixlVaultColourisedHandler()
     root.addHandler(handler)
     root.setLevel(log_level)
 
@@ -46,7 +46,7 @@ uvicorn_log_config = {
     "disable_existing_loggers": False,
     "formatters": {
         "default": {
-            "()": ColourizedFormatter,
+            "()": ColourisedFormatter,
             "fmt": LOG_FORMAT,
             "use_colors": True,
         },

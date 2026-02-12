@@ -83,7 +83,7 @@ onMounted(async () => {
 async function handleLogin() {
   try {
     error.value = null;
-    await login(username.value, password.value); // Call the centralized login function
+    await login(username.value, password.value); // Call the centralised login function
   } catch (err) {
     console.error("Login failed:", err);
     error.value = err.response?.data?.detail || err.message || "Login failed.";

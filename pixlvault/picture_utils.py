@@ -55,8 +55,8 @@ class PictureUtils:
             "w_noise": 0.08,
             "w_edge": 0.05,
             "w_tags": 0.08,
-            "w_penalized_tag": 0.40,
-            "penalized_tag_cap": 3.5,
+            "w_penalised_tag": 0.40,
+            "penalised_tag_cap": 3.5,
             "tag_bonus_cap": 10,
             "topk": 3,
             "minSim": 0.75,
@@ -125,7 +125,7 @@ class PictureUtils:
         M_cand = np.stack(cand_vecs)
         scores = np.zeros(len(candidates))
 
-        # Helper: Normalized weight from score (1..5 -> 0..1)
+        # Helper: Normalised weight from score (1..5 -> 0..1)
         def norm_weight(s):
             effective = s if s > 0 else 2.5
             return max(0, min(1, (effective - 1) / 4.0))
@@ -273,15 +273,15 @@ class PictureUtils:
         tag_component = cfg["w_tags"] * np.clip(tag_norm, 0.0, 1.0)
         scores += tag_component
 
-        # 5. Penalized Tags
-        penalized_counts = np.array(
-            [float(c.get("penalized_tag_count") or 0) for c in candidates]
+        # 5. Penalised Tags
+        penalised_counts = np.array(
+            [float(c.get("penalised_tag_count") or 0) for c in candidates]
         )
-        penalized_equivalent = np.clip(
-            penalized_counts / 5.0, 0.0, float(cfg["penalized_tag_cap"])
+        penalised_equivalent = np.clip(
+            penalised_counts / 5.0, 0.0, float(cfg["penalised_tag_cap"])
         )
-        penalized_component = cfg["w_penalized_tag"] * penalized_equivalent
-        scores -= penalized_component
+        penalised_component = cfg["w_penalised_tag"] * penalised_equivalent
+        scores -= penalised_component
 
         # Rescale [0, 1] to [1, 5]
         clipped = np.clip(scores, 0.0, 1.0)
@@ -289,13 +289,13 @@ class PictureUtils:
 
         try:
             for idx, candidate in enumerate(candidates):
-                penalized_count = float(penalized_counts[idx])
+                penalised_count = float(penalised_counts[idx])
                 final_score = float(final_scores[idx])
-                if penalized_count <= 0 and final_score <= 1.5:
+                if penalised_count <= 0 and final_score <= 1.5:
                     logger.info(
                         "[SMART SCORE][MIN] id=%s raw=%.4f clipped=%.4f final=%.4f "
                         "good=%.4f bad=%.4f aest=%.4f res=%.4f noise=%.4f "
-                        "edge=%.4f tags=%.4f penalized=%.4f mpx=%.4f w=%s h=%s",
+                        "edge=%.4f tags=%.4f penalised=%.4f mpx=%.4f w=%s h=%s",
                         candidate.get("id"),
                         float(scores[idx]),
                         float(clipped[idx]),
@@ -307,7 +307,7 @@ class PictureUtils:
                         float(noise_component[idx]),
                         float(edge_component[idx]),
                         float(tag_component[idx]),
-                        float(penalized_component[idx]),
+                        float(penalised_component[idx]),
                         float(mpx[idx]),
                         candidate.get("width"),
                         candidate.get("height"),
@@ -514,7 +514,7 @@ class PictureUtils:
                 if exif_data and piexif:
                     exif_dict = piexif.load(exif_data)
                     date_str = None
-                    for tag in ("DateTimeOriginal", "DateTime", "DateTimeDigitized"):
+                    for tag in ("DateTimeOriginal", "DateTime", "DateTimeDigitised"):
                         val = exif_dict["0th"].get(
                             piexif.ImageIFD.__dict__.get(tag)
                         ) or exif_dict["Exif"].get(piexif.ExifIFD.__dict__.get(tag))

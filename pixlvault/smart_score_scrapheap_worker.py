@@ -19,7 +19,7 @@ from pixlvault.event_types import EventType
 from pixlvault.picture_scoring import prepare_smart_score_inputs
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger
-from pixlvault.utils import _smart_score_penalized_tags
+from pixlvault.utils import _smart_score_penalised_tags
 from pixlvault.worker_registry import BaseWorker, WorkerType
 
 logger = get_logger(__name__)
@@ -82,12 +82,12 @@ class SmartScoreScrapheapWorker(BaseWorker):
                 if user and user.auto_scrapheap_lookback_minutes is not None
                 else DEFAULT_SMART_SCORE_SCRAPHEAP_LOOKBACK_MINUTES
             )
-            penalized_tags = _smart_score_penalized_tags(
-                getattr(user, "smart_score_penalized_tags", None) if user else None,
+            penalised_tags = _smart_score_penalised_tags(
+                getattr(user, "smart_score_penalised_tags", None) if user else None,
                 DEFAULT_SMART_SCORE_PENALIZED_TAGS,
                 default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
             )
-            return threshold, lookback, penalized_tags
+            return threshold, lookback, penalised_tags
 
         return self._db.run_task(fetch_config, priority=DBPriority.IMMEDIATE)
 
@@ -117,7 +117,7 @@ class SmartScoreScrapheapWorker(BaseWorker):
         self,
         session: Session,
         cutoff: datetime,
-        penalized_tag_weights: dict | None,
+        penalised_tag_weights: dict | None,
     ):
         tag_exists = exists(
             select(Tag.id).where(
@@ -167,8 +167,8 @@ class SmartScoreScrapheapWorker(BaseWorker):
             )
             candidate_ids.append(pic.id)
 
-        penalized_tag_map = {}
-        if penalized_tag_weights and candidate_ids:
+        penalised_tag_map = {}
+        if penalised_tag_weights and candidate_ids:
             tag_rows = session.exec(
                 select(Tag.picture_id, Tag.tag).where(
                     Tag.picture_id.in_(candidate_ids),
@@ -178,22 +178,22 @@ class SmartScoreScrapheapWorker(BaseWorker):
                 if not tag:
                     continue
                 key = str(tag).strip().lower()
-                weight = penalized_tag_weights.get(key)
+                weight = penalised_tag_weights.get(key)
                 if weight is not None:
-                    penalized_tag_map[pic_id] = (
-                        penalized_tag_map.get(pic_id, 0) + weight
+                    penalised_tag_map[pic_id] = (
+                        penalised_tag_map.get(pic_id, 0) + weight
                     )
 
-            if penalized_tag_map:
+            if penalised_tag_map:
                 for candidate in candidates:
-                    candidate["penalized_tag_count"] = penalized_tag_map.get(
+                    candidate["penalised_tag_count"] = penalised_tag_map.get(
                         candidate["id"], 0
                     )
 
         return candidates
 
     def _scrapheap_low_scoring_recent(self) -> int:
-        threshold, lookback_minutes, penalized_tags = self._get_config()
+        threshold, lookback_minutes, penalised_tags = self._get_config()
         if threshold is None:
             return 0
         try:
@@ -213,7 +213,7 @@ class SmartScoreScrapheapWorker(BaseWorker):
 
         def fetch_data(session: Session):
             good, bad = self._fetch_anchors(session)
-            candidates = self._fetch_candidates(session, cutoff, penalized_tags)
+            candidates = self._fetch_candidates(session, cutoff, penalised_tags)
             return good, bad, candidates
 
         good, bad, candidates = self._db.run_task(

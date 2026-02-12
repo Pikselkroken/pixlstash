@@ -101,7 +101,7 @@ const newlyCreatedToken = ref("");
 const tokenDialogOpen = ref(false);
 const tokenDeleteDialogOpen = ref(false);
 const tokenToDelete = ref(null);
-const smartScorePenalizedTags = ref([]);
+const smartScorePenalisedTags = ref([]);
 const smartScoreTagInput = ref("");
 const smartScoreTagsLoading = ref(false);
 const smartScoreTagsError = ref("");
@@ -208,8 +208,8 @@ async function fetchSmartScoreSettings() {
   smartScoreTagsError.value = "";
   try {
     const res = await apiClient.get("/users/me/config");
-    smartScorePenalizedTags.value = SmartScoreTags(
-      res.data?.smart_score_penalized_tags,
+    smartScorePenalisedTags.value = SmartScoreTags(
+      res.data?.smart_score_penalised_tags,
     );
     const threshold = Number(res.data?.auto_scrapheap_smart_score_threshold);
     if (Number.isFinite(threshold)) {
@@ -264,9 +264,9 @@ async function saveSmartScoreTags(nextTags) {
   try {
     const { d, payload } = serializeSmartScoreTags(nextTags);
     await apiClient.patch("/users/me/config", {
-      smart_score_penalized_tags: payload,
+      smart_score_penalised_tags: payload,
     });
-    smartScorePenalizedTags.value = d;
+    smartScorePenalisedTags.value = d;
     smartScoreTagsSuccess.value = "Saved.";
   } catch (e) {
     smartScoreTagsError.value =
@@ -285,7 +285,7 @@ async function addSmartScoreTag() {
   const trimmed = smartScoreTagInput.value.trim().toLowerCase();
   if (!trimmed) return;
   const next = SmartScoreTags([
-    ...smartScorePenalizedTags.value,
+    ...smartScorePenalisedTags.value,
     { tag: trimmed, weight: 3 },
   ]);
   smartScoreTagInput.value = "";
@@ -294,14 +294,14 @@ async function addSmartScoreTag() {
 
 async function removeSmartScoreTag(tag) {
   const next = SmartScoreTags(
-    smartScorePenalizedTags.value.filter((t) => t.tag !== tag),
+    smartScorePenalisedTags.value.filter((t) => t.tag !== tag),
   );
   await saveSmartScoreTags(next);
 }
 
 async function updateSmartScoreTagWeight(tag, weight) {
   const next = SmartScoreTags(
-    smartScorePenalizedTags.value.map((entry) =>
+    smartScorePenalisedTags.value.map((entry) =>
       entry.tag === tag ? { ...entry, weight: clampImportance(weight) } : entry,
     ),
   );
@@ -1339,7 +1339,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
                 <div class="settings-form">
                   <v-text-field
                     v-model="smartScoreTagInput"
-                    label="Add penalized tag"
+                    label="Add penalised tag"
                     density="comfortable"
                     variant="filled"
                     :disabled="smartScoreTagsLoading"
@@ -1369,7 +1369,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
                   </div>
                   <div class="settings-tag-list">
                     <div
-                      v-for="entry in smartScorePenalizedTags"
+                      v-for="entry in smartScorePenalisedTags"
                       :key="entry.tag"
                       class="settings-tag-chip settings-tag-chip--row"
                     >
@@ -1401,11 +1401,11 @@ defineExpose({ refreshSidebar, openSettingsDialog });
                     <div
                       v-if="
                         !smartScoreTagsLoading &&
-                        !smartScorePenalizedTags.length
+                        !smartScorePenalisedTags.length
                       "
                       class="settings-token-empty"
                     >
-                      No penalized tags yet.
+                      No penalised tags yet.
                     </div>
                   </div>
                 </div>

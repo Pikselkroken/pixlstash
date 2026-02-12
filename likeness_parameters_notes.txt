@@ -32,7 +32,7 @@ Indexing and candidate retrieval ideas
 - Use size_bin_index as a separate indexed field for fast grouping.
 - Parameter vector: fixed length float32, sentinel for missing values.
 - Build candidate sets by union of “close on at least one dimension”.
-- Consider ANN (FAISS preferred over Annoy) on normalized parameter vector.
+- Consider ANN (FAISS preferred over Annoy) on normalised parameter vector.
 - For phash: either separate filter or include as 64-dim bit vector appended to params.
 
 Failure handling

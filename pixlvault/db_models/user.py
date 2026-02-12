@@ -28,7 +28,7 @@ class User(SQLModel, table=True):
     show_problem_icon: Optional[bool] = Field(default=True)
     similarity_character: Optional[int] = Field(default=None)
     stack_strictness: Optional[float] = Field(default=0.92)
-    smart_score_penalized_tags: Optional[str] = Field(
+    smart_score_penalised_tags: Optional[str] = Field(
         default_factory=lambda: json.dumps(DEFAULT_SMART_SCORE_PENALIZED_TAGS)
     )
     auto_scrapheap_smart_score_threshold: Optional[float] = Field(default=1.25)

@@ -19,7 +19,7 @@ from pixlvault.db_models import (
 )
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger
-from pixlvault.utils import _smart_score_penalized_tags, safe_model_dict
+from pixlvault.utils import _smart_score_penalised_tags, safe_model_dict
 
 logger = get_logger(__name__)
 
@@ -110,27 +110,27 @@ def select_reference_faces_for_character(
         len(selected_picture_ids),
     )
     if remaining_rows:
-        penalized_tags = _smart_score_penalized_tags(
+        penalised_tags = _smart_score_penalised_tags(
             None,
             DEFAULT_SMART_SCORE_PENALIZED_TAGS,
             default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
         )
-        penalized_tag_set = {
-            str(tag).strip().lower() for tag in penalized_tags.keys() if tag
+        penalised_tag_set = {
+            str(tag).strip().lower() for tag in penalised_tags.keys() if tag
         }
         remaining_picture_ids = [picture.id for _, picture in remaining_rows]
         tag_weights = defaultdict(float)
-        if penalized_tag_set and remaining_picture_ids:
+        if penalised_tag_set and remaining_picture_ids:
             tag_rows = session.exec(
                 select(Tag.picture_id, Tag.tag)
                 .where(Tag.picture_id.in_(remaining_picture_ids))
                 .where(Tag.tag.is_not(None))
-                .where(func.lower(Tag.tag).in_(penalized_tag_set))
+                .where(func.lower(Tag.tag).in_(penalised_tag_set))
             ).all()
             for pic_id, tag in tag_rows or []:
                 if not tag:
                     continue
-                tag_weights[pic_id] += penalized_tags.get(tag.strip().lower(), 0.0)
+                tag_weights[pic_id] += penalised_tags.get(tag.strip().lower(), 0.0)
 
         remaining_rows.sort(
             key=lambda row: (
@@ -141,7 +141,7 @@ def select_reference_faces_for_character(
             )
         )
         logger.info(
-            "[reference_faces] character_id=%s penalized_tags=%s",
+            "[reference_faces] character_id=%s penalised_tags=%s",
             character_id,
             len(tag_weights),
         )
@@ -173,7 +173,7 @@ def select_reference_faces_for_character(
     return representatives
 
 
-def get_smart_score_penalized_tags_from_request(server, request):
+def get_smart_score_penalised_tags_from_request(server, request):
     user_id = server.auth.get_user_id(request)
     if user_id is None:
         return DEFAULT_SMART_SCORE_PENALIZED_TAGS
@@ -181,8 +181,8 @@ def get_smart_score_penalized_tags_from_request(server, request):
         lambda session: session.get(User, user_id),
         priority=DBPriority.IMMEDIATE,
     )
-    return _smart_score_penalized_tags(
-        user.smart_score_penalized_tags if user else None,
+    return _smart_score_penalised_tags(
+        user.smart_score_penalised_tags if user else None,
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     )
@@ -402,7 +402,7 @@ def fetch_smart_score_data(
     server,
     format,
     candidate_ids=None,
-    penalized_tags=None,
+    penalised_tags=None,
     include_deleted: bool = False,
     only_deleted: bool = False,
 ):
@@ -452,9 +452,9 @@ def fetch_smart_score_data(
 
         candidate_rows = session.exec(query).all()
 
-        penalized_tag_weights = {
+        penalised_tag_weights = {
             str(tag).strip().lower(): int(weight)
-            for tag, weight in (penalized_tags or {}).items()
+            for tag, weight in (penalised_tags or {}).items()
             if str(tag).strip()
         }
 
@@ -487,8 +487,8 @@ def fetch_smart_score_data(
             )
             candidate_id_list.append(pic.id)
 
-        penalized_tag_map = defaultdict(int)
-        if penalized_tag_weights and candidate_id_list:
+        penalised_tag_map = defaultdict(int)
+        if penalised_tag_weights and candidate_id_list:
             tag_rows = session.exec(
                 select(Tag.picture_id, Tag.tag).where(
                     Tag.picture_id.in_(candidate_id_list),
@@ -498,13 +498,13 @@ def fetch_smart_score_data(
                 if not tag:
                     continue
                 key = tag.strip().lower()
-                weight = penalized_tag_weights.get(key)
+                weight = penalised_tag_weights.get(key)
                 if weight is not None:
-                    penalized_tag_map[pic_id] += weight
+                    penalised_tag_map[pic_id] += weight
 
-            if penalized_tag_map:
+            if penalised_tag_map:
                 for candidate in candidates:
-                    candidate["penalized_tag_count"] = penalized_tag_map.get(
+                    candidate["penalised_tag_count"] = penalised_tag_map.get(
                         candidate["id"], 0
                     )
 
@@ -616,7 +616,7 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
                     "id": pid,
                     "embedding": v,
                     "aesthetic_score": get_attr(p, "aesthetic_score"),
-                    "penalized_tag_count": get_attr(p, "penalized_tag_count") or 0,
+                    "penalised_tag_count": get_attr(p, "penalised_tag_count") or 0,
                     "width": get_attr(p, "width"),
                     "height": get_attr(p, "height"),
                     "noise_level": get_attr(p, "noise_level"),
@@ -635,7 +635,7 @@ def find_pictures_by_smart_score(
     limit,
     descending,
     candidate_ids=None,
-    penalized_tags=None,
+    penalised_tags=None,
     include_deleted: bool = False,
     only_deleted: bool = False,
 ):
@@ -644,7 +644,7 @@ def find_pictures_by_smart_score(
         server,
         format,
         candidate_ids=candidate_ids,
-        penalized_tags=penalized_tags,
+        penalised_tags=penalised_tags,
         include_deleted=include_deleted,
         only_deleted=only_deleted,
     )

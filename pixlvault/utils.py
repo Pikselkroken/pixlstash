@@ -91,8 +91,8 @@ def serialize_user_config(user) -> dict:
         for key in allowed_fields
     }
 
-    config["smart_score_penalized_tags"] = _smart_score_penalized_tags(
-        getattr(source, "smart_score_penalized_tags", None),
+    config["smart_score_penalised_tags"] = _smart_score_penalised_tags(
+        getattr(source, "smart_score_penalised_tags", None),
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     )
@@ -116,7 +116,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "show_problem_icon",
         "similarity_character",
         "stack_strictness",
-        "smart_score_penalized_tags",
+        "smart_score_penalised_tags",
         "auto_scrapheap_smart_score_threshold",
         "auto_scrapheap_lookback_minutes",
     }
@@ -136,11 +136,11 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.similarity_character = new_value
                 updated = True
             continue
-        if key == "smart_score_penalized_tags":
+        if key == "smart_score_penalised_tags":
             if value in ("", None):
                 new_value = None
             else:
-                d = _smart_score_penalized_tags(
+                d = _smart_score_penalised_tags(
                     value,
                     None,
                     allow_empty=True,
@@ -148,11 +148,11 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 )
                 if d is None:
                     raise ValueError(
-                        "smart_score_penalized_tags must be a JSON list or object"
+                        "smart_score_penalised_tags must be a JSON list or object"
                     )
                 new_value = json.dumps(d)
-            if user.smart_score_penalized_tags != new_value:
-                user.smart_score_penalized_tags = new_value
+            if user.smart_score_penalised_tags != new_value:
+                user.smart_score_penalised_tags = new_value
                 updated = True
             continue
         if key == "auto_scrapheap_smart_score_threshold":
@@ -218,7 +218,7 @@ def _thumbnail_size(value):
     return None
 
 
-def _smart_score_penalized_tags(
+def _smart_score_penalised_tags(
     value,
     fallback=None,
     allow_empty: bool = False,

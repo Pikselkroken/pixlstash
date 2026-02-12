@@ -92,7 +92,7 @@ class PictureTagger:
                 )
                 self._device = "cpu"
 
-        logger.info(f"PictureTagger initialized with device: {self._device}")
+        logger.info(f"PictureTagger initialised with device: {self._device}")
 
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._use_custom_tagger = True
@@ -368,7 +368,7 @@ class PictureTagger:
             f"_generate_florence_caption called: image_path={image_path}, _retry_on_cpu={_retry_on_cpu}"
         )
         if self._florence_model is None:
-            logger.error("Florence-2 model is not initialized")
+            logger.error("Florence-2 model is not initialised")
             return None
 
         try:
@@ -400,7 +400,7 @@ class PictureTagger:
                             (new_width, new_height), Image.Resampling.LANCZOS
                         )
                         logger.debug(
-                            f"Resized video frame to {new_width}x{new_height} for faster processing"
+                            f"Resised video frame to {new_width}x{new_height} for faster processing"
                         )
                     inputs = self._florence_processor(
                         text="<MORE_DETAILED_CAPTION>",
@@ -467,7 +467,7 @@ class PictureTagger:
                         (new_width, new_height), Image.Resampling.LANCZOS
                     )
                     logger.debug(
-                        f"Resized image to {new_width}x{new_height} for faster processing"
+                        f"Resised image to {new_width}x{new_height} for faster processing"
                     )
                 inputs = self._florence_processor(
                     text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
@@ -875,7 +875,7 @@ class PictureTagger:
         from PIL import Image
 
         if not hasattr(self, "_custom_transform"):
-            logger.warning("Custom tagger not initialized; skipping custom tags.")
+            logger.warning("Custom tagger not initialised; skipping custom tags.")
             return {}
         if not hasattr(self, "_custom_model") or not hasattr(self, "_custom_labels"):
             logger.warning("Custom tagger model not available; skipping custom tags.")

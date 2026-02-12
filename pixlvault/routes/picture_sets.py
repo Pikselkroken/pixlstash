@@ -17,7 +17,7 @@ from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_scoring import (
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
-    get_smart_score_penalized_tags_from_request,
+    get_smart_score_penalised_tags_from_request,
 )
 from pixlvault.utils import safe_model_dict
 
@@ -144,7 +144,7 @@ def create_router(server) -> APIRouter:
             return set_dict
 
         if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
-            penalized_tags = get_smart_score_penalized_tags_from_request(
+            penalised_tags = get_smart_score_penalised_tags_from_request(
                 server, request
             )
             pictures = find_pictures_by_smart_score(
@@ -154,7 +154,7 @@ def create_router(server) -> APIRouter:
                 sys.maxsize,
                 descending,
                 candidate_ids=picture_ids,
-                penalized_tags=penalized_tags,
+                penalised_tags=penalised_tags,
             )
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 

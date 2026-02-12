@@ -40,7 +40,7 @@ class Quality(SQLModel, table=True):
     luminance_entropy: Optional[float] = Field(default=None, index=True)
     dominant_hue: Optional[float] = Field(default=None, index=True)
 
-    # Store color histogram as a binary blob (np.float32 array, serialized)
+    # Store color histogram as a binary blob (np.float32 array, serialised)
     color_histogram: Optional[bytes] = Field(
         default=None,
         sa_column=Column("color_histogram", LargeBinary, default=None, nullable=True),
@@ -88,14 +88,14 @@ class Quality(SQLModel, table=True):
         """
         Calculate quality metrics for a batch of images.
         Accepts a 4D np.ndarray (batch, height, width, channels) and returns a list of PictureQuality instances.
-        All metrics are vectorized for speed. If any metric is None, set to -1.0.
+        All metrics are vectorised for speed. If any metric is None, set to -1.0.
         """
         batch_size = images.shape[0]
         if images.ndim != 4:
             raise ValueError(
                 "Input must be a 4D array: (batch, height, width, channels)"
             )
-        # Vectorized brightness and contrast
+        # Vectorised brightness and contrast
         brightness = images.mean(axis=(1, 2, 3)) / 255.0
         contrast = images.std(axis=(1, 2, 3)) / 255.0
         if images.shape[3] == 3:
@@ -323,7 +323,7 @@ class Quality(SQLModel, table=True):
 
     @staticmethod
     def _calculate_noise_level(image: np.ndarray) -> float:
-        # Optimized: grayscale and quarter resolution
+        # Optimised: grayscale and quarter resolution
 
         # Convert to grayscale
         if image.ndim == 3:

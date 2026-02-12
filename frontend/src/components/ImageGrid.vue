@@ -165,12 +165,12 @@
               <div
                 v-if="
                   props.showProblemIcon &&
-                  hasPenalizedTags(img) &&
+                  hasPenalisedTags(img) &&
                   isThumbnailReady(img.id) &&
                   img.thumbnail
                 "
-                class="penalized-tag-indicator thumbnail-badge thumbnail-badge--top-left"
-                :title="penalizedTagsTitle(img)"
+                class="penalised-tag-indicator thumbnail-badge thumbnail-badge--top-left"
+                :title="penalisedTagsTitle(img)"
               >
                 <v-icon size="18" color="error"
                   >mdi-emoticon-sad-outline</v-icon
@@ -2634,8 +2634,8 @@ async function fetchAllGridImages() {
         ...img,
         idx: i,
         thumbnail: existing?.thumbnail ?? null,
-        penalized_tags: Array.isArray(existing?.penalized_tags)
-          ? existing.penalized_tags
+        penalised_tags: Array.isArray(existing?.penalised_tags)
+          ? existing.penalised_tags
           : [],
         faces: Array.isArray(existing?.faces) ? existing.faces : [],
         hands: Array.isArray(existing?.hands) ? existing.hands : [],
@@ -3099,9 +3099,9 @@ async function fetchThumbnailsBatch(start, end) {
         if (props.showHandBboxes && gridImg.hands.length) {
           overlayNeedsRedraw = true;
         }
-        gridImg.penalized_tags =
-          thumbObj && Array.isArray(thumbObj.penalized_tags)
-            ? thumbObj.penalized_tags
+        gridImg.penalised_tags =
+          thumbObj && Array.isArray(thumbObj.penalised_tags)
+            ? thumbObj.penalised_tags
             : [];
         if (thumbObj) {
           const thumbWidth = Number(thumbObj.thumbnail_width);
@@ -3178,14 +3178,14 @@ function updateVisibleThumbnails() {
   }, 80);
 }
 
-function hasPenalizedTags(img) {
-  return Array.isArray(img?.penalized_tags) && img.penalized_tags.length > 0;
+function hasPenalisedTags(img) {
+  return Array.isArray(img?.penalised_tags) && img.penalised_tags.length > 0;
 }
 
-function penalizedTagsTitle(img) {
-  const tags = Array.isArray(img?.penalized_tags) ? img.penalized_tags : [];
+function penalisedTagsTitle(img) {
+  const tags = Array.isArray(img?.penalised_tags) ? img.penalised_tags : [];
   if (!tags.length) return "";
-  return `Penalized tags: ${tags.join(", ")}`;
+  return `Penalised tags: ${tags.join(", ")}`;
 }
 
 function onGridScroll(e) {
@@ -4065,7 +4065,7 @@ function handleEmptyStateReset() {
   border-radius: 8px;
 }
 
-.penalized-tag-indicator {
+.penalised-tag-indicator {
   display: flex;
   align-items: center;
   justify-content: center;

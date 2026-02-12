@@ -487,7 +487,7 @@
                     :key="`unassigned-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
-                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
                     ]"
                     draggable="true"
                     @dragstart="
@@ -553,7 +553,7 @@
                     :key="`face-${group.faceKey}-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
-                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
                     ]"
                     draggable="true"
                     @dragstart="
@@ -609,7 +609,7 @@
                     :key="`hand-${group.handKey}-${tag.id ?? tag.tag}`"
                     :class="[
                       'overlay-tag',
-                      { 'overlay-tag--penalized': isPenalizedTag(tag) },
+                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
                     ]"
                     draggable="true"
                     @dragstart="
@@ -834,8 +834,8 @@ let copyResetTimer = null;
 const addingTag = ref(false);
 const newTag = ref("");
 const tagInputRef = ref(null);
-const penalizedTags = ref(new Set());
-const penalizedTagsLoading = ref(false);
+const penalisedTags = ref(new Set());
+const penalisedTagsLoading = ref(false);
 const lastTagUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 
@@ -846,23 +846,23 @@ watch(open, (value) => {
     addToSetControlKey.value += 1;
   } else {
     fetchCharacters();
-    fetchPenalizedTags();
+    fetchPenalisedTags();
   }
 });
 
-async function fetchPenalizedTags() {
-  if (penalizedTagsLoading.value) return;
-  penalizedTagsLoading.value = true;
+async function fetchPenalisedTags() {
+  if (penalisedTagsLoading.value) return;
+  penalisedTagsLoading.value = true;
   try {
     const res = await apiClient.get("/users/me/config");
     let list = [];
-    if (Array.isArray(res.data?.smart_score_penalized_tags)) {
-      list = res.data.smart_score_penalized_tags;
+    if (Array.isArray(res.data?.smart_score_penalised_tags)) {
+      list = res.data.smart_score_penalised_tags;
     } else if (
-      res.data?.smart_score_penalized_tags &&
-      typeof res.data.smart_score_penalized_tags === "object"
+      res.data?.smart_score_penalised_tags &&
+      typeof res.data.smart_score_penalised_tags === "object"
     ) {
-      list = Object.keys(res.data.smart_score_penalized_tags);
+      list = Object.keys(res.data.smart_score_penalised_tags);
     }
     const d = list
       .map((tag) =>
@@ -871,18 +871,18 @@ async function fetchPenalizedTags() {
           .toLowerCase(),
       )
       .filter(Boolean);
-    penalizedTags.value = new Set(d);
+    penalisedTags.value = new Set(d);
   } catch (e) {
-    penalizedTags.value = new Set();
+    penalisedTags.value = new Set();
   } finally {
-    penalizedTagsLoading.value = false;
+    penalisedTagsLoading.value = false;
   }
 }
 
-function isPenalizedTag(tag) {
+function isPenalisedTag(tag) {
   const key = tagLabel(tag).trim().toLowerCase();
   if (!key) return false;
-  return penalizedTags.value.has(key);
+  return penalisedTags.value.has(key);
 }
 
 function getFullImageUrl(targetImage = null) {
@@ -1532,7 +1532,7 @@ onMounted(() => {
   window.addEventListener("keydown", handleKeydown);
   window.addEventListener("resize", updateDescriptionScrollState);
   nextTick(updateDescriptionScrollState);
-  fetchPenalizedTags();
+  fetchPenalisedTags();
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
       scheduleOverlayDimsUpdate();
@@ -3571,7 +3571,7 @@ function downloadComfyWorkflow(workflow) {
   cursor: pointer;
 }
 
-.overlay-tag--penalized {
+.overlay-tag--penalised {
   color: rgb(var(--v-theme-error));
   border: 1px solid rgba(var(--v-theme-error), 0.6);
   background: rgba(var(--v-theme-error), 0.15);
