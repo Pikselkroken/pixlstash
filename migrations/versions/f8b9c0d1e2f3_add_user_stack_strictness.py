@@ -21,21 +21,21 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     conn = op.get_bind()
     existing_cols = {
-        row[1]
-        for row in conn.execute(sa.text("PRAGMA table_info('user')")).fetchall()
+        row[1] for row in conn.execute(sa.text("PRAGMA table_info('user')")).fetchall()
     }
     if "stack_strictness" not in existing_cols:
         op.add_column(
             "user",
-            sa.Column("stack_strictness", sa.Float(), nullable=True, server_default="0.92"),
+            sa.Column(
+                "stack_strictness", sa.Float(), nullable=True, server_default="0.92"
+            ),
         )
 
 
 def downgrade() -> None:
     conn = op.get_bind()
     existing_cols = {
-        row[1]
-        for row in conn.execute(sa.text("PRAGMA table_info('user')")).fetchall()
+        row[1] for row in conn.execute(sa.text("PRAGMA table_info('user')")).fetchall()
     }
     if "stack_strictness" in existing_cols:
         op.drop_column("user", "stack_strictness")

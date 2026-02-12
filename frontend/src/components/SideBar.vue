@@ -1175,8 +1175,6 @@ async function pictureSetSaved(setData) {
 }
 
 onMounted(() => {
-  fetchSortedCharactersAndSortOptions(); // Ensure proper order of fetching
-  fetchPictureSets();
   console.log(
     "[SideBar.vue] Initial descendingModel value:",
     descendingModel.value,
@@ -1737,7 +1735,12 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             handleDropOnCharacter({ characterId: char.id, event: $event })
           "
         >
-          <img :src="characterThumbnails[char.id] || unknownPerson" alt="" />
+          <img
+            :src="characterThumbnails[char.id] || unknownPerson"
+            alt=""
+            width="36"
+            height="36"
+          />
         </button>
         <div
           v-if="nonReferenceSets.length"
@@ -1914,6 +1917,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
                   : unknownPerson
               "
               alt=""
+              width="36"
+              height="36"
               class="sidebar-character-thumb"
             />
           </span>
@@ -2240,7 +2245,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .sidebar-collapsed-thumb img {
   width: 36px;
   height: 36px;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: 8px;
   display: block;
 }
@@ -2956,8 +2961,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   }
 
   .sidebar-character-thumb {
-    max-width: 44px;
-    max-height: 44px;
+    width: 44px;
+    height: 44px;
   }
 
   .add-character-inline,

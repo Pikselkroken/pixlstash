@@ -113,6 +113,8 @@ let columnsMenuCloseTimeout = null;
 const updatesSocket = ref(null);
 let updatesReconnectTimer = null;
 const configLoading = ref(false);
+const configApplying = ref(false);
+const configSnapshot = ref({});
 
 function refreshGridVersion() {
   gridVersion.value++;
@@ -457,6 +459,7 @@ function handleColumnsEnd() {
 async function fetchConfig() {
   if (configLoading.value) return;
   configLoading.value = true;
+  configApplying.value = true;
   try {
     const res = await apiClient.get("/users/me/config");
     console.log("Fetched config:", res);
@@ -526,6 +529,22 @@ async function fetchConfig() {
     selectedSimilarityCharacter.value =
       similarityValue ?? selectedSimilarityCharacter.value ?? null;
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
+    configSnapshot.value = {
+      sort: selectedSort.value || "",
+      descending: selectedDescending.value,
+      columns: typeof columns.value === "number" ? columns.value : null,
+      show_stars: showStars.value,
+      show_face_bboxes: showFaceBboxes.value,
+      show_hand_bboxes: showHandBboxes.value,
+      show_format: showFormat.value,
+      show_resolution: showResolution.value,
+      show_problem_icon: showProblemIcon.value,
+      similarity_character: selectedSimilarityCharacter.value,
+      stack_strictness:
+        res.data.stack_strictness != null
+          ? Number(res.data.stack_strictness)
+          : null,
+    };
     console.debug("[Config] Overlay settings applied", {
       showFaceBboxes: showFaceBboxes.value,
       showHandBboxes: showHandBboxes.value,
@@ -536,13 +555,15 @@ async function fetchConfig() {
   } catch (e) {
     console.error("Failed to fetch /users/me/config:", e);
   } finally {
+    configApplying.value = false;
     configLoading.value = false;
     configLoaded.value = true;
   }
 }
 
 async function patchConfigUIOptions() {
-  if (!configLoaded.value || configLoading.value) return;
+  if (!configLoaded.value || configLoading.value || configApplying.value)
+    return;
   // Only include fields the backend expects and that are not undefined/null/empty
   const patch = {};
   if (selectedSort.value) patch.sort = selectedSort.value;
@@ -574,12 +595,21 @@ async function patchConfigUIOptions() {
     }
   }
 
-  console.log("PATCH /users/me/config payload:", patch);
+  const snapshot = configSnapshot.value || {};
+  const changed = Object.fromEntries(
+    Object.entries(patch).filter(([key, value]) => snapshot[key] !== value),
+  );
+  if (Object.keys(changed).length === 0) {
+    return;
+  }
+
+  console.log("PATCH /users/me/config payload:", changed);
   try {
-    const response = await apiClient.patch("/users/me/config", patch);
+    const response = await apiClient.patch("/users/me/config", changed);
 
     const updatedConfig = await response.data;
     console.log("PATCH /users/me/config response:", updatedConfig);
+    configSnapshot.value = { ...snapshot, ...changed };
   } catch (e) {
     console.error("Error patching /users/me/config:", e);
   }

@@ -64,7 +64,6 @@ def serialize_user_config(user) -> dict:
 
     default_user = User()
     source = user or default_user
-    data = safe_model_dict(source)
 
     allowed_fields = {
         "description",
@@ -84,9 +83,12 @@ def serialize_user_config(user) -> dict:
     }
 
     config = {
-        key: (value if value is not None else getattr(default_user, key))
+        key: (
+            getattr(source, key)
+            if getattr(source, key) is not None
+            else getattr(default_user, key)
+        )
         for key in allowed_fields
-        for value in (data.get(key),)
     }
 
     config["smart_score_penalized_tags"] = normalize_smart_score_penalized_tags(

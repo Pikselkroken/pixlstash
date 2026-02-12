@@ -1995,6 +1995,9 @@ async function removeHandDetection(hand) {
 }
 
 async function fetchOverlayThumbnail(imageId) {
+  if (!open.value) {
+    return;
+  }
   if (!imageId || !backendUrl.value) {
     overlayThumbnail.value = null;
     overlayThumbnailFaceMap.value = {};

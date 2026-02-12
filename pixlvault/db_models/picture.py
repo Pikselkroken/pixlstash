@@ -557,6 +557,20 @@ class Picture(SQLModel, table=True):
         return cls.scalar_fields() - cls.large_binary_fields()
 
     @classmethod
+    def grid_fields(cls):
+        """
+        Return a minimal set of fields for grid listing.
+        """
+        return {
+            "id",
+            "width",
+            "height",
+            "format",
+            "score",
+            "created_at",
+        }
+
+    @classmethod
     def scalar_fields(cls):
         """
         Return a list of simple scalar fields
@@ -642,7 +656,7 @@ class Picture(SQLModel, table=True):
         if format:
             query = query.where(Picture.format.in_(format))
 
-        select_fields = cls.metadata_fields()
+        select_fields = metadata_fields or cls.metadata_fields()
         if select_fields:
             select_fields = list(set(select_fields) | {"id"})
             scalar_attrs = [

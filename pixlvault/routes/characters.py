@@ -1,5 +1,10 @@
+import json
+import os
 import time
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
+from PIL import Image, ImageOps
+from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
 from pixlvault.database import DBPriority
@@ -32,54 +37,67 @@ def create_router(server) -> APIRouter:
         """
         start = time.time()
         if id == "ALL":
-            metadata_fields = Picture.metadata_fields()
-            pics = server.vault.db.run_immediate_read_task(
-                Picture.find, select_fields=metadata_fields
-            )
-            image_count = len(pics)
+
+            def count_all(session: Session) -> int:
+                return session.exec(
+                    select(func.count(Picture.id)).where(
+                        Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
+                    )
+                ).one()
+
+            image_count = server.vault.db.run_immediate_read_task(count_all)
             logger.debug("ALL pics count: {}".format(image_count))
             char_id = None
         elif id == "SCRAPHEAP":
-            pics = server.vault.db.run_immediate_read_task(
-                Picture.find,
-                select_fields=["id"],
-                only_deleted=True,
-            )
-            image_count = len(pics)
+
+            def count_scrapheap(session: Session) -> int:
+                return session.exec(
+                    select(func.count(Picture.id)).where(
+                        Picture.deleted.is_(True),
+                        Picture.imported_at.is_not(None),
+                    )
+                ).one()
+
+            image_count = server.vault.db.run_immediate_read_task(count_scrapheap)
             logger.debug("SCRAPHEAP pics count: {}".format(image_count))
             char_id = None
         elif id == "UNASSIGNED":
 
-            def find_unassigned(session: Session):
-                pics = Picture.find(
-                    session, select_fields=["characters", "picture_sets"]
+            def count_unassigned(session: Session) -> int:
+                face_exists = exists().where(
+                    Face.picture_id == Picture.id,
+                    Face.character_id.is_not(None),
                 )
-                return [
-                    pic for pic in pics if not pic.characters and not pic.picture_sets
-                ]
+                set_exists = exists().where(PictureSetMember.picture_id == Picture.id)
+                return session.exec(
+                    select(func.count(Picture.id)).where(
+                        Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
+                        ~face_exists,
+                        ~set_exists,
+                    )
+                ).one()
 
-            pics = server.vault.db.run_immediate_read_task(find_unassigned)
-            image_count = len(pics)
+            image_count = server.vault.db.run_immediate_read_task(count_unassigned)
             logger.debug("UNASSIGNED pics count: {}".format(image_count))
             char_id = None
         else:
 
-            def find_assigned(session: Session, character_id: int):
-                rows = session.exec(
-                    select(Face.picture_id)
+            def count_assigned(session: Session, character_id: int) -> int:
+                return session.exec(
+                    select(func.count(func.distinct(Face.picture_id)))
                     .join(Picture, Face.picture_id == Picture.id)
                     .where(
                         Face.character_id == character_id,
                         Picture.deleted.is_(False),
                         Picture.imported_at.is_not(None),
                     )
-                ).all()
-                return set(rows)
+                ).one()
 
-            faces = server.vault.db.run_immediate_read_task(
-                find_assigned, character_id=int(id)
+            image_count = server.vault.db.run_immediate_read_task(
+                count_assigned, character_id=int(id)
             )
-            image_count = len(faces)
             char_id = int(id)
 
         if char_id:
@@ -237,6 +255,54 @@ def create_router(server) -> APIRouter:
     @router.get("/characters/{id}/{field}")
     async def get_character_field_by_id(id: int, field: str):
         if field == "thumbnail":
+            thumbnail_cache_version = 2
+            cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_path = os.path.join(cache_dir, f"character_{id}.png")
+            meta_path = os.path.join(cache_dir, f"character_{id}.json")
+
+            def fetch_best_picture_id(session: Session, character_id: int):
+                row = session.exec(
+                    select(Picture.id, Picture.score)
+                    .join(Face, Face.picture_id == Picture.id)
+                    .where(
+                        Face.character_id == character_id,
+                        Picture.deleted.is_(False),
+                        Picture.imported_at.is_not(None),
+                    )
+                    .order_by(
+                        Picture.score.is_(None),
+                        Picture.score.desc(),
+                        Picture.id.desc(),
+                    )
+                    .limit(1)
+                ).first()
+                if not row:
+                    return None
+                pic_id, score = row
+                return {
+                    "picture_id": int(pic_id),
+                    "score": float(score) if score is not None else None,
+                }
+
+            best_picture = server.vault.db.run_immediate_read_task(
+                fetch_best_picture_id, character_id=id
+            )
+            if not best_picture:
+                raise HTTPException(
+                    status_code=404, detail="No face thumbnail found for character"
+                )
+            if os.path.exists(cache_path) and os.path.exists(meta_path):
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as handle:
+                        meta = json.load(handle)
+                    if (
+                        meta.get("picture_id") == best_picture.get("picture_id")
+                        and meta.get("version") == thumbnail_cache_version
+                    ):
+                        return FileResponse(cache_path, media_type="image/png")
+                except Exception:
+                    pass
             char = server.vault.db.run_immediate_read_task(
                 Character.find,
                 select_fields=["reference_picture_set_id", "faces"],
@@ -306,11 +372,27 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(
                     status_code=404, detail="Failed to crop face thumbnail"
                 )
-            from io import BytesIO
+            try:
+                crop = crop.convert("RGB")
+            except Exception:
+                pass
+            crop = ImageOps.contain(crop, (36, 36), Image.LANCZOS)
+            try:
+                crop.save(cache_path, format="PNG")
+                try:
+                    with open(meta_path, "w", encoding="utf-8") as handle:
+                        meta_payload = dict(best_picture)
+                        meta_payload["version"] = thumbnail_cache_version
+                        json.dump(meta_payload, handle)
+                except Exception:
+                    pass
+                return FileResponse(cache_path, media_type="image/png")
+            except Exception:
+                from io import BytesIO
 
-            buf = BytesIO()
-            crop.save(buf, format="PNG")
-            return Response(content=buf.getvalue(), media_type="image/png")
+                buf = BytesIO()
+                crop.save(buf, format="PNG")
+                return Response(content=buf.getvalue(), media_type="image/png")
         try:
             char = server.vault.db.run_immediate_read_task(
                 Character.find, select_fields=[field], id=id

@@ -2387,6 +2387,7 @@ function buildPictureIdsQueryParams() {
       );
     }
   }
+  params.append("fields", "grid");
   // Add format filter for backend media type filtering
   if (props.mediaTypeFilter === "images") {
     for (const ext of PIL_IMAGE_EXTENSIONS) {
@@ -2655,12 +2656,13 @@ async function fetchAllGridImages() {
     const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
     visibleStart.value = 0;
     visibleEnd.value = Math.min(newImages.length, windowCount);
-    const prefetchStart = Math.max(0, visibleStart.value - renderBuffer.value);
-    const prefetchEnd = Math.min(
-      newImages.length,
-      visibleEnd.value + renderBuffer.value,
-    );
-    fetchThumbnailsBatch(prefetchStart, prefetchEnd);
+    if (initialRender.value) {
+      const prefetchEnd = Math.min(
+        newImages.length,
+        visibleEnd.value + divisibleViewWindow.value,
+      );
+      fetchThumbnailsBatch(visibleStart.value, prefetchEnd);
+    }
     const rangeEnd = performance.now();
     const fetchEnd = performance.now();
     console.log("[ImageGrid.vue] fetchAllGridImages total timing", {
@@ -2689,7 +2691,9 @@ async function fetchAllGridImages() {
       gridReady.value = true;
     }
   }
-  updateVisibleThumbnails();
+  if (!initialRender.value) {
+    updateVisibleThumbnails();
+  }
   if (pendingScrollTop.value !== null && scrollWrapper.value) {
     const targetTop = pendingScrollTop.value;
     pendingScrollTop.value = null;
@@ -3850,6 +3854,7 @@ function handleEmptyStateReset() {
   color: rgb(var(--v-theme-on-surface));
   text-overflow: ellipsis;
   overflow-y: hidden;
+  overflow-x: hidden;
   white-space: nowrap;
 }
 

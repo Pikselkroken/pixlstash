@@ -731,6 +731,26 @@ def create_router(server) -> APIRouter:
                 include_deleted=True,
             )
         )
+        character_name_map = {}
+        character_ids = set()
+        for pic in pics:
+            for face in getattr(pic, "faces", []):
+                if getattr(face, "character_id", None) is not None:
+                    character_ids.add(face.character_id)
+        if character_ids:
+
+            def fetch_character_names(session: Session):
+                rows = session.exec(
+                    select(Character.id, Character.name).where(
+                        Character.id.in_(character_ids)
+                    )
+                ).all()
+                return rows
+
+            rows = server.vault.db.run_task(
+                fetch_character_names, priority=DBPriority.IMMEDIATE
+            )
+            character_name_map = {char_id: name for char_id, name in rows or []}
         results = {}
         for pic in pics:
             try:
@@ -748,25 +768,14 @@ def create_router(server) -> APIRouter:
                         bbox = None
                     if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
                         raw_face_bboxes.append(list(bbox))
-                        character = (
-                            server.vault.db.run_task(
-                                lambda session: Character.find(
-                                    session,
-                                    id=face.character_id,
-                                    select_fields=["name"],
-                                )
-                            )
-                            if face.character_id
-                            else None
-                        )
                         face_entries.append(
                             {
                                 "id": face.id,
                                 "bbox": list(bbox),
                                 "character_id": face.character_id,
-                                "character_name": getattr(character[0], "name", None)
-                                if character
-                                else None,
+                                "character_name": character_name_map.get(
+                                    face.character_id
+                                ),
                                 "frame_index": getattr(face, "frame_index", None),
                             }
                         )
@@ -2519,8 +2528,12 @@ def create_router(server) -> APIRouter:
         descending: bool = Query(True),
         offset: int = Query(0),
         limit: int = Query(sys.maxsize),
+        fields: str = Query(None),
     ):
-        metadata_fields = Picture.metadata_fields()
+        if fields == "grid":
+            metadata_fields = list(Picture.grid_fields())
+        else:
+            metadata_fields = Picture.metadata_fields()
         return _select_pictures_for_listing(
             server=server,
             request=request,
