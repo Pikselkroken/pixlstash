@@ -290,6 +290,21 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
         raise
 
 
+def _ensure_user_stack_strictness(engine) -> None:
+    inspector = sa_inspect(engine)
+    if "user" not in inspector.get_table_names():
+        return
+    with engine.begin() as conn:
+        existing_cols = {
+            row[1] for row in conn.exec_driver_sql("PRAGMA table_info('user')")
+        }
+        if "stack_strictness" in existing_cols:
+            return
+        conn.exec_driver_sql(
+            "ALTER TABLE user ADD COLUMN stack_strictness FLOAT DEFAULT 0.92"
+        )
+
+
 class VaultDatabase:
     def __init__(self, db_path: str):
         self._db_path = db_path
@@ -301,6 +316,7 @@ class VaultDatabase:
         event.listen(self._engine, "connect", init_database)
 
         _run_migrations(self._engine, self._db_path, db_exists)
+        _ensure_user_stack_strictness(self._engine)
 
         # Write queue and worker
         self._task_queue = queue.PriorityQueue()
