@@ -85,7 +85,7 @@ const statusMessage = ref("");
 const characterMembersById = ref({});
 let statusTimer = null;
 
-const normalizedPictureIds = computed(() =>
+const normalisedPictureIds = computed(() =>
   (Array.isArray(props.pictureIds) ? props.pictureIds : [])
     .map((id) => String(id))
     .filter(Boolean),
@@ -110,7 +110,7 @@ const filteredCharacters = computed(() => {
 });
 
 function isCharacterDisabled(character) {
-  const ids = normalizedPictureIds.value;
+  const ids = normalisedPictureIds.value;
   if (!ids.length) return true;
   const members = characterMembersById.value?.[character.id];
   if (!members || members.size === 0) return false;
@@ -164,7 +164,7 @@ async function fetchCharacters() {
 }
 
 async function fetchCharacterMembers(list) {
-  const ids = normalizedPictureIds.value;
+  const ids = normalisedPictureIds.value;
   if (!props.backendUrl || !ids.length) {
     characterMembersById.value = {};
     return;
@@ -208,7 +208,7 @@ async function fetchCharacterMembers(list) {
 async function addToCharacter(character) {
   if (!character?.id) return;
   if (isCharacterDisabled(character)) return;
-  const ids = normalizedPictureIds.value;
+  const ids = normalisedPictureIds.value;
   if (!ids.length) return;
   const members = characterMembersById.value?.[character.id];
   const idsToAdd = members ? ids.filter((id) => !members.has(String(id))) : ids;
@@ -243,7 +243,7 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => normalizedPictureIds.value,
+  () => normalisedPictureIds.value,
   () => {
     if (menuOpen.value) {
       fetchCharacters();

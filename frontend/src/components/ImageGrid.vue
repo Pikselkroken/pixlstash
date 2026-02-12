@@ -398,8 +398,8 @@ import {
   isSupportedImageFile,
   dataTransferHasSupportedMedia,
   isSupportedVideoFile,
-  normalizeMediaFormat,
-  normalizePictureId,
+  MediaFormat,
+  PictureId,
   buildMediaUrl,
   PIL_IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
@@ -416,15 +416,10 @@ import {
   formatIsoDate,
   getStackColor,
   handBoxColor,
-  normalizeStackThreshold,
+  StackThreshold,
   toggleScore,
 } from "../utils/utils.js";
-import {
-  dedupeTagList,
-  getTagId,
-  normalizeTagList,
-  tagMatches,
-} from "../utils/tags.js";
+import { dedupeTagList, getTagId, TagList, tagMatches } from "../utils/tags.js";
 import { debounce } from "lodash-es";
 
 const emit = defineEmits([
@@ -697,10 +692,10 @@ watch(
     const pictureIds = Array.isArray(payload.pictureIds)
       ? payload.pictureIds
       : [];
-    const normalizedPayloadIds = pictureIds
-      .map((id) => normalizePictureId(id))
+    const dPayloadIds = pictureIds
+      .map((id) => PictureId(id))
       .filter((id) => id != null);
-    for (const id of normalizedPayloadIds) {
+    for (const id of dPayloadIds) {
       refreshGridImage(id);
     }
   },
@@ -1185,13 +1180,13 @@ function clearSelection() {
 async function refreshTagsForSelection() {
   if (!selectedImageIds.value.length) return;
   const ids = selectedImageIds.value.slice();
-  const normalizedIds = new Set(ids.map((id) => normalizePictureId(id)));
+  const dIds = new Set(ids.map((id) => PictureId(id)));
   try {
     await apiClient.post(`${props.backendUrl}/pictures/clear_tags`, {
       picture_ids: ids,
     });
     allGridImages.value = allGridImages.value.map((img) => {
-      if (!img || !normalizedIds.has(normalizePictureId(img.id))) {
+      if (!img || !dIds.has(PictureId(img.id))) {
         return img;
       }
       return { ...img, tags: [] };
@@ -1227,7 +1222,7 @@ function pauseVideo(id) {
 
 function isVideo(img) {
   if (!img) return false;
-  const format = normalizeMediaFormat(img);
+  const format = MediaFormat(img);
   if (format) {
     return isSupportedVideoFile(`file.${format}`);
   }
@@ -1700,9 +1695,9 @@ function invalidateThumbnailIndex(index) {
 
 async function refreshGridImage(imageId) {
   if (!imageId) return;
-  const normalizedId = normalizePictureId(imageId);
+  const dId = PictureId(imageId);
   const idx = allGridImages.value.findIndex(
-    (img) => normalizePictureId(img?.id) === normalizedId,
+    (img) => PictureId(img?.id) === dId,
   );
   if (idx === -1) return;
   const latestInfo = await fetchImageInfo(imageId, {
@@ -1771,10 +1766,8 @@ function reorderStackByScore(stackIndex) {
 function addImageToGrid(imageData) {
   if (!imageData?.id) return null;
   const items = allGridImages.value.slice();
-  const normalizedId = normalizePictureId(imageData.id);
-  const existingIndex = items.findIndex(
-    (img) => normalizePictureId(img?.id) === normalizedId,
-  );
+  const dId = PictureId(imageData.id);
+  const existingIndex = items.findIndex((img) => PictureId(img?.id) === dId);
   if (existingIndex !== -1) {
     const current = items[existingIndex] || {};
     items[existingIndex] = {
@@ -1889,10 +1882,8 @@ function invalidateVisibleThumbnailRanges() {
 
 function repositionImageByScore(imageId, newScore) {
   const items = allGridImages.value.slice();
-  const normalizedId = normalizePictureId(imageId);
-  const currentIndex = items.findIndex(
-    (item) => normalizePictureId(item?.id) === normalizedId,
-  );
+  const dId = PictureId(imageId);
+  const currentIndex = items.findIndex((item) => PictureId(item?.id) === dId);
   if (currentIndex === -1) return;
 
   const target = items[currentIndex];
@@ -2496,10 +2487,10 @@ async function fetchAllGridImages() {
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         const picList = Array.isArray(picsData) ? picsData : [];
         const picsById = new Map(
-          picList.map((img) => [normalizePictureId(img?.id), img]),
+          picList.map((img) => [PictureId(img?.id), img]),
         );
         images = referenceIds
-          .map((id) => picsById.get(normalizePictureId(id)))
+          .map((id) => picsById.get(PictureId(id)))
           .filter(Boolean);
         console.log("[ImageGrid.vue] /pictures by reference ids timing", {
           count: images.length,
@@ -2508,7 +2499,7 @@ async function fetchAllGridImages() {
         });
       }
     } else if (props.selectedSort === STACKS_SORT_KEY) {
-      const threshold = normalizeStackThreshold(props.stackThreshold);
+      const threshold = StackThreshold(props.stackThreshold);
       const stackParams = buildStackQueryParams();
       const url = `${props.backendUrl}/pictures/stacks?threshold=${encodeURIComponent(
         threshold,
@@ -2601,9 +2592,7 @@ async function fetchAllGridImages() {
     const shouldHighlight = highlightNextFetch.value && hasLoadedOnce.value;
     const nextIdSet = new Set(
       Array.isArray(images)
-        ? images
-            .map((img) => normalizePictureId(img?.id))
-            .filter((id) => id !== null)
+        ? images.map((img) => PictureId(img?.id)).filter((id) => id !== null)
         : [],
     );
     if (shouldHighlight) {
@@ -2625,13 +2614,13 @@ async function fetchAllGridImages() {
     const existingById = new Map(
       allGridImages.value
         .filter((img) => img && img.id != null)
-        .map((img) => [normalizePictureId(img.id), img]),
+        .map((img) => [PictureId(img.id), img]),
     );
     const uniqueImages = Array.isArray(images)
       ? (() => {
           const seen = new Set();
           return images.filter((img) => {
-            const id = normalizePictureId(img?.id);
+            const id = PictureId(img?.id);
             if (id == null) return true;
             if (seen.has(id)) return false;
             seen.add(id);
@@ -2640,9 +2629,7 @@ async function fetchAllGridImages() {
         })()
       : [];
     const newImages = uniqueImages.map((img, i) => {
-      const existing = img?.id
-        ? existingById.get(normalizePictureId(img.id))
-        : null;
+      const existing = img?.id ? existingById.get(PictureId(img.id)) : null;
       return {
         ...img,
         idx: i,
@@ -3319,9 +3306,7 @@ function handleImageCardClick(img, idx, event) {
   const anchorIndex =
     lastSelectedImageId != null
       ? allGrid.findIndex(
-          (item) =>
-            normalizePictureId(item?.id) ===
-            normalizePictureId(lastSelectedImageId),
+          (item) => PictureId(item?.id) === PictureId(lastSelectedImageId),
         )
       : -1;
   if (isCtrl) {
@@ -3404,8 +3389,8 @@ async function removeTagFromImage(imageId, tag) {
       (img) => img && img.id === imageId,
     );
     if (gridImg && Array.isArray(gridImg.tags)) {
-      const normalized = normalizeTagList(gridImg.tags);
-      gridImg.tags = normalized.filter((t) => !tagMatches(t, tag));
+      const d = TagList(gridImg.tags);
+      gridImg.tags = d.filter((t) => !tagMatches(t, tag));
     }
     if (isSmartScoreSortActive()) {
       await refreshSmartScoreForImage(imageId);
@@ -3426,12 +3411,12 @@ async function addTagToImage(imageId, tag) {
       },
     );
     console.log(`Tag '${tag}' added to image ${imageId}`);
-    const responseTags = normalizeTagList(response?.data?.tags);
+    const responseTags = TagList(response?.data?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
     if (gridImg) {
-      const current = normalizeTagList(gridImg.tags);
+      const current = TagList(gridImg.tags);
       const merged = responseTags.length
         ? responseTags
         : dedupeTagList([...current, { id: null, tag }]);
@@ -3563,14 +3548,14 @@ function removeImagesById(imageIds) {
     return;
   }
   console.log("Removing images by ID:", imageIds);
-  const normalizedIds = new Set(
-    imageIds.map((id) => normalizePictureId(id)).filter((id) => id !== null),
+  const dIds = new Set(
+    imageIds.map((id) => PictureId(id)).filter((id) => id !== null),
   );
   allGridImages.value = allGridImages.value.filter(
-    (img) => !normalizedIds.has(normalizePictureId(img?.id)),
+    (img) => !dIds.has(PictureId(img?.id)),
   );
   selectedImageIds.value = selectedImageIds.value.filter(
-    (id) => !normalizedIds.has(normalizePictureId(id)),
+    (id) => !dIds.has(PictureId(id)),
   );
   reindexGridImages();
   resetThumbnailState();

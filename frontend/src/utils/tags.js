@@ -11,15 +11,15 @@ export function getTagId(tag) {
   return null;
 }
 
-export function normalizeTagItem(tag) {
+export function TagItem(tag) {
   const label = getTagLabel(tag).trim();
   if (!label) return null;
   return {id: getTagId(tag), tag: label};
 }
 
-export function normalizeTagList(tags) {
+export function TagList(tags) {
   return (Array.isArray(tags) ? tags : [])
-      .map(normalizeTagItem)
+      .map(TagItem)
       .filter(Boolean);
 }
 

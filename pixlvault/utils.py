@@ -91,7 +91,7 @@ def serialize_user_config(user) -> dict:
         for key in allowed_fields
     }
 
-    config["smart_score_penalized_tags"] = normalize_smart_score_penalized_tags(
+    config["smart_score_penalized_tags"] = _smart_score_penalized_tags(
         getattr(source, "smart_score_penalized_tags", None),
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
@@ -140,17 +140,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
             if value in ("", None):
                 new_value = None
             else:
-                normalized = normalize_smart_score_penalized_tags(
+                d = _smart_score_penalized_tags(
                     value,
                     None,
                     allow_empty=True,
                     default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
                 )
-                if normalized is None:
+                if d is None:
                     raise ValueError(
                         "smart_score_penalized_tags must be a JSON list or object"
                     )
-                new_value = json.dumps(normalized)
+                new_value = json.dumps(d)
             if user.smart_score_penalized_tags != new_value:
                 user.smart_score_penalized_tags = new_value
                 updated = True
@@ -204,7 +204,7 @@ def serialize_tag_objects(tags: list | None, empty_sentinel: str = "") -> list[d
     return items
 
 
-def normalize_thumbnail_size(value):
+def _thumbnail_size(value):
     if value is None:
         return None
     if isinstance(value, str):
@@ -218,7 +218,7 @@ def normalize_thumbnail_size(value):
     return None
 
 
-def normalize_smart_score_penalized_tags(
+def _smart_score_penalized_tags(
     value,
     fallback=None,
     allow_empty: bool = False,
@@ -237,16 +237,16 @@ def normalize_smart_score_penalized_tags(
         tags = value
 
     if isinstance(tags, list):
-        normalized = {}
+        d = {}
         for tag in tags:
             if tag is None:
                 continue
             clean = str(tag).strip().lower()
             if not clean:
                 continue
-            normalized[clean] = default_weight
+            d[clean] = default_weight
     elif isinstance(tags, dict):
-        normalized = {}
+        d = {}
         for tag, weight in tags.items():
             if tag is None:
                 continue
@@ -258,12 +258,12 @@ def normalize_smart_score_penalized_tags(
             except (TypeError, ValueError):
                 weight_value = default_weight
             weight_value = max(1, min(5, weight_value))
-            existing = normalized.get(clean)
+            existing = d.get(clean)
             if existing is None or weight_value > existing:
-                normalized[clean] = weight_value
+                d[clean] = weight_value
     else:
         return fallback
 
-    if normalized:
-        return normalized
+    if d:
+        return d
     return {} if allow_empty else fallback

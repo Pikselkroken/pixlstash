@@ -160,8 +160,8 @@ function clampImportance(value) {
   return Math.min(5, Math.max(1, Math.round(num)));
 }
 
-function normalizeSmartScoreTags(tags) {
-  const normalized = new Map();
+function SmartScoreTags(tags) {
+  const d = new Map();
   if (Array.isArray(tags)) {
     for (const item of tags) {
       if (item == null) continue;
@@ -170,11 +170,11 @@ function normalizeSmartScoreTags(tags) {
           .trim()
           .toLowerCase();
         if (!clean) continue;
-        normalized.set(clean, clampImportance(item.weight));
+        d.set(clean, clampImportance(item.weight));
       } else {
         const clean = String(item).trim().toLowerCase();
         if (!clean) continue;
-        normalized.set(clean, 3);
+        d.set(clean, 3);
       }
     }
   } else if (tags && typeof tags === "object") {
@@ -183,24 +183,24 @@ function normalizeSmartScoreTags(tags) {
       const clean = String(tag).trim().toLowerCase();
       if (!clean) continue;
       const nextWeight = clampImportance(weight);
-      const existing = normalized.get(clean);
+      const existing = d.get(clean);
       if (existing == null || nextWeight > existing) {
-        normalized.set(clean, nextWeight);
+        d.set(clean, nextWeight);
       }
     }
   }
-  return Array.from(normalized.entries())
+  return Array.from(d.entries())
     .map(([tag, weight]) => ({ tag, weight }))
     .sort((a, b) => a.tag.localeCompare(b.tag));
 }
 
 function serializeSmartScoreTags(entries) {
-  const normalized = normalizeSmartScoreTags(entries);
+  const d = SmartScoreTags(entries);
   const payload = {};
-  for (const entry of normalized) {
+  for (const entry of d) {
     payload[entry.tag] = clampImportance(entry.weight);
   }
-  return { normalized, payload };
+  return { d, payload };
 }
 
 async function fetchSmartScoreSettings() {
@@ -208,7 +208,7 @@ async function fetchSmartScoreSettings() {
   smartScoreTagsError.value = "";
   try {
     const res = await apiClient.get("/users/me/config");
-    smartScorePenalizedTags.value = normalizeSmartScoreTags(
+    smartScorePenalizedTags.value = SmartScoreTags(
       res.data?.smart_score_penalized_tags,
     );
     const threshold = Number(res.data?.auto_scrapheap_smart_score_threshold);
@@ -262,11 +262,11 @@ async function saveSmartScoreTags(nextTags) {
   smartScoreTagsError.value = "";
   smartScoreTagsSuccess.value = "";
   try {
-    const { normalized, payload } = serializeSmartScoreTags(nextTags);
+    const { d, payload } = serializeSmartScoreTags(nextTags);
     await apiClient.patch("/users/me/config", {
       smart_score_penalized_tags: payload,
     });
-    smartScorePenalizedTags.value = normalized;
+    smartScorePenalizedTags.value = d;
     smartScoreTagsSuccess.value = "Saved.";
   } catch (e) {
     smartScoreTagsError.value =
@@ -284,7 +284,7 @@ async function saveSmartScoreTags(nextTags) {
 async function addSmartScoreTag() {
   const trimmed = smartScoreTagInput.value.trim().toLowerCase();
   if (!trimmed) return;
-  const next = normalizeSmartScoreTags([
+  const next = SmartScoreTags([
     ...smartScorePenalizedTags.value,
     { tag: trimmed, weight: 3 },
   ]);
@@ -293,14 +293,14 @@ async function addSmartScoreTag() {
 }
 
 async function removeSmartScoreTag(tag) {
-  const next = normalizeSmartScoreTags(
+  const next = SmartScoreTags(
     smartScorePenalizedTags.value.filter((t) => t.tag !== tag),
   );
   await saveSmartScoreTags(next);
 }
 
 async function updateSmartScoreTagWeight(tag, weight) {
-  const next = normalizeSmartScoreTags(
+  const next = SmartScoreTags(
     smartScorePenalizedTags.value.map((entry) =>
       entry.tag === tag ? { ...entry, weight: clampImportance(weight) } : entry,
     ),

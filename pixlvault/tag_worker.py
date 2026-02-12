@@ -150,15 +150,15 @@ class DescriptionWorker(BaseWorker):
         return descriptions_generated
 
 
-def normalize_custom_tagger_tags(tags: list[str]) -> list[str]:
+def _custom_tagger_tags(tags: list[str]) -> list[str]:
     replacements = {
         "extra fingers": "extra digit",
         "malformed hands": "malformed hand",
     }
-    normalized = []
+    d = []
     for tag in tags:
-        normalized.append(replacements.get(tag, tag))
-    return normalized
+        d.append(replacements.get(tag, tag))
+    return d
 
 
 class TagWorker(BaseWorker):
@@ -497,10 +497,8 @@ class TagWorker(BaseWorker):
                                     kind or "crop",
                                 )
                             if kind == "hand":
-                                normalized_tags = normalize_custom_tagger_tags(tags)
-                                filtered = [
-                                    tag for tag in normalized_tags if is_hand_tag(tag)
-                                ]
+                                d_tags = _custom_tagger_tags(tags)
+                                filtered = [tag for tag in d_tags if is_hand_tag(tag)]
                                 existing = crop_tags_by_pic_id.get(pic_id, [])
                                 existing.extend(filtered)
                                 crop_tags_by_pic_id[pic_id] = existing

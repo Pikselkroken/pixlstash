@@ -16,7 +16,7 @@ export function formatIsoDate(dateStr) {
           )}:${pad(d.getMinutes())}`;
 }
 
-export function normalizeStackThreshold(value) {
+export function StackThreshold(value) {
   if (value === null || value === undefined || value === '') return 0.9;
   const parsed = parseFloat(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return 0.9;

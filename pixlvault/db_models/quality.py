@@ -170,7 +170,7 @@ class Quality(SQLModel, table=True):
         colorfulness = fix_none(colorfulness)
         luminance_entropy = fix_none(luminance_entropy)
         dominant_hue = fix_none(dominant_hue)
-        # Compute color histograms for each image (flattened, float32, normalized)
+        # Compute color histograms for each image (flattened, float32, d)
         if calculate_histograms:
             histograms = []
             for i in range(batch_size):

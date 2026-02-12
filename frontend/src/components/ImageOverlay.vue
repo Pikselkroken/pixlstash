@@ -740,7 +740,7 @@ import {
   dedupeTagList,
   getTagId as tagId,
   getTagLabel as tagLabel,
-  normalizeTagList,
+  TagList,
   tagMatches,
 } from "../utils/tags.js";
 
@@ -864,14 +864,14 @@ async function fetchPenalizedTags() {
     ) {
       list = Object.keys(res.data.smart_score_penalized_tags);
     }
-    const normalized = list
+    const d = list
       .map((tag) =>
         String(tag || "")
           .trim()
           .toLowerCase(),
       )
       .filter(Boolean);
-    penalizedTags.value = new Set(normalized);
+    penalizedTags.value = new Set(d);
   } catch (e) {
     penalizedTags.value = new Set();
   } finally {
@@ -942,7 +942,7 @@ function confirmAddTag() {
     cancelAddTag();
     return;
   }
-  const currentTags = normalizeTagList(image.value?.tags);
+  const currentTags = TagList(image.value?.tags);
   if (currentTags.some((tag) => tag.tag === trimmed)) {
     cancelAddTag();
     return;
@@ -1681,7 +1681,7 @@ async function fetchOverlayMetadata(imageId) {
     if (Object.prototype.hasOwnProperty.call(data, "smartScore")) {
       merged.smartScore = data.smartScore;
     }
-    const dataTags = normalizeTagList(data.tags);
+    const dataTags = TagList(data.tags);
     if (data.tags !== undefined) {
       merged.tags = dedupeTagList(dataTags);
     }
@@ -1812,7 +1812,7 @@ async function fetchFaceTagsForFaces(faces, options = {}) {
         );
         const payload = await res.data;
         const tags = Array.isArray(payload) ? payload : payload?.tags;
-        return [face.id, normalizeTagList(tags)];
+        return [face.id, TagList(tags)];
       } catch (e) {
         return [face.id, []];
       } finally {
@@ -1853,7 +1853,7 @@ async function fetchHandTagsForHands(hands, options = {}) {
         );
         const payload = await res.data;
         const tags = Array.isArray(payload) ? payload : payload?.tags;
-        return [hand.id, normalizeTagList(tags)];
+        return [hand.id, TagList(tags)];
       } catch (e) {
         return [hand.id, []];
       } finally {
@@ -1874,7 +1874,7 @@ function ensureTagInImage(tag) {
   if (!image.value) return;
   const label = tagLabel(tag);
   if (!label) return;
-  const tags = normalizeTagList(image.value.tags);
+  const tags = TagList(image.value.tags);
   if (!tags.some((entry) => entry.tag === label)) {
     const next = dedupeTagList([...tags, { id: null, tag: label }]);
     image.value = { ...image.value, tags: next };
@@ -1895,7 +1895,7 @@ async function assignTagToFace(face, tag) {
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   faceTagMap.value = {
     ...faceTagMap.value,
-    [face.id]: normalizeTagList(tags),
+    [face.id]: TagList(tags),
   };
 }
 
@@ -1910,7 +1910,7 @@ async function removeTagFromFace(face, tag, options = {}) {
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   faceTagMap.value = {
     ...faceTagMap.value,
-    [face.id]: normalizeTagList(tags),
+    [face.id]: TagList(tags),
   };
   if (!options.skipRefresh && image.value?.id) {
     emit("overlay-change", {
@@ -1933,7 +1933,7 @@ async function assignTagToHand(hand, tag) {
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   handTagMap.value = {
     ...handTagMap.value,
-    [hand.id]: normalizeTagList(tags),
+    [hand.id]: TagList(tags),
   };
 }
 
@@ -1948,7 +1948,7 @@ async function removeTagFromHand(hand, tag, options = {}) {
   const tags = Array.isArray(payload) ? payload : payload?.tags;
   handTagMap.value = {
     ...handTagMap.value,
-    [hand.id]: normalizeTagList(tags),
+    [hand.id]: TagList(tags),
   };
   if (!options.skipRefresh && image.value?.id) {
     emit("overlay-change", {
@@ -2322,13 +2322,13 @@ watch(
 function handleTagBackspace(event) {
   if (event.key !== "Backspace") return;
   if (newTag.value.trim()) return;
-  const tags = normalizeTagList(image.value?.tags);
+  const tags = TagList(image.value?.tags);
   if (!tags.length) return;
   removeTag(tags[tags.length - 1]);
 }
 
 const metadataEntries = computed(() => {
-  const base = normalizeMetadata(image.value?.metadata);
+  const base = Metadata(image.value?.metadata);
   const entries = Object.entries(stripComfyMetadata(base) || {});
   return entries.map(([key, value]) => ({ key, value }));
 });
@@ -2370,18 +2370,18 @@ const handTagGroups = computed(() => {
 });
 
 const imageTags = computed(() => {
-  return dedupeTagList(normalizeTagList(image.value?.tags));
+  return dedupeTagList(TagList(image.value?.tags));
 });
 
 const faceTags = computed(() => {
   const values = Object.values(faceTagMap.value || {});
-  const tags = values.flatMap((list) => normalizeTagList(list));
+  const tags = values.flatMap((list) => TagList(list));
   return dedupeTagList(tags);
 });
 
 const handTags = computed(() => {
   const values = Object.values(handTagMap.value || {});
-  const tags = values.flatMap((list) => normalizeTagList(list));
+  const tags = values.flatMap((list) => TagList(list));
   return dedupeTagList(tags);
 });
 
@@ -2582,7 +2582,7 @@ const pictureInfoEntries = computed(() => {
 });
 
 const comfyMetadata = computed(() => {
-  const base = normalizeMetadata(image.value?.metadata);
+  const base = Metadata(image.value?.metadata);
   if (!base || !Object.keys(base).length) return null;
 
   const png = base.png && typeof base.png === "object" ? base.png : {};
@@ -2615,7 +2615,7 @@ const comfyMetadata = computed(() => {
   };
 });
 
-function normalizeMetadata(input) {
+function Metadata(input) {
   if (!input || typeof input !== "object") return {};
   const output = {};
   Object.entries(input).forEach(([key, value]) => {
@@ -2686,13 +2686,13 @@ function parseMetadataValue(value) {
 
 function findFirstComfyWorkflow(values) {
   for (const value of values) {
-    const candidate = normalizeComfyWorkflowCandidate(value);
+    const candidate = ComfyWorkflowCandidate(value);
     if (isComfyWorkflow(candidate)) return candidate;
   }
   return null;
 }
 
-function normalizeComfyWorkflowCandidate(value) {
+function ComfyWorkflowCandidate(value) {
   if (!value) return null;
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -2710,7 +2710,7 @@ function normalizeComfyWorkflowCandidate(value) {
   }
   if (value && typeof value === "object") {
     if (value.workflow) {
-      return normalizeComfyWorkflowCandidate(value.workflow) || value;
+      return ComfyWorkflowCandidate(value.workflow) || value;
     }
     return value;
   }
@@ -2980,12 +2980,12 @@ async function removeAllTag(tag) {
   const imageMatch = imageTags.value.find((entry) => entry.tag === label);
   if (imageMatch && imageMatch.id != null) {
     if (image.value && Array.isArray(image.value.tags)) {
-      const current = normalizeTagList(image.value.tags);
+      const current = TagList(image.value.tags);
       image.value.tags = current.filter((entry) => entry.tag !== label);
     }
     didUpdate = true;
   } else if (image.value && Array.isArray(image.value.tags)) {
-    const current = normalizeTagList(image.value.tags);
+    const current = TagList(image.value.tags);
     const next = current.filter((entry) => entry.tag !== label);
     if (next.length !== current.length) {
       image.value.tags = next;
@@ -2995,7 +2995,7 @@ async function removeAllTag(tag) {
 
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
   for (const face of faces) {
-    const tags = normalizeTagList(faceTagMap.value?.[face.id]);
+    const tags = TagList(faceTagMap.value?.[face.id]);
     const nextTags = tags.filter((entry) => entry.tag !== label);
     if (nextTags.length !== tags.length) {
       faceTagMap.value = {
@@ -3008,7 +3008,7 @@ async function removeAllTag(tag) {
 
   const hands = Array.isArray(handBboxes.value) ? handBboxes.value : [];
   for (const hand of hands) {
-    const tags = normalizeTagList(handTagMap.value?.[hand.id]);
+    const tags = TagList(handTagMap.value?.[hand.id]);
     const nextTags = tags.filter((entry) => entry.tag !== label);
     if (nextTags.length !== tags.length) {
       handTagMap.value = {
@@ -3044,7 +3044,7 @@ function removeTag(tag) {
     console.warn("Tag id is required to remove a picture tag.", tag);
     return;
   }
-  const current = normalizeTagList(image.value.tags);
+  const current = TagList(image.value.tags);
   const label = tagLabel(tag);
   if (!label) return;
   const next = current.filter((entry) => entry.tag !== label);

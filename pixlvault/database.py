@@ -95,21 +95,21 @@ def _levenshtein_internal(concatenated_tags, query, picture_id=None):
         else [concatenated_tags]
     )
     query_words = query.split() if isinstance(query, str) else [query]
-    normalized_query_words = [str(word).lower() for word in query_words]
+    d_query_words = [str(word).lower() for word in query_words]
     filtered_query_words = [
         word
-        for word in normalized_query_words
+        for word in d_query_words
         if len(word) > 2 and word not in LEVENSHTEIN_STOPWORDS
     ]
     if filtered_query_words:
-        normalized_query_words = filtered_query_words
+        d_query_words = filtered_query_words
 
-    normalized_tags = [str(tag).lower() for tag in tags if tag is not None]
+    d_tags = [str(tag).lower() for tag in tags if tag is not None]
 
     tag_dists = []
-    for tag_value in normalized_tags:
+    for tag_value in d_tags:
         min_dist = 1.0
-        for query_word in normalized_query_words:
+        for query_word in d_query_words:
             min_dist = min(
                 min_dist,
                 levenshtein_function(tag_value, query_word)
@@ -119,9 +119,9 @@ def _levenshtein_internal(concatenated_tags, query, picture_id=None):
 
     query_dists = []
     query_dist_map = {}
-    for query_word in normalized_query_words:
+    for query_word in d_query_words:
         min_dist = 1.0
-        for tag_value in normalized_tags:
+        for tag_value in d_tags:
             min_dist = min(
                 min_dist,
                 levenshtein_function(tag_value, query_word)
@@ -153,7 +153,7 @@ def _levenshtein_internal(concatenated_tags, query, picture_id=None):
         softmin_value,
         coverage,
         exact_matches,
-        normalized_query_words,
+        d_query_words,
     )
     if query_dist_map:
         logger.info(
