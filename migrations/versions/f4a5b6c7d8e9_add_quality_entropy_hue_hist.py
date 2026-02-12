@@ -24,6 +24,10 @@ def upgrade() -> None:
         row[1]
         for row in conn.execute(sa.text("PRAGMA table_info('quality')")).fetchall()
     }
+    existing_indexes = {
+        row[1]
+        for row in conn.execute(sa.text("PRAGMA index_list('quality')")).fetchall()
+    }
     if "luminance_entropy" not in existing_cols:
         op.add_column(
             "quality",
@@ -51,18 +55,20 @@ def upgrade() -> None:
                 nullable=True,
             ),
         )
-    op.create_index(
-        "ix_quality_luminance_entropy",
-        "quality",
-        ["luminance_entropy"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_quality_dominant_hue",
-        "quality",
-        ["dominant_hue"],
-        unique=False,
-    )
+    if "ix_quality_luminance_entropy" not in existing_indexes:
+        op.create_index(
+            "ix_quality_luminance_entropy",
+            "quality",
+            ["luminance_entropy"],
+            unique=False,
+        )
+    if "ix_quality_dominant_hue" not in existing_indexes:
+        op.create_index(
+            "ix_quality_dominant_hue",
+            "quality",
+            ["dominant_hue"],
+            unique=False,
+        )
     op.execute("DELETE FROM quality WHERE face_id IS NULL")
 
 
@@ -72,8 +78,14 @@ def downgrade() -> None:
         row[1]
         for row in conn.execute(sa.text("PRAGMA table_info('quality')")).fetchall()
     }
-    op.drop_index("ix_quality_dominant_hue", table_name="quality")
-    op.drop_index("ix_quality_luminance_entropy", table_name="quality")
+    existing_indexes = {
+        row[1]
+        for row in conn.execute(sa.text("PRAGMA index_list('quality')")).fetchall()
+    }
+    if "ix_quality_dominant_hue" in existing_indexes:
+        op.drop_index("ix_quality_dominant_hue", table_name="quality")
+    if "ix_quality_luminance_entropy" in existing_indexes:
+        op.drop_index("ix_quality_luminance_entropy", table_name="quality")
     if "color_histogram" in existing_cols:
         op.drop_column("quality", "color_histogram")
     if "dominant_hue" in existing_cols:
