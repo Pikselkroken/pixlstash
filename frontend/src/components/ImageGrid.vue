@@ -629,6 +629,16 @@ function refreshAllThumbnailInfoDisplays() {
 onMounted(() => {
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   fetchAllPicturesCount();
+  if (!hasLoadedOnce.value && !imagesLoading.value) {
+    if (
+      !Array.isArray(allGridImages.value) ||
+      allGridImages.value.length === 0
+    ) {
+      fetchAllGridImages().then(() => {
+        updateVisibleThumbnails();
+      });
+    }
+  }
   nextTick(() => {
     updateRowHeightFromGrid();
     if (typeof ResizeObserver !== "undefined" && gridContainer.value) {
@@ -3514,7 +3524,7 @@ watch(
       const newVisibleEnd = Math.ceil(lastVisibleRow) * cols;
       visibleStart.value = newVisibleStart;
       visibleEnd.value = newVisibleEnd;
-      updateVisibleThumbnails();
+      updateVisibleThumbnails(); // test
     });
   },
 );
