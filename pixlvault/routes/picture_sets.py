@@ -150,7 +150,7 @@ def create_router(server) -> APIRouter:
 
     @router.get("/picture_sets/{id}/thumbnail")
     async def get_picture_set_thumbnail(id: int, request: Request):
-        thumbnail_cache_version = 14
+        thumbnail_cache_version = 16
         cache_dir = os.path.join(server.vault.image_root, "tmp", "set_thumbnails")
         os.makedirs(cache_dir, exist_ok=True)
         cache_path = os.path.join(cache_dir, f"picture_set_{id}.png")
@@ -202,13 +202,13 @@ def create_router(server) -> APIRouter:
         path_map = server.vault.db.run_immediate_read_task(
             fetch_picture_paths, picture_ids=top_ids
         )
-        target_size = 128
-        work_size = 512
+        target_size = 64
+        work_size = 256
         card_height = int(target_size * 0.75)
         card_width = max(1, int(card_height * 0.7))
         card_size = (card_width, card_height)
         angles = [20, 5, -20]
-        offsets = [(0, 0), (0, 0), (0, -8)]
+        offsets = [(0, 0), (0, 0), (0, -4)]
         base = Image.new("RGBA", (work_size, work_size), (0, 0, 0, 0))
         pivot_x = work_size // 2
         pivot_y = work_size // 2
@@ -284,7 +284,7 @@ def create_router(server) -> APIRouter:
         alpha = base.split()[-1]
         bbox = alpha.getbbox()
         if bbox:
-            pad = 10
+            pad = 0
             left = max(0, bbox[0] - pad)
             top = max(0, bbox[1] - pad)
             right = min(work_size, bbox[2] + pad)
@@ -295,7 +295,7 @@ def create_router(server) -> APIRouter:
         shadow_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
         shadow_alpha = base.split()[-1]
         shadow_layer.putalpha(shadow_alpha)
-        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=6))
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=4))
         shadow_tint = Image.new("RGBA", base.size, (0, 0, 0, 90))
         shadow = Image.composite(
             shadow_tint,
@@ -303,15 +303,26 @@ def create_router(server) -> APIRouter:
             shadow_layer.split()[-1],
         )
         fan_with_shadow = Image.new("RGBA", base.size, (0, 0, 0, 0))
-        fan_with_shadow.alpha_composite(shadow, (3, 4))
+        fan_with_shadow.alpha_composite(shadow, (2, 3))
         fan_with_shadow.alpha_composite(base, (0, 0))
         base = fan_with_shadow
 
-        final_img = Image.new("RGBA", (target_size, target_size), (0, 0, 0, 0))
-        base.thumbnail((target_size, target_size), Image.LANCZOS)
-        offset_x = (target_size - base.width) // 2
-        offset_y = (target_size - base.height) // 2
-        final_img.alpha_composite(base, (offset_x, offset_y))
+        shadow_alpha = base.split()[-1]
+        shadow_bbox = shadow_alpha.getbbox()
+        if shadow_bbox:
+            shadow_pad = 0
+            left = max(0, shadow_bbox[0] - shadow_pad)
+            top = max(0, shadow_bbox[1] - shadow_pad)
+            right = min(base.width, shadow_bbox[2] + shadow_pad)
+            bottom = min(base.height, shadow_bbox[3] + shadow_pad)
+            base = base.crop((left, top, right, bottom))
+
+        final_img = ImageOps.fit(
+            base,
+            (target_size, target_size),
+            Image.LANCZOS,
+            centering=(0.5, 0.5),
+        )
 
         try:
             final_img.save(cache_path, format="PNG")

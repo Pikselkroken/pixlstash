@@ -86,6 +86,7 @@ const isAllPicturesActive = computed(
 );
 
 const thumbnailSize = ref(256);
+const sidebarThumbnailSize = ref(48);
 const columns = ref(4); // Default columns
 const MIN_THUMBNAIL_SIZE = 96;
 const MAX_THUMBNAIL_SIZE = 384;
@@ -266,6 +267,7 @@ watch(
 const config = reactive({
   sort: "",
   thumbnail: 256,
+  sidebar_thumbnail_size: 64,
   show_stars: true,
   show_face_bboxes: false,
   show_hand_bboxes: false,
@@ -456,6 +458,12 @@ function handleUpdateApplyTagFilter(value) {
   applyTagFilter.value = Boolean(value);
 }
 
+function handleUpdateSidebarThumbnailSize(value) {
+  const nextValue = Number(value);
+  if (!Number.isFinite(nextValue)) return;
+  sidebarThumbnailSize.value = nextValue;
+}
+
 function handleColumnsEnd() {
   if (columnsMenuCloseTimeout) {
     clearTimeout(columnsMenuCloseTimeout);
@@ -500,12 +508,16 @@ async function fetchConfig() {
     if (typeof res.data.columns === "number") {
       columns.value = res.data.columns;
     }
+    if (typeof res.data.sidebar_thumbnail_size === "number") {
+      sidebarThumbnailSize.value = res.data.sidebar_thumbnail_size;
+    }
     if (res.data.stack_strictness != null) {
       stackThreshold.value = String(res.data.stack_strictness);
     }
     config.sort_order = sortValue || selectedSort.value;
     config.descending = selectedDescending.value;
     config.columns = columns.value;
+    config.sidebar_thumbnail_size = sidebarThumbnailSize.value;
     config.show_stars =
       typeof res.data.show_stars === "boolean"
         ? res.data.show_stars
@@ -547,6 +559,10 @@ async function fetchConfig() {
       sort: selectedSort.value || "",
       descending: selectedDescending.value,
       columns: typeof columns.value === "number" ? columns.value : null,
+      sidebar_thumbnail_size:
+        typeof sidebarThumbnailSize.value === "number"
+          ? sidebarThumbnailSize.value
+          : null,
       show_stars: showStars.value,
       show_face_bboxes: showFaceBboxes.value,
       show_hand_bboxes: showHandBboxes.value,
@@ -585,6 +601,9 @@ async function patchConfigUIOptions() {
   if (selectedSort.value) patch.sort = selectedSort.value;
   patch.descending = selectedDescending.value;
   if (columns.value) patch.columns = columns.value;
+  if (sidebarThumbnailSize.value) {
+    patch.sidebar_thumbnail_size = sidebarThumbnailSize.value;
+  }
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
   if (typeof showFaceBboxes.value === "boolean") {
     patch.show_face_bboxes = showFaceBboxes.value;
@@ -863,6 +882,11 @@ watch(columns, () => {
   patchConfigUIOptions();
 });
 
+watch(sidebarThumbnailSize, () => {
+  if (!configLoaded.value) return;
+  patchConfigUIOptions();
+});
+
 watch(exportMenuOpen, async (isOpen) => {
   if (!isOpen) return;
   await nextTick();
@@ -925,10 +949,12 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :selectedDescending="selectedDescending"
             :backendUrl="BACKEND_URL"
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
+            :sidebarThumbnailSize="sidebarThumbnailSize"
             @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
             @update:hidden-tags="handleUpdateHiddenTags"
             @update:apply-tag-filter="handleUpdateApplyTagFilter"
+            @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
             @select-character="handleSelectCharacter"
             @select-reference-pictures="handleSelectReferencePictures"
             @select-set="handleSelectSet"
