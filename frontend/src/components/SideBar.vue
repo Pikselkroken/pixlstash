@@ -105,6 +105,14 @@ const tokenDialogOpen = ref(false);
 const tokenDeleteDialogOpen = ref(false);
 const tokenToDelete = ref(null);
 const taskManagerOpen = ref(false);
+const taskIndicatorCanvasRef = ref(null);
+const taskIndicatorSeries = ref([]);
+const taskIndicatorRunning = ref(false);
+const taskIndicatorProgress = ref({ current: 0, total: 0 });
+const taskIndicatorLast = new Map();
+let taskIndicatorTimer = null;
+const TASK_INDICATOR_WINDOW_SECONDS = 180;
+const TASK_INDICATOR_POLL_MS = 2000;
 const smartScorePenalisedTags = ref([]);
 const smartScoreTagInput = ref("");
 const smartScoreTagsLoading = ref(false);
@@ -189,6 +197,120 @@ function resetSettingsForm() {
   hiddenTagsSuccess.value = "";
   smartScoreScrapheapError.value = "";
   smartScoreScrapheapSuccess.value = "";
+}
+
+function startTaskIndicatorPolling() {
+  if (taskIndicatorTimer) return;
+  fetchTaskIndicatorProgress();
+  taskIndicatorTimer = setInterval(
+    fetchTaskIndicatorProgress,
+    TASK_INDICATOR_POLL_MS,
+  );
+}
+
+function stopTaskIndicatorPolling() {
+  if (!taskIndicatorTimer) return;
+  clearInterval(taskIndicatorTimer);
+  taskIndicatorTimer = null;
+}
+
+async function fetchTaskIndicatorProgress() {
+  try {
+    const res = await apiClient.get("/workers/progress");
+    const workers = res.data?.workers || {};
+    const now = Date.now() / 1000;
+    let combinedRate = 0;
+    let combinedCurrent = 0;
+    let combinedTotal = 0;
+    let running = false;
+
+    for (const [key, snapshot] of Object.entries(workers)) {
+      const current = Number(snapshot.current || 0);
+      const total = Number(snapshot.total || 0);
+      const prev = taskIndicatorLast.get(key);
+      let rate = 0;
+      if (prev && now > prev.t) {
+        const delta = current - prev.current;
+        rate = delta > 0 ? delta / (now - prev.t) : 0;
+      }
+      combinedRate += rate;
+      combinedCurrent += current;
+      combinedTotal += total;
+      if (snapshot.running) {
+        running = true;
+      }
+      taskIndicatorLast.set(key, { current, t: now });
+    }
+
+    taskIndicatorRunning.value = running;
+    taskIndicatorProgress.value = {
+      current: combinedCurrent,
+      total: combinedTotal,
+    };
+
+    const nextSeries = [...taskIndicatorSeries.value];
+    nextSeries.push({ t: now, rate: combinedRate });
+    const cutoff = now - TASK_INDICATOR_WINDOW_SECONDS;
+    taskIndicatorSeries.value = nextSeries.filter((item) => item.t >= cutoff);
+    drawTaskIndicator();
+  } catch (err) {
+    // keep last known samples
+  }
+}
+
+function drawTaskIndicator() {
+  const canvas = taskIndicatorCanvasRef.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.floor(rect.width));
+  const height = Math.max(1, Math.floor(rect.height));
+  const dpr = window.devicePixelRatio || 1;
+  const targetWidth = Math.floor(width * dpr);
+  const targetHeight = Math.floor(height * dpr);
+  if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+  ctx.fillRect(0, 0, width, height);
+
+  const samples = taskIndicatorSeries.value || [];
+  if (!samples.length) {
+    const y = height - 3;
+    ctx.beginPath();
+    ctx.moveTo(2, y);
+    ctx.lineTo(width - 2, y);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    return;
+  }
+
+  const maxRate = Math.max(1, ...samples.map((s) => s.rate || 0));
+  const pad = 2;
+  const plotWidth = width - pad * 2;
+  const plotHeight = height - pad * 2;
+  const step = samples.length > 1 ? plotWidth / (samples.length - 1) : 0;
+
+  ctx.beginPath();
+  samples.forEach((sample, index) => {
+    const x = pad + step * index;
+    const y = pad + plotHeight * (1 - (sample.rate || 0) / maxRate);
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
 }
 
 const smartScoreImportanceOptions = [
@@ -1339,6 +1461,7 @@ onMounted(() => {
     descendingModel.value,
   );
   refreshSidebar();
+  startTaskIndicatorPolling();
   const handleNoticeReflow = () => updateSidebarNoticePosition();
   if (sidebarRootRef.value) {
     sidebarRootRef.value.addEventListener("scroll", handleNoticeReflow, {
@@ -1360,6 +1483,7 @@ onBeforeUnmount(() => {
     sidebarNoticeCleanup();
     sidebarNoticeCleanup = null;
   }
+  stopTaskIndicatorPolling();
 });
 
 // Ensure similarityCharacter is valid when switching to CHARACTER_LIKENESS
@@ -2337,7 +2461,10 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           @click="taskManagerOpen = true"
         >
           <span class="sidebar-list-icon">
-            <v-icon size="36">mdi-chart-timeline-variant</v-icon>
+            <canvas
+              ref="taskIndicatorCanvasRef"
+              class="sidebar-task-indicator-canvas"
+            ></canvas>
           </span>
           <span class="sidebar-list-label">Task Manager</span>
         </div>
@@ -2638,6 +2765,23 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 
 .sidebar-footer-item {
   margin-bottom: 0;
+}
+
+.sidebar-task-indicator {
+  margin-left: auto;
+  width: 64px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.sidebar-task-indicator-canvas {
+  width: 36px;
+  height: 16px;
+  display: block;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .sidebar-settings-item {
