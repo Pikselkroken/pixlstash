@@ -775,7 +775,7 @@ onBeforeUnmount(() => {
 
 .task-manager-tab-window {
   margin-top: 12px;
-  height: 50vh;
+  height: 55vh;
   min-height: 500px;
 }
 
