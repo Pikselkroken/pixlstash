@@ -20,6 +20,7 @@ class User(SQLModel, table=True):
     sort: Optional[str] = Field(default=SortMechanism.Keys.DATE.name)
     descending: bool = Field(default=True)
     columns: Optional[int] = Field(default=4)
+    sidebar_thumbnail_size: Optional[int] = Field(default=48)
     show_stars: bool = Field(default=True)
     show_face_bboxes: Optional[bool] = Field(default=False)
     show_hand_bboxes: Optional[bool] = Field(default=False)

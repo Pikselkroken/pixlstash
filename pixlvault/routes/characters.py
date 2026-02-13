@@ -291,7 +291,7 @@ def create_router(server) -> APIRouter:
     @router.get("/characters/{id}/{field}")
     async def get_character_field_by_id(id: int, field: str):
         if field == "thumbnail":
-            thumbnail_cache_version = 5
+            thumbnail_cache_version = 6
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
             os.makedirs(cache_dir, exist_ok=True)
             cache_path = os.path.join(cache_dir, f"character_{id}.png")
@@ -461,7 +461,7 @@ def create_router(server) -> APIRouter:
                     int(round(new_y2)),
                 )
             )
-            crop = crop.resize((128, 128), Image.LANCZOS)
+            crop = crop.resize((64, 64), Image.LANCZOS)
             try:
                 crop.save(cache_path, format="PNG")
                 try:

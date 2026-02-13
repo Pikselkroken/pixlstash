@@ -1,4 +1,4 @@
-1. Package better
+1. Package better (pyinstaller and pypi)
 2. Clean up code
 
 Eventually:

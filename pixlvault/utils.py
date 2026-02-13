@@ -70,6 +70,7 @@ def serialize_user_config(user) -> dict:
         "sort",
         "descending",
         "columns",
+        "sidebar_thumbnail_size",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
@@ -92,6 +93,14 @@ def serialize_user_config(user) -> dict:
         for key in allowed_fields
     }
 
+    allowed_sidebar_sizes = tuple(range(32, 65, 8))
+    sidebar_size = _thumbnail_size(config.get("sidebar_thumbnail_size"))
+    if sidebar_size is None:
+        sidebar_size = default_user.sidebar_thumbnail_size
+    if sidebar_size not in allowed_sidebar_sizes:
+        sidebar_size = min(allowed_sidebar_sizes, key=lambda v: abs(v - sidebar_size))
+    config["sidebar_thumbnail_size"] = sidebar_size
+
     config["smart_score_penalised_tags"] = _smart_score_penalised_tags(
         getattr(source, "smart_score_penalised_tags", None),
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
@@ -110,6 +119,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "sort",
         "descending",
         "columns",
+        "sidebar_thumbnail_size",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
@@ -211,6 +221,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
             new_value = int(value)
             if user.columns != new_value:
                 user.columns = new_value
+                updated = True
+            continue
+        if key == "sidebar_thumbnail_size":
+            new_value = _thumbnail_size(value)
+            if new_value is None:
+                continue
+            allowed_sizes = tuple(range(32, 65, 8))
+            if new_value not in allowed_sizes:
+                new_value = min(allowed_sizes, key=lambda v: abs(v - new_value))
+            if user.sidebar_thumbnail_size != new_value:
+                user.sidebar_thumbnail_size = new_value
                 updated = True
             continue
         current_value = getattr(user, key, None)

@@ -28,6 +28,7 @@ const props = defineProps({
   selectedDescending: { type: Boolean, default: false },
   selectedSimilarityCharacter: { type: [String, Number, null], default: null },
   backendUrl: { type: String, required: true },
+  sidebarThumbnailSize: { type: Number, default: 48 },
 });
 
 const emit = defineEmits([
@@ -45,6 +46,7 @@ const emit = defineEmits([
   "search-images",
   "update:similarity-character",
   "update:similarity-options",
+  "update:sidebar-thumbnail-size",
   "toggle-sidebar",
   "update:sort-options",
   "update:hidden-tags",
@@ -54,6 +56,9 @@ const emit = defineEmits([
 const imageImporterRef = ref(null);
 const uploadInputRef = ref(null);
 const sidebarRootRef = ref(null);
+const labelOverflow = ref({});
+const labelRefs = new Map();
+const labelObservers = new Map();
 
 const dragOverSet = ref(null);
 
@@ -146,6 +151,63 @@ function stepNumber(value, delta, options = {}) {
     next = Number(next.toFixed(precision));
   }
   return next;
+}
+
+function updateLabelOverflow(key, el = null) {
+  const element = el || labelRefs.get(key);
+  if (!element) return;
+  const width = element.clientWidth;
+  const isOverflowing = width > 0 && element.scrollWidth > width + 1;
+  if (labelOverflow.value[key] !== isOverflowing) {
+    labelOverflow.value = { ...labelOverflow.value, [key]: isOverflowing };
+  }
+}
+
+function registerLabelRef(key, el) {
+  const existingObserver = labelObservers.get(key);
+  if (existingObserver) {
+    existingObserver.disconnect();
+    labelObservers.delete(key);
+  }
+
+  if (!el) {
+    labelRefs.delete(key);
+    if (labelOverflow.value[key] !== undefined) {
+      const next = { ...labelOverflow.value };
+      delete next[key];
+      labelOverflow.value = next;
+    }
+    return;
+  }
+
+  labelRefs.set(key, el);
+  const observer = new ResizeObserver(() => updateLabelOverflow(key, el));
+  observer.observe(el);
+  labelObservers.set(key, observer);
+  requestAnimationFrame(() => updateLabelOverflow(key, el));
+}
+
+function labelNeedsTooltip(key) {
+  return Boolean(labelOverflow.value[key]);
+}
+
+function refreshLabelOverflows() {
+  for (const [key, el] of labelRefs.entries()) {
+    updateLabelOverflow(key, el);
+  }
+}
+
+function mergeTooltipRef(refProps, key) {
+  return (el) => {
+    if (refProps?.ref) {
+      if (typeof refProps.ref === "function") {
+        refProps.ref(el);
+      } else {
+        refProps.ref.value = el;
+      }
+    }
+    registerLabelRef(key, el);
+  };
 }
 
 function incrementScrapheapThreshold(delta) {
@@ -839,6 +901,25 @@ const similarityCharacterModel = computed({
   get: () => props.selectedSimilarityCharacter,
   set: (value) => emit("update:similarity-character", value ?? null),
 });
+
+const sidebarThumbnailSizeModel = computed({
+  get: () => props.sidebarThumbnailSize ?? 64,
+  set: (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const clamped = Math.min(64, Math.max(32, parsed));
+    const snapped = Math.round(clamped / 8) * 8;
+    emit("update:sidebar-thumbnail-size", snapped);
+  },
+});
+
+const sidebarThumbnailSizeLarge = computed(
+  () => sidebarThumbnailSizeModel.value + 8,
+);
+
+const sidebarThumbStyle = computed(() => ({
+  "--sidebar-thumb-size": `${sidebarThumbnailSizeModel.value}px`,
+}));
 
 const isSearchActive = computed(() => {
   const query = typeof props.searchQuery === "string" ? props.searchQuery : "";
@@ -1641,8 +1722,21 @@ onBeforeUnmount(() => {
     sidebarNoticeCleanup();
     sidebarNoticeCleanup = null;
   }
+  for (const observer of labelObservers.values()) {
+    observer.disconnect();
+  }
+  labelObservers.clear();
+  labelRefs.clear();
   stopTaskIndicatorPolling();
 });
+
+watch(
+  [sortedCharacters, pictureSets],
+  () => {
+    nextTick(() => refreshLabelOverflows());
+  },
+  { deep: true },
+);
 
 // Ensure similarityCharacter is valid when switching to CHARACTER_LIKENESS
 watch(
@@ -1776,6 +1870,28 @@ defineExpose({ refreshSidebar, openSettingsDialog });
         <v-card-text class="settings-dialog-body">
           <v-window v-model="settingsTab" class="settings-tab-body">
             <v-window-item value="preferences">
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">Sidebar Thumbnails</div>
+                <div class="settings-section-desc">
+                  Adjust the sidebar thumbnail size.
+                </div>
+                <div class="settings-slider-row">
+                  <span class="settings-slider-value">
+                    {{ sidebarThumbnailSizeModel }}px
+                  </span>
+                  <v-slider
+                    v-model="sidebarThumbnailSizeModel"
+                    :min="32"
+                    :max="64"
+                    :step="8"
+                    hide-details
+                    track-color="#666"
+                    thumb-color="primary"
+                    class="settings-slider"
+                  />
+                </div>
+              </div>
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
                 <div class="settings-section-title">Tag Filter</div>
@@ -2218,6 +2334,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
     ref="sidebarRootRef"
     class="sidebar"
     :class="{ 'sidebar-collapsed': props.collapsed }"
+    :style="sidebarThumbStyle"
   >
     <div class="sidebar-brand">
       <div class="sidebar-brand-left">
@@ -2300,8 +2417,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           <img
             :src="characterThumbnails[char.id] || unknownPerson"
             alt=""
-            width="36"
-            height="36"
+            :width="sidebarThumbnailSizeModel"
+            :height="sidebarThumbnailSizeModel"
             class="sidebar-character-thumb"
           />
         </button>
@@ -2330,11 +2447,19 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             :src="getSetThumbnail(pset.id)"
             alt=""
             class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
-            width="36"
-            height="36"
+            :width="sidebarThumbnailSizeModel"
+            :height="sidebarThumbnailSizeModel"
             @error="handleSetThumbnailError(pset.id)"
           />
           <v-icon width="40" size="40" v-else>mdi-image-album</v-icon>
+        </div>
+        <div class="sidebar-collapsed-spacer"></div>
+        <div
+          class="sidebar-collapsed-item"
+          title="Task Manager"
+          @click.stop="taskManagerOpen = true"
+        >
+          <v-icon>mdi-timeline-clock-outline</v-icon>
         </div>
       </div>
     </template>
@@ -2500,15 +2625,22 @@ defineExpose({ refreshSidebar, openSettingsDialog });
                   : unknownPerson
               "
               alt=""
-              width="36"
-              height="36"
+              :width="sidebarThumbnailSizeModel"
+              :height="sidebarThumbnailSizeModel"
               class="sidebar-character-thumb"
             />
           </span>
           <span class="sidebar-list-label">
-            <v-tooltip location="top">
+            <v-tooltip
+              location="top"
+              :disabled="!labelNeedsTooltip(`char-${char.id}`)"
+            >
               <template #activator="{ props }">
-                <span v-bind="props" class="sidebar-list-label-text">
+                <span
+                  v-bind="props"
+                  :ref="mergeTooltipRef(props, `char-${char.id}`)"
+                  class="sidebar-list-label-text"
+                >
                   {{ char.name.charAt(0).toUpperCase() + char.name.slice(1) }}
                 </span>
               </template>
@@ -2611,16 +2743,23 @@ defineExpose({ refreshSidebar, openSettingsDialog });
               :src="getSetThumbnail(pset.id)"
               alt=""
               class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
-              width="44"
-              height="44"
+              :width="sidebarThumbnailSizeLarge"
+              :height="sidebarThumbnailSizeLarge"
               @error="handleSetThumbnailError(pset.id)"
             />
             <v-icon v-else size="44">mdi-image-album</v-icon>
           </span>
           <span class="sidebar-list-label">
-            <v-tooltip location="top">
+            <v-tooltip
+              location="top"
+              :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
+            >
               <template #activator="{ props }">
-                <span v-bind="props" class="sidebar-list-label-text">
+                <span
+                  v-bind="props"
+                  :ref="mergeTooltipRef(props, `set-${pset.id}`)"
+                  class="sidebar-list-label-text"
+                >
                   {{ pset.name }}
                 </span>
               </template>
@@ -2721,6 +2860,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   width: 280px;
   --sidebar-right-edge: 14px;
   --sidebar-header-action-right-edge: 0px;
+  --sidebar-thumb-size: 36px;
+  --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 8px);
   color: rgb(var(--v-theme-sidebar-text));
   background: rgb(var(--v-theme-sidebar));
   padding: 4px 0px 12px 0px;
@@ -2738,7 +2879,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar.sidebar-collapsed {
-  width: 56px;
+  width: calc(var(--sidebar-thumb-size) + 20px);
   overflow-x: visible;
   overflow-y: hidden;
 }
@@ -2810,9 +2951,11 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 6px 0 12px;
+  gap: 6px;
+  padding: 4px 0 8px;
   overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .sidebar-collapsed-spacer {
@@ -2821,8 +2964,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar-collapsed-item {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2848,8 +2991,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar-collapsed-thumb {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   border-radius: 8px;
   border: none;
   padding: 0;
@@ -2864,8 +3007,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar-collapsed-thumb img {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   object-fit: contain;
   border-radius: 8px;
   display: block;
@@ -2932,8 +3075,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .sidebar-collapsed-divider {
   width: 100%;
   height: 1px;
-  margin-top: 2px;
-  margin-bottom: 2px;
+  margin-top: 1px;
+  margin-bottom: 1px;
   background: rgba(var(--v-theme-background), 0.3);
 }
 
@@ -2987,8 +3130,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .sidebar-list-item.active {
   display: flex;
   align-items: center;
-  min-height: 48px;
-  padding: 2px 8px;
+  min-height: max(52px, calc(var(--sidebar-thumb-size) + 8px));
+  padding: 2px 6px;
   padding-right: var(--sidebar-right-edge) !important;
   cursor: pointer;
   border-radius: 0;
@@ -3139,6 +3282,26 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .settings-section-desc {
   font-size: 0.92em;
   color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.settings-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding-right: 8px;
+}
+
+.settings-slider-value {
+  min-width: 64px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.settings-slider {
+  flex: 1 1 auto;
+  margin-right: 6px;
+  overflow: visible;
 }
 
 .settings-account-meta {
@@ -3478,26 +3641,31 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .sidebar-list-icon {
   display: flex;
   align-items: center;
-  margin-right: 8px;
+  margin-right: 6px;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   overflow: visible;
 }
 
 .sidebar-list-label {
   flex: 1;
   min-width: 0;
+  text-align: left;
+  padding-left: 4px;
+}
+
+.sidebar-list-label-text {
+  display: block;
+  width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: left;
-  padding-left: 6px;
 }
 
 .sidebar-character-thumb {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   object-fit: contain;
   border-radius: 6px;
   background: transparent;
@@ -3506,8 +3674,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar-set-thumb-image {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   border-radius: 6px;
   object-fit: cover;
   background: transparent;
@@ -3518,16 +3686,16 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .sidebar-set-thumb-image--collapsed {
-  width: 36px;
-  height: 36px;
+  width: var(--sidebar-thumb-size);
+  height: var(--sidebar-thumb-size);
   margin: 0;
   border: none;
   box-shadow: none;
 }
 
 .sidebar-set-thumb-image--large {
-  width: 44px;
-  height: 44px;
+  width: var(--sidebar-thumb-size-large);
+  height: var(--sidebar-thumb-size-large);
   border-radius: 8px;
 }
 
@@ -3819,13 +3987,13 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   }
 
   .sidebar-list-icon {
-    width: 44px;
-    height: 44px;
+    width: var(--sidebar-thumb-size);
+    height: var(--sidebar-thumb-size);
   }
 
   .sidebar-character-thumb {
-    width: 44px;
-    height: 44px;
+    width: var(--sidebar-thumb-size);
+    height: var(--sidebar-thumb-size);
   }
 
   .add-character-inline,
