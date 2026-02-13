@@ -1003,6 +1003,13 @@ defineExpose({ blurSearchInput });
   box-shadow: 0 0 0 1px rgba(var(--v-theme-primary), 0.2);
 }
 
+.toolbar-sort-grid-btn:focus,
+.toolbar-sort-grid-btn:focus-visible,
+.toolbar-sort-grid-btn:active {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 .toolbar-sort-grid-btn.v-btn--active .toolbar-sort-grid-label {
   font-weight: 600;
 }
@@ -1139,6 +1146,13 @@ defineExpose({ blurSearchInput });
 .toolbar-action-btn:focus-visible {
   box-shadow: none !important;
   background-color: transparent !important;
+}
+
+.toolbar-action-btn:focus,
+.toolbar-action-btn:focus-visible,
+.toolbar-action-btn:active {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .toolbar-action-btn.v-btn--active {

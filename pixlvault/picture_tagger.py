@@ -37,6 +37,7 @@ MAX_CONCURRENT_IMAGES_GPU = 32
 MAX_CONCURRENT_IMAGES_CPU = 8
 FLORENCE_BATCH_SIZE_GPU = 4
 FLORENCE_BATCH_SIZE_CPU = 2
+TAGGER_DATALOADER_TIMEOUT = 30
 GENERAL_THRESHOLD = 0.8
 UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
@@ -1087,53 +1088,79 @@ class PictureTagger:
             + " and dataset size: "
             + str(len(dataset))
         )
-        data = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=BATCH_SIZE,
-            shuffle=False,
-            num_workers=worker_count,
-            collate_fn=self._collate_fn_remove_corrupted,
-            drop_last=False,
-        )
 
-        logger.info(f"Got some tags: {data}")
-        b_imgs = []
-        all_results = {}
+        def build_dataloader(worker_count_override: int):
+            data_timeout = TAGGER_DATALOADER_TIMEOUT if worker_count_override > 0 else 0
+            return torch.utils.data.DataLoader(
+                dataset,
+                batch_size=BATCH_SIZE,
+                shuffle=False,
+                num_workers=worker_count_override,
+                collate_fn=self._collate_fn_remove_corrupted,
+                drop_last=False,
+                timeout=data_timeout,
+            )
 
-        tagging_failed = False
-        for data_entry in tqdm(data, smoothing=0.0, disable=self._silent):
-            if stop_event is not None and stop_event.is_set():
-                logger.info("Tagging interrupted by stop event.")
-                break
-            if tagging_failed:
-                break
-
-            flat_data = self._flatten_data_entry(data_entry)
-
-            for data in flat_data:
+        def run_tagging(data_loader):
+            b_imgs_local = []
+            results_local = {}
+            tagging_failed_local = False
+            for data_entry in tqdm(data_loader, smoothing=0.0, disable=self._silent):
                 if stop_event is not None and stop_event.is_set():
                     logger.info("Tagging interrupted by stop event.")
-                    tagging_failed = True
                     break
-                if data is None:
-                    continue
-                image, image_path = data
-                b_imgs.append((image_path, image))
-                if len(b_imgs) >= BATCH_SIZE:
-                    b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
-                    batch_result = self._run_batch(
-                        b_imgs,
-                        undesired_tags,
-                    )
-                    if batch_result is None:
-                        logger.error(
-                            f"Tagging failed for batch: {[p for p, _ in b_imgs]}"
-                        )
-                        tagging_failed = True
-                        break
+                if tagging_failed_local:
+                    break
 
-                    all_results.update(self._naturalize_tags(batch_result))
-                    b_imgs.clear()
+                flat_data = self._flatten_data_entry(data_entry)
+
+                for data in flat_data:
+                    if stop_event is not None and stop_event.is_set():
+                        logger.info("Tagging interrupted by stop event.")
+                        tagging_failed_local = True
+                        break
+                    if data is None:
+                        continue
+                    image, image_path = data
+                    b_imgs_local.append((image_path, image))
+                    if len(b_imgs_local) >= BATCH_SIZE:
+                        b_imgs_local = [
+                            (str(image_path), image)
+                            for image_path, image in b_imgs_local
+                        ]
+                        batch_result = self._run_batch(
+                            b_imgs_local,
+                            undesired_tags,
+                        )
+                        if batch_result is None:
+                            logger.error(
+                                "Tagging failed for batch: %s",
+                                [p for p, _ in b_imgs_local],
+                            )
+                            tagging_failed_local = True
+                            break
+
+                        results_local.update(self._naturalize_tags(batch_result))
+                        b_imgs_local.clear()
+            return tagging_failed_local, b_imgs_local, results_local
+
+        data = build_dataloader(worker_count)
+        logger.info("Got some tags: %s", data)
+        b_imgs = []
+        all_results = {}
+        try:
+            _tagging_failed, b_imgs, all_results = run_tagging(data)
+        except RuntimeError as exc:
+            logger.warning("Tagging dataloader stalled: %s", exc)
+            if worker_count > 0 and (stop_event is None or not stop_event.is_set()):
+                logger.warning(
+                    "Retrying tagger dataloader with num_workers=0 for %s items",
+                    len(dataset),
+                )
+                data = build_dataloader(0)
+                _tagging_failed, b_imgs, all_results = run_tagging(data)
+            else:
+                _tagging_failed = True
 
         if len(b_imgs) > 0 and not (stop_event is not None and stop_event.is_set()):
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]

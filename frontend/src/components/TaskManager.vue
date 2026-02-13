@@ -1,199 +1,201 @@
 <template>
-  <v-card class="task-manager-card">
-    <div class="task-manager-header">
-      <div class="task-manager-title">Worker Task Manager</div>
-      <v-btn
-        icon
-        variant="text"
-        class="task-manager-close"
-        @click="emit('close')"
-      >
-        <v-icon size="20">mdi-close</v-icon>
+  <div class="task-manager-shell">
+    <div class="task-manager-window">
+      <v-btn icon size="36px" class="task-manager-close" @click="emit('close')">
+        <v-icon size="24px">mdi-close</v-icon>
       </v-btn>
-    </div>
-    <div class="task-manager-subtitle">
-      Last {{ windowSeconds / 60 }} minutes. Rates are pictures per second.
-    </div>
-    <div v-if="loading" class="task-manager-loading">Loading...</div>
-    <div v-else class="task-manager-tabs">
-      <v-tabs
-        v-model="activeTab"
-        density="compact"
-        class="task-manager-tablist"
-      >
-        <v-tab value="grid">Grid</v-tab>
-        <v-tab value="graph">Graph</v-tab>
-      </v-tabs>
-      <v-window v-model="activeTab" class="task-manager-tab-window">
-        <v-window-item value="grid">
-          <div class="task-manager-grid">
-            <div
-              v-for="entry in workerEntries"
-              :key="entry.key"
-              class="task-manager-panel"
-            >
-              <div class="task-manager-panel-header">
-                <div class="task-manager-metric">
-                  {{ formatLabel(entry.key, entry.snapshot.label) }}
-                </div>
-                <div class="task-manager-progress">
-                  {{ formatProgress(entry.snapshot) }}
-                </div>
-              </div>
-              <div class="task-manager-panel-subheader">
-                <span class="task-manager-rate">
-                  {{ formatRate(getLatestRate(entry.key)) }}/s
-                </span>
-                <span class="task-manager-max">
-                  Max {{ formatRate(getMaxRate(entry.key)) }}/s
-                </span>
-              </div>
-              <div class="task-manager-canvas-wrap">
-                <canvas
-                  :ref="
-                    (el) => registerCanvas(`${entry.key}-grid`, entry.key, el)
-                  "
-                  class="task-manager-canvas"
-                ></canvas>
-              </div>
-              <div class="task-manager-status">
-                <span
-                  class="task-manager-status-dot"
-                  :class="{
-                    'task-manager-status-dot--running': entry.snapshot.running,
-                  }"
-                ></span>
-                <span class="task-manager-status-text">
-                  {{
-                    entry.snapshot.running
-                      ? "running"
-                      : entry.snapshot.status || "idle"
-                  }}
-                </span>
-              </div>
-            </div>
-            <div
-              v-if="combinedSnapshot"
-              class="task-manager-panel task-manager-panel--combined"
-            >
-              <div class="task-manager-panel-header">
-                <div class="task-manager-metric">Total throughput</div>
-                <div class="task-manager-progress">
-                  {{ formatProgress(combinedSnapshot) }}
-                </div>
-              </div>
-              <div class="task-manager-panel-subheader">
-                <span class="task-manager-rate">
-                  {{ formatRate(getLatestRate(combinedKey)) }}/s
-                </span>
-                <span class="task-manager-max">
-                  Max {{ formatRate(getMaxRate(combinedKey)) }}/s
-                </span>
-              </div>
-              <div class="task-manager-canvas-wrap">
-                <canvas
-                  :ref="
-                    (el) =>
-                      registerCanvas(`${combinedKey}-grid`, combinedKey, el)
-                  "
-                  class="task-manager-canvas"
-                ></canvas>
-              </div>
-              <div class="task-manager-status">
-                <span
-                  class="task-manager-status-dot"
-                  :class="{
-                    'task-manager-status-dot--running':
-                      combinedSnapshot.running,
-                  }"
-                ></span>
-                <span class="task-manager-status-text">
-                  {{ combinedSnapshot.running ? "running" : "idle" }}
-                </span>
-              </div>
-            </div>
-          </div>
-        </v-window-item>
-        <v-window-item value="graph">
-          <div class="task-manager-graph">
-            <svg
-              class="task-manager-graph-lines"
-              viewBox="0 0 100 100"
-              preserveAspectRatio="none"
-            >
-              <defs>
-                <marker
-                  id="arrow"
-                  viewBox="0 0 10 10"
-                  refX="7"
-                  refY="5"
-                  markerWidth="4"
-                  markerHeight="4"
-                  orient="auto-start-reverse"
+      <v-card class="task-manager-card">
+        <div class="task-manager-header">
+          <div class="task-manager-title">Worker Task Manager</div>
+        </div>
+        <div class="task-manager-subtitle">
+          Last {{ windowSeconds / 60 }} minutes. Rates are pictures per second.
+        </div>
+        <div v-if="loading" class="task-manager-loading">Loading...</div>
+        <div v-else class="task-manager-tabs">
+          <v-tabs
+            v-model="activeTab"
+            density="compact"
+            class="task-manager-tablist"
+          >
+            <v-tab value="grid">Grid</v-tab>
+            <v-tab value="graph">Graph</v-tab>
+          </v-tabs>
+          <v-window v-model="activeTab" class="task-manager-tab-window">
+            <v-window-item value="grid">
+              <div class="task-manager-grid">
+                <div
+                  v-for="entry in workerEntries"
+                  :key="entry.key"
+                  class="task-manager-panel"
                 >
-                  <path
-                    d="M 0 0 L 10 5 L 0 10 z"
-                    fill="rgba(242, 229, 218, 0.45)"
-                  />
-                </marker>
-              </defs>
-              <polyline
-                v-for="edge in graphEdges"
-                :key="edge.id"
-                :points="edge.points"
-                stroke="rgba(242, 229, 218, 0.4)"
-                stroke-width="2"
-                marker-end="url(#arrow)"
-                fill="none"
-                vector-effect="non-scaling-stroke"
-                shape-rendering="crispEdges"
-              />
-            </svg>
-            <div
-              v-for="node in graphNodes"
-              :key="node.id"
-              class="task-manager-graph-node"
-              :class="{
-                'task-manager-graph-node--combined': node.id === combinedKey,
-              }"
-              :style="{
-                left: `${node.x}%`,
-                top: `${node.y}%`,
-                width: `${GRAPH_NODE_WIDTH}%`,
-                height: `${GRAPH_NODE_HEIGHT}%`,
-              }"
-            >
-              <div class="task-manager-graph-header">
-                <div class="task-manager-graph-title">{{ node.title }}</div>
-                <div class="task-manager-graph-progress">
-                  {{ formatProgress(node.snapshot) }}
+                  <div class="task-manager-panel-header">
+                    <div class="task-manager-metric">
+                      {{ formatLabel(entry.key, entry.snapshot.label) }}
+                    </div>
+                    <div class="task-manager-progress">
+                      {{ formatProgress(entry.snapshot) }}
+                    </div>
+                  </div>
+                  <div class="task-manager-panel-subheader">
+                    <span class="task-manager-rate">
+                      {{ formatRate(getLatestRate(entry.key)) }}/s
+                    </span>
+                    <span class="task-manager-max">
+                      Max {{ formatRate(getMaxRate(entry.key)) }}/s
+                    </span>
+                  </div>
+                  <div class="task-manager-canvas-wrap">
+                    <canvas
+                      :ref="
+                        (el) =>
+                          registerCanvas(`${entry.key}-grid`, entry.key, el)
+                      "
+                      class="task-manager-canvas"
+                    ></canvas>
+                  </div>
+                  <div class="task-manager-status">
+                    <span
+                      class="task-manager-status-dot"
+                      :class="{
+                        'task-manager-status-dot--running':
+                          entry.snapshot.running,
+                      }"
+                    ></span>
+                    <span class="task-manager-status-text">
+                      {{
+                        entry.snapshot.running
+                          ? "running"
+                          : entry.snapshot.status || "idle"
+                      }}
+                    </span>
+                  </div>
+                </div>
+                <div
+                  v-if="combinedSnapshot"
+                  class="task-manager-panel task-manager-panel--combined"
+                >
+                  <div class="task-manager-panel-header">
+                    <div class="task-manager-metric">Total throughput</div>
+                    <div class="task-manager-progress">
+                      {{ formatProgress(combinedSnapshot) }}
+                    </div>
+                  </div>
+                  <div class="task-manager-panel-subheader">
+                    <span class="task-manager-rate">
+                      {{ formatRate(getLatestRate(combinedKey)) }}/s
+                    </span>
+                    <span class="task-manager-max">
+                      Max {{ formatRate(getMaxRate(combinedKey)) }}/s
+                    </span>
+                  </div>
+                  <div class="task-manager-canvas-wrap">
+                    <canvas
+                      :ref="
+                        (el) =>
+                          registerCanvas(`${combinedKey}-grid`, combinedKey, el)
+                      "
+                      class="task-manager-canvas"
+                    ></canvas>
+                  </div>
+                  <div class="task-manager-status">
+                    <span
+                      class="task-manager-status-dot"
+                      :class="{
+                        'task-manager-status-dot--running':
+                          combinedSnapshot.running,
+                      }"
+                    ></span>
+                    <span class="task-manager-status-text">
+                      {{ combinedSnapshot.running ? "running" : "idle" }}
+                    </span>
+                  </div>
                 </div>
               </div>
-              <div class="task-manager-graph-subheader">
-                <span class="task-manager-rate">
-                  {{ formatRate(getLatestRate(node.workerKey)) }}/s
-                </span>
-                <span class="task-manager-max">
-                  {{ formatRate(getMaxRate(node.workerKey)) }}/s
-                </span>
+            </v-window-item>
+            <v-window-item value="graph">
+              <div class="task-manager-graph">
+                <svg
+                  class="task-manager-graph-lines"
+                  viewBox="0 0 100 100"
+                  preserveAspectRatio="none"
+                >
+                  <defs>
+                    <marker
+                      id="arrow"
+                      viewBox="0 0 10 10"
+                      refX="7"
+                      refY="5"
+                      markerWidth="4"
+                      markerHeight="4"
+                      orient="auto-start-reverse"
+                    >
+                      <path
+                        d="M 0 0 L 10 5 L 0 10 z"
+                        fill="rgba(242, 229, 218, 0.45)"
+                      />
+                    </marker>
+                  </defs>
+                  <polyline
+                    v-for="edge in graphEdges"
+                    :key="edge.id"
+                    :points="edge.points"
+                    stroke="rgba(242, 229, 218, 0.4)"
+                    stroke-width="2"
+                    marker-end="url(#arrow)"
+                    fill="none"
+                    vector-effect="non-scaling-stroke"
+                    shape-rendering="crispEdges"
+                  />
+                </svg>
+                <div
+                  v-for="node in graphNodes"
+                  :key="node.id"
+                  class="task-manager-graph-node"
+                  :class="{
+                    'task-manager-graph-node--combined':
+                      node.id === combinedKey,
+                  }"
+                  :style="{
+                    left: `${node.x}%`,
+                    top: `${node.y}%`,
+                    width: `${GRAPH_NODE_WIDTH}%`,
+                    height: `${GRAPH_NODE_HEIGHT}%`,
+                  }"
+                >
+                  <div class="task-manager-graph-header">
+                    <div class="task-manager-graph-title">{{ node.title }}</div>
+                    <div class="task-manager-graph-progress">
+                      {{ formatProgress(node.snapshot) }}
+                    </div>
+                  </div>
+                  <div class="task-manager-graph-subheader">
+                    <span class="task-manager-rate">
+                      {{ formatRate(getLatestRate(node.workerKey)) }}/s
+                    </span>
+                    <span class="task-manager-max">
+                      {{ formatRate(getMaxRate(node.workerKey)) }}/s
+                    </span>
+                  </div>
+                  <div
+                    class="task-manager-canvas-wrap task-manager-canvas-wrap--graph"
+                  >
+                    <canvas
+                      :ref="
+                        (el) =>
+                          registerCanvas(`${node.id}-graph`, node.workerKey, el)
+                      "
+                      class="task-manager-canvas"
+                    ></canvas>
+                  </div>
+                </div>
               </div>
-              <div
-                class="task-manager-canvas-wrap task-manager-canvas-wrap--graph"
-              >
-                <canvas
-                  :ref="
-                    (el) =>
-                      registerCanvas(`${node.id}-graph`, node.workerKey, el)
-                  "
-                  class="task-manager-canvas"
-                ></canvas>
-              </div>
-            </div>
-          </div>
-        </v-window-item>
-      </v-window>
+            </v-window-item>
+          </v-window>
+        </div>
+      </v-card>
     </div>
-  </v-card>
+  </div>
 </template>
 
 <script setup>
@@ -220,16 +222,26 @@ const GRAPH_NODE_WIDTH = 30;
 const GRAPH_NODE_HEIGHT = 20;
 
 const graphLayout = [
-  { id: "quality", workerKey: "QualityWorker", x: 2, y: 1 },
-  { id: "watch", workerKey: "WatchFolderWorker", x: 2, y: 39 },
-  { id: "features", workerKey: "FeatureExtractionWorker", x: 2, y: 67 },
-  { id: "image_embeddings", workerKey: "ImageEmbeddingWorker", x: 36, y: 14 },
-  { id: "descriptions", workerKey: "DescriptionWorker", x: 36, y: 39 },
-  { id: "tags", workerKey: "TagWorker", x: 36, y: 61 },
-  { id: "likeness_params", workerKey: "LikenessParameterWorker", x: 70, y: 1 },
-  { id: "likeness", workerKey: "LikenessWorker", x: 70, y: 25 },
-  { id: "text_embeddings", workerKey: "EmbeddingWorker", x: 70, y: 48 },
-  { id: "scrapheap", workerKey: "SmartScoreScrapheapWorker", x: 70, y: 72 },
+  { id: "quality", workerKey: "QualityWorker", x: 1, y: 1 },
+  { id: "watch", workerKey: "WatchFolderWorker", x: 1, y: 39 },
+  { id: "features", workerKey: "FeatureExtractionWorker", x: 1, y: 67 },
+  { id: "image_embeddings", workerKey: "ImageEmbeddingWorker", x: 35, y: 14 },
+  { id: "descriptions", workerKey: "DescriptionWorker", x: 35, y: 39 },
+  { id: "tags", workerKey: "TagWorker", x: 35, y: 61 },
+  {
+    id: "likeness_params",
+    workerKey: "LikenessParameterWorker",
+    x: 69,
+    y: 1,
+  },
+  { id: "likeness", workerKey: "LikenessWorker", x: 69, y: 25 },
+  { id: "text_embeddings", workerKey: "EmbeddingWorker", x: 69, y: 48 },
+  {
+    id: "scrapheap",
+    workerKey: "SmartScoreScrapheapWorker",
+    x: 69,
+    y: 72,
+  },
 ];
 
 const graphEdgesConfig = [
@@ -250,9 +262,9 @@ const graphEdgesConfig = [
 
 const labelMap = {
   quality_scored: "Quality scored",
-  face_quality_scored: "Face quality scored",
+  face_quality_scored: "Face quality",
   pictures_tagged: "Pictures tagged",
-  descriptions_generated: "Descriptions generated",
+  descriptions_generated: "Descriptions",
   text_embeddings: "Text embeddings",
   image_embeddings: "Image embeddings",
   features_extracted: "Features extracted",
@@ -697,6 +709,18 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-on-surface));
   padding: 16px 18px 20px 18px;
   border-radius: 16px;
+  width: 55vw;
+}
+
+.task-manager-shell {
+  position: relative;
+  padding: 16px;
+  background: transparent;
+}
+
+.task-manager-window {
+  position: relative;
+  display: inline-block;
 }
 
 .task-manager-header {
@@ -731,6 +755,24 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid rgba(var(--v-theme-border), 0.5);
 }
 
+:deep(.task-manager-tablist .v-tab) {
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+:deep(.task-manager-tablist .v-tab--selected) {
+  border-color: rgba(var(--v-theme-on-surface), 0.2);
+  box-shadow: none;
+}
+
+:deep(.task-manager-tablist .v-tab:focus-visible),
+:deep(.task-manager-tablist .v-tab:focus),
+:deep(.task-manager-tablist .v-tab--selected:focus-visible),
+:deep(.task-manager-tablist .v-tab--selected:focus) {
+  outline: none;
+  box-shadow: none;
+}
+
 .task-manager-tab-window {
   margin-top: 12px;
   height: 50vh;
@@ -752,18 +794,18 @@ onBeforeUnmount(() => {
 .task-manager-grid {
   margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
 }
 
 .task-manager-panel {
   background: rgba(0, 0, 0, 0.15);
   border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: 12px;
-  padding: 11px;
+  border-radius: 10px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
 }
 
 .task-manager-panel--combined {
@@ -895,9 +937,17 @@ onBeforeUnmount(() => {
 }
 
 .task-manager-close {
-  min-width: 32px;
-  min-height: 32px;
-  width: 32px;
-  height: 32px;
+  position: absolute;
+  top: -16px;
+  right: -16px;
+  background-color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  border: none;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.task-manager-close:hover {
+  background-color: rgb(var(--v-theme-accent));
 }
 </style>

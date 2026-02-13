@@ -1,9 +1,10 @@
+import ast
 import json
 import os
 import time
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from PIL import Image, ImageOps
+from PIL import Image
 from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
@@ -290,7 +291,7 @@ def create_router(server) -> APIRouter:
     @router.get("/characters/{id}/{field}")
     async def get_character_field_by_id(id: int, field: str):
         if field == "thumbnail":
-            thumbnail_cache_version = 2
+            thumbnail_cache_version = 5
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
             os.makedirs(cache_dir, exist_ok=True)
             cache_path = os.path.join(cache_dir, f"character_{id}.png")
@@ -402,16 +403,65 @@ def create_router(server) -> APIRouter:
             picture_path = PictureUtils.resolve_picture_path(
                 server.vault.image_root, best_pic.file_path
             )
-            crop = PictureUtils.crop_face_bbox_exact(picture_path, bbox)
-            if crop is None:
+            if isinstance(bbox, str):
+                try:
+                    bbox = ast.literal_eval(bbox)
+                except Exception:
+                    bbox = None
+            if not bbox or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
                 raise HTTPException(
                     status_code=404, detail="Failed to crop face thumbnail"
                 )
             try:
-                crop = crop.convert("RGB")
+                image = Image.open(picture_path).convert("RGB")
             except Exception:
-                pass
-            crop = ImageOps.contain(crop, (36, 36), Image.LANCZOS)
+                raise HTTPException(
+                    status_code=404, detail="Failed to crop face thumbnail"
+                )
+            image_width, image_height = image.size
+            x1, y1, x2, y2 = [float(v) for v in bbox]
+            x1 = max(0.0, min(float(image_width - 1), x1))
+            y1 = max(0.0, min(float(image_height - 1), y1))
+            x2 = max(0.0, min(float(image_width), x2))
+            y2 = max(0.0, min(float(image_height), y2))
+            if x2 <= x1 or y2 <= y1:
+                raise HTTPException(
+                    status_code=404, detail="Failed to crop face thumbnail"
+                )
+            side = max(x2 - x1, y2 - y1)
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            new_x1 = cx - side / 2.0
+            new_x2 = cx + side / 2.0
+            new_y1 = cy - side / 2.0
+            new_y2 = cy + side / 2.0
+            if new_x1 < 0:
+                new_x2 -= new_x1
+                new_x1 = 0.0
+            if new_x2 > image_width:
+                shift = new_x2 - image_width
+                new_x1 -= shift
+                new_x2 = float(image_width)
+            if new_y1 < 0:
+                new_y2 -= new_y1
+                new_y1 = 0.0
+            if new_y2 > image_height:
+                shift = new_y2 - image_height
+                new_y1 -= shift
+                new_y2 = float(image_height)
+            new_x1 = max(0.0, min(float(image_width - 1), new_x1))
+            new_y1 = max(0.0, min(float(image_height - 1), new_y1))
+            new_x2 = max(0.0, min(float(image_width), new_x2))
+            new_y2 = max(0.0, min(float(image_height), new_y2))
+            crop = image.crop(
+                (
+                    int(round(new_x1)),
+                    int(round(new_y1)),
+                    int(round(new_x2)),
+                    int(round(new_y2)),
+                )
+            )
+            crop = crop.resize((128, 128), Image.LANCZOS)
             try:
                 crop.save(cache_path, format="PNG")
                 try:

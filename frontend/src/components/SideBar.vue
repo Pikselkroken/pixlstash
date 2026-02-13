@@ -73,6 +73,7 @@ const countNewTags = ref({});
 const knownCountIds = new Set();
 
 const characterThumbnails = ref({});
+const setThumbnails = ref({});
 const expandedCharacters = ref({});
 
 const dragOverCharacter = ref(null);
@@ -1293,11 +1294,49 @@ async function fetchPictureSets() {
 
     const sets = await res.data; // Axios responses use `data` for the payload
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
+    await updateSetThumbnails(pictureSets.value);
     console.log("Found picture sets:", pictureSets.value);
   } catch (e) {
     console.error("Error fetching picture sets:", e);
     pictureSets.value = [...pictureSets.value]; // force reactivity on error
   }
+}
+
+async function updateSetThumbnails(sets) {
+  const nextMap = {};
+  for (const set of sets || []) {
+    const baseUrl = set?.thumbnail_url || null;
+    if (!baseUrl) {
+      nextMap[set.id] = null;
+      continue;
+    }
+    const topIds = Array.isArray(set?.top_picture_ids)
+      ? set.top_picture_ids
+      : [];
+    const versionKey = topIds.length
+      ? topIds.join("-")
+      : (set.picture_count ?? 0);
+    const url = baseUrl.startsWith("http")
+      ? baseUrl
+      : `${props.backendUrl}${baseUrl}`;
+    nextMap[set.id] = `${url}?v=${encodeURIComponent(versionKey)}`;
+  }
+  setThumbnails.value = nextMap;
+}
+
+function getSetThumbnail(setId) {
+  return setThumbnails.value?.[setId] || null;
+}
+
+function hasSetThumbnail(pset) {
+  if (!pset || !pset.id) return false;
+  if (!pset.picture_count) return false;
+  return Boolean(getSetThumbnail(pset.id));
+}
+
+function handleSetThumbnailError(setId) {
+  if (!setId) return;
+  setThumbnails.value = { ...setThumbnails.value, [setId]: null };
 }
 
 function handleCreateSet() {
@@ -2263,6 +2302,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             alt=""
             width="36"
             height="36"
+            class="sidebar-character-thumb"
           />
         </button>
         <div
@@ -2285,7 +2325,16 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           @dragleave="dragLeaveSetItem"
           @drop.prevent="handleDropOnSet(pset.id, $event)"
         >
-          <v-icon>mdi-image-album</v-icon>
+          <img
+            v-if="hasSetThumbnail(pset)"
+            :src="getSetThumbnail(pset.id)"
+            alt=""
+            class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
+            width="36"
+            height="36"
+            @error="handleSetThumbnailError(pset.id)"
+          />
+          <v-icon width="40" size="40" v-else>mdi-image-album</v-icon>
         </div>
       </div>
     </template>
@@ -2557,7 +2606,16 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           @drop.prevent="handleDropOnSet(pset.id, $event)"
         >
           <span class="sidebar-list-icon">
-            <v-icon size="44">mdi-image-album</v-icon>
+            <img
+              v-if="hasSetThumbnail(pset)"
+              :src="getSetThumbnail(pset.id)"
+              alt=""
+              class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
+              width="44"
+              height="44"
+              @error="handleSetThumbnailError(pset.id)"
+            />
+            <v-icon v-else size="44">mdi-image-album</v-icon>
           </span>
           <span class="sidebar-list-label">
             <v-tooltip location="top">
@@ -2741,6 +2799,13 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   box-shadow: none;
 }
 
+.sidebar-brand-toggle:focus,
+.sidebar-brand-toggle:focus-visible,
+.sidebar-brand-toggle:active {
+  outline: none;
+  box-shadow: none;
+}
+
 .sidebar-collapsed-list {
   display: flex;
   flex-direction: column;
@@ -2769,10 +2834,12 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 .sidebar-collapsed-item.active {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
+  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-item.droppable {
   background: rgb(var(--v-theme-primary));
+  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-item:hover {
@@ -2788,6 +2855,12 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   padding: 0;
   background: transparent;
   cursor: pointer;
+  outline: none;
+  box-shadow: none;
+  transition:
+    background 0.18s ease,
+    box-shadow 0.18s ease,
+    filter 0.18s ease;
 }
 
 .sidebar-collapsed-thumb img {
@@ -2796,19 +2869,64 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   object-fit: contain;
   border-radius: 8px;
   display: block;
+  position: relative;
+  z-index: 1;
 }
 
-.sidebar-collapsed-thumb.active img {
-  outline: 4px solid rgb(var(--v-theme-primary));
+.sidebar-collapsed-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 2;
+  box-shadow: inset 0 0 0 3px transparent;
+  transition:
+    box-shadow 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.sidebar-collapsed-thumb .sidebar-character-thumb {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
+}
+
+.sidebar-collapsed-thumb:focus,
+.sidebar-collapsed-thumb:focus-visible,
+.sidebar-collapsed-thumb:active,
+.sidebar-collapsed-thumb img:focus,
+.sidebar-collapsed-thumb img:focus-visible,
+.sidebar-collapsed-thumb img:active {
+  outline: none;
+  box-shadow: none;
+}
+
+.sidebar-collapsed-thumb.active {
+  background: rgb(var(--v-theme-primary));
+}
+
+.sidebar-collapsed-thumb.active::after {
+  opacity: 1;
+  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-thumb:hover {
-  filter: brightness(1.4);
-  outline: 4px solid rgb(var(--v-theme-accent));
+  filter: brightness(1.1);
+  background-color: rgba(var(--v-theme-accent), 0.4);
 }
 
-.sidebar-collapsed-thumb.droppable img {
-  outline: 4px solid rgb(var(--v-theme-primary));
+.sidebar-collapsed-thumb:hover::after {
+  opacity: 1;
+  box-shadow: inset 0 0 0 3px rgba(var(--v-theme-accent), 0.7);
+}
+
+.sidebar-collapsed-thumb.droppable {
+  background: rgb(var(--v-theme-primary));
+}
+
+.sidebar-collapsed-thumb.droppable::after {
+  opacity: 1;
+  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
 }
 
 .sidebar-collapsed-divider {
@@ -3364,6 +3482,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   justify-content: center;
   width: 36px;
   height: 36px;
+  overflow: visible;
 }
 
 .sidebar-list-label {
@@ -3383,6 +3502,39 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   border-radius: 6px;
   background: transparent;
   display: inline-block;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
+}
+
+.sidebar-set-thumb-image {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  display: block;
+  box-sizing: border-box;
+}
+
+.sidebar-set-thumb-image--collapsed {
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  border: none;
+  box-shadow: none;
+}
+
+.sidebar-set-thumb-image--large {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+
+.sidebar-collapsed-item,
+.sidebar-collapsed-thumb {
+  position: relative;
+  overflow: hidden;
 }
 
 .sidebar-character-group {
