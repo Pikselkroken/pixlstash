@@ -77,6 +77,7 @@ def serialize_user_config(user) -> dict:
         "show_format",
         "show_resolution",
         "show_problem_icon",
+        "date_format",
         "similarity_character",
         "stack_strictness",
         "apply_tag_filter",
@@ -126,6 +127,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "show_format",
         "show_resolution",
         "show_problem_icon",
+        "date_format",
         "similarity_character",
         "stack_strictness",
         "smart_score_penalised_tags",
@@ -133,6 +135,16 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "apply_tag_filter",
         "auto_scrapheap_smart_score_threshold",
         "auto_scrapheap_lookback_minutes",
+    }
+
+    allowed_date_formats = {
+        "locale",
+        "iso",
+        "eu",
+        "us",
+        "ymd-slash",
+        "ymd-dot",
+        "ymd-jp",
     }
 
     updated = False
@@ -188,6 +200,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = bool(value)
             if user.apply_tag_filter != new_value:
                 user.apply_tag_filter = new_value
+                updated = True
+            continue
+        if key == "date_format":
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = str(value)
+            if new_value is not None and new_value not in allowed_date_formats:
+                raise ValueError("date_format is not a supported value")
+            if user.date_format != new_value:
+                user.date_format = new_value
                 updated = True
             continue
         if key == "auto_scrapheap_smart_score_threshold":

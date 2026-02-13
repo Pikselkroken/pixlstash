@@ -60,6 +60,7 @@ const showHandBboxes = ref(false);
 const showFormat = ref(true);
 const showResolution = ref(true);
 const showProblemIcon = ref(true);
+const dateFormat = ref("locale");
 
 const activeCategoryLabel = computed(() => {
   if (selectedSet.value) {
@@ -274,6 +275,7 @@ const config = reactive({
   show_format: true,
   show_resolution: true,
   show_problem_icon: true,
+  date_format: "locale",
   stack_strictness: 0.92,
 });
 
@@ -458,6 +460,11 @@ function handleUpdateApplyTagFilter(value) {
   applyTagFilter.value = Boolean(value);
 }
 
+function handleUpdateDateFormat(value) {
+  if (value == null) return;
+  dateFormat.value = String(value);
+}
+
 function handleUpdateSidebarThumbnailSize(value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
@@ -502,6 +509,9 @@ async function fetchConfig() {
     if (typeof res.data.show_problem_icon === "boolean") {
       showProblemIcon.value = res.data.show_problem_icon;
     }
+    if (typeof res.data.date_format === "string" && res.data.date_format) {
+      dateFormat.value = res.data.date_format;
+    }
     if (typeof res.data.descending === "boolean") {
       selectedDescending.value = res.data.descending;
     }
@@ -542,6 +552,7 @@ async function fetchConfig() {
       typeof res.data.show_problem_icon === "boolean"
         ? res.data.show_problem_icon
         : showProblemIcon.value;
+    config.date_format = dateFormat.value;
     config.stack_strictness =
       res.data.stack_strictness != null
         ? res.data.stack_strictness
@@ -569,6 +580,7 @@ async function fetchConfig() {
       show_format: showFormat.value,
       show_resolution: showResolution.value,
       show_problem_icon: showProblemIcon.value,
+      date_format: dateFormat.value,
       similarity_character: selectedSimilarityCharacter.value,
       stack_strictness:
         res.data.stack_strictness != null
@@ -619,6 +631,9 @@ async function patchConfigUIOptions() {
   }
   if (typeof showProblemIcon.value === "boolean") {
     patch.show_problem_icon = showProblemIcon.value;
+  }
+  if (typeof dateFormat.value === "string" && dateFormat.value) {
+    patch.date_format = dateFormat.value;
   }
   if (selectedSimilarityCharacter.value != null) {
     patch.similarity_character = selectedSimilarityCharacter.value;
@@ -887,6 +902,12 @@ watch(sidebarThumbnailSize, () => {
   patchConfigUIOptions();
 });
 
+watch(dateFormat, () => {
+  if (!configLoaded.value) return;
+  patchConfigUIOptions();
+  refreshGridVersion();
+});
+
 watch(exportMenuOpen, async (isOpen) => {
   if (!isOpen) return;
   await nextTick();
@@ -950,10 +971,12 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :backendUrl="BACKEND_URL"
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
             :sidebarThumbnailSize="sidebarThumbnailSize"
+            :dateFormat="dateFormat"
             @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
             @update:hidden-tags="handleUpdateHiddenTags"
             @update:apply-tag-filter="handleUpdateApplyTagFilter"
+            @update:date-format="handleUpdateDateFormat"
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
             @select-character="handleSelectCharacter"
             @select-reference-pictures="handleSelectReferencePictures"
@@ -1053,6 +1076,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :showFormat="showFormat"
               :showResolution="showResolution"
               :showProblemIcon="showProblemIcon"
+              :dateFormat="dateFormat"
               :hiddenTags="hiddenTags"
               :applyTagFilter="applyTagFilter"
               :allPicturesId="ALL_PICTURES_ID"

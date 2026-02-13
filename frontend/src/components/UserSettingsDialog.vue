@@ -5,11 +5,13 @@ import { apiClient } from "../utils/apiClient";
 const props = defineProps({
   open: { type: Boolean, default: false },
   sidebarThumbnailSize: { type: Number, default: 48 },
+  dateFormat: { type: String, default: "locale" },
 });
 
 const emit = defineEmits([
   "update:open",
   "update:sidebar-thumbnail-size",
+  "update:date-format",
   "update:hidden-tags",
   "update:apply-tag-filter",
 ]);
@@ -29,6 +31,21 @@ const sidebarThumbnailSizeModel = computed({
     emit("update:sidebar-thumbnail-size", snapped);
   },
 });
+
+const dateFormatModel = computed({
+  get: () => props.dateFormat ?? "locale",
+  set: (value) => emit("update:date-format", value ?? "locale"),
+});
+
+const dateFormatOptions = [
+  { title: "Locale default", value: "locale" },
+  { title: "ISO (YYYY-MM-DD)", value: "iso" },
+  { title: "European (DD/MM/YYYY)", value: "eu" },
+  { title: "American (MM/DD/YYYY)", value: "us" },
+  { title: "China (YYYY/MM/DD)", value: "ymd-slash" },
+  { title: "Korea (YYYY.MM.DD)", value: "ymd-dot" },
+  { title: "Japan (YYYY年MM月DD日)", value: "ymd-jp" },
+];
 
 const settingsTab = ref("preferences");
 const settingsUsername = ref("");
@@ -585,6 +602,23 @@ watch([smartScoreScrapheapThreshold, smartScoreScrapheapLookback], () => {
                     class="settings-slider"
                   />
                 </div>
+              </div>
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">Date Format</div>
+                <div class="settings-section-desc">
+                  Choose how dates are shown in the grid and overlays.
+                </div>
+                <v-select
+                  v-model="dateFormatModel"
+                  :items="dateFormatOptions"
+                  item-title="title"
+                  item-value="value"
+                  density="comfortable"
+                  variant="filled"
+                  class="settings-add-tag-input"
+                  hide-details
+                />
               </div>
               <v-divider class="settings-section-divider" />
               <div class="settings-section">

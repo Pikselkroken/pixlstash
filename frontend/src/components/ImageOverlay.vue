@@ -732,7 +732,7 @@ import AddToSetControl from "./AddToSetControl.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import {
   faceBoxColor,
-  formatIsoDate,
+  formatUserDate,
   handBoxColor,
   toggleScore,
 } from "../utils/utils.js";
@@ -752,6 +752,7 @@ const props = defineProps({
   tagUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
+  dateFormat: { type: String, default: "locale" },
 });
 
 const {
@@ -2570,7 +2571,7 @@ const pictureInfoEntries = computed(() => {
   if (createdAt) {
     entries.push({
       label: "Created",
-      value: formatIsoDate(createdAt),
+      value: formatUserDate(createdAt, props.dateFormat),
     });
   }
 

@@ -7,6 +7,7 @@
     :tagUpdate="props.wsTagUpdate"
     :hiddenTags="props.hiddenTags"
     :applyTagFilter="props.applyTagFilter"
+    :dateFormat="props.dateFormat"
     @close="closeOverlay"
     @apply-score="applyScore"
     @add-tag="addTagToImage"
@@ -415,7 +416,7 @@ import StarRatingOverlay from "./StarRatingOverlay.vue";
 import { apiClient } from "../utils/apiClient";
 import {
   faceBoxColor,
-  formatIsoDate,
+  formatUserDate,
   getStackColor,
   handBoxColor,
   StackThreshold,
@@ -454,6 +455,7 @@ const props = defineProps({
   showFormat: Boolean,
   showResolution: Boolean,
   showProblemIcon: Boolean,
+  dateFormat: { type: String, default: "locale" },
   allPicturesId: String,
   unassignedPicturesId: String,
   scrapheapPicturesId: String,
@@ -1095,7 +1097,7 @@ function getThumbnailInfoItems(img) {
   } else if (selectedSort.includes("DATE") && img.created_at) {
     items.push({
       key: "created_at",
-      text: formatIsoDate(img.created_at),
+      text: formatUserDate(img.created_at, props.dateFormat),
     });
   } else if (
     selectedSort === STACKS_SORT_KEY &&

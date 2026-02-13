@@ -29,6 +29,7 @@ const props = defineProps({
   selectedSimilarityCharacter: { type: [String, Number, null], default: null },
   backendUrl: { type: String, required: true },
   sidebarThumbnailSize: { type: Number, default: 48 },
+  dateFormat: { type: String, default: "locale" },
 });
 
 const emit = defineEmits([
@@ -47,6 +48,7 @@ const emit = defineEmits([
   "update:similarity-character",
   "update:similarity-options",
   "update:sidebar-thumbnail-size",
+  "update:date-format",
   "toggle-sidebar",
   "update:sort-options",
   "update:hidden-tags",
@@ -425,6 +427,11 @@ const sidebarThumbnailSizeModel = computed({
     const snapped = Math.round(clamped / 8) * 8;
     emit("update:sidebar-thumbnail-size", snapped);
   },
+});
+
+const dateFormatModel = computed({
+  get: () => props.dateFormat ?? "locale",
+  set: (value) => emit("update:date-format", value ?? "locale"),
 });
 
 const sidebarThumbnailSizeLarge = computed(
@@ -1342,6 +1349,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   <UserSettingsDialog
     v-model:open="settingsDialogOpen"
     v-model:sidebar-thumbnail-size="sidebarThumbnailSizeModel"
+    v-model:date-format="dateFormatModel"
     @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
     @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
   />

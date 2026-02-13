@@ -5,15 +5,44 @@ export function toggleScore(currentScore, targetScore) {
   return current === target ? 0 : target;
 }
 
-export function formatIsoDate(dateStr) {
+function formatDateParts(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    year: String(date.getFullYear()),
+    month: pad(date.getMonth() + 1),
+    day: pad(date.getDate()),
+    hour: pad(date.getHours()),
+    minute: pad(date.getMinutes()),
+  };
+}
+
+export function formatUserDate(dateStr, format) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return dateStr;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${
-      pad(
-          d.getHours(),
-          )}:${pad(d.getMinutes())}`;
+  const {year, month, day, hour, minute} = formatDateParts(d);
+  const time = `${hour}:${minute}`;
+  switch (format) {
+    case 'us':
+      return `${month}/${day}/${year} ${time}`;
+    case 'eu':
+      return `${day}/${month}/${year} ${time}`;
+    case 'ymd-slash':
+      return `${year}/${month}/${day} ${time}`;
+    case 'ymd-dot':
+      return `${year}.${month}.${day} ${time}`;
+    case 'ymd-jp':
+      return `${year}年${month}月${day}日 ${time}`;
+    case 'locale':
+      return d.toLocaleString();
+    case 'iso':
+    default:
+      return `${year}-${month}-${day} ${time}`;
+  }
+}
+
+export function formatIsoDate(dateStr) {
+  return formatUserDate(dateStr, 'iso');
 }
 
 export function StackThreshold(value) {

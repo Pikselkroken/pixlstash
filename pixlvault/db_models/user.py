@@ -27,6 +27,7 @@ class User(SQLModel, table=True):
     show_format: Optional[bool] = Field(default=True)
     show_resolution: Optional[bool] = Field(default=True)
     show_problem_icon: Optional[bool] = Field(default=True)
+    date_format: Optional[str] = Field(default="locale")
     similarity_character: Optional[int] = Field(default=None)
     stack_strictness: Optional[float] = Field(default=0.92)
     smart_score_penalised_tags: Optional[str] = Field(
