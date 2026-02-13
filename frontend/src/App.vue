@@ -115,6 +115,8 @@ let updatesReconnectTimer = null;
 const configLoading = ref(false);
 const configApplying = ref(false);
 const configSnapshot = ref({});
+const hiddenTags = ref([]);
+const applyTagFilter = ref(false);
 
 function refreshGridVersion() {
   gridVersion.value++;
@@ -446,6 +448,14 @@ function handleUpdateSimilarityOptions(options) {
   similarityCharacterOptions.value = Array.isArray(options) ? options : [];
 }
 
+function handleUpdateHiddenTags(tags) {
+  hiddenTags.value = Array.isArray(tags) ? tags : [];
+}
+
+function handleUpdateApplyTagFilter(value) {
+  applyTagFilter.value = Boolean(value);
+}
+
 function handleColumnsEnd() {
   if (columnsMenuCloseTimeout) {
     clearTimeout(columnsMenuCloseTimeout);
@@ -528,6 +538,10 @@ async function fetchConfig() {
       res.data.similarity_character ?? res.data.selected_similarity_character;
     selectedSimilarityCharacter.value =
       similarityValue ?? selectedSimilarityCharacter.value ?? null;
+    hiddenTags.value = Array.isArray(res.data.hidden_tags)
+      ? res.data.hidden_tags
+      : [];
+    applyTagFilter.value = Boolean(res.data.apply_tag_filter);
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
     configSnapshot.value = {
       sort: selectedSort.value || "",
@@ -544,6 +558,8 @@ async function fetchConfig() {
         res.data.stack_strictness != null
           ? Number(res.data.stack_strictness)
           : null,
+      hidden_tags: hiddenTags.value,
+      apply_tag_filter: applyTagFilter.value,
     };
     console.debug("[Config] Overlay settings applied", {
       showFaceBboxes: showFaceBboxes.value,
@@ -791,6 +807,14 @@ watch([selectedSort, selectedDescending], () => {
   refreshGridVersion();
 });
 
+watch(hiddenTags, () => {
+  refreshGridVersion();
+});
+
+watch(applyTagFilter, () => {
+  refreshGridVersion();
+});
+
 watch([selectedCharacter, selectedSet, searchQuery], () => {
   sendUpdatesFilters();
 });
@@ -903,6 +927,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
             @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
+            @update:hidden-tags="handleUpdateHiddenTags"
+            @update:apply-tag-filter="handleUpdateApplyTagFilter"
             @select-character="handleSelectCharacter"
             @select-reference-pictures="handleSelectReferencePictures"
             @select-set="handleSelectSet"
@@ -1001,6 +1027,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :showFormat="showFormat"
               :showResolution="showResolution"
               :showProblemIcon="showProblemIcon"
+              :hiddenTags="hiddenTags"
+              :applyTagFilter="applyTagFilter"
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"

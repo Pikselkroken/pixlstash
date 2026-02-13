@@ -5,6 +5,7 @@ import uuid
 
 from sqlmodel import select, Session, delete
 from sqlalchemy.orm import load_only, selectinload
+from sqlalchemy import func
 
 from pixlvault.event_types import EventType
 from pixlvault.picture_tagger import PictureTagger
@@ -42,6 +43,16 @@ class DescriptionWorker(BaseWorker):
                 logger.debug("DescriptionWorker: Starting iteration...")
                 data_updated = False
                 missing_descriptions = self._fetch_missing_descriptions()
+                total_pics = self._db.run_immediate_read_task(
+                    self._count_total_pictures
+                )
+                total = max(int(total_pics or 0), 0)
+                missing = len(missing_descriptions)
+                self._set_progress(
+                    label="descriptions_generated",
+                    current=max(total - missing, 0),
+                    total=total,
+                )
 
                 logger.debug(
                     f"DescriptionWorker: Got {len(missing_descriptions)} pictures needing descriptions."
@@ -111,42 +122,35 @@ class DescriptionWorker(BaseWorker):
             )
         )
 
+    @staticmethod
+    def _count_total_pictures(session: Session) -> int:
+        result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
     def _generate_descriptions(
         self, picture_tagger: PictureTagger, missing_descriptions: list[Picture]
-    ) -> int:
+    ) -> list[Picture]:
         """Generate descriptions for pictures using PictureTagger."""
         assert missing_descriptions is not None
         batch = missing_descriptions[: picture_tagger.max_concurrent_images()]
 
         descriptions_generated = []
+        try:
+            batch_results = picture_tagger.generate_descriptions_batch(batch)
+        except Exception as e:
+            logger.error("Failed to generate description batch: %s", e)
+            return descriptions_generated
+
         for pic in batch:
-            try:
-                description = picture_tagger.generate_description(picture=pic)
-                logger.debug("[DESCRIPTION WORKER] Got description: " + description)
-
-                def set_description(session: Session, pic_id, description):
-                    pic = session.exec(
-                        select(Picture)
-                        .where(Picture.id == pic_id)
-                        .options(selectinload(Picture.characters))
-                    ).one()
-                    pic.description = description
-                    session.add(pic)
-                    session.commit()
-                    session.refresh(pic)
-                    return pic
-
-                pic = self._db.run_task(
-                    set_description, pic.id, description, priority=DBPriority.LOW
-                )
-                assert pic.description == description
-
+            description = batch_results.get(pic.id)
+            if description:
+                logger.debug("[DESCRIPTION WORKER] Got description: %s", description)
+                pic.description = description
                 descriptions_generated.append(pic)
-
-            except Exception as e:
-                logger.error(
-                    f"Failed to generate/store description for picture {pic.id}: {e}"
-                )
+            else:
+                logger.error("Failed to generate description for picture %s", pic.id)
         return descriptions_generated
 
 
@@ -175,6 +179,16 @@ class TagWorker(BaseWorker):
                 start = time.time()
                 logger.debug("TaggingWorker: Starting iteration...")
                 missing_tags = self._fetch_missing_tags()
+                total_pics = self._db.run_immediate_read_task(
+                    self._count_total_pictures
+                )
+                total = max(int(total_pics or 0), 0)
+                missing = len(missing_tags)
+                self._set_progress(
+                    label="pictures_tagged",
+                    current=max(total - missing, 0),
+                    total=total,
+                )
                 logger.debug(
                     f"TaggingWorker: Got {len(missing_tags)} pictures needing tags."
                 )
@@ -253,6 +267,13 @@ class TagWorker(BaseWorker):
         return VaultDatabase.result_or_throw(
             self._db.submit_task(fetch_tags, queued_ids)
         )
+
+    @staticmethod
+    def _count_total_pictures(session: Session) -> int:
+        result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
 
     def _tag_pictures(self, missing_tags) -> int:
         """Tag all pictures missing tags."""
@@ -691,6 +712,19 @@ class EmbeddingWorker(BaseWorker):
                 start = time.time()
                 logger.debug("[EMBEDDING WORKER]  Starting iteration...")
                 embeddings_updated = 0
+                total_described = self._db.run_immediate_read_task(
+                    self._count_total_described
+                )
+                total_missing = self._db.run_immediate_read_task(
+                    self._count_missing_text_embeddings
+                )
+                total = max(int(total_described or 0), 0)
+                missing = max(int(total_missing or 0), 0)
+                self._set_progress(
+                    label="text_embeddings",
+                    current=max(total - missing, 0),
+                    total=total,
+                )
                 pictures_to_embed = self._fetch_missing_text_embeddings()
                 logger.debug(
                     f"[EMBEDDING WORKER]  Got {len(pictures_to_embed)} pictures needing embeddings."
@@ -750,6 +784,29 @@ class EmbeddingWorker(BaseWorker):
         return VaultDatabase.result_or_throw(
             self._db.submit_task(find_pictures_without_embeddings)
         )
+
+    @staticmethod
+    def _count_total_described(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.description.is_not(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_text_embeddings(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.description.is_not(None))
+            .where(Picture.text_embedding.is_(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
 
     def _generate_text_embeddings(self, pictures_to_embed):
         """

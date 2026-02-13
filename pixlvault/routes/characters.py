@@ -14,12 +14,13 @@ from pixlvault.db_models import (
     Picture,
     PictureSet,
     PictureSetMember,
+    Tag,
 )
 from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.picture_scoring import select_reference_faces_for_character
-from pixlvault.utils import safe_model_dict
+from pixlvault.utils import _normalize_hidden_tags, safe_model_dict
 
 logger = get_logger(__name__)
 
@@ -27,8 +28,18 @@ logger = get_logger(__name__)
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
+    def _get_hidden_tags_from_request(request: Request) -> list[str]:
+        try:
+            user = server.auth.get_user_for_request(request)
+        except HTTPException:
+            user = server.auth.get_user()
+        if not user or not getattr(user, "apply_tag_filter", False):
+            return []
+        normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
+        return normalized or []
+
     @router.get("/characters/{id}/summary")
-    async def get_characters_summary(id: str = None):
+    async def get_characters_summary(request: Request, id: str = None):
         """
         Return summary statistics for a single category:
         - If character_id is ALL: all pictures
@@ -36,14 +47,29 @@ def create_router(server) -> APIRouter:
         - If character_id is set: that character's pictures
         """
         start = time.time()
+        hidden_tags = _get_hidden_tags_from_request(request)
+        hidden_tag_set = {str(tag).strip().lower() for tag in hidden_tags if tag}
+        hidden_tag_filter = None
+        if hidden_tag_set:
+            hidden_tag_filter = ~exists(
+                select(Tag.id).where(
+                    Tag.picture_id == Picture.id,
+                    Tag.tag.is_not(None),
+                    func.lower(Tag.tag).in_(hidden_tag_set),
+                )
+            )
+
         if id == "ALL":
 
             def count_all(session: Session) -> int:
+                conditions = [
+                    Picture.deleted.is_(False),
+                    Picture.imported_at.is_not(None),
+                ]
+                if hidden_tag_filter is not None:
+                    conditions.append(hidden_tag_filter)
                 return session.exec(
-                    select(func.count(Picture.id)).where(
-                        Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
-                    )
+                    select(func.count(Picture.id)).where(*conditions)
                 ).one()
 
             image_count = server.vault.db.run_immediate_read_task(count_all)
@@ -52,11 +78,14 @@ def create_router(server) -> APIRouter:
         elif id == "SCRAPHEAP":
 
             def count_scrapheap(session: Session) -> int:
+                conditions = [
+                    Picture.deleted.is_(True),
+                    Picture.imported_at.is_not(None),
+                ]
+                if hidden_tag_filter is not None:
+                    conditions.append(hidden_tag_filter)
                 return session.exec(
-                    select(func.count(Picture.id)).where(
-                        Picture.deleted.is_(True),
-                        Picture.imported_at.is_not(None),
-                    )
+                    select(func.count(Picture.id)).where(*conditions)
                 ).one()
 
             image_count = server.vault.db.run_immediate_read_task(count_scrapheap)
@@ -70,13 +99,16 @@ def create_router(server) -> APIRouter:
                     Face.character_id.is_not(None),
                 )
                 set_exists = exists().where(PictureSetMember.picture_id == Picture.id)
+                conditions = [
+                    Picture.deleted.is_(False),
+                    Picture.imported_at.is_not(None),
+                    ~face_exists,
+                    ~set_exists,
+                ]
+                if hidden_tag_filter is not None:
+                    conditions.append(hidden_tag_filter)
                 return session.exec(
-                    select(func.count(Picture.id)).where(
-                        Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
-                        ~face_exists,
-                        ~set_exists,
-                    )
+                    select(func.count(Picture.id)).where(*conditions)
                 ).one()
 
             image_count = server.vault.db.run_immediate_read_task(count_unassigned)
@@ -85,14 +117,17 @@ def create_router(server) -> APIRouter:
         else:
 
             def count_assigned(session: Session, character_id: int) -> int:
+                conditions = [
+                    Face.character_id == character_id,
+                    Picture.deleted.is_(False),
+                    Picture.imported_at.is_not(None),
+                ]
+                if hidden_tag_filter is not None:
+                    conditions.append(hidden_tag_filter)
                 return session.exec(
                     select(func.count(func.distinct(Face.picture_id)))
                     .join(Picture, Face.picture_id == Picture.id)
-                    .where(
-                        Face.character_id == character_id,
-                        Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
-                    )
+                    .where(*conditions)
                 ).one()
 
             image_count = server.vault.db.run_immediate_read_task(

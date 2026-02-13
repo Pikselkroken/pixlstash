@@ -31,6 +31,8 @@ class User(SQLModel, table=True):
     smart_score_penalised_tags: Optional[str] = Field(
         default_factory=lambda: json.dumps(DEFAULT_SMART_SCORE_PENALIZED_TAGS)
     )
+    hidden_tags: Optional[str] = Field(default_factory=lambda: json.dumps([]))
+    apply_tag_filter: bool = Field(default=False)
     auto_scrapheap_smart_score_threshold: Optional[float] = Field(default=1.25)
     auto_scrapheap_lookback_minutes: Optional[int] = Field(default=30)
 

@@ -750,10 +750,19 @@ const props = defineProps({
   allImages: { type: Array, default: () => [] },
   backendUrl: { type: String, required: true },
   tagUpdate: { type: Object, default: () => ({}) },
+  hiddenTags: { type: Array, default: () => [] },
+  applyTagFilter: { type: Boolean, default: false },
 });
 
-const { open, initialImageId, allImages, backendUrl, tagUpdate } =
-  toRefs(props);
+const {
+  open,
+  initialImageId,
+  allImages,
+  backendUrl,
+  tagUpdate,
+  hiddenTags,
+  applyTagFilter,
+} = toRefs(props);
 
 const image = ref(null);
 const isTagsRefreshing = ref(false);
@@ -2352,7 +2361,7 @@ const faceTagGroups = computed(() => {
       face,
       faceKey: face?.id ?? `face-${idx}`,
       label,
-      tags: faceTagMap.value?.[face.id] || [],
+      tags: filterHiddenTags(TagList(faceTagMap.value?.[face.id])),
       color: faceBoxColor(idx),
     };
   });
@@ -2364,25 +2373,47 @@ const handTagGroups = computed(() => {
     hand,
     handKey: hand?.id ?? `hand-${idx}`,
     label: handLabel(hand, idx),
-    tags: handTagMap.value?.[hand.id] || [],
+    tags: filterHiddenTags(TagList(handTagMap.value?.[hand.id])),
     color: handBoxColor(idx),
   }));
 });
 
+const hiddenTagSet = computed(() => {
+  const values = Array.isArray(hiddenTags.value) ? hiddenTags.value : [];
+  const cleaned = values
+    .map((tag) =>
+      String(tag || "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+  return new Set(cleaned);
+});
+
+function filterHiddenTags(tags) {
+  if (!applyTagFilter.value) return tags;
+  const set = hiddenTagSet.value;
+  if (!set || set.size === 0) return tags;
+  return (tags || []).filter((tag) => {
+    const key = tagLabel(tag).trim().toLowerCase();
+    return key && !set.has(key);
+  });
+}
+
 const imageTags = computed(() => {
-  return dedupeTagList(TagList(image.value?.tags));
+  return filterHiddenTags(dedupeTagList(TagList(image.value?.tags)));
 });
 
 const faceTags = computed(() => {
   const values = Object.values(faceTagMap.value || {});
   const tags = values.flatMap((list) => TagList(list));
-  return dedupeTagList(tags);
+  return filterHiddenTags(dedupeTagList(tags));
 });
 
 const handTags = computed(() => {
   const values = Object.values(handTagMap.value || {});
   const tags = values.flatMap((list) => TagList(list));
-  return dedupeTagList(tags);
+  return filterHiddenTags(dedupeTagList(tags));
 });
 
 const allImageTags = computed(() => {

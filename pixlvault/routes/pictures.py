@@ -52,10 +52,48 @@ from pixlvault.picture_scoring import (
     select_reference_faces_for_character,
 )
 from pixlvault.picture_utils import PictureUtils
-from pixlvault.utils import safe_model_dict, serialize_tag_objects
+from pixlvault.utils import (
+    safe_model_dict,
+    serialize_tag_objects,
+    _normalize_hidden_tags,
+)
 from pixlvault.worker_registry import WorkerType
 
 logger = get_logger(__name__)
+
+
+def _get_hidden_tags_from_request(server, request: Request) -> list[str]:
+    try:
+        user = server.auth.get_user_for_request(request)
+    except HTTPException:
+        user = server.auth.get_user()
+    if not user:
+        return []
+    if not getattr(user, "apply_tag_filter", False):
+        return []
+    normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
+    return normalized or []
+
+
+def _fetch_hidden_picture_ids(server, request: Request, picture_ids: list[int]):
+    hidden_tags = _get_hidden_tags_from_request(server, request)
+    if not hidden_tags or not picture_ids:
+        return set()
+    hidden_tag_set = {str(tag).strip().lower() for tag in hidden_tags if tag}
+
+    def fetch_hidden(session: Session, ids: list[int], tags: set[str]):
+        rows = session.exec(
+            select(Tag.picture_id).where(
+                Tag.picture_id.in_(ids),
+                Tag.tag.is_not(None),
+                func.lower(Tag.tag).in_(tags),
+            )
+        ).all()
+        return {row for row in rows if row is not None}
+
+    return server.vault.db.run_immediate_read_task(
+        fetch_hidden, list(picture_ids), hidden_tag_set
+    )
 
 
 def _create_picture_imports(server, uploaded_files, dest_folder):
@@ -236,6 +274,18 @@ def _select_pictures_for_listing(
             limit,
             descending,
         )
+        if pics:
+            hidden_ids = _fetch_hidden_picture_ids(
+                server,
+                request,
+                [pic.get("id") for pic in pics if pic.get("id") is not None],
+            )
+            if hidden_ids:
+                pics = [
+                    pic
+                    for pic in pics
+                    if pic.get("id") is None or pic.get("id") not in hidden_ids
+                ]
         if return_ids_only:
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
         return pics
@@ -259,6 +309,18 @@ def _select_pictures_for_listing(
             penalised_tags=penalised_tags,
             only_deleted=only_deleted,
         )
+        if pics:
+            hidden_ids = _fetch_hidden_picture_ids(
+                server,
+                request,
+                [pic.get("id") for pic in pics if pic.get("id") is not None],
+            )
+            if hidden_ids:
+                pics = [
+                    pic
+                    for pic in pics
+                    if pic.get("id") is None or pic.get("id") not in hidden_ids
+                ]
         if return_ids_only:
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
         return pics
@@ -307,6 +369,14 @@ def _select_pictures_for_listing(
             format=format,
             **query_params,
         )
+    if pics:
+        hidden_ids = _fetch_hidden_picture_ids(
+            server,
+            request,
+            [pic.id for pic in pics if getattr(pic, "id", None) is not None],
+        )
+        if hidden_ids:
+            pics = [pic for pic in pics if pic.id not in hidden_ids]
     if return_ids_only:
         return [pic.id for pic in pics]
     return serialize_metadata(pics)
@@ -524,6 +594,12 @@ def create_router(server) -> APIRouter:
 
         if not ordered_ids:
             return []
+
+        hidden_ids = _fetch_hidden_picture_ids(server, request, ordered_ids)
+        if hidden_ids:
+            ordered_ids = [pid for pid in ordered_ids if pid not in hidden_ids]
+            if not ordered_ids:
+                return []
 
         def fetch_pictures(session, ids, deleted_only: bool):
             return Picture.find(
@@ -1592,6 +1668,23 @@ def create_router(server) -> APIRouter:
             return sorted_results
 
         results = server.vault.db.run_task(find_by_text, query, offset, limit)
+        if results:
+            hidden_ids = _fetch_hidden_picture_ids(
+                server,
+                request,
+                [
+                    getattr(pic, "id", None)
+                    for pic, _score in results
+                    if pic is not None and getattr(pic, "id", None) is not None
+                ],
+            )
+            if hidden_ids:
+                results = [
+                    result
+                    for result in results
+                    if result[0] is not None
+                    and getattr(result[0], "id", None) not in hidden_ids
+                ]
         return [Picture.serialize_with_likeness(r) for r in results]
 
     @router.post("/pictures/import")

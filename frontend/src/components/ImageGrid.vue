@@ -5,6 +5,8 @@
     :allImages="allGridImages"
     :backendUrl="props.backendUrl"
     :tagUpdate="props.wsTagUpdate"
+    :hiddenTags="props.hiddenTags"
+    :applyTagFilter="props.applyTagFilter"
     @close="closeOverlay"
     @apply-score="applyScore"
     @add-tag="addTagToImage"
@@ -463,6 +465,8 @@ const props = defineProps({
   },
   mediaTypeFilter: { type: String, default: "all" },
   columns: { type: Number, required: true },
+  hiddenTags: { type: Array, default: () => [] },
+  applyTagFilter: { type: Boolean, default: false },
 });
 const STACKS_SORT_KEY = "PICTURE_STACKS";
 const STACK_COLOR_STEP = 47;
@@ -621,17 +625,38 @@ function refreshAllThumbnailInfoDisplays() {
   }
 }
 
+let initialFetchTimer = null;
+
 onMounted(() => {
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   fetchAllPicturesCount();
+  const mountFetchKey = buildGridFetchKey();
   if (!hasLoadedOnce.value && !imagesLoading.value) {
     if (
       !Array.isArray(allGridImages.value) ||
       allGridImages.value.length === 0
     ) {
-      fetchAllGridImages().then(() => {
-        updateVisibleThumbnails();
-      });
+      if (initialFetchTimer) {
+        clearTimeout(initialFetchTimer);
+      }
+      initialFetchTimer = setTimeout(() => {
+        initialFetchTimer = null;
+        const currentKey = buildGridFetchKey();
+        if (currentKey !== mountFetchKey) {
+          return;
+        }
+        if (hasLoadedOnce.value || imagesLoading.value) {
+          return;
+        }
+        if (
+          !Array.isArray(allGridImages.value) ||
+          allGridImages.value.length === 0
+        ) {
+          fetchAllGridImages().then(() => {
+            updateVisibleThumbnails();
+          });
+        }
+      }, 80);
     }
   }
   nextTick(() => {
@@ -650,6 +675,10 @@ onUnmounted(() => {
   if (gridResizeObserver) {
     gridResizeObserver.disconnect();
     gridResizeObserver = null;
+  }
+  if (initialFetchTimer) {
+    clearTimeout(initialFetchTimer);
+    initialFetchTimer = null;
   }
   fullImagePrefetchControllers.clear();
   prefetchedFullImageIds.clear();
@@ -1545,11 +1574,17 @@ async function handleImagesUploaded(newIds) {
 
 // Adjust debounce timing to 200ms for better responsiveness
 const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
+const lastGridVersionRefreshAt = ref(0);
 
 // Debounced version of fetchAllGridImages
 watch(
   () => props.gridVersion,
   () => {
+    const now = Date.now();
+    if (now - lastGridVersionRefreshAt.value < 1200) {
+      return;
+    }
+    lastGridVersionRefreshAt.value = now;
     if (skipNextWsRefresh.value) {
       skipNextWsRefresh.value = false;
       return;
@@ -2324,6 +2359,23 @@ const imagesError = ref(null);
 const totalAllPicturesCount = ref(0);
 const gridReady = ref(false);
 const gridLoadEpoch = ref(0);
+const lastFetchKey = ref("");
+const lastFetchError = ref({ key: "", at: 0 });
+const lastFetchSuccess = ref({ key: "", at: 0 });
+
+function buildGridFetchKey() {
+  return JSON.stringify({
+    selectedCharacter: props.selectedCharacter ?? null,
+    selectedReferenceCharacter: props.selectedReferenceCharacter ?? null,
+    selectedSet: props.selectedSet ?? null,
+    searchQuery: props.searchQuery ?? "",
+    selectedSort: props.selectedSort ?? "",
+    selectedDescending: props.selectedDescending ?? null,
+    stackThreshold: props.stackThreshold ?? null,
+    mediaTypeFilter: props.mediaTypeFilter ?? "all",
+    similarityCharacter: props.similarityCharacter ?? null,
+  });
+}
 
 function getStackCardStyle(img) {
   if (!img) return {};
@@ -2435,6 +2487,24 @@ function buildStackQueryParams() {
 // Fetch total image count for current filters
 async function fetchAllGridImages() {
   console.log("[ImageGrid.vue] fetchAllGridImages called.");
+  const fetchKey = buildGridFetchKey();
+  const now = Date.now();
+  if (imagesLoading.value && lastFetchKey.value === fetchKey) {
+    return;
+  }
+  if (
+    lastFetchSuccess.value.key === fetchKey &&
+    now - lastFetchSuccess.value.at < 1200
+  ) {
+    return;
+  }
+  if (
+    lastFetchError.value.key === fetchKey &&
+    now - lastFetchError.value.at < 2500
+  ) {
+    return;
+  }
+  lastFetchKey.value = fetchKey;
   const loadId = (gridLoadEpoch.value += 1);
   gridReady.value = false;
   imagesLoading.value = true;
@@ -2679,9 +2749,11 @@ async function fetchAllGridImages() {
         updateVisibleThumbnails();
       }
     });
+    lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
   } catch (e) {
     imagesError.value = e.message;
     allGridImages.value = [];
+    lastFetchError.value = { key: fetchKey, at: Date.now() };
   } finally {
     if (loadId === gridLoadEpoch.value) {
       imagesLoading.value = false;

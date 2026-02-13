@@ -307,7 +307,7 @@
               title="Overlay options"
               class="toolbar-action-btn"
             >
-              <v-icon :color="'onBackground'">mdi-layers-outline</v-icon>
+              <v-icon :color="'on-background'">mdi-layers-outline</v-icon>
             </v-btn>
           </template>
           <div
@@ -391,7 +391,7 @@
               title="Export current grid to zip"
               class="toolbar-action-btn"
             >
-              <v-icon :color="'onBackground'">mdi-download</v-icon>
+              <v-icon :color="'on-background'">mdi-download</v-icon>
             </v-btn>
           </template>
           <div
@@ -420,7 +420,7 @@
             <v-select
               v-model="exportTypeModel"
               :background-color="'surface'"
-              :color="'onSurface'"
+              :color="'on-surface'"
               :items="exportTypeOptions"
               item-title="title"
               item-value="value"
@@ -430,7 +430,7 @@
             <v-select
               v-model="exportCaptionModeModel"
               :background-color="'surface'"
-              :color="'onSurface'"
+              :color="'on-surface'"
               :items="exportCaptionOptions"
               item-title="title"
               item-value="value"
@@ -441,7 +441,7 @@
             <v-select
               v-model="exportResolutionModel"
               :background-color="'surface'"
-              :color="'onSurface'"
+              :color="'on-surface'"
               :items="exportResolutionOptions"
               item-title="title"
               item-value="value"
@@ -476,7 +476,7 @@
               title="Filter media type"
               class="toolbar-action-btn"
             >
-              <v-icon :color="'onBackground'">mdi-filter</v-icon>
+              <v-icon :color="'on-background'">mdi-filter</v-icon>
             </v-btn>
           </template>
           <div
@@ -527,7 +527,7 @@
           class="toolbar-action-btn"
           @click="emit('open-settings')"
         >
-          <v-icon :color="'onBackground'">mdi-cog</v-icon>
+          <v-icon :color="'on-background'">mdi-cog</v-icon>
         </v-btn>
       </div>
     </div>

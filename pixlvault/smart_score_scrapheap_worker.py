@@ -221,6 +221,11 @@ class SmartScoreScrapheapWorker(BaseWorker):
         )
 
         if not candidates:
+            self._set_progress(
+                label="scrapheap_candidates",
+                current=0,
+                total=0,
+            )
             return 0
 
         good_list, bad_list, cand_list, cand_ids = prepare_smart_score_inputs(
@@ -261,6 +266,11 @@ class SmartScoreScrapheapWorker(BaseWorker):
 
         deleted_count, processed_count = self._db.run_task(
             mark_processed, cand_ids, low_ids, priority=DBPriority.IMMEDIATE
+        )
+        self._set_progress(
+            label="scrapheap_candidates",
+            current=int(processed_count or 0),
+            total=len(candidates),
         )
 
         if processed_count:

@@ -1,6 +1,6 @@
 import logging as logging_
 import time
-from uvicorn.logging import ColourisedFormatter
+from uvicorn.logging import ColourizedFormatter as ColourisedFormatter
 
 LOG_FORMAT = "%(asctime)s %(levelprefix)s %(name)s: %(message)s"
 LOG_LEVEL = logging_.INFO

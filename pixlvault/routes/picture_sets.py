@@ -3,6 +3,7 @@ import sys
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
+from sqlalchemy import func
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models import (
@@ -11,6 +12,7 @@ from pixlvault.db_models import (
     PictureSet,
     PictureSetMember,
     SortMechanism,
+    Tag,
 )
 from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
@@ -19,13 +21,41 @@ from pixlvault.picture_scoring import (
     find_pictures_by_smart_score,
     get_smart_score_penalised_tags_from_request,
 )
-from pixlvault.utils import safe_model_dict
+from pixlvault.utils import safe_model_dict, _normalize_hidden_tags
 
 logger = get_logger(__name__)
 
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
+
+    def _get_hidden_tags_from_request(request: Request) -> list[str]:
+        try:
+            user = server.auth.get_user_for_request(request)
+        except HTTPException:
+            user = server.auth.get_user()
+        if not user:
+            return []
+        if not getattr(user, "apply_tag_filter", False):
+            return []
+        normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
+        return normalized or []
+
+    def _filter_hidden_picture_ids(
+        session, picture_ids: list[int], hidden_tags: list[str]
+    ) -> list[int]:
+        if not picture_ids or not hidden_tags:
+            return picture_ids
+        hidden_tag_set = {str(tag).strip().lower() for tag in hidden_tags if tag}
+        rows = session.exec(
+            select(Tag.picture_id).where(
+                Tag.picture_id.in_(picture_ids),
+                Tag.tag.is_not(None),
+                func.lower(Tag.tag).in_(hidden_tag_set),
+            )
+        ).all()
+        hidden_ids = {row for row in rows if row is not None}
+        return [pic_id for pic_id in picture_ids if pic_id not in hidden_ids]
 
     def _find_reference_character_id_for_set(picture_set_id):
         # Find reference_character_id if this is a reference set
@@ -45,7 +75,9 @@ def create_router(server) -> APIRouter:
         )
 
     @router.get("/picture_sets")
-    async def get_picture_sets():
+    async def get_picture_sets(request: Request):
+        hidden_tags = _get_hidden_tags_from_request(request)
+
         def fetch_sets(session):
             sets = session.exec(
                 select(PictureSet).options(selectinload(PictureSet.reference_character))
@@ -61,7 +93,12 @@ def create_router(server) -> APIRouter:
                         Picture.imported_at.is_not(None),
                     )
                 ).all()
-                count = len({m for m in members if m is not None})
+                filtered_ids = _filter_hidden_picture_ids(
+                    session,
+                    [m for m in members if m is not None],
+                    hidden_tags,
+                )
+                count = len(set(filtered_ids))
                 set_dict = safe_model_dict(s)
                 set_dict["picture_count"] = count
                 result.append(set_dict)
@@ -138,6 +175,15 @@ def create_router(server) -> APIRouter:
         )
         if not picture_set:
             raise HTTPException(status_code=404, detail="Picture set not found")
+        hidden_tags = _get_hidden_tags_from_request(request)
+
+        def filter_hidden_ids(session, ids):
+            return _filter_hidden_picture_ids(session, ids, hidden_tags)
+
+        picture_ids = server.vault.db.run_immediate_read_task(
+            filter_hidden_ids, picture_ids
+        )
+
         if info:
             set_dict = picture_set.dict()
             set_dict["picture_count"] = len(picture_ids)

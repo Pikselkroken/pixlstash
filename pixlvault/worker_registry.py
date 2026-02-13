@@ -1,6 +1,7 @@
 import queue
 import random
 import threading
+import time
 
 from typing import List, Tuple, Type
 from concurrent.futures import Future
@@ -76,6 +77,16 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         self._event_callback = event_callback
         self._queue = queue.Queue()
 
+        self._progress_lock = threading.Lock()
+        self._progress = {
+            "label": "idle",
+            "current": 0,
+            "total": 0,
+            "remaining": 0,
+            "updated_at": None,
+            "status": "idle",
+        }
+
     @abstractmethod
     def worker_type(self) -> WorkerType:
         """
@@ -89,6 +100,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         self._event.clear()
         self._stop.clear()
+        self._set_progress(status="running")
         if self._thread is not None and self._thread.is_alive():
             return
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -107,6 +119,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
                     "Worker %s did not shut down within timeout.",
                     self.name(),
                 )
+        self._set_progress(status="stopped")
 
     def close(self):
         """
@@ -139,6 +152,33 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         Return the name of the worker.
         """
         return self.worker_type().value
+
+    def get_progress(self) -> dict:
+        """
+        Return a snapshot of the worker progress.
+        """
+        with self._progress_lock:
+            return dict(self._progress)
+
+    def _set_progress(
+        self,
+        label: str | None = None,
+        current: int | None = None,
+        total: int | None = None,
+        status: str | None = None,
+    ):
+        with self._progress_lock:
+            if label is not None:
+                self._progress["label"] = label
+            if current is not None:
+                self._progress["current"] = max(0, int(current))
+            if total is not None:
+                self._progress["total"] = max(0, int(total))
+            remaining = self._progress["total"] - self._progress["current"]
+            self._progress["remaining"] = max(0, int(remaining))
+            if status is not None:
+                self._progress["status"] = status
+            self._progress["updated_at"] = time.time()
 
     def watch_id(self, cls: type, object_id, attr: str):
         """

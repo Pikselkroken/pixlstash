@@ -99,6 +99,15 @@ class LikenessWorker(BaseWorker):
             )
 
         while not self._stop.is_set():
+            pending = submit_low(LikenessWorker._count_queue)
+            total_candidates = submit_low(LikenessWorker._count_total_candidates)
+            total = max(int(total_candidates or 0), 0)
+            remaining = max(int(pending or 0), 0)
+            self._set_progress(
+                label="likeness_pairs",
+                current=max(total - remaining, 0),
+                total=total,
+            )
             work_items = submit_low(
                 LikenessWorker._get_next_work_batch,
                 self.MAX_A_PER_CYCLE,
@@ -218,6 +227,28 @@ class LikenessWorker(BaseWorker):
             )
 
         return batch
+
+    @staticmethod
+    def _count_queue(session: Session) -> int:
+        result = session.exec(
+            select(func.count()).select_from(PictureLikenessQueue)
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_total_candidates(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.image_embedding.is_not(None))
+            .where(Picture.likeness_parameters.is_not(None))
+            .where(Picture.perceptual_hash.is_not(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
 
     @staticmethod
     def _fetch_embedding(session: Session, picture_id: int) -> Optional[bytes]:
@@ -561,6 +592,16 @@ class LikenessWorker(BaseWorker):
 
     @staticmethod
     def _seed_queue(session: Session) -> None:
+        queued_count = session.exec(
+            select(func.count()).select_from(PictureLikenessQueue)
+        ).one()
+        if queued_count and int(queued_count) > 0:
+            return
+        likeness_count = session.exec(
+            select(func.count()).select_from(PictureLikeness)
+        ).one()
+        if likeness_count and int(likeness_count) > 0:
+            return
         rows = session.exec(select(Picture.id)).all()
         ids = [
             int(row[0]) if isinstance(row, (tuple, list)) else int(row) for row in rows

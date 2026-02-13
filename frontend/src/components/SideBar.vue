@@ -11,6 +11,7 @@ import ImageImporter from "./ImageImporter.vue";
 import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
 import SearchOverlay from "./SearchOverlay.vue";
+import TaskManager from "./TaskManager.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import { apiClient } from "../utils/apiClient";
 
@@ -46,6 +47,8 @@ const emit = defineEmits([
   "update:similarity-options",
   "toggle-sidebar",
   "update:sort-options",
+  "update:hidden-tags",
+  "update:apply-tag-filter",
 ]);
 
 const imageImporterRef = ref(null);
@@ -101,17 +104,56 @@ const newlyCreatedToken = ref("");
 const tokenDialogOpen = ref(false);
 const tokenDeleteDialogOpen = ref(false);
 const tokenToDelete = ref(null);
+const taskManagerOpen = ref(false);
 const smartScorePenalisedTags = ref([]);
 const smartScoreTagInput = ref("");
 const smartScoreTagsLoading = ref(false);
 const smartScoreTagsError = ref("");
 const smartScoreTagsSuccess = ref("");
+const hiddenTags = ref([]);
+const hiddenTagInput = ref("");
+const hiddenTagsLoading = ref(false);
+const hiddenTagsError = ref("");
+const hiddenTagsSuccess = ref("");
+const applyTagFilter = ref(false);
+const applyTagFilterLoading = ref(false);
 const smartScoreScrapheapThreshold = ref(1.25);
 const smartScoreScrapheapLookback = ref(30);
 const smartScoreScrapheapLoading = ref(false);
 const smartScoreScrapheapError = ref("");
 const smartScoreScrapheapSuccess = ref("");
+const smartScoreScrapheapHydrating = ref(false);
+let smartScoreScrapheapSaveTimer = null;
 const settingsTab = ref("preferences");
+
+function stepNumber(value, delta, options = {}) {
+  const { min = null, max = null, precision = null } = options;
+  const current = Number(value);
+  const base = Number.isFinite(current) ? current : 0;
+  let next = base + delta;
+  if (min != null) next = Math.max(min, next);
+  if (max != null) next = Math.min(max, next);
+  if (precision != null && Number.isFinite(precision)) {
+    next = Number(next.toFixed(precision));
+  }
+  return next;
+}
+
+function incrementScrapheapThreshold(delta) {
+  smartScoreScrapheapThreshold.value = stepNumber(
+    smartScoreScrapheapThreshold.value,
+    delta,
+    { min: 0.1, precision: 2 },
+  );
+}
+
+function incrementScrapheapLookback(delta) {
+  smartScoreScrapheapLookback.value = stepNumber(
+    smartScoreScrapheapLookback.value,
+    delta,
+    { min: 1, precision: 0 },
+  );
+}
 
 async function fetchSettingsAuth() {
   settingsLoading.value = true;
@@ -142,6 +184,9 @@ function resetSettingsForm() {
   smartScoreTagInput.value = "";
   smartScoreTagsError.value = "";
   smartScoreTagsSuccess.value = "";
+  hiddenTagInput.value = "";
+  hiddenTagsError.value = "";
+  hiddenTagsSuccess.value = "";
   smartScoreScrapheapError.value = "";
   smartScoreScrapheapSuccess.value = "";
 }
@@ -203,14 +248,56 @@ function serializeSmartScoreTags(entries) {
   return { d, payload };
 }
 
+function normalizeHiddenTags(tags) {
+  const values = Array.isArray(tags)
+    ? tags
+    : tags && typeof tags === "object"
+      ? Object.keys(tags)
+      : [];
+  const seen = new Set();
+  const cleaned = [];
+  for (const tag of values) {
+    if (tag == null) continue;
+    const clean = String(tag).trim().toLowerCase();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    cleaned.push(clean);
+  }
+  return cleaned.sort((a, b) => a.localeCompare(b));
+}
+
+function areStringListsEqual(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 async function fetchSmartScoreSettings() {
   smartScoreTagsLoading.value = true;
   smartScoreTagsError.value = "";
+  hiddenTagsLoading.value = true;
+  hiddenTagsError.value = "";
   try {
     const res = await apiClient.get("/users/me/config");
     smartScorePenalisedTags.value = SmartScoreTags(
       res.data?.smart_score_penalised_tags,
     );
+    const nextHiddenTags = normalizeHiddenTags(res.data?.hidden_tags);
+    const currentHiddenTags = normalizeHiddenTags(hiddenTags.value);
+    if (!areStringListsEqual(nextHiddenTags, currentHiddenTags)) {
+      hiddenTags.value = nextHiddenTags;
+      emit("update:hidden-tags", hiddenTags.value);
+    }
+    const nextApplyTagFilter = Boolean(res.data?.apply_tag_filter);
+    if (applyTagFilter.value !== nextApplyTagFilter) {
+      applyTagFilter.value = nextApplyTagFilter;
+      emit("update:apply-tag-filter", applyTagFilter.value);
+    }
+    smartScoreScrapheapHydrating.value = true;
     const threshold = Number(res.data?.auto_scrapheap_smart_score_threshold);
     if (Number.isFinite(threshold)) {
       smartScoreScrapheapThreshold.value = threshold;
@@ -221,8 +308,11 @@ async function fetchSmartScoreSettings() {
     }
   } catch (e) {
     smartScoreTagsError.value = "Failed to load smart score settings.";
+    hiddenTagsError.value = "Failed to load hidden tag settings.";
   } finally {
     smartScoreTagsLoading.value = false;
+    hiddenTagsLoading.value = false;
+    smartScoreScrapheapHydrating.value = false;
   }
 }
 
@@ -255,6 +345,17 @@ async function saveSmartScoreScrapheapSettings() {
       }, 2000);
     }
   }
+}
+
+function scheduleSmartScoreScrapheapSave() {
+  if (smartScoreScrapheapHydrating.value) return;
+  if (smartScoreScrapheapSaveTimer) {
+    clearTimeout(smartScoreScrapheapSaveTimer);
+  }
+  smartScoreScrapheapSaveTimer = setTimeout(() => {
+    smartScoreScrapheapSaveTimer = null;
+    saveSmartScoreScrapheapSettings();
+  }, 600);
 }
 
 async function saveSmartScoreTags(nextTags) {
@@ -306,6 +407,64 @@ async function updateSmartScoreTagWeight(tag, weight) {
     ),
   );
   await saveSmartScoreTags(next);
+}
+
+async function saveHiddenTags(nextTags) {
+  hiddenTagsLoading.value = true;
+  hiddenTagsError.value = "";
+  hiddenTagsSuccess.value = "";
+  try {
+    const normalized = normalizeHiddenTags(nextTags);
+    await apiClient.patch("/users/me/config", {
+      hidden_tags: normalized,
+    });
+    hiddenTags.value = normalized;
+    emit("update:hidden-tags", hiddenTags.value);
+    hiddenTagsSuccess.value = "Saved.";
+  } catch (e) {
+    hiddenTagsError.value =
+      e?.response?.data?.detail || "Failed to update hidden tags.";
+  } finally {
+    hiddenTagsLoading.value = false;
+    if (hiddenTagsSuccess.value) {
+      setTimeout(() => {
+        hiddenTagsSuccess.value = "";
+      }, 2000);
+    }
+  }
+}
+
+async function addHiddenTag() {
+  const trimmed = hiddenTagInput.value.trim().toLowerCase();
+  if (!trimmed) return;
+  const next = normalizeHiddenTags([...hiddenTags.value, trimmed]);
+  hiddenTagInput.value = "";
+  await saveHiddenTags(next);
+}
+
+async function removeHiddenTag(tag) {
+  const next = normalizeHiddenTags(
+    hiddenTags.value.filter((entry) => entry !== tag),
+  );
+  await saveHiddenTags(next);
+}
+
+async function setApplyTagFilter(value) {
+  applyTagFilterLoading.value = true;
+  hiddenTagsError.value = "";
+  try {
+    const nextValue = Boolean(value);
+    await apiClient.patch("/users/me/config", {
+      apply_tag_filter: nextValue,
+    });
+    applyTagFilter.value = nextValue;
+    emit("update:apply-tag-filter", applyTagFilter.value);
+  } catch (e) {
+    hiddenTagsError.value =
+      e?.response?.data?.detail || "Failed to update tag filter.";
+  } finally {
+    applyTagFilterLoading.value = false;
+  }
 }
 
 function formatTokenTimestamp(value) {
@@ -1179,6 +1338,7 @@ onMounted(() => {
     "[SideBar.vue] Initial descendingModel value:",
     descendingModel.value,
   );
+  refreshSidebar();
   const handleNoticeReflow = () => updateSidebarNoticePosition();
   if (sidebarRootRef.value) {
     sidebarRootRef.value.addEventListener("scroll", handleNoticeReflow, {
@@ -1242,6 +1402,10 @@ watch(
   },
 );
 
+watch([smartScoreScrapheapThreshold, smartScoreScrapheapLookback], () => {
+  scheduleSmartScoreScrapheapSave();
+});
+
 watch(
   [() => sortedCharacters.value, () => props.selectedSort],
   ([chars, selectedSort]) => {
@@ -1304,7 +1468,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   />
   <v-dialog
     v-model="settingsDialogOpen"
-    width="620"
+    width="800"
     @click:outside="settingsDialogOpen = false"
   >
     <div class="settings-dialog-shell">
@@ -1323,7 +1487,8 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           density="comfortable"
           class="settings-tabs"
         >
-          <v-tab value="preferences">User Preferences</v-tab>
+          <v-tab value="preferences">Preferences</v-tab>
+          <v-tab value="smart-score">Smart Score</v-tab>
           <v-tab value="account">Account Settings</v-tab>
         </v-tabs>
         <v-card-text class="settings-dialog-body">
@@ -1331,30 +1496,147 @@ defineExpose({ refreshSidebar, openSettingsDialog });
             <v-window-item value="preferences">
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
-                <div class="settings-section-title">Smart Score</div>
+                <div class="settings-section-title">Tag Filter</div>
+                <div class="settings-section-desc">
+                  Tags listed here are filtered from the GUI entirely.
+                </div>
+                <v-checkbox
+                  v-model="applyTagFilter"
+                  class="settings-tag-filter-toggle"
+                  density="comfortable"
+                  hide-details
+                  :disabled="applyTagFilterLoading"
+                  label="Apply tag filter to all pictures and videos"
+                  @update:model-value="setApplyTagFilter"
+                />
+                <div class="settings-tag-list">
+                  <div
+                    v-for="tag in hiddenTags"
+                    :key="tag"
+                    class="settings-tag-chip settings-tag-chip--row"
+                  >
+                    <span class="settings-tag-label">{{ tag }}</span>
+                    <v-btn
+                      icon
+                      variant="text"
+                      class="settings-tag-delete"
+                      :disabled="hiddenTagsLoading"
+                      @click="removeHiddenTag(tag)"
+                    >
+                      <v-icon size="16">mdi-close</v-icon>
+                    </v-btn>
+                  </div>
+                  <div
+                    v-if="!hiddenTagsLoading && !hiddenTags.length"
+                    class="settings-token-empty"
+                  >
+                    No hidden tags yet.
+                  </div>
+                </div>
+                <div class="settings-form">
+                  <div class="settings-add-tag-row">
+                    <v-text-field
+                      v-model="hiddenTagInput"
+                      label="Add tag filter"
+                      density="comfortable"
+                      variant="filled"
+                      class="settings-add-tag-input"
+                      :disabled="hiddenTagsLoading"
+                      @keydown.enter.prevent="addHiddenTag"
+                    />
+                    <v-btn
+                      variant="outlined"
+                      color="primary"
+                      class="settings-action-btn"
+                      :loading="hiddenTagsLoading"
+                      :disabled="hiddenTagsLoading"
+                      @click="addHiddenTag"
+                    >
+                      Add Tag
+                    </v-btn>
+                  </div>
+                  <div v-if="hiddenTagsError" class="settings-error">
+                    {{ hiddenTagsError }}
+                  </div>
+                  <div v-else-if="hiddenTagsSuccess" class="settings-success">
+                    {{ hiddenTagsSuccess }}
+                  </div>
+                  <div v-else class="settings-success">
+                    {{ "&nbsp;" }}
+                  </div>
+                </div>
+              </div>
+            </v-window-item>
+            <v-window-item value="smart-score">
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">Penalised Tags</div>
                 <div class="settings-section-desc">
                   Tags listed here reduce Smart Score when present on a picture.
                   Adjust the importance to control how much they hurt the score.
                 </div>
-                <div class="settings-form">
-                  <v-text-field
-                    v-model="smartScoreTagInput"
-                    label="Add penalised tag"
-                    density="comfortable"
-                    variant="filled"
-                    :disabled="smartScoreTagsLoading"
-                    @keydown.enter.prevent="addSmartScoreTag"
-                  />
-                  <v-btn
-                    variant="outlined"
-                    color="primary"
-                    class="settings-action-btn"
-                    :loading="smartScoreTagsLoading"
-                    :disabled="smartScoreTagsLoading"
-                    @click="addSmartScoreTag"
+                <div class="settings-tag-list">
+                  <div
+                    v-for="entry in smartScorePenalisedTags"
+                    :key="entry.tag"
+                    class="settings-tag-chip settings-tag-chip--row"
                   >
-                    Add Tag
-                  </v-btn>
+                    <span class="settings-tag-label">{{ entry.tag }}</span>
+                    <v-select
+                      class="settings-tag-importance"
+                      :items="smartScoreImportanceOptions"
+                      item-title="label"
+                      item-value="value"
+                      density="compact"
+                      variant="plain"
+                      hide-details
+                      :disabled="smartScoreTagsLoading"
+                      :model-value="entry.weight"
+                      @update:model-value="
+                        (value) => updateSmartScoreTagWeight(entry.tag, value)
+                      "
+                    />
+                    <v-btn
+                      icon
+                      variant="text"
+                      class="settings-tag-delete"
+                      :disabled="smartScoreTagsLoading"
+                      @click="removeSmartScoreTag(entry.tag)"
+                    >
+                      <v-icon size="16">mdi-close</v-icon>
+                    </v-btn>
+                  </div>
+                  <div
+                    v-if="
+                      !smartScoreTagsLoading && !smartScorePenalisedTags.length
+                    "
+                    class="settings-token-empty"
+                  >
+                    No penalised tags yet.
+                  </div>
+                </div>
+                <div class="settings-form">
+                  <div class="settings-add-tag-row">
+                    <v-text-field
+                      v-model="smartScoreTagInput"
+                      label="Add penalised tag"
+                      density="comfortable"
+                      variant="filled"
+                      class="settings-add-tag-input"
+                      :disabled="smartScoreTagsLoading"
+                      @keydown.enter.prevent="addSmartScoreTag"
+                    />
+                    <v-btn
+                      variant="outlined"
+                      color="primary"
+                      class="settings-action-btn"
+                      :loading="smartScoreTagsLoading"
+                      :disabled="smartScoreTagsLoading"
+                      @click="addSmartScoreTag"
+                    >
+                      Add Tag
+                    </v-btn>
+                  </div>
                   <div v-if="smartScoreTagsError" class="settings-error">
                     {{ smartScoreTagsError }}
                   </div>
@@ -1367,90 +1649,84 @@ defineExpose({ refreshSidebar, openSettingsDialog });
                   <div v-else class="settings-success">
                     {{ "&nbsp;" }}
                   </div>
-                  <div class="settings-tag-list">
-                    <div
-                      v-for="entry in smartScorePenalisedTags"
-                      :key="entry.tag"
-                      class="settings-tag-chip settings-tag-chip--row"
-                    >
-                      <span class="settings-tag-label">{{ entry.tag }}</span>
-                      <v-select
-                        class="settings-tag-importance"
-                        :items="smartScoreImportanceOptions"
-                        item-title="label"
-                        item-value="value"
-                        density="compact"
-                        variant="solo"
-                        hide-details
-                        :disabled="smartScoreTagsLoading"
-                        :model-value="entry.weight"
-                        @update:model-value="
-                          (value) => updateSmartScoreTagWeight(entry.tag, value)
-                        "
-                      />
-                      <v-btn
-                        icon
-                        variant="text"
-                        class="settings-tag-delete"
-                        :disabled="smartScoreTagsLoading"
-                        @click="removeSmartScoreTag(entry.tag)"
-                      >
-                        <v-icon size="16">mdi-close</v-icon>
-                      </v-btn>
-                    </div>
-                    <div
-                      v-if="
-                        !smartScoreTagsLoading &&
-                        !smartScorePenalisedTags.length
-                      "
-                      class="settings-token-empty"
-                    >
-                      No penalised tags yet.
-                    </div>
-                  </div>
                 </div>
               </div>
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
-                <div class="settings-section-title">
-                  Auto Scrapheap (Smart Score)
-                </div>
+                <div class="settings-section-title">Auto Scrapheap</div>
                 <div class="settings-section-desc">
-                  Newly tagged pictures from the last 30 minutes can be
-                  auto-moved to the scrapheap when their smart score is below
-                  the threshold.
+                  Newly tagged pictures can be auto-moved to the scrapheap when
+                  their smart score is below the threshold.
                 </div>
                 <div class="settings-form">
-                  <v-text-field
-                    v-model="smartScoreScrapheapThreshold"
-                    label="Smart score threshold"
-                    density="comfortable"
-                    variant="filled"
-                    type="number"
-                    step="0.05"
-                    min="0.1"
-                    :disabled="smartScoreScrapheapLoading"
-                  />
-                  <v-text-field
-                    v-model="smartScoreScrapheapLookback"
-                    label="Lookback window (minutes)"
-                    density="comfortable"
-                    variant="filled"
-                    type="number"
-                    step="1"
-                    min="1"
-                    :disabled="smartScoreScrapheapLoading"
-                  />
-                  <v-btn
-                    variant="outlined"
-                    color="primary"
-                    class="settings-action-btn"
-                    :loading="smartScoreScrapheapLoading"
-                    :disabled="smartScoreScrapheapLoading"
-                    @click="saveSmartScoreScrapheapSettings"
-                  >
-                    Save Auto Scrapheap
-                  </v-btn>
+                  <div class="settings-number-grid">
+                    <div class="settings-number-row">
+                      <v-text-field
+                        v-model.number="smartScoreScrapheapThreshold"
+                        label="Smart score threshold"
+                        density="comfortable"
+                        variant="filled"
+                        type="number"
+                        step="0.05"
+                        min="0.1"
+                        class="settings-number-input"
+                        :disabled="smartScoreScrapheapLoading"
+                      />
+                      <div class="settings-number-spinner">
+                        <v-btn
+                          icon
+                          variant="text"
+                          class="settings-number-btn"
+                          :disabled="smartScoreScrapheapLoading"
+                          @click="incrementScrapheapThreshold(0.05)"
+                        >
+                          <v-icon size="14">mdi-chevron-up</v-icon>
+                        </v-btn>
+                        <v-btn
+                          icon
+                          variant="text"
+                          class="settings-number-btn"
+                          :disabled="smartScoreScrapheapLoading"
+                          @click="incrementScrapheapThreshold(-0.05)"
+                        >
+                          <v-icon size="14">mdi-chevron-down</v-icon>
+                        </v-btn>
+                      </div>
+                    </div>
+                    <div class="settings-number-row">
+                      <v-text-field
+                        v-model.number="smartScoreScrapheapLookback"
+                        label="Lookback window (minutes)"
+                        density="comfortable"
+                        variant="filled"
+                        type="number"
+                        step="1"
+                        min="1"
+                        class="settings-number-input"
+                        :disabled="smartScoreScrapheapLoading"
+                      />
+                      <div class="settings-number-spinner">
+                        <v-btn
+                          icon
+                          variant="text"
+                          class="settings-number-btn"
+                          :disabled="smartScoreScrapheapLoading"
+                          @click="incrementScrapheapLookback(1)"
+                        >
+                          <v-icon size="14">mdi-chevron-up</v-icon>
+                        </v-btn>
+                        <v-btn
+                          icon
+                          variant="text"
+                          class="settings-number-btn"
+                          :disabled="smartScoreScrapheapLoading"
+                          @click="incrementScrapheapLookback(-1)"
+                        >
+                          <v-icon size="14">mdi-chevron-down</v-icon>
+                        </v-btn>
+                      </div>
+                    </div>
+                  </div>
                   <div v-if="smartScoreScrapheapError" class="settings-error">
                     {{ smartScoreScrapheapError }}
                   </div>
@@ -1650,6 +1926,10 @@ defineExpose({ refreshSidebar, openSettingsDialog });
         </v-btn>
       </v-card-actions>
     </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="taskManagerOpen" width="980">
+    <TaskManager :active="taskManagerOpen" @close="taskManagerOpen = false" />
   </v-dialog>
 
   <aside
@@ -2051,6 +2331,17 @@ defineExpose({ refreshSidebar, openSettingsDialog });
         "
       ></div>
       <div class="sidebar-footer-spacer"></div>
+      <div class="sidebar-footer">
+        <div
+          class="sidebar-list-item sidebar-footer-item"
+          @click="taskManagerOpen = true"
+        >
+          <span class="sidebar-list-icon">
+            <v-icon size="36">mdi-chart-timeline-variant</v-icon>
+          </span>
+          <span class="sidebar-list-label">Task Manager</span>
+        </div>
+      </div>
     </template>
   </aside>
   <div
@@ -2341,6 +2632,14 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   flex: 1 1 auto;
 }
 
+.sidebar-footer {
+  padding: 4px 0 0 0;
+}
+
+.sidebar-footer-item {
+  margin-bottom: 0;
+}
+
 .sidebar-settings-item {
   margin-top: 6px;
 }
@@ -2349,6 +2648,7 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
   border-radius: 12px;
+  color-scheme: dark;
 }
 
 .settings-dialog-shell {
@@ -2378,6 +2678,49 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 
 .settings-tabs {
   margin-top: 4px;
+}
+
+:deep(.settings-tabs .v-tab) {
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+:deep(.settings-tabs .v-tab--selected) {
+  border-color: rgba(var(--v-theme-on-surface), 0.2);
+  box-shadow: none;
+}
+
+:deep(.settings-tabs .v-tab--active) {
+  border-color: rgba(var(--v-theme-on-surface), 0.2);
+  box-shadow: none;
+}
+
+:deep(.settings-tabs .v-tab--selected::before),
+:deep(.settings-tabs .v-tab--active::before) {
+  opacity: 0;
+}
+
+:deep(.settings-tabs .v-tab .v-btn__overlay),
+:deep(.settings-tabs .v-tab .v-btn__underlay) {
+  opacity: 0;
+}
+
+:deep(.settings-tabs .v-tab:focus-visible) {
+  outline: none;
+  box-shadow: none;
+  border-color: rgba(var(--v-theme-on-surface), 0.18);
+}
+
+:deep(.settings-tabs .v-tab:focus),
+:deep(.settings-tabs .v-tab:active),
+:deep(.settings-tabs .v-tab--active),
+:deep(.settings-tabs .v-tab--selected) {
+  outline: none;
+  box-shadow: none;
+}
+
+:deep(.settings-tabs .v-tab--selected:focus-visible) {
+  border-color: rgba(var(--v-theme-on-surface), 0.2);
 }
 
 .settings-tab-body {
@@ -2428,6 +2771,66 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.settings-add-tag-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.settings-add-tag-input {
+  flex: 1 1 auto;
+}
+
+.settings-number-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.settings-number-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-number-spinner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: center;
+  transform: translateY(-10px);
+}
+
+.settings-number-btn {
+  color: rgb(var(--v-theme-on-surface));
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  border-radius: 6px;
+  width: 24px;
+  height: 22px;
+  min-width: 24px;
+}
+
+.settings-number-btn:hover {
+  background: rgba(var(--v-theme-on-surface), 0.16);
+}
+
+.settings-number-input {
+  width: 100%;
+}
+
+:deep(.settings-number-input input[type="number"]) {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+:deep(.settings-number-input input[type="number"]::-webkit-inner-spin-button),
+:deep(.settings-number-input input[type="number"]::-webkit-outer-spin-button) {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .settings-error {
@@ -2535,25 +2938,45 @@ defineExpose({ refreshSidebar, openSettingsDialog });
 }
 
 .settings-tag-importance {
-  flex: 0 0 150px;
-  min-width: 150px;
-  max-width: 150px;
+  flex: 0 0 120px;
+  min-width: 120px;
+  max-width: 120px;
 }
 
-.settings-tag-importance .v-field {
+:deep(.settings-tag-importance .v-field) {
   min-height: 28px;
   height: 28px;
   padding-top: 0;
   padding-bottom: 0;
   font-size: 0.9em;
+  background: transparent;
+  box-shadow: none;
+  border: none;
 }
 
-.settings-tag-importance .v-field__input {
+:deep(.settings-tag-importance .v-field__input) {
   min-height: 28px;
   height: 28px;
   padding-top: 0;
   padding-bottom: 0;
+  padding-right: 4px;
   font-size: 0.85rem;
+}
+
+:deep(.settings-tag-importance .v-field__append-inner) {
+  align-self: center;
+  margin-left: 2px;
+  padding-top: 0;
+  padding-bottom: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+}
+
+:deep(.settings-tag-importance .v-field__overlay),
+:deep(.settings-tag-importance .v-field__underlay),
+:deep(.settings-tag-importance .v-field__outline) {
+  opacity: 0;
 }
 
 :deep(.settings-tag-importance .v-select__selection-text) {

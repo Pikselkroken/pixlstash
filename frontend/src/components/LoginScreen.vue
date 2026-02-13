@@ -98,33 +98,35 @@ async function handleLogin() {
   align-items: center;
   justify-content: center;
   height: 100vh;
+  background: rgb(var(--v-theme-dark-surface));
+  color-scheme: dark;
 }
 
 .headline {
   margin: 0 0 0.25rem;
-  color: #ddd;
+  color: rgb(var(--v-theme-on-dark-surface));
   text-align: center;
 }
 
 .subtitle {
   text-align: center;
   font-size: 1.1rem;
-  color: #bbb;
+  color: rgba(var(--v-theme-on-dark-surface), 0.9);
 }
 .subtext {
   margin-top: 1rem;
   font-size: 0.9rem;
-  color: #999;
+  color: rgba(var(--v-theme-on-dark-surface), 0.9);
   text-align: center;
 }
 .text-input,
 .password-input {
   padding: 0.5rem 0.5rem 0.5rem 0.5rem;
   font-size: 1rem;
-  border: 1px solid #555;
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
   border-radius: 4px;
-  background-color: #222;
-  color: #eee;
+  background-color: rgb(var(--v-theme-dark-surface));
+  color: rgba(var(--v-theme-on-dark-surface), 0.9);
   width: 100%;
 }
 

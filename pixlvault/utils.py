@@ -78,6 +78,7 @@ def serialize_user_config(user) -> dict:
         "show_problem_icon",
         "similarity_character",
         "stack_strictness",
+        "apply_tag_filter",
         "auto_scrapheap_smart_score_threshold",
         "auto_scrapheap_lookback_minutes",
     }
@@ -96,6 +97,7 @@ def serialize_user_config(user) -> dict:
         DEFAULT_SMART_SCORE_PENALIZED_TAGS,
         default_weight=DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     )
+    config["hidden_tags"] = _normalize_hidden_tags(getattr(source, "hidden_tags", None))
     config["sort_order"] = config["sort"]
     return config
 
@@ -117,6 +119,8 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "similarity_character",
         "stack_strictness",
         "smart_score_penalised_tags",
+        "hidden_tags",
+        "apply_tag_filter",
         "auto_scrapheap_smart_score_threshold",
         "auto_scrapheap_lookback_minutes",
     }
@@ -153,6 +157,27 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = json.dumps(d)
             if user.smart_score_penalised_tags != new_value:
                 user.smart_score_penalised_tags = new_value
+                updated = True
+            continue
+        if key == "hidden_tags":
+            if value in ("", None, "null"):
+                normalized = []
+            else:
+                normalized = _normalize_hidden_tags(value)
+                if normalized is None:
+                    raise ValueError("hidden_tags must be a JSON list of strings")
+            new_value = json.dumps(normalized)
+            if user.hidden_tags != new_value:
+                user.hidden_tags = new_value
+                updated = True
+            continue
+        if key == "apply_tag_filter":
+            if value in ("", None, "null"):
+                new_value = False
+            else:
+                new_value = bool(value)
+            if user.apply_tag_filter != new_value:
+                user.apply_tag_filter = new_value
                 updated = True
             continue
         if key == "auto_scrapheap_smart_score_threshold":
@@ -267,3 +292,33 @@ def _smart_score_penalised_tags(
     if d:
         return d
     return {} if allow_empty else fallback
+
+
+def _normalize_hidden_tags(value):
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        try:
+            tags = json.loads(value)
+        except Exception:
+            return None
+    else:
+        tags = value
+
+    if isinstance(tags, dict):
+        tags = list(tags.keys())
+    if not isinstance(tags, list):
+        return None
+
+    cleaned = []
+    seen = set()
+    for tag in tags:
+        if tag is None:
+            continue
+        clean = str(tag).strip().lower()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        cleaned.append(clean)
+    return cleaned

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from sqlmodel import Session, delete, select
+from sqlalchemy import func
 from PIL import Image
 
 from pixlvault.database import DBPriority
@@ -66,6 +67,15 @@ class LikenessParameterWorker(BaseWorker):
             )
 
         while not self._stop.is_set():
+            total_pics = submit_low(LikenessParameterWorker._count_total_pictures)
+            pending = submit_low(LikenessParameterWorker._count_pending_parameters)
+            total = max(int(total_pics or 0), 0)
+            missing = max(int(pending or 0), 0)
+            self._set_progress(
+                label="likeness_parameters",
+                current=max(total - missing, 0),
+                total=total,
+            )
             work = submit_low(
                 LikenessParameterWorker._find_next_work,
                 self.BATCH_SIZE,
@@ -175,6 +185,27 @@ class LikenessParameterWorker(BaseWorker):
                 return param, size_bin_index, (ids, remaining_in_bin)
 
         return None
+
+    @staticmethod
+    def _count_total_pictures(session: Session) -> int:
+        result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_pending_parameters(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(
+                (Picture.likeness_parameters.is_(None))
+                | (Picture.size_bin_index.is_(None))
+            )
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
 
     @staticmethod
     def _find_size_bin_batch(

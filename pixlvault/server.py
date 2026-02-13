@@ -18,6 +18,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pillow_heif import register_heif_opener
 
@@ -484,17 +485,51 @@ class Server:
             data = tomllib.load(f)
         return data.get("project", {}).get("version", "unknown")
 
+    def _get_frontend_dist_dir(self):
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        dist_dir = os.path.join(base_dir, "frontend", "dist")
+        if not os.path.isdir(dist_dir):
+            return None
+        return dist_dir
+
+    def _get_frontend_index_path(self):
+        dist_dir = self._get_frontend_dist_dir()
+        if not dist_dir:
+            return None
+        index_path = os.path.join(dist_dir, "index.html")
+        if not os.path.isfile(index_path):
+            return None
+        return index_path
+
     def _setup_routes(self):
         ###############################
         # Static file endpoints      ##
         ###############################
+        dist_dir = self._get_frontend_dist_dir()
+        if dist_dir:
+            assets_dir = os.path.join(dist_dir, "assets")
+            if os.path.isdir(assets_dir):
+                self.api.mount(
+                    "/assets",
+                    StaticFiles(directory=assets_dir),
+                    name="frontend-assets",
+                )
+
         @self.api.get("/")
         async def read_root():
+            index_path = self._get_frontend_index_path()
+            if index_path:
+                return FileResponse(index_path)
             version = self._get_version()
             return {"message": "PixlVault REST API", "version": version}
 
         @self.api.get("/favicon.ico")
         def favicon():
+            index_path = self._get_frontend_index_path()
+            if index_path:
+                favicon_path = os.path.join(os.path.dirname(index_path), "favicon.ico")
+                if os.path.isfile(favicon_path):
+                    return FileResponse(favicon_path)
             favicon_path = os.path.join(
                 os.path.dirname(__file__), "..", "frontend", "public", "favicon.ico"
             )
@@ -571,3 +606,19 @@ class Server:
         @self.api.get("/protected")
         async def protected():
             return {"message": "You are authenticated!"}
+
+        @self.api.get("/{full_path:path}")
+        async def frontend_fallback(full_path: str):
+            dist_dir = self._get_frontend_dist_dir()
+            if not dist_dir:
+                raise HTTPException(status_code=404, detail="Not Found")
+
+            safe_path = os.path.normpath(full_path).lstrip(os.sep)
+            candidate = os.path.abspath(os.path.join(dist_dir, safe_path))
+            if candidate.startswith(dist_dir) and os.path.isfile(candidate):
+                return FileResponse(candidate)
+
+            index_path = self._get_frontend_index_path()
+            if not index_path:
+                raise HTTPException(status_code=404, detail="Not Found")
+            return FileResponse(index_path)

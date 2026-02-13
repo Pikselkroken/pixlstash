@@ -5,6 +5,7 @@ import urllib.request
 from insightface.app import FaceAnalysis
 
 from sqlmodel import select
+from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 from pixlvault.database import DBPriority
 from pixlvault.event_types import EventType
@@ -51,6 +52,17 @@ class FeatureExtractionWorker(BaseWorker):
             try:
                 logger.debug("FeatureExtractionWorker: Starting iteration...")
                 pics_needing_face_bboxes = self._find_pics_needing_feature_extraction()
+                total_pics = self._db.run_immediate_read_task(
+                    self._count_total_pictures
+                )
+                pending = len(pics_needing_face_bboxes)
+                total = max(int(total_pics or 0), 0)
+                current = max(total - pending, 0)
+                self._set_progress(
+                    label="features_extracted",
+                    current=current,
+                    total=total,
+                )
                 logger.debug(
                     "FeatureExtractionWorker: Found %d pictures needing face bboxes: %s",
                     len(pics_needing_face_bboxes),
@@ -101,6 +113,13 @@ class FeatureExtractionWorker(BaseWorker):
                 .options(selectinload(Picture.faces), selectinload(Picture.hands))
             ).all()
         )
+
+    @staticmethod
+    def _count_total_pictures(session):
+        result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
 
     def _ensure_hand_detector(self):
         if FeatureExtractionWorker._hand_model is not None:
