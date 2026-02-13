@@ -1,6 +1,5 @@
-1. Report some progress on backend workers
-2. Package better
-3. Clean up code
+1. Package better
+2. Clean up code
 
 Eventually:
 * Multi-user

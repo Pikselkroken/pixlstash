@@ -705,6 +705,11 @@ const sidebarNoticePosition = ref(null);
 const setItemRefs = ref(new Map());
 const characterItemRefs = ref(new Map());
 let sidebarNoticeTimeout = null;
+const sidebarError = ref(null);
+const sidebarErrorTargetId = ref(null);
+const sidebarErrorTargetType = ref("set");
+const sidebarErrorPosition = ref(null);
+let sidebarErrorTimeout = null;
 
 function registerSetRef(setId, el) {
   if (!setId) return;
@@ -742,12 +747,32 @@ function updateSidebarNoticePosition() {
   };
 }
 
+function updateSidebarErrorPosition() {
+  if (!sidebarError.value || !sidebarErrorTargetId.value) {
+    sidebarErrorPosition.value = null;
+    return;
+  }
+  const targetMap =
+    sidebarErrorTargetType.value === "character"
+      ? characterItemRefs.value
+      : setItemRefs.value;
+  const target = targetMap.get(sidebarErrorTargetId.value);
+  if (!target) return;
+  const rect = target.getBoundingClientRect();
+  const sidebarRect = sidebarRootRef.value
+    ? sidebarRootRef.value.getBoundingClientRect()
+    : null;
+  const baseLeft = sidebarRect ? sidebarRect.right + 12 : rect.right + 12;
+  sidebarErrorPosition.value = {
+    top: rect.top + rect.height / 2,
+    left: baseLeft,
+  };
+}
+
 function createSet() {
   setEditorSet.value = null;
   setEditorOpen.value = true;
 }
-
-const sidebarError = ref(null);
 
 const sortedCharacters = computed(() => {
   return [...characters.value]
@@ -965,8 +990,66 @@ function createCharacter() {
   });
 }
 
-function handleImportFinished() {
-  emit("import-finished");
+const pendingImportTarget = ref(null);
+
+function getImportedPictureIds(payload) {
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  return Array.from(
+    new Set(
+      results
+        .map((entry) => entry?.picture_id)
+        .filter((id) => id !== null && id !== undefined),
+    ),
+  );
+}
+
+async function associateImportedPictures(pictureIds, target) {
+  if (!target || !pictureIds.length) return;
+  if (target.type === "set") {
+    await Promise.all(
+      pictureIds.map((id) =>
+        apiClient.post(
+          `${props.backendUrl}/picture_sets/${target.id}/members/${id}`,
+        ),
+      ),
+    );
+    await fetchPictureSets();
+    return;
+  }
+  if (target.type === "character") {
+    await apiClient.post(`${props.backendUrl}/characters/${target.id}/faces`, {
+      picture_ids: pictureIds,
+    });
+    await fetchSidebarData();
+    await fetchCharacterThumbnail(target.id);
+  }
+}
+
+async function handleImportFinished(payload) {
+  emit("import-finished", payload);
+  const target = pendingImportTarget.value;
+  if (!target) return;
+  pendingImportTarget.value = null;
+  const pictureIds = getImportedPictureIds(payload);
+  if (!pictureIds.length) return;
+  try {
+    await associateImportedPictures(pictureIds, target);
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || String(e);
+    let targetName = "";
+    if (target.type === "character") {
+      targetName =
+        characters.value.find((c) => c.id === target.id)?.name || "Character";
+    } else if (target.type === "set") {
+      targetName =
+        pictureSets.value.find((s) => s.id === target.id)?.name || "Set";
+    }
+    const normalizedDetail = String(detail || "").toLowerCase();
+    const prefix = normalizedDetail.includes("already")
+      ? `Already associated with ${targetName}`
+      : `Failed to associate imported pictures with ${targetName}`;
+    setError(`${prefix}: ${detail}`, target.id, target.type);
+  }
 }
 
 function openUploadDialog() {
@@ -986,9 +1069,22 @@ function setLoading(isLoading) {
   emit("set-loading", isLoading);
 }
 
-function setError(message) {
+function setError(message, targetId = null, targetType = "set") {
   sidebarError.value = message;
+  sidebarErrorTargetId.value = targetId;
+  sidebarErrorTargetType.value = targetType;
+  nextTick(() => updateSidebarErrorPosition());
   emit("set-error", message);
+  if (sidebarErrorTimeout) {
+    clearTimeout(sidebarErrorTimeout);
+    sidebarErrorTimeout = null;
+  }
+  sidebarErrorTimeout = setTimeout(() => {
+    sidebarError.value = null;
+    sidebarErrorTargetId.value = null;
+    sidebarErrorPosition.value = null;
+    sidebarErrorTimeout = null;
+  }, 3500);
 }
 
 function showNotice(
@@ -1235,6 +1331,12 @@ async function handleDeleteSet() {
 
 async function handleDropOnSet(setId, event) {
   dragOverSet.value = null;
+  if (event?.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+    const files = Array.from(event.dataTransfer.files);
+    pendingImportTarget.value = { type: "set", id: setId };
+    imageImporterRef.value?.startImport(files);
+    return;
+  }
   // Get the dragged image IDs from the drag event
   let draggedIds = [];
   try {
@@ -1280,7 +1382,7 @@ async function handleDropOnSet(setId, event) {
       showNotice("Picture already in set", setId);
       return;
     }
-    setError("Failed to add images to set: " + detail);
+    setError("Failed to add images to set: " + detail, setId, "set");
   }
 }
 
@@ -1294,6 +1396,12 @@ function handleDragLeaveCharacter() {
 
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
+  if (event?.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+    const files = Array.from(event.dataTransfer.files);
+    pendingImportTarget.value = { type: "character", id: characterId };
+    imageImporterRef.value?.startImport(files);
+    return;
+  }
   // Accept faceIds or imageIds from drag event
   let faceIds = [];
   let imageIds = [];
@@ -1322,7 +1430,11 @@ async function onCharacterDrop(characterId, event) {
       showNotice(detail, characterId, "character");
       return;
     }
-    setError("Failed to add images to set: " + detail);
+    setError(
+      "Failed to add images to set: " + detail,
+      characterId,
+      "character",
+    );
     return;
   }
 
@@ -1374,7 +1486,11 @@ async function onCharacterDrop(characterId, event) {
       showNotice(detail, characterId, "character");
       return;
     }
-    setError("Failed to add images to set: " + detail);
+    setError(
+      "Failed to add images to set: " + detail,
+      characterId,
+      "character",
+    );
     return;
   }
 }
@@ -1460,9 +1576,12 @@ onMounted(() => {
     "[SideBar.vue] Initial descendingModel value:",
     descendingModel.value,
   );
-  refreshSidebar();
-  startTaskIndicatorPolling();
-  const handleNoticeReflow = () => updateSidebarNoticePosition();
+  //refreshSidebar();
+  //startTaskIndicatorPolling();
+  const handleNoticeReflow = () => {
+    updateSidebarNoticePosition();
+    updateSidebarErrorPosition();
+  };
   if (sidebarRootRef.value) {
     sidebarRootRef.value.addEventListener("scroll", handleNoticeReflow, {
       passive: true,
@@ -2282,8 +2401,19 @@ defineExpose({ refreshSidebar, openSettingsDialog });
           </v-icon>
         </div>
       </div>
-      <div v-if="sidebarError" class="sidebar-error">
-        {{ sidebarError.value }}
+      <div
+        v-if="sidebarError"
+        class="sidebar-error-bubble"
+        :style="
+          sidebarErrorPosition
+            ? {
+                top: `${sidebarErrorPosition.top}px`,
+                left: `${sidebarErrorPosition.left}px`,
+              }
+            : { top: '72px', left: '20px' }
+        "
+      >
+        {{ sidebarError }}
       </div>
       <div v-if="sortedCharacters.length === 0" class="sidebar-character-group">
         <div class="sidebar-list-item">
@@ -3261,13 +3391,23 @@ defineExpose({ refreshSidebar, openSettingsDialog });
   width: 100%;
 }
 
-.sidebar-error {
-  color: #ffcccc;
-  background: rgba(0, 0, 0, 0.25);
-  padding: 6px 12px;
-  border-radius: 6px;
-  margin: 8px 12px;
-  font-size: 0.95em;
+.sidebar-error-bubble {
+  position: fixed;
+  top: 72px;
+  left: 20px;
+  transform: translateY(-50%);
+  z-index: 1200;
+  color: #ffffff;
+  background: rgba(140, 20, 20, 0.8);
+  padding: 10px 16px;
+  border-radius: 14px;
+  font-size: 0.9em;
+  line-height: 1.3;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  max-width: 360px;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .sidebar-list-count {

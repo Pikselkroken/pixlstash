@@ -89,6 +89,10 @@
       @scroll="onGridScroll"
       :style="scrollWrapperStyle"
     >
+      <!-- Drag overlay (visible viewport of grid) -->
+      <div v-if="dragOverlayVisible" class="drag-overlay">
+        <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
+      </div>
       <div v-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
           <div class="empty-state-illustration" aria-hidden="true">
@@ -137,10 +141,6 @@
             border: '0px solid blue',
           }"
         ></div>
-        <!-- Drag overlay -->
-        <div v-if="dragOverlayVisible" class="drag-overlay">
-          <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
-        </div>
         <div
           v-for="(img, idx) in gridImagesToRender"
           :key="img.id ? `img-${img.id}-${img.idx}` : `placeholder-${img.idx}`"
@@ -1561,7 +1561,43 @@ async function confirmRestoreScrapheap() {
 
 const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
-async function handleImagesUploaded(newIds) {
+async function handleImagesUploaded(payload) {
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  const pictureIds = Array.from(
+    new Set(
+      results
+        .map((entry) => entry?.picture_id)
+        .filter((id) => id !== null && id !== undefined),
+    ),
+  );
+  if (pictureIds.length) {
+    try {
+      const selectedSetId = props.selectedSet;
+      const selectedCharacterId = props.selectedCharacter;
+      const selectedCharacterKey = String(selectedCharacterId ?? "");
+      const skipCharacter = [
+        String(props.allPicturesId),
+        String(props.unassignedPicturesId),
+        String(props.scrapheapPicturesId),
+      ].includes(selectedCharacterKey);
+      if (selectedSetId != null && selectedSetId !== "") {
+        await Promise.all(
+          pictureIds.map((id) =>
+            apiClient.post(
+              `${props.backendUrl}/picture_sets/${selectedSetId}/members/${id}`,
+            ),
+          ),
+        );
+      } else if (!skipCharacter && selectedCharacterId != null) {
+        await apiClient.post(
+          `${props.backendUrl}/characters/${selectedCharacterId}/faces`,
+          { picture_ids: pictureIds },
+        );
+      }
+    } catch (e) {
+      console.error("Failed to associate imported pictures:", e);
+    }
+  }
   resetThumbnailState();
   allGridImages.value = [];
   selectedImageIds.value = [];
@@ -1631,7 +1667,7 @@ const overlayImageId = ref(null);
 
 // Drag-and-drop overlay state
 const dragOverlayVisible = ref(false);
-const dragOverlayMessage = ref("");
+const dragOverlayMessage = ref("Drop files here to import");
 const dragSource = ref(null);
 
 const selectedGroupName = ref("");
@@ -2224,64 +2260,35 @@ async function applyScoresForSelection(imageIds, targetScore) {
 }
 
 // Drag-and-drop overlay handlers
-async function handleGridDragEnter(e) {
-  if (
-    e.relatedTarget &&
-    gridContainer.value &&
-    gridContainer.value.contains(e.relatedTarget)
-  )
-    return;
+function isFileDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+  return types.includes("Files") || types.includes("application/x-moz-file");
+}
+
+function handleGridDragEnter(e) {
   if (!e.dataTransfer) return;
-
-  // Log dataTransfer contents for debugging
-  console.debug("[DEBUG] dataTransfer types:", e.dataTransfer.types);
-  console.debug("[DEBUG] dataTransfer items:", e.dataTransfer.items);
-
-  // Focus on standard dataTransfer types for inspection
-  const standardTypesToInspect = ["text/uri-list", "text/html", "text/plain"];
-  for (const type of standardTypesToInspect) {
-    if (e.dataTransfer.types.includes(type)) {
-      const data = e.dataTransfer.getData(type);
-      console.debug(`[DEBUG] dataTransfer content for ${type}:`, data);
-    }
-  }
-
-  const hasSupported = dataTransferHasSupportedMedia(e.dataTransfer);
-  if (!hasSupported) return;
+  const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
+  if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
   dragOverlayVisible.value = true;
-
-  const itemCount = e.dataTransfer.items.length;
-  if (
-    props.selectedCharacter &&
-    props.selectedCharacter !== props.allPicturesId &&
-    props.selectedCharacter !== props.unassignedPicturesId
-  ) {
-    const groupLabel = selectedGroupName.value
-      ? "for " + selectedGroupName.value
-      : "";
-    dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s) ${groupLabel}`;
-  } else {
-    dragOverlayMessage.value = `Drop files here to import ${itemCount} file(s)`;
-  }
+  dragOverlayMessage.value = "Drop files here to import";
   e.preventDefault();
-  console.debug("Overlay shown");
 }
 
 function handleGridDragOver(e) {
-  if (dataTransferHasSupportedMedia(e.dataTransfer)) {
-    if (!dragOverlayVisible.value) {
-      dragOverlayVisible.value = true;
-      dragOverlayMessage.value = "Drop files here to import";
-    }
-    e.preventDefault();
+  if (!e.dataTransfer) return;
+  const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
+  if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
+  if (!dragOverlayVisible.value) {
+    dragOverlayVisible.value = true;
+    dragOverlayMessage.value = "Drop files here to import";
   }
+  e.preventDefault();
 }
 
 function handleGridDragLeave(e) {
   if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
     dragOverlayVisible.value = false;
-  } else {
-    console.debug("Drag still inside grid, overlay remains");
   }
 }
 
@@ -3797,14 +3804,17 @@ function handleEmptyStateReset() {
 
 <style scoped>
 .drag-overlay {
-  position: fixed;
-  inset: 0;
+  position: sticky;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   background: rgba(var(--v-theme-accent), 0.2);
-  z-index: 9999;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: all;
+  pointer-events: none;
   border: 8px solid rgb(var(--v-theme-accent));
   border-radius: 16px; /* rounded corners */
   box-sizing: border-box;
@@ -3814,6 +3824,12 @@ function handleEmptyStateReset() {
   color: #ffffff;
   font-size: 3em;
   font-weight: bold;
+}
+
+.drag-overlay-message {
+  padding: 6px 14px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 12px;
 }
 
 .export-progress {

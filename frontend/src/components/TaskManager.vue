@@ -216,7 +216,7 @@ const lastSnapshot = new Map();
 let pollTimer = null;
 const combinedKey = "__combined__";
 const activeTab = ref("grid");
-const GRAPH_NODE_WIDTH = 23;
+const GRAPH_NODE_WIDTH = 30;
 const GRAPH_NODE_HEIGHT = 20;
 
 const graphLayout = [

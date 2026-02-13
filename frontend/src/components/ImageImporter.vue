@@ -313,6 +313,7 @@ async function startImport(files, options = {}) {
       importedCount,
       total: files.length,
       phase: importPhase.value,
+      results: allResults,
     });
   } catch (error) {
     const message = error?.message || String(error);
