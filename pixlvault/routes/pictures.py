@@ -1229,7 +1229,7 @@ def create_router(server) -> APIRouter:
                                     and not PictureUtils.is_video_file(full_path)
                                 ):
                                     try:
-                                        from PIL import Image
+                                        from PIL import Image, PngImagePlugin
                                         from io import BytesIO
 
                                         with Image.open(full_path) as img:
@@ -1247,12 +1247,46 @@ def create_router(server) -> APIRouter:
                                             save_format = (
                                                 img.format or ext.lstrip(".").upper()
                                             )
-                                            if save_format.upper() in {"JPG", "JPEG"}:
+                                            save_format_upper = save_format.upper()
+                                            save_kwargs = {}
+                                            exif_bytes = img.info.get("exif")
+                                            if exif_bytes:
+                                                save_kwargs["exif"] = exif_bytes
+                                            icc_profile = img.info.get("icc_profile")
+                                            if icc_profile:
+                                                save_kwargs["icc_profile"] = icc_profile
+                                            if save_format_upper == "PNG":
+                                                pnginfo = PngImagePlugin.PngInfo()
+                                                for key, value in (
+                                                    img.info or {}
+                                                ).items():
+                                                    if key in {"exif", "icc_profile"}:
+                                                        continue
+                                                    if isinstance(value, str):
+                                                        pnginfo.add_text(key, value)
+                                                    elif isinstance(value, bytes):
+                                                        try:
+                                                            pnginfo.add_text(
+                                                                key,
+                                                                value.decode("utf-8"),
+                                                            )
+                                                        except Exception:
+                                                            continue
+                                                save_kwargs["pnginfo"] = pnginfo
+
+                                            if save_format_upper in {"JPG", "JPEG"}:
                                                 resised.save(
-                                                    buffer, format="JPEG", quality=95
+                                                    buffer,
+                                                    format="JPEG",
+                                                    quality=95,
+                                                    **save_kwargs,
                                                 )
                                             else:
-                                                resised.save(buffer, format=save_format)
+                                                resised.save(
+                                                    buffer,
+                                                    format=save_format,
+                                                    **save_kwargs,
+                                                )
 
                                         zip_file.writestr(arcname, buffer.getvalue())
                                     except Exception as exc:
