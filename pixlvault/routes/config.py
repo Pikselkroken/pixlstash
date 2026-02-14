@@ -5,6 +5,16 @@ import sys
 import time
 from typing import Optional
 
+try:
+    import psutil
+except Exception:  # pragma: no cover - optional dependency
+    psutil = None
+
+try:
+    import torch
+except Exception:  # pragma: no cover - optional dependency
+    torch = None
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
@@ -62,6 +72,40 @@ def create_router(server) -> APIRouter:
         except Exception as exc:
             logger.warning("Failed to open path %s: %s", path, exc)
             return False
+
+    def _get_system_usage():
+        payload = {
+            "cpu_percent": None,
+            "ram_used_gb": None,
+            "ram_total_gb": None,
+            "ram_percent": None,
+            "vram_used_gb": None,
+            "vram_total_gb": None,
+            "vram_percent": None,
+        }
+
+        if psutil:
+            try:
+                payload["cpu_percent"] = psutil.cpu_percent(interval=None)
+                memory = psutil.virtual_memory()
+                payload["ram_total_gb"] = round(memory.total / (1024**3), 2)
+                payload["ram_used_gb"] = round(memory.used / (1024**3), 2)
+                payload["ram_percent"] = memory.percent
+            except Exception as exc:
+                logger.warning("Failed to read CPU/RAM usage: %s", exc)
+
+        if torch and torch.cuda.is_available():
+            try:
+                free_bytes, total_bytes = torch.cuda.mem_get_info()
+                used_bytes = max(total_bytes - free_bytes, 0)
+                payload["vram_total_gb"] = round(total_bytes / (1024**3), 2)
+                payload["vram_used_gb"] = round(used_bytes / (1024**3), 2)
+                if total_bytes > 0:
+                    payload["vram_percent"] = round(used_bytes / total_bytes * 100, 1)
+            except Exception as exc:
+                logger.warning("Failed to read VRAM usage: %s", exc)
+
+        return payload
 
     class ChangePasswordRequest(BaseModel):
         current_password: Optional[str] = None
@@ -142,7 +186,11 @@ def create_router(server) -> APIRouter:
     async def get_workers_progress(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
-        return {"status": "success", "workers": server.vault.get_worker_progress()}
+        return {
+            "status": "success",
+            "workers": server.vault.get_worker_progress(),
+            "system": _get_system_usage(),
+        }
 
     @router.get("/server-config/watch-folders")
     async def get_watch_folders(request: Request):

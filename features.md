@@ -6,7 +6,7 @@ PixlVault is a next-generation image management platform designed for the modern
 
 ## 🚀 Key Features
 
-### 1. Blazing-Fast Image Search & Semantic Tagging
+### 1. Search & Semantic Tagging
 - **Semantic Search:** Instantly find images using natural language queries, fuzzy matching, and synonym expansion powered by SBERT and spaCy.
 - **AI Tagging:** Automatic batch tagging of images and faces using state-of-the-art models (e.g., WD14, CLIP, custom taggers).
 - **Fuzzy & Synonym Matching:** Never miss a shot—search by concept, mood, or even typo.

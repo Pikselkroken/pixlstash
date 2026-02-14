@@ -22,7 +22,7 @@
         --panel-strong: rgba(225, 229, 235, 0.9);
         --text: #393f46;
         --muted: rgba(57, 63, 70, 0.7);
-        --accent: #9fb11f;
+        --accent: #8ea604;
         --accent-2: #7f8f1a;
         --accent-3: #2f8b5f;
         --warning: #c4942f;
@@ -66,7 +66,7 @@
       .shell {
         max-width: 1320px;
         margin: 0 auto;
-        padding: 32px 24px 72px;
+        padding: 8px 4px 12px;
       }
 
       .nav {
@@ -111,16 +111,56 @@
         color: var(--toolbar-text);
       }
 
+      .nav-actions {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .download-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+      }
+
+      .download-btn {
+        background: linear-gradient(130deg, var(--accent), var(--accent-2));
+        color: #ffffff;
+        padding: 10px 16px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        border: 1px solid transparent;
+        box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
+        transition:
+          transform 0.2s ease,
+          box-shadow 0.2s ease;
+      }
+
+      .download-btn:hover {
+        box-shadow: 0 18px 34px rgba(97, 117, 12, 0.35);
+      }
+
+      .download-sub {
+        font-size: 0.72rem;
+        color: rgba(242, 245, 250, 0.7);
+      }
+
+      .download-sub:hover {
+        color: var(--accent);
+      }
+
       .nav-links a:hover {
         color: var(--accent);
       }
 
       .hero {
-        margin-top: 64px;
+        margin-top: 20px;
         display: grid;
         grid-template-columns: minmax(520px, 1.6fr) minmax(320px, 1fr);
-        gap: 32px;
-        align-items: center;
+        gap: 4px;
+        align-items: flex-start;
       }
 
       .hero h1 {
@@ -140,9 +180,9 @@
         display: flex;
         flex-wrap: nowrap;
         gap: 10px;
-        margin-bottom: 24px;
-        align-items: center;
-        overflow-x: auto;
+        margin-bottom: 30px;
+        align-items: flex-start;
+        overflow-x: none;
         scrollbar-width: none;
       }
 
@@ -151,8 +191,8 @@
       }
 
       .badge {
-        padding: 6px 12px;
-        border-radius: 999px;
+        padding: 8px 12px;
+        border-radius: 10px;
         font-size: 0.85rem;
         background: var(--panel);
         border: 1px solid rgba(34, 38, 44, 0.12);
@@ -170,7 +210,7 @@
 
       .btn {
         padding: 12px 18px;
-        border-radius: 999px;
+        border-radius: 10px;
         font-weight: 600;
         font-size: 0.95rem;
         border: 1px solid transparent;
@@ -184,7 +224,7 @@
 
       .btn-primary {
         background: linear-gradient(130deg, var(--accent), var(--accent-2));
-        color: #1b1f24;
+        color: #ffffff;
         box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
       }
 
@@ -202,8 +242,8 @@
       .hero-panel {
         background: linear-gradient(
           180deg,
-          rgba(255, 255, 255, 0.9) 0%,
-          rgba(235, 239, 244, 0.7) 100%
+          rgba(255, 255, 255, 0.7) 0%,
+          rgba(235, 239, 244, 0.9) 100%
         );
         border-radius: var(--radius-lg);
         border: 1px solid rgba(34, 38, 44, 0.12);
@@ -211,32 +251,6 @@
         position: relative;
         overflow: hidden;
         box-shadow: 0 28px 60px var(--shadow);
-      }
-
-      .hero-panel::before {
-        content: "";
-        position: absolute;
-        inset: -40% 40% auto -20%;
-        height: 220px;
-        background: radial-gradient(
-          circle,
-          rgba(159, 177, 31, 0.35),
-          transparent 70%
-        );
-        opacity: 0.6;
-      }
-
-      .hero-panel::after {
-        content: "";
-        position: absolute;
-        inset: auto -10% -30% 50%;
-        height: 240px;
-        background: radial-gradient(
-          circle,
-          rgba(47, 139, 95, 0.3),
-          transparent 70%
-        );
-        opacity: 0.6;
       }
 
       .panel-header {
@@ -435,20 +449,6 @@
         background: rgba(255, 255, 255, 1);
       }
 
-      .shot::after {
-        content: "";
-        position: absolute;
-        width: 140px;
-        height: 140px;
-        right: -40px;
-        bottom: -60px;
-        background: radial-gradient(
-          circle,
-          rgba(159, 177, 31, 0.25),
-          transparent 70%
-        );
-      }
-
       .shot-label {
         font-family: var(--mono);
         font-size: 0.78rem;
@@ -509,6 +509,15 @@
           align-items: flex-start;
         }
 
+        .nav-actions {
+          width: 100%;
+          justify-content: flex-start;
+        }
+
+        .download-wrap {
+          align-items: flex-start;
+        }
+
         .hero {
           margin-top: 40px;
         }
@@ -532,10 +541,26 @@
         </div>
         <div class="nav-links">
           <a href="#features">Features</a>
-          <a href="#api">API</a>
           <a href="#workflows">Use cases</a>
-          <a href="#screens">Screens</a>
+          <a href="#api">API</a>
           <a href="https://github.com/Pixelurgy/pixlvault">GitHub</a>
+        </div>
+        <div class="nav-actions">
+          <div class="download-wrap">
+            <a
+              class="download-btn"
+              id="download-btn"
+              href="https://github.com/Pixelurgy/pixlvault/releases/latest"
+            >
+              <span id="download-label">Download</span>
+            </a>
+            <a
+              class="download-sub"
+              id="download-other"
+              href="https://github.com/Pixelurgy/pixlvault/releases"
+              >Other platforms</a
+            >
+          </div>
         </div>
       </nav>
 
@@ -548,10 +573,10 @@
             <span class="badge">AI tagging + search</span>
             <span class="badge">Automatic rejection</span>
           </div>
-          <h1>PixlVault keeps your image library searchable and organized.</h1>
+          <h1>Find. Tag. Ship.</h1>
           <p>
             A practical image management platform for photographers and AI
-            creators. PixlVault brings semantic search, face tagging, and
+            creators. PixlVault brings semantic search, automated tagging, and
             dataset workflows into one place.
           </p>
           <div class="cta-row">
@@ -561,7 +586,6 @@
             >
               View on GitHub
             </a>
-            <a class="btn btn-secondary" href="#screens">See the UI</a>
           </div>
         </div>
         <div class="hero-panel">
@@ -587,88 +611,6 @@
               <h4>Easy Export</h4>
               <p>Package filtered selections into training-ready zips.</p>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="features" class="section">
-        <div class="section-header">
-          <h2 class="section-title">Built for fast browsing</h2>
-          <p class="section-subtitle">
-            PixlVault combines automatic tagging, semantic search, and metadata
-            so you can navigate large libraries with fewer steps.
-          </p>
-        </div>
-        <div class="feature-grid">
-          <div class="feature-card">
-            <h3>Semantic search</h3>
-            <p>Search with natural language and fuzzy matching.</p>
-          </div>
-          <div class="feature-card">
-            <h3>AI tagging</h3>
-            <p>Batch-tag images and faces with state-of-the-art models.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Integrate with ComfyUI</h3>
-            <p>Run workflows in ComfyUI directly from PixlVault.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Open source + easy install</h3>
-            <p>Public repo, local-first workflow, and quick setup.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="api" class="section">
-        <div class="section-header">
-          <h2 class="section-title">API features</h2>
-          <p class="section-subtitle">
-            PixlVault exposes a REST API so you can integrate with scripts,
-            pipelines, and external tools.
-          </p>
-        </div>
-        <div class="feature-grid">
-          <div class="feature-card">
-            <h3>Picture management</h3>
-            <p>List, filter, and update image metadata programmatically.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Tags and labels</h3>
-            <p>Add, remove, and audit tags for images and faces.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Sets and exports</h3>
-            <p>Build sets and trigger filtered exports from the API.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Automation hooks</h3>
-            <p>Drive workflows with endpoints for search and scoring.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="workflows" class="section">
-        <div class="section-header">
-          <h2 class="section-title">Designed for creative workflows</h2>
-          <p class="section-subtitle">
-            Whether you shoot or generate, PixlVault helps you organize, review,
-            and share your work.
-          </p>
-        </div>
-        <div class="use-case-grid">
-          <div class="use-case">
-            <h4>Photographers</h4>
-            <p>Curate, rate, and find your strongest shots quicker.</p>
-          </div>
-          <div class="use-case">
-            <h4>AI creators</h4>
-            <p>Tag, group, and export datasets for training and fine-tuning.</p>
-          </div>
-          <div class="use-case">
-            <h4>Hobbyists</h4>
-            <p>
-              Organise your home photos. Detect duplicates and family members.
-            </p>
           </div>
         </div>
       </section>
@@ -757,11 +699,14 @@
                 loading="lazy"
               />
             </button>
-            <h4>Inspect tags and faces</h4>
-            <p>Edit tags, assign characters, and validate detections.</p>
+            <h4>Inspect pictures</h4>
+            <p>
+              Review and edit automatic descriptions and assign faces to
+              individuals.
+            </p>
           </div>
           <div class="shot">
-            <div class="shot-label">Tags</div>
+            <div class="shot-label">Face and hand detection</div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotImageOverlay2.jpg"
@@ -770,8 +715,10 @@
                 loading="lazy"
               />
             </button>
-            <h4>Anomalies</h4>
-            <p>Review tags, discover anomalies, and keep datasets clean.</p>
+            <h4>Analyse faces and hands</h4>
+            <p>
+              Assign tags to detected faces and hands for better organisation.
+            </p>
           </div>
           <div class="shot">
             <div class="shot-label">Spot the errors</div>
@@ -789,6 +736,99 @@
         </div>
       </section>
 
+      <section id="features" class="section">
+        <div class="section-header">
+          <h2 class="section-title">Built for fast browsing</h2>
+          <p class="section-subtitle">
+            PixlVault combines automatic tagging, semantic search, and metadata
+            so you can navigate large libraries with fewer steps.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <h3>AI tagging</h3>
+            <p>Batch-tag images and faces with state-of-the-art models.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Integrate with ComfyUI</h3>
+            <p>Run workflows in ComfyUI directly from PixlVault.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Easy installation</h3>
+            <p>Public repo, local-first workflow, and quick setup.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Automatic import</h3>
+            <p>Import images automatically from selected folders.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Play and preview videos</h3>
+            <p>Preview and play videos directly within PixlVault.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="workflows" class="section">
+        <div class="section-header">
+          <h2 class="section-title">Designed for creative workflows</h2>
+          <p class="section-subtitle">
+            Whether you shoot or generate, PixlVault helps you organize, review,
+            and share your work.
+          </p>
+        </div>
+        <div class="use-case-grid">
+          <div class="use-case">
+            <h4>Photographers</h4>
+            <p>Curate, rate, and find your strongest shots quicker.</p>
+          </div>
+          <div class="use-case">
+            <h4>AI creators</h4>
+            <p>Tag, group, and export datasets for training and fine-tuning.</p>
+          </div>
+          <div class="use-case">
+            <h4>Hobbyists</h4>
+            <p>
+              Organise your home photos. Detect duplicates and family members.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="api" class="section">
+        <div class="section-header">
+          <h2 class="section-title">API features</h2>
+          <p class="section-subtitle">
+            PixlVault exposes a REST API so you can integrate with scripts,
+            pipelines, and external tools.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <h3>Picture management</h3>
+            <p>List, filter, and update image metadata programmatically.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Tags and labels</h3>
+            <p>Add, remove, and audit tags for images and faces.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Sets and exports</h3>
+            <p>Build sets and trigger filtered exports from the API.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Automation hooks</h3>
+            <p>Drive workflows with endpoints for search and scoring.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Load into other apps</h3>
+            <p>
+              Use custom ComfyUI nodes to load images from PixlVault into your
+              workflows.
+            </p>
+          </div>
+        </div>
+      </section>
+
       <section class="cta-banner">
         <div>
           <h2 class="section-title">Ready to try PixlVault?</h2>
@@ -801,7 +841,6 @@
           >
             Get PixlVault
           </a>
-          <a class="btn btn-secondary" href="#features">Explore features</a>
         </div>
       </section>
 
@@ -848,6 +887,33 @@
           closeLightbox();
         }
       });
+
+      const downloadBtn = document.getElementById("download-btn");
+      const downloadLabel = document.getElementById("download-label");
+
+      function getPlatformInfo() {
+        const ua = navigator.userAgent || "";
+        const platform = navigator.platform || "";
+        const isMac = /Mac|iPhone|iPad|iPod/i.test(ua) || /Mac/i.test(platform);
+        const isWindows = /Win/i.test(platform) || /Windows/i.test(ua);
+        const isLinux = /Linux/i.test(platform) && !/Android/i.test(ua);
+
+        if (isMac) {
+          return { label: "Download for macOS" };
+        }
+        if (isWindows) {
+          return { label: "Download for Windows" };
+        }
+        if (isLinux) {
+          return { label: "Download for Linux" };
+        }
+        return { label: "Download" };
+      }
+
+      if (downloadBtn && downloadLabel) {
+        const info = getPlatformInfo();
+        downloadLabel.textContent = info.label;
+      }
     </script>
   </body>
 </html>
