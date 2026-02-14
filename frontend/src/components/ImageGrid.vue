@@ -525,7 +525,7 @@ const preserveScrollOnNextFetch = ref(false);
 const pendingScrollTop = ref(null);
 const skipNextWsRefresh = ref(false);
 
-// Key to force face bbox overlay recompute
+// Key to force face bbox overlay recompute.
 const faceOverlayRedrawKey = ref(0);
 let gridResizeObserver = null;
 
@@ -2499,7 +2499,14 @@ async function fetchAllGridImages() {
   const fetchKey = buildGridFetchKey();
   const now = Date.now();
   if (imagesLoading.value && lastFetchKey.value === fetchKey) {
-    return;
+    const lastActivity = Math.max(
+      lastFetchSuccess.value.at || 0,
+      lastFetchError.value.at || 0,
+    );
+    if (now - lastActivity < 2500) {
+      return;
+    }
+    imagesLoading.value = false;
   }
   if (
     lastFetchSuccess.value.key === fetchKey &&
@@ -4095,7 +4102,7 @@ function handleEmptyStateReset() {
   top: 0;
   left: 0;
   z-index: 1;
-  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.4);
+  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
   transition:
     transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
     box-shadow 0.18s;

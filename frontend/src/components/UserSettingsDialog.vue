@@ -30,18 +30,27 @@ const sidebarThumbnailSizeModel = computed({
     if (!Number.isFinite(parsed)) return;
     const clamped = Math.min(64, Math.max(32, parsed));
     const snapped = Math.round(clamped / 8) * 8;
+    if (snapped === (props.sidebarThumbnailSize ?? 48)) return;
     emit("update:sidebar-thumbnail-size", snapped);
   },
 });
 
 const dateFormatModel = computed({
   get: () => props.dateFormat ?? "locale",
-  set: (value) => emit("update:date-format", value ?? "locale"),
+  set: (value) => {
+    const nextValue = value ?? "locale";
+    if (nextValue === (props.dateFormat ?? "locale")) return;
+    emit("update:date-format", nextValue);
+  },
 });
 
 const themeModeModel = computed({
   get: () => props.themeMode ?? "light",
-  set: (value) => emit("update:theme-mode", value ?? "light"),
+  set: (value) => {
+    const nextValue = value ?? "light";
+    if (nextValue === (props.themeMode ?? "light")) return;
+    emit("update:theme-mode", nextValue);
+  },
 });
 
 const dateFormatOptions = [
@@ -1390,8 +1399,8 @@ watch([smartScoreScrapheapThreshold, smartScoreScrapheapLookback], () => {
 .settings-tag-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 6px;
+  gap: 4px;
+  padding: 4px 6px;
   border-radius: 6px;
   background: rgba(var(--v-theme-on-surface), 0.06);
   color: rgba(var(--v-theme-on-surface), 0.9);

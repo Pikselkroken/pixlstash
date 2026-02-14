@@ -366,8 +366,8 @@ button[disabled] {
 .thumbnail-container:focus-within .thumbnail-img {
   transform: scale(1.02);
   box-shadow:
-    0 4px 24px 0 rgba(var(--v-theme-info), 0.2),
-    0 1.5px 6px 0 rgba(var(--v-theme-shadow), 0.3);
+    0 0 0 1px rgba(var(--v-theme-on-surface), 0.16),
+    0 10px 22px rgba(var(--v-theme-shadow), 0.22);
   z-index: 2;
   transition:
     transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
