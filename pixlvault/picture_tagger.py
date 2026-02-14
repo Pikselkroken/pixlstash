@@ -11,6 +11,7 @@ import onnxruntime as ort
 import os
 import platform
 import re
+import threading
 import torch
 from torchvision import transforms
 
@@ -76,6 +77,8 @@ class PictureTagger:
         self._model_location = model_location
         self._silent = silent
         self._image_root = image_root
+        self._model_init_lock = threading.Lock()
+        self._models_ready = True
 
         # Store device for both CLIP and ONNX
         if PictureTagger.FORCE_CPU:
@@ -232,7 +235,73 @@ class PictureTagger:
 
         torch.cuda.empty_cache()
         gc.collect()
+        self._models_ready = False
         logger.debug("PictureTagger.__exit__ called, all resources released.")
+
+    def aggressive_unload(self):
+        logger.warning("PictureTagger.aggressive_unload() called, releasing models...")
+        self.close()
+
+    def _init_clip_model(self):
+        self._clip_model, _, self._clip_preprocess = (
+            open_clip.create_model_and_transforms(
+                CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS
+            )
+        )
+        self._clip_device = self._device
+        self._clip_model = self._clip_model.to(self._clip_device)
+        if self._clip_device == "cuda":
+            self._clip_model = self._clip_model.half()
+        self._clip_tokenizer = open_clip.get_tokenizer(CLIP_MODEL_NAME)
+
+    def _ensure_clip_ready(self):
+        if getattr(self, "_clip_model", None) is not None and getattr(
+            self, "_clip_preprocess", None
+        ) is not None and getattr(self, "_clip_tokenizer", None) is not None:
+            return
+        with self._model_init_lock:
+            if getattr(self, "_clip_model", None) is None or getattr(
+                self, "_clip_preprocess", None
+            ) is None or getattr(self, "_clip_tokenizer", None) is None:
+                self._init_clip_model()
+                self._models_ready = True
+
+    def _ensure_tagging_ready(self):
+        with self._model_init_lock:
+            if getattr(self, "ort_sess", None) is None:
+                self._init_onnx_session()
+            if not hasattr(self, "_general_tags") or not hasattr(
+                self, "_rating_tags"
+            ):
+                self._load_and_preprocess_tags()
+            if self._use_custom_tagger:
+                missing_custom = (
+                    getattr(self, "_custom_model", None) is None
+                    or getattr(self, "_custom_labels", None) is None
+                    or getattr(self, "_custom_transform", None) is None
+                )
+                if missing_custom:
+                    try:
+                        self._init_custom_tagger()
+                    except Exception as exc:
+                        logger.warning(
+                            "Custom tagger reinit failed; disabling custom tagger: %s",
+                            exc,
+                        )
+                        self._use_custom_tagger = False
+            self._models_ready = True
+
+    def _ensure_captioning_ready(self):
+        if getattr(self, "_florence_model", None) is not None and getattr(
+            self, "_florence_processor", None
+        ) is not None:
+            return
+        with self._model_init_lock:
+            if getattr(self, "_florence_model", None) is None or getattr(
+                self, "_florence_processor", None
+            ) is None:
+                self._init_florence_captioning()
+                self._models_ready = True
 
     def max_concurrent_images(self):
         if self._device == "cpu":
@@ -1067,6 +1136,8 @@ class PictureTagger:
         )
         logger.debug("Removing tags: " + ", ".join(undesired_tags))
 
+        self._ensure_tagging_ready()
+
         dataset = ImageLoadingDatasetPrepper(image_paths)
         if self._device == "cpu":
             max_concurrent = MAX_CONCURRENT_IMAGES_CPU
@@ -1193,6 +1264,7 @@ class PictureTagger:
         return combined_results
 
     def generate_description(self, picture):
+        self._ensure_captioning_ready()
         logger.debug(
             f"generate_description: picture.file_path={getattr(picture, 'file_path', None)}"
         )
@@ -1214,6 +1286,7 @@ class PictureTagger:
         return florence_caption
 
     def generate_descriptions_batch(self, pictures: list[Picture]) -> dict[int, str]:
+        self._ensure_captioning_ready()
         if not pictures:
             return {}
 
@@ -1340,6 +1413,8 @@ class PictureTagger:
         if not query:
             return None
 
+        self._ensure_clip_ready()
+
         import torch
 
         try:
@@ -1367,6 +1442,8 @@ class PictureTagger:
         import os
         import torch
         from PIL import Image
+
+        self._ensure_clip_ready()
 
         file_path = (
             picture.file_path if hasattr(picture, "file_path") else picture["file_path"]

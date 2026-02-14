@@ -37,3 +37,4 @@ passlib
 bcrypt<4.0.0
 ultralytics
 psutil
+pynvml

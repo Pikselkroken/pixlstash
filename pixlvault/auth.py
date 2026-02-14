@@ -440,7 +440,7 @@ class AuthService:
             "/check-session",
             "/logout",
         ]
-        excluded_prefixes = ["/assets/"]
+        excluded_prefixes = ["/assets/", "/pictures/shared/"]
         if request.method == "OPTIONS":
             return await call_next(request)
 

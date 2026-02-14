@@ -11,9 +11,9 @@ except Exception:  # pragma: no cover - optional dependency
     psutil = None
 
 try:
-    import torch
+    import pynvml
 except Exception:  # pragma: no cover - optional dependency
-    torch = None
+    pynvml = None
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -73,7 +73,7 @@ def create_router(server) -> APIRouter:
             logger.warning("Failed to open path %s: %s", path, exc)
             return False
 
-    def _get_system_usage():
+    def _get_process_usage():
         payload = {
             "cpu_percent": None,
             "ram_used_gb": None,
@@ -86,24 +86,61 @@ def create_router(server) -> APIRouter:
 
         if psutil:
             try:
-                payload["cpu_percent"] = psutil.cpu_percent(interval=None)
-                memory = psutil.virtual_memory()
-                payload["ram_total_gb"] = round(memory.total / (1024**3), 2)
-                payload["ram_used_gb"] = round(memory.used / (1024**3), 2)
-                payload["ram_percent"] = memory.percent
+                process = psutil.Process(os.getpid())
+                payload["cpu_percent"] = process.cpu_percent(interval=None)
+                memory = process.memory_info()
+                payload["ram_used_gb"] = round(memory.rss / (1024**3), 2)
+                payload["ram_percent"] = process.memory_percent()
             except Exception as exc:
                 logger.warning("Failed to read CPU/RAM usage: %s", exc)
 
-        if torch and torch.cuda.is_available():
+        if pynvml:
             try:
-                free_bytes, total_bytes = torch.cuda.mem_get_info()
-                used_bytes = max(total_bytes - free_bytes, 0)
-                payload["vram_total_gb"] = round(total_bytes / (1024**3), 2)
-                payload["vram_used_gb"] = round(used_bytes / (1024**3), 2)
-                if total_bytes > 0:
+                pynvml.nvmlInit()
+                pid = os.getpid()
+                used_bytes = 0
+                total_bytes = 0
+                device_count = pynvml.nvmlDeviceGetCount()
+                for index in range(device_count):
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                    processes = []
+                    try:
+                        processes = pynvml.nvmlDeviceGetComputeRunningProcesses(
+                            handle
+                        )
+                    except Exception:
+                        processes = []
+                    try:
+                        processes += pynvml.nvmlDeviceGetGraphicsRunningProcesses(
+                            handle
+                        )
+                    except Exception:
+                        pass
+                    for entry in processes:
+                        if entry.pid != pid:
+                            continue
+                        used_gpu = getattr(entry, "usedGpuMemory", None)
+                        if used_gpu is None:
+                            continue
+                        if used_gpu == getattr(pynvml, "NVML_VALUE_NOT_AVAILABLE", -1):
+                            continue
+                        used_bytes += used_gpu
+                        try:
+                            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                            total_bytes += mem_info.total
+                        except Exception:
+                            pass
+                if total_bytes > 0 and used_bytes >= 0:
+                    payload["vram_total_gb"] = round(total_bytes / (1024**3), 2)
+                    payload["vram_used_gb"] = round(used_bytes / (1024**3), 2)
                     payload["vram_percent"] = round(used_bytes / total_bytes * 100, 1)
             except Exception as exc:
                 logger.warning("Failed to read VRAM usage: %s", exc)
+            finally:
+                try:
+                    pynvml.nvmlShutdown()
+                except Exception:
+                    pass
 
         return payload
 
@@ -150,6 +187,10 @@ def create_router(server) -> APIRouter:
         user, updated = server.vault.db.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+        if "keep_models_in_memory" in patch_data:
+            server.vault.set_keep_models_in_memory(
+                getattr(user, "keep_models_in_memory", True)
+            )
         elapsed = time.time() - start_time
         logger.debug(
             f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"
@@ -189,7 +230,7 @@ def create_router(server) -> APIRouter:
         return {
             "status": "success",
             "workers": server.vault.get_worker_progress(),
-            "system": _get_system_usage(),
+            "process": _get_process_usage(),
         }
 
     @router.get("/server-config/watch-folders")

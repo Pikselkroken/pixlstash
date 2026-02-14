@@ -107,6 +107,9 @@ class Server:
         self._user = self.auth.ensure_user()
         if self._user and self._user.description is not None:
             self.vault.set_description(self._user.description)
+        self.vault.set_keep_models_in_memory(
+            getattr(self._user, "keep_models_in_memory", True)
+        )
 
         self.api = FastAPI(lifespan=self.lifespan)
         # Enable CORS for any origin (credentials require explicit origin echo)

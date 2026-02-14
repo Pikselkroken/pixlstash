@@ -84,6 +84,7 @@ def serialize_user_config(user) -> dict:
         "apply_tag_filter",
         "auto_scrapheap_smart_score_threshold",
         "auto_scrapheap_lookback_minutes",
+        "keep_models_in_memory",
     }
 
     config = {
@@ -137,6 +138,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "apply_tag_filter",
         "auto_scrapheap_smart_score_threshold",
         "auto_scrapheap_lookback_minutes",
+        "keep_models_in_memory",
     }
 
     allowed_date_formats = {
@@ -203,6 +205,15 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = bool(value)
             if user.apply_tag_filter != new_value:
                 user.apply_tag_filter = new_value
+                updated = True
+            continue
+        if key == "keep_models_in_memory":
+            if value in ("", None, "null"):
+                new_value = True
+            else:
+                new_value = bool(value)
+            if user.keep_models_in_memory != new_value:
+                user.keep_models_in_memory = new_value
                 updated = True
             continue
         if key == "date_format":

@@ -114,8 +114,7 @@ async function openServerConfigInOS() {
   try {
     await apiClient.post("/server-config/open");
   } catch (error) {
-    watchFoldersError.value =
-      "Unable to open the server-config.json file.";
+    watchFoldersError.value = "Unable to open the server-config.json file.";
   } finally {
     watchFoldersOpening.value = false;
   }
@@ -211,11 +210,13 @@ watch(dialogOpen, (isOpen) => {
                   <li>Restart the server to apply changes.</li>
                 </ol>
                 <div class="watch-folder-snippet">
-                  <pre>{
+                  <pre>
+{
   "watch_folders": [
     { "folder": "/path/to/photos", "delete_after_import": false }
   ]
-}</pre>
+}</pre
+                  >
                 </div>
                 <p class="google-photos-note">
                   Server config file (full path):
@@ -426,7 +427,9 @@ watch(dialogOpen, (isOpen) => {
   min-height: 140px;
   text-align: center;
   background: rgba(var(--v-theme-on-surface), 0.03);
-  transition: border-color 0.2s ease, background 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
 }
 
 .local-import-dropzone.is-dragging {
@@ -450,14 +453,14 @@ watch(dialogOpen, (isOpen) => {
 
 .watch-folder-snippet pre {
   margin: 0;
-  font-family: "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo",
-    monospace;
+  font-family:
+    "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
   white-space: pre-wrap;
 }
 
 .watch-folder-path {
-  font-family: "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo",
-    monospace;
+  font-family:
+    "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", monospace;
   font-size: 0.9rem;
 }
 
@@ -480,5 +483,4 @@ watch(dialogOpen, (isOpen) => {
   color: rgba(var(--v-theme-on-surface), 0.8);
   font-size: 0.92rem;
 }
-
 </style>

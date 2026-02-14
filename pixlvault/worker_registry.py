@@ -62,6 +62,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
     """
 
     INTERVAL = 10  # Default interval between worker runs in seconds
+    IDLE_CLEANUP_INTERVAL = 60  # Seconds between idle cleanup attempts
 
     def __init__(self, database, picture_tagger, event_callback):
         self._db = database
@@ -86,6 +87,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
             "updated_at": None,
             "status": "idle",
         }
+        self._last_idle_cleanup_at = 0.0
 
     @abstractmethod
     def worker_type(self) -> WorkerType:
@@ -168,6 +170,8 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         status: str | None = None,
     ):
         with self._progress_lock:
+            if status is None and self._progress.get("status") == "idle":
+                status = "running"
             if label is not None:
                 self._progress["label"] = label
             if current is not None:
@@ -179,6 +183,23 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
             if status is not None:
                 self._progress["status"] = status
             self._progress["updated_at"] = time.time()
+
+    def _maybe_release_idle_memory(self):
+        now = time.time()
+        if now - self._last_idle_cleanup_at < self.IDLE_CLEANUP_INTERVAL:
+            return
+        self._last_idle_cleanup_at = now
+
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     def watch_id(self, cls: type, object_id, attr: str):
         """
@@ -215,6 +236,8 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
         """
         Wait for a random short duration to stagger working time
         """
+        self._set_progress(status="idle")
+        self._maybe_release_idle_memory()
         wait_time = random.uniform(self.INTERVAL - 1.0, self.INTERVAL + 1.0)
         self._event.wait(wait_time)
         self._event.clear()

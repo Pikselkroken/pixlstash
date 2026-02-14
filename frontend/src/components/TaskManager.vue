@@ -116,6 +116,23 @@
                   </div>
                 </div>
               </div>
+              <div v-if="systemItems.length" class="task-manager-system">
+                <div class="task-manager-system-header">PixlVault usage</div>
+                <div class="task-manager-system-items">
+                  <div
+                    v-for="item in systemItems"
+                    :key="item.label"
+                    class="task-manager-system-item"
+                  >
+                    <span class="task-manager-system-label">{{
+                      item.label
+                    }}</span>
+                    <span class="task-manager-system-value">{{
+                      item.value
+                    }}</span>
+                  </div>
+                </div>
+              </div>
             </v-window-item>
             <v-window-item value="graph">
               <div class="task-manager-graph">
@@ -226,6 +243,7 @@ const emit = defineEmits(["close"]);
 const loading = ref(false);
 const workerSnapshots = ref({});
 const series = ref({});
+const systemUsage = ref(null);
 const canvasRefs = new Map();
 const canvasObservers = new Map();
 const lastSnapshot = new Map();
@@ -371,6 +389,38 @@ const combinedSnapshot = computed(() => {
     running,
     status: running ? "running" : "idle",
   };
+});
+
+const systemItems = computed(() => {
+  const usage = systemUsage.value || {};
+  const items = [];
+  if (Number.isFinite(usage.cpu_percent)) {
+    items.push({
+      label: "CPU",
+      value: formatPercent(usage.cpu_percent),
+    });
+  }
+  if (Number.isFinite(usage.ram_used_gb)) {
+    items.push({
+      label: "RAM",
+      value: formatUsage(
+        usage.ram_used_gb,
+        usage.ram_total_gb,
+        usage.ram_percent,
+      ),
+    });
+  }
+  if (Number.isFinite(usage.vram_used_gb)) {
+    items.push({
+      label: "VRAM",
+      value: formatUsage(
+        usage.vram_used_gb,
+        usage.vram_total_gb,
+        usage.vram_percent,
+      ),
+    });
+  }
+  return items;
 });
 
 function registerCanvas(canvasKey, dataKey, el) {
@@ -604,6 +654,7 @@ async function fetchProgress() {
   try {
     const res = await apiClient.get("/workers/progress");
     const workers = res.data?.workers || {};
+    systemUsage.value = res.data?.process || res.data?.system || null;
     const now = Date.now() / 1000;
     const nextSeries = { ...series.value };
     workerSnapshots.value = workers;
@@ -745,6 +796,31 @@ function formatRate(value) {
   return rate.toFixed(2);
 }
 
+function formatPercent(value) {
+  const percent = Number(value);
+  if (!Number.isFinite(percent)) return "n/a";
+  if (percent >= 10) return `${percent.toFixed(0)}%`;
+  return `${percent.toFixed(1)}%`;
+}
+
+function formatGigabytes(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "n/a";
+  return `${amount.toFixed(1)} GB`;
+}
+
+function formatUsage(used, total, percent) {
+  const usedLabel = formatGigabytes(used);
+  if (Number.isFinite(total)) {
+    return `${usedLabel} / ${formatGigabytes(total)} (${formatPercent(percent)})`;
+  }
+  const percentLabel = formatPercent(percent);
+  if (percentLabel !== "n/a") {
+    return `${usedLabel} (${percentLabel})`;
+  }
+  return usedLabel;
+}
+
 function getMaxRate(key) {
   const samples = series.value[key] || [];
   if (!samples.length) return 0;
@@ -799,7 +875,7 @@ onBeforeUnmount(() => {
   color: rgb(var(--v-theme-on-background));
   padding: 16px 18px 20px 18px;
   border-radius: 16px;
-  width: 55vw;
+  width: 60vw;
 }
 
 .task-manager-shell {
@@ -829,6 +905,45 @@ onBeforeUnmount(() => {
   margin-top: 4px;
   color: rgba(var(--v-theme-on-surface), 0.65);
   font-size: 0.9rem;
+}
+
+.task-manager-system {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-manager-system-header {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.8);
+}
+
+.task-manager-system-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.task-manager-system-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-surface), 0.4);
+  border: 1px solid rgba(var(--v-theme-border), 0.35);
+  font-size: 0.85rem;
+}
+
+.task-manager-system-label {
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), 0.9);
+}
+
+.task-manager-system-value {
+  color: rgba(var(--v-theme-on-surface), 0.65);
 }
 
 .task-manager-loading {

@@ -1,6 +1,7 @@
 import concurrent
 
 import os
+import time
 import threading
 import numpy as np
 
@@ -34,6 +35,7 @@ logger = get_logger(__name__)
 
 
 class Vault:
+    AGGRESSIVE_UNLOAD_INTERVAL = 300
     # Map event type to list of worker types
     _event_worker_map = {
         EventType.CHANGED_PICTURES: [
@@ -102,6 +104,8 @@ class Vault:
         self.set_description(description or "")
 
         self._picture_tagger = None
+        self._last_aggressive_unload_at = 0.0
+        self._keep_models_in_memory = True
 
         self._workers = {}
         self._event_listeners = []
@@ -186,6 +190,9 @@ class Vault:
             self.db.close()
             del self.db
             self.db = None
+
+    def set_keep_models_in_memory(self, keep_models_in_memory: bool):
+        self._keep_models_in_memory = bool(keep_models_in_memory)
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
@@ -311,7 +318,39 @@ class Vault:
                     "running": False,
                 }
             progress[worker_type.value] = snapshot
+        self._maybe_aggressive_unload(progress)
         return progress
+
+    def _maybe_aggressive_unload(self, progress: dict):
+        if self._keep_models_in_memory:
+            return
+        if not self._picture_tagger:
+            return
+        now = time.time()
+        if now - self._last_aggressive_unload_at < self.AGGRESSIVE_UNLOAD_INTERVAL:
+            return
+
+        any_busy = False
+        for snapshot in progress.values():
+            status = snapshot.get("status")
+            running = bool(snapshot.get("running"))
+            if running and status not in ("idle", "stopped", "uninitialized"):
+                any_busy = True
+                break
+        if any_busy:
+            return
+
+        logger.warning("All workers idle; aggressively unloading models.")
+        try:
+            self._picture_tagger.aggressive_unload()
+        except Exception as exc:
+            logger.warning("Aggressive unload failed for PictureTagger: %s", exc)
+        for worker in self._workers.values():
+            try:
+                worker.close()
+            except Exception as exc:
+                logger.warning("Aggressive unload failed for %s: %s", worker.name(), exc)
+        self._last_aggressive_unload_at = now
 
     def import_default_data(self, add_tagger_test_images: bool = False):
         """

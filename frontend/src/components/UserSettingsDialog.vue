@@ -97,6 +97,9 @@ const hiddenTagsError = ref("");
 const hiddenTagsSuccess = ref("");
 const applyTagFilter = ref(false);
 const applyTagFilterLoading = ref(false);
+const keepModelsInMemory = ref(true);
+const keepModelsInMemoryLoading = ref(false);
+const keepModelsInMemoryError = ref("");
 const smartScoreScrapheapThreshold = ref(1.25);
 const smartScoreScrapheapLookback = ref(30);
 const smartScoreScrapheapLoading = ref(false);
@@ -174,6 +177,7 @@ function resetSettingsForm() {
   hiddenTagInput.value = "";
   hiddenTagsError.value = "";
   hiddenTagsSuccess.value = "";
+  keepModelsInMemoryError.value = "";
   smartScoreScrapheapError.value = "";
   smartScoreScrapheapSuccess.value = "";
 }
@@ -275,6 +279,11 @@ async function fetchSmartScoreSettings() {
     if (applyTagFilter.value !== nextApplyTagFilter) {
       applyTagFilter.value = nextApplyTagFilter;
       emit("update:apply-tag-filter", applyTagFilter.value);
+    }
+    if (typeof res.data?.keep_models_in_memory === "boolean") {
+      keepModelsInMemory.value = res.data.keep_models_in_memory;
+    } else {
+      keepModelsInMemory.value = true;
     }
     smartScoreScrapheapHydrating.value = true;
     const threshold = Number(res.data?.auto_scrapheap_smart_score_threshold);
@@ -443,6 +452,23 @@ async function setApplyTagFilter(value) {
       e?.response?.data?.detail || "Failed to update tag filter.";
   } finally {
     applyTagFilterLoading.value = false;
+  }
+}
+
+async function setKeepModelsInMemory(value) {
+  keepModelsInMemoryLoading.value = true;
+  keepModelsInMemoryError.value = "";
+  try {
+    const nextValue = Boolean(value);
+    await apiClient.patch("/users/me/config", {
+      keep_models_in_memory: nextValue,
+    });
+    keepModelsInMemory.value = nextValue;
+  } catch (e) {
+    keepModelsInMemoryError.value =
+      e?.response?.data?.detail || "Failed to update model memory setting.";
+  } finally {
+    keepModelsInMemoryLoading.value = false;
   }
 }
 
@@ -657,6 +683,26 @@ watch([smartScoreScrapheapThreshold, smartScoreScrapheapLookback], () => {
                   class="settings-add-tag-input"
                   hide-details
                 />
+              </div>
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">Model Memory</div>
+                <div class="settings-section-desc">
+                  Keep models loaded in RAM/VRAM for faster processing. Turn off
+                  to unload models when idle and save memory.
+                </div>
+                <v-checkbox
+                  v-model="keepModelsInMemory"
+                  class="settings-tag-filter-toggle"
+                  density="comfortable"
+                  hide-details
+                  :disabled="keepModelsInMemoryLoading"
+                  label="Keep models in memory and VRAM"
+                  @update:model-value="setKeepModelsInMemory"
+                />
+                <div v-if="keepModelsInMemoryError" class="settings-error">
+                  {{ keepModelsInMemoryError }}
+                </div>
               </div>
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
