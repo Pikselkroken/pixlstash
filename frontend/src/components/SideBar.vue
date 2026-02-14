@@ -2478,7 +2478,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   background: rgb(var(--v-theme-accent));
 }
 
-
 .delete-character-inline {
   color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: 1.1rem;
