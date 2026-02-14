@@ -50,7 +50,7 @@ function handleClick(n) {
 }
 
 .star-overlay--compact:hover {
-  filter: brightness(1.75);
+  filter: brightness(1.25);
 }
 
 .star-overlay--compact .v-icon {

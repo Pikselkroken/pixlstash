@@ -51,6 +51,8 @@
                         (el) =>
                           registerCanvas(`${entry.key}-grid`, entry.key, el)
                       "
+                      width="240"
+                      height="60"
                       class="task-manager-canvas"
                     ></canvas>
                   </div>
@@ -95,6 +97,8 @@
                         (el) =>
                           registerCanvas(`${combinedKey}-grid`, combinedKey, el)
                       "
+                      width="240"
+                      height="60"
                       class="task-manager-canvas"
                     ></canvas>
                   </div>
@@ -140,7 +144,7 @@
                     v-for="edge in graphEdges"
                     :key="edge.id"
                     :points="edge.points"
-                    stroke="rgba(var(--v-theme-on-surface), 0.4)"
+                    stroke="rgba(var(--v-theme-on-surface), 0.6)"
                     stroke-width="2"
                     marker-end="url(#arrow)"
                     fill="none"
@@ -185,6 +189,8 @@
                         (el) =>
                           registerCanvas(`${node.id}-graph`, node.workerKey, el)
                       "
+                      width="240"
+                      height="48"
                       class="task-manager-canvas"
                     ></canvas>
                   </div>
@@ -199,7 +205,14 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
@@ -214,6 +227,7 @@ const loading = ref(false);
 const workerSnapshots = ref({});
 const series = ref({});
 const canvasRefs = new Map();
+const canvasObservers = new Map();
 const lastSnapshot = new Map();
 let pollTimer = null;
 const combinedKey = "__combined__";
@@ -269,10 +283,46 @@ const labelMap = {
   image_embeddings: "Image embeddings",
   features_extracted: "Features extracted",
   likeness_pairs: "Likeness pairs",
-  likeness_parameters: "Likeness parameters",
+  likeness_parameters: "Likeness params",
   scrapheap_candidates: "Scrapheap candidates",
   watch_folder_import: "Watch folder import",
 };
+
+function seedSnapshotsIfEmpty() {
+  if (Object.keys(workerSnapshots.value || {}).length) return;
+  const nextSnapshots = {};
+  const now = Date.now() / 1000;
+  const nextSeries = {};
+  const seedKeys = new Set([
+    ...graphLayout.map((node) => node.workerKey),
+    "FaceQualityWorker",
+    combinedKey,
+  ]);
+  for (const workerKey of seedKeys) {
+    nextSnapshots[workerKey] = {
+      label: "idle",
+      current: 0,
+      total: 0,
+      remaining: 0,
+      updated_at: null,
+      status: "idle",
+      running: false,
+    };
+    nextSeries[workerKey] = [
+      {
+        t: now,
+        rate: 0,
+        current: 0,
+        total: 0,
+        label: "idle",
+        running: false,
+      },
+    ];
+  }
+  workerSnapshots.value = nextSnapshots;
+  series.value = { ...nextSeries };
+  nextTick(() => requestAnimationFrame(drawAll));
+}
 
 function getThemeRgb(name) {
   if (typeof window === "undefined") return null;
@@ -326,6 +376,17 @@ const combinedSnapshot = computed(() => {
 function registerCanvas(canvasKey, dataKey, el) {
   if (!el) return;
   canvasRefs.set(canvasKey, { el, dataKey });
+  if (canvasObservers.has(canvasKey)) {
+    canvasObservers.get(canvasKey).disconnect();
+  }
+  const observer = new ResizeObserver(() => {
+    drawSparkline(el, series.value[dataKey] || []);
+  });
+  observer.observe(el);
+  canvasObservers.set(canvasKey, observer);
+  requestAnimationFrame(() => {
+    drawSparkline(el, series.value[dataKey] || []);
+  });
 }
 
 const graphNodes = computed(() =>
@@ -613,9 +674,12 @@ function drawSparkline(canvas, samples) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.floor(rect.width));
-  const height = Math.max(1, Math.floor(rect.height));
-  if (width < 4 || height < 4) return;
+  const fallbackWidth =
+    canvas.width || canvas.parentElement?.clientWidth || 240;
+  const fallbackHeight =
+    canvas.height || canvas.parentElement?.clientHeight || 60;
+  const width = Math.max(4, Math.floor(rect.width || fallbackWidth));
+  const height = Math.max(4, Math.floor(rect.height || fallbackHeight));
   const dpr = window.devicePixelRatio || 1;
   const targetWidth = Math.floor(width * dpr);
   const targetHeight = Math.floor(height * dpr);
@@ -627,29 +691,19 @@ function drawSparkline(canvas, samples) {
   ctx.scale(dpr, dpr);
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = themeRgba("on-surface", 0.04, "255, 255, 255");
+  ctx.fillStyle = themeRgba("surface", 0.2, "255, 255, 255");
   ctx.fillRect(0, 0, width, height);
 
-  if (!samples.length) {
-    const pad = 6;
-    const y = height - pad;
-    ctx.beginPath();
-    ctx.moveTo(pad, y);
-    ctx.lineTo(width - pad, y);
-    ctx.strokeStyle = themeRgba("on-surface", 0.45, "242, 229, 218");
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    return;
-  }
-
-  const maxRate = Math.max(1, ...samples.map((s) => s.rate || 0));
+  const plotSamples = samples.length ? samples : [{ rate: 0 }];
+  const maxRate = Math.max(1, ...plotSamples.map((s) => s.rate || 0));
   const pad = 6;
   const plotWidth = width - pad * 2;
   const plotHeight = height - pad * 2;
-  const step = samples.length > 1 ? plotWidth / (samples.length - 1) : 0;
+  const step =
+    plotSamples.length > 1 ? plotWidth / (plotSamples.length - 1) : 0;
 
   ctx.beginPath();
-  samples.forEach((sample, index) => {
+  plotSamples.forEach((sample, index) => {
     const x = pad + step * index;
     const y = pad + plotHeight * (1 - (sample.rate || 0) / maxRate);
     if (index === 0) {
@@ -658,14 +712,14 @@ function drawSparkline(canvas, samples) {
       ctx.lineTo(x, y);
     }
   });
-  ctx.strokeStyle = themeRgba("on-surface", 0.85, "242, 229, 218");
+  ctx.strokeStyle = themeRgba("tertiary", 0.85, "242, 229, 218");
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  ctx.lineTo(pad + step * (samples.length - 1), pad + plotHeight);
+  ctx.lineTo(pad + step * (plotSamples.length - 1), pad + plotHeight);
   ctx.lineTo(pad, pad + plotHeight);
   ctx.closePath();
-  ctx.fillStyle = themeRgba("primary", 0.18, "142, 166, 4");
+  ctx.fillStyle = themeRgba("tertiary", 0.18, "142, 166, 4");
   ctx.fill();
 }
 
@@ -707,7 +761,9 @@ watch(
   () => props.active,
   (value) => {
     if (value) {
+      seedSnapshotsIfEmpty();
       startPolling();
+      nextTick(() => requestAnimationFrame(drawAll));
     } else {
       stopPolling();
     }
@@ -715,15 +771,32 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => activeTab.value,
+  async () => {
+    await nextTick();
+    requestAnimationFrame(drawAll);
+  },
+  { immediate: true },
+);
+
+onMounted(() => {
+  nextTick(() => requestAnimationFrame(drawAll));
+});
+
 onBeforeUnmount(() => {
   stopPolling();
+  for (const observer of canvasObservers.values()) {
+    observer.disconnect();
+  }
+  canvasObservers.clear();
 });
 </script>
 
 <style scoped>
 .task-manager-card {
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
+  background: rgb(var(--v-theme-background));
+  color: rgb(var(--v-theme-on-background));
   padding: 16px 18px 20px 18px;
   border-radius: 16px;
   width: 55vw;
@@ -816,7 +889,7 @@ onBeforeUnmount(() => {
 }
 
 .task-manager-panel {
-  background: rgba(var(--v-theme-shadow), 0.15);
+  background: rgba(var(--v-theme-surface), 0.45);
   border: 1px solid rgba(var(--v-theme-border), 0.4);
   border-radius: 10px;
   padding: 10px;
@@ -826,7 +899,7 @@ onBeforeUnmount(() => {
 }
 
 .task-manager-panel--combined {
-  background: rgba(var(--v-theme-shadow), 0.22);
+  background: rgba(var(--v-theme-surface), 0.45);
   border-color: rgba(var(--v-theme-primary), 0.6);
 }
 
@@ -853,7 +926,7 @@ onBeforeUnmount(() => {
   padding: 8px;
   border-radius: 10px;
   border: 1px solid rgba(var(--v-theme-border), 0.5);
-  background: rgba(var(--v-theme-shadow), 0.25);
+  background: rgba(var(--v-theme-surface), 0.45);
   display: flex;
   flex-direction: column;
   gap: 4px;

@@ -267,7 +267,7 @@ watch(
   { immediate: true },
 );
 
-// --- Config Dialog State ---
+// --- Config Dialog State ---.
 const config = reactive({
   sort: "",
   thumbnail: 256,
@@ -457,16 +457,27 @@ function handleUpdateSimilarityOptions(options) {
 }
 
 function handleUpdateHiddenTags(tags) {
-  hiddenTags.value = Array.isArray(tags) ? tags : [];
+  const nextTags = Array.isArray(tags) ? tags : [];
+  if (
+    hiddenTags.value.length === nextTags.length &&
+    hiddenTags.value.every((tag, index) => tag === nextTags[index])
+  ) {
+    return;
+  }
+  hiddenTags.value = nextTags;
 }
 
 function handleUpdateApplyTagFilter(value) {
-  applyTagFilter.value = Boolean(value);
+  const nextValue = Boolean(value);
+  if (applyTagFilter.value === nextValue) return;
+  applyTagFilter.value = nextValue;
 }
 
 function handleUpdateDateFormat(value) {
   if (value == null) return;
-  dateFormat.value = String(value);
+  const nextValue = String(value);
+  if (nextValue === dateFormat.value) return;
+  dateFormat.value = nextValue;
 }
 
 function handleUpdateThemeMode(value) {
