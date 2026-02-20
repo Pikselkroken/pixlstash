@@ -145,6 +145,54 @@ def _create_picture_imports(server, uploaded_files, dest_folder):
 
     return shas, existing_map, new_pictures
 
+def _write_image_to_zip(img, arcname, zip_file, ext=None, scale=1.0, save_kwargs=None):
+    """Resize and write an image to a zip file, preserving metadata if possible."""
+    from io import BytesIO
+    if scale < 1.0:
+        new_width = max(1, int(img.width * scale))
+        new_height = max(1, int(img.height * scale))
+        img = img.resize((new_width, new_height), resample=Image.LANCZOS)
+    buffer = BytesIO()
+    fmt = ext.lstrip(".").upper() if ext else (img.format or "PNG")
+    if fmt == "JPG":
+        fmt = "JPEG"
+    if save_kwargs is None:
+        save_kwargs = {}
+    img.save(buffer, format=fmt, **save_kwargs)
+    zip_file.writestr(arcname, buffer.getvalue())
+
+def _build_tag_caption(picture):
+    tags = []
+    for tag in getattr(picture, "tags", []) or []:
+        tag_value = getattr(tag, "tag", None)
+        if tag_value in (None, TAG_EMPTY_SENTINEL):
+            continue
+        tags.append(tag_value)
+    return ", ".join(tags)
+
+def _build_character_caption(picture):
+    character_names = []
+    for character in (getattr(picture, "characters", []) or []):
+        name_value = getattr(character, "name", None)
+        if name_value:
+            character_names.append(name_value)
+    return ", ".join(character_names)
+
+def _export_features_to_zip(img, base_name, features, tags_by_feature, feature_type, zip_file, scale=1.0):
+    """Export face/hand crops and tags to zip."""
+    for feature in features:
+        index = getattr(feature, f"{feature_type}_index", 0)
+        if index < 0 or not feature.bbox:
+            continue
+        bbox = feature.bbox
+        crop = img.crop(bbox)
+        if scale < 1.0:
+            crop = crop.resize((max(1, int(crop.width * scale)), max(1, int(crop.height * scale))), resample=Image.LANCZOS)
+        arcname = f"{base_name}_{feature_type}_{(index + 1):03d}.png"
+        _write_image_to_zip(crop, arcname, zip_file, ext=".png", scale=1.0)
+        tags = tags_by_feature.get(feature.id, [])
+        if tags:
+            zip_file.writestr(f"{base_name}_{feature_type}_{(index + 1):03d}.txt", ", ".join(tags) + "\n")
 
 def _select_pictures_for_listing(
     *,
@@ -1094,73 +1142,14 @@ def create_router(server) -> APIRouter:
                 face_tags_by_face = {}
                 hand_tags_by_hand = {}
 
-                def _clamp_bbox(bbox, width, height):
-                    if not bbox or len(bbox) != 4:
-                        return None
-                    x_min, y_min, x_max, y_max = [int(round(v)) for v in bbox]
-                    x_min = max(0, min(x_min, width - 1))
-                    y_min = max(0, min(y_min, height - 1))
-                    x_max = max(x_min + 1, min(x_max, width))
-                    y_max = max(y_min + 1, min(y_max, height))
-                    return [x_min, y_min, x_max, y_max]
-
                 if export_type_d != Picture.ExportType.FULL:
-
-                    def fetch_features(session: Session, picture_ids):
-                        faces = session.exec(
-                            select(Face).where(Face.picture_id.in_(picture_ids))
-                        ).all()
-                        hands = session.exec(
-                            select(Hand).where(Hand.picture_id.in_(picture_ids))
-                        ).all()
-                        face_ids = [face.id for face in faces]
-                        hand_ids = [hand.id for hand in hands]
-
-                        face_tags = []
-                        hand_tags = []
-                        if face_ids:
-                            face_tags = session.exec(
-                                select(FaceTag.face_id, Tag.tag)
-                                .join(Tag, Tag.id == FaceTag.tag_id)
-                                .where(FaceTag.face_id.in_(face_ids))
-                            ).all()
-                        if hand_ids:
-                            hand_tags = session.exec(
-                                select(HandTag.hand_id, Tag.tag)
-                                .join(Tag, Tag.id == HandTag.tag_id)
-                                .where(HandTag.hand_id.in_(hand_ids))
-                            ).all()
-
-                        faces_by_pic = {}
-                        for face in faces:
-                            faces_by_pic.setdefault(face.picture_id, []).append(face)
-
-                        hands_by_pic = {}
-                        for hand in hands:
-                            hands_by_pic.setdefault(hand.picture_id, []).append(hand)
-
-                        face_tags_by_face = {}
-                        for face_id, tag in face_tags:
-                            face_tags_by_face.setdefault(face_id, []).append(tag)
-
-                        hand_tags_by_hand = {}
-                        for hand_id, tag in hand_tags:
-                            hand_tags_by_hand.setdefault(hand_id, []).append(tag)
-
-                        return (
-                            faces_by_pic,
-                            hands_by_pic,
-                            face_tags_by_face,
-                            hand_tags_by_hand,
-                        )
-
                     (
                         feature_faces_by_pic,
                         feature_hands_by_pic,
                         face_tags_by_face,
                         hand_tags_by_hand,
                     ) = server.vault.db.run_task(
-                        fetch_features,
+                        Picture.fetch_features,
                         [pic.id for pic in pics],
                     )
 
@@ -1208,14 +1197,6 @@ def create_router(server) -> APIRouter:
                 server.export_tasks[task_id]["total"] = total_items
                 server.export_tasks[task_id]["processed"] = 0
 
-                def resize_crop_if_needed(crop, scale):
-                    if scale >= 1.0:
-                        return crop
-                    new_width = max(1, int(round(crop.width * scale)))
-                    new_height = max(1, int(round(crop.height * scale)))
-                    if new_width == crop.width and new_height == crop.height:
-                        return crop
-                    return crop.resize((new_width, new_height), resample=Image.LANCZOS)
 
                 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
                     for idx, pic in enumerate(pics, start=1):
@@ -1234,30 +1215,10 @@ def create_router(server) -> APIRouter:
                             ext = os.path.splitext(full_path)[1]
                             if export_type_d == Picture.ExportType.FULL:
                                 arcname = f"image_{idx:05d}{ext}"
-                                if (
-                                    scale_factor < 1.0
-                                    and not PictureUtils.is_video_file(full_path)
-                                ):
-                                    try:
-                                        from PIL import Image, PngImagePlugin
-                                        from io import BytesIO
-
-                                        with Image.open(full_path) as img:
-                                            new_width = max(
-                                                1, int(img.width * scale_factor)
-                                            )
-                                            new_height = max(
-                                                1, int(img.height * scale_factor)
-                                            )
-                                            resised = img.resize(
-                                                (new_width, new_height),
-                                                resample=Image.LANCZOS,
-                                            )
-                                            buffer = BytesIO()
-                                            save_format = (
-                                                img.format or ext.lstrip(".").upper()
-                                            )
-                                            save_format_upper = save_format.upper()
+                                try:
+                                    from PIL import Image, PngImagePlugin
+                                    with Image.open(full_path) as img:
+                                        if scale_factor < 1.0 and not PictureUtils.is_video_file(full_path):
                                             save_kwargs = {}
                                             exif_bytes = img.info.get("exif")
                                             if exif_bytes:
@@ -1265,87 +1226,45 @@ def create_router(server) -> APIRouter:
                                             icc_profile = img.info.get("icc_profile")
                                             if icc_profile:
                                                 save_kwargs["icc_profile"] = icc_profile
-                                            if save_format_upper == "PNG":
+                                            if (img.format or ext.lstrip(".").upper()).upper() == "PNG":
                                                 pnginfo = PngImagePlugin.PngInfo()
-                                                for key, value in (
-                                                    img.info or {}
-                                                ).items():
+                                                for key, value in (img.info or {}).items():
                                                     if key in {"exif", "icc_profile"}:
                                                         continue
                                                     if isinstance(value, str):
                                                         pnginfo.add_text(key, value)
                                                     elif isinstance(value, bytes):
                                                         try:
-                                                            pnginfo.add_text(
-                                                                key,
-                                                                value.decode("utf-8"),
-                                                            )
+                                                            pnginfo.add_text(key, value.decode("utf-8"))
                                                         except Exception:
                                                             continue
                                                 save_kwargs["pnginfo"] = pnginfo
-
-                                            if save_format_upper in {"JPG", "JPEG"}:
-                                                resised.save(
-                                                    buffer,
-                                                    format="JPEG",
-                                                    quality=95,
-                                                    **save_kwargs,
-                                                )
-                                            else:
-                                                resised.save(
-                                                    buffer,
-                                                    format=save_format,
-                                                    **save_kwargs,
-                                                )
-
-                                        zip_file.writestr(arcname, buffer.getvalue())
-                                    except Exception as exc:
-                                        logger.warning(
-                                            "Failed to resize %s (%s); falling back to original.",
-                                            full_path,
-                                            exc,
-                                        )
-                                        zip_file.write(full_path, arcname=arcname)
-                                else:
+                                            _write_image_to_zip(img, arcname, zip_file, ext=ext, scale=scale_factor, save_kwargs=save_kwargs)
+                                        else:
+                                            zip_file.write(full_path, arcname=arcname)
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Failed to resize %s (%s); falling back to original.",
+                                        full_path,
+                                        exc,
+                                    )
                                     zip_file.write(full_path, arcname=arcname)
-
-                                def build_tag_caption(picture):
-                                    tags = []
-                                    for tag in getattr(picture, "tags", []) or []:
-                                        tag_value = getattr(tag, "tag", None)
-                                        if tag_value in (None, TAG_EMPTY_SENTINEL):
-                                            continue
-                                        tags.append(tag_value)
-                                    return ", ".join(tags)
 
                                 caption_text = None
                                 if caption_mode_d == "description":
                                     caption_text = pic.description or ""
                                     if not caption_text:
-                                        caption_text = build_tag_caption(pic)
+                                        caption_text = _build_tag_caption(pic)
                                 elif caption_mode_d == "tags":
-                                    caption_text = build_tag_caption(pic)
+                                    caption_text = _build_tag_caption(pic)
 
                                 if include_character_name_enabled:
-                                    character_names = []
-                                    for character in (
-                                        getattr(pic, "characters", []) or []
-                                    ):
-                                        name_value = getattr(character, "name", None)
-                                        if name_value:
-                                            character_names.append(name_value)
-
+                                    character_names = _build_character_caption(pic)
                                     if character_names:
                                         if caption_mode_d == "tags":
-                                            caption_text = ", ".join(
-                                                character_names + [caption_text]
-                                            )
+                                            caption_text = ", ".join([character_names, caption_text]) if caption_text else character_names
                                         elif caption_mode_d == "description":
-                                            caption_text = (
-                                                ", ".join(character_names)
-                                                + ": "
-                                                + caption_text
-                                            )
+                                            caption_text = f"{character_names}: {caption_text}" if caption_text else character_names
 
                                 if (
                                     caption_mode_d != "none"
@@ -1361,8 +1280,6 @@ def create_router(server) -> APIRouter:
                                     continue
                                 try:
                                     from PIL import Image
-                                    from io import BytesIO
-
                                     with Image.open(full_path) as img:
                                         base_name = f"image_{idx:05d}"
                                         export_faces = export_type_d in {
@@ -1376,80 +1293,20 @@ def create_router(server) -> APIRouter:
 
                                         if export_faces:
                                             faces = feature_faces_by_pic.get(pic.id, [])
+                                            # Clamp bboxes before export
                                             for face in faces:
-                                                if getattr(face, "face_index", 0) < 0:
-                                                    continue
-                                                if not face.bbox:
-                                                    continue
-                                                bbox = _clamp_bbox(
-                                                    face.bbox, img.width, img.height
-                                                )
-                                                if not bbox:
-                                                    continue
-                                                crop = img.crop(bbox)
-                                                crop = resize_crop_if_needed(
-                                                    crop, scale_factor
-                                                )
-                                                buffer = BytesIO()
-                                                crop.save(buffer, format="PNG")
-                                                face_index = getattr(
-                                                    face, "face_index", 0
-                                                )
-                                                arcname = f"{base_name}_face_{(face_index + 1):03d}.png"
-                                                zip_file.writestr(
-                                                    arcname, buffer.getvalue()
-                                                )
-                                                server.export_tasks[task_id][
-                                                    "processed"
-                                                ] += 1
-
-                                                tags = face_tags_by_face.get(
-                                                    face.id, []
-                                                )
-                                                if tags:
-                                                    zip_file.writestr(
-                                                        f"{base_name}_face_{(face_index + 1):03d}.txt",
-                                                        ", ".join(tags) + "\n",
-                                                    )
+                                                if face.bbox:
+                                                    face.bbox = PictureUtils.clamp_bbox(face.bbox, img.width, img.height)
+                                            _export_features_to_zip(img, base_name, faces, face_tags_by_face, "face", zip_file, scale=scale_factor)
+                                            server.export_tasks[task_id]["processed"] += len(faces)
 
                                         if export_hands:
                                             hands = feature_hands_by_pic.get(pic.id, [])
                                             for hand in hands:
-                                                if getattr(hand, "hand_index", 0) < 0:
-                                                    continue
-                                                if not hand.bbox:
-                                                    continue
-                                                bbox = _clamp_bbox(
-                                                    hand.bbox, img.width, img.height
-                                                )
-                                                if not bbox:
-                                                    continue
-                                                crop = img.crop(bbox)
-                                                crop = resize_crop_if_needed(
-                                                    crop, scale_factor
-                                                )
-                                                buffer = BytesIO()
-                                                crop.save(buffer, format="PNG")
-                                                hand_index = getattr(
-                                                    hand, "hand_index", 0
-                                                )
-                                                arcname = f"{base_name}_hand_{(hand_index + 1):03d}.png"
-                                                zip_file.writestr(
-                                                    arcname, buffer.getvalue()
-                                                )
-                                                server.export_tasks[task_id][
-                                                    "processed"
-                                                ] += 1
-
-                                                tags = hand_tags_by_hand.get(
-                                                    hand.id, []
-                                                )
-                                                if tags:
-                                                    zip_file.writestr(
-                                                        f"{base_name}_hand_{(hand_index + 1):03d}.txt",
-                                                        ", ".join(tags) + "\n",
-                                                    )
-
+                                                if hand.bbox:
+                                                    hand.bbox = PictureUtils.clamp_bbox(hand.bbox, img.width, img.height)
+                                            _export_features_to_zip(img, base_name, hands, hand_tags_by_hand, "hand", zip_file, scale=scale_factor)
+                                            server.export_tasks[task_id]["processed"] += len(hands)
                                 except Exception as exc:
                                     logger.warning(
                                         "Failed to export features for %s (%s).",
