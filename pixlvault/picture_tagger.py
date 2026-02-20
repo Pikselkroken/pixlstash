@@ -255,14 +255,18 @@ class PictureTagger:
         self._clip_tokenizer = open_clip.get_tokenizer(CLIP_MODEL_NAME)
 
     def _ensure_clip_ready(self):
-        if getattr(self, "_clip_model", None) is not None and getattr(
-            self, "_clip_preprocess", None
-        ) is not None and getattr(self, "_clip_tokenizer", None) is not None:
+        if (
+            getattr(self, "_clip_model", None) is not None
+            and getattr(self, "_clip_preprocess", None) is not None
+            and getattr(self, "_clip_tokenizer", None) is not None
+        ):
             return
         with self._model_init_lock:
-            if getattr(self, "_clip_model", None) is None or getattr(
-                self, "_clip_preprocess", None
-            ) is None or getattr(self, "_clip_tokenizer", None) is None:
+            if (
+                getattr(self, "_clip_model", None) is None
+                or getattr(self, "_clip_preprocess", None) is None
+                or getattr(self, "_clip_tokenizer", None) is None
+            ):
                 self._init_clip_model()
                 self._models_ready = True
 
@@ -270,9 +274,7 @@ class PictureTagger:
         with self._model_init_lock:
             if getattr(self, "ort_sess", None) is None:
                 self._init_onnx_session()
-            if not hasattr(self, "_general_tags") or not hasattr(
-                self, "_rating_tags"
-            ):
+            if not hasattr(self, "_general_tags") or not hasattr(self, "_rating_tags"):
                 self._load_and_preprocess_tags()
             if self._use_custom_tagger:
                 missing_custom = (
@@ -292,14 +294,16 @@ class PictureTagger:
             self._models_ready = True
 
     def _ensure_captioning_ready(self):
-        if getattr(self, "_florence_model", None) is not None and getattr(
-            self, "_florence_processor", None
-        ) is not None:
+        if (
+            getattr(self, "_florence_model", None) is not None
+            and getattr(self, "_florence_processor", None) is not None
+        ):
             return
         with self._model_init_lock:
-            if getattr(self, "_florence_model", None) is None or getattr(
-                self, "_florence_processor", None
-            ) is None:
+            if (
+                getattr(self, "_florence_model", None) is None
+                or getattr(self, "_florence_processor", None) is None
+            ):
                 self._init_florence_captioning()
                 self._models_ready = True
 

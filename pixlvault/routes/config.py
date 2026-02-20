@@ -105,9 +105,7 @@ def create_router(server) -> APIRouter:
                     handle = pynvml.nvmlDeviceGetHandleByIndex(index)
                     processes = []
                     try:
-                        processes = pynvml.nvmlDeviceGetComputeRunningProcesses(
-                            handle
-                        )
+                        processes = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
                     except Exception:
                         processes = []
                     try:

@@ -34,7 +34,9 @@ def upgrade() -> None:
         return
     op.add_column(
         TABLE_NAME,
-        sa.Column(COLUMN_NAME, sa.Boolean(), nullable=True, server_default=sa.text("1")),
+        sa.Column(
+            COLUMN_NAME, sa.Boolean(), nullable=True, server_default=sa.text("1")
+        ),
     )
 
 
