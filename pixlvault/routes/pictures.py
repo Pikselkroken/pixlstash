@@ -144,69 +144,6 @@ def _create_picture_imports(server, uploaded_files, dest_folder):
 
     return shas, existing_map, new_pictures
 
-
-def _write_image_to_zip(img, arcname, zip_file, ext=None, scale=1.0, save_kwargs=None):
-    """Resize and write an image to a zip file, preserving metadata if possible."""
-    from io import BytesIO
-
-    if scale < 1.0:
-        new_width = max(1, int(img.width * scale))
-        new_height = max(1, int(img.height * scale))
-        img = img.resize((new_width, new_height), resample=Image.LANCZOS)
-    buffer = BytesIO()
-    fmt = ext.lstrip(".").upper() if ext else (img.format or "PNG")
-    if fmt == "JPG":
-        fmt = "JPEG"
-    if save_kwargs is None:
-        save_kwargs = {}
-    img.save(buffer, format=fmt, **save_kwargs)
-    zip_file.writestr(arcname, buffer.getvalue())
-
-
-def _build_tag_caption(picture):
-    tags = []
-    for tag in getattr(picture, "tags", []) or []:
-        tag_value = getattr(tag, "tag", None)
-        if tag_value in (None, TAG_EMPTY_SENTINEL):
-            continue
-        tags.append(tag_value)
-    return ", ".join(tags)
-
-
-def _build_character_caption(picture):
-    character_names = []
-    for character in getattr(picture, "characters", []) or []:
-        name_value = getattr(character, "name", None)
-        if name_value:
-            character_names.append(name_value)
-    return ", ".join(character_names)
-
-
-def _export_features_to_zip(
-    img, base_name, features, tags_by_feature, feature_type, zip_file, scale=1.0
-):
-    """Export face/hand crops and tags to zip."""
-    for feature in features:
-        index = getattr(feature, f"{feature_type}_index", 0)
-        if index < 0 or not feature.bbox:
-            continue
-        bbox = feature.bbox
-        crop = img.crop(bbox)
-        if scale < 1.0:
-            crop = crop.resize(
-                (max(1, int(crop.width * scale)), max(1, int(crop.height * scale))),
-                resample=Image.LANCZOS,
-            )
-        arcname = f"{base_name}_{feature_type}_{(index + 1):03d}.png"
-        _write_image_to_zip(crop, arcname, zip_file, ext=".png", scale=1.0)
-        tags = tags_by_feature.get(feature.id, [])
-        if tags:
-            zip_file.writestr(
-                f"{base_name}_{feature_type}_{(index + 1):03d}.txt",
-                ", ".join(tags) + "\n",
-            )
-
-
 def _select_pictures_for_listing(
     *,
     server,
@@ -1002,7 +939,7 @@ def create_router(server) -> APIRouter:
             "filename": None,
         }
 
-        from pixlvault.picture_export import PictureExportService
+        from pixlvault.picture_service_utils import PictureServiceUtils
 
         # Gather extra params for the export service
         background_data = {
@@ -1015,7 +952,7 @@ def create_router(server) -> APIRouter:
             "export_type": export_type,
         }
         background_tasks.add_task(
-            PictureExportService.generate_zip,
+            PictureServiceUtils.generate_zip,
             server,
             request,
             task_id,

@@ -3,15 +3,13 @@ import sys
 import re
 import zipfile
 from PIL import Image, PngImagePlugin
+
+from pixlvault.db_models.tag import TAG_EMPTY_SENTINEL
 from .picture_utils import PictureUtils
 from .db_models.picture import Picture, PictureSet
 from .db_models.picture_set import PictureSetMember
 from sqlmodel import select
 from .routes.pictures import (
-    _write_image_to_zip,
-    _build_tag_caption,
-    _build_character_caption,
-    _export_features_to_zip,
     _select_pictures_for_listing,
 )
 import logging
@@ -19,7 +17,126 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class PictureExportService:
+class PictureServiceUtils:
+    @staticmethod
+    def _build_tag_caption(picture):
+        tags = []
+        for tag in getattr(picture, "tags", []) or []:
+            tag_value = getattr(tag, "tag", None)
+            if tag_value in (None, TAG_EMPTY_SENTINEL):
+                continue
+            tags.append(tag_value)
+        return ", ".join(tags)
+
+    @staticmethod
+    def _build_character_caption(picture):
+        character_names = []
+        for character in getattr(picture, "characters", []) or []:
+            name_value = getattr(character, "name", None)
+            if name_value:
+                character_names.append(name_value)
+        return ", ".join(character_names)
+
+    @staticmethod
+    def _export_features_to_zip(
+        img, base_name, features, tags_by_feature, feature_type, zip_file, scale=1.0
+    ):
+        """Export face/hand crops and tags to zip."""
+        for feature in features:
+            index = getattr(feature, f"{feature_type}_index", 0)
+            if index < 0 or not feature.bbox:
+                continue
+            bbox = feature.bbox
+            crop = img.crop(bbox)
+            if scale < 1.0:
+                crop = crop.resize(
+                    (max(1, int(crop.width * scale)), max(1, int(crop.height * scale))),
+                    resample=Image.LANCZOS,
+                )
+            arcname = f"{base_name}_{feature_type}_{(index + 1):03d}.png"
+            PictureServiceUtils._write_image_to_zip(crop, arcname, zip_file, ext=".png", scale=1.0)
+            tags = tags_by_feature.get(feature.id, [])
+            if tags:
+                zip_file.writestr(
+                    f"{base_name}_{feature_type}_{(index + 1):03d}.txt",
+                    ", ".join(tags) + "\n",
+                )
+
+
+    @staticmethod
+    def _write_image_to_zip(img, arcname, zip_file, ext=None, scale=1.0, save_kwargs=None):
+        """Resize and write an image to a zip file, preserving metadata if possible."""
+        from io import BytesIO
+
+        if scale < 1.0:
+            new_width = max(1, int(img.width * scale))
+            new_height = max(1, int(img.height * scale))
+            img = img.resize((new_width, new_height), resample=Image.LANCZOS)
+        buffer = BytesIO()
+        fmt = ext.lstrip(".").upper() if ext else (img.format or "PNG")
+        if fmt == "JPG":
+            fmt = "JPEG"
+        if save_kwargs is None:
+            save_kwargs = {}
+        img.save(buffer, format=fmt, **save_kwargs)
+        zip_file.writestr(arcname, buffer.getvalue())
+
+    @staticmethod
+    def _parse_export_params(request, background_data):
+        """
+        Parse and normalize export parameters from request and background_data.
+        Returns a dict with all normalized parameters.
+        """
+        export_type_value = (
+            request.query_params.get("export_type")
+            or request.query_params.get("exportType")
+            or background_data.get("export_type")
+        )
+        export_type_d = Picture.ExportType.from_string(export_type_value)
+
+        caption_mode = background_data.get("caption_mode", "description")
+        caption_mode_d = (caption_mode or "description").lower()
+        if caption_mode_d not in {"none", "description", "tags"}:
+            caption_mode_d = "description"
+
+        include_character_name = background_data.get("include_character_name", False)
+        include_character_name_enabled = bool(include_character_name) and caption_mode_d != "none"
+
+        if export_type_d != Picture.ExportType.FULL:
+            caption_mode_d = "tags"
+            include_character_name_enabled = False
+
+        resolution = background_data.get("resolution", "original")
+        resolution_d = (resolution or "original").lower()
+        if resolution_d not in {"original", "half", "quarter"}:
+            resolution_d = "original"
+        scale_map = {
+            "original": 1.0,
+            "half": 0.5,
+            "quarter": 0.25,
+        }
+        scale_factor = scale_map.get(resolution_d, 1.0)
+
+        only_deleted = request.query_params.get("character_id") == "SCRAPHEAP"
+        picture_ids = request.query_params.getlist("id")
+
+        select_fields = Picture.metadata_fields()
+        if export_type_d == Picture.ExportType.FULL:
+            if caption_mode_d != "none":
+                select_fields = select_fields | {"tags"}
+            if include_character_name_enabled:
+                select_fields = select_fields | {"characters"}
+
+        return {
+            "export_type_d": export_type_d,
+            "caption_mode_d": caption_mode_d,
+            "include_character_name_enabled": include_character_name_enabled,
+            "scale_factor": scale_factor,
+            "only_deleted": only_deleted,
+            "picture_ids": picture_ids,
+            "select_fields": select_fields,
+        }
+
     @staticmethod
     def generate_zip(
         server, request, task_id, export_tasks, TEMP_EXPORT_DIR, background_data
@@ -35,44 +152,14 @@ class PictureExportService:
             background_data: dict of extra params (query, set_id, threshold, caption_mode, include_character_name, resolution, export_type)
         """
         try:
-            export_type_value = (
-                request.query_params.get("export_type")
-                or request.query_params.get("exportType")
-                or background_data.get("export_type")
-            )
-            export_type_d = Picture.ExportType.from_string(export_type_value)
-            caption_mode = background_data.get("caption_mode", "description")
-            caption_mode_d = (caption_mode or "description").lower()
-            if caption_mode_d not in {"none", "description", "tags"}:
-                caption_mode_d = "description"
-            include_character_name = background_data.get(
-                "include_character_name", False
-            )
-            include_character_name_enabled = (
-                bool(include_character_name) and caption_mode_d != "none"
-            )
-            if export_type_d != Picture.ExportType.FULL:
-                caption_mode_d = "tags"
-                include_character_name_enabled = False
-            resolution = background_data.get("resolution", "original")
-            resolution_d = (resolution or "original").lower()
-            if resolution_d not in {"original", "half", "quarter"}:
-                resolution_d = "original"
-            scale_map = {
-                "original": 1.0,
-                "half": 0.5,
-                "quarter": 0.25,
-            }
-            scale_factor = scale_map.get(resolution_d, 1.0)
-
-            only_deleted = request.query_params.get("character_id") == "SCRAPHEAP"
-            picture_ids = request.query_params.getlist("id")
-            select_fields = Picture.metadata_fields()
-            if export_type_d == Picture.ExportType.FULL:
-                if caption_mode_d != "none":
-                    select_fields = select_fields | {"tags"}
-                if include_character_name_enabled:
-                    select_fields = select_fields | {"characters"}
+            params = PictureServiceUtils._parse_export_params(request, background_data)
+            export_type_d = params["export_type_d"]
+            caption_mode_d = params["caption_mode_d"]
+            include_character_name_enabled = params["include_character_name_enabled"]
+            scale_factor = params["scale_factor"]
+            only_deleted = params["only_deleted"]
+            picture_ids = params["picture_ids"]
+            select_fields = params["select_fields"]
 
             pics = []
             set_id = background_data.get("set_id")
@@ -290,7 +377,7 @@ class PictureExportService:
                                                     except Exception:
                                                         continue
                                             save_kwargs["pnginfo"] = pnginfo
-                                        _write_image_to_zip(
+                                        PictureServiceUtils._write_image_to_zip(
                                             img,
                                             arcname,
                                             zip_file,
@@ -312,12 +399,12 @@ class PictureExportService:
                             if caption_mode_d == "description":
                                 caption_text = pic.description or ""
                                 if not caption_text:
-                                    caption_text = _build_tag_caption(pic)
+                                    caption_text = PictureServiceUtils._build_tag_caption(pic)
                             elif caption_mode_d == "tags":
-                                caption_text = _build_tag_caption(pic)
+                                caption_text = PictureServiceUtils._build_tag_caption(pic)
 
                             if include_character_name_enabled:
-                                character_names = _build_character_caption(pic)
+                                character_names = PictureServiceUtils._build_character_caption(pic)
                                 if character_names:
                                     if caption_mode_d == "tags":
                                         caption_text = (
@@ -360,7 +447,7 @@ class PictureExportService:
                                                 face.bbox = PictureUtils.clamp_bbox(
                                                     face.bbox, img.width, img.height
                                                 )
-                                        _export_features_to_zip(
+                                        PictureServiceUtils._export_features_to_zip(
                                             img,
                                             base_name,
                                             faces,
@@ -378,7 +465,7 @@ class PictureExportService:
                                                 hand.bbox = PictureUtils.clamp_bbox(
                                                     hand.bbox, img.width, img.height
                                                 )
-                                        _export_features_to_zip(
+                                        PictureServiceUtils._export_features_to_zip(
                                             img,
                                             base_name,
                                             hands,
