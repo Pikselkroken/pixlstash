@@ -492,6 +492,23 @@ class PictureUtils:
         return ext in [".mp4", ".webm", ".avi", ".mov", ".mkv"]
 
     @staticmethod
+    def clamp_bbox(bbox, width, height):
+        """
+        Clamp a bounding box [x_min, y_min, x_max, y_max] to image bounds.
+        Returns a new list [x_min, y_min, x_max, y_max] or None if invalid.
+        """
+        if not bbox or len(bbox) != 4:
+            return None
+        x_min, y_min, x_max, y_max = [int(round(v)) for v in bbox]
+        x_min = max(0, min(x_min, width - 1))
+        y_min = max(0, min(y_min, height - 1))
+        x_max = max(x_min + 1, min(x_max, width))
+        y_max = max(y_min + 1, min(y_max, height))
+        if x_max <= x_min or y_max <= y_min:
+            return None
+        return [x_min, y_min, x_max, y_max]
+
+    @staticmethod
     def extract_created_at_from_metadata(
         image_bytes: bytes, fallback_file_path: str = None
     ) -> Optional[datetime]:
