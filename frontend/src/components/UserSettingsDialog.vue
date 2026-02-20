@@ -55,12 +55,13 @@ const themeModeModel = computed({
 
 const dateFormatOptions = [
   { title: "Locale default", value: "locale" },
-  { title: "ISO (YYYY-MM-DD)", value: "iso" },
-  { title: "European (DD/MM/YYYY)", value: "eu" },
-  { title: "American (MM/DD/YYYY)", value: "us" },
-  { title: "China (YYYY/MM/DD)", value: "ymd-slash" },
-  { title: "Korea (YYYY.MM.DD)", value: "ymd-dot" },
-  { title: "Japan (YYYY年MM月DD日)", value: "ymd-jp" },
+  { title: "ISO (YYYY-MM-DD, 24h)", value: "iso" },
+  { title: "European (DD/MM/YYYY, 24h)", value: "eu" },
+  { title: "British (DD/MM/YYYY, AM/PM)", value: "british" },
+  { title: "American (MM/DD/YYYY, AM/PM)", value: "us" },
+  { title: "China (YYYY/MM/DD, 24h)", value: "ymd-slash" },
+  { title: "Korea (YYYY.MM.DD, 24h)", value: "ymd-dot" },
+  { title: "Japan (YYYY年MM月DD日, 24h)", value: "ymd-jp" },
 ];
 
 const themeModeOptions = [
