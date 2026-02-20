@@ -705,12 +705,8 @@ class Picture(SQLModel, table=True):
             face_tags_by_face: dict[face_id, list[tag]]
             hand_tags_by_hand: dict[hand_id, list[tag]]
         """
-        faces = session.exec(
-            select(Face).where(Face.picture_id.in_(picture_ids))
-        ).all()
-        hands = session.exec(
-            select(Hand).where(Hand.picture_id.in_(picture_ids))
-        ).all()
+        faces = session.exec(select(Face).where(Face.picture_id.in_(picture_ids))).all()
+        hands = session.exec(select(Hand).where(Hand.picture_id.in_(picture_ids))).all()
         face_ids = [face.id for face in faces]
         hand_ids = [hand.id for hand in hands]
 

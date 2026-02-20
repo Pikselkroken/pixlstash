@@ -36,7 +36,6 @@ from pixlvault.db_models import (
     Picture,
     PictureLikeness,
     PictureSetMember,
-    PictureSet,
     SortMechanism,
     Tag,
     TAG_EMPTY_SENTINEL,
@@ -145,9 +144,11 @@ def _create_picture_imports(server, uploaded_files, dest_folder):
 
     return shas, existing_map, new_pictures
 
+
 def _write_image_to_zip(img, arcname, zip_file, ext=None, scale=1.0, save_kwargs=None):
     """Resize and write an image to a zip file, preserving metadata if possible."""
     from io import BytesIO
+
     if scale < 1.0:
         new_width = max(1, int(img.width * scale))
         new_height = max(1, int(img.height * scale))
@@ -161,6 +162,7 @@ def _write_image_to_zip(img, arcname, zip_file, ext=None, scale=1.0, save_kwargs
     img.save(buffer, format=fmt, **save_kwargs)
     zip_file.writestr(arcname, buffer.getvalue())
 
+
 def _build_tag_caption(picture):
     tags = []
     for tag in getattr(picture, "tags", []) or []:
@@ -170,15 +172,19 @@ def _build_tag_caption(picture):
         tags.append(tag_value)
     return ", ".join(tags)
 
+
 def _build_character_caption(picture):
     character_names = []
-    for character in (getattr(picture, "characters", []) or []):
+    for character in getattr(picture, "characters", []) or []:
         name_value = getattr(character, "name", None)
         if name_value:
             character_names.append(name_value)
     return ", ".join(character_names)
 
-def _export_features_to_zip(img, base_name, features, tags_by_feature, feature_type, zip_file, scale=1.0):
+
+def _export_features_to_zip(
+    img, base_name, features, tags_by_feature, feature_type, zip_file, scale=1.0
+):
     """Export face/hand crops and tags to zip."""
     for feature in features:
         index = getattr(feature, f"{feature_type}_index", 0)
@@ -187,12 +193,19 @@ def _export_features_to_zip(img, base_name, features, tags_by_feature, feature_t
         bbox = feature.bbox
         crop = img.crop(bbox)
         if scale < 1.0:
-            crop = crop.resize((max(1, int(crop.width * scale)), max(1, int(crop.height * scale))), resample=Image.LANCZOS)
+            crop = crop.resize(
+                (max(1, int(crop.width * scale)), max(1, int(crop.height * scale))),
+                resample=Image.LANCZOS,
+            )
         arcname = f"{base_name}_{feature_type}_{(index + 1):03d}.png"
         _write_image_to_zip(crop, arcname, zip_file, ext=".png", scale=1.0)
         tags = tags_by_feature.get(feature.id, [])
         if tags:
-            zip_file.writestr(f"{base_name}_{feature_type}_{(index + 1):03d}.txt", ", ".join(tags) + "\n")
+            zip_file.writestr(
+                f"{base_name}_{feature_type}_{(index + 1):03d}.txt",
+                ", ".join(tags) + "\n",
+            )
+
 
 def _select_pictures_for_listing(
     *,
@@ -989,343 +1002,27 @@ def create_router(server) -> APIRouter:
             "filename": None,
         }
 
-        def generate_zip():
-            try:
-                export_type_value = (
-                    request.query_params.get("export_type")
-                    or request.query_params.get("exportType")
-                    or export_type
-                )
-                export_type_d = Picture.ExportType.from_string(export_type_value)
-                caption_mode_d = (caption_mode or "description").lower()
-                if caption_mode_d not in {"none", "description", "tags"}:
-                    caption_mode_d = "description"
-                include_character_name_enabled = (
-                    bool(include_character_name) and caption_mode_d != "none"
-                )
-                if export_type_d != Picture.ExportType.FULL:
-                    caption_mode_d = "tags"
-                    include_character_name_enabled = False
-                resolution_d = (resolution or "original").lower()
-                if resolution_d not in {"original", "half", "quarter"}:
-                    resolution_d = "original"
-                scale_map = {
-                    "original": 1.0,
-                    "half": 0.5,
-                    "quarter": 0.25,
-                }
-                scale_factor = scale_map.get(resolution_d, 1.0)
+        from pixlvault.picture_export import PictureExportService
 
-                only_deleted = request.query_params.get("character_id") == "SCRAPHEAP"
-
-                picture_ids = request.query_params.getlist("id")
-
-                select_fields = Picture.metadata_fields()
-                if export_type_d == Picture.ExportType.FULL:
-                    if caption_mode_d != "none":
-                        select_fields = select_fields | {"tags"}
-                    if include_character_name_enabled:
-                        select_fields = select_fields | {"characters"}
-
-                pics = []
-
-                if picture_ids:
-                    pics = server.vault.db.run_task(
-                        Picture.find,
-                        id=picture_ids,
-                        select_fields=select_fields,
-                        include_deleted=only_deleted,
-                    )
-                elif set_id is not None:
-                    logger.debug("Exporting pictures set {} ".format(set_id))
-
-                    def fetch_members(session, set_id):
-                        members = session.exec(
-                            select(PictureSetMember).where(
-                                PictureSetMember.set_id == set_id
-                            )
-                        ).all()
-                        picture_ids = [m.picture_id for m in members]
-                        if not picture_ids:
-                            return []
-                        return Picture.find(
-                            session,
-                            id=picture_ids,
-                            select_fields=select_fields,
-                        )
-
-                    pics = server.vault.db.run_task(fetch_members, set_id)
-                elif query:
-                    logger.debug(
-                        "Exporting pictures using search query: {}".format(query)
-                    )
-
-                    def find_by_text(session, query):
-                        words = re.findall(r"\b\w+\b", query.lower())
-                        query_full = "A photo of " + query
-                        return [
-                            r[0]
-                            for r in Picture.semantic_search(
-                                session,
-                                query_full,
-                                words,
-                                text_to_embedding=server.vault.generate_text_embedding,
-                                offset=0,
-                                limit=sys.maxsize,
-                                threshold=threshold,
-                                select_fields=select_fields,
-                                only_deleted=only_deleted,
-                            )
-                        ]
-
-                    pics = server.vault.db.run_task(find_by_text, query)
-                else:
-                    logger.debug("Exporting pictures using list filters")
-                    ordered_ids = _select_pictures_for_listing(
-                        server=server,
-                        request=request,
-                        sort=None,
-                        descending=True,
-                        offset=0,
-                        limit=sys.maxsize,
-                        metadata_fields=select_fields,
-                        return_ids_only=True,
-                        exclude_query_params={
-                            "query",
-                            "set_id",
-                            "threshold",
-                            "caption_mode",
-                            "include_character_name",
-                            "export_type",
-                            "resolution",
-                        },
-                    )
-                    if ordered_ids:
-                        pics = server.vault.db.run_task(
-                            Picture.find,
-                            id=ordered_ids,
-                            select_fields=select_fields,
-                            include_deleted=only_deleted,
-                        )
-                        pic_map = {pic.id: pic for pic in pics}
-                        pics = [
-                            pic_map.get(pid) for pid in ordered_ids if pid in pic_map
-                        ]
-
-                logger.debug(
-                    f"Export task {task_id}: {len(pics)} pictures to be added to the ZIP."
-                )
-
-                if not pics:
-                    server.export_tasks[task_id]["status"] = "failed"
-                    return
-
-                filename_parts = []
-                if set_id is not None:
-
-                    def get_set(session, set_id):
-                        return session.get(PictureSet, set_id)
-
-                    picture_set = server.vault.db.run_task(get_set, set_id)
-                    if picture_set:
-                        filename_parts.append(picture_set.name.replace(" ", "_"))
-                if query:
-                    filename_parts.append(f"search_{query[:20]}")
-
-                filename = "_".join(filename_parts) if filename_parts else "pictures"
-                filename = f"{filename}_{len(pics)}_images.zip"
-                server.export_tasks[task_id]["filename"] = filename
-
-                zip_path = os.path.join(server.TEMP_EXPORT_DIR, f"export_{task_id}.zip")
-                feature_faces_by_pic = {}
-                feature_hands_by_pic = {}
-                face_tags_by_face = {}
-                hand_tags_by_hand = {}
-
-                if export_type_d != Picture.ExportType.FULL:
-                    (
-                        feature_faces_by_pic,
-                        feature_hands_by_pic,
-                        face_tags_by_face,
-                        hand_tags_by_hand,
-                    ) = server.vault.db.run_task(
-                        Picture.fetch_features,
-                        [pic.id for pic in pics],
-                    )
-
-                if export_type_d == Picture.ExportType.FULL:
-                    total_items = len(pics)
-                else:
-                    total_items = 0
-                    export_faces = export_type_d in {
-                        Picture.ExportType.FACE,
-                        Picture.ExportType.FACE_HAND,
-                    }
-                    export_hands = export_type_d in {
-                        Picture.ExportType.HAND,
-                        Picture.ExportType.FACE_HAND,
-                    }
-                    for pic in pics:
-                        if not getattr(pic, "file_path", None) or not os.path.exists(
-                            PictureUtils.resolve_picture_path(
-                                server.vault.image_root, pic.file_path
-                            )
-                        ):
-                            continue
-                        full_path = PictureUtils.resolve_picture_path(
-                            server.vault.image_root, pic.file_path
-                        )
-                        if PictureUtils.is_video_file(full_path):
-                            continue
-                        if export_faces:
-                            faces = feature_faces_by_pic.get(pic.id, [])
-                            for face in faces:
-                                if getattr(face, "face_index", 0) < 0:
-                                    continue
-                                if not face.bbox:
-                                    continue
-                                total_items += 1
-                        if export_hands:
-                            hands = feature_hands_by_pic.get(pic.id, [])
-                            for hand in hands:
-                                if getattr(hand, "hand_index", 0) < 0:
-                                    continue
-                                if not hand.bbox:
-                                    continue
-                                total_items += 1
-
-                server.export_tasks[task_id]["total"] = total_items
-                server.export_tasks[task_id]["processed"] = 0
-
-
-                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for idx, pic in enumerate(pics, start=1):
-                        if (
-                            hasattr(pic, "file_path")
-                            and pic.file_path
-                            and os.path.exists(
-                                PictureUtils.resolve_picture_path(
-                                    server.vault.image_root, pic.file_path
-                                )
-                            )
-                        ):
-                            full_path = PictureUtils.resolve_picture_path(
-                                server.vault.image_root, pic.file_path
-                            )
-                            ext = os.path.splitext(full_path)[1]
-                            if export_type_d == Picture.ExportType.FULL:
-                                arcname = f"image_{idx:05d}{ext}"
-                                try:
-                                    from PIL import Image, PngImagePlugin
-                                    with Image.open(full_path) as img:
-                                        if scale_factor < 1.0 and not PictureUtils.is_video_file(full_path):
-                                            save_kwargs = {}
-                                            exif_bytes = img.info.get("exif")
-                                            if exif_bytes:
-                                                save_kwargs["exif"] = exif_bytes
-                                            icc_profile = img.info.get("icc_profile")
-                                            if icc_profile:
-                                                save_kwargs["icc_profile"] = icc_profile
-                                            if (img.format or ext.lstrip(".").upper()).upper() == "PNG":
-                                                pnginfo = PngImagePlugin.PngInfo()
-                                                for key, value in (img.info or {}).items():
-                                                    if key in {"exif", "icc_profile"}:
-                                                        continue
-                                                    if isinstance(value, str):
-                                                        pnginfo.add_text(key, value)
-                                                    elif isinstance(value, bytes):
-                                                        try:
-                                                            pnginfo.add_text(key, value.decode("utf-8"))
-                                                        except Exception:
-                                                            continue
-                                                save_kwargs["pnginfo"] = pnginfo
-                                            _write_image_to_zip(img, arcname, zip_file, ext=ext, scale=scale_factor, save_kwargs=save_kwargs)
-                                        else:
-                                            zip_file.write(full_path, arcname=arcname)
-                                except Exception as exc:
-                                    logger.warning(
-                                        "Failed to resize %s (%s); falling back to original.",
-                                        full_path,
-                                        exc,
-                                    )
-                                    zip_file.write(full_path, arcname=arcname)
-
-                                caption_text = None
-                                if caption_mode_d == "description":
-                                    caption_text = pic.description or ""
-                                    if not caption_text:
-                                        caption_text = _build_tag_caption(pic)
-                                elif caption_mode_d == "tags":
-                                    caption_text = _build_tag_caption(pic)
-
-                                if include_character_name_enabled:
-                                    character_names = _build_character_caption(pic)
-                                    if character_names:
-                                        if caption_mode_d == "tags":
-                                            caption_text = ", ".join([character_names, caption_text]) if caption_text else character_names
-                                        elif caption_mode_d == "description":
-                                            caption_text = f"{character_names}: {caption_text}" if caption_text else character_names
-
-                                if (
-                                    caption_mode_d != "none"
-                                    and caption_text is not None
-                                ):
-                                    zip_file.writestr(
-                                        f"image_{idx:05d}.txt",
-                                        f"{caption_text}\n",
-                                    )
-                                server.export_tasks[task_id]["processed"] += 1
-                            else:
-                                if PictureUtils.is_video_file(full_path):
-                                    continue
-                                try:
-                                    from PIL import Image
-                                    with Image.open(full_path) as img:
-                                        base_name = f"image_{idx:05d}"
-                                        export_faces = export_type_d in {
-                                            Picture.ExportType.FACE,
-                                            Picture.ExportType.FACE_HAND,
-                                        }
-                                        export_hands = export_type_d in {
-                                            Picture.ExportType.HAND,
-                                            Picture.ExportType.FACE_HAND,
-                                        }
-
-                                        if export_faces:
-                                            faces = feature_faces_by_pic.get(pic.id, [])
-                                            # Clamp bboxes before export
-                                            for face in faces:
-                                                if face.bbox:
-                                                    face.bbox = PictureUtils.clamp_bbox(face.bbox, img.width, img.height)
-                                            _export_features_to_zip(img, base_name, faces, face_tags_by_face, "face", zip_file, scale=scale_factor)
-                                            server.export_tasks[task_id]["processed"] += len(faces)
-
-                                        if export_hands:
-                                            hands = feature_hands_by_pic.get(pic.id, [])
-                                            for hand in hands:
-                                                if hand.bbox:
-                                                    hand.bbox = PictureUtils.clamp_bbox(hand.bbox, img.width, img.height)
-                                            _export_features_to_zip(img, base_name, hands, hand_tags_by_hand, "hand", zip_file, scale=scale_factor)
-                                            server.export_tasks[task_id]["processed"] += len(hands)
-                                except Exception as exc:
-                                    logger.warning(
-                                        "Failed to export features for %s (%s).",
-                                        full_path,
-                                        exc,
-                                    )
-
-                zip_size = os.path.getsize(zip_path)
-                logger.debug(
-                    f"Export task {task_id}: ZIP file created with size {zip_size} bytes."
-                )
-
-                server.export_tasks[task_id]["status"] = "completed"
-                server.export_tasks[task_id]["file_path"] = zip_path
-            except Exception as exc:
-                server.export_tasks[task_id]["status"] = "failed"
-                logger.error(f"Export task {task_id} failed: {exc}")
-
-        background_tasks.add_task(generate_zip)
+        # Gather extra params for the export service
+        background_data = {
+            "query": query,
+            "set_id": set_id,
+            "threshold": threshold,
+            "caption_mode": caption_mode,
+            "include_character_name": include_character_name,
+            "resolution": resolution,
+            "export_type": export_type,
+        }
+        background_tasks.add_task(
+            PictureExportService.generate_zip,
+            server,
+            request,
+            task_id,
+            server.export_tasks,
+            server.TEMP_EXPORT_DIR,
+            background_data,
+        )
         return JSONResponse({"task_id": task_id})
 
     @router.get("/pictures/export/status")
