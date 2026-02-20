@@ -1395,7 +1395,7 @@ def create_router(server) -> APIRouter:
                                                 face_index = getattr(
                                                     face, "face_index", 0
                                                 )
-                                                arcname = f"{base_name}_face_{face_index:03d}.png"
+                                                arcname = f"{base_name}_face_{(face_index + 1):03d}.png"
                                                 zip_file.writestr(
                                                     arcname, buffer.getvalue()
                                                 )
@@ -1408,7 +1408,7 @@ def create_router(server) -> APIRouter:
                                                 )
                                                 if tags:
                                                     zip_file.writestr(
-                                                        f"{base_name}_face_{face_index:03d}.txt",
+                                                        f"{base_name}_face_{(face_index + 1):03d}.txt",
                                                         ", ".join(tags) + "\n",
                                                     )
 
@@ -1433,7 +1433,7 @@ def create_router(server) -> APIRouter:
                                                 hand_index = getattr(
                                                     hand, "hand_index", 0
                                                 )
-                                                arcname = f"{base_name}_hand_{hand_index:03d}.png"
+                                                arcname = f"{base_name}_hand_{(hand_index + 1):03d}.png"
                                                 zip_file.writestr(
                                                     arcname, buffer.getvalue()
                                                 )
@@ -1446,7 +1446,7 @@ def create_router(server) -> APIRouter:
                                                 )
                                                 if tags:
                                                     zip_file.writestr(
-                                                        f"{base_name}_hand_{hand_index:03d}.txt",
+                                                        f"{base_name}_hand_{(hand_index + 1):03d}.txt",
                                                         ", ".join(tags) + "\n",
                                                     )
 
