@@ -1088,11 +1088,21 @@ onBeforeUnmount(() => {
 .task-manager-metric {
   font-weight: 600;
   font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+  line-height: 1.2;
 }
 
 .task-manager-progress {
   font-size: 0.85rem;
   color: rgba(var(--v-theme-on-surface), 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 1.2em;
+  line-height: 1.2;
 }
 
 .task-manager-panel-subheader {
