@@ -437,6 +437,7 @@ class AuthService:
             "/openapi.json",
             "/favicon.ico",
             "/",
+            "/version",
             "/check-session",
             "/logout",
         ]

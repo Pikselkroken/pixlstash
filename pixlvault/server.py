@@ -534,6 +534,11 @@ class Server:
             version = self._get_version()
             return {"message": "PixlVault REST API", "version": version}
 
+        @self.api.get("/version")
+        async def read_version():
+            version = self._get_version()
+            return {"message": "PixlVault REST API", "version": version}
+
         @self.api.get("/favicon.ico")
         def favicon():
             index_path = self._get_frontend_index_path()

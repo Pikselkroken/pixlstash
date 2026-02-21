@@ -588,13 +588,13 @@ def test_post_logo_altered_pixel_upload():
     log_resources("END test_post_logo_altered_pixel_upload")
 
 
-def test_read_root():
-    log_resources("START test_read_root")
+def test_read_version():
+    log_resources("START test_read_version")
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(server_config_path=server_config_path) as server:
             client = TestClient(server.api)
-            response = client.get("/")
+            response = client.get("/version")
             assert response.status_code == 200
             expected_version = get_project_version()
             assert response.json() == {
@@ -602,7 +602,7 @@ def test_read_root():
                 "version": expected_version,
             }
     gc.collect()
-    log_resources("END test_read_root")
+    log_resources("END test_read_version")
 
 
 def test_benchmark_add_images_by_binary_upload():
