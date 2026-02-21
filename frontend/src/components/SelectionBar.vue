@@ -47,7 +47,7 @@
           class="delete-btn"
           @click="$emit('delete-selected')"
         >
-          Delete Pictures
+          {{ deleteButtonLabel }}
         </button>
       </div>
     </div>
@@ -93,6 +93,11 @@ const showRemoveButton = computed(() => {
 const removeButtonLabel = computed(() => {
   if (isScrapheapView.value) return "Restore Selected";
   return `Remove from ${props.selectedGroupName ? props.selectedGroupName : "group"}`;
+});
+
+const deleteButtonLabel = computed(() => {
+  if (isScrapheapView.value) return "Permanently Delete Pictures";
+  return "Delete Pictures";
 });
 </script>
 

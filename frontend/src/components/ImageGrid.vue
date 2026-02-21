@@ -1429,35 +1429,44 @@ function handleAddToCharacter(payload) {
   emit("refresh-sidebar");
 }
 
-function deleteSelected() {
+async function deleteSelected() {
   if (!selectedImageIds.value.length) return;
   const isScrapheapSelection = isScrapheapView.value;
   const idsToRemove = selectedImageIds.value.slice();
   if (isScrapheapSelection) {
     if (
-      !confirm(`Delete ${selectedImageIds.value.length} selected image(s)?`)
+      !confirm(
+        `Permanently delete ${selectedImageIds.value.length} selected image(s)?`,
+      )
     ) {
       return;
     }
   }
   const backendUrl = props.backendUrl;
-  Promise.all(
-    selectedImageIds.value.map((id) =>
-      apiClient.delete(`${backendUrl}/pictures/${id}`).catch((err) => {
-        alert(`Error deleting image ${id}: ${err.message}`);
-      }),
-    ),
-  ).then(() => {
-    if (!isScrapheapSelection) {
-      removeImagesById(idsToRemove);
+  try {
+    if (isScrapheapSelection) {
+      await apiClient.post(`${backendUrl}/pictures/scrapheap/delete`, {
+        picture_ids: idsToRemove,
+      });
+    } else {
+      await Promise.all(
+        idsToRemove.map((id) =>
+          apiClient.delete(`${backendUrl}/pictures/${id}`).catch((err) => {
+            alert(`Error deleting image ${id}: ${err.message}`);
+          }),
+        ),
+      );
     }
+    removeImagesById(idsToRemove);
     selectedImageIds.value = [];
     lastSelectedImageId = null;
     if (isScrapheapSelection) {
       updateVisibleThumbnails();
     }
     emit("refresh-sidebar");
-  });
+  } catch (err) {
+    alert(`Error deleting images: ${err?.message || err}`);
+  }
 }
 
 const isScrapheapView = computed(() => {
