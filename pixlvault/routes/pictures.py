@@ -266,6 +266,16 @@ def _select_pictures_for_listing(
                 status_code=400,
                 detail="reference_character_id is required for CHARACTER_LIKENESS sort",
             )
+        candidate_ids = None
+        if only_deleted:
+            candidate_ids = server.vault.db.run_task(
+                fetch_smart_score_candidate_ids,
+                character_id,
+                only_deleted,
+                format,
+            )
+            if candidate_ids is not None and not candidate_ids:
+                return []
         pics = find_pictures_by_character_likeness(
             server,
             character_id,
@@ -273,6 +283,7 @@ def _select_pictures_for_listing(
             offset,
             limit,
             descending,
+            candidate_ids=candidate_ids,
         )
         if pics:
             hidden_ids = _fetch_hidden_picture_ids(
@@ -416,7 +427,14 @@ def create_router(server) -> APIRouter:
                         Picture.imported_at.is_not(None),
                     )
                 ).all()
-                return [row for row in members]
+                normalized = []
+                for row in members:
+                    if isinstance(row, (list, tuple)):
+                        if row:
+                            normalized.append(row[0])
+                        continue
+                    normalized.append(row)
+                return normalized
 
             candidate_ids = set(
                 server.vault.db.run_immediate_read_task(fetch_set_ids, set_id)
@@ -2193,6 +2211,89 @@ def create_router(server) -> APIRouter:
         )
         server.vault.notify(EventType.CHANGED_PICTURES)
         return {"status": "success", "restored_count": restored_count}
+
+    @router.post("/pictures/scrapheap/delete")
+    async def delete_scrapheap_selection(
+        background_tasks: BackgroundTasks,
+        payload: dict = Body(...),
+    ):
+        ids = payload.get("picture_ids") if isinstance(payload, dict) else None
+        if not isinstance(ids, list) or not ids:
+            raise HTTPException(
+                status_code=400,
+                detail="picture_ids must be a non-empty list",
+            )
+        try:
+            ids = [int(pid) for pid in ids]
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="picture_ids must contain valid integers",
+            )
+
+        def fetch_deleted(session: Session, ids: list[int]):
+            rows = session.exec(
+                select(Picture.id, Picture.file_path).where(
+                    Picture.deleted.is_(True),
+                    Picture.id.in_(ids),
+                )
+            ).all()
+            return rows
+
+        rows = server.vault.db.run_task(
+            fetch_deleted,
+            ids,
+            priority=DBPriority.IMMEDIATE,
+        )
+        if not rows:
+            return {"status": "success", "deleted_count": 0}
+
+        picture_ids = [row[0] for row in rows if row[0] is not None]
+        file_paths = [row[1] for row in rows if row[1]]
+
+        def delete_files(image_root: str, paths: list[str]):
+            for rel_path in paths:
+                file_path = PictureUtils.resolve_picture_path(image_root, rel_path)
+                if file_path and os.path.isfile(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        logger.error(
+                            "Failed to delete picture file %s: %s",
+                            file_path,
+                            e,
+                        )
+                thumb_path = PictureUtils.get_thumbnail_path(image_root, rel_path)
+                if thumb_path and os.path.isfile(thumb_path):
+                    try:
+                        os.remove(thumb_path)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to delete thumbnail %s: %s",
+                            thumb_path,
+                            e,
+                        )
+
+        background_tasks.add_task(
+            delete_files,
+            server.vault.image_root,
+            file_paths,
+        )
+
+        def delete_rows(session: Session, ids: list[int]):
+            if not ids:
+                return 0
+            session.exec(delete(Picture).where(Picture.id.in_(ids)))
+            session.commit()
+            return len(ids)
+
+        deleted_count = server.vault.db.run_task(
+            delete_rows,
+            picture_ids,
+            priority=DBPriority.IMMEDIATE,
+        )
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return {"status": "success", "deleted_count": deleted_count}
 
     @router.delete("/pictures/{id}")
     async def delete_picture(id: str):

@@ -133,6 +133,24 @@
           @dblclick="toggleZoom"
           @wheel.prevent="onWheelZoom"
         >
+          <button
+            class="overlay-canvas-copy"
+            type="button"
+            title="Copy image"
+            aria-label="Copy image"
+            :disabled="!canCopyOverlay"
+            :class="{ hidden: chromeHidden }"
+            @click.stop="copyOverlayImage"
+          >
+            <v-icon size="16">
+              {{
+                overlayCopyState === "copied"
+                  ? "mdi-check-bold"
+                  : "mdi-content-copy"
+              }}
+            </v-icon>
+            <span>Copy</span>
+          </button>
           <div
             class="overlay-media"
             :style="mediaTransformStyle"
@@ -826,12 +844,14 @@ const isSavingDescription = ref(false);
 const descriptionDraft = ref("");
 const descriptionEditorRef = ref(null);
 const descriptionCopyState = ref("idle");
+const overlayCopyState = ref("idle");
 const canCopyDescription = computed(() => {
   const source = isEditingDescription.value
     ? descriptionDraft.value
     : image.value?.description;
   return !!(source && source.length);
 });
+const canCopyOverlay = computed(() => !!image.value);
 const descriptionTeaser = computed(() => {
   const desc = image.value?.description || "";
   const trimmed = desc.trim();
@@ -910,6 +930,7 @@ function getFilmstripThumbSrc(target) {
 watch(image, () => {
   resetTagInput();
   syncDescriptionDraft();
+  resetOverlayCopyState();
   nextTick(updateDescriptionScrollState);
 });
 
@@ -919,6 +940,7 @@ watch(open, (isOpen) => {
   } else {
     cancelEditDescription();
     resetCopyState();
+    resetOverlayCopyState();
   }
 });
 
@@ -1037,6 +1059,20 @@ function handleKeydown(e) {
       }
     }
     return; // Ignore other overlay key presses when editing
+  }
+
+  if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+    const target = e.target;
+    const isEditable =
+      target &&
+      (target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target.isContentEditable);
+    if (!isEditable) {
+      e.preventDefault();
+      copyOverlayImage();
+    }
+    return;
   }
 
   // Regular keydown behavior
@@ -1573,6 +1609,7 @@ onUnmounted(() => {
     swipeHintTimer = null;
   }
   resetCopyState();
+  resetOverlayCopyState();
   clearCharacterThumbnails();
 });
 
@@ -2984,12 +3021,148 @@ async function copyDescription() {
   }
 }
 
+async function copyOverlayImage() {
+  if (!image.value) return;
+  const url = getFullImageUrl(image.value);
+  let copied = false;
+  try {
+    if (isSupportedVideoFile(getOverlayFormat(image.value))) {
+      copied = await copyVideoFrameToClipboard();
+    } else {
+      copied = await copyImageElementToClipboard();
+    }
+    if (!copied) {
+      copied = await copyImageByFetch(url);
+    }
+    if (!copied) {
+      await copyTextToClipboard(url);
+    }
+    overlayCopyState.value = "copied";
+    if (overlayCopyResetTimer) {
+      clearTimeout(overlayCopyResetTimer);
+    }
+    overlayCopyResetTimer = window.setTimeout(() => {
+      resetOverlayCopyState();
+    }, 2000);
+  } catch (err) {
+    try {
+      await copyTextToClipboard(url);
+      overlayCopyState.value = "copied";
+    } catch (fallbackErr) {
+      console.warn("Failed to copy overlay image:", fallbackErr || err);
+    }
+  }
+}
+
+async function copyImageElementToClipboard() {
+  const imgEl = imgRef.value;
+  if (!imgEl || !imgEl.complete) return false;
+  const canvas = document.createElement("canvas");
+  canvas.width = imgEl.naturalWidth || imgEl.width;
+  canvas.height = imgEl.naturalHeight || imgEl.height;
+  if (!canvas.width || !canvas.height) return false;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return false;
+  try {
+    ctx.drawImage(imgEl, 0, 0);
+    const blob = await canvasToBlob(canvas, "image/png");
+    if (!blob) return false;
+    return await copyBlobToClipboard(blob);
+  } catch (err) {
+    return false;
+  }
+}
+
+async function copyVideoFrameToClipboard() {
+  const videoEl = videoRef.value;
+  if (!videoEl || videoEl.readyState < 2) return false;
+  const width = videoEl.videoWidth || videoEl.clientWidth;
+  const height = videoEl.videoHeight || videoEl.clientHeight;
+  if (!width || !height) return false;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return false;
+  try {
+    ctx.drawImage(videoEl, 0, 0, width, height);
+    const blob = await canvasToBlob(canvas, "image/png");
+    if (!blob) return false;
+    return await copyBlobToClipboard(blob);
+  } catch (err) {
+    return false;
+  }
+}
+
+async function copyImageByFetch(url) {
+  if (!navigator?.clipboard?.write || !window.ClipboardItem) return false;
+  try {
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) return false;
+    const blob = await response.blob();
+    if (!blob) return false;
+    return await copyBlobToClipboard(blob);
+  } catch (err) {
+    return false;
+  }
+}
+
+async function copyBlobToClipboard(blob) {
+  if (!navigator?.clipboard?.write || !window.ClipboardItem) return false;
+  const mime = blob.type || "image/png";
+  const item = new ClipboardItem({ [mime]: blob });
+  await navigator.clipboard.write([item]);
+  return true;
+}
+
+function canvasToBlob(canvas, type) {
+  return new Promise((resolve) => {
+    if (!canvas?.toBlob) {
+      resolve(null);
+      return;
+    }
+    canvas.toBlob(
+      (blob) => {
+        resolve(blob || null);
+      },
+      type,
+      0.95,
+    );
+  });
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) return;
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
 function resetCopyState() {
   if (copyResetTimer) {
     clearTimeout(copyResetTimer);
     copyResetTimer = null;
   }
   descriptionCopyState.value = "idle";
+}
+
+let overlayCopyResetTimer = null;
+function resetOverlayCopyState() {
+  if (overlayCopyResetTimer) {
+    clearTimeout(overlayCopyResetTimer);
+    overlayCopyResetTimer = null;
+  }
+  overlayCopyState.value = "idle";
 }
 
 function handleDescriptionEditorKey(event) {
@@ -3122,7 +3295,7 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .overlay-shell.sidebar-open {
-  --sidebar-width: 0px;
+  --sidebar-width: 320px;
 }
 
 .overlay-topbar {
@@ -3289,6 +3462,37 @@ function downloadComfyWorkflow(workflow) {
   user-select: none;
 }
 
+.overlay-canvas-copy {
+  position: absolute;
+  top: calc(var(--topbar-height) + 12px);
+  right: calc(16px + var(--sidebar-width));
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
+  background: rgba(var(--v-theme-shadow), 0.4);
+  color: rgb(var(--v-theme-on-dark-surface));
+  padding: 6px 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  z-index: 6000;
+}
+
+.overlay-canvas-copy:hover {
+  background: rgba(var(--v-theme-shadow), 0.55);
+}
+
+.overlay-canvas-copy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.overlay-canvas-copy.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .overlay-media {
   position: relative;
   width: 100%;
@@ -3362,7 +3566,7 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .overlay-nav-right {
-  right: 16px;
+  right: calc(16px + var(--sidebar-width));
 }
 
 .zoom-hud {
@@ -4085,6 +4289,10 @@ function downloadComfyWorkflow(workflow) {
 }
 
 @media (max-width: 720px) {
+  .overlay-shell.sidebar-open {
+    --sidebar-width: 78%;
+  }
+
   .overlay-main {
     grid-template-columns: 1fr;
   }
