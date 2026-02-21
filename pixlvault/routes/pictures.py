@@ -9,6 +9,7 @@ import zipfile
 from io import BytesIO
 from collections import defaultdict, deque
 from email.utils import formatdate
+from datetime import datetime
 
 from PIL import Image
 from fastapi import (
@@ -1413,6 +1414,30 @@ def create_router(server) -> APIRouter:
                             raise RuntimeError(
                                 f"Face extraction timed out for picture id={pic.id}"
                             ) from exc
+                    new_ids = [pic.id for pic in new_pictures if pic.id is not None]
+
+                    def mark_imported(session, ids: list[int]):
+                        if not ids:
+                            return []
+                        now = datetime.utcnow()
+                        pics = session.exec(
+                            select(Picture).where(Picture.id.in_(ids))
+                        ).all()
+                        updated = []
+                        for pic in pics:
+                            if pic.imported_at is None:
+                                pic.imported_at = now
+                                session.add(pic)
+                                updated.append(pic.id)
+                        session.commit()
+                        return updated
+
+                    imported_ids = server.vault.db.run_task(mark_imported, new_ids)
+                    if imported_ids:
+                        server.vault.notify(
+                            EventType.PICTURE_IMPORTED,
+                            imported_ids,
+                        )
                     server.import_tasks[task_id]["status"] = "completed"
                 else:
                     server.import_tasks[task_id]["status"] = "completed"

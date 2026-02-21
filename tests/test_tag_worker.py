@@ -7,9 +7,12 @@ from io import BytesIO
 
 from fastapi.testclient import TestClient
 from pixlvault.db_models import Picture
+from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
 from pixlvault.worker_registry import WorkerType
 from tests.utils import upload_pictures_and_wait
+
+logger = get_logger(__name__)
 
 
 def make_image(color=(0, 0, 0)):
@@ -160,16 +163,41 @@ def test_tagger_worker_adds_tags():
             assert import_status["results"][0]["status"] == "success"
             picture_id = import_status["results"][0]["picture_id"]
 
+            logger.info(f"Uploaded TaggerTest.png with picture ID {picture_id}")
+
             future = server.vault.get_worker_future(
                 WorkerType.TAGGER, Picture, picture_id, "tags"
             )
-            server.vault.start_workers({WorkerType.TAGGER, WorkerType.DESCRIPTION})
+            server.vault.start_workers(
+                {
+                    WorkerType.TAGGER,
+                    WorkerType.DESCRIPTION,
+                    WorkerType.SMART_SCORE_SCRAPHEAP,
+                }
+            )
             assert future.result(timeout=60), "Tagger worker did not finish in time"
-            server.vault.stop_workers({WorkerType.TAGGER, WorkerType.DESCRIPTION})
+            server.vault.stop_workers(
+                {
+                    WorkerType.TAGGER,
+                    WorkerType.DESCRIPTION,
+                    WorkerType.SMART_SCORE_SCRAPHEAP,
+                }
+            )
+
+            get_pic_resp = client.get(f"/pictures/{picture_id}/metadata")
+            assert get_pic_resp.status_code == 200, (
+                f"Failed to get picture metadata {picture_id} with error {get_pic_resp.text}"
+            )
+            pic_info = get_pic_resp.json()
+            assert pic_info.get("id") == picture_id, (
+                f"Retrieved picture ID {pic_info.get('id')} does not match expected {picture_id}"
+            )
 
             # Wait for tag worker to process
             get_resp = client.get(f"/pictures/{picture_id}/tags")
-            assert get_resp.status_code == 200
+            assert get_resp.status_code == 200, (
+                f"Failed to get tags for picture {picture_id} with error {get_resp.text}"
+            )
             pic_info = get_resp.json()
             found_tags = pic_info.get("tags", [])
             pic_id = pic_info.get("id")

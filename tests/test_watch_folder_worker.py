@@ -51,7 +51,14 @@ def test_watch_folder():
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
 
-            server.vault.start_workers({WorkerType.WATCH_FOLDERS})
+            server.vault.start_workers(
+                {
+                    WorkerType.WATCH_FOLDERS,
+                    WorkerType.TAGGER,
+                    WorkerType.IMAGE_EMBEDDING,
+                    WorkerType.SMART_SCORE_SCRAPHEAP,
+                }
+            )
             worker = server.vault._workers.get(WorkerType.WATCH_FOLDERS)
             if worker:
                 worker.notify()
@@ -114,7 +121,14 @@ def test_watch_folder_delete_after_import():
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
 
-            server.vault.start_workers({WorkerType.WATCH_FOLDERS})
+            server.vault.start_workers(
+                {
+                    WorkerType.WATCH_FOLDERS,
+                    WorkerType.TAGGER,
+                    WorkerType.IMAGE_EMBEDDING,
+                    WorkerType.SMART_SCORE_SCRAPHEAP,
+                }
+            )
             worker = server.vault._workers.get(WorkerType.WATCH_FOLDERS)
             if worker:
                 worker.notify()

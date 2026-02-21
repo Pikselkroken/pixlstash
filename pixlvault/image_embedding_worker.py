@@ -241,9 +241,16 @@ class ImageEmbeddingWorker(BaseWorker):
                     if not failed_files:
                         failed_files = [batch_files[pid] for pid in batch_pids]
                     failure_updates = self._build_failure_updates(batch_pids)
-                    self._db.run_task(
+                    updated_ids = self._db.run_task(
                         self._save_results, failure_updates, priority=DBPriority.LOW
                     )
+                    if updated_ids:
+                        self._notify_ids_processed(
+                            [
+                                (Picture, pid, "image_embedding", None)
+                                for pid in updated_ids
+                            ]
+                        )
                     logger.warning(
                         "ImageEmbeddingWorker: No images loaded for batch. Marked %s pictures as failed.",
                         len(batch_pids),
@@ -302,9 +309,16 @@ class ImageEmbeddingWorker(BaseWorker):
                     if not failed_files:
                         failed_files = [batch_files[pid] for pid in batch_pids]
                     failure_updates = self._build_failure_updates(batch_pids)
-                    self._db.run_task(
+                    updated_ids = self._db.run_task(
                         self._save_results, failure_updates, priority=DBPriority.LOW
                     )
+                    if updated_ids:
+                        self._notify_ids_processed(
+                            [
+                                (Picture, pid, "image_embedding", None)
+                                for pid in updated_ids
+                            ]
+                        )
                     logger.error(
                         "ImageEmbeddingWorker: No embeddings generated. Marked %s pictures as failed.",
                         len(batch_pids),
@@ -389,7 +403,13 @@ class ImageEmbeddingWorker(BaseWorker):
                     if not failed_files:
                         failed_files = [batch_files[pid] for pid in failed_pids]
 
-                self._db.run_task(self._save_results, updates, priority=DBPriority.LOW)
+                updated_ids = self._db.run_task(
+                    self._save_results, updates, priority=DBPriority.LOW
+                )
+                if updated_ids:
+                    self._notify_ids_processed(
+                        [(Picture, pid, "image_embedding", None) for pid in updated_ids]
+                    )
 
                 logger.debug(
                     "ImageEmbeddingWorker: Processed %s pictures (embeddings%s).",
@@ -446,3 +466,4 @@ class ImageEmbeddingWorker(BaseWorker):
         if updated_ids:
             PictureLikenessQueue.enqueue(session, updated_ids)
             session.commit()
+        return updated_ids

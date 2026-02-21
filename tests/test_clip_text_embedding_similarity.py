@@ -1,3 +1,4 @@
+from datetime import datetime
 import shutil
 import pytest
 
@@ -331,7 +332,9 @@ def test_picture_embedding_storage_and_retrieval():
         arr = np.random.randn(384).astype(np.float32)
         with Session(engine) as session:
             # Always provide a valid string id
-            pic = Picture(id=0, description="Test", text_embedding=arr)
+            pic = Picture(
+                id=0, description="Test", text_embedding=arr, imported_at=datetime.now()
+            )
             assert pic.id == 0, f"Picture.id should be a non-None integer, got {pic.id}"
             session.add(pic)
             session.commit()
@@ -381,16 +384,19 @@ def test_picture_semantic_search_returns_relevant_result(test_server):
             id=0,
             description="Clementine holding a black assault rifle",
             text_embedding=dummy_text_to_embedding("assault rifle"),
+            imported_at=datetime.now(),
         )
         pic2 = Picture(
             id=1,
             description="A young woman named Clementine is sitting on a bench, reading a book.",
             text_embedding=dummy_text_to_embedding("reading a book"),
+            imported_at=datetime.now(),
         )
         pic3 = Picture(
             id=2,
             description="Clementine is running through a field of flowers, wearing a white dress.",
             text_embedding=dummy_text_to_embedding("other"),
+            imported_at=datetime.now(),
         )
         session.add(pic1)
         session.add(pic2)
@@ -446,16 +452,19 @@ def test_picture_semantic_search_with_tags_and_weights(
             id=0,
             description="Clementine holding a black assault rifle",
             text_embedding=dummy_text_to_embedding("assault rifle"),
+            imported_at=datetime.now(),
         )
         pic2 = Picture(
             id=1,
             description="A young woman named Clementine is sitting on a bench, reading a book.",
             text_embedding=dummy_text_to_embedding("reading a book"),
+            imported_at=datetime.now(),
         )
         pic3 = Picture(
             id=2,
             description="Clementine is running through a field of flowers, wearing a white dress.",
             text_embedding=dummy_text_to_embedding("other"),
+            imported_at=datetime.now(),
         )
         session.add(pic1)
         session.add(pic2)
@@ -521,14 +530,17 @@ def test_picture_semantic_search_without_embeddings(
         pic1 = Picture(
             id=0,
             description="Clementine holding a black assault rifle",
+            imported_at=datetime.now(),
         )
         pic2 = Picture(
             id=1,
             description="A young woman named Clementine is sitting on a bench, reading a book.",
+            imported_at=datetime.now(),
         )
         pic3 = Picture(
             id=2,
             description="Clementine is running through a field of flowers, wearing a white dress.",
+            imported_at=datetime.now(),
         )
         session.add(pic1)
         session.add(pic2)
@@ -595,16 +607,19 @@ def test_picture_semantic_search_without_tags(
             id=0,
             description="Clementine holding a black assault rifle",
             text_embedding=dummy_text_to_embedding("assault rifle"),
+            imported_at=datetime.now(),
         )
         pic2 = Picture(
             id=1,
             description="A young woman named Clementine is sitting on a bench, reading a book.",
             text_embedding=dummy_text_to_embedding("reading a book"),
+            imported_at=datetime.now(),
         )
         pic3 = Picture(
             id=2,
             description="Clementine is running through a field of flowers, wearing a white dress.",
             text_embedding=dummy_text_to_embedding("other"),
+            imported_at=datetime.now(),
         )
         session.add(pic1)
         session.add(pic2)

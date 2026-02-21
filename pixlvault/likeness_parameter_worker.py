@@ -97,6 +97,10 @@ class LikenessParameterWorker(BaseWorker):
                     size_bin_index,
                     len(LikenessParameter),
                 )
+                if ids:
+                    self._notify_ids_processed(
+                        [(Picture, pid, "likeness_parameters", None) for pid in ids]
+                    )
                 logger.info(
                     "LikenessParameterWorker: Updated size bin %s (%sx%s) for %s images.",
                     size_bin_index,
@@ -137,6 +141,10 @@ class LikenessParameterWorker(BaseWorker):
                         int(param),
                         values,
                         len(LikenessParameter),
+                    )
+                if ids:
+                    self._notify_ids_processed(
+                        [(Picture, pid, "likeness_parameters", None) for pid in ids]
                     )
                 if param in QUALITY_PARAM_FIELDS:
                     missing_quality = max(len(ids) - len(quality_by_id), 0)
