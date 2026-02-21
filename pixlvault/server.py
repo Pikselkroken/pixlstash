@@ -159,6 +159,7 @@ class Server:
     def _should_send_ws_update(self, event_type: EventType, filters: dict) -> bool:
         return event_type in (
             EventType.CHANGED_PICTURES,
+            EventType.PICTURE_IMPORTED,
             EventType.CHANGED_TAGS,
             EventType.CLEARED_TAGS,
         )
@@ -172,6 +173,13 @@ class Server:
             picture_ids = data if isinstance(data, (list, tuple, set)) else []
             payload = {
                 "type": "tags_changed",
+                "event": event_type.name,
+                "picture_ids": list(picture_ids),
+            }
+        elif event_type == EventType.PICTURE_IMPORTED:
+            picture_ids = data if isinstance(data, (list, tuple, set)) else []
+            payload = {
+                "type": "picture_imported",
                 "event": event_type.name,
                 "picture_ids": list(picture_ids),
             }
@@ -541,6 +549,8 @@ class Server:
         @self.api.websocket("/ws/updates")
         async def websocket_updates(websocket: WebSocket):
             await websocket.accept()
+            if not self._ws_loop:
+                self._ws_loop = asyncio.get_running_loop()
             client = {"ws": websocket, "filters": {}}
             with self._ws_clients_lock:
                 self._ws_clients.append(client)

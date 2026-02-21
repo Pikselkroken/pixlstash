@@ -24,6 +24,10 @@ def create_router(server) -> APIRouter:
     @router.post("/pictures/{id}/tags")
     async def add_tag_to_picture(id: str, payload: dict = Body(...)):
         try:
+            try:
+                pic_id = int(id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid picture id")
             tag = payload.get("tag")
             if not tag:
                 raise HTTPException(status_code=400, detail="Tag is required")
@@ -31,9 +35,10 @@ def create_router(server) -> APIRouter:
             pic_list = server.vault.db.run_task(
                 lambda session: Picture.find(
                     session,
-                    id=id,
+                    id=pic_id,
                     select_fields=["tags"],
                     include_deleted=True,
+                    include_unimported=True,
                 )
             )
             if not pic_list:
@@ -49,6 +54,7 @@ def create_router(server) -> APIRouter:
                         id=pic_id,
                         select_fields=["tags"],
                         include_deleted=True,
+                        include_unimported=True,
                     )[0]
                     sentinel = next(
                         (t for t in pic.tags if t.tag == TAG_EMPTY_SENTINEL),
@@ -67,13 +73,50 @@ def create_router(server) -> APIRouter:
                 server.vault.notify(EventType.CHANGED_TAGS)
 
             return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to add tag: {e}")
             raise HTTPException(status_code=500, detail="Failed to add tag")
 
+    @router.get("/pictures/{id}/tags")
+    async def list_picture_tags(id: str):
+        try:
+            try:
+                pic_id = int(id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid picture id")
+            pic_list = server.vault.db.run_task(
+                lambda session: Picture.find(
+                    session,
+                    id=pic_id,
+                    select_fields=["tags"],
+                    include_deleted=True,
+                    include_unimported=True,
+                )
+            )
+            if not pic_list:
+                raise HTTPException(status_code=404, detail="Picture not found")
+            pic = pic_list[0]
+            return {
+                "id": getattr(pic, "id", None),
+                "tags": serialize_tag_objects(pic.tags),
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Failed to list tags for picture %s: %s", id, exc)
+            raise HTTPException(
+                status_code=500, detail="Failed to list tags for picture"
+            )
+
     @router.delete("/pictures/{id}/tags/{tag_id}")
     async def remove_tag_from_picture(id: str, tag_id: str):
         try:
+            try:
+                pic_id = int(id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid picture id")
             if not tag_id.isdigit():
                 raise HTTPException(status_code=400, detail="tag_id must be numeric")
             tag_id_int = int(tag_id)
@@ -84,6 +127,7 @@ def create_router(server) -> APIRouter:
                     id=pic_id,
                     select_fields=["tags"],
                     include_deleted=True,
+                    include_unimported=True,
                 )[0]
                 target = session.exec(
                     select(Tag).where(
@@ -117,16 +161,22 @@ def create_router(server) -> APIRouter:
                 session.refresh(pic)
                 return pic
 
-            pic = server.vault.db.run_task(update_picture, id, tag_id_int)
+            pic = server.vault.db.run_task(update_picture, pic_id, tag_id_int)
             server.vault.notify(EventType.CHANGED_TAGS)
 
             return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to remove tag: {e}")
             raise HTTPException(status_code=500, detail="Failed to remove tag")
 
     @router.post("/pictures/{id}/tags/remove_all")
     async def remove_tag_from_picture_everywhere(id: str, payload: dict = Body(...)):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
         tag_value = (payload or {}).get("tag")
         if not tag_value:
             raise HTTPException(status_code=400, detail="Tag is required")
@@ -137,6 +187,7 @@ def create_router(server) -> APIRouter:
                 id=pic_id,
                 select_fields=["tags"],
                 include_deleted=True,
+                include_unimported=True,
             )
             if not pic_list:
                 raise HTTPException(status_code=404, detail="Picture not found")
@@ -169,7 +220,7 @@ def create_router(server) -> APIRouter:
             session.refresh(pic)
             return pic
 
-        pic = server.vault.db.run_task(update_picture, id, tag_value)
+        pic = server.vault.db.run_task(update_picture, pic_id, tag_value)
         server.vault.notify(EventType.CHANGED_TAGS)
         return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
 

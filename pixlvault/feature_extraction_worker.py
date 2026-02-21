@@ -5,8 +5,9 @@ import urllib.request
 from insightface.app import FaceAnalysis
 
 from sqlmodel import select
-from sqlalchemy import func
+from sqlalchemy import func, inspect as sa_inspect
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import NO_VALUE
 from pixlvault.database import DBPriority
 from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
@@ -180,6 +181,42 @@ class FeatureExtractionWorker(BaseWorker):
             return []
 
     @staticmethod
+    def _get_loaded_relationship(obj, name):
+        try:
+            state = sa_inspect(obj)
+        except Exception:
+            return False, None
+        attr = state.attrs.get(name)
+        if attr is None:
+            return False, None
+        loaded = attr.loaded_value
+        if loaded is NO_VALUE:
+            return False, None
+        return True, loaded
+
+    def _has_faces(self, picture_id: int) -> bool:
+        def fetch(session):
+            return (
+                session.exec(
+                    select(Face.id).where(Face.picture_id == picture_id)
+                ).first()
+                is not None
+            )
+
+        return bool(self._db.run_immediate_read_task(fetch))
+
+    def _has_hands(self, picture_id: int) -> bool:
+        def fetch(session):
+            return (
+                session.exec(
+                    select(Hand.id).where(Hand.picture_id == picture_id)
+                ).first()
+                is not None
+            )
+
+        return bool(self._db.run_immediate_read_task(fetch))
+
+    @staticmethod
     def _expand_bbox(bbox, frame_w, frame_h, scale):
         if bbox is None or len(bbox) != 4:
             return None
@@ -234,8 +271,16 @@ class FeatureExtractionWorker(BaseWorker):
                 continue
             pic_face_ids = []
             pic_hand_ids = []
-            need_faces = not getattr(pic, "faces", None)
-            need_hands = not getattr(pic, "hands", None)
+            faces_loaded, faces_value = self._get_loaded_relationship(pic, "faces")
+            hands_loaded, hands_value = self._get_loaded_relationship(pic, "hands")
+            if faces_loaded:
+                need_faces = not faces_value
+            else:
+                need_faces = not self._has_faces(pic.id)
+            if hands_loaded:
+                need_hands = not hands_value
+            else:
+                need_hands = not self._has_hands(pic.id)
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
             file_path = PictureUtils.resolve_picture_path(
                 self._db.image_root, pic.file_path

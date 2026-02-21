@@ -1,3 +1,4 @@
+from datetime import datetime
 import gc
 import json
 import numpy as np
@@ -41,6 +42,7 @@ def test_smart_score_consistency():
                 image_embedding=emb_bytes,
                 aesthetic_score=5.5,
                 score=0,
+                imported_at=datetime.now(),
             )
             session.add(p1)
 
@@ -50,6 +52,7 @@ def test_smart_score_consistency():
                 image_embedding=emb_bytes,
                 aesthetic_score=4.5,
                 score=0,
+                imported_at=datetime.now(),
             )
             session.add(p2)
 

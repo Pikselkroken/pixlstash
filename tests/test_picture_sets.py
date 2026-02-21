@@ -1,4 +1,5 @@
 import gc
+import time
 from fastapi.testclient import TestClient
 
 import collections
@@ -38,7 +39,7 @@ def setup_server_with_temp_db():
     with open(server_config_path, "w") as f:
         f.write(json.dumps({"port": 8000}))
     server = Server(server_config_path)
-    server.vault.start_workers({WorkerType.FACE})
+    server.vault.start_workers({WorkerType.FACE, WorkerType.SMART_SCORE_SCRAPHEAP})
     client = TestClient(server.api)
 
     resp = client.post(
@@ -105,16 +106,48 @@ def test_add_and_remove_picture_from_set():
         )
         assert png_files, "No PNG files found in pictures/ directory for test."
         img_path = png_files[0]
-        with open(img_path, "rb") as f:
-            files = {"file": (os.path.basename(img_path), f, "image/png")}
-            import_status = upload_pictures_and_wait(client, files)
-        assert import_status["status"] == "completed"
-        # Get picture id
-        resp = client.get("/pictures")
-        pic_id = resp.json()[0]["id"]
-        # Add to set
-        resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
-        assert resp.status_code == 200
+        with client.websocket_connect("/ws/updates") as ws:
+            import threading
+            import queue
+
+            deadline = time.time() + 10
+            imported = False
+            messages = queue.Queue()
+
+            def recv_loop():
+                try:
+                    while True:
+                        messages.put(ws.receive_json())
+                except Exception:
+                    return
+
+            thread = threading.Thread(target=recv_loop, daemon=True)
+            thread.start()
+
+            with open(img_path, "rb") as f:
+                files = {"file": (os.path.basename(img_path), f, "image/png")}
+                import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            # Get picture id
+            pic_id = import_status["results"][0]["picture_id"]
+            # Add to set
+            resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
+            assert resp.status_code == 200
+            # Wait for the PICTURE_IMPORTED websocket event before checking membership
+
+            while time.time() < deadline:
+                try:
+                    payload = messages.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("event") == "PICTURE_IMPORTED" and pic_id in (
+                    payload.get("picture_ids") or []
+                ):
+                    imported = True
+                    break
+            assert imported, "Timed out waiting for PICTURE_IMPORTED websocket event"
         # Check members
         resp = client.get(f"/picture_sets/{set_id}/members")
         assert pic_id in resp.json()["picture_ids"]

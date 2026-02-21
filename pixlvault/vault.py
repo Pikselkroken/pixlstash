@@ -1,5 +1,6 @@
 import concurrent
 
+import datetime
 import os
 import time
 import threading
@@ -403,6 +404,7 @@ class Vault:
             source_file_path=logo_src,
         )
         picture.description = "PixlVault Logo"
+        picture.imported_at = datetime.datetime.now()
 
         assert picture.file_path
 
@@ -433,6 +435,7 @@ class Vault:
                         source_file_path=src_path,
                     )
                     pic.description = os.path.basename(src_path)
+                    pic.imported_at = datetime.datetime.now()
                     assert pic.file_path
                     self.db.run_task(
                         add_picture,
