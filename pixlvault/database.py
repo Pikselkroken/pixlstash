@@ -165,7 +165,7 @@ def _levenshtein_internal(concatenated_tags, query, picture_id=None):
     # Prioritize query-word matches over non-matching tags.
     base_score = 0.75 * mean_query + 0.15 * softmin_value + 0.10 * mean_best
     if coverage < 1.0:
-        base_score *= 1.0 + (1.0 - coverage) * 0.4
+        base_score *= 1.0 + (1.0 - coverage) * 0.15
     else:
         base_score *= 0.85
 

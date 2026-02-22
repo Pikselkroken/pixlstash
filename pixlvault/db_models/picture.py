@@ -367,7 +367,7 @@ class Picture(SQLModel, table=True):
         raw_fuzzy_score = func.max(
             0.0, 1.0 - func.coalesce(tag_subq.c.min_tag_dist, 1.0)
         )
-        fuzzy_score = func.pow(raw_fuzzy_score, 2.2)
+        fuzzy_score = func.pow(raw_fuzzy_score, 1.5)
 
         # Main query: join pictures with tag_subq, compute combined score
         stmt = (

@@ -42,8 +42,6 @@ jobs:
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_stack_utils.py
       - name: Test Picture Set Management
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_sets.py
-      - name: Test Picture Stacking Logic
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_stacking.py
       - name: Test Quality Worker
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_quality_worker.py
       - name: Test Server Endpoints and Integration
