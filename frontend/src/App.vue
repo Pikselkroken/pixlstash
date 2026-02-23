@@ -62,6 +62,8 @@ const showFormat = ref(true);
 const showResolution = ref(true);
 const showProblemIcon = ref(true);
 const showStacks = ref(true);
+const expandedStackCount = ref(0);
+const totalStackCount = ref(0);
 const dateFormat = ref("locale");
 const themeMode = ref("light");
 const theme = useTheme();
@@ -290,7 +292,7 @@ const config = reactive({
   show_format: true,
   show_resolution: true,
   show_problem_icon: true,
-  show_stacks: true,
+  expand_all_stacks: true,
   date_format: "locale",
   theme_mode: "light",
   stack_strictness: 0.92,
@@ -467,6 +469,23 @@ function handleUpdateStackThreshold(value) {
   stackThreshold.value = value;
 }
 
+function handleStackStatsUpdate(payload) {
+  const expanded = Number(payload?.expanded ?? 0);
+  const total = Number(payload?.total ?? 0);
+  expandedStackCount.value = Number.isFinite(expanded)
+    ? Math.max(0, expanded)
+    : 0;
+  totalStackCount.value = Number.isFinite(total) ? Math.max(0, total) : 0;
+}
+
+function handleExpandAllStacks() {
+  showStacks.value = true;
+}
+
+function handleCollapseAllStacks() {
+  showStacks.value = false;
+}
+
 const selectedSimilarityCharacter = ref(null);
 const similarityCharacterOptions = ref([]);
 function handleUpdateSimilarityCharacter(val) {
@@ -552,7 +571,9 @@ async function fetchConfig() {
     if (typeof res.data.show_problem_icon === "boolean") {
       showProblemIcon.value = res.data.show_problem_icon;
     }
-    if (typeof res.data.show_stacks === "boolean") {
+    if (typeof res.data.expand_all_stacks === "boolean") {
+      showStacks.value = res.data.expand_all_stacks;
+    } else if (typeof res.data.show_stacks === "boolean") {
       showStacks.value = res.data.show_stacks;
     }
     if (typeof res.data.date_format === "string" && res.data.date_format) {
@@ -604,10 +625,12 @@ async function fetchConfig() {
       typeof res.data.show_problem_icon === "boolean"
         ? res.data.show_problem_icon
         : showProblemIcon.value;
-    config.show_stacks =
-      typeof res.data.show_stacks === "boolean"
-        ? res.data.show_stacks
-        : showStacks.value;
+    config.expand_all_stacks =
+      typeof res.data.expand_all_stacks === "boolean"
+        ? res.data.expand_all_stacks
+        : typeof res.data.show_stacks === "boolean"
+          ? res.data.show_stacks
+          : showStacks.value;
     config.date_format = dateFormat.value;
     config.theme_mode = themeMode.value;
     config.stack_strictness =
@@ -637,7 +660,7 @@ async function fetchConfig() {
       show_format: showFormat.value,
       show_resolution: showResolution.value,
       show_problem_icon: showProblemIcon.value,
-      show_stacks: showStacks.value,
+      expand_all_stacks: showStacks.value,
       date_format: dateFormat.value,
       theme_mode: themeMode.value,
       similarity_character: selectedSimilarityCharacter.value,
@@ -692,7 +715,7 @@ async function patchConfigUIOptions() {
     patch.show_problem_icon = showProblemIcon.value;
   }
   if (typeof showStacks.value === "boolean") {
-    patch.show_stacks = showStacks.value;
+    patch.expand_all_stacks = showStacks.value;
   }
   if (typeof dateFormat.value === "string" && dateFormat.value) {
     patch.date_format = dateFormat.value;
@@ -1118,6 +1141,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :similarityCharacterOptions="similarityCharacterOptions"
             :selectedSimilarityCharacter="selectedSimilarityCharacter"
             :stackThreshold="stackThreshold"
+            :stackExpandedCount="expandedStackCount"
+            :stackTotalCount="totalStackCount"
             v-model:searchInput="searchInput"
             v-model:isSearchHistoryOpen="isSearchHistoryOpen"
             v-model:columnsMenuOpen="columnsMenuOpen"
@@ -1148,6 +1173,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @columns-end="handleColumnsEnd"
             @confirm-export-zip="confirmExportZip"
             @open-settings="openSettingsDialog"
+            @expand-all-stacks="handleExpandAllStacks"
+            @collapse-all-stacks="handleCollapseAllStacks"
           />
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
@@ -1191,6 +1218,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               @update:selected-sort="handleUpdateSelectedSort"
               @refresh-sidebar="refreshSidebar"
               @reset-to-all="handleResetToAll"
+              @update:stack-stats="handleStackStatsUpdate"
             />
           </div>
         </main>

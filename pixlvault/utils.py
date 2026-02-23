@@ -77,7 +77,6 @@ def serialize_user_config(user) -> dict:
         "show_format",
         "show_resolution",
         "show_problem_icon",
-        "show_stacks",
         "date_format",
         "theme_mode",
         "comfyui_url",
@@ -97,6 +96,11 @@ def serialize_user_config(user) -> dict:
         )
         for key in allowed_fields
     }
+    config["expand_all_stacks"] = (
+        getattr(source, "show_stacks")
+        if getattr(source, "show_stacks") is not None
+        else getattr(default_user, "show_stacks")
+    )
 
     allowed_sidebar_sizes = tuple(range(32, 65, 8))
     sidebar_size = _thumbnail_size(config.get("sidebar_thumbnail_size"))
@@ -131,6 +135,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "show_format",
         "show_resolution",
         "show_problem_icon",
+        "expand_all_stacks",
         "show_stacks",
         "date_format",
         "theme_mode",
@@ -160,6 +165,12 @@ def apply_user_config_patch(user, patch_data) -> bool:
     for key, value in patch_data.items():
         if key not in allowed_fields:
             raise ValueError(f"Key '{key}' does not exist in config.")
+        if key in {"expand_all_stacks", "show_stacks"}:
+            new_value = bool(value)
+            if user.show_stacks != new_value:
+                user.show_stacks = new_value
+                updated = True
+            continue
         if key == "similarity_character":
             if value in ("", None, "null"):
                 new_value = None

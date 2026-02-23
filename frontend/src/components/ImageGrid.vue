@@ -500,6 +500,7 @@ const emit = defineEmits([
   "reset-to-all",
   "search-all",
   "update:selected-sort",
+  "update:stack-stats",
 ]);
 
 // Props
@@ -3272,8 +3273,7 @@ function buildGridFetchKey() {
 
 function getStackCardStyle(img) {
   if (!img) return {};
-  if (!props.showStacks) return {};
-  if (!isStackExpandedForImage(img) && props.selectedSort !== STACKS_SORT_KEY) {
+  if (!isStackExpandedForImage(img)) {
     return {};
   }
   const color = applyStackBackgroundAlpha(getStackCardColor(img));
@@ -3288,7 +3288,6 @@ function getStackCardStyle(img) {
 
 function getStackCardColor(img) {
   if (!img) return null;
-  if (!props.showStacks) return null;
   if (typeof img.stackColor === "string" && img.stackColor) {
     return img.stackColor;
   }
@@ -3524,7 +3523,6 @@ function buildStackLeaderMap(images) {
 }
 
 function collapseStackImages(images) {
-  if (!props.showStacks) return images;
   if (!Array.isArray(images) || images.length === 0) return [];
   const counts = new Map();
   for (const img of images) {
@@ -3663,6 +3661,7 @@ function rebuildGridImagesFromLastFetch() {
   const source = Array.isArray(lastFetchedGridImages.value)
     ? lastFetchedGridImages.value
     : [];
+  syncExpandAllStacksFromFetchedImages();
   const collapsed = collapseStackImages(source);
   const newImages = mapGridImages(collapsed);
   allGridImages.value = newImages;
@@ -3679,19 +3678,31 @@ function rebuildGridImagesFromLastFetch() {
 }
 
 async function refreshExpandedStacksAfterFetch() {
-  if (!props.showStacks) return;
   const expanded = Array.from(expandedStackIds.value || []);
   if (!expanded.length) return;
+  const nextExpanded = new Set(expandedStackIds.value);
   for (const stackId of expanded) {
     removeExpandedStackMembers(stackId);
     const header = allGridImages.value.find(
       (item) => getPictureStackId(item) === stackId,
     );
+    if (!header) {
+      nextExpanded.delete(stackId);
+      continue;
+    }
     const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
     const loaded = await ensureStackMembersLoaded(stackId);
     if (loaded !== false) {
-      insertExpandedStackMembers(stackId, fallbackCount);
+      const insertedCount = insertExpandedStackMembers(stackId, fallbackCount);
+      if (insertedCount <= 0) {
+        nextExpanded.delete(stackId);
+      }
+    } else {
+      nextExpanded.delete(stackId);
     }
+  }
+  if (nextExpanded.size !== expandedStackIds.value.size) {
+    expandedStackIds.value = nextExpanded;
   }
 }
 
@@ -3788,20 +3799,20 @@ function buildExpandedStackImages(stackId, fallbackImg, stackCount) {
 }
 
 function insertExpandedStackMembers(stackId, fallbackCount) {
-  if (!stackId) return;
+  if (!stackId) return 0;
   const items = allGridImages.value.slice();
-  if (!items.length) return;
+  if (!items.length) return 0;
   const headerIndex = items.findIndex(
     (item) => getPictureStackId(item) === stackId,
   );
-  if (headerIndex === -1) return;
+  if (headerIndex === -1) return 0;
   const header = items[headerIndex];
   const stackCount = getExpandedStackCount(
     stackId,
     fallbackCount ?? header?.stackCount,
   );
   const expanded = buildExpandedStackImages(stackId, header, stackCount);
-  if (!expanded.length) return;
+  if (!expanded.length) return 0;
   const headerId = header?.id != null ? String(header.id) : null;
   const filtered = items.filter((item) => {
     if (getPictureStackId(item) !== stackId) return true;
@@ -3813,7 +3824,7 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
   const filteredHeaderIndex = filtered.findIndex(
     (item) => getPictureStackId(item) === stackId,
   );
-  if (filteredHeaderIndex === -1) return;
+  if (filteredHeaderIndex === -1) return 0;
   const existingById = new Map(
     allGridImages.value
       .filter((img) => img && img.id != null)
@@ -3850,6 +3861,7 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
     adjustScrollWindowForDelta(insertIndex, insertCount, result.length);
     maybeRefreshThumbnailsForRange(insertIndex, insertIndex + insertCount + 1);
   }
+  return insertCount;
 }
 
 function removeExpandedStackMembers(stackId) {
@@ -3900,6 +3912,60 @@ function isStackExpandedForImage(img) {
   return expandedStackIds.value.has(stackId);
 }
 
+function collectExpandableStackIds(images) {
+  if (!Array.isArray(images) || images.length === 0) return [];
+  const counts = new Map();
+  for (const img of images) {
+    const stackId = getPictureStackId(img);
+    if (!stackId) continue;
+    counts.set(stackId, (counts.get(stackId) || 0) + 1);
+  }
+
+  const expandable = new Set();
+  for (const img of images) {
+    const stackId = getPictureStackId(img);
+    if (!stackId) continue;
+    const countFromImage = Number(img?.stackCount ?? img?.stack_count ?? 0);
+    const countFromPresence = counts.get(stackId) || 0;
+    if (countFromImage > 1 || countFromPresence > 1) {
+      expandable.add(stackId);
+    }
+  }
+  return Array.from(expandable);
+}
+
+function emitStackStats() {
+  const expandable = collectExpandableStackIds(lastFetchedGridImages.value);
+  const expandableSet = new Set(expandable);
+  let expanded = 0;
+  for (const stackId of expandedStackIds.value || []) {
+    if (expandableSet.has(stackId)) {
+      expanded += 1;
+    }
+  }
+  emit("update:stack-stats", {
+    expanded,
+    total: expandable.length,
+  });
+}
+
+function syncExpandAllStacksFromFetchedImages() {
+  if (!props.showStacks) return;
+  const autoIds = collectExpandableStackIds(lastFetchedGridImages.value);
+  if (!autoIds.length) return;
+  const nextIds = new Set(expandedStackIds.value);
+  let changed = false;
+  for (const stackId of autoIds) {
+    if (!nextIds.has(stackId)) {
+      nextIds.add(stackId);
+      changed = true;
+    }
+  }
+  if (changed) {
+    expandedStackIds.value = nextIds;
+  }
+}
+
 async function ensureStackMembersLoaded(stackId) {
   if (!stackId) return false;
   const localMembers = getLocalStackMembers(stackId);
@@ -3911,40 +3977,56 @@ async function ensureStackMembersLoaded(stackId) {
   if (existing && Array.isArray(existing.images) && existing.images.length) {
     return true;
   }
-  if (expandedStackLoading.value.has(stackId)) return false;
-  const nextLoading = new Set(expandedStackLoading.value);
-  nextLoading.add(stackId);
-  expandedStackLoading.value = nextLoading;
-  try {
-    const picsRes = await apiClient.get(
-      `${props.backendUrl}/stacks/${stackId}/pictures?fields=grid`,
+  const inFlight = expandedStackLoadPromises.get(stackId);
+  if (inFlight) {
+    await inFlight;
+    const afterWait = expandedStackMembers.value.get(stackId);
+    return !!(
+      afterWait &&
+      Array.isArray(afterWait.images) &&
+      afterWait.images.length
     );
-    const picsData = await picsRes.data;
-    const pics = Array.isArray(picsData) ? picsData : [];
-    const sorted = sortStackMembers(pics);
-    const ordered = sorted
-      .filter((img) => img && img.id != null)
-      .map((img) =>
-        img.stack_id !== undefined || img.stackId !== undefined
-          ? img
-          : { ...img, stack_id: normalizeStackIdValue(stackId) },
-      );
-    const pictureIds = ordered.map((img) => String(img.id));
-    const nextMembers = new Map(expandedStackMembers.value);
-    nextMembers.set(stackId, {
-      ids: pictureIds,
-      images: ordered,
-    });
-    expandedStackMembers.value = nextMembers;
-    return true;
-  } catch (e) {
-    console.error("Failed to load stack members:", e);
-    return false;
-  } finally {
-    const cleared = new Set(expandedStackLoading.value);
-    cleared.delete(stackId);
-    expandedStackLoading.value = cleared;
   }
+
+  const loadPromise = (async () => {
+    const nextLoading = new Set(expandedStackLoading.value);
+    nextLoading.add(stackId);
+    expandedStackLoading.value = nextLoading;
+    try {
+      const picsRes = await apiClient.get(
+        `${props.backendUrl}/stacks/${stackId}/pictures?fields=grid`,
+      );
+      const picsData = await picsRes.data;
+      const pics = Array.isArray(picsData) ? picsData : [];
+      const sorted = sortStackMembers(pics);
+      const ordered = sorted
+        .filter((img) => img && img.id != null)
+        .map((img) =>
+          img.stack_id !== undefined || img.stackId !== undefined
+            ? img
+            : { ...img, stack_id: normalizeStackIdValue(stackId) },
+        );
+      const pictureIds = ordered.map((img) => String(img.id));
+      const nextMembers = new Map(expandedStackMembers.value);
+      nextMembers.set(stackId, {
+        ids: pictureIds,
+        images: ordered,
+      });
+      expandedStackMembers.value = nextMembers;
+      return true;
+    } catch (e) {
+      console.error("Failed to load stack members:", e);
+      return false;
+    } finally {
+      const cleared = new Set(expandedStackLoading.value);
+      cleared.delete(stackId);
+      expandedStackLoading.value = cleared;
+      expandedStackLoadPromises.delete(stackId);
+    }
+  })();
+
+  expandedStackLoadPromises.set(stackId, loadPromise);
+  return await loadPromise;
 }
 
 async function toggleStackExpand(img) {
@@ -3963,7 +4045,18 @@ async function toggleStackExpand(img) {
   const stackCount = getStackBadgeCount(img);
   const loaded = await ensureStackMembersLoaded(stackId);
   if (loaded !== false) {
-    insertExpandedStackMembers(stackId, stackCount);
+    const insertedCount = insertExpandedStackMembers(stackId, stackCount);
+    if (insertedCount <= 0) {
+      const resetExpanded = new Set(expandedStackIds.value);
+      resetExpanded.delete(stackId);
+      expandedStackIds.value = resetExpanded;
+      removeExpandedStackMembers(stackId);
+    }
+  } else {
+    const resetExpanded = new Set(expandedStackIds.value);
+    resetExpanded.delete(stackId);
+    expandedStackIds.value = resetExpanded;
+    removeExpandedStackMembers(stackId);
   }
 }
 
@@ -4000,7 +4093,6 @@ function getDragImageIdFromEvent(event) {
 }
 
 function buildStackReorderDragState(sourceId) {
-  if (!props.showStacks) return null;
   if (!sourceId) return null;
   const source = allGridImages.value.find(
     (item) => item?.id != null && String(item.id) === String(sourceId),
@@ -4167,9 +4259,6 @@ function handleStackReorderDrop(img, event) {
   const nextIds = currentIds.slice();
   const [moved] = nextIds.splice(fromIndex, 1);
   const targetIndex = nextIds.indexOf(targetId);
-  if (targetIndex === -1) return;
-  let insertIndex = hoverSide === "right" ? targetIndex + 1 : targetIndex;
-  if (insertIndex < 0) insertIndex = 0;
   if (insertIndex > nextIds.length) insertIndex = nextIds.length;
   nextIds.splice(insertIndex, 0, moved);
 
@@ -4360,6 +4449,7 @@ async function fetchAllGridImages() {
       });
     }
     lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
+    syncExpandAllStacksFromFetchedImages();
     images = collapseStackImages(images);
     const shouldHighlight = highlightNextFetch.value && hasLoadedOnce.value;
     const nextIdSet = new Set(
@@ -4516,6 +4606,19 @@ watch([() => props.mediaTypeFilter], () => {
 });
 
 watch(
+  () => props.showStacks,
+  async (expandAllStacksEnabled) => {
+    if (expandAllStacksEnabled) {
+      syncExpandAllStacksFromFetchedImages();
+    } else {
+      expandedStackIds.value = new Set();
+    }
+    rebuildGridImagesFromLastFetch();
+    await refreshExpandedStacksAfterFetch();
+  },
+);
+
+watch(
   () => props.columns,
   async () => {
     updateRowHeightFromGrid();
@@ -4638,7 +4741,16 @@ const lastFetchedGridImages = ref([]);
 const expandedStackIds = ref(new Set());
 const expandedStackMembers = ref(new Map());
 const expandedStackLoading = ref(new Set());
+const expandedStackLoadPromises = new Map();
 const stackReorderDrag = ref(null);
+
+watch(
+  [() => expandedStackIds.value, () => lastFetchedGridImages.value],
+  () => {
+    emitStackStats();
+  },
+  { immediate: true },
+);
 
 watch(
   [
@@ -4946,7 +5058,7 @@ function getStackBadgeCount(img) {
 }
 
 function shouldShowStackBadge(img) {
-  return props.showStacks && getStackBadgeCount(img) > 1;
+  return getStackBadgeCount(img) > 1;
 }
 
 function stackBadgeTitle(img) {

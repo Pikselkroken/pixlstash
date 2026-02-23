@@ -81,7 +81,7 @@ const pixlVaultDark = {
     onSecondary: '#ffffff',
     tertiary: '#77A0A9',
     onTertiary: '#0f1418',
-    border: '#3c434b',
+    border: '#8c838b',
     divider: '#3a4047',
     overlay: '#00000066',
     focus: '#7c4dff',
