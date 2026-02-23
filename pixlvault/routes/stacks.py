@@ -470,15 +470,20 @@ def create_router(server) -> APIRouter:
                     session.add(pic)
 
             remaining = session.exec(
-                select(Picture.id).where(Picture.stack_id == stack_id)
-            ).first()
+                select(Picture).where(Picture.stack_id == stack_id)
+            ).all()
 
-            if remaining is None:
+            if len(remaining) <= 1:
+                for pic in remaining:
+                    pic.stack_id = None
+                    pic.stack_position = None
+                    session.add(pic)
                 session.delete(stack)
-            else:
-                stack.updated_at = datetime.utcnow()
-                session.add(stack)
+                session.commit()
+                return None
 
+            stack.updated_at = datetime.utcnow()
+            session.add(stack)
             session.commit()
             return stack
 
