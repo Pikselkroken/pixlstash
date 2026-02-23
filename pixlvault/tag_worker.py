@@ -53,17 +53,33 @@ class DescriptionWorker(BaseWorker):
                     current=max(total - missing, 0),
                     total=total,
                 )
-
+                missing_ids_preview = [
+                    pic.id
+                    for pic in missing_descriptions[
+                        : min(10, len(missing_descriptions))
+                    ]
+                ]
                 logger.debug(
-                    f"DescriptionWorker: Got {len(missing_descriptions)} pictures needing descriptions."
+                    "DescriptionWorker: total=%s missing=%s missing_ids_preview=%s",
+                    total,
+                    missing,
+                    missing_ids_preview,
                 )
                 if self._stop.is_set():
                     break
                 descriptions_generated = self._generate_descriptions(
                     self._picture_tagger, missing_descriptions
                 )
-                logger.debug(
-                    f"DescriptionWorker: Generated {len(descriptions_generated)} descriptions."
+                generated_ids_preview = [
+                    pic.id
+                    for pic in descriptions_generated[
+                        : min(10, len(descriptions_generated))
+                    ]
+                ]
+                logger.info(
+                    "DescriptionWorker: generated=%s generated_ids_preview=%s",
+                    len(descriptions_generated),
+                    generated_ids_preview,
                 )
                 if self._stop.is_set():
                     break
@@ -88,14 +104,38 @@ class DescriptionWorker(BaseWorker):
                         priority=DBPriority.LOW,
                     )
                     data_updated = len(changed) > 0
+                    changed_ids_preview = [
+                        object_id
+                        for _, object_id, _, _ in changed[: min(10, len(changed))]
+                    ]
+                    logger.info(
+                        "DescriptionWorker: committed=%s changed_ids_preview=%s",
+                        len(changed),
+                        changed_ids_preview,
+                    )
                     self._notify_ids_processed(changed)
                     self._notify_others(EventType.CHANGED_DESCRIPTIONS)
                 timing = time.time() - start
                 if data_updated:
-                    logger.debug(f"DescriptionWorker: Done after {timing:.2f} seconds.")
+                    logger.info(
+                        "DescriptionWorker: Iteration done in %.2fs with DB updates.",
+                        timing,
+                    )
                 else:
+                    if missing > 0:
+                        logger.info(
+                            "DescriptionWorker: No DB updates despite missing=%s after %.2fs; entering wait.",
+                            missing,
+                            timing,
+                        )
+                    else:
+                        logger.info(
+                            "DescriptionWorker: No pending descriptions after %.2fs; entering wait.",
+                            timing,
+                        )
                     logger.debug(
-                        f"DescriptionWorker: Sleeping after {timing:.2f} seconds. No work needed."
+                        "DescriptionWorker: Sleeping after %.2f seconds. No work needed.",
+                        timing,
                     )
                     self._wait()
             except Exception as e:
@@ -110,7 +150,7 @@ class DescriptionWorker(BaseWorker):
         logger.info("Exiting DescriptionWorker loop.")
 
     def _fetch_missing_descriptions(self):
-        logger.debug("Starting the database fetch for missing descriptions")
+        logger.info("DescriptionWorker: Fetching pictures missing descriptions.")
 
         return VaultDatabase.result_or_throw(
             self._db.submit_task(
@@ -134,13 +174,40 @@ class DescriptionWorker(BaseWorker):
     ) -> list[Picture]:
         """Generate descriptions for pictures using PictureTagger."""
         assert missing_descriptions is not None
-        batch = missing_descriptions[: picture_tagger.max_concurrent_images()]
+        batch_limit = max(
+            1,
+            int(
+                picture_tagger.description_batch_size()
+                if hasattr(picture_tagger, "description_batch_size")
+                else picture_tagger.max_concurrent_images()
+            ),
+        )
+        batch = missing_descriptions[:batch_limit]
+        batch_ids = [pic.id for pic in batch]
+        logger.info(
+            "DescriptionWorker: Generating batch_size=%s batch_ids=%s",
+            len(batch),
+            batch_ids,
+        )
 
         descriptions_generated = []
         try:
+            generate_start = time.time()
             batch_results = picture_tagger.generate_descriptions_batch(batch)
+            logger.info(
+                "DescriptionWorker: Batch generation completed in %.2fs for %s pictures.",
+                time.time() - generate_start,
+                len(batch),
+            )
         except Exception as e:
-            logger.error("Failed to generate description batch: %s", e)
+            import traceback
+
+            logger.error(
+                "Failed to generate description batch for ids=%s: %s\n%s",
+                batch_ids,
+                e,
+                traceback.format_exc(),
+            )
             return descriptions_generated
 
         for pic in batch:

@@ -319,6 +319,11 @@ class PictureTagger:
         else:
             return MAX_CONCURRENT_IMAGES_GPU
 
+    def description_batch_size(self):
+        max_concurrent = max(1, int(self.max_concurrent_images()))
+        florence_batch = max(1, int(getattr(self, "_florence_batch_size", 1)))
+        return min(max_concurrent, florence_batch)
+
     def _init_florence_captioning(self):
         """
         Enable Florence-2 for natural language captioning instead of tag-based descriptions.

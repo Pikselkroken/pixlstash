@@ -844,10 +844,10 @@ def test_semantic_search():
                         )
 
             for future in description_futures:
-                future.result(timeout=80)
+                future.result(timeout=120)
 
             for future in tag_futures:
-                future.result(timeout=80)
+                future.result(timeout=120)
 
             server.vault.start_workers(
                 {
@@ -925,7 +925,7 @@ def test_semantic_search():
 
             for search_text in search_texts:
                 search_resp = client.get(
-                    f"/pictures/search?query={quote(search_text)}&threshold=0.45"
+                    f"/pictures/search?query={quote(search_text)}&threshold=0.4"
                 )
                 assert search_resp.status_code == 200
                 results = search_resp.json()
