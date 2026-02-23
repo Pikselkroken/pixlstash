@@ -9,7 +9,8 @@
           <div class="task-manager-header-main">
             <div class="task-manager-title">Worker Task Manager</div>
             <div class="task-manager-subtitle">
-              Last {{ windowSeconds / 60 }} minutes. Rates are pictures per second.
+              Last {{ windowSeconds / 60 }} minutes. Rates are pictures per
+              second.
             </div>
           </div>
           <div v-if="systemItems.length" class="task-manager-header-system">
