@@ -158,6 +158,17 @@
             @set-score="setScore"
           />
           <button
+            v-if="showOverlayStackButton"
+            class="overlay-icon-btn"
+            type="button"
+            title="Toggle stack"
+            aria-label="Toggle stack"
+            @click.stop="toggleFilmstripStackExpand(image)"
+            :class="{ hidden: chromeHidden }"
+          >
+            <v-icon size="20">mdi-layers</v-icon>
+          </button>
+          <button
             class="overlay-icon-btn"
             type="button"
             title="Toggle face/hand bounding boxes"
@@ -1299,9 +1310,13 @@ function isImageInFilmstrip(targetId) {
 async function ensureOverlayFilmstripForImage() {
   const targetId = image.value?.id ?? null;
   if (!targetId) return;
-  if (isImageInFilmstrip(targetId)) return;
   const stackId = getOverlayStackId(image.value);
   if (!stackId) return;
+  const shouldExpand =
+    showStacks.value || (!isImageInFilmstrip(targetId) && stackId);
+  if (!shouldExpand) return;
+  const stackCount = getOverlayStackCount(image.value);
+  if (stackCount <= 1) return;
   if (!overlayExpandedStackIds.value.has(stackId)) {
     const nextIds = new Set(overlayExpandedStackIds.value);
     nextIds.add(stackId);
@@ -1415,8 +1430,16 @@ function getOverlayStackCount(item) {
   return overlayStackCounts.value.get(stackId) || 0;
 }
 
+const overlayStackCountForImage = computed(() => {
+  if (!image.value) return 0;
+  return getOverlayStackCount(image.value);
+});
+
+const showOverlayStackButton = computed(() => {
+  return overlayStackCountForImage.value > 1;
+});
+
 function shouldShowFilmstripStackBadge(item) {
-  if (!showStacks.value) return false;
   return getOverlayStackCount(item) > 1;
 }
 
@@ -1493,7 +1516,6 @@ function getFilmstripStackIconStyle(item) {
 }
 
 function getFilmstripStackStyle(item) {
-  if (!showStacks.value) return {};
   if (!isFilmstripStackExpanded(item)) return {};
   const color = applyOverlayStackBackgroundAlpha(getOverlayStackColor(item));
   if (!color) return {};
@@ -1523,7 +1545,7 @@ function applyOverlayStackBackgroundAlpha(color) {
 function isFilmstripStackExpanded(item) {
   const stackId = getOverlayStackId(item);
   if (!stackId) return false;
-  return overlayExpandedStackIds.value.has(stackId);
+  return showStacks.value || overlayExpandedStackIds.value.has(stackId);
 }
 
 function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
@@ -1563,7 +1585,6 @@ function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
 }
 
 function collapseOverlayStackImages(images) {
-  if (!showStacks.value) return images;
   if (!Array.isArray(images) || images.length === 0) return [];
   const counts = new Map();
   for (const img of images) {
@@ -1588,7 +1609,7 @@ function collapseOverlayStackImages(images) {
     if (seen.has(stackId)) continue;
     seen.add(stackId);
     const stackCount = getOverlayStackCount(img) || counts.get(stackId) || 1;
-    if (overlayExpandedStackIds.value.has(stackId)) {
+    if (showStacks.value || overlayExpandedStackIds.value.has(stackId)) {
       const expanded = buildOverlayExpandedStackImages(
         stackId,
         img,
@@ -1711,6 +1732,12 @@ watch(
     void ensureOverlayFilmstripForImage();
   },
 );
+
+watch(showStacks, (value) => {
+  if (value) {
+    void ensureOverlayFilmstripForImage();
+  }
+});
 
 watch(image, () => {
   resetTagInput();

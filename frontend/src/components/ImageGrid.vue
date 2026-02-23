@@ -44,6 +44,7 @@
       :scrapheapPicturesId="String(props.scrapheapPicturesId)"
       :backend-url="props.backendUrl"
       :selected-image-ids="selectedImageIds"
+      :show-remove-from-stack="showRemoveFromStack"
       :visible="showSelectionBar"
       @clear-selection="clearSelection"
       @refresh-tags="refreshTagsForSelection"
@@ -52,6 +53,7 @@
       @delete-selected="deleteSelected"
       @add-to-character="handleAddToCharacter"
       @create-stack="createStackFromSelection"
+      @remove-from-stack="removeSelectedFromStack"
       @create-stacks-from-groups="createStacksFromSelectedGroups"
     />
     <EmptyScrapHeap
@@ -1234,15 +1236,32 @@ async function maybeRefreshOverlayForComfyui() {
     return;
   }
   const newest = selectNewestStackMember(members);
+  const currentOverlayId =
+    overlayImageId.value != null ? String(overlayImageId.value) : null;
+  const nextOverlayId =
+    newest?.id != null ? String(newest.id) : null;
   logComfyuiDebug("overlay-refresh-apply", {
     sourceId,
     sourceStackId,
     memberCount: members.length,
     selectedId: newest?.id ?? null,
+    currentOverlayId,
   });
-  if (newest?.id != null) {
-    overlayImageId.value = newest.id;
+  if (!nextOverlayId) {
+    if (!hasComfyuiRefreshRetry(sourceId)) {
+      comfyuiPendingOverlayRefresh.value = false;
+      clearComfyuiRefreshRetries();
+    }
+    return;
   }
+  if (currentOverlayId && currentOverlayId === nextOverlayId) {
+    if (!hasComfyuiRefreshRetry(sourceId)) {
+      comfyuiPendingOverlayRefresh.value = false;
+      clearComfyuiRefreshRetries();
+    }
+    return;
+  }
+  overlayImageId.value = newest.id;
   comfyuiPendingOverlayRefresh.value = false;
   clearComfyuiRefreshRetries();
 }
@@ -2199,6 +2218,36 @@ const isScrapheapView = computed(() => {
   const selected = String(props.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
 });
+const selectedStackId = computed(() => {
+  const ids = Array.isArray(selectedImageIds.value)
+    ? selectedImageIds.value
+    : [];
+  if (!ids.length) return null;
+  const images = Array.isArray(allGridImages.value)
+    ? allGridImages.value
+    : [];
+  if (!images.length) return null;
+  const imageById = new Map(
+    images
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+  let stackId = null;
+  for (const id of ids) {
+    const img = imageById.get(String(id));
+    const currentStackId = getPictureStackId(img);
+    if (!currentStackId) return null;
+    if (stackId === null) {
+      stackId = currentStackId;
+      continue;
+    }
+    if (stackId !== currentStackId) return null;
+  }
+  return stackId;
+});
+const showRemoveFromStack = computed(() => {
+  return selectedStackId.value !== null;
+});
 const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
@@ -2684,6 +2733,61 @@ async function createStackFromSelection() {
     debouncedFetchAllGridImages();
   } catch (e) {
     console.error("Failed to create stack from selection:", e);
+  }
+}
+
+async function removeSelectedFromStack() {
+  const stackId = selectedStackId.value;
+  const ids = Array.isArray(selectedImageIds.value)
+    ? selectedImageIds.value
+    : [];
+  if (!stackId || !ids.length) return;
+  try {
+    await apiClient.delete(`${props.backendUrl}/stacks/${stackId}/members`, {
+      data: { picture_ids: ids },
+    });
+    const removed = new Set(ids.map((id) => PictureId(id)));
+    allGridImages.value = allGridImages.value.map((img) => {
+      if (!img || !removed.has(PictureId(img.id))) {
+        return img;
+      }
+      return {
+        ...img,
+        stack_id: null,
+        stackId: null,
+        stack_index: null,
+        stackIndex: null,
+        stack_position: null,
+        stackPosition: null,
+        stack_count: null,
+        stackCount: null,
+      };
+    });
+    const nextMembers = new Map(expandedStackMembers.value);
+    const entry = nextMembers.get(stackId);
+    if (entry) {
+      const nextIds = Array.isArray(entry.ids)
+        ? entry.ids.filter((id) => !removed.has(PictureId(id)))
+        : [];
+      const nextImages = Array.isArray(entry.images)
+        ? entry.images.filter((img) => !removed.has(PictureId(img?.id)))
+        : [];
+      if (nextIds.length || nextImages.length) {
+        nextMembers.set(stackId, { ids: nextIds, images: nextImages });
+      } else {
+        nextMembers.delete(stackId);
+        const nextExpanded = new Set(expandedStackIds.value);
+        if (nextExpanded.delete(stackId)) {
+          expandedStackIds.value = nextExpanded;
+        }
+      }
+      expandedStackMembers.value = nextMembers;
+    }
+    clearSelection();
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+  } catch (e) {
+    console.error("Failed to remove selected images from stack:", e);
   }
 }
 

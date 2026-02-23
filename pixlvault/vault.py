@@ -215,9 +215,7 @@ class Vault:
         if self._picture_tagger and hasattr(
             self._picture_tagger, "set_keep_models_in_memory"
         ):
-            self._picture_tagger.set_keep_models_in_memory(
-                self._keep_models_in_memory
-            )
+            self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
 
         if previous and not self._keep_models_in_memory:
             logger.info(
@@ -298,9 +296,7 @@ class Vault:
         """
         if not self._picture_tagger:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
-            self._picture_tagger.set_keep_models_in_memory(
-                self._keep_models_in_memory
-            )
+            self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
 
         if worker_type not in self._workers:
             worker_instance = WorkerRegistry.create_worker(

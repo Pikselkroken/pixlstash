@@ -36,7 +36,17 @@
           @added="$emit('add-to-character', $event)"
         />
         <button
-          v-if="selectedCount > 1 && !isScrapheapView"
+          v-if="showRemoveStackButton"
+          class="stack-btn"
+          type="button"
+          title="Remove selected images from their stack"
+          @click="$emit('remove-from-stack')"
+        >
+          <v-icon size="16">mdi-layers-minus</v-icon>
+          <span>Remove From Stack</span>
+        </button>
+        <button
+          v-else-if="selectedCount > 1 && !isScrapheapView"
           class="stack-btn"
           type="button"
           title="Create a stack from the selected images"
@@ -91,6 +101,7 @@ const props = defineProps({
   scrapheapPicturesId: { type: String, required: true },
   backendUrl: { type: String, required: true },
   selectedImageIds: { type: Array, default: () => [] },
+  showRemoveFromStack: { type: Boolean, default: false },
 });
 
 const STACKS_SORT_KEY = "PICTURE_STACKS";
@@ -126,6 +137,11 @@ const deleteButtonLabel = computed(() => {
 const showGroupStackButton = computed(() => {
   if (isScrapheapView.value) return false;
   return props.selectedCount > 0 && props.selectedSort === STACKS_SORT_KEY;
+});
+
+const showRemoveStackButton = computed(() => {
+  if (isScrapheapView.value) return false;
+  return props.showRemoveFromStack === true;
 });
 </script>
 
