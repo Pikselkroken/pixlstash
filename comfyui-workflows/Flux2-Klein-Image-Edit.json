@@ -150,23 +150,6 @@
       "title": "CFGGuider"
     }
   },
-  "75:62": {
-    "inputs": {
-      "steps": 4,
-      "width": [
-        "75:81",
-        0
-      ],
-      "height": [
-        "75:81",
-        1
-      ]
-    },
-    "class_type": "Flux2Scheduler",
-    "_meta": {
-      "title": "Flux2Scheduler"
-    }
-  },
   "75:74": {
     "inputs": {
       "text": "{{caption}}",
@@ -260,6 +243,23 @@
     "class_type": "UNETLoader",
     "_meta": {
       "title": "Load Diffusion Model"
+    }
+  },
+  "75:62": {
+    "inputs": {
+      "steps": 6,
+      "width": [
+        "75:81",
+        0
+      ],
+      "height": [
+        "75:81",
+        1
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2Scheduler"
     }
   }
 }
