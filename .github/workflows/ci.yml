@@ -32,20 +32,20 @@ jobs:
           ruff check pixlvault
 
       # Individual test steps for each test file
+      - name: Test Florence-2 Captioning
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_florence.py
+      - name: Test Server Endpoints and Integration
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_server.py
       - name: Test Tag Worker and Tagging
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_tag_worker.py
       - name: Test Picture Likeness Worker
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_likeness_worker.py
-      - name: Test Florence-2 Captioning
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_florence.py
       - name: Test Picture Stack Utilities
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_stack_utils.py
       - name: Test Picture Set Management
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_sets.py
       - name: Test Quality Worker
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_quality_worker.py
-      - name: Test Server Endpoints and Integration
-        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_server.py
       - name: Test CLIP Text Embedding Similarity
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_clip_text_embedding_similarity.py
       - name: Test Backend Order Stability
