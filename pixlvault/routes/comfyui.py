@@ -33,9 +33,35 @@ PLACEHOLDER_CAPTION = "{{caption}}"
 DEFAULT_COMFYUI_URL = "http://127.0.0.1:8188/"
 
 
-def _workflow_dir() -> str:
+def _workflow_base_dir() -> str:
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     return os.path.join(base_dir, "comfyui-workflows")
+
+
+def _workflow_builtin_dir() -> str:
+    return os.path.join(_workflow_base_dir(), "built-in")
+
+
+def _workflow_user_dir() -> str:
+    return os.path.join(_workflow_base_dir(), "user")
+
+
+def _workflow_dirs() -> list[tuple[str, str]]:
+    return [
+        ("user", _workflow_user_dir()),
+        ("built-in", _workflow_builtin_dir()),
+    ]
+
+
+def _resolve_workflow_path(name: str) -> tuple[str | None, str | None]:
+    normalized = _normalize_workflow_name(name)
+    if not normalized:
+        return None, None
+    for source, folder in _workflow_dirs():
+        path = os.path.join(folder, normalized)
+        if os.path.isfile(path):
+            return path, source
+    return None, None
 
 
 def _normalize_workflow_name(name: str) -> str:
@@ -619,41 +645,55 @@ def create_router(server) -> APIRouter:
 
     @router.get("/comfyui/workflows")
     async def list_comfyui_workflows():
-        workflow_dir = _workflow_dir()
-        if not os.path.isdir(workflow_dir):
-            return {"workflows": [], "workflow_dir": workflow_dir}
-
+        workflow_dir = _workflow_base_dir()
+        workflow_dirs = {
+            "built_in": _workflow_builtin_dir(),
+            "user": _workflow_user_dir(),
+        }
         workflows = []
-        for entry in sorted(os.listdir(workflow_dir)):
-            if not entry.lower().endswith(".json"):
+        seen = set()
+        for source, folder in _workflow_dirs():
+            if not os.path.isdir(folder):
                 continue
-            path = os.path.join(workflow_dir, entry)
-            try:
-                payload = _load_workflow_json(path)
-                valid, missing = _find_placeholder_usage(payload)
-            except Exception as exc:
-                logger.warning("Failed to read workflow %s: %s", entry, exc)
-                valid = False
-                missing = [PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION]
-            workflows.append(
-                {
-                    "name": entry,
-                    "display_name": os.path.splitext(entry)[0],
-                    "valid": valid,
-                    "missing_placeholders": missing,
-                }
-            )
-        return {"workflows": workflows, "workflow_dir": workflow_dir}
+            for entry in sorted(os.listdir(folder)):
+                if not entry.lower().endswith(".json"):
+                    continue
+                if entry in seen:
+                    continue
+                seen.add(entry)
+                path = os.path.join(folder, entry)
+                try:
+                    payload = _load_workflow_json(path)
+                    valid, missing = _find_placeholder_usage(payload)
+                except Exception as exc:
+                    logger.warning("Failed to read workflow %s: %s", entry, exc)
+                    valid = False
+                    missing = [PLACEHOLDER_IMAGE, PLACEHOLDER_CAPTION]
+                workflows.append(
+                    {
+                        "name": entry,
+                        "display_name": os.path.splitext(entry)[0],
+                        "valid": valid,
+                        "missing_placeholders": missing,
+                        "source": source,
+                    }
+                )
+        workflows.sort(key=lambda item: item.get("name", ""))
+        return {
+            "workflows": workflows,
+            "workflow_dir": workflow_dir,
+            "workflow_dirs": workflow_dirs,
+        }
 
     @router.delete("/comfyui/workflows/{workflow_name}")
     async def delete_comfyui_workflow(workflow_name: str):
         normalized = _normalize_workflow_name(workflow_name)
         if not normalized:
             raise HTTPException(status_code=400, detail="workflow_name is required")
-        workflow_dir = _workflow_dir()
+        workflow_dir = _workflow_user_dir()
         path = os.path.join(workflow_dir, normalized)
         if not os.path.isfile(path):
-            raise HTTPException(status_code=404, detail="Workflow not found")
+            raise HTTPException(status_code=404, detail="Workflow not found in user")
         try:
             os.remove(path)
         except OSError as exc:
@@ -686,9 +726,8 @@ def create_router(server) -> APIRouter:
         if client_id is not None:
             client_id = str(client_id)
 
-        workflow_dir = _workflow_dir()
-        workflow_path = os.path.join(workflow_dir, workflow_name)
-        if not os.path.isfile(workflow_path):
+        workflow_path, workflow_source = _resolve_workflow_path(workflow_name)
+        if not workflow_path:
             raise HTTPException(status_code=404, detail="Workflow not found")
 
         workflow_payload = _load_workflow_json(workflow_path)
@@ -793,7 +832,7 @@ def create_router(server) -> APIRouter:
             )
         overwrite = bool(payload.get("overwrite"))
 
-        workflow_dir = _workflow_dir()
+        workflow_dir = _workflow_user_dir()
         os.makedirs(workflow_dir, exist_ok=True)
         path = os.path.join(workflow_dir, name)
         if os.path.exists(path) and not overwrite:
