@@ -734,8 +734,8 @@ const expandAllStacksDisabled = computed(() => {
   return total <= 0 || expanded >= total;
 });
 
-const collapseAllStacksDisabled = computed(() =>
-  Number(props.stackExpandedCount || 0) <= 0,
+const collapseAllStacksDisabled = computed(
+  () => Number(props.stackExpandedCount || 0) <= 0,
 );
 
 const exportTypeModel = computed({
