@@ -191,7 +191,7 @@
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
         >
-          <v-card
+          <div
             :class="[
               'thumbnail-card',
               { 'thumbnail-card-new': isImageRecentlyAdded(img.id) },
@@ -414,7 +414,7 @@
                 @set-score="setScore(img, $event)"
               />
             </div>
-          </v-card>
+          </div>
           <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
           <!-- Info row absolutely positioned below thumbnail -->
           <div class="thumbnail-info-row">
@@ -1238,8 +1238,7 @@ async function maybeRefreshOverlayForComfyui() {
   const newest = selectNewestStackMember(members);
   const currentOverlayId =
     overlayImageId.value != null ? String(overlayImageId.value) : null;
-  const nextOverlayId =
-    newest?.id != null ? String(newest.id) : null;
+  const nextOverlayId = newest?.id != null ? String(newest.id) : null;
   logComfyuiDebug("overlay-refresh-apply", {
     sourceId,
     sourceStackId,
@@ -2223,9 +2222,7 @@ const selectedStackId = computed(() => {
     ? selectedImageIds.value
     : [];
   if (!ids.length) return null;
-  const images = Array.isArray(allGridImages.value)
-    ? allGridImages.value
-    : [];
+  const images = Array.isArray(allGridImages.value) ? allGridImages.value : [];
   if (!images.length) return null;
   const imageById = new Map(
     images
@@ -3427,11 +3424,17 @@ function applyStackBackgroundAlpha(color) {
   }
   if (trimmed.startsWith("hsl(")) {
     const inner = trimmed.slice(4, -1).trim();
-    return `hsla(${inner} / 0.6)`;
+    if (inner.includes(",")) {
+      return `hsla(${inner}, 0.6)`;
+    }
+    return `hsl(${inner} / 0.6)`;
   }
   if (trimmed.startsWith("rgb(")) {
     const inner = trimmed.slice(4, -1).trim();
-    return `rgba(${inner} / 0.6)`;
+    if (inner.includes(",")) {
+      return `rgba(${inner}, 0.6)`;
+    }
+    return `rgb(${inner} / 0.6)`;
   }
   return trimmed;
 }
@@ -4363,6 +4366,11 @@ function handleStackReorderDrop(img, event) {
   const nextIds = currentIds.slice();
   const [moved] = nextIds.splice(fromIndex, 1);
   const targetIndex = nextIds.indexOf(targetId);
+  let insertIndex = targetIndex;
+  if (hoverSide === "right") {
+    insertIndex = targetIndex + 1;
+  }
+  if (insertIndex < 0) insertIndex = 0;
   if (insertIndex > nextIds.length) insertIndex = nextIds.length;
   nextIds.splice(insertIndex, 0, moved);
 
@@ -6101,19 +6109,6 @@ function handleEmptyStateReset() {
   background: rgba(var(--v-theme-info), 0.62);
   pointer-events: none;
   z-index: 2;
-}
-.v-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  box-shadow: none;
-  background: transparent;
-  width: 100%;
-  max-width: 256px;
-  min-width: 128px;
-  padding: 4px;
-  margin: 0;
 }
 .thumbnail-info-row {
   margin-top: 0;

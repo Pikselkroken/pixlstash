@@ -1645,6 +1645,7 @@ const workflowImportCaptionPreview = computed(() => {
                         {{ workflow.valid ? "valid" : "invalid" }}
                       </span>
                       <v-btn
+                        v-if="workflow.source !== 'built-in'"
                         icon
                         variant="text"
                         class="settings-tag-delete"

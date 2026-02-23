@@ -1533,11 +1533,17 @@ function applyOverlayStackBackgroundAlpha(color) {
   }
   if (trimmed.startsWith("hsl(")) {
     const inner = trimmed.slice(4, -1).trim();
-    return `hsla(${inner} / 0.6)`;
+    if (inner.includes(",")) {
+      return `hsla(${inner}, 0.6)`;
+    }
+    return `hsl(${inner} / 0.6)`;
   }
   if (trimmed.startsWith("rgb(")) {
     const inner = trimmed.slice(4, -1).trim();
-    return `rgba(${inner} / 0.6)`;
+    if (inner.includes(",")) {
+      return `rgba(${inner}, 0.6)`;
+    }
+    return `rgb(${inner} / 0.6)`;
   }
   return trimmed;
 }
