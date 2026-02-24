@@ -8,7 +8,10 @@
   >
     <div v-if="!plugin" class="plugin-ui-note">No plugin selected.</div>
     <div v-else>
-      <div v-if="showDescription && plugin.description" class="plugin-ui-description">
+      <div
+        v-if="showDescription && plugin.description"
+        class="plugin-ui-description"
+      >
         {{ plugin.description }}
       </div>
       <div v-if="!parameterFields.length" class="plugin-ui-note">
@@ -23,10 +26,16 @@
             index === 0 && showDescription && !!plugin.description,
         }"
       >
-        <label :class="['plugin-ui-label', labelClass]">{{ field.label || field.name }}</label>
+        <label :class="['plugin-ui-label', labelClass]">{{
+          field.label || field.name
+        }}</label>
 
         <select
-          v-if="field.type === 'string' && Array.isArray(field.enum) && field.enum.length"
+          v-if="
+            field.type === 'string' &&
+            Array.isArray(field.enum) &&
+            field.enum.length
+          "
           v-model="formValues[field.name]"
           :class="inputClass ? [inputClass] : ['plugin-ui-input']"
         >
@@ -42,7 +51,10 @@
           :class="inputClass ? [inputClass] : ['plugin-ui-input']"
         />
 
-        <label v-else-if="field.type === 'boolean'" class="plugin-ui-checkbox-row">
+        <label
+          v-else-if="field.type === 'boolean'"
+          class="plugin-ui-checkbox-row"
+        >
           <input v-model="formValues[field.name]" type="checkbox" />
           <span>Enabled</span>
         </label>
@@ -78,6 +90,7 @@ const emit = defineEmits(["update:modelValue"]);
 
 const formValues = reactive({});
 const isSyncingFromProps = ref(false);
+const lastEmittedSignature = ref("");
 
 const parameterFields = computed(() => {
   if (!props.plugin || !Array.isArray(props.plugin.parameters)) return [];
@@ -85,30 +98,80 @@ const parameterFields = computed(() => {
 });
 
 function coerceDefault(field) {
-  if (field.default !== undefined) return field.default;
+  if (field.default !== undefined) return cloneParameterValue(field.default);
   if (field.type === "boolean") return false;
   if (field.type === "number" || field.type === "integer") return 0;
   if (Array.isArray(field.enum) && field.enum.length) return field.enum[0];
   return "";
 }
 
-function resetFormFromPlugin() {
-  isSyncingFromProps.value = true;
-  for (const key of Object.keys(formValues)) {
-    delete formValues[key];
+function cloneParameterValue(value) {
+  if (value == null) return value;
+  if (typeof value !== "object") return value;
+  try {
+    return structuredClone(value);
+  } catch (_) {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (_) {
+      return value;
+    }
   }
+}
+
+function stableStringify(value) {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(",")}}`;
+}
+
+function currentPayloadFromForm() {
+  const payload = {};
+  for (const field of parameterFields.value) {
+    payload[field.name] = formValues[field.name];
+  }
+  return payload;
+}
+
+function syncModelValueIntoForm() {
+  isSyncingFromProps.value = true;
   const incoming =
     props.modelValue && typeof props.modelValue === "object"
       ? props.modelValue
       : {};
-  for (const field of parameterFields.value) {
-    if (Object.prototype.hasOwnProperty.call(incoming, field.name)) {
-      formValues[field.name] = incoming[field.name];
-    } else {
-      formValues[field.name] = coerceDefault(field);
+
+  const fieldNames = new Set(parameterFields.value.map((field) => field.name));
+
+  for (const key of Object.keys(formValues)) {
+    if (!fieldNames.has(key)) {
+      delete formValues[key];
     }
   }
+
+  for (const field of parameterFields.value) {
+    const name = field.name;
+    const nextValue = Object.prototype.hasOwnProperty.call(incoming, name)
+      ? cloneParameterValue(incoming[name])
+      : coerceDefault(field);
+    const currentSignature = stableStringify(formValues[name]);
+    const nextSignature = stableStringify(nextValue);
+    if (currentSignature !== nextSignature) {
+      formValues[name] = nextValue;
+    }
+  }
+
+  lastEmittedSignature.value = stableStringify(currentPayloadFromForm());
   isSyncingFromProps.value = false;
+}
+
+function resetFormFromPlugin() {
+  syncModelValueIntoForm();
 }
 
 watch(
@@ -122,9 +185,8 @@ watch(
 watch(
   () => props.modelValue,
   () => {
-    resetFormFromPlugin();
+    syncModelValueIntoForm();
   },
-  { deep: true },
 );
 
 watch(
@@ -137,10 +199,10 @@ watch(
 );
 
 function emitValue() {
-  const payload = {};
-  for (const field of parameterFields.value) {
-    payload[field.name] = formValues[field.name];
-  }
+  const payload = currentPayloadFromForm();
+  const signature = stableStringify(payload);
+  if (signature === lastEmittedSignature.value) return;
+  lastEmittedSignature.value = signature;
   emit("update:modelValue", payload);
 }
 </script>

@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 THUMBNAIL_FORMAT = "WEBP"
 THUMBNAIL_EXTENSION = ".webp"
 THUMBNAIL_QUALITY = 80
+THUMBNAIL_WEBP_METHOD = 2
 
 
 class PictureUtils:
@@ -476,7 +477,7 @@ class PictureUtils:
                 buf,
                 format=THUMBNAIL_FORMAT,
                 quality=THUMBNAIL_QUALITY,
-                method=6,
+                method=THUMBNAIL_WEBP_METHOD,
             )
         except Exception as exc:
             logger.error("Error encoding thumbnail bytes: %s", exc)

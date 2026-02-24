@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import concurrent.futures
 import base64
 import os
@@ -7,7 +8,7 @@ import sys
 import uuid
 import zipfile
 from io import BytesIO
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 from email.utils import formatdate
 from datetime import datetime
 
@@ -397,6 +398,32 @@ def _select_pictures_for_listing(
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
+    thumbnail_generation_locks: dict[int, asyncio.Lock] = {}
+    thumbnail_memory_cache: OrderedDict[int, bytes] = OrderedDict()
+    thumbnail_memory_cache_max = 128
+
+    def get_thumbnail_lock(picture_id: int) -> asyncio.Lock:
+        lock = thumbnail_generation_locks.get(picture_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            thumbnail_generation_locks[picture_id] = lock
+        return lock
+
+    def get_cached_thumbnail_bytes(picture_id: int) -> bytes | None:
+        data = thumbnail_memory_cache.pop(picture_id, None)
+        if data is None:
+            return None
+        thumbnail_memory_cache[picture_id] = data
+        return data
+
+    def cache_thumbnail_bytes(picture_id: int, thumbnail_bytes: bytes) -> None:
+        if not thumbnail_bytes:
+            return
+        if picture_id in thumbnail_memory_cache:
+            thumbnail_memory_cache.pop(picture_id, None)
+        thumbnail_memory_cache[picture_id] = thumbnail_bytes
+        while len(thumbnail_memory_cache) > thumbnail_memory_cache_max:
+            thumbnail_memory_cache.popitem(last=False)
 
     @router.get(
         "/sort_mechanisms",
@@ -862,6 +889,8 @@ def create_router(server) -> APIRouter:
         description="Returns a WebP thumbnail for a picture id, generating and caching it on demand when needed.",
     )
     async def get_thumbnail(id: int):
+        started_at = datetime.now()
+
         def fetch_picture(session: Session, picture_id: int):
             pics = Picture.find(
                 session,
@@ -882,37 +911,120 @@ def create_router(server) -> APIRouter:
             server.vault.image_root, pic.file_path
         )
         if thumb_path and os.path.exists(thumb_path):
+            elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+            logger.info(
+                "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
+                id,
+                thumb_path,
+                elapsed_ms,
+            )
             return FileResponse(thumb_path, media_type="image/webp")
 
-        resolved_path = PictureUtils.resolve_picture_path(
-            server.vault.image_root, pic.file_path
-        )
-        if resolved_path and os.path.exists(resolved_path):
-            img = PictureUtils.load_image_or_video(resolved_path)
-            if img is not None:
+        cached_bytes = get_cached_thumbnail_bytes(id)
+        if cached_bytes:
+            elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+            logger.info(
+                "Thumbnail GET memory-hit: id=%s elapsed_ms=%.1f",
+                id,
+                elapsed_ms,
+            )
+            return Response(content=cached_bytes, media_type="image/webp")
+
+        lock = get_thumbnail_lock(id)
+        async with lock:
+            if thumb_path and os.path.exists(thumb_path):
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.info(
+                    "Thumbnail GET cache-hit-after-wait: id=%s path=%s elapsed_ms=%.1f",
+                    id,
+                    thumb_path,
+                    elapsed_ms,
+                )
+                return FileResponse(thumb_path, media_type="image/webp")
+
+            cached_bytes = get_cached_thumbnail_bytes(id)
+            if cached_bytes:
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.info(
+                    "Thumbnail GET memory-hit-after-wait: id=%s elapsed_ms=%.1f",
+                    id,
+                    elapsed_ms,
+                )
+                return Response(content=cached_bytes, media_type="image/webp")
+
+            def build_thumbnail_blocking() -> tuple[str, str | None, bytes | None, str | None]:
+                resolved = PictureUtils.resolve_picture_path(
+                    server.vault.image_root, pic.file_path
+                )
+                if not resolved or not os.path.exists(resolved):
+                    return "missing-source", resolved, None, None
+
+                img = PictureUtils.load_image_or_video(resolved)
+                if img is None:
+                    return "load-failed", resolved, None, None
+
                 if not isinstance(img, Image.Image):
                     img = Image.fromarray(img)
+
                 thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(img)
-                if thumbnail_bytes:
-                    saved_thumb = PictureUtils.write_thumbnail_bytes(
-                        server.vault.image_root, pic.file_path, thumbnail_bytes
-                    )
-                    if saved_thumb and os.path.exists(saved_thumb):
-                        return FileResponse(saved_thumb, media_type="image/webp")
-                    logger.warning(
-                        "Failed to persist on-demand thumbnail for picture %s",
-                        pic.id,
-                    )
-            else:
+                if not thumbnail_bytes:
+                    return "encode-failed", resolved, None, None
+
+                saved_thumb_path = PictureUtils.write_thumbnail_bytes(
+                    server.vault.image_root, pic.file_path, thumbnail_bytes
+                )
+                if saved_thumb_path and os.path.exists(saved_thumb_path):
+                    return "saved", resolved, None, saved_thumb_path
+
+                return "memory-only", resolved, thumbnail_bytes, None
+
+            status, resolved_path, thumbnail_bytes, saved_thumb = await asyncio.to_thread(
+                build_thumbnail_blocking
+            )
+
+            if status == "saved" and saved_thumb:
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.info(
+                    "Thumbnail GET generated: id=%s source=%s elapsed_ms=%.1f",
+                    id,
+                    resolved_path,
+                    elapsed_ms,
+                )
+                return FileResponse(saved_thumb, media_type="image/webp")
+
+            if status == "memory-only" and thumbnail_bytes:
+                cache_thumbnail_bytes(id, thumbnail_bytes)
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.warning(
+                    "Thumbnail GET generated-memory-only: id=%s source=%s elapsed_ms=%.1f",
+                    id,
+                    resolved_path,
+                    elapsed_ms,
+                )
+                return Response(content=thumbnail_bytes, media_type="image/webp")
+
+            if status == "missing-source":
+                logger.warning(
+                    "Missing source file for on-demand thumbnail: %s",
+                    resolved_path,
+                )
+            elif status == "load-failed":
                 logger.warning(
                     "Failed to load image for on-demand thumbnail: %s",
                     resolved_path,
                 )
-        else:
-            logger.warning(
-                "Missing source file for on-demand thumbnail: %s",
-                resolved_path,
-            )
+            elif status == "encode-failed":
+                logger.warning(
+                    "Failed to encode on-demand thumbnail: %s",
+                    resolved_path,
+                )
+
+        elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+        logger.warning(
+            "Thumbnail GET failed: id=%s elapsed_ms=%.1f",
+            id,
+            elapsed_ms,
+        )
 
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
@@ -925,6 +1037,13 @@ def create_router(server) -> APIRouter:
         ids = payload.get("ids", [])
         if not isinstance(ids, list):
             raise HTTPException(status_code=400, detail="'ids' must be a list")
+
+        logger.info(
+            "Thumbnail batch request: client=%s count=%s ids_preview=%s",
+            getattr(getattr(request, "client", None), "host", None),
+            len(ids),
+            ids[:8],
+        )
 
         penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
         penalised_tag_set = {
@@ -998,7 +1117,13 @@ def create_router(server) -> APIRouter:
                     "thumbnail_side",
                 ],
                 include_deleted=True,
-            )
+            ),
+            priority=DBPriority.IMMEDIATE,
+        )
+        logger.info(
+            "Thumbnail batch resolved: requested=%s found=%s",
+            len(ids),
+            len(pics or []),
         )
         character_name_map = {}
         character_ids = set()

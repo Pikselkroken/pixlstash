@@ -2,6 +2,7 @@
   <ImageOverlay
     :open="overlayOpen"
     :initialImageId="overlayImageId"
+    :initialExpandedStackIds="overlayInitialExpandedStackIds"
     :allImages="allGridImages"
     :backendUrl="props.backendUrl"
     :tagUpdate="props.wsTagUpdate"
@@ -266,23 +267,21 @@
               >
                 {{ img.width }}×{{ img.height }}
               </div>
-              <template v-if="img.thumbnail && isVideo(img)">
+              <template v-if="getThumbnailSrc(img) && isVideo(img)">
                 <video
                   class="thumbnail-img"
-                  :src="
-                    buildMediaUrl({ backendUrl: props.backendUrl, image: img })
+                  :src="getThumbnailSrc(img)"
+                  :ref="
+                    (el) => {
+                      setVideoRef(img.id, el);
+                      setThumbnailRef(img.id, el);
+                    }
                   "
-                  :ref="(el) => setVideoRef(img.id, el)"
                   draggable="false"
                   @pointerdown="prepareThumbnailNativeDrag(img, $event)"
                   @pointerup="handleThumbnailPointerRelease($event)"
                   @pointercancel="handleThumbnailPointerRelease($event)"
-                  @load="
-                    () => {
-                      setThumbnailRef(img.id, el);
-                      onThumbnailLoad(img.id);
-                    }
-                  "
+                  @loadeddata="onThumbnailLoad(img.id, $event)"
                   muted
                   loop
                   playsinline
@@ -296,18 +295,21 @@
                   "
                 ></video>
                 <img
-                  v-if="img.thumbnail"
+                  v-if="getThumbnailSrc(img)"
                   class="thumbnail-drag-preview"
-                  :src="img.thumbnail"
+                  :src="getThumbnailSrc(img)"
                   :ref="(el) => setDragPreviewRef(img.id, el)"
                   alt=""
                 />
               </template>
-              <template v-else-if="img.thumbnail">
+              <template v-else-if="getThumbnailSrc(img)">
                 <img
-                  :src="img.thumbnail"
+                  :src="getThumbnailSrc(img)"
                   class="thumbnail-img"
                   :ref="(el) => setThumbnailRef(img.id, el)"
+                  loading="eager"
+                  fetchpriority="high"
+                  decoding="async"
                   draggable="true"
                   @pointerdown="prepareThumbnailNativeDrag(img, $event)"
                   @pointerup="handleThumbnailPointerRelease($event)"
@@ -315,12 +317,7 @@
                   @dragstart="handleThumbnailNativeDragStart(img, $event)"
                   @dragend="handleThumbnailNativeDragEnd($event)"
                   @error="handleImageError"
-                  @load="
-                    () => {
-                      setThumbnailRef(img.id, el);
-                      onThumbnailLoad(img.id);
-                    }
-                  "
+                  @load="onThumbnailLoad(img.id, $event)"
                 />
                 <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
                 <template v-if="isThumbnailReady(img.id) && img.thumbnail">
@@ -565,6 +562,25 @@ const textMeasureContext = textMeasureCanvas
   : null;
 const thumbnailLoadedMap = reactive({});
 const thumbnailReadyMap = reactive({});
+const thumbnailAssignedAtMap = reactive({});
+
+function getResourceTimingForUrl(url) {
+  if (typeof performance === "undefined" || !url) return null;
+  try {
+    const entries = performance.getEntriesByName(url);
+    if (!Array.isArray(entries) || !entries.length) return null;
+    const last = entries[entries.length - 1];
+    return {
+      durationMs: Number((last.duration || 0).toFixed(1)),
+      transferSize: Number(last.transferSize || 0),
+      encodedBodySize: Number(last.encodedBodySize || 0),
+      decodedBodySize: Number(last.decodedBodySize || 0),
+      responseEnd: Number((last.responseEnd || 0).toFixed(1)),
+    };
+  } catch {
+    return null;
+  }
+}
 const THUMBNAIL_RETRY_DELAY_MS = 10000;
 const THUMBNAIL_RETRY_LIMIT = 1;
 const thumbnailRetryTimers = new Map();
@@ -660,13 +676,19 @@ async function runPluginWithParameters(pluginName, pictureIds, parameters) {
         .filter((id) => id != null);
       if (newIds.length) {
         triggerNewImageHighlight(newIds);
+        if (overlayOpen.value) {
+          overlayImageId.value = newIds[newIds.length - 1];
+        }
       }
     }
     preserveScrollOnNextFetch.value = true;
     debouncedFetchAllGridImages();
     if (overlayOpen.value && pictureIds.length) {
-      const firstId = pictureIds[0];
-      refreshGridImage(firstId);
+      const refreshId =
+        createdIds.length > 0
+          ? createdIds[createdIds.length - 1]
+          : pictureIds[0];
+      await refreshGridImage(refreshId, { force: true });
     }
   } catch (err) {
     console.error("Failed to run plugin:", err);
@@ -1569,8 +1591,26 @@ function isImageRecentlyAdded(id) {
   return Boolean(id && recentlyAddedIds.value[id]);
 }
 
-function onThumbnailLoad(id) {
+function onThumbnailLoad(id, event = null) {
   thumbnailLoadedMap[id] = (thumbnailLoadedMap[id] || 0) + 1;
+  const assignedAt = Number(thumbnailAssignedAtMap[id]);
+  const eventTarget = event?.target || null;
+  const src =
+    eventTarget?.currentSrc ||
+    eventTarget?.src ||
+    thumbnailRefs[id]?.currentSrc ||
+    thumbnailRefs[id]?.src ||
+    null;
+  if (Number.isFinite(assignedAt) && assignedAt > 0) {
+    const elapsedMs = performance.now() - assignedAt;
+    console.log("[ImageGrid.vue] thumbnail img load timing", {
+      id,
+      elapsedMs: Number(elapsedMs.toFixed(1)),
+      src,
+      resourceTiming: getResourceTimingForUrl(src),
+    });
+    delete thumbnailAssignedAtMap[id];
+  }
   clearThumbnailRetry(id);
 }
 
@@ -1595,7 +1635,10 @@ function scheduleThumbnailRetry(id, index, requestEpoch) {
     if (current.thumbnail) return;
     thumbnailRetryCounts[id] = (thumbnailRetryCounts[id] || 0) + 1;
     invalidateThumbnailIndex(index);
-    fetchThumbnailsBatch(index, index + 1);
+    fetchThumbnailsBatch(index, index + 1, {
+      reason: "retry-missing-thumbnail",
+      triggerId: id,
+    });
   }, THUMBNAIL_RETRY_DELAY_MS);
   thumbnailRetryTimers.set(id, timer);
 }
@@ -1632,6 +1675,11 @@ function setThumbnailContainerRef(id, el) {
 
 function isThumbnailReady(id) {
   return Boolean(id && thumbnailReadyMap[id]);
+}
+
+function getThumbnailSrc(img) {
+  if (!img) return null;
+  return img.thumbnail || null;
 }
 
 function getThumbnailLoadedKey(id) {
@@ -1868,7 +1916,6 @@ function getHandBboxOverlays(img) {
 const hoveredImageIdx = ref(null);
 
 function handleImageMouseEnter(img) {
-  prefetchFullImage(img);
   hoveredImageIdx.value = img.idx;
 }
 function handleImageMouseLeave(img) {
@@ -2503,6 +2550,7 @@ const hasMoreImages = ref(true);
 // Image overlay
 const overlayOpen = ref(false);
 const overlayImageId = ref(null);
+const overlayInitialExpandedStackIds = ref([]);
 
 // Drag-and-drop overlay state
 const dragOverlayVisible = ref(false);
@@ -2641,7 +2689,7 @@ function invalidateThumbnailIndex(index) {
   );
 }
 
-async function refreshGridImage(imageId) {
+async function refreshGridImage(imageId, options = {}) {
   if (!imageId) return;
   const dId = PictureId(imageId);
   const idx = allGridImages.value.findIndex(
@@ -2651,14 +2699,17 @@ async function refreshGridImage(imageId) {
   const latestInfo = await fetchImageInfo(imageId, {
     smartScore:
       isSmartScoreSortActive() || props.selectedSort === STACKS_SORT_KEY,
+    force: options?.force === true,
   });
   if (latestInfo && !Array.isArray(latestInfo)) {
     const current = allGridImages.value[idx] || {};
-    allGridImages.value[idx] = {
+    const nextImages = allGridImages.value.slice();
+    nextImages[idx] = {
       ...current,
       ...latestInfo,
       idx: current.idx ?? idx,
     };
+    allGridImages.value = nextImages;
   }
   if (props.selectedSort === STACKS_SORT_KEY) {
     const stackIndex = getStackIndexFromItem(allGridImages.value[idx]);
@@ -2765,8 +2816,13 @@ async function fetchCharacterLikenessForImage(imageId) {
 function handleOverlayChange(payload) {
   if (!payload) return;
   const imageId = payload.imageId ?? payload.id ?? payload;
-  if (!imageId) return;
   const fields = payload.fields || {};
+  if (fields.stack) {
+    preserveScrollOnNextFetch.value = true;
+    void fetchAllGridImages();
+    return;
+  }
+  if (!imageId) return;
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
     refreshGridImage(imageId);
     preserveScrollOnNextFetch.value = true;
@@ -2948,6 +3004,9 @@ async function createStacksFromSelectedGroups() {
 
 async function openOverlay(img) {
   if (!img || !img.id) return;
+  overlayInitialExpandedStackIds.value = Array.from(
+    expandedStackIds.value || [],
+  );
   overlayImageId.value = img.id;
   overlayOpen.value = true;
 }
@@ -2955,6 +3014,7 @@ async function openOverlay(img) {
 function closeOverlay() {
   overlayOpen.value = false;
   overlayImageId.value = null;
+  overlayInitialExpandedStackIds.value = [];
   comfyuiPendingOverlayRefresh.value = false;
 }
 
@@ -3441,7 +3501,6 @@ function getStackCardStyle(img) {
   if (!color) return {};
   return {
     backgroundColor: color,
-    padding: "6px",
     borderRadius: "0px",
     boxShadow: "none",
   };
@@ -3824,6 +3883,31 @@ function maybeRefreshThumbnailsForRange(start, end) {
   updateVisibleThumbnails();
 }
 
+function fetchThumbnailsForRangeNow(start, end, reason = "manual-now") {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+  const safeStart = Math.max(0, Math.floor(start));
+  const safeEnd = Math.max(safeStart, Math.floor(end));
+  if (safeEnd <= safeStart) return;
+
+  void fetchThumbnailsBatch(safeStart, safeEnd, { reason, force: true });
+}
+
+function arraysEqualByString(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (String(a[i]) !== String(b[i])) return false;
+  }
+  return true;
+}
+
+function getRenderedStackMemberIds(stackId) {
+  if (!stackId) return [];
+  return allGridImages.value
+    .filter((item) => getPictureStackId(item) === stackId && item?.id != null)
+    .map((item) => String(item.id));
+}
+
 function rebuildGridImagesFromLastFetch() {
   const source = Array.isArray(lastFetchedGridImages.value)
     ? lastFetchedGridImages.value
@@ -4026,7 +4110,17 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
       insertCount,
     );
     adjustScrollWindowForDelta(insertIndex, insertCount, result.length);
-    maybeRefreshThumbnailsForRange(insertIndex, insertIndex + insertCount + 1);
+    markVisibleFetchSuppressedForExpand(
+      insertIndex,
+      insertIndex + insertCount + 1,
+    );
+    fetchThumbnailsForRangeNow(
+      insertIndex,
+      insertIndex + insertCount + 1,
+      "stack-expand-insert",
+    );
+  } else {
+    maybeRefreshThumbnailsForRange(insertIndex, insertIndex + 1);
   }
   return insertCount;
 }
@@ -4217,16 +4311,40 @@ async function toggleStackExpand(img) {
   nextIds.add(stackId);
   expandedStackIds.value = nextIds;
   const stackCount = getStackBadgeCount(img);
+  let insertedCount = 0;
+  const localMembers = getLocalStackMembers(stackId);
+  if (localMembers.length > 1) {
+    cacheExpandedStackMembers(stackId, localMembers);
+    insertedCount = insertExpandedStackMembers(stackId, stackCount);
+  }
+
   const loaded = await ensureStackMembersLoaded(stackId, stackCount);
+  if (!expandedStackIds.value.has(stackId)) {
+    return;
+  }
   if (loaded !== false) {
-    const insertedCount = insertExpandedStackMembers(stackId, stackCount);
+    const renderedIds = getRenderedStackMemberIds(stackId);
+    const latestEntry = expandedStackMembers.value.get(stackId);
+    const latestIds = Array.isArray(latestEntry?.ids) ? latestEntry.ids : [];
+    if (
+      insertedCount > 0 &&
+      latestIds.length &&
+      arraysEqualByString(renderedIds, latestIds)
+    ) {
+      return;
+    }
+    removeExpandedStackMembers(stackId);
+    insertedCount = insertExpandedStackMembers(stackId, stackCount);
     if (insertedCount <= 0) {
       const resetExpanded = new Set(expandedStackIds.value);
       resetExpanded.delete(stackId);
       expandedStackIds.value = resetExpanded;
       removeExpandedStackMembers(stackId);
     }
-  } else {
+    return;
+  }
+
+  if (insertedCount <= 0) {
     const resetExpanded = new Set(expandedStackIds.value);
     resetExpanded.delete(stackId);
     expandedStackIds.value = resetExpanded;
@@ -4816,10 +4934,47 @@ const loadedRanges = ref([]);
 let thumbFetchTimeout = null;
 let pendingRanges = [];
 const thumbnailRequestEpoch = ref(0);
+const suppressVisibleThumbFetch = ref({
+  until: 0,
+  start: 0,
+  end: 0,
+});
+
+function isRangeOverlap(startA, endA, startB, endB) {
+  return Math.max(startA, startB) < Math.min(endA, endB);
+}
+
+function shouldSuppressVisibleWindowFetch(start, end) {
+  const now = Date.now();
+  const token = suppressVisibleThumbFetch.value;
+  if (!token || now > Number(token.until || 0)) return false;
+  if (!isRangeOverlap(start, end, token.start, token.end)) return false;
+
+  const visible = allGridImages.value.slice(start, end);
+  const missingOutsideSuppressed = visible.some((img, idx) => {
+    if (!img || img.thumbnail) return false;
+    const globalIndex = start + idx;
+    return globalIndex < token.start || globalIndex >= token.end;
+  });
+  return !missingOutsideSuppressed;
+}
+
+function markVisibleFetchSuppressedForExpand(start, end) {
+  suppressVisibleThumbFetch.value = {
+    until: Date.now() + 350,
+    start,
+    end,
+  };
+}
 
 function resetThumbnailState() {
   loadedRanges.value = [];
   pendingRanges = [];
+  suppressVisibleThumbFetch.value = {
+    until: 0,
+    start: 0,
+    end: 0,
+  };
   if (thumbFetchTimeout) {
     clearTimeout(thumbFetchTimeout);
     thumbFetchTimeout = null;
@@ -4827,6 +4982,9 @@ function resetThumbnailState() {
   thumbnailRequestEpoch.value += 1;
   for (const key of Object.keys(thumbnailLoadedMap)) {
     delete thumbnailLoadedMap[key];
+  }
+  for (const key of Object.keys(thumbnailAssignedAtMap)) {
+    delete thumbnailAssignedAtMap[key];
   }
   for (const timer of thumbnailRetryTimers.values()) {
     clearTimeout(timer);
@@ -5051,7 +5209,7 @@ const gridImagesToRender = computed(() => {
 });
 
 // Batch fetch metadata (including thumbnail) for visible range
-async function fetchThumbnailsBatch(start, end) {
+async function fetchThumbnailsBatch(start, end, meta = {}) {
   if (start === undefined || start === null) {
     start = renderStart.value;
   }
@@ -5061,8 +5219,22 @@ async function fetchThumbnailsBatch(start, end) {
 
   const requestEpoch = thumbnailRequestEpoch.value;
 
-  if (rangeCovers(loadedRanges.value, start, end)) return;
-  if (rangeCovers(pendingRanges, start, end)) return;
+  if (rangeCovers(pendingRanges, start, end)) {
+    console.log("[ImageGrid.vue] thumbnail fetch skipped (pending)", {
+      reason: meta?.reason || "unknown",
+      start,
+      end,
+    });
+    return;
+  }
+  if (!meta?.force && rangeCovers(loadedRanges.value, start, end)) {
+    console.log("[ImageGrid.vue] thumbnail fetch skipped (loaded)", {
+      reason: meta?.reason || "unknown",
+      start,
+      end,
+    });
+    return;
+  }
   pendingRanges.push([start, end]);
   // Fetch batch metadata for visible range
   try {
@@ -5102,10 +5274,31 @@ async function fetchThumbnailsBatch(start, end) {
       ...img,
       score: img.score ?? 0,
       idx: start + idx, // Ensure idx is global index
-      thumbnail: null,
+      thumbnail: img?.thumbnail ?? null,
+      faces: Array.isArray(img?.faces) ? img.faces : [],
+      hands: Array.isArray(img?.hands) ? img.hands : [],
+      penalised_tags: Array.isArray(img?.penalised_tags)
+        ? img.penalised_tags
+        : [],
+      thumbnail_width: img?.thumbnail_width,
+      thumbnail_height: img?.thumbnail_height,
     }));
-    // Now fetch thumbnails for these IDs
-    ids = ids.filter((id) => id !== null && id !== undefined);
+    // Now fetch thumbnails only for IDs missing a thumbnail
+    ids = gridImages
+      .filter(
+        (img) => img.id !== null && img.id !== undefined && !img.thumbnail,
+      )
+      .map((img) => img.id);
+    const requestedIdPreview = ids.slice(0, 8);
+    console.log("[ImageGrid.vue] thumbnail fetch prepared", {
+      reason: meta?.reason || "unknown",
+      start,
+      end,
+      rangeSize: Math.max(0, end - start),
+      missingCount: ids.length,
+      requestedIdPreview,
+      triggerId: meta?.triggerId ?? null,
+    });
     let overlayNeedsRedraw = false;
     if (ids.length) {
       ids = Array.from(new Set(ids.map((id) => String(id))));
@@ -5125,15 +5318,27 @@ async function fetchThumbnailsBatch(start, end) {
       if (requestEpoch !== thumbnailRequestEpoch.value) {
         return;
       }
+      const requestedIds = new Set(ids);
       for (const gridImg of gridImages) {
+        if (!requestedIds.has(String(gridImg.id))) {
+          continue;
+        }
         const thumbObj = thumbData[String(gridImg.id)];
         const thumbnailUrl =
           thumbObj && thumbObj.thumbnail ? thumbObj.thumbnail : null;
+        const previousThumbnail = gridImg.thumbnail || null;
         gridImg.thumbnail = thumbnailUrl
           ? thumbnailUrl.startsWith("http")
             ? thumbnailUrl
             : `${props.backendUrl}${thumbnailUrl}`
           : null;
+        if (
+          gridImg.id != null &&
+          gridImg.thumbnail &&
+          gridImg.thumbnail !== previousThumbnail
+        ) {
+          thumbnailAssignedAtMap[gridImg.id] = performance.now();
+        }
         if (gridImg.id != null && thumbObj && thumbObj.thumbnail) {
           thumbnailLoadedMap[gridImg.id] =
             (thumbnailLoadedMap[gridImg.id] || 0) + 1;
@@ -5203,6 +5408,15 @@ function updateVisibleThumbnails() {
     allGridImages.value.length,
     visibleEnd.value + renderBuffer.value,
   );
+  if (shouldSuppressVisibleWindowFetch(start, end)) {
+    console.log("[ImageGrid.vue] thumbnail fetch suppressed (expand overlap)", {
+      start,
+      end,
+      visibleStart: visibleStart.value,
+      visibleEnd: visibleEnd.value,
+    });
+    return;
+  }
   if (rangeCovers(loadedRanges.value, start, end)) return;
   if (rangeCovers(pendingRanges, start, end)) return;
   console.log("[ImageGrid.vue] Updating visible thumbnails:", {
@@ -5223,7 +5437,9 @@ function updateVisibleThumbnails() {
       return;
     }
     console.log("[ImageGrid.vue] Fetching thumbnails batch:", { start, end });
-    await fetchThumbnailsBatch(start, end);
+    await fetchThumbnailsBatch(start, end, {
+      reason: "visible-window",
+    });
   }, 80);
 }
 
