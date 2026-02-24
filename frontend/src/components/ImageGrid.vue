@@ -10,6 +10,7 @@
     :dateFormat="props.dateFormat"
     :showStacks="props.showStacks"
     :showProblemIcon="props.showProblemIcon"
+    :availablePlugins="availablePlugins"
     :comfyuiProgress="comfyuiProgress"
     :comfyuiProgressPercent="comfyuiProgressPercent"
     :comfyuiClientId="comfyuiClientId"
@@ -21,6 +22,7 @@
     @overlay-change="handleOverlayChange"
     @added-to-set="handleOverlayAddedToSet"
     @comfyui-run="handleComfyuiRun"
+    @run-plugin="handlePluginRunRequest"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -44,6 +46,7 @@
       :scrapheapPicturesId="String(props.scrapheapPicturesId)"
       :backend-url="props.backendUrl"
       :selected-image-ids="selectedImageIds"
+      :available-plugins="availablePlugins"
       :show-remove-from-stack="showRemoveFromStack"
       :visible="showSelectionBar"
       @clear-selection="clearSelection"
@@ -54,6 +57,7 @@
       @create-stack="createStackFromSelection"
       @remove-from-stack="removeSelectedFromStack"
       @create-stacks-from-groups="createStacksFromSelectedGroups"
+      @run-plugin="handlePluginRunRequest"
     />
     <EmptyScrapHeap
       v-if="showScrapheapBar"
@@ -602,6 +606,75 @@ const comfyuiWsState = reactive({
 let comfyuiWs = null;
 let comfyuiHideTimer = null;
 const comfyuiRefreshRetryTimers = new Map();
+
+const availablePlugins = ref([]);
+const pluginRunLoading = ref(false);
+
+async function fetchAvailablePlugins() {
+  if (!props.backendUrl) {
+    availablePlugins.value = [];
+    return;
+  }
+  try {
+    const res = await apiClient.get(`${props.backendUrl}/pictures/plugins`);
+    const plugins = Array.isArray(res.data?.plugins) ? res.data.plugins : [];
+    availablePlugins.value = plugins.filter((plugin) => plugin && plugin.name);
+  } catch (err) {
+    console.warn("Failed to load image plugins:", err);
+    availablePlugins.value = [];
+  }
+}
+
+function handlePluginRunRequest(payload) {
+  const pluginName = String(payload?.pluginName || "").trim();
+  const pictureIds = Array.isArray(payload?.pictureIds)
+    ? payload.pictureIds
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  const parameters =
+    payload?.parameters && typeof payload.parameters === "object"
+      ? payload.parameters
+      : {};
+  if (!pluginName || !pictureIds.length) return;
+  runPluginWithParameters(pluginName, pictureIds, parameters);
+}
+
+async function runPluginWithParameters(pluginName, pictureIds, parameters) {
+  if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
+  pluginRunLoading.value = true;
+  try {
+    const res = await apiClient.post(
+      `${props.backendUrl}/pictures/plugins/${encodeURIComponent(pluginName)}`,
+      {
+        picture_ids: pictureIds,
+        parameters: parameters || {},
+      },
+    );
+    const createdIds = Array.isArray(res.data?.created_picture_ids)
+      ? res.data.created_picture_ids
+      : [];
+    if (createdIds.length) {
+      const newIds = createdIds
+        .map((id) => PictureId(id))
+        .filter((id) => id != null);
+      if (newIds.length) {
+        triggerNewImageHighlight(newIds);
+      }
+    }
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+    if (overlayOpen.value && pictureIds.length) {
+      const firstId = pictureIds[0];
+      refreshGridImage(firstId);
+    }
+  } catch (err) {
+    console.error("Failed to run plugin:", err);
+    alert(err?.response?.data?.detail || err?.message || String(err));
+  } finally {
+    pluginRunLoading.value = false;
+  }
+}
 
 function isComfyuiDebugEnabled() {
   return (
@@ -1362,6 +1435,7 @@ let initialFetchTimer = null;
 
 onMounted(() => {
   window.addEventListener("resize", triggerFaceOverlayRedraw);
+  fetchAvailablePlugins();
   fetchAllPicturesCount();
   const mountFetchKey = buildGridFetchKey();
   if (!hasLoadedOnce.value && !imagesLoading.value) {
@@ -1402,6 +1476,13 @@ onMounted(() => {
     }
   });
 });
+
+watch(
+  () => props.backendUrl,
+  () => {
+    fetchAvailablePlugins();
+  },
+);
 
 onUnmounted(() => {
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
@@ -3777,7 +3858,7 @@ async function refreshExpandedStacksAfterFetch() {
       continue;
     }
     const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
-    const loaded = await ensureStackMembersLoaded(stackId);
+    const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
     if (loaded !== false) {
       const insertedCount = insertExpandedStackMembers(stackId, fallbackCount);
       if (insertedCount <= 0) {
@@ -4052,16 +4133,23 @@ function syncExpandAllStacksFromFetchedImages() {
   }
 }
 
-async function ensureStackMembersLoaded(stackId) {
+async function ensureStackMembersLoaded(stackId, expectedCount = null) {
   if (!stackId) return false;
+  const expected = Number(expectedCount ?? 0);
+  const minExpected = Number.isFinite(expected) && expected > 0 ? expected : 0;
   const localMembers = getLocalStackMembers(stackId);
-  if (localMembers.length) {
+  if (
+    localMembers.length &&
+    (minExpected <= 0 || localMembers.length >= minExpected)
+  ) {
     cacheExpandedStackMembers(stackId, localMembers);
     return true;
   }
   const existing = expandedStackMembers.value.get(stackId);
   if (existing && Array.isArray(existing.images) && existing.images.length) {
-    return true;
+    if (minExpected <= 0 || existing.images.length >= minExpected) {
+      return true;
+    }
   }
   const inFlight = expandedStackLoadPromises.get(stackId);
   if (inFlight) {
@@ -4129,7 +4217,7 @@ async function toggleStackExpand(img) {
   nextIds.add(stackId);
   expandedStackIds.value = nextIds;
   const stackCount = getStackBadgeCount(img);
-  const loaded = await ensureStackMembersLoaded(stackId);
+  const loaded = await ensureStackMembersLoaded(stackId, stackCount);
   if (loaded !== false) {
     const insertedCount = insertExpandedStackMembers(stackId, stackCount);
     if (insertedCount <= 0) {
@@ -4149,7 +4237,7 @@ async function toggleStackExpand(img) {
 function prefetchStackMembers(img) {
   const stackId = getPictureStackId(img);
   if (!stackId) return;
-  void ensureStackMembersLoaded(stackId);
+  void ensureStackMembersLoaded(stackId, getStackBadgeCount(img));
 }
 
 function getStackReorderCount(stackId, fallbackCount) {

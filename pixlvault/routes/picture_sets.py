@@ -79,7 +79,11 @@ def create_router(server) -> APIRouter:
             find_reference_character, picture_set_id
         )
 
-    @router.get("/picture_sets")
+    @router.get(
+        "/picture_sets",
+        summary="List picture sets",
+        description="Returns picture sets with visible member counts, top pictures, and thumbnail URLs.",
+    )
     async def get_picture_sets(request: Request):
         hidden_tags = _get_hidden_tags_from_request(request)
 
@@ -129,7 +133,11 @@ def create_router(server) -> APIRouter:
         logger.debug(f"Fetched picture set {result}")
         return result
 
-    @router.post("/picture_sets")
+    @router.post(
+        "/picture_sets",
+        summary="Create picture set",
+        description="Creates a new picture set with name and optional description.",
+    )
     async def create_picture_set(payload: dict = Body(...)):
         name = payload.get("name")
         description = payload.get("description", "")
@@ -148,7 +156,11 @@ def create_router(server) -> APIRouter:
         )
         return {"status": "success", "picture_set": set_dict}
 
-    @router.get("/picture_sets/{id}/thumbnail")
+    @router.get(
+        "/picture_sets/{id}/thumbnail",
+        summary="Get picture set thumbnail",
+        description="Returns or generates a cached composite thumbnail representing top-scoring pictures in a set.",
+    )
     async def get_picture_set_thumbnail(id: int, request: Request):
         thumbnail_cache_version = 16
         cache_dir = os.path.join(server.vault.image_root, "tmp", "set_thumbnails")
@@ -367,7 +379,11 @@ def create_router(server) -> APIRouter:
             final_img.save(buf, format="PNG")
             return Response(content=buf.getvalue(), media_type="image/png")
 
-    @router.get("/picture_sets/{id}")
+    @router.get(
+        "/picture_sets/{id}",
+        summary="Get picture set",
+        description="Returns set metadata or member pictures with optional sort, format, and character-likeness/smart-score modes.",
+    )
     async def get_picture_set(
         request: Request,
         id: int,
@@ -484,7 +500,11 @@ def create_router(server) -> APIRouter:
         pictures = server.vault.db.run_immediate_read_task(fetch_pics, picture_ids)
         return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
-    @router.patch("/picture_sets/{id}")
+    @router.patch(
+        "/picture_sets/{id}",
+        summary="Update picture set",
+        description="Updates picture set name and/or description.",
+    )
     async def update_picture_set(id: int, payload: dict = Body(...)):
         name = payload.get("name")
         description = payload.get("description")
@@ -508,7 +528,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Picture set not found")
         return {"status": "success"}
 
-    @router.delete("/picture_sets/{id}")
+    @router.delete(
+        "/picture_sets/{id}",
+        summary="Delete picture set",
+        description="Deletes a picture set and all its membership links.",
+    )
     async def delete_picture_set(id: int):
         def delete_set(session, id):
             picture_set = session.get(PictureSet, id)
@@ -530,7 +554,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Picture set not found")
         return {"status": "success", "deleted_id": id}
 
-    @router.get("/picture_sets/{id}/members")
+    @router.get(
+        "/picture_sets/{id}/members",
+        summary="List picture set members",
+        description="Returns unique picture ids that belong to a set, with optional deleted inclusion.",
+    )
     async def get_picture_set_pictures(
         id: int,
         include_deleted: bool = Query(False),
@@ -559,7 +587,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Picture set not found")
         return {"picture_ids": picture_ids}
 
-    @router.post("/picture_sets/{id}/members/{picture_id}")
+    @router.post(
+        "/picture_sets/{id}/members/{picture_id}",
+        summary="Add picture to set",
+        description="Adds one picture to a set when the set and picture are valid and membership does not already exist.",
+    )
     async def add_picture_to_set(id: int, picture_id: str):
         reference_character_id = _find_reference_character_id_for_set(id)
 
@@ -599,7 +631,11 @@ def create_router(server) -> APIRouter:
             )
         return {"status": "success"}
 
-    @router.delete("/picture_sets/{id}/members/{picture_id}")
+    @router.delete(
+        "/picture_sets/{id}/members/{picture_id}",
+        summary="Remove picture from set",
+        description="Removes one picture membership from a picture set.",
+    )
     async def remove_picture_from_set(id: int, picture_id: str):
         reference_character_id = _find_reference_character_id_for_set(id)
 

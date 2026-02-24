@@ -146,7 +146,11 @@ def create_router(server) -> APIRouter:
 
         return ordered
 
-    @router.get("/stacks/{stack_id}")
+    @router.get(
+        "/stacks/{stack_id}",
+        summary="Get stack details",
+        description="Returns stack metadata and ordered picture ids for a stack.",
+    )
     async def get_stack(stack_id: int, request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
@@ -168,7 +172,11 @@ def create_router(server) -> APIRouter:
         payload["picture_ids"] = [pic.id for pic in pictures]
         return payload
 
-    @router.get("/stacks/{stack_id}/pictures")
+    @router.get(
+        "/stacks/{stack_id}/pictures",
+        summary="List pictures in stack",
+        description="Returns ordered picture payloads for a stack using grid or metadata field sets.",
+    )
     async def get_stack_pictures(
         stack_id: int,
         request: Request,
@@ -232,7 +240,11 @@ def create_router(server) -> APIRouter:
             for pic in pictures
         ]
 
-    @router.get("/pictures/{picture_id}/stack")
+    @router.get(
+        "/pictures/{picture_id}/stack",
+        summary="Get picture's stack",
+        description="Returns the stack containing a picture, or null stack information when unstacked.",
+    )
     async def get_stack_for_picture(picture_id: int, request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
@@ -257,7 +269,11 @@ def create_router(server) -> APIRouter:
         payload["picture_ids"] = [pic.id for pic in pictures]
         return payload
 
-    @router.post("/stacks")
+    @router.post(
+        "/stacks",
+        summary="Create stack",
+        description="Creates a new stack or reuses an existing compatible one and assigns provided pictures to it.",
+    )
     async def create_stack(payload: dict = Body(...), request: Request = None):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
@@ -338,7 +354,11 @@ def create_router(server) -> APIRouter:
         payload["picture_ids"] = [pic.id for pic in pictures]
         return payload
 
-    @router.patch("/stacks/{stack_id}/order")
+    @router.patch(
+        "/stacks/{stack_id}/order",
+        summary="Reorder stack",
+        description="Sets explicit order for all members in a stack using a complete ordered id list.",
+    )
     async def reorder_stack(
         stack_id: int, payload: dict = Body(...), request: Request = None
     ):
@@ -385,7 +405,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Stack not found")
         return {"stack_id": stack_id, "picture_ids": result}
 
-    @router.post("/stacks/{stack_id}/members")
+    @router.post(
+        "/stacks/{stack_id}/members",
+        summary="Add stack members",
+        description="Adds pictures to an existing stack while preventing cross-stack membership conflicts.",
+    )
     async def add_stack_members(
         stack_id: int, payload: dict = Body(...), request: Request = None
     ):
@@ -447,7 +471,11 @@ def create_router(server) -> APIRouter:
         payload["picture_ids"] = [pic.id for pic in pictures]
         return payload
 
-    @router.delete("/stacks/{stack_id}/members")
+    @router.delete(
+        "/stacks/{stack_id}/members",
+        summary="Remove stack members",
+        description="Removes pictures from a stack and deletes the stack when one or fewer members remain.",
+    )
     async def remove_stack_members(
         stack_id: int, payload: dict = Body(...), request: Request = None
     ):

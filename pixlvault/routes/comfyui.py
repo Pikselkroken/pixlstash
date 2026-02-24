@@ -643,7 +643,11 @@ def create_router(server) -> APIRouter:
             except Exception:
                 pass
 
-    @router.get("/comfyui/workflows")
+    @router.get(
+        "/comfyui/workflows",
+        summary="List ComfyUI workflows",
+        description="Lists discovered built-in and user workflows with placeholder validation metadata.",
+    )
     async def list_comfyui_workflows():
         workflow_dir = _workflow_base_dir()
         workflow_dirs = {
@@ -685,7 +689,11 @@ def create_router(server) -> APIRouter:
             "workflow_dirs": workflow_dirs,
         }
 
-    @router.delete("/comfyui/workflows/{workflow_name}")
+    @router.delete(
+        "/comfyui/workflows/{workflow_name}",
+        summary="Delete user workflow",
+        description="Deletes a workflow JSON from the user workflow directory.",
+    )
     async def delete_comfyui_workflow(workflow_name: str):
         normalized = _normalize_workflow_name(workflow_name)
         if not normalized:
@@ -701,7 +709,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=500, detail="Failed to delete workflow")
         return {"status": "success", "name": normalized}
 
-    @router.post("/comfyui/run_i2i")
+    @router.post(
+        "/comfyui/run_i2i",
+        summary="Run ComfyUI image-to-image",
+        description="Submits i2i prompts for one or more picture ids and imports generated outputs back into PixlVault.",
+    )
     async def run_comfyui_i2i(request: Request, payload: dict = Body(...)):
         workflow_name = _normalize_workflow_name(payload.get("workflow_name"))
         if not workflow_name:
@@ -820,7 +832,11 @@ def create_router(server) -> APIRouter:
 
         return {"status": "success", "prompts": prompts}
 
-    @router.post("/comfyui/workflows/import")
+    @router.post(
+        "/comfyui/workflows/import",
+        summary="Import ComfyUI workflow",
+        description="Saves a workflow JSON into the user workflow directory, optionally overwriting an existing file.",
+    )
     async def import_comfyui_workflow(payload: dict = Body(...)):
         name = _normalize_workflow_name(payload.get("name"))
         if not name:

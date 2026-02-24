@@ -41,6 +41,8 @@ from pixlvault.db_models import (
     Tag,
 )
 from pixlvault.event_types import EventType
+from pixlvault.image_plugins.registry import get_image_plugin_manager
+from pixlvault.image_plugins.service import apply_plugin_to_pictures
 from pixlvault.pixl_logging import get_logger
 from pixlvault.picture_scoring import (
     compute_character_likeness_for_faces,
@@ -396,14 +398,100 @@ def _select_pictures_for_listing(
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/sort_mechanisms")
+    @router.get(
+        "/sort_mechanisms",
+        summary="List picture sort mechanisms",
+        description="Returns all available sorting keys and direction semantics supported by picture listing and search endpoints.",
+    )
     async def get_pictures_sort_mechanisms():
         """Return available sorting mechanisms for pictures."""
         result = SortMechanism.all()
         logger.debug("Returning sort mechanisms: {}".format(result))
         return result
 
-    @router.get("/pictures/stacks")
+    @router.get(
+        "/pictures/plugins",
+        summary="List image plugins",
+        description="Lists available image plugins and their parameter schemas.",
+    )
+    async def list_picture_plugins():
+        manager = get_image_plugin_manager()
+        manager.reload()
+        return {
+            "plugins": manager.list_plugins(),
+            "plugin_errors": manager.list_errors(),
+            "plugin_dirs": {
+                "built_in": manager.built_in_dir,
+                "user": manager.user_dir,
+            },
+        }
+
+    @router.post(
+        "/pictures/plugins/{name}",
+        summary="Run image plugin",
+        description="Runs a named image plugin on selected pictures and imports outputs into stacks.",
+    )
+    async def run_picture_plugin(name: str, payload: dict = Body(...)):
+        manager = get_image_plugin_manager()
+        manager.reload()
+        plugin = manager.get_plugin(name)
+        if plugin is None:
+            raise HTTPException(status_code=404, detail="Plugin not found")
+
+        raw_picture_ids = payload.get("picture_ids")
+        if not isinstance(raw_picture_ids, list) or not raw_picture_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+
+        try:
+            picture_ids = [
+                int(pic_id) for pic_id in raw_picture_ids if pic_id is not None
+            ]
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="picture_ids must contain integers"
+            )
+
+        if not picture_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must contain integers"
+            )
+
+        parameters = payload.get("parameters") or {}
+        if not isinstance(parameters, dict):
+            raise HTTPException(status_code=400, detail="parameters must be an object")
+
+        try:
+            result = apply_plugin_to_pictures(
+                server,
+                plugin,
+                picture_ids,
+                parameters,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            logger.warning("Plugin run failed for '%s': %s", name, exc)
+            raise HTTPException(status_code=500, detail=f"Plugin failed: {exc}")
+
+        created_ids = result.get("created_picture_ids") or []
+        output_ids = result.get("output_picture_ids") or []
+        if created_ids:
+            server.vault.notify(EventType.PICTURE_IMPORTED, created_ids)
+        if output_ids:
+            server.vault.notify(EventType.CHANGED_PICTURES, output_ids)
+
+        return {
+            "status": "success",
+            **result,
+        }
+
+    @router.get(
+        "/pictures/stacks",
+        summary="List computed picture stack groups",
+        description="Builds stack-like groups from likeness edges using filtering options such as character, set, format, and threshold.",
+    )
     async def get_picture_stacks(
         request: Request,
         threshold: float = 0.0,
@@ -768,7 +856,11 @@ def create_router(server) -> APIRouter:
 
         return response
 
-    @router.get("/pictures/thumbnails/{id}.webp")
+    @router.get(
+        "/pictures/thumbnails/{id}.webp",
+        summary="Get picture thumbnail image",
+        description="Returns a WebP thumbnail for a picture id, generating and caching it on demand when needed.",
+    )
     async def get_thumbnail(id: int):
         def fetch_picture(session: Session, picture_id: int):
             pics = Picture.find(
@@ -824,7 +916,11 @@ def create_router(server) -> APIRouter:
 
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
-    @router.post("/pictures/thumbnails")
+    @router.post(
+        "/pictures/thumbnails",
+        summary="Get batch thumbnail metadata",
+        description="Returns thumbnail URLs and mapped face/hand overlays for a list of picture ids, including penalised-tag hints.",
+    )
     async def get_thumbnails(request: Request, payload: dict = Body(...)):
         ids = payload.get("ids", [])
         if not isinstance(ids, list):
@@ -1016,7 +1112,11 @@ def create_router(server) -> APIRouter:
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
 
-    @router.get("/pictures/export")
+    @router.get(
+        "/pictures/export",
+        summary="Start picture export job",
+        description="Queues an asynchronous export task and returns a task id for polling status and downloading the generated archive.",
+    )
     async def export_pictures_zip(
         request: Request,
         background_tasks: BackgroundTasks,
@@ -1060,7 +1160,11 @@ def create_router(server) -> APIRouter:
         )
         return JSONResponse({"task_id": task_id})
 
-    @router.get("/pictures/export/status")
+    @router.get(
+        "/pictures/export/status",
+        summary="Get export job status",
+        description="Returns current progress for an export task id, including completion state and download URL when ready.",
+    )
     async def export_status(task_id: str):
         task = server.export_tasks.get(task_id)
         if not task:
@@ -1086,7 +1190,11 @@ def create_router(server) -> APIRouter:
             "progress": progress,
         }
 
-    @router.get("/pictures/export/download/{task_id}")
+    @router.get(
+        "/pictures/export/download/{task_id}",
+        summary="Download completed export",
+        description="Downloads the generated export file for a completed task id.",
+    )
     async def download_export(task_id: str):
         task = server.export_tasks.get(task_id)
         if not task or task["status"] != "completed":
@@ -1095,7 +1203,11 @@ def create_router(server) -> APIRouter:
         filename = task.get("filename") or os.path.basename(task["file_path"])
         return FileResponse(task["file_path"], filename=filename)
 
-    @router.get("/pictures/search")
+    @router.get(
+        "/pictures/search",
+        summary="Search pictures by text",
+        description="Performs semantic text search across pictures with optional sort, filtering, and candidate scoping.",
+    )
     async def search_pictures(
         request: Request,
         query: str,
@@ -1326,7 +1438,11 @@ def create_router(server) -> APIRouter:
                 ]
         return [Picture.serialize_with_likeness(r) for r in results]
 
-    @router.post("/pictures/import")
+    @router.post(
+        "/pictures/import",
+        summary="Import media files",
+        description="Starts an asynchronous import of uploaded image/video files (or zip contents) and returns a task id.",
+    )
     async def import_pictures(
         background_tasks: BackgroundTasks,
         file: list[UploadFile] = File(None),
@@ -1553,7 +1669,11 @@ def create_router(server) -> APIRouter:
         background_tasks.add_task(run_import_task, server)
         return {"task_id": task_id}
 
-    @router.get("/pictures/import/status")
+    @router.get(
+        "/pictures/import/status",
+        summary="Get import job status",
+        description="Returns progress and result information for a previously started import task.",
+    )
     async def import_status(task_id: str):
         task = server.import_tasks.get(task_id)
         if not task:
@@ -1575,7 +1695,11 @@ def create_router(server) -> APIRouter:
             payload["error"] = task.get("error")
         return payload
 
-    @router.get("/pictures/{id}.{ext}")
+    @router.get(
+        "/pictures/{id}.{ext}",
+        summary="Get original picture file",
+        description="Streams the original media file for a picture id when the requested extension matches the stored format.",
+    )
     async def get_picture(request: Request, id: str, ext: str):
         if not isinstance(id, str):
             logger.error(f"Invalid id type: {type(id)} value: {id}")
@@ -1634,7 +1758,11 @@ def create_router(server) -> APIRouter:
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
 
-    @router.get("/pictures/{id}/metadata")
+    @router.get(
+        "/pictures/{id}/metadata",
+        summary="Get picture metadata",
+        description="Returns metadata, tags, and optional smart score for a single picture, including embedded file metadata when available.",
+    )
     async def get_picture_metadata(
         request: Request,
         id: str,
@@ -1745,7 +1873,11 @@ def create_router(server) -> APIRouter:
         logger.debug("Returning dict: " + str(pic_dict))
         return pic_dict
 
-    @router.post("/pictures/{id}/face")
+    @router.post(
+        "/pictures/{id}/face",
+        summary="Create manual face entry",
+        description="Adds a face bounding box to a picture and frame index, updating sentinel/ordering behavior for manual annotations.",
+    )
     async def create_picture_face(id: str, payload: dict = Body(...)):
         try:
             pic_id = int(id)
@@ -1802,7 +1934,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_PICTURES)
         return safe_model_dict(face)
 
-    @router.post("/pictures/{id}/hand")
+    @router.post(
+        "/pictures/{id}/hand",
+        summary="Create manual hand entry",
+        description="Adds a hand bounding box to a picture and frame index, updating sentinel/ordering behavior for manual annotations.",
+    )
     async def create_picture_hand(id: str, payload: dict = Body(...)):
         try:
             pic_id = int(id)
@@ -1859,7 +1995,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_PICTURES)
         return safe_model_dict(hand)
 
-    @router.delete("/pictures/{id}/face/{index}")
+    @router.delete(
+        "/pictures/{id}/face/{index}",
+        summary="Delete face by index",
+        description="Deletes a face at frame 0 by index and reindexes remaining faces for stable ordering.",
+    )
     async def delete_picture_face(id: str, index: int):
         try:
             pic_id = int(id)
@@ -1917,7 +2057,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_PICTURES)
         return {"status": "success", "message": "Face deleted."}
 
-    @router.delete("/pictures/{id}/hand/{index}")
+    @router.delete(
+        "/pictures/{id}/hand/{index}",
+        summary="Delete hand by index",
+        description="Deletes a hand at frame 0 by index and reindexes remaining hands for stable ordering.",
+    )
     async def delete_picture_hand(id: str, index: int):
         try:
             pic_id = int(id)
@@ -1974,7 +2118,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_PICTURES)
         return {"status": "success", "message": "Hand deleted."}
 
-    @router.get("/pictures/{id}/character_likeness")
+    @router.get(
+        "/pictures/{id}/character_likeness",
+        summary="Get picture character likeness",
+        description="Computes max character-likeness score for faces in a picture against a reference character.",
+    )
     async def get_picture_character_likeness(
         id: str,
         reference_character_id: int = Query(...),
@@ -2079,7 +2227,11 @@ def create_router(server) -> APIRouter:
             "eligible": True,
         }
 
-    @router.get("/pictures/{id}/{field}")
+    @router.get(
+        "/pictures/{id}/{field}",
+        summary="Get raw picture field",
+        description="Returns a single picture field value; large binary fields are base64 encoded and thumbnail returns image bytes.",
+    )
     async def get_picture_field(id: str, field: str):
         pics = server.vault.db.run_task(
             lambda session: Picture.find(
@@ -2100,7 +2252,11 @@ def create_router(server) -> APIRouter:
             return {field: base64.b64encode(getattr(pic, field)).decode("utf-8")}
         return {field: safe_model_dict(getattr(pic, field))}
 
-    @router.patch("/pictures/{id}")
+    @router.patch(
+        "/pictures/{id}",
+        summary="Patch picture fields",
+        description="Updates mutable picture fields from query/body parameters, including tag replacement when provided.",
+    )
     async def patch_picture(id: str, request: Request):
         params = dict(request.query_params)
 
@@ -2198,7 +2354,11 @@ def create_router(server) -> APIRouter:
 
         return {"status": "success", "picture": safe_model_dict(pic)}
 
-    @router.post("/pictures/scrapheap/restore")
+    @router.post(
+        "/pictures/scrapheap/restore",
+        summary="Restore deleted pictures",
+        description="Restores deleted pictures from scrapheap, either all deleted pictures or a provided picture id subset.",
+    )
     async def restore_scrapheap(payload: dict | None = Body(None)):
         picture_ids = None
         if payload:
@@ -2232,14 +2392,20 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_PICTURES)
         return {"status": "success", "restored_count": restored_count}
 
-    @router.delete("/pictures/scrapheap")
+    @router.delete(
+        "/pictures/scrapheap",
+        summary="Permanently delete scrapheap pictures",
+        description="Permanently removes deleted pictures from database and disk for provided ids or for all scrapheap items when omitted.",
+    )
     async def delete_scrapheap_selection(
         background_tasks: BackgroundTasks,
         payload: dict | None = Body(None),
     ):
         ids = None
         if payload is not None:
-            maybe_ids = payload.get("picture_ids") if isinstance(payload, dict) else None
+            maybe_ids = (
+                payload.get("picture_ids") if isinstance(payload, dict) else None
+            )
             if maybe_ids is not None:
                 if not isinstance(maybe_ids, list) or not maybe_ids:
                     raise HTTPException(
@@ -2255,12 +2421,16 @@ def create_router(server) -> APIRouter:
                     )
 
         def fetch_deleted(session: Session, ids: list[int] | None):
-            query = select(Picture.id, Picture.file_path).where(Picture.deleted.is_(True))
+            query = select(Picture.id, Picture.file_path).where(
+                Picture.deleted.is_(True)
+            )
             if ids is not None:
                 query = query.where(Picture.id.in_(ids))
             return session.exec(query).all()
 
-        rows = server.vault.db.run_task(fetch_deleted, ids, priority=DBPriority.IMMEDIATE)
+        rows = server.vault.db.run_task(
+            fetch_deleted, ids, priority=DBPriority.IMMEDIATE
+        )
         if not rows:
             return {"status": "success", "deleted_count": 0}
 
@@ -2311,7 +2481,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_PICTURES)
         return {"status": "success", "deleted_count": deleted_count}
 
-    @router.delete("/pictures/{id}")
+    @router.delete(
+        "/pictures/{id}",
+        summary="Move picture to scrapheap",
+        description="Soft-deletes a picture by marking it deleted, making it appear in scrapheap views.",
+    )
     async def delete_picture(id: str):
         def delete_pic(session, id):
             pic = session.get(Picture, id)
@@ -2331,7 +2505,11 @@ def create_router(server) -> APIRouter:
             content={"status": "success", "message": f"Picture id={id} deleted."}
         )
 
-    @router.get("/pictures")
+    @router.get(
+        "/pictures",
+        summary="List pictures",
+        description="Lists pictures with filtering, sort, pagination, and optional grid field projection.",
+    )
     async def list_pictures(
         request: Request,
         sort: str = Query(None),
