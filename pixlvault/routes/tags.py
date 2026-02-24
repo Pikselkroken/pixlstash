@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Body, HTTPException
 from sqlmodel import Session, delete, select
 
-from pixlvault.database import DBPriority
 from pixlvault.db_models import (
     Face,
     FaceTag,
@@ -21,7 +20,11 @@ logger = get_logger(__name__)
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
-    @router.post("/pictures/{id}/tags")
+    @router.post(
+        "/pictures/{id}/tags",
+        summary="Add tag to picture",
+        description="Adds a tag to a picture and removes empty-tag sentinel when appropriate.",
+    )
     async def add_tag_to_picture(id: str, payload: dict = Body(...)):
         try:
             try:
@@ -79,7 +82,11 @@ def create_router(server) -> APIRouter:
             logger.error(f"Failed to add tag: {e}")
             raise HTTPException(status_code=500, detail="Failed to add tag")
 
-    @router.get("/pictures/{id}/tags")
+    @router.get(
+        "/pictures/{id}/tags",
+        summary="List picture tags",
+        description="Returns all tags currently attached to a picture.",
+    )
     async def list_picture_tags(id: str):
         try:
             try:
@@ -110,7 +117,11 @@ def create_router(server) -> APIRouter:
                 status_code=500, detail="Failed to list tags for picture"
             )
 
-    @router.delete("/pictures/{id}/tags/{tag_id}")
+    @router.delete(
+        "/pictures/{id}/tags/{tag_id}",
+        summary="Remove picture tag",
+        description="Removes one tag from a picture by numeric tag id and restores empty-tag sentinel when needed.",
+    )
     async def remove_tag_from_picture(id: str, tag_id: str):
         try:
             try:
@@ -171,7 +182,11 @@ def create_router(server) -> APIRouter:
             logger.error(f"Failed to remove tag: {e}")
             raise HTTPException(status_code=500, detail="Failed to remove tag")
 
-    @router.post("/pictures/{id}/tags/remove_all")
+    @router.post(
+        "/pictures/{id}/tags/remove_all",
+        summary="Remove tag everywhere on picture",
+        description="Removes a tag value from the picture and its face/hand associations for that picture.",
+    )
     async def remove_tag_from_picture_everywhere(id: str, payload: dict = Body(...)):
         try:
             pic_id = int(id)
@@ -224,7 +239,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_TAGS)
         return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
 
-    @router.get("/faces/{face_id}/tags")
+    @router.get(
+        "/faces/{face_id}/tags",
+        summary="List face tags",
+        description="Returns tags currently linked to a face.",
+    )
     async def list_face_tags(face_id: int):
         def fetch_tags(session: Session, face_id: int):
             face = session.get(Face, face_id)
@@ -240,7 +259,11 @@ def create_router(server) -> APIRouter:
         tags = server.vault.db.run_task(fetch_tags, face_id)
         return {"tags": tags}
 
-    @router.post("/faces/{face_id}/tags")
+    @router.post(
+        "/faces/{face_id}/tags",
+        summary="Add tag to face",
+        description="Associates a tag with a face, creating the underlying picture tag when missing.",
+    )
     async def add_tag_to_face(face_id: int, payload: dict = Body(...)):
         tag_value = (payload or {}).get("tag")
         if not tag_value:
@@ -280,7 +303,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_TAGS)
         return {"status": "success", "tags": tags}
 
-    @router.delete("/faces/{face_id}/tags/{tag}")
+    @router.delete(
+        "/faces/{face_id}/tags/{tag}",
+        summary="Remove tag from face",
+        description="Removes a tag association from a face using either tag id or tag value.",
+    )
     async def remove_tag_from_face(face_id: int, tag: str):
         def update_face(session: Session, face_id: int, tag_value: str):
             face = session.get(Face, face_id)
@@ -312,7 +339,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_TAGS)
         return {"status": "success", "tags": tags}
 
-    @router.get("/hands/{hand_id}/tags")
+    @router.get(
+        "/hands/{hand_id}/tags",
+        summary="List hand tags",
+        description="Returns tags currently linked to a hand.",
+    )
     async def list_hand_tags(hand_id: int):
         def fetch_tags(session: Session, hand_id: int):
             hand = session.get(Hand, hand_id)
@@ -328,7 +359,11 @@ def create_router(server) -> APIRouter:
         tags = server.vault.db.run_task(fetch_tags, hand_id)
         return {"tags": tags}
 
-    @router.post("/hands/{hand_id}/tags")
+    @router.post(
+        "/hands/{hand_id}/tags",
+        summary="Add tag to hand",
+        description="Associates a tag with a hand, creating the underlying picture tag when missing.",
+    )
     async def add_tag_to_hand(hand_id: int, payload: dict = Body(...)):
         tag_value = (payload or {}).get("tag")
         if not tag_value:
@@ -368,7 +403,11 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_TAGS)
         return {"status": "success", "tags": tags}
 
-    @router.delete("/hands/{hand_id}/tags/{tag}")
+    @router.delete(
+        "/hands/{hand_id}/tags/{tag}",
+        summary="Remove tag from hand",
+        description="Removes a tag association from a hand using either tag id or tag value.",
+    )
     async def remove_tag_from_hand(hand_id: int, tag: str):
         def update_hand(session: Session, hand_id: int, tag_value: str):
             hand = session.get(Hand, hand_id)

@@ -39,7 +39,11 @@ def create_router(server) -> APIRouter:
         normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
         return normalized or []
 
-    @router.get("/characters/{id}/summary")
+    @router.get(
+        "/characters/{id}/summary",
+        summary="Get character category summary",
+        description="Returns summary counts and thumbnail reference for ALL, UNASSIGNED, SCRAPHEAP, or a specific character id.",
+    )
     async def get_characters_summary(request: Request, id: str = None):
         """
         Return summary statistics for a single category:
@@ -153,7 +157,11 @@ def create_router(server) -> APIRouter:
         logger.debug(f"Category summary: {summary}")
         return summary
 
-    @router.get("/characters/{id}/reference_pictures")
+    @router.get(
+        "/characters/{id}/reference_pictures",
+        summary="List reference pictures",
+        description="Returns picture ids selected as reference faces for the given character.",
+    )
     async def get_character_reference_pictures(id: int):
         """Return reference picture ids for a character.
 
@@ -192,7 +200,11 @@ def create_router(server) -> APIRouter:
         )
         return {"reference_picture_ids": picture_ids}
 
-    @router.patch("/characters/{id}")
+    @router.patch(
+        "/characters/{id}",
+        summary="Update character",
+        description="Updates character fields and clears dependent picture text embeddings when identity data changes.",
+    )
     async def patch_character(id: int, request: Request):
         data = await request.json()
         name = data.get("name")
@@ -233,7 +245,11 @@ def create_router(server) -> APIRouter:
 
         return {"status": "success", "character": char}
 
-    @router.delete("/characters/{id}")
+    @router.delete(
+        "/characters/{id}",
+        summary="Delete character",
+        description="Deletes a character, clears character assignment from faces, and removes its reference set when present.",
+    )
     async def delete_character(id: int):
         try:
 
@@ -278,7 +294,11 @@ def create_router(server) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
 
-    @router.get("/characters/{id}")
+    @router.get(
+        "/characters/{id}",
+        summary="Get character by id",
+        description="Returns a single character record by id.",
+    )
     async def get_character_by_id(id: int):
         try:
             char = server.vault.db.run_immediate_read_task(
@@ -288,7 +308,11 @@ def create_router(server) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
 
-    @router.get("/characters/{id}/{field}")
+    @router.get(
+        "/characters/{id}/{field}",
+        summary="Get character field",
+        description="Returns one character field value, including generated thumbnail handling for field=thumbnail.",
+    )
     async def get_character_field_by_id(id: int, field: str):
         if field == "thumbnail":
             thumbnail_cache_version = 6
@@ -500,7 +524,11 @@ def create_router(server) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
 
-    @router.get("/characters")
+    @router.get(
+        "/characters",
+        summary="List characters",
+        description="Lists characters, optionally filtered by exact name.",
+    )
     async def get_characters(name: str = Query(None)):
         try:
             logger.debug(f"Fetching characters with name: {name}")
@@ -515,7 +543,11 @@ def create_router(server) -> APIRouter:
             logger.error(f"Error fetching characters: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
-    @router.post("/characters")
+    @router.post(
+        "/characters",
+        summary="Create character",
+        description="Creates a character and its linked reference picture set.",
+    )
     async def create_character(payload: dict = Body(...)):
         try:
 
@@ -549,7 +581,11 @@ def create_router(server) -> APIRouter:
             logger.error(f"Error creating character: {e}")
             raise HTTPException(status_code=400, detail="Invalid character data")
 
-    @router.post("/characters/{character_id}/faces")
+    @router.post(
+        "/characters/{character_id}/faces",
+        summary="Assign faces to character",
+        description="Assigns provided face ids or largest faces from picture ids to a character.",
+    )
     async def assign_face_to_character(character_id: int, payload: dict = Body(...)):
         face_ids = payload.get("face_ids")
         picture_ids = payload.get("picture_ids")
@@ -651,7 +687,11 @@ def create_router(server) -> APIRouter:
             "character_id": character_id,
         }
 
-    @router.delete("/characters/{character_id}/faces")
+    @router.delete(
+        "/characters/{character_id}/faces",
+        summary="Unassign faces from character",
+        description="Removes character assignment from provided face ids or from faces in provided picture ids.",
+    )
     async def remove_character_from_faces(character_id: int, payload: dict = Body(...)):
         face_ids = payload.get("face_ids", None)
         picture_ids = payload.get("picture_ids", None)

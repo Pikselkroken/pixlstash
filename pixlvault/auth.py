@@ -434,14 +434,21 @@ class AuthService:
         excluded_paths = [
             "/login",
             "/docs",
+            "/redoc",
             "/openapi.json",
+            "/docs/oauth2-redirect",
             "/favicon.ico",
             "/",
             "/version",
             "/check-session",
             "/logout",
         ]
-        excluded_prefixes = ["/assets/", "/pictures/shared/"]
+        excluded_prefixes = [
+            "/assets/",
+            "/pictures/shared/",
+            "/docs/",
+            "/redoc/",
+        ]
         if request.method == "OPTIONS":
             return await call_next(request)
 

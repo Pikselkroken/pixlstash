@@ -1,0 +1,2 @@
+*.py
+!plugin_template.py

@@ -323,13 +323,21 @@ def create_router(server) -> APIRouter:
     class CreateTokenRequest(BaseModel):
         description: Optional[str] = None
 
-    @router.get("/users/me/config")
+    @router.get(
+        "/users/me/config",
+        summary="Get current user config",
+        description="Returns the authenticated user's UI and behavior configuration payload.",
+    )
     async def get_me_config(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
         return serialize_user_config(user)
 
-    @router.patch("/users/me/config")
+    @router.patch(
+        "/users/me/config",
+        summary="Update current user config",
+        description="Applies a partial config patch for the authenticated user and returns updated settings.",
+    )
     async def patch_me_config(request: Request):
         _ensure_secure_when_required(request)
         user_id = server.auth.require_user_id(request)
@@ -371,29 +379,53 @@ def create_router(server) -> APIRouter:
             "config": serialize_user_config(user),
         }
 
-    @router.post("/users/me/auth")
+    @router.post(
+        "/users/me/auth",
+        summary="Change current user password",
+        description="Changes the authenticated user's password according to auth policy.",
+    )
     async def change_me_password(payload: ChangePasswordRequest, request: Request):
         result = server.auth.change_password(request, payload)
         server._user = server.auth.user
         return result
 
-    @router.get("/users/me/auth")
+    @router.get(
+        "/users/me/auth",
+        summary="Get auth state",
+        description="Returns authentication and session-related information for the current request.",
+    )
     async def get_me_auth(request: Request):
         return server.auth.get_auth_info(request)
 
-    @router.post("/users/me/token")
+    @router.post(
+        "/users/me/token",
+        summary="Create API token",
+        description="Creates a personal access token for the authenticated user.",
+    )
     async def create_me_token(payload: CreateTokenRequest, request: Request):
         return server.auth.create_token(request, payload.description)
 
-    @router.get("/users/me/token")
+    @router.get(
+        "/users/me/token",
+        summary="List API tokens",
+        description="Lists personal access tokens owned by the authenticated user.",
+    )
     async def list_me_tokens(request: Request):
         return server.auth.list_tokens(request)
 
-    @router.delete("/users/me/token/{token_id}")
+    @router.delete(
+        "/users/me/token/{token_id}",
+        summary="Delete API token",
+        description="Deletes one personal access token by id for the authenticated user.",
+    )
     async def delete_me_token(token_id: int, request: Request):
         return server.auth.delete_token(request, token_id)
 
-    @router.get("/workers/progress")
+    @router.get(
+        "/workers/progress",
+        summary="Get worker progress",
+        description="Returns background worker progress plus process CPU, RAM, and VRAM usage metrics.",
+    )
     async def get_workers_progress(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
@@ -403,7 +435,11 @@ def create_router(server) -> APIRouter:
             "process": _get_process_usage(),
         }
 
-    @router.get("/server-config/watch-folders")
+    @router.get(
+        "/server-config/watch-folders",
+        summary="List watch folders",
+        description="Returns watch-folder paths from server configuration.",
+    )
     async def get_watch_folders(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
@@ -414,7 +450,11 @@ def create_router(server) -> APIRouter:
             "watch_folders": folders,
         }
 
-    @router.post("/server-config/open")
+    @router.post(
+        "/server-config/open",
+        summary="Open server config location",
+        description="Opens the server config path in the operating system file browser.",
+    )
     async def open_server_config(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)

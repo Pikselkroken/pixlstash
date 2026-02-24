@@ -7,6 +7,15 @@ A REST API server for PixlVault
 - Install dependencies: `pip install -e .`
 - Run server: `python -m pixlvault.server`
 
+## Image Plugins
+
+- Built-in plugins live in `image-plugins/built-in/`.
+- Current built-ins: `colour_filter`, `scaling`.
+- User plugins live in `image-plugins/user/`.
+- Start from the template: `image-plugins/user/plugin_template.py`.
+- Copy the template to a new `.py` file in `image-plugins/user/`, then rename class/id and implement `run()`.
+- `plugin_template.py` is intentionally ignored by plugin discovery.
+
 ## Database Migrations (Alembic)
 
 PixlVault uses Alembic for schema changes. The server runs migrations on startup.

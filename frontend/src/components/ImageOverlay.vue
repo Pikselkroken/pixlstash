@@ -38,8 +38,9 @@
         </div>
         <div class="overlay-top-actions">
           <v-menu
-            v-model="comfyuiMenuOpen"
+            v-model="pluginMenuOpen"
             :close-on-content-click="false"
+            location-strategy="connected"
             location="bottom end"
             origin="top end"
             transition="scale-transition"
@@ -49,17 +50,86 @@
                 v-bind="props"
                 class="overlay-icon-btn overlay-comfy-activator"
                 type="button"
-                title="Run ComfyUI I2I"
-                aria-label="Run ComfyUI I2I"
+                title="Run image plugin"
+                aria-label="Run image plugin"
                 :class="{
                   hidden: chromeHidden,
-                  'overlay-icon-btn--active': comfyuiMenuOpen,
+                  'overlay-icon-btn--active': pluginMenuOpen,
                 }"
               >
-                <v-icon size="20">mdi-robot</v-icon>
-                <span class="overlay-comfy-activator-label">I2I</span>
+                <v-icon size="20">mdi-tune-variant</v-icon>
+                <span class="overlay-comfy-activator-label">Plugin</span>
               </button>
             </template>
+            <div class="overlay-comfy-panel">
+              <div class="overlay-comfy-header">Image Plugins</div>
+              <div class="overlay-comfy-body">
+                <div
+                  v-if="!overlayPluginOptions.length"
+                  class="overlay-comfy-warning"
+                >
+                  No plugins available.
+                </div>
+                <template v-else>
+                  <label class="overlay-comfy-field-label">Plugin</label>
+                  <select
+                    v-model="overlaySelectedPluginName"
+                    class="overlay-comfy-select"
+                  >
+                    <option
+                      v-for="plugin in overlayPluginOptions"
+                      :key="plugin.name"
+                      :value="plugin.name"
+                    >
+                      {{ plugin.display_name || plugin.name }}
+                    </option>
+                  </select>
+                  <PluginParametersUI
+                    v-model="overlayPluginParameters"
+                    :plugin="activeOverlayPluginSchema"
+                    :show-description="true"
+                    tone="dark"
+                    input-class="overlay-comfy-select"
+                    label-class="overlay-comfy-field-label"
+                  />
+                  <div class="overlay-comfy-actions">
+                    <button
+                      class="overlay-comfy-run"
+                      type="button"
+                      :disabled="!image || !overlaySelectedPluginName"
+                      @click.stop="runOverlayPlugin"
+                    >
+                      <v-icon size="16">mdi-play</v-icon>
+                      <span>Run</span>
+                    </button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </v-menu>
+          <div class="overlay-menu-anchor">
+            <button
+              class="overlay-icon-btn overlay-comfy-activator"
+              type="button"
+              title="Run ComfyUI I2I"
+              aria-label="Run ComfyUI I2I"
+              :class="{
+                hidden: chromeHidden,
+                'overlay-icon-btn--active': comfyuiMenuOpen,
+              }"
+            >
+              <v-icon size="20">mdi-robot</v-icon>
+              <span class="overlay-comfy-activator-label">I2I</span>
+            </button>
+            <v-menu
+              v-model="comfyuiMenuOpen"
+              activator="parent"
+              :close-on-content-click="false"
+              location-strategy="connected"
+              location="bottom end"
+              origin="top end"
+              transition="scale-transition"
+            >
             <div class="overlay-comfy-panel">
               <div class="overlay-comfy-header">ComfyUI I2I</div>
               <div v-if="comfyuiWorkflowLoading" class="overlay-comfy-status">
@@ -140,7 +210,8 @@
                 </div>
               </div>
             </div>
-          </v-menu>
+            </v-menu>
+          </div>
           <AddToSetControl
             v-if="image"
             :key="addToSetControlKey"
@@ -919,6 +990,7 @@ import {
 } from "../utils/media.js";
 import { apiClient } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
+import PluginParametersUI from "./PluginParametersUI.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import {
   faceBoxColor,
@@ -946,6 +1018,7 @@ const props = defineProps({
   dateFormat: { type: String, default: "locale" },
   showStacks: { type: Boolean, default: true },
   showProblemIcon: { type: Boolean, default: true },
+  availablePlugins: { type: Array, default: () => [] },
   comfyuiProgress: { type: Object, default: null },
   comfyuiProgressPercent: { type: Number, default: 0 },
   comfyuiClientId: { type: String, default: "" },
@@ -961,6 +1034,7 @@ const {
   applyTagFilter,
   showStacks,
   showProblemIcon,
+  availablePlugins,
   comfyuiProgress,
   comfyuiProgressPercent,
   comfyuiClientId,
@@ -1014,6 +1088,7 @@ const emit = defineEmits([
   "overlay-change",
   "added-to-set",
   "comfyui-run",
+  "run-plugin",
 ]);
 
 const descriptionRef = ref(null);
@@ -1052,6 +1127,7 @@ const penalisedTagsLoading = ref(false);
 const lastTagUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
+const pluginMenuOpen = ref(false);
 const comfyuiWorkflows = ref([]);
 const comfyuiWorkflowLoading = ref(false);
 const comfyuiWorkflowError = ref("");
@@ -1062,6 +1138,29 @@ const comfyuiCaptionFocused = ref(false);
 const comfyuiRunLoading = ref(false);
 const comfyuiRunError = ref("");
 const comfyuiRunSuccess = ref("");
+const overlaySelectedPluginName = ref("");
+const overlayPluginParameters = ref({});
+
+const overlayPluginOptions = computed(() => {
+  if (!Array.isArray(availablePlugins.value)) return [];
+  return availablePlugins.value.filter((plugin) => plugin && plugin.name);
+});
+
+const activeOverlayPluginSchema = computed(() => {
+  if (!overlaySelectedPluginName.value) return null;
+  return (
+    overlayPluginOptions.value.find(
+      (plugin) =>
+        String(plugin.name) === String(overlaySelectedPluginName.value),
+    ) || null
+  );
+});
+
+const overlayPluginParameterFields = computed(() => {
+  const schema = activeOverlayPluginSchema.value;
+  if (!schema || !Array.isArray(schema.parameters)) return [];
+  return schema.parameters.filter((field) => field && field.name);
+});
 
 const COMFYUI_PROMPT_STORAGE_PREFIX = "pixlvault:comfyuiPrompt:";
 
@@ -1125,12 +1224,16 @@ const showComfyuiCaptionHelp = computed(() => {
 
 watch(open, (value) => {
   if (!value) {
+    pluginMenuOpen.value = false;
+    comfyuiMenuOpen.value = false;
     resetTagInput();
     chromeHidden.value = false;
     chromeRevealTimestamp.value = 0;
     addToSetControlKey.value += 1;
     resetComfyState();
   } else {
+    pluginMenuOpen.value = false;
+    comfyuiMenuOpen.value = false;
     chromeRevealTimestamp.value = Date.now();
     const stored = loadComfyuiPromptFromSession();
     if (stored != null) {
@@ -1184,6 +1287,40 @@ watch(comfyuiMenuOpen, (value) => {
     comfyuiRunSuccess.value = "";
     comfyuiCaptionFocused.value = false;
   }
+});
+
+watch(
+  overlayPluginOptions,
+  (plugins) => {
+    if (!Array.isArray(plugins) || !plugins.length) {
+      overlaySelectedPluginName.value = "";
+      return;
+    }
+    if (!overlaySelectedPluginName.value) {
+      overlaySelectedPluginName.value = String(plugins[0].name);
+      return;
+    }
+    const exists = plugins.some(
+      (plugin) =>
+        String(plugin.name) === String(overlaySelectedPluginName.value),
+    );
+    if (!exists) {
+      overlaySelectedPluginName.value = String(plugins[0].name);
+    }
+  },
+  { immediate: true },
+);
+
+watch(overlaySelectedPluginName, () => {
+  overlayPluginParameters.value = {};
+});
+
+watch(pluginMenuOpen, (isOpen) => {
+  if (!isOpen) return;
+  if (!overlaySelectedPluginName.value && overlayPluginOptions.value.length) {
+    overlaySelectedPluginName.value = String(overlayPluginOptions.value[0].name);
+  }
+  overlayPluginParameters.value = {};
 });
 
 async function fetchPenalisedTags() {
@@ -1265,6 +1402,16 @@ async function runComfyWorkflow() {
   } finally {
     comfyuiRunLoading.value = false;
   }
+}
+
+function runOverlayPlugin() {
+  if (!image.value?.id || !overlaySelectedPluginName.value) return;
+  emit("run-plugin", {
+    pluginName: overlaySelectedPluginName.value,
+    pictureIds: [image.value.id],
+    parameters: overlayPluginParameters.value || {},
+  });
+  pluginMenuOpen.value = false;
 }
 
 function isPenalisedTag(tag) {
