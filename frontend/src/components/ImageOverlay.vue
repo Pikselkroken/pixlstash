@@ -507,7 +507,10 @@
           class="overlay-rail"
           :class="{ hidden: chromeHidden }"
         >
-          <div class="filmstrip-viewport">
+          <div
+            class="filmstrip-viewport"
+            @wheel.prevent.stop="onFilmstripWheel"
+          >
             <transition-group
               name="filmstrip-slide"
               tag="div"
@@ -1126,8 +1129,6 @@ function setOverlayImageById(nextId) {
     return;
   }
   isTagsRefreshing.value = true;
-  zoomMode.value = "fit";
-  resetPan();
 }
 
 // Watch for changes to initialImageId and update local image copy
@@ -1303,6 +1304,8 @@ watch(open, (value) => {
     chromeHidden.value = false;
     chromeRevealTimestamp.value = 0;
     addToSetControlKey.value += 1;
+    zoomMode.value = "fit";
+    resetPan();
     resetComfyState();
   } else {
     resetOverlayStackState();
@@ -2174,12 +2177,26 @@ function setScore(n) {
 }
 
 function showPrevImage() {
+  return navigateOverlayImage(-1);
+}
+
+function navigateOverlayImage(direction, options = {}) {
   const sorted = filmstripImages.value;
+  const allowWrap = options?.wrap !== false;
   if (!image.value || !sorted.length) return;
   const idx = sorted.findIndex((i) => i.id === image.value.id);
   if (idx === -1) return;
-  const prevIdx = (idx - 1 + sorted.length) % sorted.length;
-  setOverlayImageById(sorted[prevIdx]?.id ?? null);
+  let nextIdx = idx + direction;
+  if (allowWrap) {
+    nextIdx = (nextIdx + sorted.length) % sorted.length;
+  } else {
+    nextIdx = Math.min(sorted.length - 1, Math.max(0, nextIdx));
+    if (nextIdx === idx) {
+      return false;
+    }
+  }
+  setOverlayImageById(sorted[nextIdx]?.id ?? null);
+  return true;
 }
 
 function selectImageByIndex(idx) {
@@ -2192,12 +2209,7 @@ function selectImageByIndex(idx) {
 }
 
 function showNextImage() {
-  const sorted = filmstripImages.value;
-  if (!image.value || !sorted.length) return;
-  const idx = sorted.findIndex((i) => i.id === image.value.id);
-  if (idx === -1) return;
-  const nextIdx = (idx + 1) % sorted.length;
-  setOverlayImageById(sorted[nextIdx]?.id ?? null);
+  return navigateOverlayImage(1);
 }
 
 function handleKeydown(e) {
@@ -2248,9 +2260,9 @@ function handleKeydown(e) {
     } else {
       emit("close");
     }
-  } else if (["ArrowLeft", "Left"].includes(e.key)) {
+  } else if (["ArrowLeft", "Left", "ArrowUp", "Up"].includes(e.key)) {
     showPrevImage();
-  } else if (["ArrowRight", "Right"].includes(e.key)) {
+  } else if (["ArrowRight", "Right", "ArrowDown", "Down"].includes(e.key)) {
     showNextImage();
   } else if (e.key === "z" || e.key === "Z") {
     toggleZoom();
@@ -2268,9 +2280,15 @@ const showFaceBbox = ref(false);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;
 const FILMSTRIP_VISIBLE_COUNT = 7;
-const FILMSTRIP_BUFFER_COUNT = 1;
+const FILMSTRIP_BUFFER_COUNT = 3;
 const FILMSTRIP_GAP = 0;
 const FILMSTRIP_RAIL_PADDING = 8;
+const FILMSTRIP_WHEEL_THRESHOLD = 60;
+const WHEEL_LINE_HEIGHT_PX = 16;
+const FILMSTRIP_WHEEL_SENSITIVITY = 0.25;
+const FILMSTRIP_WHEEL_STEP_COOLDOWN_MS = 30;
+const ZOOM_WHEEL_THRESHOLD = 40;
+const ZOOM_WHEEL_SENSITIVITY = 0.25;
 const windowHeight = ref(0);
 const overlayMainRef = ref(null);
 const overlayRailRef = ref(null);
@@ -2278,6 +2296,9 @@ const touchStart = ref({ x: 0, y: 0, time: 0 });
 const touchLatest = ref({ x: 0, y: 0 });
 const swipeHintVisible = ref(false);
 let swipeHintTimer = null;
+let filmstripWheelAccumulator = 0;
+let filmstripWheelLastStepTs = 0;
+let zoomWheelAccumulator = 0;
 
 function updateViewportMetrics() {
   if (typeof window !== "undefined") {
@@ -2433,17 +2454,86 @@ function handleMediaDragStart(event) {
 function onWheelZoom(event) {
   if (!open.value) return;
   handleUserActivity();
-  const direction = Math.sign(event.deltaY);
-  if (direction === 0) return;
+  const deltaY = normalizeZoomWheelDelta(event);
+  if (!Number.isFinite(deltaY) || deltaY === 0) return;
+  zoomWheelAccumulator += deltaY;
+  if (Math.abs(zoomWheelAccumulator) < ZOOM_WHEEL_THRESHOLD) {
+    return;
+  }
+  const direction = Math.sign(zoomWheelAccumulator);
+  zoomWheelAccumulator -= direction * ZOOM_WHEEL_THRESHOLD;
   const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
   if (direction < 0 && currentIndex < zoomSteps.length - 1) {
     zoomMode.value = zoomSteps[currentIndex + 1];
   } else if (direction > 0 && currentIndex > 0) {
     zoomMode.value = zoomSteps[currentIndex - 1];
+  } else {
+    zoomWheelAccumulator = 0;
   }
   if (zoomMode.value === "fit") {
     resetPan();
   }
+}
+
+function normalizeZoomWheelDelta(event) {
+  if (!event) return 0;
+  const raw = Number(event.deltaY ?? 0);
+  if (!Number.isFinite(raw) || raw === 0) return 0;
+  const scaled = raw * ZOOM_WHEEL_SENSITIVITY;
+  if (event.deltaMode === 1) {
+    return scaled * WHEEL_LINE_HEIGHT_PX;
+  }
+  if (event.deltaMode === 2) {
+    const pagePx = Number(windowHeight.value) || 800;
+    return scaled * pagePx;
+  }
+  return scaled;
+}
+
+function onFilmstripWheel(event) {
+  if (!open.value) return;
+  if (isMobile.value) return;
+  handleUserActivity();
+  const now = Date.now();
+  if (now - filmstripWheelLastStepTs < FILMSTRIP_WHEEL_STEP_COOLDOWN_MS) {
+    return;
+  }
+  const deltaY = normalizeWheelDelta(event);
+  if (!Number.isFinite(deltaY) || deltaY === 0) return;
+  filmstripWheelAccumulator += deltaY;
+  if (Math.abs(filmstripWheelAccumulator) < FILMSTRIP_WHEEL_THRESHOLD) {
+    return;
+  }
+  const direction = Math.sign(filmstripWheelAccumulator);
+  filmstripWheelAccumulator -= direction * FILMSTRIP_WHEEL_THRESHOLD;
+  if (direction > 0) {
+    const moved = navigateOverlayImage(1, { wrap: false });
+    if (!moved) {
+      filmstripWheelAccumulator = 0;
+    }
+    filmstripWheelLastStepTs = now;
+  } else if (direction < 0) {
+    const moved = navigateOverlayImage(-1, { wrap: false });
+    if (!moved) {
+      filmstripWheelAccumulator = 0;
+    }
+    filmstripWheelLastStepTs = now;
+  }
+}
+
+function normalizeWheelDelta(event) {
+  if (!event) return 0;
+  const raw = Number(event.deltaY ?? 0);
+  if (!Number.isFinite(raw) || raw === 0) return 0;
+  const scaled = raw * FILMSTRIP_WHEEL_SENSITIVITY;
+  if (event.deltaMode === 1) {
+    return scaled * WHEEL_LINE_HEIGHT_PX;
+  }
+  if (event.deltaMode === 2) {
+    const pagePx = Number(windowHeight.value) || 800;
+    return scaled * pagePx;
+  }
+  return scaled;
 }
 
 const mediaTransformStyle = computed(() => {
@@ -2844,6 +2934,9 @@ onUnmounted(() => {
 
 watch(open, (isOpen) => {
   if (!isOpen) {
+    filmstripWheelAccumulator = 0;
+    filmstripWheelLastStepTs = 0;
+    zoomWheelAccumulator = 0;
     swipeHintVisible.value = false;
     if (swipeHintTimer) {
       clearTimeout(swipeHintTimer);
@@ -3568,7 +3661,6 @@ watch(
       overlayThumbnailFaceMap.value = {};
       overlayThumbnailDims.value = { width: 256, height: 256 };
     }
-    resetPan();
   },
   { immediate: true },
 );
@@ -5005,7 +5097,7 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .overlay-nav-left {
-  left: 16px;
+  left: calc(16px + var(--filmstrip-rail-width));
 }
 
 .overlay-nav-right {
@@ -5088,7 +5180,7 @@ function downloadComfyWorkflow(workflow) {
   padding-right: 0;
   box-sizing: border-box;
   min-height: 100%;
-  transition: transform 0.24s ease;
+  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .filmstrip-thumb {
@@ -5106,12 +5198,12 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .filmstrip-slide-move {
-  transition: transform 0.24s ease;
+  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .filmstrip-slide-enter-active,
 .filmstrip-slide-leave-active {
-  transition: opacity 0.14s ease;
+  transition: opacity 0.2s ease-out;
 }
 
 .filmstrip-slide-enter-from,
