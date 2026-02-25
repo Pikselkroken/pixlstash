@@ -101,12 +101,6 @@ const applyTagFilterLoading = ref(false);
 const keepModelsInMemory = ref(true);
 const keepModelsInMemoryLoading = ref(false);
 const keepModelsInMemoryError = ref("");
-const smartScoreScrapheapThreshold = ref(1.25);
-const smartScoreScrapheapLookback = ref(30);
-const smartScoreScrapheapLoading = ref(false);
-const smartScoreScrapheapError = ref("");
-const smartScoreScrapheapSuccess = ref("");
-const smartScoreScrapheapHydrating = ref(false);
 const comfyuiHost = ref("127.0.0.1");
 const comfyuiPort = ref("8188");
 const comfyuiUrlLoading = ref(false);
@@ -127,7 +121,6 @@ const workflowImportSaving = ref(false);
 const workflowList = ref([]);
 const workflowListLoading = ref(false);
 const workflowListError = ref("");
-let smartScoreScrapheapSaveTimer = null;
 
 const smartScoreImportanceOptions = [
   { value: 1, label: "Mild" },
@@ -148,22 +141,6 @@ function stepNumber(value, delta, options = {}) {
     next = Number(next.toFixed(precision));
   }
   return next;
-}
-
-function incrementScrapheapThreshold(delta) {
-  smartScoreScrapheapThreshold.value = stepNumber(
-    smartScoreScrapheapThreshold.value,
-    delta,
-    { min: 0.1, precision: 2 },
-  );
-}
-
-function incrementScrapheapLookback(delta) {
-  smartScoreScrapheapLookback.value = stepNumber(
-    smartScoreScrapheapLookback.value,
-    delta,
-    { min: 1, precision: 0 },
-  );
 }
 
 async function fetchSettingsAuth() {
@@ -199,8 +176,6 @@ function resetSettingsForm() {
   hiddenTagsError.value = "";
   hiddenTagsSuccess.value = "";
   keepModelsInMemoryError.value = "";
-  smartScoreScrapheapError.value = "";
-  smartScoreScrapheapSuccess.value = "";
   comfyuiUrlError.value = "";
   comfyuiUrlSuccess.value = "";
   workflowImportError.value = "";
@@ -330,22 +305,12 @@ async function fetchSmartScoreSettings() {
     } else {
       keepModelsInMemory.value = true;
     }
-    smartScoreScrapheapHydrating.value = true;
-    const threshold = Number(res.data?.auto_scrapheap_smart_score_threshold);
-    if (Number.isFinite(threshold)) {
-      smartScoreScrapheapThreshold.value = threshold;
-    }
-    const lookback = Number(res.data?.auto_scrapheap_lookback_minutes);
-    if (Number.isFinite(lookback)) {
-      smartScoreScrapheapLookback.value = Math.max(1, Math.round(lookback));
-    }
   } catch (e) {
     smartScoreTagsError.value = "Failed to load smart score settings.";
     hiddenTagsError.value = "Failed to load hidden tag settings.";
   } finally {
     smartScoreTagsLoading.value = false;
     hiddenTagsLoading.value = false;
-    smartScoreScrapheapHydrating.value = false;
   }
 }
 
@@ -864,48 +829,6 @@ async function confirmWorkflowImport() {
   }
 }
 
-async function saveSmartScoreScrapheapSettings() {
-  smartScoreScrapheapLoading.value = true;
-  smartScoreScrapheapError.value = "";
-  smartScoreScrapheapSuccess.value = "";
-  try {
-    const threshold = Number(smartScoreScrapheapThreshold.value);
-    const lookback = Number(smartScoreScrapheapLookback.value);
-    if (!Number.isFinite(threshold) || threshold <= 0) {
-      throw new Error("Threshold must be a positive number.");
-    }
-    if (!Number.isFinite(lookback) || lookback < 1) {
-      throw new Error("Lookback must be at least 1 minute.");
-    }
-    await apiClient.patch("/users/me/config", {
-      auto_scrapheap_smart_score_threshold: threshold,
-      auto_scrapheap_lookback_minutes: Math.round(lookback),
-    });
-    smartScoreScrapheapSuccess.value = "Saved.";
-  } catch (e) {
-    smartScoreScrapheapError.value =
-      e?.response?.data?.detail || e?.message || "Failed to update settings.";
-  } finally {
-    smartScoreScrapheapLoading.value = false;
-    if (smartScoreScrapheapSuccess.value) {
-      setTimeout(() => {
-        smartScoreScrapheapSuccess.value = "";
-      }, 2000);
-    }
-  }
-}
-
-function scheduleSmartScoreScrapheapSave() {
-  if (smartScoreScrapheapHydrating.value) return;
-  if (smartScoreScrapheapSaveTimer) {
-    clearTimeout(smartScoreScrapheapSaveTimer);
-  }
-  smartScoreScrapheapSaveTimer = setTimeout(() => {
-    smartScoreScrapheapSaveTimer = null;
-    saveSmartScoreScrapheapSettings();
-  }, 600);
-}
-
 async function saveSmartScoreTags(nextTags) {
   smartScoreTagsLoading.value = true;
   smartScoreTagsError.value = "";
@@ -1154,10 +1077,6 @@ watch(
     }
   },
 );
-
-watch([smartScoreScrapheapThreshold, smartScoreScrapheapLookback], () => {
-  scheduleSmartScoreScrapheapSave();
-});
 
 watch([comfyuiHost, comfyuiPort], () => {
   scheduleComfyuiSave();
@@ -1461,93 +1380,6 @@ const workflowImportCaptionPreview = computed(() => {
                 </div>
               </div>
               <v-divider class="settings-section-divider" />
-              <div class="settings-section">
-                <div class="settings-section-title">Auto Scrapheap</div>
-                <div class="settings-section-desc">
-                  Newly tagged pictures can be auto-moved to the scrapheap when
-                  their smart score is below the threshold.
-                </div>
-                <div class="settings-form">
-                  <div class="settings-number-grid">
-                    <div class="settings-number-row">
-                      <v-text-field
-                        v-model.number="smartScoreScrapheapThreshold"
-                        label="Smart score threshold"
-                        density="comfortable"
-                        variant="filled"
-                        type="number"
-                        step="0.05"
-                        min="0.1"
-                        class="settings-number-input"
-                        :disabled="smartScoreScrapheapLoading"
-                      />
-                      <div class="settings-number-spinner">
-                        <v-btn
-                          icon
-                          variant="text"
-                          class="settings-number-btn"
-                          :disabled="smartScoreScrapheapLoading"
-                          @click="incrementScrapheapThreshold(0.05)"
-                        >
-                          <v-icon size="14">mdi-chevron-up</v-icon>
-                        </v-btn>
-                        <v-btn
-                          icon
-                          variant="text"
-                          class="settings-number-btn"
-                          :disabled="smartScoreScrapheapLoading"
-                          @click="incrementScrapheapThreshold(-0.05)"
-                        >
-                          <v-icon size="14">mdi-chevron-down</v-icon>
-                        </v-btn>
-                      </div>
-                    </div>
-                    <div class="settings-number-row">
-                      <v-text-field
-                        v-model.number="smartScoreScrapheapLookback"
-                        label="Lookback window (minutes)"
-                        density="comfortable"
-                        variant="filled"
-                        type="number"
-                        step="1"
-                        min="1"
-                        class="settings-number-input"
-                        :disabled="smartScoreScrapheapLoading"
-                      />
-                      <div class="settings-number-spinner">
-                        <v-btn
-                          icon
-                          variant="text"
-                          class="settings-number-btn"
-                          :disabled="smartScoreScrapheapLoading"
-                          @click="incrementScrapheapLookback(1)"
-                        >
-                          <v-icon size="14">mdi-chevron-up</v-icon>
-                        </v-btn>
-                        <v-btn
-                          icon
-                          variant="text"
-                          class="settings-number-btn"
-                          :disabled="smartScoreScrapheapLoading"
-                          @click="incrementScrapheapLookback(-1)"
-                        >
-                          <v-icon size="14">mdi-chevron-down</v-icon>
-                        </v-btn>
-                      </div>
-                    </div>
-                  </div>
-                  <div v-if="smartScoreScrapheapError" class="settings-error">
-                    {{ smartScoreScrapheapError }}
-                  </div>
-                  <div
-                    v-else-if="smartScoreScrapheapSuccess"
-                    class="settings-success"
-                  >
-                    {{ smartScoreScrapheapSuccess }}
-                  </div>
-                  <div v-else class="settings-success">{{ "&nbsp;" }}</div>
-                </div>
-              </div>
             </v-window-item>
             <v-window-item value="workflows">
               <v-divider class="settings-section-divider" />

@@ -277,12 +277,6 @@ const graphLayout = [
   },
   { id: "likeness", workerKey: "LikenessWorker", x: 69, y: 25 },
   { id: "text_embeddings", workerKey: "EmbeddingWorker", x: 69, y: 48 },
-  {
-    id: "scrapheap",
-    workerKey: "SmartScoreScrapheapWorker",
-    x: 69,
-    y: 72,
-  },
 ];
 
 const graphEdgesConfig = [
@@ -293,9 +287,7 @@ const graphEdgesConfig = [
   { from: "features", to: "tags", route: "bus" },
   { from: "quality", to: "likeness", route: "bus" },
   { from: "quality", to: "likeness_params", route: "lane", laneX: 46 },
-  { from: "quality", to: "scrapheap", route: "bus" },
   { from: "descriptions", to: "text_embeddings" },
-  { from: "tags", to: "scrapheap" },
   { from: "text_embeddings", to: "likeness", route: "direct" },
   { from: "image_embeddings", to: "likeness" },
   { from: "likeness_params", to: "likeness", route: "direct" },
@@ -311,7 +303,6 @@ const labelMap = {
   features_extracted: "Features extracted",
   likeness_pairs: "Likeness pairs",
   likeness_parameters: "Likeness params",
-  scrapheap_candidates: "Scrapheap candidates",
   watch_folder_import: "Watch folder import",
 };
 

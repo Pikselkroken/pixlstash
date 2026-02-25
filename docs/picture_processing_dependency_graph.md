@@ -34,11 +34,10 @@ flowchart TD
 - `FaceQualityWorker` requires detected faces with bounding boxes.
 - `TagWorker` can tag pictures directly and can also backfill missing face/hand tags after detection.
 - `DescriptionWorker` only needs a picture; `EmbeddingWorker` needs `description` first.
-- `ImageEmbeddingWorker` is prerequisite for smart score and likeness.
-- `QualityWorker` is prerequisite for quality-derived likeness parameters and can feed smart score fallback.
+- `ImageEmbeddingWorker` is prerequisite for likeness.
+- `QualityWorker` is prerequisite for quality-derived likeness parameters.
 - `LikenessParameterWorker` requires picture metadata and quality/image-derived inputs; it enqueues pictures for `LikenessWorker`.
 - `LikenessWorker` requires: `image_embedding`, `likeness_parameters`, and `perceptual_hash`.
-- `SmartScoreScrapheapWorker` currently gates on: `imported_at is null`, non-empty tags, embedding, and `(aesthetic_score or quality)`.
 
 ## Event Triggers (high level)
 
@@ -50,14 +49,10 @@ flowchart LR
     CP --> W4[DescriptionWorker]
     CP --> W5[ImageEmbeddingWorker]
     CP --> W6[LikenessParameterWorker]
-    CP --> W7[SmartScoreScrapheapWorker]
-
     CF[CHANGED_FACES] --> W8[FaceQualityWorker]
     CF --> W2
 
-    CT[CHANGED_TAGS] --> W7
     CD[CHANGED_DESCRIPTIONS] --> W9[EmbeddingWorker]
     QU[QUALITY_UPDATED] --> W10[LikenessWorker]
     QU --> W6
-    QU --> W7
 ```
