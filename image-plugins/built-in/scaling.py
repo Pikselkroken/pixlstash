@@ -19,6 +19,8 @@ class ScalingPlugin(ImagePlugin):
     name = "scaling"
     display_name = "Scaling"
     description = "Scale images up or down using common interpolation algorithms."
+    supports_images = True
+    supports_videos = False
 
     SCALE_FACTORS = ["0.25", "0.5", "1.25", "1.5", "2.0", "4.0"]
     RESAMPLERS = {

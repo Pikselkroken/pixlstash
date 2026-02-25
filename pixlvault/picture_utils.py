@@ -1087,6 +1087,10 @@ class PictureUtils:
         if not pixel_sha:
             pixel_sha = PictureUtils.calculate_hash_from_bytes(image_bytes)
 
+        inferred_ext = ""
+        if picture_uuid:
+            inferred_ext = os.path.splitext(str(picture_uuid))[1].lower().lstrip(".")
+
         # Try to detect if this is a video or image
         img_format = None
         width = height = None
@@ -1120,7 +1124,10 @@ class PictureUtils:
                 if thumbnail_bytes is None:
                     raise ValueError("Failed to generate thumbnail for video")
             cap.release()
-            img_format = "MP4"
+            if inferred_ext:
+                img_format = inferred_ext.upper()
+            else:
+                img_format = "MP4"
             os.remove(tmp_path)
 
         if not picture_uuid:

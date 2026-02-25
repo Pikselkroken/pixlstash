@@ -1,49 +1,4 @@
-"""Built-in colour filter plugin.
-
-How to create your own plugin from this skeleton:
-1. Copy this file into `image-plugins/user/` and rename it, for example
-   `my_plugin.py`.
-2. Rename the class and set a unique `name` (plugin id), plus
-   `display_name`/`description`.
-3. Define your UI parameters in `parameter_schema()`.
-4. Implement image processing in `run()` and return one output image for each
-   input image, in the same order.
-5. Use `self.report_progress(...)` while processing and
-   `self.report_error(...)` if a single image fails.
-
-Minimal skeleton:
-
-    from typing import Any
-    from PIL import Image
-    from pixlvault.image_plugins.base import ImagePlugin
-
-    class MyPlugin(ImagePlugin):
-        name = "my_plugin"
-        display_name = "My Plugin"
-        description = "Describe what this plugin does."
-
-        def parameter_schema(self) -> list[dict[str, Any]]:
-            return [
-                {
-                    "name": "strength",
-                    "type": "number",
-                    "default": 1.0,
-                }
-            ]
-
-        def run(self, images, parameters=None, progress_callback=None, error_callback=None):
-            out = []
-            total = len(images)
-            for idx, image in enumerate(images):
-                try:
-                    # transform image here
-                    out.append(image.copy())
-                    self.report_progress(progress_callback, current=idx + 1, total=total, message="Processed")
-                except Exception as exc:
-                    self.report_error(error_callback, index=idx, message="Failed", details={"error": str(exc)})
-                    out.append(image.copy())
-            return out
-"""
+"""Built-in brightness/contrast plugin."""
 
 from __future__ import annotations
 
@@ -53,36 +8,34 @@ from typing import Any
 
 import cv2
 import numpy as np
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageEnhance
 
 from pixlvault.image_plugins.base import ImagePlugin
 
 
-class ColourFilterPlugin(ImagePlugin):
-    name = "colour_filter"
-    display_name = "Colour Filter"
-    description = "Apply black & white, sepia, cool, warm, or vivid colour filters."
+class BrightnessContrastPlugin(ImagePlugin):
+    name = "brightness_contrast"
+    display_name = "Brightness / Contrast"
+    description = "Adjust brightness and contrast for images or videos."
     supports_images = True
     supports_videos = True
-
-    FILTER_MODES = {
-        "black_and_white",
-        "sepia",
-        "cool",
-        "warm",
-        "vivid",
-    }
 
     def parameter_schema(self) -> list[dict[str, Any]]:
         return [
             {
-                "name": "mode",
-                "label": "Filter",
-                "type": "string",
-                "default": "black_and_white",
-                "enum": sorted(self.FILTER_MODES),
-                "description": "Which colour transform to apply.",
-            }
+                "name": "brightness",
+                "label": "Brightness",
+                "type": "number",
+                "default": 1.0,
+                "description": "Brightness multiplier (1.0 = no change).",
+            },
+            {
+                "name": "contrast",
+                "label": "Contrast",
+                "type": "number",
+                "default": 1.0,
+                "description": "Contrast multiplier (1.0 = no change).",
+            },
         ]
 
     def run(
@@ -93,15 +46,14 @@ class ColourFilterPlugin(ImagePlugin):
         error_callback=None,
     ) -> list[Image.Image]:
         params = parameters or {}
-        mode = str(params.get("mode") or "black_and_white").strip().lower()
-        if mode not in self.FILTER_MODES:
-            mode = "black_and_white"
+        brightness = self._coerce_positive_number(params.get("brightness"), 1.0)
+        contrast = self._coerce_positive_number(params.get("contrast"), 1.0)
 
         out: list[Image.Image] = []
         total = len(images)
         for idx, image in enumerate(images):
             try:
-                filtered = self._apply_mode(image, mode)
+                filtered = self._apply_adjustments(image, brightness, contrast)
                 out.append(filtered)
                 self.report_progress(
                     progress_callback,
@@ -113,7 +65,7 @@ class ColourFilterPlugin(ImagePlugin):
                 self.report_error(
                     error_callback,
                     index=idx,
-                    message="Failed to apply colour filter",
+                    message="Failed to apply brightness/contrast",
                     details={"error": str(exc)},
                 )
                 out.append(image.copy())
@@ -127,9 +79,8 @@ class ColourFilterPlugin(ImagePlugin):
         error_callback=None,
     ) -> tuple[bytes, str]:
         params = parameters or {}
-        mode = str(params.get("mode") or "black_and_white").strip().lower()
-        if mode not in self.FILTER_MODES:
-            mode = "black_and_white"
+        brightness = self._coerce_positive_number(params.get("brightness"), 1.0)
+        contrast = self._coerce_positive_number(params.get("contrast"), 1.0)
 
         cap = cv2.VideoCapture(source_path)
         if not cap.isOpened():
@@ -199,7 +150,11 @@ class ColourFilterPlugin(ImagePlugin):
                     break
 
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                filtered = self._apply_mode(Image.fromarray(rgb_frame), mode)
+                filtered = self._apply_adjustments(
+                    Image.fromarray(rgb_frame),
+                    brightness,
+                    contrast,
+                )
                 filtered_bgr = cv2.cvtColor(
                     np.array(filtered.convert("RGB")),
                     cv2.COLOR_RGB2BGR,
@@ -227,7 +182,7 @@ class ColourFilterPlugin(ImagePlugin):
             self.report_error(
                 error_callback,
                 index=0,
-                message="Failed to apply colour filter to video",
+                message="Failed to apply brightness/contrast to video",
                 details={"error": str(exc), "source_path": source_path},
             )
             raise
@@ -241,36 +196,22 @@ class ColourFilterPlugin(ImagePlugin):
                 except OSError:
                     pass
 
-    def _apply_mode(self, image: Image.Image, mode: str) -> Image.Image:
+    @staticmethod
+    def _coerce_positive_number(value: Any, default: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed <= 0:
+            return default
+        return parsed
+
+    @staticmethod
+    def _apply_adjustments(
+        image: Image.Image,
+        brightness: float,
+        contrast: float,
+    ) -> Image.Image:
         rgb = image.convert("RGB")
-        if mode == "black_and_white":
-            return ImageOps.grayscale(rgb).convert("RGB")
-        if mode == "sepia":
-            return ImageOps.colorize(
-                ImageOps.grayscale(rgb),
-                black="#2E1B0F",
-                white="#F2D8B5",
-            )
-        if mode == "cool":
-            r, g, b = rgb.split()
-            return Image.merge(
-                "RGB",
-                (
-                    r.point(lambda value: int(value * 0.9)),
-                    g.point(lambda value: int(value * 1.0)),
-                    b.point(lambda value: int(value * 1.1)),
-                ),
-            )
-        if mode == "warm":
-            r, g, b = rgb.split()
-            return Image.merge(
-                "RGB",
-                (
-                    r.point(lambda value: int(value * 1.1)),
-                    g.point(lambda value: int(value * 1.0)),
-                    b.point(lambda value: int(value * 0.9)),
-                ),
-            )
-        if mode == "vivid":
-            return ImageEnhance.Color(rgb).enhance(1.35)
-        return ImageOps.grayscale(rgb).convert("RGB")
+        bright = ImageEnhance.Brightness(rgb).enhance(brightness)
+        return ImageEnhance.Contrast(bright).enhance(contrast)

@@ -18,7 +18,7 @@ from sqlmodel import (
     select,
     Session,
 )
-from typing import ClassVar, Optional, List, TYPE_CHECKING, Type
+from typing import ClassVar, Optional, List, TYPE_CHECKING
 
 from pixlvault.db_models.face_tag import FaceTag
 from pixlvault.db_models.hand_tag import HandTag
@@ -143,7 +143,7 @@ class ExportType(Enum):
 
 
 class Picture(SQLModel, table=True):
-    ExportType: ClassVar[Type[ExportType]] = ExportType
+    ExportType: ClassVar[type["ExportType"]] = ExportType
     id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None

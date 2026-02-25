@@ -14,6 +14,8 @@
     :availablePlugins="availablePlugins"
     :comfyuiProgress="comfyuiProgress"
     :comfyuiProgressPercent="comfyuiProgressPercent"
+    :pluginProgress="pluginProgress"
+    :pluginProgressPercent="pluginProgressPercent"
     :comfyuiClientId="comfyuiClientId"
     @close="closeOverlay"
     @apply-score="applyScore"
@@ -47,6 +49,8 @@
       :scrapheapPicturesId="String(props.scrapheapPicturesId)"
       :backend-url="props.backendUrl"
       :selected-image-ids="selectedImageIds"
+      :selected-media-support="selectedMediaSupport"
+      :comfyui-client-id="comfyuiClientId"
       :available-plugins="availablePlugins"
       :show-remove-from-stack="showRemoveFromStack"
       :visible="showSelectionBar"
@@ -59,6 +63,7 @@
       @remove-from-stack="removeSelectedFromStack"
       @create-stacks-from-groups="createStacksFromSelectedGroups"
       @run-plugin="handlePluginRunRequest"
+      @comfyui-run="handleComfyuiRun"
     />
     <EmptyScrapHeap
       v-if="showScrapheapBar"
@@ -111,6 +116,25 @@
           class="comfyui-progress-fill"
           :style="{ width: `${comfyuiProgressPercent}%` }"
         ></div>
+      </div>
+    </div>
+
+    <div
+      v-if="pluginProgress.visible"
+      class="plugin-progress"
+      :class="{ 'plugin-progress-error': pluginProgress.status === 'failed' }"
+    >
+      <div class="plugin-progress-title">
+        {{ pluginProgress.message }}
+      </div>
+      <div class="plugin-progress-bar">
+        <div
+          class="plugin-progress-fill"
+          :style="{ width: `${pluginProgressPercent}%` }"
+        ></div>
+      </div>
+      <div class="plugin-progress-meta">
+        {{ pluginProgress.current }} / {{ pluginProgress.total }}
       </div>
     </div>
 
@@ -267,16 +291,24 @@
               >
                 {{ img.width }}×{{ img.height }}
               </div>
-              <template v-if="getThumbnailSrc(img) && isVideo(img)">
+              <template
+                v-if="
+                  getThumbnailSrc(img) &&
+                  isVideo(img) &&
+                  getVideoThumbnailSrc(img)
+                "
+              >
                 <video
                   class="thumbnail-img"
-                  :src="getThumbnailSrc(img)"
+                  :src="getVideoThumbnailSrc(img)"
+                  :poster="getThumbnailSrc(img)"
                   :ref="
                     (el) => {
                       setVideoRef(img.id, el);
                       setThumbnailRef(img.id, el);
                     }
                   "
+                  preload="metadata"
                   draggable="false"
                   @pointerdown="prepareThumbnailNativeDrag(img, $event)"
                   @pointerup="handleThumbnailPointerRelease($event)"
@@ -287,15 +319,8 @@
                   playsinline
                   @mouseenter="playVideo(img.id)"
                   @mouseleave="pauseVideo(img.id)"
-                  style="
-                    object-fit: cover;
-                    width: 100%;
-                    height: 100%;
-                    border-radius: 8px;
-                  "
                 ></video>
                 <img
-                  v-if="getThumbnailSrc(img)"
                   class="thumbnail-drag-preview"
                   :src="getThumbnailSrc(img)"
                   :ref="(el) => setDragPreviewRef(img.id, el)"
@@ -318,6 +343,13 @@
                   @dragend="handleThumbnailNativeDragEnd($event)"
                   @error="handleImageError"
                   @load="onThumbnailLoad(img.id, $event)"
+                />
+                <img
+                  v-if="isVideo(img)"
+                  class="thumbnail-drag-preview"
+                  :src="getThumbnailSrc(img)"
+                  :ref="(el) => setDragPreviewRef(img.id, el)"
+                  alt=""
                 />
                 <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
                 <template v-if="isThumbnailReady(img.id) && img.thumbnail">
@@ -537,6 +569,10 @@ const props = defineProps({
     type: Object,
     default: () => ({ key: 0, pictureIds: [] }),
   },
+  wsPluginProgress: {
+    type: Object,
+    default: () => ({ key: 0, payload: null }),
+  },
   mediaTypeFilter: { type: String, default: "all" },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
@@ -605,6 +641,16 @@ const comfyuiProgress = reactive({
   percent: 0,
   message: "ComfyUI running...",
 });
+const pluginProgress = reactive({
+  visible: false,
+  status: "idle",
+  current: 0,
+  total: 0,
+  percent: 0,
+  message: "",
+  runId: "",
+});
+let pluginProgressHideTimer = null;
 const comfyuiActivePromptIds = ref(new Set());
 const comfyuiCompletedPromptIds = ref(new Set());
 const comfyuiPromptPictureMap = reactive({});
@@ -654,6 +700,42 @@ function handlePluginRunRequest(payload) {
       : {};
   if (!pluginName || !pictureIds.length) return;
   runPluginWithParameters(pluginName, pictureIds, parameters);
+}
+
+function normalizePluginProgressMessage(message, fallback) {
+  const raw = String(message || "").trim() || String(fallback || "").trim();
+  if (!raw) return "";
+
+  let text = raw;
+
+  for (let i = 0; i < 3; i += 1) {
+    const trimmed = text.trim();
+    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+      break;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed !== "string") {
+        break;
+      }
+      text = parsed;
+    } catch {
+      break;
+    }
+  }
+
+  for (let i = 0; i < 5; i += 1) {
+    const next = text
+      .replace(/\\+r\\+n/g, "\n")
+      .replace(/\\+n/g, "\n")
+      .replace(/\\+\n/g, "\n");
+    if (next === text) {
+      break;
+    }
+    text = next;
+  }
+
+  return text;
 }
 
 async function runPluginWithParameters(pluginName, pictureIds, parameters) {
@@ -723,6 +805,11 @@ function getComfyuiClientId() {
 
 const comfyuiProgressPercent = computed(() => {
   const percent = Number(comfyuiProgress.percent) || 0;
+  return Math.min(100, Math.max(0, Math.round(percent)));
+});
+
+const pluginProgressPercent = computed(() => {
+  const percent = Number(pluginProgress.percent) || 0;
   return Math.min(100, Math.max(0, Math.round(percent)));
 });
 
@@ -1529,6 +1616,10 @@ onUnmounted(() => {
   recentlyAddedTimers.clear();
   recentlyAddedIds.value = {};
   clearComfyuiHideTimer();
+  if (pluginProgressHideTimer) {
+    clearTimeout(pluginProgressHideTimer);
+    pluginProgressHideTimer = null;
+  }
   if (comfyuiWs) {
     comfyuiWs.close();
     comfyuiWs = null;
@@ -1567,6 +1658,51 @@ watch(
       .filter((id) => id != null);
     for (const id of dPayloadIds) {
       refreshGridImage(id);
+    }
+  },
+);
+
+watch(
+  () => props.wsPluginProgress,
+  (wrapped) => {
+    if (!wrapped || typeof wrapped !== "object") return;
+    const payload = wrapped.payload;
+    if (!payload || typeof payload !== "object") return;
+
+    if (pluginProgressHideTimer) {
+      clearTimeout(pluginProgressHideTimer);
+      pluginProgressHideTimer = null;
+    }
+
+    pluginProgress.runId = String(payload.run_id || pluginProgress.runId || "");
+    pluginProgress.status = String(payload.status || "running");
+    pluginProgress.current = Math.max(0, Number(payload.current || 0));
+    pluginProgress.total = Math.max(
+      pluginProgress.current,
+      Number(payload.total || pluginProgress.total || 0),
+    );
+    const explicitProgress = Number(payload.progress);
+    if (Number.isFinite(explicitProgress)) {
+      pluginProgress.percent = explicitProgress;
+    } else if (pluginProgress.total > 0) {
+      pluginProgress.percent =
+        (pluginProgress.current / pluginProgress.total) * 100;
+    }
+    const pluginName = String(payload.plugin || "plugin");
+    pluginProgress.message = normalizePluginProgressMessage(
+      payload.message,
+      `${pluginName}: ${pluginProgress.status}`,
+    );
+    pluginProgress.visible = true;
+
+    if (
+      pluginProgress.status === "completed" ||
+      pluginProgress.status === "failed"
+    ) {
+      pluginProgressHideTimer = setTimeout(() => {
+        pluginProgress.visible = false;
+        pluginProgressHideTimer = null;
+      }, 1800);
     }
   },
 );
@@ -1680,6 +1816,11 @@ function isThumbnailReady(id) {
 function getThumbnailSrc(img) {
   if (!img) return null;
   return img.thumbnail || null;
+}
+
+function getVideoThumbnailSrc(img) {
+  if (!img || !isVideo(img)) return null;
+  return buildMediaUrl({ backendUrl: props.backendUrl, image: img }) || null;
 }
 
 function getThumbnailLoadedKey(id) {
@@ -2351,6 +2492,38 @@ const selectedStackId = computed(() => {
 });
 const showRemoveFromStack = computed(() => {
   return selectedStackId.value !== null;
+});
+const selectedMediaSupport = computed(() => {
+  const ids = Array.isArray(selectedImageIds.value)
+    ? selectedImageIds.value
+    : [];
+  if (!ids.length) {
+    return { hasImages: false, hasVideos: false };
+  }
+
+  const images = Array.isArray(allGridImages.value) ? allGridImages.value : [];
+  const imageById = new Map(
+    images
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+
+  let hasImages = false;
+  let hasVideos = false;
+  for (const id of ids) {
+    const img = imageById.get(String(id));
+    if (!img) {
+      hasImages = true;
+      continue;
+    }
+    if (isVideo(img)) {
+      hasVideos = true;
+    } else {
+      hasImages = true;
+    }
+  }
+
+  return { hasImages, hasVideos };
 });
 const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
@@ -5627,12 +5800,14 @@ function handleContainerDragStart(img, event) {
   }
   setDragSourceImageIds([img.id]);
   const thumbEl = thumbnailRefs[img.id];
-  if (!isVideo(img) && thumbEl instanceof HTMLImageElement) {
+  if (thumbEl instanceof HTMLImageElement) {
     setDragImageFromElement(event, thumbEl);
   }
   if (isVideo(img)) {
     const previewEl = dragPreviewRefs[img.id];
-    setDragImageFromElement(event, previewEl);
+    if (previewEl instanceof HTMLImageElement) {
+      setDragImageFromElement(event, previewEl);
+    }
   }
   setDragDataForImageIds(event, [img.id]);
 }
@@ -5798,6 +5973,27 @@ onMounted(() => {
 
 // Clear selection on ESC key
 function handleKeyDown(event) {
+  const isEditableElement = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.isContentEditable) return true;
+    const tagName = element.tagName;
+    if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
+      return true;
+    }
+    if (element.getAttribute("role") === "textbox") return true;
+    return false;
+  };
+
+  const target = event.target;
+  if (isEditableElement(target)) {
+    return;
+  }
+  if (
+    typeof document !== "undefined" &&
+    isEditableElement(document.activeElement)
+  ) {
+    return;
+  }
   if (overlayOpen.value) return; // Ignore if overlay is open
   if (event.key === "Escape") {
     selectedImageIds.value = [];
@@ -6192,6 +6388,51 @@ function handleEmptyStateReset() {
   min-width: 180px;
   box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
   backdrop-filter: blur(6px);
+}
+
+.plugin-progress {
+  position: absolute;
+  bottom: 88px;
+  right: 12px;
+  z-index: 120;
+  background: rgba(var(--v-theme-dark-surface), 0.75);
+  color: rgb(var(--v-theme-on-dark-surface));
+  padding: 8px 10px;
+  border-radius: 8px;
+  min-width: 220px;
+  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
+  backdrop-filter: blur(6px);
+}
+
+.plugin-progress-error {
+  background: rgba(var(--v-theme-error), 0.95);
+}
+
+.plugin-progress-title {
+  font-size: 0.8em;
+  margin-bottom: 6px;
+  white-space: pre-line;
+}
+
+.plugin-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.plugin-progress-fill {
+  height: 100%;
+  background: rgb(var(--v-theme-accent));
+  width: 0;
+  transition: width 0.2s ease;
+}
+
+.plugin-progress-meta {
+  margin-top: 6px;
+  font-size: 0.78em;
+  opacity: 0.85;
 }
 
 .comfyui-progress-title {

@@ -25,6 +25,8 @@ class MyPlugin(ImagePlugin):
     name = "my_plugin"
     display_name = "My Plugin"
     description = "Describe what this plugin does."
+    supports_images = True
+    supports_videos = False
 
     def parameter_schema(self) -> list[dict[str, Any]]:
         return [

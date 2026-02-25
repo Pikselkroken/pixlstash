@@ -22,7 +22,6 @@ class WorkerType(str, Enum):
     DESCRIPTION = "DescriptionWorker"
     TEXT_EMBEDDING = "EmbeddingWorker"
     IMAGE_EMBEDDING = "ImageEmbeddingWorker"
-    SMART_SCORE_SCRAPHEAP = "SmartScoreScrapheapWorker"
     WATCH_FOLDERS = "WatchFolderWorker"
 
     @staticmethod

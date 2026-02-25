@@ -203,6 +203,7 @@ class Server:
         return event_type in (
             EventType.CHANGED_PICTURES,
             EventType.PICTURE_IMPORTED,
+            EventType.PLUGIN_PROGRESS,
             EventType.CHANGED_TAGS,
             EventType.CLEARED_TAGS,
         )
@@ -225,6 +226,13 @@ class Server:
                 "type": "picture_imported",
                 "event": event_type.name,
                 "picture_ids": list(picture_ids),
+            }
+        elif event_type == EventType.PLUGIN_PROGRESS:
+            progress_payload = data if isinstance(data, dict) else {}
+            payload = {
+                "type": "plugin_progress",
+                "event": event_type.name,
+                **progress_payload,
             }
         else:
             picture_ids = data if isinstance(data, (list, tuple, set)) else []

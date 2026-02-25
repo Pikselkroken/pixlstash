@@ -1,13 +1,15 @@
 import os
 import tempfile
+import numpy as np
 
 from datetime import datetime
 from io import BytesIO
 
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlmodel import Session
+from sqlmodel import Session, select
 
+from pixlvault.db_models.picture_set import PictureSet, PictureSetMember
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.server import Server
 
@@ -49,9 +51,22 @@ def test_picture_plugins_list_and_run_colour_filter():
                 session.commit()
                 session.refresh(first)
                 session.refresh(second)
-                return [first.id, second.id]
+                picture_set = PictureSet(name="Plugin Test Set", description="test")
+                session.add(picture_set)
+                session.commit()
+                session.refresh(picture_set)
+                session.add(
+                    PictureSetMember(set_id=picture_set.id, picture_id=first.id)
+                )
+                session.add(
+                    PictureSetMember(set_id=picture_set.id, picture_id=second.id)
+                )
+                session.commit()
+                return [first.id, second.id, picture_set.id]
 
-            inserted_ids = server.vault.db.run_task(add_pictures)
+            inserted = server.vault.db.run_task(add_pictures)
+            inserted_ids = inserted[:2]
+            created_set_id = inserted[2]
             assert len(inserted_ids) == 2
 
             pictures_resp = client.get("/pictures?fields=grid")
@@ -67,6 +82,33 @@ def test_picture_plugins_list_and_run_colour_filter():
             names = {plugin.get("name") for plugin in plugins}
             assert "colour_filter" in names
             assert "scaling" in names
+            assert "brightness_contrast" in names
+            assert "blur_sharpen" in names
+            colour_schema = next(
+                (plugin for plugin in plugins if plugin.get("name") == "colour_filter"),
+                None,
+            )
+            assert colour_schema is not None
+            assert colour_schema.get("supports_images") is True
+            assert colour_schema.get("supports_videos") is True
+            brightness_contrast_schema = next(
+                (
+                    plugin
+                    for plugin in plugins
+                    if plugin.get("name") == "brightness_contrast"
+                ),
+                None,
+            )
+            assert brightness_contrast_schema is not None
+            assert brightness_contrast_schema.get("supports_images") is True
+            assert brightness_contrast_schema.get("supports_videos") is True
+            blur_sharpen_schema = next(
+                (plugin for plugin in plugins if plugin.get("name") == "blur_sharpen"),
+                None,
+            )
+            assert blur_sharpen_schema is not None
+            assert blur_sharpen_schema.get("supports_images") is True
+            assert blur_sharpen_schema.get("supports_videos") is True
 
             run_resp = client.post(
                 "/pictures/plugins/colour_filter",
@@ -80,6 +122,16 @@ def test_picture_plugins_list_and_run_colour_filter():
             assert run_payload.get("status") == "success"
             created_ids = run_payload.get("created_picture_ids") or []
             assert len(created_ids) == 2
+
+            def fetch_set_members(session: Session, set_id: int):
+                members = session.exec(
+                    select(PictureSetMember).where(PictureSetMember.set_id == set_id)
+                ).all()
+                return {int(member.picture_id) for member in members}
+
+            set_member_ids = server.vault.db.run_task(fetch_set_members, created_set_id)
+            for created_id in created_ids:
+                assert int(created_id) in set_member_ids
 
             after_resp = client.get("/pictures?fields=grid")
             assert after_resp.status_code == 200
@@ -128,3 +180,64 @@ def test_picture_plugins_list_and_run_colour_filter():
                 assert scaled is not None
                 assert int(scaled.get("width")) == int(source.get("width")) * 2
                 assert int(scaled.get("height")) == int(source.get("height")) * 2
+
+            brightness_resp = client.post(
+                "/pictures/plugins/brightness_contrast",
+                json={
+                    "picture_ids": selected_ids,
+                    "parameters": {
+                        "brightness": 1.1,
+                        "contrast": 1.2,
+                    },
+                },
+            )
+            assert brightness_resp.status_code == 200, brightness_resp.text
+            brightness_payload = brightness_resp.json()
+            assert brightness_payload.get("status") == "success"
+            brightness_ids = brightness_payload.get("created_picture_ids") or []
+            assert len(brightness_ids) == 2
+
+            blur_resp = client.post(
+                "/pictures/plugins/blur_sharpen",
+                json={
+                    "picture_ids": selected_ids,
+                    "parameters": {
+                        "mode": "blur",
+                        "strength": 1.0,
+                    },
+                },
+            )
+            assert blur_resp.status_code == 200, blur_resp.text
+            blur_payload = blur_resp.json()
+            assert blur_payload.get("status") == "success"
+            blur_output_ids = blur_payload.get("output_picture_ids") or []
+            assert len(blur_output_ids) == 2
+
+
+def test_create_picture_from_bytes_preserves_video_extension_format(monkeypatch):
+    class _FakeVideoCapture:
+        def __init__(self, _path):
+            self._read = False
+
+        def read(self):
+            if self._read:
+                return False, None
+            self._read = True
+            frame = np.zeros((32, 48, 3), dtype=np.uint8)
+            return True, frame
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr("pixlvault.picture_utils.cv2.VideoCapture", _FakeVideoCapture)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        picture = PictureUtils.create_picture_from_bytes(
+            image_root_path=temp_dir,
+            image_bytes=b"not-an-image",
+            picture_uuid="example.webm",
+        )
+
+        assert picture.format == "WEBM"
+        assert picture.file_path is not None
+        assert picture.file_path.endswith(".webm")

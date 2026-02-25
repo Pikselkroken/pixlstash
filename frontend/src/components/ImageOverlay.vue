@@ -50,28 +50,28 @@
                 v-bind="props"
                 class="overlay-icon-btn overlay-comfy-activator"
                 type="button"
-                title="Run image plugin"
-                aria-label="Run image plugin"
+                title="Apply filters"
+                aria-label="Apply filters"
                 :class="{
                   hidden: chromeHidden,
                   'overlay-icon-btn--active': pluginMenuOpen,
                 }"
               >
                 <v-icon size="20">mdi-tune-variant</v-icon>
-                <span class="overlay-comfy-activator-label">Plugin</span>
+                <span class="overlay-comfy-activator-label">Filters</span>
               </button>
             </template>
             <div class="overlay-comfy-panel">
-              <div class="overlay-comfy-header">Image Plugins</div>
+              <div class="overlay-comfy-header">Filters</div>
               <div class="overlay-comfy-body">
                 <div
                   v-if="!overlayPluginOptions.length"
                   class="overlay-comfy-warning"
                 >
-                  No plugins available.
+                  No filters available.
                 </div>
                 <template v-else>
-                  <label class="overlay-comfy-field-label">Plugin</label>
+                  <label class="overlay-comfy-field-label">Filters</label>
                   <select
                     v-model="overlaySelectedPluginName"
                     class="overlay-comfy-select"
@@ -314,6 +314,27 @@
       </div>
 
       <div
+        v-if="pluginProgress && pluginProgress.visible"
+        class="overlay-plugin-progress"
+        :class="{
+          'overlay-plugin-progress-error': pluginProgress.status === 'failed',
+        }"
+      >
+        <div class="overlay-plugin-progress-title">
+          {{ pluginProgress.message }}
+        </div>
+        <div class="overlay-plugin-progress-bar">
+          <div
+            class="overlay-plugin-progress-fill"
+            :style="{ width: `${pluginProgressPercent}%` }"
+          ></div>
+        </div>
+        <div class="overlay-plugin-progress-meta">
+          {{ pluginProgress.current || 0 }} / {{ pluginProgress.total || 0 }}
+        </div>
+      </div>
+
+      <div
         ref="overlayMainRef"
         class="overlay-main"
         :style="filmstripStyleVars"
@@ -493,80 +514,80 @@
               class="filmstrip-list"
               :style="filmstripCanvasStyle"
             >
-            <button
-              v-for="item in filmstripCanvasWindow"
-              :key="
-                item.id ? `filmstrip-${item.id}` : `filmstrip-${item.index}`
-              "
-              :class="[
-                'filmstrip-thumb',
-                {
-                  'filmstrip-thumb-stack-joined': item.isStackJoined,
-                },
-              ]"
-              @click.stop="selectImageByIndex(item.index)"
-              :title="item.description || 'Image'"
-            >
-              <div
-                class="filmstrip-thumb-tile"
-                :style="getFilmstripStackStyle(item)"
-              >
-                <img
-                  v-if="getFilmstripThumbSrc(item)"
-                  :class="[
-                    'filmstrip-thumb-image',
-                    { 'filmstrip-thumb-image-active': item.isActive },
-                  ]"
-                  :src="getFilmstripThumbSrc(item)"
-                  :alt="item.description || 'Thumbnail'"
-                  loading="lazy"
-                />
-                <div
-                  v-else
-                  :class="[
-                    'filmstrip-thumb-placeholder',
-                    { 'filmstrip-thumb-image-active': item.isActive },
-                  ]"
-                >
-                  <v-icon size="22">
-                    {{
-                      isSupportedVideoFile(getOverlayFormat(item))
-                        ? "mdi-video"
-                        : "mdi-image"
-                    }}
-                  </v-icon>
-                </div>
-              </div>
-              <div
-                v-if="
-                  shouldShowFilmstripStackBadge(item) &&
-                  getFilmstripThumbSrc(item) &&
-                  isFilmstripStackLead(item)
+              <button
+                v-for="item in filmstripCanvasWindow"
+                :key="
+                  item.id ? `filmstrip-${item.id}` : `filmstrip-${item.index}`
                 "
-                class="filmstrip-badge filmstrip-badge--top-left"
-                :title="filmstripStackBadgeTitle(item)"
-                @click.stop="toggleFilmstripStackExpand(item)"
-                @mouseenter.stop="prefetchFilmstripStackMembers(item)"
-              >
-                <v-icon size="14" :style="getFilmstripStackIconStyle(item)"
-                  >mdi-layers</v-icon
-                >
-              </div>
-              <div
-                v-if="shouldShowFilmstripProblemBadge(item)"
                 :class="[
-                  'filmstrip-badge',
-                  shouldShowFilmstripStackBadge(item)
-                    ? 'filmstrip-badge--top-left-stack'
-                    : 'filmstrip-badge--top-left',
+                  'filmstrip-thumb',
+                  {
+                    'filmstrip-thumb-stack-joined': item.isStackJoined,
+                  },
                 ]"
-                :title="filmstripProblemTitle(item)"
+                @click.stop="selectImageByIndex(item.index)"
+                :title="item.description || 'Image'"
               >
-                <v-icon size="14" color="error"
-                  >mdi-emoticon-sad-outline</v-icon
+                <div
+                  class="filmstrip-thumb-tile"
+                  :style="getFilmstripStackStyle(item)"
                 >
-              </div>
-            </button>
+                  <img
+                    v-if="getFilmstripThumbSrc(item)"
+                    :class="[
+                      'filmstrip-thumb-image',
+                      { 'filmstrip-thumb-image-active': item.isActive },
+                    ]"
+                    :src="getFilmstripThumbSrc(item)"
+                    :alt="item.description || 'Thumbnail'"
+                    loading="lazy"
+                  />
+                  <div
+                    v-else
+                    :class="[
+                      'filmstrip-thumb-placeholder',
+                      { 'filmstrip-thumb-image-active': item.isActive },
+                    ]"
+                  >
+                    <v-icon size="22">
+                      {{
+                        isSupportedVideoFile(getOverlayFormat(item))
+                          ? "mdi-video"
+                          : "mdi-image"
+                      }}
+                    </v-icon>
+                  </div>
+                </div>
+                <div
+                  v-if="
+                    shouldShowFilmstripStackBadge(item) &&
+                    getFilmstripThumbSrc(item) &&
+                    isFilmstripStackLead(item)
+                  "
+                  class="filmstrip-badge filmstrip-badge--top-left"
+                  :title="filmstripStackBadgeTitle(item)"
+                  @click.stop="toggleFilmstripStackExpand(item)"
+                  @mouseenter.stop="prefetchFilmstripStackMembers(item)"
+                >
+                  <v-icon size="14" :style="getFilmstripStackIconStyle(item)"
+                    >mdi-layers</v-icon
+                  >
+                </div>
+                <div
+                  v-if="shouldShowFilmstripProblemBadge(item)"
+                  :class="[
+                    'filmstrip-badge',
+                    shouldShowFilmstripStackBadge(item)
+                      ? 'filmstrip-badge--top-left-stack'
+                      : 'filmstrip-badge--top-left',
+                  ]"
+                  :title="filmstripProblemTitle(item)"
+                >
+                  <v-icon size="14" color="error"
+                    >mdi-emoticon-sad-outline</v-icon
+                  >
+                </div>
+              </button>
             </transition-group>
           </div>
         </div>
@@ -1020,6 +1041,8 @@ const props = defineProps({
   availablePlugins: { type: Array, default: () => [] },
   comfyuiProgress: { type: Object, default: null },
   comfyuiProgressPercent: { type: Number, default: 0 },
+  pluginProgress: { type: Object, default: null },
+  pluginProgressPercent: { type: Number, default: 0 },
   comfyuiClientId: { type: String, default: "" },
 });
 
@@ -1037,6 +1060,8 @@ const {
   availablePlugins,
   comfyuiProgress,
   comfyuiProgressPercent,
+  pluginProgress,
+  pluginProgressPercent,
   comfyuiClientId,
 } = toRefs(props);
 
@@ -1170,10 +1195,27 @@ const comfyuiRunError = ref("");
 const comfyuiRunSuccess = ref("");
 const overlaySelectedPluginName = ref("");
 const overlayPluginParameters = ref({});
+const overlaySelectionMedia = computed(() => {
+  const format = image.value ? getOverlayFormat(image.value) : "";
+  const hasVideos = format ? isSupportedVideoFile(format) : false;
+  return {
+    hasImages: !hasVideos,
+    hasVideos,
+  };
+});
 
 const overlayPluginOptions = computed(() => {
   if (!Array.isArray(availablePlugins.value)) return [];
-  return availablePlugins.value.filter((plugin) => plugin && plugin.name);
+  const hasImages = overlaySelectionMedia.value.hasImages;
+  const hasVideos = overlaySelectionMedia.value.hasVideos;
+  return availablePlugins.value.filter((plugin) => {
+    if (!plugin || !plugin.name) return false;
+    const supportsImages = plugin.supports_images !== false;
+    const supportsVideos = plugin.supports_videos === true;
+    if (hasImages && !supportsImages) return false;
+    if (hasVideos && !supportsVideos) return false;
+    return true;
+  });
 });
 
 const activeOverlayPluginSchema = computed(() => {
@@ -1991,7 +2033,7 @@ watch(
 watch(
   () => allImages.value,
   async () => {
-    const currentId = initialImageId.value ?? image.value?.id;
+    const currentId = image.value?.id ?? initialImageId.value;
     if (currentId != null && currentId !== "") {
       setOverlayImageById(currentId);
     }
@@ -2459,11 +2501,17 @@ const filmstripCanvasData = computed(() => {
     images.length,
   );
   let canvasStart = Math.max(0, visibleStart - FILMSTRIP_BUFFER_COUNT);
-  let canvasEnd = Math.min(images.length - 1, visibleEnd + FILMSTRIP_BUFFER_COUNT);
+  let canvasEnd = Math.min(
+    images.length - 1,
+    visibleEnd + FILMSTRIP_BUFFER_COUNT,
+  );
   while (canvasEnd - canvasStart + 1 < canvasCount && canvasStart > 0) {
     canvasStart -= 1;
   }
-  while (canvasEnd - canvasStart + 1 < canvasCount && canvasEnd < images.length - 1) {
+  while (
+    canvasEnd - canvasStart + 1 < canvasCount &&
+    canvasEnd < images.length - 1
+  ) {
     canvasEnd += 1;
   }
 
@@ -4535,6 +4583,51 @@ function downloadComfyWorkflow(workflow) {
   transition: width 0.2s ease;
 }
 
+.overlay-plugin-progress {
+  position: absolute;
+  bottom: 128px;
+  right: calc(16px + var(--sidebar-width));
+  z-index: 6;
+  background: rgba(var(--v-theme-dark-surface), 0.75);
+  color: rgb(var(--v-theme-on-dark-surface));
+  padding: 8px 10px;
+  border-radius: 8px;
+  min-width: 220px;
+  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
+  backdrop-filter: blur(6px);
+}
+
+.overlay-plugin-progress-error {
+  background: rgba(var(--v-theme-error), 0.95);
+}
+
+.overlay-plugin-progress-title {
+  font-size: 0.8em;
+  margin-bottom: 6px;
+  white-space: pre-line;
+}
+
+.overlay-plugin-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.overlay-plugin-progress-fill {
+  height: 100%;
+  background: rgb(var(--v-theme-accent));
+  width: 0;
+  transition: width 0.2s ease;
+}
+
+.overlay-plugin-progress-meta {
+  margin-top: 6px;
+  font-size: 0.78em;
+  opacity: 0.85;
+}
+
 .overlay-close {
   border: none;
   background: rgba(var(--v-theme-primary), 0.7);
@@ -4874,11 +4967,18 @@ function downloadComfyWorkflow(workflow) {
   width: auto;
   height: auto;
   object-fit: contain;
-  border-radius: 12px;
   background: rgb(var(--v-theme-dark-surface));
   box-shadow: 0 12px 30px rgba(var(--v-theme-shadow), 0.45);
   position: relative;
   z-index: 1;
+}
+
+.overlay-img {
+  border-radius: 0;
+}
+
+.overlay-video {
+  border-radius: 12px;
 }
 
 .overlay-nav {

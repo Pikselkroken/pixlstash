@@ -69,7 +69,6 @@ def create_router(server) -> APIRouter:
             def count_all(session: Session) -> int:
                 conditions = [
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                 ]
                 if hidden_tag_filter is not None:
                     conditions.append(hidden_tag_filter)
@@ -85,7 +84,6 @@ def create_router(server) -> APIRouter:
             def count_scrapheap(session: Session) -> int:
                 conditions = [
                     Picture.deleted.is_(True),
-                    Picture.imported_at.is_not(None),
                 ]
                 if hidden_tag_filter is not None:
                     conditions.append(hidden_tag_filter)
@@ -106,7 +104,6 @@ def create_router(server) -> APIRouter:
                 set_exists = exists().where(PictureSetMember.picture_id == Picture.id)
                 conditions = [
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                     ~face_exists,
                     ~set_exists,
                 ]
@@ -125,7 +122,6 @@ def create_router(server) -> APIRouter:
                 conditions = [
                     Face.character_id == character_id,
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                 ]
                 if hidden_tag_filter is not None:
                     conditions.append(hidden_tag_filter)
@@ -328,7 +324,6 @@ def create_router(server) -> APIRouter:
                     .where(
                         Face.character_id == character_id,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                     .order_by(
                         Picture.score.is_(None),

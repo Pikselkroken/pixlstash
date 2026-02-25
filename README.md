@@ -10,7 +10,7 @@ A REST API server for PixlVault
 ## Image Plugins
 
 - Built-in plugins live in `image-plugins/built-in/`.
-- Current built-ins: `colour_filter`, `scaling`.
+- Current built-ins: `colour_filter`, `scaling`, `brightness_contrast`, `blur_sharpen`.
 - User plugins live in `image-plugins/user/`.
 - Start from the template: `image-plugins/user/plugin_template.py`.
 - Copy the template to a new `.py` file in `image-plugins/user/`, then rename class/id and implement `run()`.

@@ -64,6 +64,22 @@ from pixlvault.worker_registry import WorkerType
 
 logger = get_logger(__name__)
 
+MEDIA_TYPE_BY_FORMAT = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "gif": "image/gif",
+    "bmp": "image/bmp",
+    "tiff": "image/tiff",
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+    "mov": "video/quicktime",
+    "avi": "video/x-msvideo",
+    "mkv": "video/x-matroska",
+    "m4v": "video/mp4",
+}
+
 
 def _get_hidden_tags_from_request(server, request: Request) -> list[str]:
     try:
@@ -224,7 +240,6 @@ def _select_pictures_for_listing(
         if deleted_only:
             query = select(Picture.id).where(
                 Picture.deleted.is_(True),
-                Picture.imported_at.is_not(None),
             )
         elif character_id_value == "UNASSIGNED":
             unassigned_condition = ~exists(
@@ -242,7 +257,6 @@ def _select_pictures_for_listing(
                 unassigned_condition,
                 not_in_set_condition,
                 Picture.deleted.is_(False),
-                Picture.imported_at.is_not(None),
             )
         elif character_id_value is None or character_id_value == "":
             return None
@@ -253,7 +267,6 @@ def _select_pictures_for_listing(
                 .where(
                     Face.character_id == character_id_value,
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                 )
             )
         else:
@@ -489,18 +502,94 @@ def create_router(server) -> APIRouter:
         if not isinstance(parameters, dict):
             raise HTTPException(status_code=400, detail="parameters must be an object")
 
+        plugin_run_id = str(uuid.uuid4())
+
+        def emit_plugin_progress(progress_payload: dict):
+            if not isinstance(progress_payload, dict):
+                return
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "run_id": plugin_run_id,
+                    "plugin": str(progress_payload.get("plugin") or name),
+                    "status": "running",
+                    **progress_payload,
+                },
+            )
+
+        def emit_plugin_error(error_payload: dict):
+            if not isinstance(error_payload, dict):
+                return
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "run_id": plugin_run_id,
+                    "plugin": str(error_payload.get("plugin") or name),
+                    "status": "error",
+                    "message": str(error_payload.get("message") or "Plugin error"),
+                    "error": error_payload,
+                },
+            )
+
+        server.vault.notify(
+            EventType.PLUGIN_PROGRESS,
+            {
+                "run_id": plugin_run_id,
+                "plugin": name,
+                "status": "started",
+                "current": 0,
+                "total": len(picture_ids),
+                "progress": 0.0,
+                "message": f"Starting plugin: {name}",
+            },
+        )
+
         try:
-            result = apply_plugin_to_pictures(
+            result = await asyncio.to_thread(
+                apply_plugin_to_pictures,
                 server,
                 plugin,
                 picture_ids,
                 parameters,
+                progress_reporter=emit_plugin_progress,
+                error_reporter=emit_plugin_error,
             )
         except ValueError as exc:
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "run_id": plugin_run_id,
+                    "plugin": name,
+                    "status": "failed",
+                    "message": str(exc),
+                },
+            )
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:
             logger.warning("Plugin run failed for '%s': %s", name, exc)
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "run_id": plugin_run_id,
+                    "plugin": name,
+                    "status": "failed",
+                    "message": str(exc),
+                },
+            )
             raise HTTPException(status_code=500, detail=f"Plugin failed: {exc}")
+
+        server.vault.notify(
+            EventType.PLUGIN_PROGRESS,
+            {
+                "run_id": plugin_run_id,
+                "plugin": name,
+                "status": "completed",
+                "current": len(picture_ids),
+                "total": len(picture_ids),
+                "progress": 100.0,
+                "message": f"Completed plugin: {name}",
+            },
+        )
 
         created_ids = result.get("created_picture_ids") or []
         output_ids = result.get("output_picture_ids") or []
@@ -539,7 +628,6 @@ def create_router(server) -> APIRouter:
                     .where(
                         PictureSetMember.set_id == set_id,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                 ).all()
                 normalized = []
@@ -574,7 +662,6 @@ def create_router(server) -> APIRouter:
                         unassigned_condition,
                         not_in_set_condition,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                     return list(session.exec(query).all())
 
@@ -589,7 +676,6 @@ def create_router(server) -> APIRouter:
                     rows = session.exec(
                         select(Picture.id).where(
                             Picture.deleted.is_(True),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -610,7 +696,6 @@ def create_router(server) -> APIRouter:
                         select(Picture.id).where(
                             Picture.id.in_(picture_ids),
                             Picture.deleted.is_(False),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -626,7 +711,6 @@ def create_router(server) -> APIRouter:
             def fetch_format_ids(session, format, deleted_only: bool):
                 query = select(Picture.id).where(
                     Picture.format.in_(format),
-                    Picture.imported_at.is_not(None),
                 )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
@@ -651,7 +735,6 @@ def create_router(server) -> APIRouter:
                     rows = session.exec(
                         select(Picture.id).where(
                             Picture.deleted.is_(True),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -665,7 +748,6 @@ def create_router(server) -> APIRouter:
                     rows = session.exec(
                         select(Picture.id).where(
                             Picture.deleted.is_(False),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -727,7 +809,6 @@ def create_router(server) -> APIRouter:
             def fetch_stack_map(session, ids, deleted_only: bool):
                 query = select(Picture.id, Picture.stack_id).where(
                     Picture.id.in_(ids),
-                    Picture.imported_at.is_not(None),
                 )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
@@ -749,7 +830,6 @@ def create_router(server) -> APIRouter:
                     return []
                 query = select(Picture.id, Picture.stack_id).where(
                     Picture.stack_id.in_(stack_ids),
-                    Picture.imported_at.is_not(None),
                 )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
@@ -952,7 +1032,9 @@ def create_router(server) -> APIRouter:
                 )
                 return Response(content=cached_bytes, media_type="image/webp")
 
-            def build_thumbnail_blocking() -> tuple[str, str | None, bytes | None, str | None]:
+            def build_thumbnail_blocking() -> tuple[
+                str, str | None, bytes | None, str | None
+            ]:
                 resolved = PictureUtils.resolve_picture_path(
                     server.vault.image_root, pic.file_path
                 )
@@ -978,9 +1060,12 @@ def create_router(server) -> APIRouter:
 
                 return "memory-only", resolved, thumbnail_bytes, None
 
-            status, resolved_path, thumbnail_bytes, saved_thumb = await asyncio.to_thread(
-                build_thumbnail_blocking
-            )
+            (
+                status,
+                resolved_path,
+                thumbnail_bytes,
+                saved_thumb,
+            ) = await asyncio.to_thread(build_thumbnail_blocking)
 
             if status == "saved" and saved_thumb:
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
@@ -1392,7 +1477,6 @@ def create_router(server) -> APIRouter:
                     .where(
                         PictureSetMember.set_id == set_id_value,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                 ).all()
                 return [row for row in members]
@@ -1419,7 +1503,6 @@ def create_router(server) -> APIRouter:
                         unassigned_condition,
                         not_in_set_condition,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                     return list(session.exec(query_stmt).all())
 
@@ -1443,7 +1526,6 @@ def create_router(server) -> APIRouter:
                         select(Picture.id).where(
                             Picture.id.in_(picture_ids),
                             Picture.deleted.is_(False),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -1862,7 +1944,8 @@ def create_router(server) -> APIRouter:
                 detail="Requested extension does not match picture format",
             )
 
-        response = FileResponse(file_path)
+        media_type = MEDIA_TYPE_BY_FORMAT.get(pic.format.lower())
+        response = FileResponse(file_path, media_type=media_type)
         try:
             stat = os.stat(file_path)
             etag = f'W/"{stat.st_size}-{int(stat.st_mtime)}"'
@@ -2263,7 +2346,6 @@ def create_router(server) -> APIRouter:
                 select(Picture).where(
                     Picture.id == pic_id,
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                 )
             ).first()
             if not pic:

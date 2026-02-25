@@ -28,9 +28,6 @@ from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.likeness_parameter_worker import LikenessParameterWorker  # noqa: F401
 from pixlvault.image_embedding_worker import ImageEmbeddingWorker  # noqa: F401
 from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
-from pixlvault.smart_score_scrapheap_worker import (  # noqa: F401
-    SmartScoreScrapheapWorker,
-)
 from pixlvault.watch_folder_worker import WatchFolderWorker  # noqa: F401
 
 
@@ -49,9 +46,7 @@ class Vault:
             WorkerType.DESCRIPTION,
             WorkerType.IMAGE_EMBEDDING,
             WorkerType.LIKENESS_PARAMETERS,
-            WorkerType.SMART_SCORE_SCRAPHEAP,
         ],
-        EventType.CHANGED_TAGS: [WorkerType.SMART_SCORE_SCRAPHEAP],
         EventType.CHANGED_FACES: [
             WorkerType.FACE_QUALITY,
             WorkerType.TAGGER,
@@ -63,7 +58,6 @@ class Vault:
         EventType.QUALITY_UPDATED: [
             WorkerType.LIKENESS,
             WorkerType.LIKENESS_PARAMETERS,
-            WorkerType.SMART_SCORE_SCRAPHEAP,
         ],
         EventType.CLEARED_TAGS: [WorkerType.TAGGER, WorkerType.TEXT_EMBEDDING],
     }
