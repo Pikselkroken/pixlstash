@@ -15,10 +15,10 @@ import pixlvault.db_models  # noqa: F401
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0001_baseline"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "0001_baseline"  # noqa: F841
+down_revision: Union[str, None] = None  # noqa: F841
+branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
+depends_on: Union[str, Sequence[str], None] = None  # noqa: F841
 
 
 def upgrade() -> None:

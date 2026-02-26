@@ -9,10 +9,10 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision = "0d1e2f3a4b5c"
-down_revision = ("0a1b2c3d4e5f", "0c1d2e3f4a5b")
-branch_labels = None
-depends_on = None
+revision = "0d1e2f3a4b5c"  # noqa: F841
+down_revision = ("0a1b2c3d4e5f", "0c1d2e3f4a5b")  # noqa: F841
+branch_labels = None  # noqa: F841
+depends_on = None  # noqa: F841
 
 
 def upgrade() -> None:
