@@ -12,10 +12,10 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "f9c0d1e2f3a4"
-down_revision: Union[str, None] = "f8b9c0d1e2f3"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "f9c0d1e2f3a4"  # noqa: F841
+down_revision: Union[str, None] = "f8b9c0d1e2f3"  # noqa: F841
+branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
+depends_on: Union[str, Sequence[str], None] = None  # noqa: F841
 
 
 OLD_COLUMN = "smart_score_penalized_tags"

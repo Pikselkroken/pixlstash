@@ -12,10 +12,10 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0c1d2e3f4a5b"
-down_revision: Union[str, None] = "0b1c2d3e4f5a"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "0c1d2e3f4a5b"  # noqa: F841
+down_revision: Union[str, None] = "0b1c2d3e4f5a"  # noqa: F841
+branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
+depends_on: Union[str, Sequence[str], None] = None  # noqa: F841
 
 TABLE_NAME = "user"
 COLUMN_NAME = "show_stacks"

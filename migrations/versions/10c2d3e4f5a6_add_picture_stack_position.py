@@ -16,10 +16,10 @@ def _table_exists(table_name: str) -> bool:
 
 
 # revision identifiers, used by Alembic.
-revision = "10c2d3e4f5a6"
-down_revision = "0b1c2d3e4f5a"
-branch_labels = None
-depends_on = None
+revision = "10c2d3e4f5a6"  # noqa: F841
+down_revision = "0b1c2d3e4f5a"  # noqa: F841
+branch_labels = None  # noqa: F841
+depends_on = None  # noqa: F841
 
 
 def upgrade() -> None:
