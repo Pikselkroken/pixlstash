@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 from typing import List, Dict
 
 from sqlmodel import Session, select
@@ -159,6 +160,7 @@ class WatchFolderWorker(BaseWorker):
                                 source_file_path=file_path,
                                 pixel_sha=pixel_sha,
                             )
+                            pic.imported_at = datetime.now()
                             new_pictures.append(pic)
                             stack_id, source_id = parse_stack_tags_from_filename(
                                 file_path

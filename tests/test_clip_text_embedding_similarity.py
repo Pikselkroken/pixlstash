@@ -68,6 +68,7 @@ descriptions = [
 @pytest.fixture(scope="module")
 def shared_tagger():
     tagger = PictureTagger("cuda" if not PictureTagger.FORCE_CPU else "cpu")
+    tagger._ensure_clip_ready()
     yield tagger
     del tagger
 
