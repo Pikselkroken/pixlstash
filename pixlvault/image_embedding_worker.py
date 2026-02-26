@@ -98,6 +98,34 @@ class ImageEmbeddingWorker(BaseWorker):
         except Exception:
             return None
 
+    def _ensure_clip_ready(self) -> bool:
+        if self._picture_tagger is None:
+            logger.error("ImageEmbeddingWorker: PictureTagger not available for CLIP embeddings.")
+            return False
+
+        for attempt in range(1, 4):
+            try:
+                self._picture_tagger._ensure_clip_ready()
+                if (
+                    getattr(self._picture_tagger, "_clip_model", None) is not None
+                    and getattr(self._picture_tagger, "_clip_preprocess", None)
+                    is not None
+                ):
+                    return True
+            except Exception as exc:
+                logger.warning(
+                    "ImageEmbeddingWorker: CLIP init attempt %s/3 failed: %s",
+                    attempt,
+                    exc,
+                )
+                if attempt < 3:
+                    time.sleep(1.0)
+
+        logger.error(
+            "ImageEmbeddingWorker: CLIP model unavailable after retries; embeddings cannot be generated."
+        )
+        return False
+
     def _ensure_model(self):
         if self.aesthetic_model is not None:
             return
@@ -262,10 +290,10 @@ class ImageEmbeddingWorker(BaseWorker):
 
                 embeddings = None
 
-                # 1. Try using PictureTagger's loaded CLIP model
-                if self._picture_tagger and getattr(
-                    self._picture_tagger, "_clip_model", None
-                ):
+                clip_ready = self._ensure_clip_ready()
+
+                # 1. Use PictureTagger's CLIP model
+                if clip_ready:
                     try:
                         # open_clip expects images as tensors
                         # We can use the preprocess from PictureTagger
