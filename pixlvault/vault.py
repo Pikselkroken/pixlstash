@@ -9,20 +9,26 @@ import threading
 import numpy as np
 
 from typing import Optional
+from concurrent.futures import Future
 
 from sqlmodel import Session, select
+from sqlalchemy import func
 
 
 from .database import DBPriority, VaultDatabase
-from .db_models import MetaData, Character, Picture, PictureSet
+from .db_models import MetaData, Character, Face, Hand, Picture, PictureSet
 from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
 from .picture_utils import PictureUtils
+from .tasks.missing_description_finder import MissingDescriptionFinder
+from .tasks.missing_tags_finder import MissingTagsFinder
+from .task_runner import TaskRunner, TaskStatus
+from .work_planner import WorkPlanner
 from .worker_registry import WorkerRegistry, WorkerType
 
 # These import lines are all necessary to register the workers with the WorkerRegistry
 from pixlvault.event_types import EventType
-from pixlvault.tag_worker import TagWorker, DescriptionWorker, EmbeddingWorker  # noqa: F401
+from pixlvault.tag_worker import EmbeddingWorker  # noqa: F401
 from pixlvault.feature_extraction_worker import FeatureExtractionWorker  # noqa: F401
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.likeness_parameter_worker import LikenessParameterWorker  # noqa: F401
@@ -60,6 +66,10 @@ class Vault:
             WorkerType.LIKENESS_PARAMETERS,
         ],
         EventType.CLEARED_TAGS: [WorkerType.TAGGER, WorkerType.TEXT_EMBEDDING],
+    }
+    _planner_managed_worker_types = {
+        WorkerType.TAGGER,
+        WorkerType.DESCRIPTION,
     }
 
     def __enter__(self):
@@ -107,9 +117,30 @@ class Vault:
         self._keep_models_in_memory = True
 
         self._workers = {}
+        self._planner_watchers = {}
+        self._planner_watchers_lock = threading.Lock()
         self._event_listeners = []
         self._event_listeners_lock = threading.Lock()
+        self._task_runner = TaskRunner(name="vault-task-runner")
+        self._work_planner = WorkPlanner(
+            task_runner=self._task_runner,
+            task_finders=[
+                MissingTagsFinder(
+                    database=self.db,
+                    picture_tagger_getter=lambda: self._picture_tagger,
+                ),
+                MissingDescriptionFinder(
+                    database=self.db,
+                    picture_tagger_getter=lambda: self._picture_tagger,
+                )
+            ],
+        )
         self._closed = False
+
+        self._task_runner.add_task_complete_callback(self._on_task_completed)
+        self._task_runner.add_task_complete_callback(self._work_planner.on_task_complete)
+        self._task_runner.start()
+        self._work_planner.start()
 
     def stop_workers(self, workers_to_stop: set[WorkerType] = WorkerType.all()):
         logger.debug("Stopping background workers...")
@@ -130,11 +161,19 @@ class Vault:
         # Initialize all workers
         logger.debug("Initialise background workers...")
         for worker_type in workers_to_start:
+            if worker_type in self._planner_managed_worker_types:
+                continue
             if worker_type not in self._workers:
                 self.initialise_worker_if_necessary(worker_type)
 
         logger.debug("Starting background workers...")
         for worker_type in workers_to_start:
+            if worker_type in self._planner_managed_worker_types:
+                logger.info(
+                    "Worker %s is planner-managed; no worker thread to start.",
+                    worker_type,
+                )
+                continue
             worker = self._workers.get(worker_type)
             if worker:
                 logger.info(f"Starting worker: {worker_type}")
@@ -151,12 +190,16 @@ class Vault:
         """
         worker_types = self._event_worker_map.get(event_type, [])
         for worker_type in worker_types:
+            if worker_type in self._planner_managed_worker_types:
+                continue
             worker = self._workers.get(worker_type)
             if worker:
                 logger.debug(f"Notifying worker {worker_type} for event {event_type}")
                 worker.notify(event_type=event_type, data=data)
             else:
                 logger.debug(f"Worker {worker_type} not found for event {event_type}")
+        if self._work_planner and self._work_planner.is_running():
+            self._work_planner.wake()
         with self._event_listeners_lock:
             listeners = list(self._event_listeners)
         for listener in listeners:
@@ -190,6 +233,8 @@ class Vault:
             return
         self._closed = True
         self.stop_workers(WorkerType.all())
+        self._work_planner.stop()
+        self._task_runner.stop()
         for worker in self._workers.values():
             worker.close()
 
@@ -288,6 +333,14 @@ class Vault:
         Args:
             worker_type (WorkerType): The type of worker to initialize.
         """
+        if worker_type in self._planner_managed_worker_types:
+            if not self._picture_tagger:
+                self._picture_tagger = PictureTagger(image_root=self.image_root)
+                self._picture_tagger.set_keep_models_in_memory(
+                    self._keep_models_in_memory
+                )
+            return
+
         if not self._picture_tagger:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
@@ -299,7 +352,56 @@ class Vault:
                 self._picture_tagger,
                 event_callback=self.notify,
             )
+            if hasattr(worker_instance, "set_task_submitter"):
+                worker_instance.set_task_submitter(self.submit_task)
             self._workers[worker_type] = worker_instance
+
+    def submit_task(self, task):
+        """Submit an in-memory task to the shared task runner."""
+        return self._task_runner.submit(task)
+
+    def _on_task_completed(self, task, error):
+        if error is not None or task.status != TaskStatus.COMPLETED:
+            return
+
+        result = task.result if isinstance(task.result, dict) else {}
+        changed = result.get("changed") if isinstance(result, dict) else None
+        if not changed:
+            return
+
+        if task.type == "TagTask":
+            self._notify_worker_ids_processed(WorkerType.TAGGER, changed)
+            picture_ids = [pic_id for _, pic_id, _, _ in changed]
+            if picture_ids:
+                self.notify(EventType.CHANGED_TAGS, picture_ids)
+            return
+
+        if task.type == "DescriptionTask":
+            self._notify_worker_ids_processed(WorkerType.DESCRIPTION, changed)
+            self.notify(EventType.CHANGED_DESCRIPTIONS)
+
+    def _notify_worker_ids_processed(self, worker_type: WorkerType, changed):
+        worker = self._workers.get(worker_type)
+        if worker is not None:
+            worker._notify_ids_processed(changed)
+            return
+        self._notify_planner_ids_processed(worker_type, changed)
+
+    def _watch_planner_id(self, worker_type: WorkerType, cls: type, object_id, attr: str):
+        future = Future()
+        with self._planner_watchers_lock:
+            self._planner_watchers[(worker_type, cls, object_id, attr)] = future
+        return future
+
+    def _notify_planner_ids_processed(self, worker_type: WorkerType, changed):
+        with self._planner_watchers_lock:
+            for cls, object_id, attr, payload in changed:
+                future = self._planner_watchers.pop(
+                    (worker_type, cls, object_id, attr),
+                    None,
+                )
+                if future:
+                    future.set_result((object_id, payload))
 
     def get_worker_future(
         self, worker_type: WorkerType, cls: type, object_id: int, attr: str
@@ -311,6 +413,10 @@ class Vault:
         Returns:
             concurrent.futures.Future: Future set to True when completed.
         """
+        if worker_type in self._planner_managed_worker_types:
+            self.initialise_worker_if_necessary(worker_type)
+            return self._watch_planner_id(worker_type, cls, object_id, attr)
+
         self.initialise_worker_if_necessary(worker_type)
 
         worker = self._workers.get(worker_type)
@@ -323,12 +429,44 @@ class Vault:
         """
         Check if a specific worker is running.
         """
+        if worker_type in self._planner_managed_worker_types:
+            return bool(self._work_planner and self._work_planner.is_running())
         worker = self._workers.get(worker_type)
         return worker is not None and worker.is_alive()
 
     def _build_worker_progress_snapshot(self) -> dict:
         progress = {}
         for worker_type in WorkerType.all():
+            if worker_type in self._planner_managed_worker_types:
+                total = int(self.db.run_immediate_read_task(self._count_total_pictures) or 0)
+                if worker_type == WorkerType.DESCRIPTION:
+                    missing = int(
+                        self.db.run_immediate_read_task(
+                            self._count_missing_descriptions
+                        )
+                        or 0
+                    )
+                    label = "descriptions_generated"
+                elif worker_type == WorkerType.TAGGER:
+                    missing = int(
+                        self.db.run_immediate_read_task(self._count_missing_tags)
+                        or 0
+                    )
+                    label = "pictures_tagged"
+                else:
+                    missing = 0
+                    label = "planner_managed"
+                progress[worker_type.value] = {
+                    "label": label,
+                    "current": max(total - missing, 0),
+                    "total": total,
+                    "remaining": max(missing, 0),
+                    "updated_at": time.time(),
+                    "status": "running" if self.is_worker_running(worker_type) else "idle",
+                    "running": self.is_worker_running(worker_type),
+                }
+                continue
+
             worker = self._workers.get(worker_type)
             if worker:
                 snapshot = worker.get_progress()
@@ -345,6 +483,37 @@ class Vault:
                 }
             progress[worker_type.value] = snapshot
         return progress
+
+    @staticmethod
+    def _count_total_pictures(session: Session) -> int:
+        result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_descriptions(session: Session) -> int:
+        result = session.exec(
+            select(func.count()).select_from(Picture).where(Picture.description.is_(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_tags(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(
+                (~Picture.tags.any())
+                | Picture.faces.any((Face.face_index >= 0) & (~Face.tags.any()))
+                | Picture.hands.any((Hand.hand_index >= 0) & (~Hand.tags.any()))
+            )
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
 
     def get_worker_progress(self) -> dict:
         progress = self._build_worker_progress_snapshot()
