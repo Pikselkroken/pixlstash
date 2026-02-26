@@ -76,6 +76,7 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
 
         self._event_callback = event_callback
         self._queue = queue.Queue()
+        self._task_submitter = None
 
         self._progress_lock = threading.Lock()
         self._progress = {
@@ -87,6 +88,24 @@ class BaseWorker(ABC, metaclass=WorkerRegistry):
             "status": "idle",
         }
         self._last_idle_cleanup_at = 0.0
+
+    def set_task_submitter(self, task_submitter):
+        """Register a callback used to submit tasks to the shared task runner."""
+        self._task_submitter = task_submitter
+
+    def _submit_task(self, task):
+        """Submit a task through the configured task submitter.
+
+        If no submitter is configured, the task runs synchronously as a fallback.
+        """
+        if self._task_submitter is not None:
+            return self._task_submitter(task)
+        logger.warning(
+            "No task submitter configured for %s; running task synchronously.",
+            self.name(),
+        )
+        task.run()
+        return getattr(task, "id", None)
 
     @abstractmethod
     def worker_type(self) -> WorkerType:

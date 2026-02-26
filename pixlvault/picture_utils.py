@@ -8,7 +8,7 @@ from fractions import Fraction
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import List, Optional
-from PIL import Image
+from PIL import Image, ImageOps
 
 try:
     from PIL.TiffImagePlugin import IFDRational
@@ -508,6 +508,28 @@ class PictureUtils:
         if x_max <= x_min or y_max <= y_min:
             return None
         return [x_min, y_min, x_max, y_max]
+
+    @staticmethod
+    def pad_image_to_square(pil_img: Image.Image, fill=0) -> Optional[Image.Image]:
+        """Pad a PIL image to a square canvas while preserving content."""
+        if pil_img is None:
+            return None
+        width, height = pil_img.size
+        if width <= 0 or height <= 0:
+            return None
+
+        target = max(width, height)
+        pad_x = max(0, target - width)
+        pad_y = max(0, target - height)
+        left = pad_x // 2
+        right = pad_x - left
+        top = pad_y // 2
+        bottom = pad_y - top
+        return ImageOps.expand(
+            pil_img,
+            border=(left, top, right, bottom),
+            fill=fill,
+        )
 
     @staticmethod
     def extract_created_at_from_metadata(
