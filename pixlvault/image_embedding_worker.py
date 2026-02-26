@@ -100,7 +100,9 @@ class ImageEmbeddingWorker(BaseWorker):
 
     def _ensure_clip_ready(self) -> bool:
         if self._picture_tagger is None:
-            logger.error("ImageEmbeddingWorker: PictureTagger not available for CLIP embeddings.")
+            logger.error(
+                "ImageEmbeddingWorker: PictureTagger not available for CLIP embeddings."
+            )
             return False
 
         for attempt in range(1, 4):
