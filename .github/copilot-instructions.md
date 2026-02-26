@@ -28,6 +28,15 @@
 - **Database:** SQLite (`vault.db`), schema managed via Python and bash scripts.
 - **Image Quality:** Batch processing and metrics in `pixlvault/pictures.py` and `pixlvault/picture_quality.py`.
 
+## Fixing bugs and default error resolution approach
+- NEVER assume a fix without understanding the root cause.
+- ALWAYS read error messages carefully and check stack traces to identify the source of the error.
+- NEVER apply fallback-based fixes unless I explicitly approve them in this conversation.
+- REQUIRED debugging sequence: reproduce issue → isolate root cause → implement direct fix → validate with tests/log evidence.
+- Fallbacks are LAST RESORT only, not a default strategy.
+- If a fallback is approved and necessary, implement it so it does not mask the underlying issue and includes clear logging for future resolution.
+- If you cannot resolve the root cause, document findings, blockers, and attempted fixes, then ask for direction instead of applying an unverified workaround.
+
 ## Developer Workflows
 
 - **Install dependencies:** `pip install -e .`
