@@ -158,7 +158,7 @@
       .hero {
         margin-top: 20px;
         display: grid;
-        grid-template-columns: minmax(520px, 1.6fr) minmax(320px, 1fr);
+        grid-template-columns: minmax(0, 1fr);
         gap: 4px;
         align-items: flex-start;
       }
@@ -571,13 +571,14 @@
             <span class="badge">Open Source</span>
             <span class="badge">Cross-Platform</span>
             <span class="badge">AI tagging + search</span>
-            <span class="badge">Automatic rejection</span>
+            <span class="badge">Simple Image Enhancement</span>
+            <span class="badge">ComfyUI Integration</span>
           </div>
-          <h1>Find. Tag. Ship.</h1>
+          <h1>Simplify your image workflow.</h1>
           <p>
             A practical image management platform for photographers and AI
-            creators. PixlVault brings semantic search, automated tagging, and
-            dataset workflows into one place.
+            creators. Let PixlVault organise your pictures so you can focus on
+            work that matters.
           </p>
           <div class="cta-row">
             <a
@@ -586,31 +587,12 @@
             >
               View on GitHub
             </a>
-          </div>
-        </div>
-        <div class="hero-panel">
-          <div class="panel-header">
-            <span>HIGHLIGHTS</span>
-            <span>AUTOMATION</span>
-          </div>
-          <div class="panel-title">Search. Score. Stack.</div>
-          <div class="panel-grid">
-            <div class="panel-card">
-              <h4>AI Automation</h4>
-              <p>Use modern AI models to automate tedious tasks.</p>
-            </div>
-            <div class="panel-card">
-              <h4>Likeness Searches</h4>
-              <p>Automatically find similar images and faces.</p>
-            </div>
-            <div class="panel-card">
-              <h4>GPU Support</h4>
-              <p>Leverage your GPU for faster tagging and processing.</p>
-            </div>
-            <div class="panel-card">
-              <h4>Easy Export</h4>
-              <p>Package filtered selections into training-ready zips.</p>
-            </div>
+            <a
+              class="btn btn-secondary"
+              href="https://pypi.org/project/pixlvault/"
+            >
+              View on PyPI
+            </a>
           </div>
         </div>
       </section>
@@ -621,7 +603,7 @@
         </div>
         <div class="shot-grid">
           <div class="shot">
-            <div class="shot-label">Image grid</div>
+            <div class="shot-label"><h4>Image grid</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotGrid.jpg"
@@ -630,13 +612,10 @@
                 loading="lazy"
               />
             </button>
-            <h4>Scan the grid</h4>
-            <p>
-              Preview stacks, scores, and metadata without leaving the grid.
-            </p>
+            <p>Pretty image view with scoring, stacking and sorting.</p>
           </div>
           <div class="shot">
-            <div class="shot-label">Dark + smart scoring</div>
+            <div class="shot-label"><h4>Dark Theme</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotGridDark.jpg"
@@ -645,11 +624,10 @@
                 loading="lazy"
               />
             </button>
-            <h4>Review scores in dark mode</h4>
-            <p>Sort and scan ratings with the smart scoring view.</p>
+            <p>Choice between light and dark themes for better visibility.</p>
           </div>
           <div class="shot">
-            <div class="shot-label">Similarity sorting</div>
+            <div class="shot-label"><h4>Similarity sorting</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotGridSimilarity.jpg"
@@ -658,11 +636,10 @@
                 loading="lazy"
               />
             </button>
-            <h4>Sort by character similarity</h4>
-            <p>Compare likeness scores without leaving the grid.</p>
+            <p>Easily find pictures containing particular characters.</p>
           </div>
           <div class="shot">
-            <div class="shot-label">Selections + actions</div>
+            <div class="shot-label"><h4>Batch operations</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotGridSelection.jpg"
@@ -671,26 +648,29 @@
                 loading="lazy"
               />
             </button>
-            <h4>Select, add, and delete</h4>
             <p>
-              Batch select images, assign to sets or characters, and delete.
+              Select images, assign to sets or characters and perform batch
+              actions.
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label">Task manager</div>
+            <div class="shot-label"><h4>ComfyUI Integration</h4></div>
             <button class="shot-image-btn" type="button">
               <img
-                src="assets/ScreenshotTaskManager.jpg"
-                data-full="assets/ScreenshotTaskManager.jpg"
-                alt="PixlVault task manager view"
+                src="assets/ScreenshotComfyUi.jpg"
+                data-full="assets/ScreenshotComfyUi.jpg"
+                alt="PixlVault ComfyUI integration view"
                 loading="lazy"
               />
             </button>
-            <h4>Track automation</h4>
-            <p>Monitor background tagging and processing tasks.</p>
+            <p>
+              Run your own ComfyUI workflows directly from PixlVault with
+              progress tracking. Any workflow with LoadImage and SaveImage
+              should work.
+            </p>
           </div>
           <div class="shot">
-            <div class="shot-label">Image View</div>
+            <div class="shot-label"><h4>Picture inspection</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotImageOverlay.jpg"
@@ -699,14 +679,13 @@
                 loading="lazy"
               />
             </button>
-            <h4>Inspect pictures</h4>
             <p>
               Review and edit automatic descriptions and assign faces to
               individuals.
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label">Face and hand detection</div>
+            <div class="shot-label"><h4>Face/hand detection</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotImageOverlay2.jpg"
@@ -715,13 +694,13 @@
                 loading="lazy"
               />
             </button>
-            <h4>Analyse faces and hands</h4>
             <p>
-              Assign tags to detected faces and hands for better organisation.
+              Assign tags to detected faces and hands for better organisation
+              and for exporting to training datasets.
             </p>
           </div>
           <div class="shot">
-            <div class="shot-label">Spot the errors</div>
+            <div class="shot-label"><h4>Spot the errors</h4></div>
             <button class="shot-image-btn" type="button">
               <img
                 src="assets/ScreenshotImageOverlay3.jpg"
@@ -730,18 +709,19 @@
                 loading="lazy"
               />
             </button>
-            <h4>Detect anomalies</h4>
-            <p>Find the outliers and inconsistencies in your dataset.</p>
+            <p>
+              Find the outliers, anomalies and inconsistencies in your dataset.
+            </p>
           </div>
         </div>
       </section>
 
       <section id="features" class="section">
         <div class="section-header">
-          <h2 class="section-title">Built for fast browsing</h2>
+          <h2 class="section-title">Other Features</h2>
           <p class="section-subtitle">
-            PixlVault combines automatic tagging, semantic search, and metadata
-            so you can navigate large libraries with fewer steps.
+            Automatic tagging, semantic search, and metadata so you can navigate
+            large libraries with fewer steps.
           </p>
         </div>
         <div class="feature-grid">
@@ -750,20 +730,25 @@
             <p>Batch-tag images and faces with state-of-the-art models.</p>
           </div>
           <div class="feature-card">
-            <h3>Integrate with ComfyUI</h3>
-            <p>Run workflows in ComfyUI directly from PixlVault.</p>
+            <h3>Anomaly detection</h3>
+            <p>
+              Automatically applies a ViT model to detect anomalies in your
+              images, like malformed anatomy.
+            </p>
           </div>
           <div class="feature-card">
-            <h3>Easy installation</h3>
-            <p>Public repo, local-first workflow, and quick setup.</p>
+            <h3>Automatic grouping</h3>
+            <p>
+              Automatically groups similar images for easier organization and
+              review.
+            </p>
           </div>
           <div class="feature-card">
-            <h3>Automatic import</h3>
-            <p>Import images automatically from selected folders.</p>
-          </div>
-          <div class="feature-card">
-            <h3>Play and preview videos</h3>
-            <p>Preview and play videos directly within PixlVault.</p>
+            <h3>Plugin system</h3>
+            <p>
+              Extend PixlVault's functionality with custom Python plugins for
+              image processing.
+            </p>
           </div>
         </div>
       </section>
@@ -820,11 +805,8 @@
             <p>Drive workflows with endpoints for search and scoring.</p>
           </div>
           <div class="feature-card">
-            <h3>Load into other apps</h3>
-            <p>
-              Use custom ComfyUI nodes to load images from PixlVault into your
-              workflows.
-            </p>
+            <h3>Authentication</h3>
+            <p>Use username/password or API tokens.</p>
           </div>
         </div>
       </section>

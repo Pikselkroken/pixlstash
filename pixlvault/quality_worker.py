@@ -68,7 +68,7 @@ class QualityWorker(BaseWorker):
                     current=max(total - missing, 0),
                     total=total,
                 )
-                logger.info(
+                logger.debug(
                     f"Found {len(pics_missing_quality)} pictures missing quality metrics."
                 )
                 if pics_missing_quality:
@@ -85,7 +85,7 @@ class QualityWorker(BaseWorker):
                     )
                     sample_pics = pics_missing_quality[:3]
                     for sample_pic in sample_pics:
-                        logger.info(
+                        logger.debug(
                             "[QUALITY] Missing sample: id=%s format=%s width=%s height=%s file_path=%s",
                             sample_pic.id,
                             sample_pic.format,
@@ -102,7 +102,7 @@ class QualityWorker(BaseWorker):
                     pics_missing_quality
                 )
                 if grouped_full:
-                    logger.info(
+                    logger.debug(
                         "[QUALITY] Grouped into %s batches (example key=%s size=%s)",
                         len(grouped_full),
                         next(iter(grouped_full.keys())),
@@ -179,7 +179,7 @@ class QualityWorker(BaseWorker):
                             )
                             self._notify_ids_processed(result)
                             quality_updates += len(result)
-                            logger.info(
+                            logger.debug(
                                 "[QUALITY] Updated %s qualities for group=%s",
                                 len(result),
                                 group_key,
@@ -187,7 +187,7 @@ class QualityWorker(BaseWorker):
                         else:
                             logger.warning("[QUALITY] No quality updates calculated.")
                     if missing_load_ids or shape_mismatch_ids:
-                        logger.info(
+                        logger.debug(
                             "[QUALITY] Batch diagnostics: missing_load=%s shape_mismatch=%s sample_missing=%s sample_shape=%s",
                             len(missing_load_ids),
                             len(shape_mismatch_ids),

@@ -76,7 +76,7 @@ class DescriptionWorker(BaseWorker):
                         : min(10, len(descriptions_generated))
                     ]
                 ]
-                logger.info(
+                logger.debug(
                     "DescriptionWorker: generated=%s generated_ids_preview=%s",
                     len(descriptions_generated),
                     generated_ids_preview,
@@ -108,7 +108,7 @@ class DescriptionWorker(BaseWorker):
                         object_id
                         for _, object_id, _, _ in changed[: min(10, len(changed))]
                     ]
-                    logger.info(
+                    logger.debug(
                         "DescriptionWorker: committed=%s changed_ids_preview=%s",
                         len(changed),
                         changed_ids_preview,
@@ -117,19 +117,19 @@ class DescriptionWorker(BaseWorker):
                     self._notify_others(EventType.CHANGED_DESCRIPTIONS)
                 timing = time.time() - start
                 if data_updated:
-                    logger.info(
+                    logger.debug(
                         "DescriptionWorker: Iteration done in %.2fs with DB updates.",
                         timing,
                     )
                 else:
                     if missing > 0:
-                        logger.info(
+                        logger.debug(
                             "DescriptionWorker: No DB updates despite missing=%s after %.2fs; entering wait.",
                             missing,
                             timing,
                         )
                     else:
-                        logger.info(
+                        logger.debug(
                             "DescriptionWorker: No pending descriptions after %.2fs; entering wait.",
                             timing,
                         )
@@ -150,7 +150,7 @@ class DescriptionWorker(BaseWorker):
         logger.info("Exiting DescriptionWorker loop.")
 
     def _fetch_missing_descriptions(self):
-        logger.info("DescriptionWorker: Fetching pictures missing descriptions.")
+        logger.debug("DescriptionWorker: Fetching pictures missing descriptions.")
 
         return VaultDatabase.result_or_throw(
             self._db.submit_task(
@@ -184,7 +184,7 @@ class DescriptionWorker(BaseWorker):
         )
         batch = missing_descriptions[:batch_limit]
         batch_ids = [pic.id for pic in batch]
-        logger.info(
+        logger.debug(
             "DescriptionWorker: Generating batch_size=%s batch_ids=%s",
             len(batch),
             batch_ids,
@@ -197,7 +197,7 @@ class DescriptionWorker(BaseWorker):
         try:
             generate_start = time.time()
             batch_results = picture_tagger.generate_descriptions_batch(batch)
-            logger.info(
+            logger.debug(
                 "DescriptionWorker: Batch generation completed in %.2fs for %s pictures.",
                 time.time() - generate_start,
                 len(batch),
@@ -372,7 +372,7 @@ class TagWorker(BaseWorker):
         if image_paths:
             if self._stop.is_set():
                 return []
-            logger.info("Tagging %s images", len(image_paths))
+            logger.debug("Tagging %s images", len(image_paths))
             logger.debug("Tagging image paths: %s", image_paths)
             tag_results = self._picture_tagger.tag_images(
                 image_paths, stop_event=self._stop
@@ -409,7 +409,7 @@ class TagWorker(BaseWorker):
                         path = os.path.join(crop_debug_dir, name)
                         try:
                             cv2.imwrite(path, crop)
-                            logger.info("Saved crop: %s", path)
+                            logger.debug("Saved crop: %s", path)
                         except Exception as exc:
                             logger.warning("Failed to write crop %s: %s", path, exc)
 
@@ -580,7 +580,7 @@ class TagWorker(BaseWorker):
                             threshold=self._picture_tagger.custom_tagger_threshold_crops(),
                             image_size=self._picture_tagger.custom_tagger_image_size_crops(),
                         )
-                        logger.info(
+                        logger.debug(
                             "Crop tagging results: %s items",
                             len(unified_results or {}),
                         )
@@ -590,7 +590,7 @@ class TagWorker(BaseWorker):
                                 continue
                             kind = item_to_kind.get(key)
                             if "blurry" in tags:
-                                logger.info(
+                                logger.debug(
                                     "[TAG SOURCE] pic_id=%s source=%s tag=blurry",
                                     pic_id,
                                     kind or "crop",
@@ -630,7 +630,7 @@ class TagWorker(BaseWorker):
                     continue
                 base_tags = tag_results.get(path, [])
                 if "blurry" in base_tags:
-                    logger.info(
+                    logger.debug(
                         "[TAG SOURCE] pic_id=%s source=full tag=blurry",
                         pic.id,
                     )

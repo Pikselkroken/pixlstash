@@ -34,6 +34,82 @@ logger = get_logger(__name__)
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
+    def _enrich_with_stack_counts(pictures: list[dict]) -> list[dict]:
+        if not pictures:
+            return pictures
+
+        picture_ids = [
+            int(pic.get("id"))
+            for pic in pictures
+            if isinstance(pic, dict) and pic.get("id") is not None
+        ]
+        if not picture_ids:
+            return pictures
+
+        def fetch_stack_info(session: Session, ids: list[int]):
+            id_stack_rows = session.exec(
+                select(Picture.id, Picture.stack_id).where(
+                    Picture.id.in_(ids),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+            stack_ids = sorted(
+                {
+                    int(stack_id)
+                    for _pic_id, stack_id in id_stack_rows
+                    if stack_id is not None
+                }
+            )
+            if not stack_ids:
+                return id_stack_rows, []
+
+            stack_count_rows = session.exec(
+                select(Picture.stack_id, func.count(Picture.id))
+                .where(
+                    Picture.stack_id.in_(stack_ids),
+                    Picture.deleted.is_(False),
+                )
+                .group_by(Picture.stack_id)
+            ).all()
+            return id_stack_rows, stack_count_rows
+
+        id_stack_rows, stack_count_rows = server.vault.db.run_immediate_read_task(
+            fetch_stack_info, picture_ids
+        )
+        stack_id_by_picture_id = {
+            int(pic_id): stack_id for pic_id, stack_id in id_stack_rows
+        }
+        stack_count_by_stack_id = {
+            int(stack_id): int(count)
+            for stack_id, count in stack_count_rows
+            if stack_id is not None
+        }
+
+        enriched: list[dict] = []
+        for pic in pictures:
+            if not isinstance(pic, dict):
+                enriched.append(pic)
+                continue
+            picture_id = pic.get("id")
+            if picture_id is None:
+                enriched.append(pic)
+                continue
+            numeric_id = int(picture_id)
+            stack_id = pic.get("stack_id")
+            if stack_id is None:
+                stack_id = stack_id_by_picture_id.get(numeric_id)
+            stack_count = 0
+            if stack_id is not None:
+                stack_count = stack_count_by_stack_id.get(int(stack_id), 1)
+            enriched.append(
+                {
+                    **pic,
+                    "stack_id": stack_id,
+                    "stack_count": stack_count,
+                }
+            )
+        return enriched
+
     def _get_hidden_tags_from_request(request: Request) -> list[str]:
         try:
             user = server.auth.get_user_for_request(request)
@@ -99,7 +175,6 @@ def create_router(server) -> APIRouter:
                     .where(
                         PictureSetMember.set_id == s.id,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                 ).all()
                 filtered_ids = _filter_hidden_picture_ids(
@@ -181,7 +256,6 @@ def create_router(server) -> APIRouter:
                 .where(
                     PictureSetMember.set_id == set_id,
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                 )
             ).all()
             member_ids = [row for row in member_rows if row is not None]
@@ -412,7 +486,6 @@ def create_router(server) -> APIRouter:
                 .where(
                     PictureSetMember.set_id == id,
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                 )
             ).all()
             seen = set()
@@ -458,6 +531,7 @@ def create_router(server) -> APIRouter:
                 candidate_ids=picture_ids,
                 penalised_tags=penalised_tags,
             )
+            pictures = _enrich_with_stack_counts(pictures)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
         if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
@@ -475,6 +549,7 @@ def create_router(server) -> APIRouter:
                 descending,
                 candidate_ids=picture_ids,
             )
+            pictures = _enrich_with_stack_counts(pictures)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
         def fetch_pics(session, picture_ids):
@@ -498,6 +573,7 @@ def create_router(server) -> APIRouter:
             ]
 
         pictures = server.vault.db.run_immediate_read_task(fetch_pics, picture_ids)
+        pictures = _enrich_with_stack_counts(pictures)
         return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
     @router.patch(
@@ -569,7 +645,6 @@ def create_router(server) -> APIRouter:
                 return None
             filters = [
                 PictureSetMember.set_id == id,
-                Picture.imported_at.is_not(None),
             ]
             if not include_deleted:
                 filters.append(Picture.deleted.is_(False))

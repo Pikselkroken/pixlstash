@@ -27,6 +27,7 @@ class ImageEmbeddingWorker(BaseWorker):
     """
 
     BATCH_SIZE = 32
+    BACKEND_ERROR_LOG_INTERVAL_SECONDS = 60
 
     # LAION Aesthetic Predictor weights (V2)
     # Using the improved predictors trained on SAC+Logos+AVA
@@ -50,19 +51,22 @@ class ImageEmbeddingWorker(BaseWorker):
         self.aesthetic_model = None
         self._aesthetic_config = self.AESTHETIC_MODELS.get(CLIP_MODEL_NAME)
         self._aesthetic_disabled = self._aesthetic_config is None
+        self._last_backend_error_log_at = 0.0
 
     def worker_type(self) -> WorkerType:
         return WorkerType.IMAGE_EMBEDDING
 
     def _count_remaining(self, session: Session):
         """Count all pictures needing embeddings or aesthetic scores."""
+        missing_embedding = or_(
+            Picture.image_embedding.is_(None),
+            func.length(Picture.image_embedding) == 0,
+        )
         if self._aesthetic_disabled:
-            condition = Picture.image_embedding.is_(None)
+            condition = missing_embedding
         else:
-            from sqlalchemy import or_
-
             condition = or_(
-                Picture.image_embedding.is_(None),
+                missing_embedding,
                 Picture.aesthetic_score.is_(None),
             )
         stmt = select(func.count()).select_from(Picture).where(condition)
@@ -97,6 +101,36 @@ class ImageEmbeddingWorker(BaseWorker):
             return f"{value:0{hash_size * hash_size // 4}x}"
         except Exception:
             return None
+
+    def _ensure_clip_ready(self) -> bool:
+        if self._picture_tagger is None:
+            logger.error(
+                "ImageEmbeddingWorker: PictureTagger not available for CLIP embeddings."
+            )
+            return False
+
+        for attempt in range(1, 4):
+            try:
+                self._picture_tagger._ensure_clip_ready()
+                if (
+                    getattr(self._picture_tagger, "_clip_model", None) is not None
+                    and getattr(self._picture_tagger, "_clip_preprocess", None)
+                    is not None
+                ):
+                    return True
+            except Exception as exc:
+                logger.warning(
+                    "ImageEmbeddingWorker: CLIP init attempt %s/3 failed: %s",
+                    attempt,
+                    exc,
+                )
+                if attempt < 3:
+                    time.sleep(1.0)
+
+        logger.error(
+            "ImageEmbeddingWorker: CLIP model unavailable after retries; embeddings cannot be generated."
+        )
+        return False
 
     def _ensure_model(self):
         if self.aesthetic_model is not None:
@@ -157,6 +191,51 @@ class ImageEmbeddingWorker(BaseWorker):
             self.aesthetic_model = None
             self._aesthetic_disabled = True
 
+    def _ensure_embedding_backend(self) -> bool:
+        clip_model = getattr(self._picture_tagger, "_clip_model", None)
+        clip_preprocess = getattr(self._picture_tagger, "_clip_preprocess", None)
+
+        if self._picture_tagger and (clip_model is None or clip_preprocess is None):
+            ensure_clip_ready = getattr(
+                self._picture_tagger, "_ensure_clip_ready", None
+            )
+            if callable(ensure_clip_ready):
+                try:
+                    ensure_clip_ready()
+                except Exception as e:
+                    now = time.time()
+                    if (
+                        now - self._last_backend_error_log_at
+                        >= self.BACKEND_ERROR_LOG_INTERVAL_SECONDS
+                    ):
+                        logger.error(
+                            "ImageEmbeddingWorker: Failed to initialise CLIP backend: %s",
+                            e,
+                        )
+                        self._last_backend_error_log_at = now
+
+        clip_ready = bool(
+            getattr(self._picture_tagger, "_clip_model", None) is not None
+            and getattr(self._picture_tagger, "_clip_preprocess", None) is not None
+        )
+        fallback_ready = self.model is not None
+
+        if clip_ready or fallback_ready:
+            return True
+
+        now = time.time()
+        if (
+            now - self._last_backend_error_log_at
+            >= self.BACKEND_ERROR_LOG_INTERVAL_SECONDS
+        ):
+            logger.error(
+                "ImageEmbeddingWorker: No embedding backend available (clip_ready=%s fallback_ready=%s).",
+                clip_ready,
+                fallback_ready,
+            )
+            self._last_backend_error_log_at = now
+        return False
+
     def _run(self):
         logger.info("ImageEmbeddingWorker: Started.")
 
@@ -189,6 +268,9 @@ class ImageEmbeddingWorker(BaseWorker):
                     continue
 
                 self._ensure_model()
+                if not self._ensure_embedding_backend():
+                    self._wait()
+                    continue
 
                 logger.debug(f"ImageEmbeddingWorker: Processing {len(batch)} pictures.")
 
@@ -262,10 +344,10 @@ class ImageEmbeddingWorker(BaseWorker):
 
                 embeddings = None
 
-                # 1. Try using PictureTagger's loaded CLIP model
-                if self._picture_tagger and getattr(
-                    self._picture_tagger, "_clip_model", None
-                ):
+                clip_ready = self._ensure_clip_ready()
+
+                # 1. Use PictureTagger's CLIP model
+                if clip_ready:
                     try:
                         # open_clip expects images as tensors
                         # We can use the preprocess from PictureTagger
@@ -306,26 +388,16 @@ class ImageEmbeddingWorker(BaseWorker):
                         )
 
                 if embeddings is None:
-                    if not failed_files:
-                        failed_files = [batch_files[pid] for pid in batch_pids]
-                    failure_updates = self._build_failure_updates(batch_pids)
-                    updated_ids = self._db.run_task(
-                        self._save_results, failure_updates, priority=DBPriority.LOW
-                    )
-                    if updated_ids:
-                        self._notify_ids_processed(
-                            [
-                                (Picture, pid, "image_embedding", None)
-                                for pid in updated_ids
-                            ]
-                        )
                     logger.error(
-                        "ImageEmbeddingWorker: No embeddings generated. Marked %s pictures as failed.",
+                        "ImageEmbeddingWorker: No embeddings generated for batch of %s pictures (clip_ready=%s fallback_ready=%s). Will retry.",
                         len(batch_pids),
+                        bool(getattr(self._picture_tagger, "_clip_model", None)),
+                        bool(self.model),
                     )
                     logger.warning(
                         f"ImageEmbeddingWorker: Failed to process {len(failed_files)} files in this batch: {failed_files}"
                     )
+                    self._wait()
                     continue
 
                 # Calculate Aesthetic Scores
@@ -436,11 +508,15 @@ class ImageEmbeddingWorker(BaseWorker):
 
     def _fetch_work(self, session: Session):
         """Fetch a batch of pictures that need embeddings or aesthetics."""
+        missing_embedding = or_(
+            Picture.image_embedding.is_(None),
+            func.length(Picture.image_embedding) == 0,
+        )
         if self._aesthetic_disabled:
-            condition = Picture.image_embedding.is_(None)
+            condition = missing_embedding
         else:
             condition = or_(
-                Picture.image_embedding.is_(None),
+                missing_embedding,
                 Picture.aesthetic_score.is_(None),
             )
 

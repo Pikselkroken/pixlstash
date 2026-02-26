@@ -738,7 +738,6 @@ def test_semantic_search():
                 {
                     WorkerType.TAGGER,
                     WorkerType.DESCRIPTION,
-                    WorkerType.SMART_SCORE_SCRAPHEAP,
                 }
             )
 

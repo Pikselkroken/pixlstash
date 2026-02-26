@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import concurrent.futures
 import base64
 import os
@@ -7,7 +8,7 @@ import sys
 import uuid
 import zipfile
 from io import BytesIO
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 from email.utils import formatdate
 from datetime import datetime
 
@@ -62,6 +63,22 @@ from pixlvault.utils import (
 from pixlvault.worker_registry import WorkerType
 
 logger = get_logger(__name__)
+
+MEDIA_TYPE_BY_FORMAT = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "gif": "image/gif",
+    "bmp": "image/bmp",
+    "tiff": "image/tiff",
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+    "mov": "video/quicktime",
+    "avi": "video/x-msvideo",
+    "mkv": "video/x-matroska",
+    "m4v": "video/mp4",
+}
 
 
 def _get_hidden_tags_from_request(server, request: Request) -> list[str]:
@@ -223,7 +240,6 @@ def _select_pictures_for_listing(
         if deleted_only:
             query = select(Picture.id).where(
                 Picture.deleted.is_(True),
-                Picture.imported_at.is_not(None),
             )
         elif character_id_value == "UNASSIGNED":
             unassigned_condition = ~exists(
@@ -241,7 +257,6 @@ def _select_pictures_for_listing(
                 unassigned_condition,
                 not_in_set_condition,
                 Picture.deleted.is_(False),
-                Picture.imported_at.is_not(None),
             )
         elif character_id_value is None or character_id_value == "":
             return None
@@ -252,7 +267,6 @@ def _select_pictures_for_listing(
                 .where(
                     Face.character_id == character_id_value,
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                 )
             )
         else:
@@ -397,6 +411,32 @@ def _select_pictures_for_listing(
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
+    thumbnail_generation_locks: dict[int, asyncio.Lock] = {}
+    thumbnail_memory_cache: OrderedDict[int, bytes] = OrderedDict()
+    thumbnail_memory_cache_max = 128
+
+    def get_thumbnail_lock(picture_id: int) -> asyncio.Lock:
+        lock = thumbnail_generation_locks.get(picture_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            thumbnail_generation_locks[picture_id] = lock
+        return lock
+
+    def get_cached_thumbnail_bytes(picture_id: int) -> bytes | None:
+        data = thumbnail_memory_cache.pop(picture_id, None)
+        if data is None:
+            return None
+        thumbnail_memory_cache[picture_id] = data
+        return data
+
+    def cache_thumbnail_bytes(picture_id: int, thumbnail_bytes: bytes) -> None:
+        if not thumbnail_bytes:
+            return
+        if picture_id in thumbnail_memory_cache:
+            thumbnail_memory_cache.pop(picture_id, None)
+        thumbnail_memory_cache[picture_id] = thumbnail_bytes
+        while len(thumbnail_memory_cache) > thumbnail_memory_cache_max:
+            thumbnail_memory_cache.popitem(last=False)
 
     @router.get(
         "/sort_mechanisms",
@@ -462,18 +502,94 @@ def create_router(server) -> APIRouter:
         if not isinstance(parameters, dict):
             raise HTTPException(status_code=400, detail="parameters must be an object")
 
+        plugin_run_id = str(uuid.uuid4())
+
+        def emit_plugin_progress(progress_payload: dict):
+            if not isinstance(progress_payload, dict):
+                return
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "run_id": plugin_run_id,
+                    "plugin": str(progress_payload.get("plugin") or name),
+                    "status": "running",
+                    **progress_payload,
+                },
+            )
+
+        def emit_plugin_error(error_payload: dict):
+            if not isinstance(error_payload, dict):
+                return
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "run_id": plugin_run_id,
+                    "plugin": str(error_payload.get("plugin") or name),
+                    "status": "error",
+                    "message": str(error_payload.get("message") or "Plugin error"),
+                    "error": error_payload,
+                },
+            )
+
+        server.vault.notify(
+            EventType.PLUGIN_PROGRESS,
+            {
+                "run_id": plugin_run_id,
+                "plugin": name,
+                "status": "started",
+                "current": 0,
+                "total": len(picture_ids),
+                "progress": 0.0,
+                "message": f"Starting plugin: {name}",
+            },
+        )
+
         try:
-            result = apply_plugin_to_pictures(
+            result = await asyncio.to_thread(
+                apply_plugin_to_pictures,
                 server,
                 plugin,
                 picture_ids,
                 parameters,
+                progress_reporter=emit_plugin_progress,
+                error_reporter=emit_plugin_error,
             )
         except ValueError as exc:
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "run_id": plugin_run_id,
+                    "plugin": name,
+                    "status": "failed",
+                    "message": str(exc),
+                },
+            )
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:
             logger.warning("Plugin run failed for '%s': %s", name, exc)
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "run_id": plugin_run_id,
+                    "plugin": name,
+                    "status": "failed",
+                    "message": str(exc),
+                },
+            )
             raise HTTPException(status_code=500, detail=f"Plugin failed: {exc}")
+
+        server.vault.notify(
+            EventType.PLUGIN_PROGRESS,
+            {
+                "run_id": plugin_run_id,
+                "plugin": name,
+                "status": "completed",
+                "current": len(picture_ids),
+                "total": len(picture_ids),
+                "progress": 100.0,
+                "message": f"Completed plugin: {name}",
+            },
+        )
 
         created_ids = result.get("created_picture_ids") or []
         output_ids = result.get("output_picture_ids") or []
@@ -512,7 +628,6 @@ def create_router(server) -> APIRouter:
                     .where(
                         PictureSetMember.set_id == set_id,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                 ).all()
                 normalized = []
@@ -547,7 +662,6 @@ def create_router(server) -> APIRouter:
                         unassigned_condition,
                         not_in_set_condition,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                     return list(session.exec(query).all())
 
@@ -562,7 +676,6 @@ def create_router(server) -> APIRouter:
                     rows = session.exec(
                         select(Picture.id).where(
                             Picture.deleted.is_(True),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -583,7 +696,6 @@ def create_router(server) -> APIRouter:
                         select(Picture.id).where(
                             Picture.id.in_(picture_ids),
                             Picture.deleted.is_(False),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -599,7 +711,6 @@ def create_router(server) -> APIRouter:
             def fetch_format_ids(session, format, deleted_only: bool):
                 query = select(Picture.id).where(
                     Picture.format.in_(format),
-                    Picture.imported_at.is_not(None),
                 )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
@@ -624,7 +735,6 @@ def create_router(server) -> APIRouter:
                     rows = session.exec(
                         select(Picture.id).where(
                             Picture.deleted.is_(True),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -638,7 +748,6 @@ def create_router(server) -> APIRouter:
                     rows = session.exec(
                         select(Picture.id).where(
                             Picture.deleted.is_(False),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -700,7 +809,6 @@ def create_router(server) -> APIRouter:
             def fetch_stack_map(session, ids, deleted_only: bool):
                 query = select(Picture.id, Picture.stack_id).where(
                     Picture.id.in_(ids),
-                    Picture.imported_at.is_not(None),
                 )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
@@ -722,7 +830,6 @@ def create_router(server) -> APIRouter:
                     return []
                 query = select(Picture.id, Picture.stack_id).where(
                     Picture.stack_id.in_(stack_ids),
-                    Picture.imported_at.is_not(None),
                 )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
@@ -862,6 +969,8 @@ def create_router(server) -> APIRouter:
         description="Returns a WebP thumbnail for a picture id, generating and caching it on demand when needed.",
     )
     async def get_thumbnail(id: int):
+        started_at = datetime.now()
+
         def fetch_picture(session: Session, picture_id: int):
             pics = Picture.find(
                 session,
@@ -882,37 +991,125 @@ def create_router(server) -> APIRouter:
             server.vault.image_root, pic.file_path
         )
         if thumb_path and os.path.exists(thumb_path):
+            elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+            logger.info(
+                "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
+                id,
+                thumb_path,
+                elapsed_ms,
+            )
             return FileResponse(thumb_path, media_type="image/webp")
 
-        resolved_path = PictureUtils.resolve_picture_path(
-            server.vault.image_root, pic.file_path
-        )
-        if resolved_path and os.path.exists(resolved_path):
-            img = PictureUtils.load_image_or_video(resolved_path)
-            if img is not None:
+        cached_bytes = get_cached_thumbnail_bytes(id)
+        if cached_bytes:
+            elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+            logger.info(
+                "Thumbnail GET memory-hit: id=%s elapsed_ms=%.1f",
+                id,
+                elapsed_ms,
+            )
+            return Response(content=cached_bytes, media_type="image/webp")
+
+        lock = get_thumbnail_lock(id)
+        async with lock:
+            if thumb_path and os.path.exists(thumb_path):
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.info(
+                    "Thumbnail GET cache-hit-after-wait: id=%s path=%s elapsed_ms=%.1f",
+                    id,
+                    thumb_path,
+                    elapsed_ms,
+                )
+                return FileResponse(thumb_path, media_type="image/webp")
+
+            cached_bytes = get_cached_thumbnail_bytes(id)
+            if cached_bytes:
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.info(
+                    "Thumbnail GET memory-hit-after-wait: id=%s elapsed_ms=%.1f",
+                    id,
+                    elapsed_ms,
+                )
+                return Response(content=cached_bytes, media_type="image/webp")
+
+            def build_thumbnail_blocking() -> tuple[
+                str, str | None, bytes | None, str | None
+            ]:
+                resolved = PictureUtils.resolve_picture_path(
+                    server.vault.image_root, pic.file_path
+                )
+                if not resolved or not os.path.exists(resolved):
+                    return "missing-source", resolved, None, None
+
+                img = PictureUtils.load_image_or_video(resolved)
+                if img is None:
+                    return "load-failed", resolved, None, None
+
                 if not isinstance(img, Image.Image):
                     img = Image.fromarray(img)
+
                 thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(img)
-                if thumbnail_bytes:
-                    saved_thumb = PictureUtils.write_thumbnail_bytes(
-                        server.vault.image_root, pic.file_path, thumbnail_bytes
-                    )
-                    if saved_thumb and os.path.exists(saved_thumb):
-                        return FileResponse(saved_thumb, media_type="image/webp")
-                    logger.warning(
-                        "Failed to persist on-demand thumbnail for picture %s",
-                        pic.id,
-                    )
-            else:
+                if not thumbnail_bytes:
+                    return "encode-failed", resolved, None, None
+
+                saved_thumb_path = PictureUtils.write_thumbnail_bytes(
+                    server.vault.image_root, pic.file_path, thumbnail_bytes
+                )
+                if saved_thumb_path and os.path.exists(saved_thumb_path):
+                    return "saved", resolved, None, saved_thumb_path
+
+                return "memory-only", resolved, thumbnail_bytes, None
+
+            (
+                status,
+                resolved_path,
+                thumbnail_bytes,
+                saved_thumb,
+            ) = await asyncio.to_thread(build_thumbnail_blocking)
+
+            if status == "saved" and saved_thumb:
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.info(
+                    "Thumbnail GET generated: id=%s source=%s elapsed_ms=%.1f",
+                    id,
+                    resolved_path,
+                    elapsed_ms,
+                )
+                return FileResponse(saved_thumb, media_type="image/webp")
+
+            if status == "memory-only" and thumbnail_bytes:
+                cache_thumbnail_bytes(id, thumbnail_bytes)
+                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                logger.warning(
+                    "Thumbnail GET generated-memory-only: id=%s source=%s elapsed_ms=%.1f",
+                    id,
+                    resolved_path,
+                    elapsed_ms,
+                )
+                return Response(content=thumbnail_bytes, media_type="image/webp")
+
+            if status == "missing-source":
+                logger.warning(
+                    "Missing source file for on-demand thumbnail: %s",
+                    resolved_path,
+                )
+            elif status == "load-failed":
                 logger.warning(
                     "Failed to load image for on-demand thumbnail: %s",
                     resolved_path,
                 )
-        else:
-            logger.warning(
-                "Missing source file for on-demand thumbnail: %s",
-                resolved_path,
-            )
+            elif status == "encode-failed":
+                logger.warning(
+                    "Failed to encode on-demand thumbnail: %s",
+                    resolved_path,
+                )
+
+        elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+        logger.warning(
+            "Thumbnail GET failed: id=%s elapsed_ms=%.1f",
+            id,
+            elapsed_ms,
+        )
 
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
@@ -925,6 +1122,13 @@ def create_router(server) -> APIRouter:
         ids = payload.get("ids", [])
         if not isinstance(ids, list):
             raise HTTPException(status_code=400, detail="'ids' must be a list")
+
+        logger.info(
+            "Thumbnail batch request: client=%s count=%s ids_preview=%s",
+            getattr(getattr(request, "client", None), "host", None),
+            len(ids),
+            ids[:8],
+        )
 
         penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
         penalised_tag_set = {
@@ -998,7 +1202,13 @@ def create_router(server) -> APIRouter:
                     "thumbnail_side",
                 ],
                 include_deleted=True,
-            )
+            ),
+            priority=DBPriority.IMMEDIATE,
+        )
+        logger.info(
+            "Thumbnail batch resolved: requested=%s found=%s",
+            len(ids),
+            len(pics or []),
         )
         character_name_map = {}
         character_ids = set()
@@ -1267,7 +1477,6 @@ def create_router(server) -> APIRouter:
                     .where(
                         PictureSetMember.set_id == set_id_value,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                 ).all()
                 return [row for row in members]
@@ -1294,7 +1503,6 @@ def create_router(server) -> APIRouter:
                         unassigned_condition,
                         not_in_set_condition,
                         Picture.deleted.is_(False),
-                        Picture.imported_at.is_not(None),
                     )
                     return list(session.exec(query_stmt).all())
 
@@ -1318,7 +1526,6 @@ def create_router(server) -> APIRouter:
                         select(Picture.id).where(
                             Picture.id.in_(picture_ids),
                             Picture.deleted.is_(False),
-                            Picture.imported_at.is_not(None),
                         )
                     ).all()
                     return list(rows)
@@ -1737,7 +1944,8 @@ def create_router(server) -> APIRouter:
                 detail="Requested extension does not match picture format",
             )
 
-        response = FileResponse(file_path)
+        media_type = MEDIA_TYPE_BY_FORMAT.get(pic.format.lower())
+        response = FileResponse(file_path, media_type=media_type)
         try:
             stat = os.stat(file_path)
             etag = f'W/"{stat.st_size}-{int(stat.st_mtime)}"'
@@ -2138,7 +2346,6 @@ def create_router(server) -> APIRouter:
                 select(Picture).where(
                     Picture.id == pic_id,
                     Picture.deleted.is_(False),
-                    Picture.imported_at.is_not(None),
                 )
             ).first()
             if not pic:

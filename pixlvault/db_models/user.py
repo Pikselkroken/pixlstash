@@ -38,8 +38,6 @@ class User(SQLModel, table=True):
     )
     hidden_tags: Optional[str] = Field(default_factory=lambda: json.dumps([]))
     apply_tag_filter: bool = Field(default=False)
-    auto_scrapheap_smart_score_threshold: Optional[float] = Field(default=1.25)
-    auto_scrapheap_lookback_minutes: Optional[int] = Field(default=30)
     keep_models_in_memory: bool = Field(default=True)
 
     tokens: List["UserToken"] = Relationship(

@@ -114,6 +114,7 @@ const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
 const wsTagUpdate = ref({ key: 0, pictureIds: [] });
+const wsPluginProgress = ref({ key: 0, payload: null });
 const columnsMenuOpen = ref(false);
 const overlaysMenuOpen = ref(false);
 const configLoaded = ref(false);
@@ -213,6 +214,11 @@ function connectUpdatesSocket() {
         : [];
       const nextKey = (wsTagUpdate.value?.key || 0) + 1;
       wsTagUpdate.value = { key: nextKey, pictureIds };
+    } else if (payload?.type === "plugin_progress") {
+      wsPluginProgress.value = {
+        key: Date.now(),
+        payload,
+      };
     }
   };
 
@@ -1199,6 +1205,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :gridVersion="gridVersion"
               :wsUpdateKey="wsUpdateKey"
               :wsTagUpdate="wsTagUpdate"
+              :wsPluginProgress="wsPluginProgress"
               :mediaTypeFilter="mediaTypeFilter"
               :showFaceBboxes="showFaceBboxes"
               :showHandBboxes="showHandBboxes"

@@ -37,6 +37,10 @@
 - If a fallback is approved and necessary, implement it so it does not mask the underlying issue and includes clear logging for future resolution.
 - If you cannot resolve the root cause, document findings, blockers, and attempted fixes, then ask for direction instead of applying an unverified workaround.
 
+## Alembic migrations
+- Always create a new migration file for each schema change, with a descriptive name.
+- Always ensure that variables or parameters that are unused in the function but are necessary for alembic gets marked to be excluded from linting errors (e.g., `# noqa: F841`).
+
 ## Developer Workflows
 
 - **Install dependencies:** `pip install -e .`

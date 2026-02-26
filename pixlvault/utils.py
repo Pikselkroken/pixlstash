@@ -83,8 +83,6 @@ def serialize_user_config(user) -> dict:
         "similarity_character",
         "stack_strictness",
         "apply_tag_filter",
-        "auto_scrapheap_smart_score_threshold",
-        "auto_scrapheap_lookback_minutes",
         "keep_models_in_memory",
     }
 
@@ -145,8 +143,6 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "smart_score_penalised_tags",
         "hidden_tags",
         "apply_tag_filter",
-        "auto_scrapheap_smart_score_threshold",
-        "auto_scrapheap_lookback_minutes",
         "keep_models_in_memory",
     }
 
@@ -260,24 +256,6 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 raise ValueError("theme_mode is not a supported value")
             if user.theme_mode != new_value:
                 user.theme_mode = new_value
-                updated = True
-            continue
-        if key == "auto_scrapheap_smart_score_threshold":
-            if value in ("", None, "null"):
-                new_value = None
-            else:
-                new_value = float(value)
-            if user.auto_scrapheap_smart_score_threshold != new_value:
-                user.auto_scrapheap_smart_score_threshold = new_value
-                updated = True
-            continue
-        if key == "auto_scrapheap_lookback_minutes":
-            if value in ("", None, "null"):
-                new_value = None
-            else:
-                new_value = int(value)
-            if user.auto_scrapheap_lookback_minutes != new_value:
-                user.auto_scrapheap_lookback_minutes = new_value
                 updated = True
             continue
         if key == "stack_strictness":

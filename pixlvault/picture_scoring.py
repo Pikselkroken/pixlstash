@@ -50,7 +50,6 @@ def select_reference_faces_for_character(
             Face.face_index == 0,
             Face.features.is_not(None),
             Picture.deleted.is_(False),
-            Picture.imported_at.is_not(None),
         )
     )
 
@@ -297,7 +296,6 @@ def find_pictures_by_character_likeness(
             if not candidate_ids:
                 return []
             query = query.where(Face.picture_id.in_(candidate_ids))
-        query = query.where(Picture.imported_at.is_not(None))
         faces = session.exec(query).all()
         return faces
 
@@ -358,7 +356,6 @@ def find_pictures_by_character_likeness(
                 .where(~assigned_faces)
                 .where(~in_set)
                 .where(Picture.deleted.is_(False))
-                .where(Picture.imported_at.is_not(None))
             ).all()
             return [row for row in rows]
 
@@ -437,8 +434,6 @@ def fetch_smart_score_data(
             query = query.where(Picture.deleted.is_(True))
         elif not include_deleted:
             query = query.where(Picture.deleted.is_(False))
-
-        query = query.where(Picture.imported_at.is_not(None))
 
         if candidate_ids is not None:
             if not candidate_ids:
@@ -540,8 +535,6 @@ def fetch_smart_score_unscored_ids(
             query = query.where(Picture.deleted.is_(True))
         elif not include_deleted:
             query = query.where(Picture.deleted.is_(False))
-
-        query = query.where(Picture.imported_at.is_not(None))
 
         if candidate_ids is not None:
             if not candidate_ids:

@@ -50,28 +50,28 @@
                 v-bind="props"
                 class="overlay-icon-btn overlay-comfy-activator"
                 type="button"
-                title="Run image plugin"
-                aria-label="Run image plugin"
+                title="Apply filters"
+                aria-label="Apply filters"
                 :class="{
                   hidden: chromeHidden,
                   'overlay-icon-btn--active': pluginMenuOpen,
                 }"
               >
                 <v-icon size="20">mdi-tune-variant</v-icon>
-                <span class="overlay-comfy-activator-label">Plugin</span>
+                <span class="overlay-comfy-activator-label">Filters</span>
               </button>
             </template>
             <div class="overlay-comfy-panel">
-              <div class="overlay-comfy-header">Image Plugins</div>
+              <div class="overlay-comfy-header">Filters</div>
               <div class="overlay-comfy-body">
                 <div
                   v-if="!overlayPluginOptions.length"
                   class="overlay-comfy-warning"
                 >
-                  No plugins available.
+                  No filters available.
                 </div>
                 <template v-else>
-                  <label class="overlay-comfy-field-label">Plugin</label>
+                  <label class="overlay-comfy-field-label">Filters</label>
                   <select
                     v-model="overlaySelectedPluginName"
                     class="overlay-comfy-select"
@@ -130,86 +130,86 @@
               origin="top end"
               transition="scale-transition"
             >
-            <div class="overlay-comfy-panel">
-              <div class="overlay-comfy-header">ComfyUI I2I</div>
-              <div v-if="comfyuiWorkflowLoading" class="overlay-comfy-status">
-                Loading workflows...
-              </div>
-              <div v-else class="overlay-comfy-body">
-                <div v-if="comfyuiWorkflowError" class="overlay-comfy-error">
-                  {{ comfyuiWorkflowError }}
+              <div class="overlay-comfy-panel">
+                <div class="overlay-comfy-header">ComfyUI I2I</div>
+                <div v-if="comfyuiWorkflowLoading" class="overlay-comfy-status">
+                  Loading workflows...
                 </div>
-                <div
-                  v-if="!validComfyWorkflows.length"
-                  class="overlay-comfy-warning"
-                >
-                  No valid workflows found in comfyui-workflows/ (needs
-                  {{ imagePlaceholderLabel }}).
-                </div>
-                <label class="overlay-comfy-field-label">Workflow</label>
-                <select
-                  v-model="comfyuiSelectedWorkflow"
-                  class="overlay-comfy-select"
-                  :disabled="!validComfyWorkflows.length"
-                >
-                  <option
-                    v-for="workflow in validComfyWorkflows"
-                    :key="workflow.name"
-                    :value="workflow.name"
-                  >
-                    {{ workflow.display_name || workflow.name }}
-                  </option>
-                </select>
-                <div
-                  v-if="invalidComfyWorkflows.length"
-                  class="overlay-comfy-note"
-                >
-                  {{ invalidComfyWorkflows.length }} workflow(s) missing
-                  required placeholders.
-                </div>
-                <template v-if="showComfyuiCaptionInput">
-                  <label class="overlay-comfy-field-label">Caption</label>
-                  <div class="overlay-comfy-textarea-wrap">
-                    <div
-                      v-if="showComfyuiCaptionHelp"
-                      class="overlay-comfy-help"
-                    >
-                      Add edit caption here
-                    </div>
-                    <textarea
-                      v-model="comfyuiCaption"
-                      class="overlay-comfy-textarea"
-                      rows="4"
-                      @input="comfyuiCaptionTouched = true"
-                      @focus="comfyuiCaptionFocused = true"
-                      @blur="comfyuiCaptionFocused = false"
-                    ></textarea>
+                <div v-else class="overlay-comfy-body">
+                  <div v-if="comfyuiWorkflowError" class="overlay-comfy-error">
+                    {{ comfyuiWorkflowError }}
                   </div>
-                </template>
-                <div class="overlay-comfy-actions">
-                  <button
-                    class="overlay-comfy-run"
-                    type="button"
-                    :disabled="!canRunComfyWorkflow"
-                    @click.stop="runComfyWorkflow"
+                  <div
+                    v-if="!validComfyWorkflows.length"
+                    class="overlay-comfy-warning"
                   >
-                    <v-icon
-                      size="16"
-                      :class="{ 'mdi-spin': comfyuiRunLoading }"
+                    No valid workflows found in comfyui-workflows/ (needs
+                    {{ imagePlaceholderLabel }}).
+                  </div>
+                  <label class="overlay-comfy-field-label">Workflow</label>
+                  <select
+                    v-model="comfyuiSelectedWorkflow"
+                    class="overlay-comfy-select"
+                    :disabled="!validComfyWorkflows.length"
+                  >
+                    <option
+                      v-for="workflow in validComfyWorkflows"
+                      :key="workflow.name"
+                      :value="workflow.name"
                     >
-                      {{ comfyuiRunLoading ? "mdi-loading" : "mdi-play" }}
-                    </v-icon>
-                    <span>{{ comfyuiRunLoading ? "Running" : "Run" }}</span>
-                  </button>
-                </div>
-                <div v-if="comfyuiRunError" class="overlay-comfy-error">
-                  {{ comfyuiRunError }}
-                </div>
-                <div v-if="comfyuiRunSuccess" class="overlay-comfy-success">
-                  {{ comfyuiRunSuccess }}
+                      {{ workflow.display_name || workflow.name }}
+                    </option>
+                  </select>
+                  <div
+                    v-if="invalidComfyWorkflows.length"
+                    class="overlay-comfy-note"
+                  >
+                    {{ invalidComfyWorkflows.length }} workflow(s) missing
+                    required placeholders.
+                  </div>
+                  <template v-if="showComfyuiCaptionInput">
+                    <label class="overlay-comfy-field-label">Caption</label>
+                    <div class="overlay-comfy-textarea-wrap">
+                      <div
+                        v-if="showComfyuiCaptionHelp"
+                        class="overlay-comfy-help"
+                      >
+                        Add edit caption here
+                      </div>
+                      <textarea
+                        v-model="comfyuiCaption"
+                        class="overlay-comfy-textarea"
+                        rows="4"
+                        @input="comfyuiCaptionTouched = true"
+                        @focus="comfyuiCaptionFocused = true"
+                        @blur="comfyuiCaptionFocused = false"
+                      ></textarea>
+                    </div>
+                  </template>
+                  <div class="overlay-comfy-actions">
+                    <button
+                      class="overlay-comfy-run"
+                      type="button"
+                      :disabled="!canRunComfyWorkflow"
+                      @click.stop="runComfyWorkflow"
+                    >
+                      <v-icon
+                        size="16"
+                        :class="{ 'mdi-spin': comfyuiRunLoading }"
+                      >
+                        {{ comfyuiRunLoading ? "mdi-loading" : "mdi-play" }}
+                      </v-icon>
+                      <span>{{ comfyuiRunLoading ? "Running" : "Run" }}</span>
+                    </button>
+                  </div>
+                  <div v-if="comfyuiRunError" class="overlay-comfy-error">
+                    {{ comfyuiRunError }}
+                  </div>
+                  <div v-if="comfyuiRunSuccess" class="overlay-comfy-success">
+                    {{ comfyuiRunSuccess }}
+                  </div>
                 </div>
               </div>
-            </div>
             </v-menu>
           </div>
           <AddToSetControl
@@ -228,17 +228,6 @@
             icon-size="large"
             @set-score="setScore"
           />
-          <button
-            v-if="showOverlayStackButton"
-            class="overlay-icon-btn"
-            type="button"
-            title="Toggle stack"
-            aria-label="Toggle stack"
-            @click.stop="toggleFilmstripStackExpand(image)"
-            :class="{ hidden: chromeHidden }"
-          >
-            <v-icon size="20">mdi-layers</v-icon>
-          </button>
           <button
             class="overlay-icon-btn"
             type="button"
@@ -321,6 +310,27 @@
             class="overlay-comfyui-progress-fill"
             :style="{ width: `${comfyuiProgressPercent}%` }"
           ></div>
+        </div>
+      </div>
+
+      <div
+        v-if="pluginProgress && pluginProgress.visible"
+        class="overlay-plugin-progress"
+        :class="{
+          'overlay-plugin-progress-error': pluginProgress.status === 'failed',
+        }"
+      >
+        <div class="overlay-plugin-progress-title">
+          {{ pluginProgress.message }}
+        </div>
+        <div class="overlay-plugin-progress-bar">
+          <div
+            class="overlay-plugin-progress-fill"
+            :style="{ width: `${pluginProgressPercent}%` }"
+          ></div>
+        </div>
+        <div class="overlay-plugin-progress-meta">
+          {{ pluginProgress.current || 0 }} / {{ pluginProgress.total || 0 }}
         </div>
       </div>
 
@@ -492,84 +502,93 @@
           </div>
         </div>
 
-        <div class="overlay-rail" :class="{ hidden: chromeHidden }">
-          <div class="filmstrip-list">
-            <button
-              v-for="item in filmstripWindow"
-              :key="
-                item.id
-                  ? `filmstrip-${item.id}-${item.index}`
-                  : `filmstrip-${item.index}`
-              "
-              :class="[
-                'filmstrip-thumb',
-                {
-                  'filmstrip-thumb-stack-joined': item.isStackJoined,
-                },
-              ]"
-              @click.stop="selectImageByIndex(item.index)"
-              :title="item.description || 'Image'"
+        <div
+          ref="overlayRailRef"
+          class="overlay-rail"
+          :class="{ hidden: chromeHidden }"
+        >
+          <div class="filmstrip-viewport">
+            <transition-group
+              name="filmstrip-slide"
+              tag="div"
+              class="filmstrip-list"
+              :style="filmstripCanvasStyle"
             >
-              <div
-                class="filmstrip-thumb-tile"
-                :style="getFilmstripStackStyle(item)"
-              >
-                <img
-                  v-if="getFilmstripThumbSrc(item)"
-                  :class="[
-                    'filmstrip-thumb-image',
-                    { 'filmstrip-thumb-image-active': item.isActive },
-                  ]"
-                  :src="getFilmstripThumbSrc(item)"
-                  :alt="item.description || 'Thumbnail'"
-                  loading="lazy"
-                />
-                <div
-                  v-else
-                  :class="[
-                    'filmstrip-thumb-placeholder',
-                    { 'filmstrip-thumb-image-active': item.isActive },
-                  ]"
-                >
-                  <v-icon size="22">
-                    {{
-                      isSupportedVideoFile(getOverlayFormat(item))
-                        ? "mdi-video"
-                        : "mdi-image"
-                    }}
-                  </v-icon>
-                </div>
-              </div>
-              <div
-                v-if="
-                  shouldShowFilmstripStackBadge(item) &&
-                  getFilmstripThumbSrc(item) &&
-                  isFilmstripStackLead(item)
+              <button
+                v-for="item in filmstripCanvasWindow"
+                :key="
+                  item.id ? `filmstrip-${item.id}` : `filmstrip-${item.index}`
                 "
-                class="filmstrip-badge filmstrip-badge--top-left"
-                :title="filmstripStackBadgeTitle(item)"
-                @click.stop="toggleFilmstripStackExpand(item)"
-                @mouseenter.stop="prefetchFilmstripStackMembers(item)"
-              >
-                <v-icon size="14" :style="getFilmstripStackIconStyle(item)"
-                  >mdi-layers</v-icon
-                >
-              </div>
-              <div
-                v-if="shouldShowFilmstripProblemBadge(item)"
                 :class="[
-                  'filmstrip-badge',
-                  shouldShowFilmstripStackBadge(item)
-                    ? 'filmstrip-badge--top-left-stack'
-                    : 'filmstrip-badge--top-left',
+                  'filmstrip-thumb',
+                  {
+                    'filmstrip-thumb-stack-joined': item.isStackJoined,
+                  },
                 ]"
-                :title="filmstripProblemTitle(item)"
+                @click.stop="selectImageByIndex(item.index)"
+                :title="item.description || 'Image'"
               >
-                <v-icon size="14" color="error"
-                  >mdi-emoticon-sad-outline</v-icon
+                <div
+                  class="filmstrip-thumb-tile"
+                  :style="getFilmstripStackStyle(item)"
                 >
-              </div>
-            </button>
+                  <img
+                    v-if="getFilmstripThumbSrc(item)"
+                    :class="[
+                      'filmstrip-thumb-image',
+                      { 'filmstrip-thumb-image-active': item.isActive },
+                    ]"
+                    :src="getFilmstripThumbSrc(item)"
+                    :alt="item.description || 'Thumbnail'"
+                    loading="lazy"
+                  />
+                  <div
+                    v-else
+                    :class="[
+                      'filmstrip-thumb-placeholder',
+                      { 'filmstrip-thumb-image-active': item.isActive },
+                    ]"
+                  >
+                    <v-icon size="22">
+                      {{
+                        isSupportedVideoFile(getOverlayFormat(item))
+                          ? "mdi-video"
+                          : "mdi-image"
+                      }}
+                    </v-icon>
+                  </div>
+                </div>
+                <div
+                  v-if="
+                    shouldShowFilmstripStackBadge(item) &&
+                    getFilmstripThumbSrc(item) &&
+                    isFilmstripStackLead(item)
+                  "
+                  class="filmstrip-badge filmstrip-badge--top-left"
+                  :title="filmstripStackBadgeTitle(item)"
+                  @click.stop="toggleFilmstripStackExpand(item)"
+                  @mouseenter.stop="prefetchFilmstripStackMembers(item)"
+                >
+                  <v-icon size="14" :style="getFilmstripStackIconStyle(item)"
+                    >mdi-layers</v-icon
+                  >
+                </div>
+                <div
+                  v-if="shouldShowFilmstripProblemBadge(item)"
+                  :class="[
+                    'filmstrip-badge',
+                    shouldShowFilmstripStackBadge(item)
+                      ? 'filmstrip-badge--top-left-stack'
+                      : 'filmstrip-badge--top-left',
+                  ]"
+                  :title="filmstripProblemTitle(item)"
+                >
+                  <v-icon size="14" color="error"
+                    >mdi-emoticon-sad-outline</v-icon
+                  >
+                </div>
+              </button>
+            </transition-group>
           </div>
         </div>
 
@@ -1010,6 +1029,7 @@ import {
 const props = defineProps({
   open: { type: Boolean, default: false },
   initialImageId: { type: [String, Number, null], default: null },
+  initialExpandedStackIds: { type: Array, default: () => [] },
   allImages: { type: Array, default: () => [] },
   backendUrl: { type: String, required: true },
   tagUpdate: { type: Object, default: () => ({}) },
@@ -1021,12 +1041,15 @@ const props = defineProps({
   availablePlugins: { type: Array, default: () => [] },
   comfyuiProgress: { type: Object, default: null },
   comfyuiProgressPercent: { type: Number, default: 0 },
+  pluginProgress: { type: Object, default: null },
+  pluginProgressPercent: { type: Number, default: 0 },
   comfyuiClientId: { type: String, default: "" },
 });
 
 const {
   open,
   initialImageId,
+  initialExpandedStackIds,
   allImages,
   backendUrl,
   tagUpdate,
@@ -1037,6 +1060,8 @@ const {
   availablePlugins,
   comfyuiProgress,
   comfyuiProgressPercent,
+  pluginProgress,
+  pluginProgressPercent,
   comfyuiClientId,
 } = toRefs(props);
 
@@ -1054,21 +1079,51 @@ const lastPointer = ref({ x: 0, y: 0 });
 const overlayExpandedStackIds = ref(new Set());
 const overlayExpandedStackMembers = ref(new Map());
 const overlayExpandedStackLoading = ref(new Set());
+const overlayStackSignatures = ref(new Map());
+const overlayStackReloadToken = ref(0);
+
+function resetOverlayStackState() {
+  overlayExpandedStackIds.value = new Set();
+  overlayExpandedStackMembers.value = new Map();
+  overlayExpandedStackLoading.value = new Set();
+  overlayStackSignatures.value = new Map();
+  overlayStackReloadToken.value += 1;
+}
+
+function applyInitialExpandedStackState() {
+  const raw = Array.isArray(initialExpandedStackIds.value)
+    ? initialExpandedStackIds.value
+    : [];
+  const next = new Set(
+    raw
+      .map((id) => (id === null || id === undefined ? "" : String(id)))
+      .filter(Boolean),
+  );
+  overlayExpandedStackIds.value = next;
+}
 
 function setOverlayImageById(nextId) {
   if (nextId == null || nextId === "") {
     image.value = null;
     return;
   }
-  const list = getOverlayImageList();
-  const target = list.find((item) => String(item?.id) === String(nextId));
+  const allList = Array.isArray(allImages.value) ? allImages.value : [];
+  const targetFromAll = allList.find(
+    (item) => String(item?.id) === String(nextId),
+  );
+  const target = targetFromAll
+    ? targetFromAll
+    : getOverlayImageList().find((item) => String(item?.id) === String(nextId));
   if (target) {
     image.value = {
       ...target,
       tags: [],
     };
   } else {
-    image.value = { id: nextId, tags: [] };
+    if (!image.value) {
+      image.value = { id: nextId, tags: [] };
+    }
+    return;
   }
   isTagsRefreshing.value = true;
   zoomMode.value = "fit";
@@ -1140,10 +1195,27 @@ const comfyuiRunError = ref("");
 const comfyuiRunSuccess = ref("");
 const overlaySelectedPluginName = ref("");
 const overlayPluginParameters = ref({});
+const overlaySelectionMedia = computed(() => {
+  const format = image.value ? getOverlayFormat(image.value) : "";
+  const hasVideos = format ? isSupportedVideoFile(format) : false;
+  return {
+    hasImages: !hasVideos,
+    hasVideos,
+  };
+});
 
 const overlayPluginOptions = computed(() => {
   if (!Array.isArray(availablePlugins.value)) return [];
-  return availablePlugins.value.filter((plugin) => plugin && plugin.name);
+  const hasImages = overlaySelectionMedia.value.hasImages;
+  const hasVideos = overlaySelectionMedia.value.hasVideos;
+  return availablePlugins.value.filter((plugin) => {
+    if (!plugin || !plugin.name) return false;
+    const supportsImages = plugin.supports_images !== false;
+    const supportsVideos = plugin.supports_videos === true;
+    if (hasImages && !supportsImages) return false;
+    if (hasVideos && !supportsVideos) return false;
+    return true;
+  });
 });
 
 const activeOverlayPluginSchema = computed(() => {
@@ -1224,6 +1296,7 @@ const showComfyuiCaptionHelp = computed(() => {
 
 watch(open, (value) => {
   if (!value) {
+    resetOverlayStackState();
     pluginMenuOpen.value = false;
     comfyuiMenuOpen.value = false;
     resetTagInput();
@@ -1232,6 +1305,8 @@ watch(open, (value) => {
     addToSetControlKey.value += 1;
     resetComfyState();
   } else {
+    resetOverlayStackState();
+    applyInitialExpandedStackState();
     pluginMenuOpen.value = false;
     comfyuiMenuOpen.value = false;
     chromeRevealTimestamp.value = Date.now();
@@ -1318,7 +1393,9 @@ watch(overlaySelectedPluginName, () => {
 watch(pluginMenuOpen, (isOpen) => {
   if (!isOpen) return;
   if (!overlaySelectedPluginName.value && overlayPluginOptions.value.length) {
-    overlaySelectedPluginName.value = String(overlayPluginOptions.value[0].name);
+    overlaySelectedPluginName.value = String(
+      overlayPluginOptions.value[0].name,
+    );
   }
   overlayPluginParameters.value = {};
 });
@@ -1427,9 +1504,19 @@ function getFullImageUrl(targetImage = null) {
 
 function getFilmstripThumbSrc(target) {
   if (!target) return "";
-  if (target.thumbnail) return target.thumbnail;
-  if (isSupportedVideoFile(getOverlayFormat(target))) return "";
-  return getFullImageUrl(target);
+  if (target.thumbnail) {
+    const thumbnail = String(target.thumbnail);
+    if (!thumbnail) return "";
+    if (thumbnail.startsWith("http")) return thumbnail;
+    if (thumbnail.startsWith("/")) {
+      return backendUrl.value ? `${backendUrl.value}${thumbnail}` : thumbnail;
+    }
+    return thumbnail;
+  }
+  if (target.id != null && backendUrl.value) {
+    return `${backendUrl.value}/pictures/thumbnails/${target.id}.webp`;
+  }
+  return "";
 }
 
 function getOverlayImageList() {
@@ -1546,6 +1633,37 @@ function getOverlayLocalStackMembers(stackId) {
   return sortOverlayStackMembers(members);
 }
 
+function getOverlayStackSignature(stackId) {
+  if (!stackId) return "";
+  const members = getOverlayLocalStackMembers(stackId);
+  if (!members.length) return "";
+  const parts = members.map((img) => {
+    const id = img?.id != null ? String(img.id) : "";
+    const pos = getOverlayStackPositionValue(img);
+    return `${id}:${pos === null ? "x" : String(pos)}`;
+  });
+  return `${members.length}|${parts.join(",")}`;
+}
+
+function normalizeOverlayStackMembersForStack(stackId, members) {
+  if (!stackId || !Array.isArray(members) || !members.length) return [];
+  const allList = Array.isArray(allImages.value) ? allImages.value : [];
+  const latestById = new Map(
+    allList
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+  const normalized = [];
+  for (const member of members) {
+    if (!member || member.id == null) continue;
+    const id = String(member.id);
+    const latest = latestById.get(id) || member;
+    if (getOverlayStackId(latest) !== stackId) continue;
+    normalized.push(latest);
+  }
+  return sortOverlayStackMembers(normalized);
+}
+
 const overlayStackCounts = computed(() => {
   const counts = new Map();
   const list = Array.isArray(allImages.value) ? allImages.value : [];
@@ -1567,15 +1685,6 @@ function getOverlayStackCount(item) {
   if (ids.length) return ids.length;
   return overlayStackCounts.value.get(stackId) || 0;
 }
-
-const overlayStackCountForImage = computed(() => {
-  if (!image.value) return 0;
-  return getOverlayStackCount(image.value);
-});
-
-const showOverlayStackButton = computed(() => {
-  return overlayStackCountForImage.value > 1;
-});
 
 function shouldShowFilmstripStackBadge(item) {
   return getOverlayStackCount(item) > 1;
@@ -1694,13 +1803,21 @@ function isFilmstripStackExpanded(item) {
 
 function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
   const entry = overlayExpandedStackMembers.value.get(stackId);
-  const ids = Array.isArray(entry?.ids) ? entry.ids : [];
   const images = Array.isArray(entry?.images) ? entry.images : [];
-  const localMembers = getOverlayLocalStackMembers(stackId);
-  const merged = [...localMembers, ...images].filter(
-    (img) => img && img.id != null,
+  const normalizedCached = normalizeOverlayStackMembersForStack(
+    stackId,
+    images,
   );
-  const imageById = new Map(merged.map((img) => [String(img.id), img]));
+  const localMembers = getOverlayLocalStackMembers(stackId);
+  const imageById = new Map();
+  for (const img of normalizedCached) {
+    if (!img || img.id == null) continue;
+    imageById.set(String(img.id), img);
+  }
+  for (const img of localMembers) {
+    if (!img || img.id == null) continue;
+    imageById.set(String(img.id), img);
+  }
   const ordered = [];
   const seen = new Set();
   const addImage = (img) => {
@@ -1711,9 +1828,9 @@ function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
     ordered.push(img);
   };
 
-  const orderedIds = ids.length
-    ? ids
-    : sortOverlayStackMembers(merged).map((img) => String(img.id));
+  const orderedIds = sortOverlayStackMembers(
+    Array.from(imageById.values()),
+  ).map((img) => String(img.id));
   for (const id of orderedIds) {
     addImage(imageById.get(String(id)));
   }
@@ -1772,13 +1889,18 @@ function collapseOverlayStackImages(images) {
   return collapsed;
 }
 
-async function ensureOverlayStackMembersLoaded(stackId, referenceItem = null) {
+async function ensureOverlayStackMembersLoaded(
+  stackId,
+  referenceItem = null,
+  options = {},
+) {
   if (!stackId) return false;
+  const forceReload = options?.force === true;
   const localMembers = getOverlayLocalStackMembers(stackId);
   const expectedCount = Number(
     referenceItem?.stackCount ?? referenceItem?.stack_count ?? 0,
   );
-  if (localMembers.length > 1) {
+  if (!forceReload && localMembers.length > 1) {
     const orderedLocal = sortOverlayStackMembers(localMembers);
     if (!Number.isFinite(expectedCount) || expectedCount <= 0) {
       const ids = orderedLocal
@@ -1800,8 +1922,19 @@ async function ensureOverlayStackMembersLoaded(stackId, referenceItem = null) {
     }
   }
   const existing = overlayExpandedStackMembers.value.get(stackId);
-  if (existing && Array.isArray(existing.images) && existing.images.length) {
-    return true;
+  if (
+    !forceReload &&
+    existing &&
+    Array.isArray(existing.images) &&
+    existing.images.length
+  ) {
+    if (
+      !Number.isFinite(expectedCount) ||
+      expectedCount <= 0 ||
+      existing.images.length >= expectedCount
+    ) {
+      return true;
+    }
   }
   if (overlayExpandedStackLoading.value.has(stackId)) return false;
   if (!backendUrl.value) return false;
@@ -1814,7 +1947,7 @@ async function ensureOverlayStackMembersLoaded(stackId, referenceItem = null) {
     );
     const data = await res.data;
     const images = Array.isArray(data) ? data : [];
-    const ordered = sortOverlayStackMembers(images);
+    const ordered = normalizeOverlayStackMembersForStack(stackId, images);
     const ids = ordered
       .filter((img) => img && img.id != null)
       .map((img) => String(img.id));
@@ -1832,10 +1965,40 @@ async function ensureOverlayStackMembersLoaded(stackId, referenceItem = null) {
   }
 }
 
+function getOverlayStackLeaderId(stackId) {
+  if (!stackId) return null;
+  const localMembers = getOverlayLocalStackMembers(stackId);
+  if (localMembers.length && localMembers[0]?.id != null) {
+    return String(localMembers[0].id);
+  }
+  const cached = overlayExpandedStackMembers.value.get(stackId);
+  const cachedIds = Array.isArray(cached?.ids) ? cached.ids : [];
+  if (cachedIds.length) {
+    return String(cachedIds[0]);
+  }
+  const cachedImages = Array.isArray(cached?.images) ? cached.images : [];
+  const orderedCached = sortOverlayStackMembers(cachedImages);
+  if (orderedCached.length && orderedCached[0]?.id != null) {
+    return String(orderedCached[0].id);
+  }
+  return null;
+}
+
 async function toggleFilmstripStackExpand(item) {
   const stackId = getOverlayStackId(item);
   if (!stackId) return;
   if (overlayExpandedStackIds.value.has(stackId)) {
+    const currentStackId = getOverlayStackId(image.value);
+    if (
+      currentStackId === stackId &&
+      image.value?.id != null &&
+      !showStacks.value
+    ) {
+      const leaderId = getOverlayStackLeaderId(stackId);
+      if (leaderId && leaderId !== String(image.value.id)) {
+        setOverlayImageById(leaderId);
+      }
+    }
     const nextIds = new Set(overlayExpandedStackIds.value);
     nextIds.delete(stackId);
     overlayExpandedStackIds.value = nextIds;
@@ -1869,11 +2032,57 @@ watch(
 
 watch(
   () => allImages.value,
-  () => {
-    overlayExpandedStackIds.value = new Set();
-    overlayExpandedStackMembers.value = new Map();
-    overlayExpandedStackLoading.value = new Set();
+  async () => {
+    const currentId = image.value?.id ?? initialImageId.value;
+    if (currentId != null && currentId !== "") {
+      setOverlayImageById(currentId);
+    }
     void ensureOverlayFilmstripForImage();
+
+    const stackId = getOverlayStackId(image.value);
+    if (!stackId) return;
+    const nextSignature = getOverlayStackSignature(stackId);
+    if (!nextSignature) return;
+
+    const previousSignature = overlayStackSignatures.value.get(stackId) || "";
+    const nextSignatures = new Map(overlayStackSignatures.value);
+    nextSignatures.set(stackId, nextSignature);
+    overlayStackSignatures.value = nextSignatures;
+
+    if (previousSignature === nextSignature) return;
+
+    if (previousSignature) {
+      emit("overlay-change", {
+        imageId: image.value?.id ?? null,
+        fields: { stack: true },
+        stackId,
+      });
+    }
+
+    const nextMembers = new Map(overlayExpandedStackMembers.value);
+    nextMembers.delete(stackId);
+    overlayExpandedStackMembers.value = nextMembers;
+
+    const reloadToken = overlayStackReloadToken.value + 1;
+    overlayStackReloadToken.value = reloadToken;
+
+    await ensureOverlayStackMembersLoaded(stackId, image.value, {
+      force: true,
+    });
+    if (overlayStackReloadToken.value !== reloadToken) return;
+
+    const refreshed = overlayExpandedStackMembers.value.get(stackId);
+    const ids = Array.isArray(refreshed?.ids) ? refreshed.ids : [];
+    const localMembers = getOverlayLocalStackMembers(stackId);
+    const topId =
+      ids.length > 0
+        ? ids[0]
+        : localMembers[0]?.id != null
+          ? String(localMembers[0].id)
+          : null;
+    if (topId && String(image.value?.id ?? "") !== String(topId)) {
+      setOverlayImageById(topId);
+    }
   },
 );
 
@@ -2058,8 +2267,13 @@ function handleKeydown(e) {
 const showFaceBbox = ref(false);
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 900;
+const FILMSTRIP_VISIBLE_COUNT = 7;
+const FILMSTRIP_BUFFER_COUNT = 1;
+const FILMSTRIP_GAP = 0;
+const FILMSTRIP_RAIL_PADDING = 8;
 const windowHeight = ref(0);
 const overlayMainRef = ref(null);
+const overlayRailRef = ref(null);
 const touchStart = ref({ x: 0, y: 0, time: 0 });
 const touchLatest = ref({ x: 0, y: 0 });
 const swipeHintVisible = ref(false);
@@ -2072,26 +2286,36 @@ function updateViewportMetrics() {
   }
 }
 
-const filmstripStyleVars = computed(() => {
-  const targetCount = 7;
-  const gap = 0;
-  const railPadding = 8;
-  const railPaddingTotal = railPadding * 2;
+const filmstripThumbSizePx = computed(() => {
+  const targetCount = FILMSTRIP_VISIBLE_COUNT;
+  const railPaddingTotal = FILMSTRIP_RAIL_PADDING * 2;
+  const railHeight = overlayRailRef.value?.offsetHeight || 0;
   const overlayMainHeight = overlayMainRef.value?.offsetHeight || 0;
   const fallbackHeight = Math.max(0, windowHeight.value || 0);
-  const available = Math.max(0, overlayMainHeight || fallbackHeight);
+  const availableRaw = Math.max(0, overlayMainHeight || fallbackHeight);
+  const available = railHeight > 0 ? railHeight : Math.max(0, availableRaw);
   const usable = Math.max(0, available - railPaddingTotal);
-  const totalGaps = gap * (targetCount - 1);
+  const totalGaps = FILMSTRIP_GAP * (targetCount - 1);
   const rawSize = (usable - totalGaps) / targetCount;
   const computed = Number.isFinite(rawSize) ? Math.floor(rawSize) : 0;
-  const thumbSize = computed > 0 ? Math.max(36, computed - 8) : 80;
+  return computed > 0 ? Math.max(36, computed - 8) : 80;
+});
+
+const filmstripStyleVars = computed(() => {
+  const railPaddingTotal = FILMSTRIP_RAIL_PADDING * 2;
+  const thumbSize = filmstripThumbSizePx.value;
+  const railHeight = overlayRailRef.value?.offsetHeight || 0;
+  const overlayMainHeight = overlayMainRef.value?.offsetHeight || 0;
+  const fallbackHeight = Math.max(0, windowHeight.value || 0);
+  const availableRaw = Math.max(0, overlayMainHeight || fallbackHeight);
+  const available = railHeight > 0 ? railHeight : Math.max(0, availableRaw);
   const railWidth = thumbSize + 12;
   return {
     "--filmstrip-thumb-size": `${thumbSize}px`,
     "--filmstrip-rail-width": `${railWidth}px`,
     "--filmstrip-available-height": `${available}px`,
-    "--filmstrip-gap": `${gap}px`,
-    "--filmstrip-padding": `${railPadding}px`,
+    "--filmstrip-gap": `${FILMSTRIP_GAP}px`,
+    "--filmstrip-padding": `${FILMSTRIP_RAIL_PADDING}px`,
     "--filmstrip-padding-total": `${railPaddingTotal}px`,
   };
 });
@@ -2249,34 +2473,54 @@ const zoomHudLabel = computed(() => {
   return `${Math.round(Number(zoomMode.value) * 100)}%`;
 });
 
-const filmstripWindow = computed(() => {
+const filmstripCanvasData = computed(() => {
   const images = filmstripImages.value;
-  if (!images.length || !image.value) return [];
+  if (!images.length || !image.value) {
+    return { items: [], topBufferSlots: 0 };
+  }
   const currentIndex = images.findIndex((img) => img.id === image.value.id);
-  if (currentIndex === -1) return [];
-  const targetCount = Math.min(7, images.length);
-  let start = currentIndex - 3;
-  let end = currentIndex + 3;
-  if (start < 0) {
-    end += Math.abs(start);
-    start = 0;
+  if (currentIndex === -1) {
+    return { items: [], topBufferSlots: 0 };
   }
-  if (end >= images.length) {
-    const overshoot = end - (images.length - 1);
-    start = Math.max(0, start - overshoot);
-    end = images.length - 1;
+
+  const visibleCount = Math.min(FILMSTRIP_VISIBLE_COUNT, images.length);
+  let visibleStart = currentIndex - Math.floor(visibleCount / 2);
+  let visibleEnd = visibleStart + visibleCount - 1;
+  if (visibleStart < 0) {
+    visibleEnd += Math.abs(visibleStart);
+    visibleStart = 0;
   }
-  while (end - start + 1 < targetCount && end < images.length - 1) {
-    end += 1;
+  if (visibleEnd >= images.length) {
+    const overshoot = visibleEnd - (images.length - 1);
+    visibleStart = Math.max(0, visibleStart - overshoot);
+    visibleEnd = images.length - 1;
   }
-  while (end - start + 1 < targetCount && start > 0) {
-    start -= 1;
+
+  const canvasCount = Math.min(
+    visibleCount + FILMSTRIP_BUFFER_COUNT * 2,
+    images.length,
+  );
+  let canvasStart = Math.max(0, visibleStart - FILMSTRIP_BUFFER_COUNT);
+  let canvasEnd = Math.min(
+    images.length - 1,
+    visibleEnd + FILMSTRIP_BUFFER_COUNT,
+  );
+  while (canvasEnd - canvasStart + 1 < canvasCount && canvasStart > 0) {
+    canvasStart -= 1;
   }
+  while (
+    canvasEnd - canvasStart + 1 < canvasCount &&
+    canvasEnd < images.length - 1
+  ) {
+    canvasEnd += 1;
+  }
+
+  const topBufferSlots = Math.max(0, visibleStart - canvasStart);
   const indices = [];
-  for (let idx = start; idx <= end; idx += 1) {
+  for (let idx = canvasStart; idx <= canvasEnd; idx += 1) {
     indices.push(idx);
   }
-  return indices.map((idx) => {
+  const items = indices.map((idx) => {
     const item = images[idx];
     const stackId = getOverlayStackId(item);
     const prevItem = idx > 0 ? images[idx - 1] : null;
@@ -2293,6 +2537,19 @@ const filmstripWindow = computed(() => {
       isStackJoined,
     };
   });
+
+  return { items, topBufferSlots };
+});
+
+const filmstripCanvasWindow = computed(() => filmstripCanvasData.value.items);
+
+const filmstripCanvasStyle = computed(() => {
+  if (isMobile.value) return {};
+  const slot = filmstripThumbSizePx.value + FILMSTRIP_GAP;
+  const offset = Math.max(0, filmstripCanvasData.value.topBufferSlots) * slot;
+  return {
+    transform: `translateY(-${offset}px)`,
+  };
 });
 
 function toggleFaceBbox() {
@@ -4326,6 +4583,51 @@ function downloadComfyWorkflow(workflow) {
   transition: width 0.2s ease;
 }
 
+.overlay-plugin-progress {
+  position: absolute;
+  bottom: 128px;
+  right: calc(16px + var(--sidebar-width));
+  z-index: 6;
+  background: rgba(var(--v-theme-dark-surface), 0.75);
+  color: rgb(var(--v-theme-on-dark-surface));
+  padding: 8px 10px;
+  border-radius: 8px;
+  min-width: 220px;
+  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
+  backdrop-filter: blur(6px);
+}
+
+.overlay-plugin-progress-error {
+  background: rgba(var(--v-theme-error), 0.95);
+}
+
+.overlay-plugin-progress-title {
+  font-size: 0.8em;
+  margin-bottom: 6px;
+  white-space: pre-line;
+}
+
+.overlay-plugin-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.overlay-plugin-progress-fill {
+  height: 100%;
+  background: rgb(var(--v-theme-accent));
+  width: 0;
+  transition: width 0.2s ease;
+}
+
+.overlay-plugin-progress-meta {
+  margin-top: 6px;
+  font-size: 0.78em;
+  opacity: 0.85;
+}
+
 .overlay-close {
   border: none;
   background: rgba(var(--v-theme-primary), 0.7);
@@ -4665,11 +4967,18 @@ function downloadComfyWorkflow(workflow) {
   width: auto;
   height: auto;
   object-fit: contain;
-  border-radius: 12px;
   background: rgb(var(--v-theme-dark-surface));
   box-shadow: 0 12px 30px rgba(var(--v-theme-shadow), 0.45);
   position: relative;
   z-index: 1;
+}
+
+.overlay-img {
+  border-radius: 0;
+}
+
+.overlay-video {
+  border-radius: 12px;
 }
 
 .overlay-nav {
@@ -4760,17 +5069,26 @@ function downloadComfyWorkflow(workflow) {
   pointer-events: none;
 }
 
+.filmstrip-viewport {
+  width: var(--filmstrip-thumb-size, 100%);
+  height: 100%;
+  overflow: hidden;
+  align-self: center;
+}
+
 .filmstrip-list {
   display: flex;
   flex-direction: column;
   gap: var(--filmstrip-gap, 8px);
-  overflow-y: hidden;
+  overflow-y: visible;
   width: var(--filmstrip-thumb-size, 100%);
   align-items: center;
-  overflow-x: hidden;
+  overflow-x: visible;
   align-self: center;
   padding-right: 0;
-  height: calc(100% - var(--filmstrip-padding-total, 16px));
+  box-sizing: border-box;
+  min-height: 100%;
+  transition: transform 0.24s ease;
 }
 
 .filmstrip-thumb {
@@ -4785,6 +5103,20 @@ function downloadComfyWorkflow(workflow) {
   max-width: 100%;
   aspect-ratio: 1 / 1;
   position: relative;
+}
+
+.filmstrip-slide-move {
+  transition: transform 0.24s ease;
+}
+
+.filmstrip-slide-enter-active,
+.filmstrip-slide-leave-active {
+  transition: opacity 0.14s ease;
+}
+
+.filmstrip-slide-enter-from,
+.filmstrip-slide-leave-to {
+  opacity: 0;
 }
 
 .filmstrip-thumb-tile {
@@ -5489,10 +5821,19 @@ function downloadComfyWorkflow(workflow) {
   }
 
   .filmstrip-list {
+    min-height: 0;
     flex-direction: row;
+    overflow: visible;
+    width: auto;
+    transform: none !important;
+    transition: none;
+  }
+
+  .filmstrip-viewport {
+    width: 100%;
+    height: 100%;
     overflow-x: auto;
     overflow-y: hidden;
-    width: auto;
   }
 
   .filmstrip-thumb {

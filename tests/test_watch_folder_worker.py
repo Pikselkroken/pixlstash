@@ -56,7 +56,6 @@ def test_watch_folder():
                     WorkerType.WATCH_FOLDERS,
                     WorkerType.TAGGER,
                     WorkerType.IMAGE_EMBEDDING,
-                    WorkerType.SMART_SCORE_SCRAPHEAP,
                 }
             )
             worker = server.vault._workers.get(WorkerType.WATCH_FOLDERS)
@@ -126,7 +125,6 @@ def test_watch_folder_delete_after_import():
                     WorkerType.WATCH_FOLDERS,
                     WorkerType.TAGGER,
                     WorkerType.IMAGE_EMBEDDING,
-                    WorkerType.SMART_SCORE_SCRAPHEAP,
                 }
             )
             worker = server.vault._workers.get(WorkerType.WATCH_FOLDERS)

@@ -83,7 +83,7 @@ class LikenessParameterWorker(BaseWorker):
             )
 
             if not work:
-                logger.info("LikenessParameterWorker: No pending work. Sleeping...")
+                logger.debug("LikenessParameterWorker: No pending work. Sleeping...")
                 self._wait()
                 continue
 
@@ -101,7 +101,7 @@ class LikenessParameterWorker(BaseWorker):
                     self._notify_ids_processed(
                         [(Picture, pid, "likeness_parameters", None) for pid in ids]
                     )
-                logger.info(
+                logger.debug(
                     "LikenessParameterWorker: Updated size bin %s (%sx%s) for %s images.",
                     size_bin_index,
                     width,
@@ -148,7 +148,7 @@ class LikenessParameterWorker(BaseWorker):
                     )
                 if param in QUALITY_PARAM_FIELDS:
                     missing_quality = max(len(ids) - len(quality_by_id), 0)
-                    logger.info(
+                    logger.debug(
                         "LikenessParameterWorker: Updated %s for %s images in bin %s (remaining in bin: %s, quality_rows: %s, missing_quality: %s).",
                         param.name,
                         len(ids),
@@ -158,7 +158,7 @@ class LikenessParameterWorker(BaseWorker):
                         missing_quality,
                     )
                 else:
-                    logger.info(
+                    logger.debug(
                         "LikenessParameterWorker: Updated %s for %s images in bin %s (remaining in bin: %s).",
                         param.name,
                         len(ids),

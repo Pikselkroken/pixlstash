@@ -172,7 +172,6 @@ def test_tagger_worker_adds_tags():
                 {
                     WorkerType.TAGGER,
                     WorkerType.DESCRIPTION,
-                    WorkerType.SMART_SCORE_SCRAPHEAP,
                 }
             )
             assert future.result(timeout=60), "Tagger worker did not finish in time"
@@ -180,7 +179,6 @@ def test_tagger_worker_adds_tags():
                 {
                     WorkerType.TAGGER,
                     WorkerType.DESCRIPTION,
-                    WorkerType.SMART_SCORE_SCRAPHEAP,
                 }
             )
 

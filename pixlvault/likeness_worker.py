@@ -78,7 +78,7 @@ class LikenessWorker(BaseWorker):
             )
 
         submit_low(LikenessWorker._seed_queue)
-        logger.info("LikenessWorker: queue initialised.")
+        logger.debug("LikenessWorker: queue initialised.")
 
         param_thresholds = submit_low(
             LikenessWorker._compute_param_gap_thresholds,
@@ -87,12 +87,12 @@ class LikenessWorker(BaseWorker):
         )
         date_span_seconds = submit_low(LikenessWorker._compute_date_span_seconds)
         if param_thresholds:
-            logger.info(
+            logger.debug(
                 "LikenessWorker: Loaded %s parameter gap thresholds.",
                 len(param_thresholds),
             )
         if date_span_seconds:
-            logger.info(
+            logger.debug(
                 "LikenessWorker: Date span seconds=%s, window fraction=%s.",
                 int(date_span_seconds),
                 self.DATE_WINDOW_FRACTION,
@@ -114,7 +114,7 @@ class LikenessWorker(BaseWorker):
             )
 
             if not work_items:
-                logger.info("LikenessWorker: No pending pairs. Sleeping...")
+                logger.debug("LikenessWorker: No pending pairs. Sleeping...")
                 self._wait()
                 continue
 
@@ -137,7 +137,7 @@ class LikenessWorker(BaseWorker):
                     likeness_results,
                     self.TOP_K,
                 )
-            logger.info(
+            logger.debug(
                 "LikenessWorker: Cycle summary queued=%s pairs_scored=%s",
                 len(work_items),
                 len(likeness_results),

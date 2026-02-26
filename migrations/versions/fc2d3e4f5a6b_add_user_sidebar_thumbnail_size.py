@@ -12,10 +12,10 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "fc2d3e4f5a6b"
-down_revision: Union[str, None] = "fb1c2d3e4f5a"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "fc2d3e4f5a6b"  # noqa: F841
+down_revision: Union[str, None] = "fb1c2d3e4f5a"  # noqa: F841
+branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
+depends_on: Union[str, Sequence[str], None] = None  # noqa: F841
 
 TABLE_NAME = "user"
 COLUMN_NAME = "sidebar_thumbnail_size"

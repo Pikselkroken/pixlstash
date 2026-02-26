@@ -33,13 +33,13 @@
                 :disabled="!selectedPluginName"
               >
                 <v-icon size="16">mdi-tune-variant</v-icon>
-                <span>Run Plugin</span>
+                <span>Apply Filters</span>
               </button>
             </template>
             <div class="plugin-menu-panel">
-              <div class="plugin-menu-header">Image Plugin</div>
+              <div class="plugin-menu-header">Filters</div>
               <div class="plugin-menu-body">
-                <label class="plugin-menu-label">Plugin</label>
+                <label class="plugin-menu-label">Filters</label>
                 <select v-model="selectedPluginName" class="plugin-run-select">
                   <option
                     v-for="plugin in pluginOptions"
@@ -69,6 +69,89 @@
                     <v-icon size="16">mdi-play</v-icon>
                     <span>Run</span>
                   </button>
+                </div>
+              </div>
+            </div>
+          </v-menu>
+        </div>
+        <div
+          v-if="selectedCount > 0 && !isScrapheapView"
+          class="plugin-run-controls"
+        >
+          <v-menu
+            v-model="comfyuiMenuOpen"
+            :close-on-content-click="false"
+            location-strategy="connected"
+            location="bottom end"
+            origin="top end"
+            transition="scale-transition"
+          >
+            <template #activator="{ props: menuProps }">
+              <button
+                v-bind="menuProps"
+                class="stack-btn"
+                type="button"
+                :disabled="!selectedImageIds.length"
+              >
+                <v-icon size="16">mdi-robot</v-icon>
+                <span>ComfyUI</span>
+              </button>
+            </template>
+            <div class="plugin-menu-panel">
+              <div class="plugin-menu-header">ComfyUI I2I</div>
+              <div class="plugin-menu-body">
+                <div v-if="comfyuiWorkflowLoading" class="plugin-menu-note">
+                  Loading workflows...
+                </div>
+                <div v-else>
+                  <div v-if="comfyuiWorkflowError" class="plugin-menu-error">
+                    {{ comfyuiWorkflowError }}
+                  </div>
+                  <template v-if="validComfyWorkflows.length">
+                    <label class="plugin-menu-label">Workflow</label>
+                    <select
+                      v-model="comfyuiSelectedWorkflow"
+                      class="plugin-run-select"
+                    >
+                      <option
+                        v-for="workflow in validComfyWorkflows"
+                        :key="workflow.name"
+                        :value="workflow.name"
+                      >
+                        {{ workflow.display_name || workflow.name }}
+                      </option>
+                    </select>
+
+                    <label class="plugin-menu-label">Caption</label>
+                    <textarea
+                      v-model="comfyuiCaption"
+                      class="plugin-menu-textarea"
+                      rows="3"
+                      placeholder="Optional caption for {{caption}}"
+                      @keydown.stop
+                    ></textarea>
+
+                    <div class="plugin-menu-actions">
+                      <button
+                        class="stack-btn"
+                        type="button"
+                        :disabled="!canRunComfyWorkflow"
+                        @click="runSelectedComfyWorkflow"
+                      >
+                        <v-icon size="16">mdi-play</v-icon>
+                        <span>{{ comfyuiRunLoading ? "Running" : "Run" }}</span>
+                      </button>
+                    </div>
+                  </template>
+                  <div v-else class="plugin-menu-note">
+                    No valid workflows found.
+                  </div>
+                  <div v-if="comfyuiRunError" class="plugin-menu-error">
+                    {{ comfyuiRunError }}
+                  </div>
+                  <div v-if="comfyuiRunSuccess" class="plugin-menu-success">
+                    {{ comfyuiRunSuccess }}
+                  </div>
                 </div>
               </div>
             </div>
@@ -137,6 +220,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
+import { apiClient } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToCharacterControl from "./AddToCharacterControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";
@@ -153,6 +237,11 @@ const props = defineProps({
   scrapheapPicturesId: { type: String, required: true },
   backendUrl: { type: String, required: true },
   selectedImageIds: { type: Array, default: () => [] },
+  selectedMediaSupport: {
+    type: Object,
+    default: () => ({ hasImages: false, hasVideos: false }),
+  },
+  comfyuiClientId: { type: String, default: "" },
   showRemoveFromStack: { type: Boolean, default: false },
   availablePlugins: { type: Array, default: () => [] },
 });
@@ -167,6 +256,7 @@ const emit = defineEmits([
   "remove-from-group",
   "delete-selected",
   "run-plugin",
+  "comfyui-run",
 ]);
 
 const STACKS_SORT_KEY = "PICTURE_STACKS";
@@ -211,12 +301,30 @@ const showRemoveStackButton = computed(() => {
 
 const pluginOptions = computed(() => {
   if (!Array.isArray(props.availablePlugins)) return [];
-  return props.availablePlugins.filter((plugin) => plugin && plugin.name);
+  const hasImages = props.selectedMediaSupport?.hasImages === true;
+  const hasVideos = props.selectedMediaSupport?.hasVideos === true;
+  return props.availablePlugins.filter((plugin) => {
+    if (!plugin || !plugin.name) return false;
+    const supportsImages = plugin.supports_images !== false;
+    const supportsVideos = plugin.supports_videos === true;
+    if (hasImages && !supportsImages) return false;
+    if (hasVideos && !supportsVideos) return false;
+    return true;
+  });
 });
 
 const selectedPluginName = ref("");
 const pluginMenuOpen = ref(false);
 const pluginParameters = ref({});
+const comfyuiMenuOpen = ref(false);
+const comfyuiWorkflows = ref([]);
+const comfyuiWorkflowLoading = ref(false);
+const comfyuiWorkflowError = ref("");
+const comfyuiSelectedWorkflow = ref("");
+const comfyuiCaption = ref("");
+const comfyuiRunLoading = ref(false);
+const comfyuiRunError = ref("");
+const comfyuiRunSuccess = ref("");
 
 const activePluginSchema = computed(() => {
   if (!selectedPluginName.value) return null;
@@ -259,6 +367,91 @@ watch(pluginMenuOpen, (isOpen) => {
   }
   pluginParameters.value = {};
 });
+
+const validComfyWorkflows = computed(() => {
+  if (!Array.isArray(comfyuiWorkflows.value)) return [];
+  return comfyuiWorkflows.value.filter((workflow) => workflow?.valid !== false);
+});
+
+const canRunComfyWorkflow = computed(() => {
+  if (comfyuiRunLoading.value) return false;
+  if (!props.backendUrl) return false;
+  if (
+    !Array.isArray(props.selectedImageIds) ||
+    !props.selectedImageIds.length
+  ) {
+    return false;
+  }
+  return !!comfyuiSelectedWorkflow.value;
+});
+
+watch(comfyuiMenuOpen, async (isOpen) => {
+  if (!isOpen) return;
+  comfyuiRunError.value = "";
+  comfyuiRunSuccess.value = "";
+  await fetchComfyWorkflows();
+  if (!comfyuiSelectedWorkflow.value && validComfyWorkflows.value.length) {
+    comfyuiSelectedWorkflow.value = String(validComfyWorkflows.value[0].name);
+  }
+});
+
+async function fetchComfyWorkflows() {
+  if (comfyuiWorkflowLoading.value) return;
+  if (!props.backendUrl) return;
+  comfyuiWorkflowLoading.value = true;
+  comfyuiWorkflowError.value = "";
+  try {
+    const res = await apiClient.get(`${props.backendUrl}/comfyui/workflows`);
+    const workflows = res.data?.workflows;
+    comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
+  } catch (err) {
+    comfyuiWorkflowError.value =
+      err?.response?.data?.detail || err?.message || String(err);
+    comfyuiWorkflows.value = [];
+  } finally {
+    comfyuiWorkflowLoading.value = false;
+  }
+}
+
+async function runSelectedComfyWorkflow() {
+  if (!canRunComfyWorkflow.value) return;
+  comfyuiRunLoading.value = true;
+  comfyuiRunError.value = "";
+  comfyuiRunSuccess.value = "";
+  try {
+    const pictureIds = (
+      Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
+    )
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    if (!pictureIds.length) return;
+
+    const payload = {
+      picture_ids: pictureIds,
+      workflow_name: comfyuiSelectedWorkflow.value,
+      caption: comfyuiCaption.value || "",
+      client_id: props.comfyuiClientId || undefined,
+    };
+    const res = await apiClient.post(
+      `${props.backendUrl}/comfyui/run_i2i`,
+      payload,
+    );
+    const prompts = Array.isArray(res.data?.prompts) ? res.data.prompts : [];
+    emit("comfyui-run", {
+      prompts,
+      pictureIds,
+      pictureId: pictureIds[0] ?? null,
+    });
+    comfyuiRunSuccess.value = prompts.length
+      ? `Queued ${prompts.length} run(s) in ComfyUI.`
+      : "Queued in ComfyUI.";
+  } catch (err) {
+    comfyuiRunError.value =
+      err?.response?.data?.detail || err?.message || String(err);
+  } finally {
+    comfyuiRunLoading.value = false;
+  }
+}
 
 function runSelectedPlugin() {
   if (!selectedPluginName.value) return;
@@ -405,5 +598,33 @@ function runSelectedPlugin() {
   background: rgba(var(--v-theme-background), 0.7);
   color: rgb(var(--v-theme-on-background));
   padding: 0 8px;
+}
+
+.plugin-menu-textarea {
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid rgba(var(--v-theme-primary), 0.4);
+  background: rgba(var(--v-theme-background), 0.7);
+  color: rgb(var(--v-theme-on-background));
+  padding: 8px;
+  resize: vertical;
+  min-height: 70px;
+}
+
+.plugin-menu-note {
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
+.plugin-menu-error {
+  margin-top: 8px;
+  color: rgb(var(--v-theme-error));
+  font-size: 0.8rem;
+}
+
+.plugin-menu-success {
+  margin-top: 8px;
+  color: rgb(var(--v-theme-success));
+  font-size: 0.8rem;
 }
 </style>
