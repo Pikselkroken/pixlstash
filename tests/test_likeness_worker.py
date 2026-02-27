@@ -7,6 +7,7 @@ from pixlvault.server import Server
 from pixlvault.worker_registry import WorkerType
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
+from pixlvault.picture_utils import PictureUtils
 from sqlalchemy import func
 from sqlmodel import select
 
@@ -33,8 +34,23 @@ def test_likeness_worker():
             assert pictures and len(pictures) >= 2, (
                 "No pictures found in the database. Test requires at least two pictures."
             )
+
+            quality_pictures = [pic for pic in pictures if pic.file_path]
+            assert quality_pictures, (
+                "Expected at least one picture with file_path for quality calculation."
+            )
+            quality_paths = [
+                PictureUtils.resolve_picture_path(
+                    server.vault.db.image_root, pic.file_path
+                )
+                for pic in quality_pictures
+            ]
+            assert any(os.path.exists(path) for path in quality_paths), (
+                "Expected at least one quality-processable picture file to exist on disk."
+            )
+
             quality_futures = []
-            for pic in pictures:
+            for pic in quality_pictures:
                 future = server.vault.get_worker_future(
                     WorkerType.QUALITY, Picture, pic.id, "quality"
                 )

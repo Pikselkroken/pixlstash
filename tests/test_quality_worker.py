@@ -3,6 +3,7 @@ import tempfile
 from fastapi.testclient import TestClient
 
 from pixlvault.db_models import Face, Picture, Quality
+from pixlvault.picture_utils import PictureUtils
 from pixlvault.server import Server
 from pixlvault.worker_registry import WorkerType
 from tests.utils import upload_pictures_and_wait
@@ -116,6 +117,21 @@ def test_quality_worker_end_to_end():
             import_status = upload_pictures_and_wait(client, files)
             assert import_status["status"] == "completed"
             pic_id = import_status["results"][0]["picture_id"]
+
+            imported_picture = server.vault.db.run_task(
+                lambda s: Picture.find(
+                    s, id=pic_id, select_fields=Picture.metadata_fields()
+                )[0]
+            )
+            assert imported_picture.file_path, (
+                "Expected imported quality test picture to have file_path."
+            )
+            imported_path = PictureUtils.resolve_picture_path(
+                server.vault.db.image_root, imported_picture.file_path
+            )
+            assert os.path.exists(imported_path), (
+                "Expected imported quality test picture file to exist on disk."
+            )
 
             # Debug dump of picture_faces table after face detection
             print("\n--- DEBUG DUMP: picture_faces after face detection ---")
