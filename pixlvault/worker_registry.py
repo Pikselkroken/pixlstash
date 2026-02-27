@@ -50,9 +50,17 @@ class WorkerRegistry(ABCMeta):
         """
         Create an instance of a registered worker by name.
         """
-        if worker_name not in cls.registry:
-            raise ValueError(f"Worker '{worker_name}' is not registered.")
-        return cls.registry[worker_name.value](*args, **kwargs)
+        class_name_by_worker_type = {
+            WorkerType.IMAGE_EMBEDDING: "ImageEmbeddingWorker",
+        }
+        class_name = class_name_by_worker_type.get(worker_name)
+        if class_name is None:
+            raise ValueError(
+                f"Worker type '{worker_name}' is not configured as thread-backed."
+            )
+        if class_name not in cls.registry:
+            raise ValueError(f"Worker class '{class_name}' is not registered.")
+        return cls.registry[class_name](*args, **kwargs)
 
 
 class BaseWorker(ABC, metaclass=WorkerRegistry):

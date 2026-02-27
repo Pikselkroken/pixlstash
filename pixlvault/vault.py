@@ -20,22 +20,17 @@ from .db_models import MetaData, Character, Face, Hand, Picture, PictureSet
 from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
 from .picture_utils import PictureUtils
-from .tasks.missing_description_finder import MissingDescriptionFinder
-from .tasks.missing_feature_extraction_finder import MissingFeatureExtractionFinder
-from .tasks.missing_text_embeddings_finder import MissingTextEmbeddingsFinder
-from .tasks.missing_tags_finder import MissingTagsFinder
-from .tasks.missing_watch_folder_imports_finder import MissingWatchFolderImportsFinder
+from .tasks.face_quality_task import FaceQualityTask
 from .tasks.feature_extraction_task import FeatureExtractionTask
+from .tasks.likeness_task import LikenessTask
+from .tasks.quality_task import QualityTask
 from .task_runner import TaskRunner, TaskStatus
 from .work_planner import WorkPlanner
 from .worker_registry import WorkerRegistry, WorkerType
 
 # These import lines are all necessary to register the workers with the WorkerRegistry
 from pixlvault.event_types import EventType
-from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
-from pixlvault.likeness_parameter_worker import LikenessParameterWorker  # noqa: F401
 from pixlvault.image_embedding_worker import ImageEmbeddingWorker  # noqa: F401
-from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
 
 
 logger = get_logger(__name__)
@@ -68,13 +63,7 @@ class Vault:
         ],
         EventType.CLEARED_TAGS: [WorkerType.TAGGER, WorkerType.TEXT_EMBEDDING],
     }
-    _planner_managed_worker_types = {
-        WorkerType.FACE,
-        WorkerType.TAGGER,
-        WorkerType.DESCRIPTION,
-        WorkerType.TEXT_EMBEDDING,
-        WorkerType.WATCH_FOLDERS,
-    }
+    _planner_managed_worker_types = set()
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -128,35 +117,22 @@ class Vault:
         self._event_listeners = []
         self._event_listeners_lock = threading.Lock()
         self._task_runner = TaskRunner(name="vault-task-runner")
+        self._planner_work_finders = WorkPlanner.work_finders(
+            database=self.db,
+            picture_tagger_getter=lambda: self._picture_tagger,
+            config_path=self._server_config_path,
+        )
+        self._planner_managed_worker_types = set(self._planner_work_finders.keys())
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
-            task_finders=[
-                MissingFeatureExtractionFinder(
-                    database=self.db,
-                    picture_tagger_getter=lambda: self._picture_tagger,
-                ),
-                MissingTagsFinder(
-                    database=self.db,
-                    picture_tagger_getter=lambda: self._picture_tagger,
-                ),
-                MissingDescriptionFinder(
-                    database=self.db,
-                    picture_tagger_getter=lambda: self._picture_tagger,
-                ),
-                MissingTextEmbeddingsFinder(
-                    database=self.db,
-                    picture_tagger_getter=lambda: self._picture_tagger,
-                ),
-                MissingWatchFolderImportsFinder(
-                    database=self.db,
-                    config_path=self._server_config_path,
-                ),
-            ],
+            task_finders=list(self._planner_work_finders.values()),
         )
         self._closed = False
 
         self._task_runner.add_task_complete_callback(self._on_task_completed)
-        self._task_runner.add_task_complete_callback(self._work_planner.on_task_complete)
+        self._task_runner.add_task_complete_callback(
+            self._work_planner.on_task_complete
+        )
         self._task_runner.start()
         self._work_planner.start()
 
@@ -396,6 +372,23 @@ class Vault:
                 self.notify(EventType.CHANGED_TAGS, picture_ids)
             return
 
+        if task.type == "QualityTask":
+            self._notify_worker_ids_processed(WorkerType.QUALITY, changed)
+            self.notify(EventType.QUALITY_UPDATED)
+            return
+
+        if task.type == "FaceQualityTask":
+            self._notify_worker_ids_processed(WorkerType.FACE_QUALITY, changed)
+            return
+
+        if task.type == "LikenessParametersTask":
+            self._notify_worker_ids_processed(WorkerType.LIKENESS_PARAMETERS, changed)
+            return
+
+        if task.type == "LikenessTask":
+            self._notify_worker_ids_processed(WorkerType.LIKENESS, changed)
+            return
+
         if task.type == "FeatureExtractionTask":
             self._notify_worker_ids_processed(WorkerType.FACE, changed)
             picture_ids = result.get("picture_ids") or []
@@ -425,7 +418,9 @@ class Vault:
             return
         self._notify_planner_ids_processed(worker_type, changed)
 
-    def _watch_planner_id(self, worker_type: WorkerType, cls: type, object_id, attr: str):
+    def _watch_planner_id(
+        self, worker_type: WorkerType, cls: type, object_id, attr: str
+    ):
         future = Future()
         with self._planner_watchers_lock:
             self._planner_watchers[(worker_type, cls, object_id, attr)] = future
@@ -511,7 +506,9 @@ class Vault:
         progress = {}
         for worker_type in WorkerType.all():
             if worker_type in self._planner_managed_worker_types:
-                total = int(self.db.run_immediate_read_task(self._count_total_pictures) or 0)
+                total = int(
+                    self.db.run_immediate_read_task(self._count_total_pictures) or 0
+                )
                 if worker_type == WorkerType.DESCRIPTION:
                     missing = int(
                         self.db.run_immediate_read_task(
@@ -522,10 +519,26 @@ class Vault:
                     label = "descriptions_generated"
                 elif worker_type == WorkerType.TAGGER:
                     missing = int(
-                        self.db.run_immediate_read_task(self._count_missing_tags)
-                        or 0
+                        self.db.run_immediate_read_task(self._count_missing_tags) or 0
                     )
                     label = "pictures_tagged"
+                elif worker_type == WorkerType.QUALITY:
+                    missing = int(
+                        self.db.run_immediate_read_task(self._count_missing_quality)
+                        or 0
+                    )
+                    label = "quality_scored"
+                elif worker_type == WorkerType.FACE_QUALITY:
+                    total = int(
+                        self.db.run_immediate_read_task(self._count_total_faces) or 0
+                    )
+                    missing = int(
+                        self.db.run_immediate_read_task(
+                            self._count_missing_face_quality
+                        )
+                        or 0
+                    )
+                    label = "face_quality_scored"
                 elif worker_type == WorkerType.FACE:
                     missing = int(
                         self.db.run_immediate_read_task(
@@ -547,6 +560,28 @@ class Vault:
                     )
                     total = max(described, 0)
                     label = "text_embeddings"
+                elif worker_type == WorkerType.LIKENESS_PARAMETERS:
+                    missing = int(
+                        self.db.run_immediate_read_task(
+                            self._count_pending_likeness_parameters
+                        )
+                        or 0
+                    )
+                    label = "likeness_parameters"
+                elif worker_type == WorkerType.LIKENESS:
+                    total = int(
+                        self.db.run_immediate_read_task(
+                            self._count_total_likeness_candidates
+                        )
+                        or 0
+                    )
+                    missing = int(
+                        self.db.run_immediate_read_task(
+                            self._count_pending_likeness_queue
+                        )
+                        or 0
+                    )
+                    label = "likeness_pairs"
                 elif worker_type == WorkerType.WATCH_FOLDERS:
                     total = 0
                     missing = 0
@@ -560,7 +595,9 @@ class Vault:
                     "total": total,
                     "remaining": max(missing, 0),
                     "updated_at": time.time(),
-                    "status": "running" if self.is_worker_running(worker_type) else "idle",
+                    "status": "running"
+                    if self.is_worker_running(worker_type)
+                    else "idle",
                     "running": self.is_worker_running(worker_type),
                 }
                 continue
@@ -592,7 +629,9 @@ class Vault:
     @staticmethod
     def _count_missing_descriptions(session: Session) -> int:
         result = session.exec(
-            select(func.count()).select_from(Picture).where(Picture.description.is_(None))
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.description.is_(None))
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
@@ -625,6 +664,18 @@ class Vault:
         return result or 0
 
     @staticmethod
+    def _count_missing_quality(session: Session) -> int:
+        return QualityTask.count_missing_quality(session)
+
+    @staticmethod
+    def _count_total_faces(session: Session) -> int:
+        return FaceQualityTask.count_total_faces(session)
+
+    @staticmethod
+    def _count_missing_face_quality(session: Session) -> int:
+        return FaceQualityTask.count_missing_face_quality(session)
+
+    @staticmethod
     def _count_total_described(session: Session) -> int:
         result = session.exec(
             select(func.count())
@@ -646,6 +697,28 @@ class Vault:
         if isinstance(result, (tuple, list)):
             return result[0]
         return result or 0
+
+    @staticmethod
+    def _count_pending_likeness_parameters(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(
+                (Picture.likeness_parameters.is_(None))
+                | (Picture.size_bin_index.is_(None))
+            )
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_pending_likeness_queue(session: Session) -> int:
+        return LikenessTask.count_queue(session)
+
+    @staticmethod
+    def _count_total_likeness_candidates(session: Session) -> int:
+        return LikenessTask.count_total_candidates(session)
 
     def get_worker_progress(self) -> dict:
         progress = self._build_worker_progress_snapshot()
@@ -731,7 +804,9 @@ class Vault:
         try:
             FeatureExtractionTask.release_detection_models()
         except Exception as exc:
-            logger.warning("Aggressive unload failed for feature extraction models: %s", exc)
+            logger.warning(
+                "Aggressive unload failed for feature extraction models: %s", exc
+            )
         for worker in self._workers.values():
             try:
                 worker.close()

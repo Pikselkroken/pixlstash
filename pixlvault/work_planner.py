@@ -13,6 +13,62 @@ class WorkPlanner:
     MAX_INTERVAL_S = 10.0
     BACKOFF_FACTOR = 1.8
 
+    @staticmethod
+    def work_finders(database, picture_tagger_getter, config_path=None):
+        from pixlvault.worker_registry import WorkerType
+        from pixlvault.tasks.missing_description_finder import MissingDescriptionFinder
+        from pixlvault.tasks.missing_face_quality_finder import MissingFaceQualityFinder
+        from pixlvault.tasks.missing_feature_extraction_finder import (
+            MissingFeatureExtractionFinder,
+        )
+        from pixlvault.tasks.missing_likeness_parameters_finder import (
+            MissingLikenessParametersFinder,
+        )
+        from pixlvault.tasks.missing_likeness_finder import MissingLikenessFinder
+        from pixlvault.tasks.missing_quality_finder import MissingQualityFinder
+        from pixlvault.tasks.missing_text_embeddings_finder import (
+            MissingTextEmbeddingsFinder,
+        )
+        from pixlvault.tasks.missing_tags_finder import MissingTagsFinder
+        from pixlvault.tasks.missing_watch_folder_imports_finder import (
+            MissingWatchFolderImportsFinder,
+        )
+
+        return {
+            WorkerType.FACE: MissingFeatureExtractionFinder(
+                database=database,
+                picture_tagger_getter=picture_tagger_getter,
+            ),
+            WorkerType.QUALITY: MissingQualityFinder(
+                database=database,
+            ),
+            WorkerType.FACE_QUALITY: MissingFaceQualityFinder(
+                database=database,
+            ),
+            WorkerType.TAGGER: MissingTagsFinder(
+                database=database,
+                picture_tagger_getter=picture_tagger_getter,
+            ),
+            WorkerType.DESCRIPTION: MissingDescriptionFinder(
+                database=database,
+                picture_tagger_getter=picture_tagger_getter,
+            ),
+            WorkerType.TEXT_EMBEDDING: MissingTextEmbeddingsFinder(
+                database=database,
+                picture_tagger_getter=picture_tagger_getter,
+            ),
+            WorkerType.LIKENESS_PARAMETERS: MissingLikenessParametersFinder(
+                database=database,
+            ),
+            WorkerType.LIKENESS: MissingLikenessFinder(
+                database=database,
+            ),
+            WorkerType.WATCH_FOLDERS: MissingWatchFolderImportsFinder(
+                database=database,
+                config_path=config_path,
+            ),
+        }
+
     def __init__(self, task_runner, task_finders: list):
         self._task_runner = task_runner
         self._task_finders = task_finders or []
@@ -32,7 +88,9 @@ class WorkPlanner:
             return
         self._stop.clear()
         self._wake.clear()
-        self._thread = threading.Thread(target=self._run, name="WorkPlanner", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="WorkPlanner", daemon=True
+        )
         self._thread.start()
         logger.info("WorkPlanner started with %s finders.", len(self._task_finders))
 

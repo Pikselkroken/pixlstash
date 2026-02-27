@@ -1,6 +1,7 @@
 import queue
 import threading
 import uuid
+import traceback
 
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -145,7 +146,21 @@ class TaskRunner:
                 task.run()
             except Exception as exc:
                 error = exc
-                logger.warning("Task %s (%s) failed: %s", task.id, task.type, exc)
+                tb = traceback.extract_tb(exc.__traceback__)
+                if tb:
+                    last = tb[-1]
+                    logger.warning(
+                        "Task %s (%s) failed at %s:%s in %s: %s | code=%s",
+                        task.id,
+                        task.type,
+                        last.filename,
+                        last.lineno,
+                        last.name,
+                        exc,
+                        (last.line or "").strip(),
+                    )
+                else:
+                    logger.warning("Task %s (%s) failed: %s", task.id, task.type, exc)
             finally:
                 callbacks = list(self._on_task_complete_callbacks)
                 for callback in callbacks:

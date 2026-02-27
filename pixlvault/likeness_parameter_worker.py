@@ -1,5 +1,4 @@
 import os
-import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -11,7 +10,6 @@ from PIL import Image
 from pixlvault.database import DBPriority
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger
-from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.picture import (
     LIKENESS_PARAMETER_SENTINEL,
     LikenessParameter,
@@ -40,10 +38,9 @@ PICTURE_PARAM_FIELDS = {
 
 PHASH_BITS = 64
 PHASH_HEX_LEN = PHASH_BITS // 4
-WORKER_DB_PRIORITY = DBPriority.LOW
 
 
-class LikenessParameterWorker(BaseWorker):
+class LikenessParameterWorker:
     """Compute likeness parameter vectors in size-binned batches.
 
     This worker operates parameter-by-parameter in enum order. For each parameter,
@@ -52,124 +49,9 @@ class LikenessParameterWorker(BaseWorker):
 
     BATCH_SIZE = 128
     SCAN_LIMIT = 2048
-    YIELD_SLEEP_SECONDS = 0.05
-    QUALITY_EMPTY_BACKOFF_SECONDS = 0.5
 
-    def worker_type(self) -> WorkerType:
-        return WorkerType.LIKENESS_PARAMETERS
-
-    def _run(self):
-        logger.info("LikenessParameterWorker: started.")
-
-        def submit_low(func, *args, **kwargs):
-            return self._db.result_or_throw(
-                self._db.submit_task(func, *args, priority=WORKER_DB_PRIORITY, **kwargs)
-            )
-
-        while not self._stop.is_set():
-            total_pics = submit_low(LikenessParameterWorker._count_total_pictures)
-            pending = submit_low(LikenessParameterWorker._count_pending_parameters)
-            total = max(int(total_pics or 0), 0)
-            missing = max(int(pending or 0), 0)
-            self._set_progress(
-                label="likeness_parameters",
-                current=max(total - missing, 0),
-                total=total,
-            )
-            work = submit_low(
-                LikenessParameterWorker._find_next_work,
-                self.BATCH_SIZE,
-                self.SCAN_LIMIT,
-            )
-
-            if not work:
-                logger.debug("LikenessParameterWorker: No pending work. Sleeping...")
-                self._wait()
-                continue
-
-            param, size_bin, payload = work
-            if param == LikenessParameter.SIZE_BIN:
-                width, height, ids = payload
-                size_bin_index = self._size_bin_index(width, height)
-                submit_low(
-                    LikenessParameterWorker._update_size_bin,
-                    ids,
-                    size_bin_index,
-                    len(LikenessParameter),
-                )
-                if ids:
-                    self._notify_ids_processed(
-                        [(Picture, pid, "likeness_parameters", None) for pid in ids]
-                    )
-                logger.debug(
-                    "LikenessParameterWorker: Updated size bin %s (%sx%s) for %s images.",
-                    size_bin_index,
-                    width,
-                    height,
-                    len(ids),
-                )
-            else:
-                ids, remaining_in_bin = payload
-                if param in QUALITY_PARAM_FIELDS:
-                    quality_by_id = self._fetch_quality_for_ids(ids)
-                    submit_low(
-                        LikenessParameterWorker._update_quality_values,
-                        ids,
-                        quality_by_id,
-                        len(LikenessParameter),
-                    )
-                elif param in PICTURE_PARAM_FIELDS:
-                    picture_by_id, picture_updates = self._fetch_picture_params_for_ids(
-                        ids
-                    )
-                    if picture_updates:
-                        submit_low(
-                            LikenessParameterWorker._update_picture_metadata,
-                            picture_updates,
-                        )
-                    submit_low(
-                        LikenessParameterWorker._update_picture_values,
-                        ids,
-                        picture_by_id,
-                        len(LikenessParameter),
-                    )
-                else:
-                    values = [LIKENESS_PARAMETER_SENTINEL for _ in ids]
-                    submit_low(
-                        LikenessParameterWorker._update_parameter_values,
-                        ids,
-                        int(param),
-                        values,
-                        len(LikenessParameter),
-                    )
-                if ids:
-                    self._notify_ids_processed(
-                        [(Picture, pid, "likeness_parameters", None) for pid in ids]
-                    )
-                if param in QUALITY_PARAM_FIELDS:
-                    missing_quality = max(len(ids) - len(quality_by_id), 0)
-                    logger.debug(
-                        "LikenessParameterWorker: Updated %s for %s images in bin %s (remaining in bin: %s, quality_rows: %s, missing_quality: %s).",
-                        param.name,
-                        len(ids),
-                        size_bin,
-                        max(remaining_in_bin - len(ids), 0),
-                        len(quality_by_id),
-                        missing_quality,
-                    )
-                else:
-                    logger.debug(
-                        "LikenessParameterWorker: Updated %s for %s images in bin %s (remaining in bin: %s).",
-                        param.name,
-                        len(ids),
-                        size_bin,
-                        max(remaining_in_bin - len(ids), 0),
-                    )
-
-            if self.YIELD_SLEEP_SECONDS > 0 and not self._stop.is_set():
-                time.sleep(self.YIELD_SLEEP_SECONDS)
-
-        logger.info("LikenessParameterWorker: stopped.")
+    def __init__(self, database):
+        self._db = database
 
     @staticmethod
     def _find_next_work(
@@ -193,13 +75,6 @@ class LikenessParameterWorker(BaseWorker):
                 return param, size_bin_index, (ids, remaining_in_bin)
 
         return None
-
-    @staticmethod
-    def _count_total_pictures(session: Session) -> int:
-        result = session.exec(select(func.count()).select_from(Picture)).one()
-        if isinstance(result, (tuple, list)):
-            return result[0]
-        return result or 0
 
     @staticmethod
     def _count_pending_parameters(session: Session) -> int:

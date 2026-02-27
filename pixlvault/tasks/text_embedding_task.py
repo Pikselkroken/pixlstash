@@ -46,7 +46,9 @@ class TextEmbeddingTask(BaseTask):
                 if db_pic is not None:
                     db_pic.text_embedding = pic.text_embedding
                     session.add(db_pic)
-                    changed.append((Picture, pic.id, "text_embedding", pic.text_embedding))
+                    changed.append(
+                        (Picture, pic.id, "text_embedding", pic.text_embedding)
+                    )
             session.commit()
             logger.debug(
                 "TextEmbeddingTask: Committed %s embedding updates to DB.",
@@ -65,8 +67,12 @@ class TextEmbeddingTask(BaseTask):
             "changed": changed,
         }
 
-    def _generate_text_embeddings(self, pictures_to_embed: list[Picture]) -> list[Picture]:
-        embeddings = self._picture_tagger.generate_text_embedding(pictures=pictures_to_embed)
+    def _generate_text_embeddings(
+        self, pictures_to_embed: list[Picture]
+    ) -> list[Picture]:
+        embeddings = self._picture_tagger.generate_text_embedding(
+            pictures=pictures_to_embed
+        )
         if not embeddings:
             return []
 

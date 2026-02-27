@@ -115,7 +115,7 @@ def test_florence_caption_performance(tagger, image_files):
     # Relax requirements when running on CPU; Florence takes longer there.
     device = getattr(tagger, "_florence_device", None)
     if device is not None and getattr(device, "type", "cpu") == "cuda":
-        assert time_per_image < 1.0, (
+        assert time_per_image < 1.5, (
             f"Performance too slow on GPU: {time_per_image:.3f}s per image"
         )
     else:

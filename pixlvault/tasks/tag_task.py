@@ -84,9 +84,7 @@ class TagTask(BaseTask):
             if not face_map and not hand_map and set(tags) == existing_tag_set:
                 continue
 
-            tag_ids = session.exec(
-                select(Tag.id).where(Tag.picture_id == pic_id)
-            ).all()
+            tag_ids = session.exec(select(Tag.id).where(Tag.picture_id == pic_id)).all()
             tag_ids = [
                 row[0] if isinstance(row, tuple) else row
                 for row in tag_ids
@@ -130,15 +128,18 @@ class TagTask(BaseTask):
         session.commit()
         return updated_ids
 
-
     def _tag_pictures_batch(self) -> list:
         assert self._pictures is not None
 
-        batch = self._pictures[: max(1, int(self._picture_tagger.max_concurrent_images()))]
+        batch = self._pictures[
+            : max(1, int(self._picture_tagger.max_concurrent_images()))
+        ]
         image_paths = []
         pic_by_path = {}
         for pic in batch:
-            file_path = PictureUtils.resolve_picture_path(self._db.image_root, pic.file_path)
+            file_path = PictureUtils.resolve_picture_path(
+                self._db.image_root, pic.file_path
+            )
             image_paths.append(file_path)
             pic_by_path[file_path] = pic
 
@@ -207,7 +208,9 @@ class TagTask(BaseTask):
                                 if getattr(face, "face_index", 0) < 0:
                                     continue
                                 bbox = getattr(face, "bbox", None)
-                                clamped = PictureUtils.clamp_bbox(bbox, frame_w, frame_h)
+                                clamped = PictureUtils.clamp_bbox(
+                                    bbox, frame_w, frame_h
+                                )
                                 if clamped is None:
                                     continue
                                 crop = PictureUtils.crop_face_from_frame(frame, clamped)
@@ -218,7 +221,7 @@ class TagTask(BaseTask):
                                         clamped,
                                     )
                                     continue
-                                
+
                                 try:
                                     crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                                     crop_img = Image.fromarray(crop_rgb)
@@ -245,19 +248,28 @@ class TagTask(BaseTask):
                                 if getattr(hand, "hand_index", 0) < 0:
                                     continue
                                 bbox = getattr(hand, "bbox", None)
-                                clamped = PictureUtils.clamp_bbox(bbox, frame_w, frame_h)
+                                clamped = PictureUtils.clamp_bbox(
+                                    bbox, frame_w, frame_h
+                                )
                                 if clamped is None:
                                     continue
                                 ex1, ey1, ex2, ey2 = clamped
                                 area = (ex2 - ex1) * (ey2 - ey1)
-                                if hand_min_area_ratio > 0 and area / frame_area < hand_min_area_ratio:
+                                if (
+                                    hand_min_area_ratio > 0
+                                    and area / frame_area < hand_min_area_ratio
+                                ):
                                     continue
                                 hand_candidates.append((area, clamped, hand))
 
                             if hand_candidates:
-                                hand_candidates.sort(key=lambda item: item[0], reverse=True)
+                                hand_candidates.sort(
+                                    key=lambda item: item[0], reverse=True
+                                )
                                 if hand_max_per_picture > 0:
-                                    hand_candidates = hand_candidates[:hand_max_per_picture]
+                                    hand_candidates = hand_candidates[
+                                        :hand_max_per_picture
+                                    ]
 
                             for _, bbox, hand in hand_candidates:
                                 crop = PictureUtils.crop_face_from_frame(frame, bbox)
@@ -313,13 +325,17 @@ class TagTask(BaseTask):
                                 )
                             if kind == "hand":
                                 custom_tags = self._custom_tagger_tags(tags)
-                                filtered = [tag for tag in custom_tags if is_hand_tag(tag)]
+                                filtered = [
+                                    tag for tag in custom_tags if is_hand_tag(tag)
+                                ]
                                 existing = crop_tags_by_pic_id.get(pic_id, [])
                                 existing.extend(filtered)
                                 crop_tags_by_pic_id[pic_id] = existing
                                 hand_id = item_to_hand_id.get(key)
                                 if hand_id is not None:
-                                    existing_hand = hand_tags_by_hand_id.get(hand_id, [])
+                                    existing_hand = hand_tags_by_hand_id.get(
+                                        hand_id, []
+                                    )
                                     existing_hand.extend(filtered)
                                     hand_tags_by_hand_id[hand_id] = existing_hand
                             else:
@@ -328,7 +344,9 @@ class TagTask(BaseTask):
                                 crop_tags_by_pic_id[pic_id] = existing
                                 face_id = item_to_face_id.get(key)
                                 if face_id is not None:
-                                    existing_face = face_tags_by_face_id.get(face_id, [])
+                                    existing_face = face_tags_by_face_id.get(
+                                        face_id, []
+                                    )
                                     filtered = [tag for tag in tags if is_face_tag(tag)]
                                     existing_face.extend(filtered)
                                     face_tags_by_face_id[face_id] = existing_face
@@ -342,7 +360,9 @@ class TagTask(BaseTask):
                     continue
                 base_tags = tag_results.get(path, [])
                 if "blurry" in base_tags:
-                    logger.debug("[TAG SOURCE] pic_id=%s source=full tag=blurry", pic.id)
+                    logger.debug(
+                        "[TAG SOURCE] pic_id=%s source=full tag=blurry", pic.id
+                    )
                 extra_tags = crop_tags_by_pic_id.get(pic.id, [])
                 combined = sorted(set(base_tags) | set(extra_tags))
                 if combined:

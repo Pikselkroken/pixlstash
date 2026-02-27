@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import time
 from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -9,9 +8,7 @@ import numpy as np
 from sqlalchemy import func
 from sqlmodel import Session, delete, select
 
-from pixlvault.database import DBPriority
 from pixlvault.pixl_logging import get_logger
-from pixlvault.worker_registry import BaseWorker, WorkerType
 from pixlvault.db_models.picture import (
     LIKENESS_PARAMETER_SENTINEL,
     LikenessParameter,
@@ -25,7 +22,7 @@ from pixlvault.db_models.picture_likeness import (
 logger = get_logger(__name__)
 
 
-class LikenessWorker(BaseWorker):
+class LikenessWorker:
     """
     Speed-focused likeness worker for stacking near-identical images.
     Uses aggressive pruning to avoid N^2 behavior.
@@ -66,90 +63,8 @@ class LikenessWorker(BaseWorker):
         }
     )
 
-    def worker_type(self) -> WorkerType:
-        return WorkerType.LIKENESS
-
-    def _run(self):
-        logger.info("LikenessWorker: started.")
-
-        def submit_low(func, *args, **kwargs):
-            return self._db.result_or_throw(
-                self._db.submit_task(func, *args, priority=DBPriority.LOW, **kwargs)
-            )
-
-        submit_low(LikenessWorker._seed_queue)
-        logger.debug("LikenessWorker: queue initialised.")
-
-        param_thresholds = submit_low(
-            LikenessWorker._compute_param_gap_thresholds,
-            self.PARAM_GAP_PERCENTILE,
-            self.PARAM_THRESHOLD_SAMPLE_LIMIT,
-        )
-        date_span_seconds = submit_low(LikenessWorker._compute_date_span_seconds)
-        if param_thresholds:
-            logger.debug(
-                "LikenessWorker: Loaded %s parameter gap thresholds.",
-                len(param_thresholds),
-            )
-        if date_span_seconds:
-            logger.debug(
-                "LikenessWorker: Date span seconds=%s, window fraction=%s.",
-                int(date_span_seconds),
-                self.DATE_WINDOW_FRACTION,
-            )
-
-        while not self._stop.is_set():
-            pending = submit_low(LikenessWorker._count_queue)
-            total_candidates = submit_low(LikenessWorker._count_total_candidates)
-            total = max(int(total_candidates or 0), 0)
-            remaining = max(int(pending or 0), 0)
-            self._set_progress(
-                label="likeness_pairs",
-                current=max(total - remaining, 0),
-                total=total,
-            )
-            work_items = submit_low(
-                LikenessWorker._get_next_work_batch,
-                self.MAX_A_PER_CYCLE,
-            )
-
-            if not work_items:
-                logger.debug("LikenessWorker: No pending pairs. Sleeping...")
-                self._wait()
-                continue
-
-            queued_ids = [int(item[0]) for item in work_items]
-            bulk_rows = submit_low(LikenessWorker._fetch_bulk_candidate_data)
-            likeness_results = self._compute_bulk_likeness(
-                queued_ids,
-                bulk_rows,
-                param_thresholds,
-                date_span_seconds,
-            )
-
-            processed_notify_ids = [
-                (PictureLikenessQueue, pid, "queue", None) for pid in queued_ids
-            ]
-
-            if likeness_results:
-                submit_low(
-                    LikenessWorker._write_results,
-                    likeness_results,
-                    self.TOP_K,
-                )
-            logger.debug(
-                "LikenessWorker: Cycle summary queued=%s pairs_scored=%s",
-                len(work_items),
-                len(likeness_results),
-            )
-
-            if processed_notify_ids:
-                self._notify_ids_processed(processed_notify_ids)
-
-            if self.YIELD_SLEEP_SECONDS > 0 and not self._stop.is_set():
-                time.sleep(self.YIELD_SLEEP_SECONDS)
-
-        logger.info("LikenessWorker: stopped.")
+    def __init__(self, database):
+        self._db = database
 
     @staticmethod
     def _get_next_work_batch(

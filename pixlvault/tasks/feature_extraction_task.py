@@ -68,11 +68,7 @@ class FeatureExtractionTask(BaseTask):
 
         changed = self._extract_features(self._pictures)
         picture_ids = sorted(
-            {
-                pic_id
-                for _, pic_id, _, _ in (changed or [])
-                if pic_id is not None
-            }
+            {pic_id for _, pic_id, _, _ in (changed or []) if pic_id is not None}
         )
 
         if not self._should_keep_models_in_memory():
@@ -190,7 +186,9 @@ class FeatureExtractionTask(BaseTask):
     def _has_faces(self, picture_id: int) -> bool:
         def fetch(session):
             return (
-                session.exec(select(Face.id).where(Face.picture_id == picture_id)).first()
+                session.exec(
+                    select(Face.id).where(Face.picture_id == picture_id)
+                ).first()
                 is not None
             )
 
@@ -199,7 +197,9 @@ class FeatureExtractionTask(BaseTask):
     def _has_hands(self, picture_id: int) -> bool:
         def fetch(session):
             return (
-                session.exec(select(Hand.id).where(Hand.picture_id == picture_id)).first()
+                session.exec(
+                    select(Hand.id).where(Hand.picture_id == picture_id)
+                ).first()
                 is not None
             )
 
@@ -250,7 +250,9 @@ class FeatureExtractionTask(BaseTask):
             else:
                 need_hands = not self._has_hands(pic.id)
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
-            file_path = PictureUtils.resolve_picture_path(self._db.image_root, pic.file_path)
+            file_path = PictureUtils.resolve_picture_path(
+                self._db.image_root, pic.file_path
+            )
             ext = os.path.splitext(file_path)[1].lower()
             face_objects = []
             hand_objects = []
@@ -262,7 +264,9 @@ class FeatureExtractionTask(BaseTask):
                 if img is not None:
                     if need_faces:
                         faces = self._insightface_app.get(img)
-                        logger.debug("Found %d faces in image %s", len(faces), file_path)
+                        logger.debug(
+                            "Found %d faces in image %s", len(faces), file_path
+                        )
                         face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
                         for face in faces:
                             expanded_bbox = Face.expand_face_bbox(
@@ -272,8 +276,13 @@ class FeatureExtractionTask(BaseTask):
                                 face_expand_fraction,
                             )
                             features_bytes = None
-                            if hasattr(face, "embedding") and face.embedding is not None:
-                                features_bytes = face.embedding.astype("float32").tobytes()
+                            if (
+                                hasattr(face, "embedding")
+                                and face.embedding is not None
+                            ):
+                                features_bytes = face.embedding.astype(
+                                    "float32"
+                                ).tobytes()
                             face_objects.append(
                                 Face(
                                     picture_id=pic.id,
@@ -341,8 +350,13 @@ class FeatureExtractionTask(BaseTask):
                                         face_expand_fraction,
                                     )
                                     features_bytes = None
-                                    if hasattr(face, "embedding") and face.embedding is not None:
-                                        features_bytes = face.embedding.astype("float32").tobytes()
+                                    if (
+                                        hasattr(face, "embedding")
+                                        and face.embedding is not None
+                                    ):
+                                        features_bytes = face.embedding.astype(
+                                            "float32"
+                                        ).tobytes()
                                     else:
                                         logger.warning(
                                             "Face embedding missing for face in video %s, frame 0",
@@ -361,7 +375,9 @@ class FeatureExtractionTask(BaseTask):
                                     )
                             if need_hands and hand_model is not None:
                                 if hand_frames_used < HAND_DETECT_VIDEO_FRAMES:
-                                    boxes = self._predict_hands(hand_model, frame, file_path)
+                                    boxes = self._predict_hands(
+                                        hand_model, frame, file_path
+                                    )
                                     hand_frames_used += 1
                                     for box in boxes:
                                         expanded = self._expand_bbox(
@@ -403,8 +419,13 @@ class FeatureExtractionTask(BaseTask):
                                         face_expand_fraction,
                                     )
                                     features_bytes = None
-                                    if hasattr(face, "embedding") and face.embedding is not None:
-                                        features_bytes = face.embedding.astype("float32").tobytes()
+                                    if (
+                                        hasattr(face, "embedding")
+                                        and face.embedding is not None
+                                    ):
+                                        features_bytes = face.embedding.astype(
+                                            "float32"
+                                        ).tobytes()
                                     else:
                                         logger.warning(
                                             "Face embedding missing for face in video %s, frame %s",
@@ -423,7 +444,9 @@ class FeatureExtractionTask(BaseTask):
                                     )
                             if need_hands and hand_model is not None:
                                 if hand_frames_used < HAND_DETECT_VIDEO_FRAMES:
-                                    boxes = self._predict_hands(hand_model, frame, file_path)
+                                    boxes = self._predict_hands(
+                                        hand_model, frame, file_path
+                                    )
                                     hand_frames_used += 1
                                     for box in boxes:
                                         expanded = self._expand_bbox(
@@ -459,7 +482,9 @@ class FeatureExtractionTask(BaseTask):
                     file_path,
                 )
 
-            face_objects.sort(key=lambda f: (f.bbox[1], f.bbox[0], f.bbox[3], f.bbox[2]))
+            face_objects.sort(
+                key=lambda f: (f.bbox[1], f.bbox[0], f.bbox[3], f.bbox[2])
+            )
             for idx, face in enumerate(face_objects):
                 face.face_index = idx
 
@@ -496,7 +521,9 @@ class FeatureExtractionTask(BaseTask):
                         face_ids.append(face.id)
                     return face_ids
 
-                face_ids = self._db.run_task(insert_faces, face_objects, priority=DBPriority.HIGH)
+                face_ids = self._db.run_task(
+                    insert_faces, face_objects, priority=DBPriority.HIGH
+                )
                 pic_face_ids.extend(face_ids)
 
             if need_faces and thumbnail_bytes:
@@ -539,7 +566,9 @@ class FeatureExtractionTask(BaseTask):
                     if hand.picture_id is None:
                         hand.picture_id = pic.id
 
-                hand_objects.sort(key=lambda h: (h.bbox[1], h.bbox[0], h.bbox[3], h.bbox[2]))
+                hand_objects.sort(
+                    key=lambda h: (h.bbox[1], h.bbox[0], h.bbox[3], h.bbox[2])
+                )
                 for idx, hand in enumerate(hand_objects):
                     hand.hand_index = idx
 
@@ -562,7 +591,9 @@ class FeatureExtractionTask(BaseTask):
                         session.refresh(hand)
                         return hand.id
 
-                    hand_id = self._db.run_task(insert_hand_sentinel, priority=DBPriority.HIGH)
+                    hand_id = self._db.run_task(
+                        insert_hand_sentinel, priority=DBPriority.HIGH
+                    )
                     pic_hand_ids.append(hand_id)
                 else:
 

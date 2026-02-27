@@ -4,7 +4,11 @@ import time
 from pixlvault.picture_utils import PictureUtils
 
 from .base_task_finder import BaseTaskFinder
-from .watch_folder_import_task import WatchFolderImportTask, load_watch_folders, persist_watch_folders
+from .watch_folder_import_task import (
+    WatchFolderImportTask,
+    load_watch_folders,
+    persist_watch_folders,
+)
 
 
 class MissingWatchFolderImportsFinder(BaseTaskFinder):
