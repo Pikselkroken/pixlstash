@@ -3,7 +3,8 @@ from typing import Callable
 from sqlmodel import Session, select
 
 from pixlvault.db_models import Picture
-from pixlvault.description_task import DescriptionTask
+
+from .description_task import DescriptionTask
 
 from .base_task_finder import BaseTaskFinder
 

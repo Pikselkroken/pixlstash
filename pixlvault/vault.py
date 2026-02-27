@@ -21,20 +21,21 @@ from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
 from .picture_utils import PictureUtils
 from .tasks.missing_description_finder import MissingDescriptionFinder
+from .tasks.missing_feature_extraction_finder import MissingFeatureExtractionFinder
+from .tasks.missing_text_embeddings_finder import MissingTextEmbeddingsFinder
 from .tasks.missing_tags_finder import MissingTagsFinder
+from .tasks.missing_watch_folder_imports_finder import MissingWatchFolderImportsFinder
+from .tasks.feature_extraction_task import FeatureExtractionTask
 from .task_runner import TaskRunner, TaskStatus
 from .work_planner import WorkPlanner
 from .worker_registry import WorkerRegistry, WorkerType
 
 # These import lines are all necessary to register the workers with the WorkerRegistry
 from pixlvault.event_types import EventType
-from pixlvault.tag_worker import EmbeddingWorker  # noqa: F401
-from pixlvault.feature_extraction_worker import FeatureExtractionWorker  # noqa: F401
 from pixlvault.likeness_worker import LikenessWorker  # noqa: F401
 from pixlvault.likeness_parameter_worker import LikenessParameterWorker  # noqa: F401
 from pixlvault.image_embedding_worker import ImageEmbeddingWorker  # noqa: F401
 from pixlvault.quality_worker import FaceQualityWorker, QualityWorker  # noqa: F401
-from pixlvault.watch_folder_worker import WatchFolderWorker  # noqa: F401
 
 
 logger = get_logger(__name__)
@@ -68,8 +69,11 @@ class Vault:
         EventType.CLEARED_TAGS: [WorkerType.TAGGER, WorkerType.TEXT_EMBEDDING],
     }
     _planner_managed_worker_types = {
+        WorkerType.FACE,
         WorkerType.TAGGER,
         WorkerType.DESCRIPTION,
+        WorkerType.TEXT_EMBEDDING,
+        WorkerType.WATCH_FOLDERS,
     }
 
     def __enter__(self):
@@ -89,6 +93,7 @@ class Vault:
         self,
         image_root: str,
         description: Optional[str] = None,
+        server_config_path: Optional[str] = None,
     ):
         """
         Initialize a Vault instance.
@@ -115,6 +120,7 @@ class Vault:
         self._last_aggressive_unload_at = 0.0
         self._last_model_status_log_at = 0.0
         self._keep_models_in_memory = True
+        self._server_config_path = server_config_path
 
         self._workers = {}
         self._planner_watchers = {}
@@ -125,6 +131,10 @@ class Vault:
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=[
+                MissingFeatureExtractionFinder(
+                    database=self.db,
+                    picture_tagger_getter=lambda: self._picture_tagger,
+                ),
                 MissingTagsFinder(
                     database=self.db,
                     picture_tagger_getter=lambda: self._picture_tagger,
@@ -132,7 +142,15 @@ class Vault:
                 MissingDescriptionFinder(
                     database=self.db,
                     picture_tagger_getter=lambda: self._picture_tagger,
-                )
+                ),
+                MissingTextEmbeddingsFinder(
+                    database=self.db,
+                    picture_tagger_getter=lambda: self._picture_tagger,
+                ),
+                MissingWatchFolderImportsFinder(
+                    database=self.db,
+                    config_path=self._server_config_path,
+                ),
             ],
         )
         self._closed = False
@@ -173,6 +191,8 @@ class Vault:
                     "Worker %s is planner-managed; no worker thread to start.",
                     worker_type,
                 )
+                if self._work_planner and self._work_planner.is_running():
+                    self._work_planner.wake()
                 continue
             worker = self._workers.get(worker_type)
             if worker:
@@ -266,7 +286,7 @@ class Vault:
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
-        Generate a text embedding using the EmbeddingWorker.
+        Generate a text embedding using PictureTagger.
 
         Args:
             text (str): Input text to generate embedding for.
@@ -376,9 +396,27 @@ class Vault:
                 self.notify(EventType.CHANGED_TAGS, picture_ids)
             return
 
+        if task.type == "FeatureExtractionTask":
+            self._notify_worker_ids_processed(WorkerType.FACE, changed)
+            picture_ids = result.get("picture_ids") or []
+            if picture_ids:
+                self.notify(EventType.CHANGED_FACES, picture_ids)
+            return
+
         if task.type == "DescriptionTask":
             self._notify_worker_ids_processed(WorkerType.DESCRIPTION, changed)
             self.notify(EventType.CHANGED_DESCRIPTIONS)
+            return
+
+        if task.type == "TextEmbeddingTask":
+            self._notify_worker_ids_processed(WorkerType.TEXT_EMBEDDING, changed)
+            return
+
+        if task.type == "WatchFolderImportTask":
+            picture_ids = result.get("imported_picture_ids") or []
+            if picture_ids:
+                self.notify(EventType.CHANGED_PICTURES, picture_ids)
+                self.notify(EventType.PICTURE_IMPORTED, picture_ids)
 
     def _notify_worker_ids_processed(self, worker_type: WorkerType, changed):
         worker = self._workers.get(worker_type)
@@ -391,6 +429,34 @@ class Vault:
         future = Future()
         with self._planner_watchers_lock:
             self._planner_watchers[(worker_type, cls, object_id, attr)] = future
+        return future
+
+    def _planner_attr_current_value(self, cls: type, object_id: int, attr: str):
+        def fetch(session: Session):
+            obj = session.get(cls, object_id)
+            if obj is None:
+                return False, None
+            value = getattr(obj, attr, None)
+            if attr in {"faces", "hands", "tags"}:
+                try:
+                    return len(value or []) > 0, value
+                except Exception:
+                    return False, value
+            return value is not None, value
+
+        return self.db.run_immediate_read_task(fetch)
+
+    def _resolve_planner_future_if_already_processed(
+        self,
+        cls: type,
+        object_id: int,
+        attr: str,
+    ) -> Future | None:
+        is_ready, payload = self._planner_attr_current_value(cls, object_id, attr)
+        if not is_ready:
+            return None
+        future = Future()
+        future.set_result((object_id, payload))
         return future
 
     def _notify_planner_ids_processed(self, worker_type: WorkerType, changed):
@@ -415,6 +481,13 @@ class Vault:
         """
         if worker_type in self._planner_managed_worker_types:
             self.initialise_worker_if_necessary(worker_type)
+            resolved_future = self._resolve_planner_future_if_already_processed(
+                cls,
+                object_id,
+                attr,
+            )
+            if resolved_future is not None:
+                return resolved_future
             return self._watch_planner_id(worker_type, cls, object_id, attr)
 
         self.initialise_worker_if_necessary(worker_type)
@@ -453,6 +526,31 @@ class Vault:
                         or 0
                     )
                     label = "pictures_tagged"
+                elif worker_type == WorkerType.FACE:
+                    missing = int(
+                        self.db.run_immediate_read_task(
+                            self._count_missing_feature_extractions
+                        )
+                        or 0
+                    )
+                    label = "features_extracted"
+                elif worker_type == WorkerType.TEXT_EMBEDDING:
+                    described = int(
+                        self.db.run_immediate_read_task(self._count_total_described)
+                        or 0
+                    )
+                    missing = int(
+                        self.db.run_immediate_read_task(
+                            self._count_missing_text_embeddings
+                        )
+                        or 0
+                    )
+                    total = max(described, 0)
+                    label = "text_embeddings"
+                elif worker_type == WorkerType.WATCH_FOLDERS:
+                    total = 0
+                    missing = 0
+                    label = "watch_folder_import"
                 else:
                     missing = 0
                     label = "planner_managed"
@@ -515,6 +613,40 @@ class Vault:
             return result[0]
         return result or 0
 
+    @staticmethod
+    def _count_missing_feature_extractions(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where((~Picture.faces.any()) | (~Picture.hands.any()))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_total_described(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.description.is_not(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_text_embeddings(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.description.is_not(None))
+            .where(Picture.text_embedding.is_(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
     def get_worker_progress(self) -> dict:
         progress = self._build_worker_progress_snapshot()
         self._maybe_aggressive_unload(progress)
@@ -549,11 +681,10 @@ class Vault:
                 model_state = {"error": f"failed_to_collect_tagger_state:{exc}"}
 
         model_state["insightface_loaded"] = bool(
-            getattr(FeatureExtractionWorker, "_global_insightface_app", None)
-            is not None
+            getattr(FeatureExtractionTask, "_global_insightface_app", None) is not None
         )
         model_state["hand_detector_loaded"] = bool(
-            getattr(FeatureExtractionWorker, "_hand_model", None) is not None
+            getattr(FeatureExtractionTask, "_hand_model", None) is not None
         )
         model_state["workers_busy"] = worker_busy
         logger.info("Model residency status: %s", model_state)
@@ -597,6 +728,10 @@ class Vault:
             self._picture_tagger.aggressive_unload()
         except Exception as exc:
             logger.warning("Aggressive unload failed for PictureTagger: %s", exc)
+        try:
+            FeatureExtractionTask.release_detection_models()
+        except Exception as exc:
+            logger.warning("Aggressive unload failed for feature extraction models: %s", exc)
         for worker in self._workers.values():
             try:
                 worker.close()

@@ -33,7 +33,6 @@ from pixlvault.event_types import EventType
 from pixlvault.auth import AuthService, LoginRequest
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.vault import Vault
-from pixlvault.watch_folder_worker import WatchFolderWorker
 from pixlvault.routes.config import create_router as create_config_router
 from pixlvault.routes.characters import create_router as create_characters_router
 from pixlvault.routes.picture_sets import create_router as create_picture_sets_router
@@ -123,9 +122,8 @@ class Server:
         self.vault = Vault(
             image_root=self._server_config["image_root"],
             description=User().description,
+            server_config_path=self._server_config_path,
         )
-
-        WatchFolderWorker.configure(self._server_config_path)
 
         self._ws_clients = []
         self._ws_clients_lock = threading.Lock()
