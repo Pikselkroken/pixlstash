@@ -17,8 +17,6 @@ class DescriptionTask(BaseTask):
         database: Vault database instance.
         picture_tagger: Tagger used to generate descriptions.
         pictures: Pictures to process in this batch.
-        notify_ids_processed: Callback to resolve worker futures.
-        notify_event: Callback to emit follow-up vault events.
     """
 
     def __init__(
