@@ -446,16 +446,20 @@ class PictureUtils:
             return None
 
     @staticmethod
+    def _read_first_video_frame_bgr(file_path: str) -> Optional[np.ndarray]:
+        cap = cv2.VideoCapture(file_path)
+        ret, frame = cap.read()
+        cap.release()
+        if ret and frame is not None:
+            return frame
+        return None
+
+    @staticmethod
     def load_image_or_video_bgr(file_path: str) -> Optional[np.ndarray]:
         if not file_path or not os.path.exists(file_path):
             return None
         if PictureUtils.is_video_file(file_path):
-            cap = cv2.VideoCapture(file_path)
-            ret, frame = cap.read()
-            cap.release()
-            if ret and frame is not None:
-                return frame
-            return None
+            return PictureUtils._read_first_video_frame_bgr(file_path)
 
         img = cv2.imread(file_path)
         if img is not None:
@@ -783,12 +787,8 @@ class PictureUtils:
             except Exception:
                 pass
             # If not an image, try as video (extract first frame)
-            import cv2
-
-            cap = cv2.VideoCapture(file_path)
-            ret, frame = cap.read()
-            cap.release()
-            if ret and frame is not None:
+            frame = PictureUtils._read_first_video_frame_bgr(file_path)
+            if frame is not None:
                 # Convert BGR to RGB
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 return frame_rgb
