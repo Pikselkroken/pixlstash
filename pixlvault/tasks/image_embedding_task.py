@@ -118,8 +118,10 @@ class ImageEmbeddingTask(BaseTask):
                 Picture.aesthetic_score.is_(None),
             )
 
-        stmt = select(Picture.id, Picture.file_path).where(condition).limit(
-            int(limit or cls.BATCH_SIZE)
+        stmt = (
+            select(Picture.id, Picture.file_path)
+            .where(condition)
+            .limit(int(limit or cls.BATCH_SIZE))
         )
         return session.exec(stmt).all()
 
@@ -218,7 +220,9 @@ class ImageEmbeddingTask(BaseTask):
             model.load_state_dict(state_dict)
             model.eval()
 
-            if self._picture_tagger and getattr(self._picture_tagger, "_clip_device", None):
+            if self._picture_tagger and getattr(
+                self._picture_tagger, "_clip_device", None
+            ):
                 model = model.to(self._picture_tagger._clip_device)
 
             ImageEmbeddingTask._aesthetic_model = model
@@ -234,7 +238,9 @@ class ImageEmbeddingTask(BaseTask):
         clip_preprocess = getattr(self._picture_tagger, "_clip_preprocess", None)
 
         if self._picture_tagger and (clip_model is None or clip_preprocess is None):
-            ensure_clip_ready = getattr(self._picture_tagger, "_ensure_clip_ready", None)
+            ensure_clip_ready = getattr(
+                self._picture_tagger, "_ensure_clip_ready", None
+            )
             if callable(ensure_clip_ready):
                 try:
                     ensure_clip_ready()
@@ -260,7 +266,10 @@ class ImageEmbeddingTask(BaseTask):
             return True
 
         now = time.time()
-        if now - self._last_backend_error_log_at >= self.BACKEND_ERROR_LOG_INTERVAL_SECONDS:
+        if (
+            now - self._last_backend_error_log_at
+            >= self.BACKEND_ERROR_LOG_INTERVAL_SECONDS
+        ):
             logger.error(
                 "ImageEmbeddingTask: No embedding backend available (clip_ready=%s fallback_ready=%s).",
                 clip_ready,
@@ -297,7 +306,9 @@ class ImageEmbeddingTask(BaseTask):
                     )
                     if pil_imgs:
                         flat_images.extend(pil_imgs)
-                        flat_hashes.extend([self._compute_dhash(img) for img in pil_imgs])
+                        flat_hashes.extend(
+                            [self._compute_dhash(img) for img in pil_imgs]
+                        )
                         flat_pids.extend([pid] * len(pil_imgs))
                 else:
                     try:
@@ -348,19 +359,22 @@ class ImageEmbeddingTask(BaseTask):
                 preprocess = self._picture_tagger._clip_preprocess
                 device = self._picture_tagger._clip_device
 
-                image_tensors = torch.stack([preprocess(img) for img in flat_images]).to(
-                    device
-                )
+                image_tensors = torch.stack(
+                    [preprocess(img) for img in flat_images]
+                ).to(device)
                 if device == "cuda":
                     image_tensors = image_tensors.half()
 
                 with torch.no_grad():
-                    features = self._picture_tagger._clip_model.encode_image(image_tensors)
+                    features = self._picture_tagger._clip_model.encode_image(
+                        image_tensors
+                    )
                     features /= features.norm(dim=-1, keepdim=True)
                     embeddings = features.cpu().numpy()
             except Exception as exc:
                 logger.error(
-                    "ImageEmbeddingTask: Failed to use PictureTagger CLIP model: %s", exc
+                    "ImageEmbeddingTask: Failed to use PictureTagger CLIP model: %s",
+                    exc,
                 )
                 embeddings = None
 
@@ -373,7 +387,9 @@ class ImageEmbeddingTask(BaseTask):
                     _embeddings=True,
                 )
             except Exception as exc:
-                logger.error("ImageEmbeddingTask: Failed to use local CLIP model: %s", exc)
+                logger.error(
+                    "ImageEmbeddingTask: Failed to use local CLIP model: %s", exc
+                )
 
         if embeddings is None:
             logger.error(
@@ -396,7 +412,9 @@ class ImageEmbeddingTask(BaseTask):
                     emb_tensor = torch.from_numpy(embeddings).float()
                     if next(ImageEmbeddingTask._aesthetic_model.parameters()).is_cuda:
                         emb_tensor = emb_tensor.to(
-                            next(ImageEmbeddingTask._aesthetic_model.parameters()).device
+                            next(
+                                ImageEmbeddingTask._aesthetic_model.parameters()
+                            ).device
                         )
 
                     scores = ImageEmbeddingTask._aesthetic_model(emb_tensor).squeeze()
@@ -447,7 +465,9 @@ class ImageEmbeddingTask(BaseTask):
             if not failed_files:
                 failed_files = [batch_files[pid] for pid in failed_pids]
 
-        updated_ids = self._db.run_task(self._save_results, updates, priority=DBPriority.LOW)
+        updated_ids = self._db.run_task(
+            self._save_results, updates, priority=DBPriority.LOW
+        )
         changed = [(Picture, pid, "image_embedding", None) for pid in updated_ids]
 
         if failed_pids:
