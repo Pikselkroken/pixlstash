@@ -119,7 +119,9 @@ const columnsMenuOpen = ref(false);
 const overlaysMenuOpen = ref(false);
 const configLoaded = ref(false);
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
+const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
 let columnsMenuCloseTimeout = null;
+let sidebarRefreshDebounceTimeout = null;
 const updatesSocket = ref(null);
 let updatesReconnectTimer = null;
 const configLoading = ref(false);
@@ -309,6 +311,16 @@ const error = ref(null);
 
 function refreshSidebar(options = {}) {
   sidebarRef.value?.refreshSidebar(options);
+}
+
+function refreshSidebarDebounced() {
+  if (sidebarRefreshDebounceTimeout) {
+    clearTimeout(sidebarRefreshDebounceTimeout);
+  }
+  sidebarRefreshDebounceTimeout = setTimeout(() => {
+    sidebarRefreshDebounceTimeout = null;
+    refreshSidebar();
+  }, SIDEBAR_REFRESH_DEBOUNCE_MS);
 }
 
 function openSettingsDialog() {
@@ -941,10 +953,14 @@ watch([selectedSort, selectedDescending], () => {
 
 watch(hiddenTags, () => {
   refreshGridVersion();
+  if (applyTagFilter.value) {
+    refreshSidebarDebounced();
+  }
 });
 
 watch(applyTagFilter, () => {
   refreshGridVersion();
+  refreshSidebarDebounced();
 });
 
 watch([selectedCharacter, selectedSet, searchQuery], () => {
@@ -1065,6 +1081,10 @@ onBeforeUnmount(() => {
   if (columnsMenuCloseTimeout) {
     clearTimeout(columnsMenuCloseTimeout);
     columnsMenuCloseTimeout = null;
+  }
+  if (sidebarRefreshDebounceTimeout) {
+    clearTimeout(sidebarRefreshDebounceTimeout);
+    sidebarRefreshDebounceTimeout = null;
   }
 });
 
