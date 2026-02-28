@@ -83,7 +83,9 @@ class PictureQualityUtils:
             if valid_pics:
                 shapes = [img.shape for img in valid_pics]
                 if len(set(shapes)) > 1:
-                    logger.error("Shape mismatch in batch: %s", [str(s) for s in shapes])
+                    logger.error(
+                        "Shape mismatch in batch: %s", [str(s) for s in shapes]
+                    )
                 try:
                     batch_array = np.stack(valid_pics, axis=0)
                 except Exception as stack_exc:
@@ -98,7 +100,9 @@ class PictureQualityUtils:
                     q = qualities[valid_indices.index(i)]
                     all_qualities.append(q)
                 else:
-                    logger.warning("No quality calculated for picture_id=%s", pics[i].id)
+                    logger.warning(
+                        "No quality calculated for picture_id=%s", pics[i].id
+                    )
                     all_qualities.append(None)
             return all_qualities
         except Exception as exc:
@@ -195,7 +199,9 @@ class PictureQualityUtils:
             groups[current_key] = current_group
         return groups, invalid_faces
 
-    def calculate_face_quality(self, pics_and_faces: List[Tuple[Picture, Face]]) -> List[Quality]:
+    def calculate_face_quality(
+        self, pics_and_faces: List[Tuple[Picture, Face]]
+    ) -> List[Quality]:
         try:
             all_qualities = []
             cropped_pics = []

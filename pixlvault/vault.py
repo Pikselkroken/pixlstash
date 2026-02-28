@@ -16,7 +16,16 @@ from sqlalchemy import func
 
 
 from .database import DBPriority, VaultDatabase
-from .db_models import MetaData, Character, Face, Hand, Picture, PictureSet
+from .db_models import (
+    MetaData,
+    Character,
+    Face,
+    Hand,
+    Picture,
+    PictureSet,
+    Tag,
+    TAG_EMPTY_SENTINEL,
+)
 from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
 from .picture_utils import PictureUtils
@@ -155,6 +164,7 @@ class Vault:
         logger.debug("Initialise background workers...")
         for worker_type in workers_to_start:
             if worker_type in self._planner_managed_worker_types:
+                self.initialise_worker_if_necessary(worker_type)
                 continue
             if worker_type not in self._workers:
                 self.initialise_worker_if_necessary(worker_type)
@@ -639,13 +649,18 @@ class Vault:
 
     @staticmethod
     def _count_missing_tags(session: Session) -> int:
+        has_real_tag = (Tag.tag.is_not(None)) & (Tag.tag != TAG_EMPTY_SENTINEL)
         result = session.exec(
             select(func.count())
             .select_from(Picture)
             .where(
-                (~Picture.tags.any())
-                | Picture.faces.any((Face.face_index >= 0) & (~Face.tags.any()))
-                | Picture.hands.any((Hand.hand_index >= 0) & (~Hand.tags.any()))
+                (~Picture.tags.any(has_real_tag))
+                | Picture.faces.any(
+                    (Face.face_index >= 0) & (~Face.tags.any(has_real_tag))
+                )
+                | Picture.hands.any(
+                    (Hand.hand_index >= 0) & (~Hand.tags.any(has_real_tag))
+                )
             )
         ).one()
         if isinstance(result, (tuple, list)):

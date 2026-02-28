@@ -3,7 +3,7 @@ from typing import Callable
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 
-from pixlvault.db_models import Face, Hand, Picture
+from pixlvault.db_models import Face, Hand, Picture, Tag, TAG_EMPTY_SENTINEL
 
 from .base_task_finder import BaseTaskFinder
 from .tag_task import TagTask
@@ -43,12 +43,17 @@ class MissingTagsFinder(BaseTaskFinder):
 
     @staticmethod
     def _fetch_missing_tags(session: Session, limit: int):
+        has_real_tag = (Tag.tag.is_not(None)) & (Tag.tag != TAG_EMPTY_SENTINEL)
         return session.exec(
             select(Picture)
             .where(
-                (~Picture.tags.any())
-                | Picture.faces.any((Face.face_index >= 0) & (~Face.tags.any()))
-                | Picture.hands.any((Hand.hand_index >= 0) & (~Hand.tags.any()))
+                (~Picture.tags.any(has_real_tag))
+                | Picture.faces.any(
+                    (Face.face_index >= 0) & (~Face.tags.any(has_real_tag))
+                )
+                | Picture.hands.any(
+                    (Hand.hand_index >= 0) & (~Hand.tags.any(has_real_tag))
+                )
             )
             .options(
                 selectinload(Picture.tags),

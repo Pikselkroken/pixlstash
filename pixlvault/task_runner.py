@@ -5,7 +5,7 @@ import traceback
 from typing import Any, Callable, Optional
 
 from .pixl_logging import get_logger
-from .tasks.base_task import BaseTask, TaskStatus
+from .tasks.base_task import BaseTask
 
 
 logger = get_logger(__name__)
