@@ -5,7 +5,7 @@ import numpy as np
 from sqlmodel import Session
 
 from pixlvault.db_models import Picture
-from pixlvault.image_embedding_worker import ImageEmbeddingWorker
+from pixlvault.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlvault.vault import Vault
 
 
@@ -55,11 +55,21 @@ def test_fetch_work_includes_empty_embedding_blob(tmp_path):
 
         vault.db.run_task(seed)
 
-        worker = ImageEmbeddingWorker(vault.db, None, event_callback=None)
-        worker._aesthetic_disabled = True
-
-        work = vault.db.run_task(worker._fetch_work)
-        remaining = int(vault.db.run_task(worker._count_remaining) or 0)
+        work = vault.db.run_task(
+            lambda session: ImageEmbeddingTask.fetch_work(
+                session,
+                aesthetic_disabled=True,
+            )
+        )
+        remaining = int(
+            vault.db.run_task(
+                lambda session: ImageEmbeddingTask.count_remaining(
+                    session,
+                    aesthetic_disabled=True,
+                )
+            )
+            or 0
+        )
         work_ids = {pid for pid, _ in work}
 
         assert len(work_ids) == 2
@@ -100,11 +110,21 @@ def test_fetch_work_includes_missing_aesthetic_when_embedding_exists(tmp_path):
 
         vault.db.run_task(seed)
 
-        worker = ImageEmbeddingWorker(vault.db, None, event_callback=None)
-        worker._aesthetic_disabled = False
-
-        work = vault.db.run_task(worker._fetch_work)
-        remaining = int(vault.db.run_task(worker._count_remaining) or 0)
+        work = vault.db.run_task(
+            lambda session: ImageEmbeddingTask.fetch_work(
+                session,
+                aesthetic_disabled=False,
+            )
+        )
+        remaining = int(
+            vault.db.run_task(
+                lambda session: ImageEmbeddingTask.count_remaining(
+                    session,
+                    aesthetic_disabled=False,
+                )
+            )
+            or 0
+        )
 
         assert len(work) == 1
         assert remaining == 1

@@ -60,7 +60,7 @@ from pixlvault.utils import (
     serialize_tag_objects,
     _normalize_hidden_tags,
 )
-from pixlvault.worker_registry import WorkerType
+from pixlvault.worker_types import WorkerType
 
 logger = get_logger(__name__)
 

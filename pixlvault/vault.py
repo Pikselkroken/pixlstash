@@ -22,15 +22,14 @@ from .picture_tagger import PictureTagger
 from .picture_utils import PictureUtils
 from .tasks.face_quality_task import FaceQualityTask
 from .tasks.feature_extraction_task import FeatureExtractionTask
+from .tasks.image_embedding_task import ImageEmbeddingTask
 from .tasks.likeness_task import LikenessTask
 from .tasks.quality_task import QualityTask
 from .task_runner import TaskRunner, TaskStatus
 from .work_planner import WorkPlanner
-from .worker_registry import WorkerRegistry, WorkerType
+from .worker_types import WorkerType
 
-# These import lines are all necessary to register the workers with the WorkerRegistry
 from pixlvault.event_types import EventType
-from pixlvault.image_embedding_worker import ImageEmbeddingWorker  # noqa: F401
 
 
 logger = get_logger(__name__)
@@ -337,20 +336,9 @@ class Vault:
                 )
             return
 
-        if not self._picture_tagger:
-            self._picture_tagger = PictureTagger(image_root=self.image_root)
-            self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
-
-        if worker_type not in self._workers:
-            worker_instance = WorkerRegistry.create_worker(
-                worker_type,
-                self.db,
-                self._picture_tagger,
-                event_callback=self.notify,
-            )
-            if hasattr(worker_instance, "set_task_submitter"):
-                worker_instance.set_task_submitter(self.submit_task)
-            self._workers[worker_type] = worker_instance
+        raise ValueError(
+            f"Worker type '{worker_type}' is no longer thread-backed and must be planner-managed."
+        )
 
     def submit_task(self, task):
         """Submit an in-memory task to the shared task runner."""
@@ -403,6 +391,10 @@ class Vault:
 
         if task.type == "TextEmbeddingTask":
             self._notify_worker_ids_processed(WorkerType.TEXT_EMBEDDING, changed)
+            return
+
+        if task.type == "ImageEmbeddingTask":
+            self._notify_worker_ids_processed(WorkerType.IMAGE_EMBEDDING, changed)
             return
 
         if task.type == "WatchFolderImportTask":
@@ -560,6 +552,14 @@ class Vault:
                     )
                     total = max(described, 0)
                     label = "text_embeddings"
+                elif worker_type == WorkerType.IMAGE_EMBEDDING:
+                    missing = int(
+                        self.db.run_immediate_read_task(
+                            self._count_missing_image_embeddings
+                        )
+                        or 0
+                    )
+                    label = "image_embeddings"
                 elif worker_type == WorkerType.LIKENESS_PARAMETERS:
                     missing = int(
                         self.db.run_immediate_read_task(
@@ -699,6 +699,10 @@ class Vault:
         return result or 0
 
     @staticmethod
+    def _count_missing_image_embeddings(session: Session) -> int:
+        return ImageEmbeddingTask.count_remaining(session)
+
+    @staticmethod
     def _count_pending_likeness_parameters(session: Session) -> int:
         result = session.exec(
             select(func.count())
@@ -806,6 +810,12 @@ class Vault:
         except Exception as exc:
             logger.warning(
                 "Aggressive unload failed for feature extraction models: %s", exc
+            )
+        try:
+            ImageEmbeddingTask.release_models()
+        except Exception as exc:
+            logger.warning(
+                "Aggressive unload failed for image embedding models: %s", exc
             )
         for worker in self._workers.values():
             try:

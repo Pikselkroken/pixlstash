@@ -4,7 +4,7 @@ from pixlvault.database import DBPriority
 from pixlvault.db_models import Picture
 from pixlvault.picture_tagger import PictureTagger
 from pixlvault.pixl_logging import get_logger
-from pixlvault.task_runner import BaseTask
+from pixlvault.tasks.base_task import BaseTask
 
 
 logger = get_logger(__name__)

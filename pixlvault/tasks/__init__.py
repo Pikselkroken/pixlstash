@@ -3,8 +3,10 @@ from .description_task import DescriptionTask
 from .feature_extraction_task import FeatureExtractionTask
 from .face_quality_task import FaceQualityTask
 from .quality_task import QualityTask
+from .image_embedding_task import ImageEmbeddingTask
 from .missing_face_quality_finder import MissingFaceQualityFinder
 from .missing_feature_extraction_finder import MissingFeatureExtractionFinder
+from .missing_image_embeddings_finder import MissingImageEmbeddingsFinder
 from .missing_likeness_finder import MissingLikenessFinder
 from .missing_likeness_parameters_finder import MissingLikenessParametersFinder
 from .missing_description_finder import MissingDescriptionFinder
@@ -23,9 +25,11 @@ __all__ = [
     "DescriptionTask",
     "FaceQualityTask",
     "FeatureExtractionTask",
+    "ImageEmbeddingTask",
     "QualityTask",
     "MissingFaceQualityFinder",
     "MissingFeatureExtractionFinder",
+    "MissingImageEmbeddingsFinder",
     "MissingLikenessFinder",
     "MissingLikenessParametersFinder",
     "MissingDescriptionFinder",

@@ -9,7 +9,7 @@ from pixlvault.picture_likeness_parameter_utils import (
     PICTURE_PARAM_FIELDS,
     QUALITY_PARAM_FIELDS,
 )
-from pixlvault.task_runner import BaseTask
+from pixlvault.tasks.base_task import BaseTask
 
 
 class LikenessParametersTask(BaseTask):
@@ -49,7 +49,7 @@ class LikenessParametersTask(BaseTask):
 
         if param == LikenessParameter.SIZE_BIN:
             width, height, ids = payload
-            size_bin_index = helper._size_bin_index(width, height)
+            size_bin_index = helper.size_bin_index(width, height)
             submit_low(
                 PictureLikenessParameterUtils.update_size_bin,
                 ids,
