@@ -1080,6 +1080,7 @@ const {
 
 const image = ref(null);
 const isTagsRefreshing = ref(false);
+const userVisibleHiddenTagKeys = ref(new Set());
 const sidebarOpen = ref(true);
 const filmstripOpen = ref(false);
 const chromeHidden = ref(false);
@@ -1148,6 +1149,7 @@ function setOverlayImageById(nextId) {
     return;
   }
   if (!isSameImage) {
+    userVisibleHiddenTagKeys.value = new Set();
     isTagsRefreshing.value = true;
   }
 }
@@ -2179,12 +2181,35 @@ function confirmAddTag() {
     cancelAddTag();
     return;
   }
+  pinUserVisibleHiddenTag(trimmed);
   emit("add-tag", image.value.id, trimmed);
   if (image.value && Array.isArray(image.value.tags)) {
     const next = dedupeTagList([...currentTags, { id: null, tag: trimmed }]);
     image.value.tags = next;
   }
   resetTagInput();
+}
+
+function normalizeTagKey(tag) {
+  return String(tagLabel(tag) ?? tag ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function pinUserVisibleHiddenTag(tag) {
+  const key = normalizeTagKey(tag);
+  if (!key) return;
+  const next = new Set(userVisibleHiddenTagKeys.value);
+  next.add(key);
+  userVisibleHiddenTagKeys.value = next;
+}
+
+function unpinUserVisibleHiddenTag(tag) {
+  const key = normalizeTagKey(tag);
+  if (!key) return;
+  const next = new Set(userVisibleHiddenTagKeys.value);
+  next.delete(key);
+  userVisibleHiddenTagKeys.value = next;
 }
 
 function handleOverlayAddToSet(payload) {
@@ -3771,18 +3796,23 @@ const hiddenTagSet = computed(() => {
   return new Set(cleaned);
 });
 
-function filterHiddenTags(tags) {
+function filterHiddenTags(tags, options = {}) {
   if (!applyTagFilter.value) return tags;
   const set = hiddenTagSet.value;
   if (!set || set.size === 0) return tags;
+  const keepVisible =
+    options?.keepVisible instanceof Set ? options.keepVisible : null;
   return (tags || []).filter((tag) => {
     const key = tagLabel(tag).trim().toLowerCase();
+    if (keepVisible?.has(key)) return true;
     return key && !set.has(key);
   });
 }
 
 const imageTags = computed(() => {
-  return filterHiddenTags(dedupeTagList(TagList(image.value?.tags)));
+  return filterHiddenTags(dedupeTagList(TagList(image.value?.tags)), {
+    keepVisible: userVisibleHiddenTagKeys.value,
+  });
 });
 
 const faceTags = computed(() => {
@@ -4524,6 +4554,7 @@ async function removeAllTag(tag) {
   if (!tag) return;
   const label = tagLabel(tag);
   if (!label) return;
+  unpinUserVisibleHiddenTag(label);
   let didUpdate = false;
   const imageMatch = imageTags.value.find((entry) => entry.tag === label);
   if (imageMatch && imageMatch.id != null) {
@@ -4588,29 +4619,43 @@ async function removeAllTag(tag) {
 
 async function refreshPictureTags() {
   if (!image.value?.id || !backendUrl.value) return;
-  const tagsToRemove = TagList(imageTags.value).filter(
-    (entry) => tagId(entry) != null,
+  const labelsToRemove = Array.from(
+    new Set(
+      TagList(allImageTags.value)
+        .map((entry) => tagLabel(entry))
+        .map((label) => (typeof label === "string" ? label.trim() : ""))
+        .filter(Boolean),
+    ),
   );
-  if (!tagsToRemove.length) return;
+  if (!labelsToRemove.length) return;
 
   isTagsRefreshing.value = true;
   try {
-    for (const tag of tagsToRemove) {
-      const key = String(tagId(tag));
-      const label = tagLabel(tag);
-      if (!key || !label) continue;
-      await apiClient.delete(
-        `${backendUrl.value}/pictures/${image.value.id}/tags/${key}`,
+    for (const label of labelsToRemove) {
+      await apiClient.post(
+        `${backendUrl.value}/pictures/${image.value.id}/tags/remove_all`,
+        { tag: label },
       );
-      if (Array.isArray(image.value.tags)) {
-        const current = TagList(image.value.tags);
-        image.value.tags = current.filter((entry) => entry.tag !== label);
-      }
     }
+
+    if (image.value && Array.isArray(image.value.tags)) {
+      image.value.tags = [];
+    }
+    faceTagMap.value = {};
+    handTagMap.value = {};
+
     emit("overlay-change", {
       imageId: image.value.id,
       fields: { tags: true, smartScore: true },
     });
+
+    await fetchOverlayMetadata(image.value.id);
+    if (Array.isArray(faceBboxes.value) && faceBboxes.value.length) {
+      await fetchFaceTagsForFaces(faceBboxes.value, { force: true });
+    }
+    if (Array.isArray(handBboxes.value) && handBboxes.value.length) {
+      await fetchHandTagsForHands(handBboxes.value, { force: true });
+    }
   } catch (err) {
     console.warn("Failed to refresh picture tags:", err);
   } finally {
@@ -4627,6 +4672,7 @@ function removeTag(tag) {
   const current = TagList(image.value.tags);
   const label = tagLabel(tag);
   if (!label) return;
+  unpinUserVisibleHiddenTag(label);
   const next = current.filter((entry) => entry.tag !== label);
   image.value.tags = next;
   emit("remove-tag", image.value.id, tag); // Notify parent component
@@ -5332,7 +5378,7 @@ function downloadComfyWorkflow(workflow) {
   right: 0;
   bottom: 0;
   width: var(--sidebar-width);
-  background: rgba(var(--v-theme-dark-surface), 0.9);
+  background: rgba(var(--v-theme-dark-surface), 0.6);
   color: rgb(var(--v-theme-on-dark-surface));
   transition: width 0.2s ease;
   overflow: hidden;

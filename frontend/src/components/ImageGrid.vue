@@ -5919,6 +5919,13 @@ async function removeTagFromImage(imageId, tag) {
       const d = TagList(gridImg.tags);
       gridImg.tags = d.filter((t) => !tagMatches(t, tag));
     }
+    if (props.applyTagFilter) {
+      lastFetchSuccess.value = { key: "", at: 0 };
+      lastFetchError.value = { key: "", at: 0 };
+      await fetchAllGridImages();
+      updateVisibleThumbnails();
+      return;
+    }
     if (isSmartScoreSortActive()) {
       await refreshSmartScoreForImage(imageId);
     } else {
@@ -5948,6 +5955,13 @@ async function addTagToImage(imageId, tag) {
         ? responseTags
         : dedupeTagList([...current, { id: null, tag }]);
       gridImg.tags = merged;
+    }
+    if (props.applyTagFilter) {
+      lastFetchSuccess.value = { key: "", at: 0 };
+      lastFetchError.value = { key: "", at: 0 };
+      await fetchAllGridImages();
+      updateVisibleThumbnails();
+      return;
     }
     if (isSmartScoreSortActive()) {
       await refreshSmartScoreForImage(imageId);
