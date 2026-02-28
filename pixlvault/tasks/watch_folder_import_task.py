@@ -14,7 +14,7 @@ from pixlvault.stacking import (
     get_or_create_stack_for_picture,
     parse_stack_tags_from_filename,
 )
-from pixlvault.task_runner import BaseTask
+from pixlvault.tasks.base_task import BaseTask
 
 
 logger = get_logger(__name__)

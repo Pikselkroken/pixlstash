@@ -12,7 +12,7 @@ from pixlvault.db_models import Character, Face, Picture
 from sqlmodel import select
 from pixlvault.server import Server
 from pixlvault.pixl_logging import get_logger
-from pixlvault.worker_registry import WorkerType
+from pixlvault.worker_types import WorkerType
 
 
 logger = get_logger(__name__)

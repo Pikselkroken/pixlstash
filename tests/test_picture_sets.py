@@ -11,7 +11,7 @@ import tracemalloc
 
 from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
-from pixlvault.worker_registry import WorkerType
+from pixlvault.worker_types import WorkerType
 from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)

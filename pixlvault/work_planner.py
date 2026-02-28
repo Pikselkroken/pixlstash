@@ -15,11 +15,14 @@ class WorkPlanner:
 
     @staticmethod
     def work_finders(database, picture_tagger_getter, config_path=None):
-        from pixlvault.worker_registry import WorkerType
+        from pixlvault.worker_types import WorkerType
         from pixlvault.tasks.missing_description_finder import MissingDescriptionFinder
         from pixlvault.tasks.missing_face_quality_finder import MissingFaceQualityFinder
         from pixlvault.tasks.missing_feature_extraction_finder import (
             MissingFeatureExtractionFinder,
+        )
+        from pixlvault.tasks.missing_image_embeddings_finder import (
+            MissingImageEmbeddingsFinder,
         )
         from pixlvault.tasks.missing_likeness_parameters_finder import (
             MissingLikenessParametersFinder,
@@ -54,6 +57,10 @@ class WorkPlanner:
                 picture_tagger_getter=picture_tagger_getter,
             ),
             WorkerType.TEXT_EMBEDDING: MissingTextEmbeddingsFinder(
+                database=database,
+                picture_tagger_getter=picture_tagger_getter,
+            ),
+            WorkerType.IMAGE_EMBEDDING: MissingImageEmbeddingsFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),

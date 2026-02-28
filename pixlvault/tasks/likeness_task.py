@@ -5,7 +5,7 @@ from pixlvault.database import DBPriority
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
 from pixlvault.picture_likeness_utils import PictureLikenessUtils
-from pixlvault.task_runner import BaseTask
+from pixlvault.tasks.base_task import BaseTask
 
 
 class LikenessTask(BaseTask):

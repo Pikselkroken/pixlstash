@@ -17,7 +17,7 @@ from pixlvault.db_models.picture import Picture
 from pixlvault.picture_tagger import MODEL_DIR, PictureTagger
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger
-from pixlvault.task_runner import BaseTask
+from pixlvault.tasks.base_task import BaseTask
 
 
 logger = get_logger(__name__)

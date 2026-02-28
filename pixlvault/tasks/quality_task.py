@@ -9,7 +9,7 @@ from pixlvault.db_models import Picture, Quality
 from pixlvault.picture_quality_utils import PictureQualityUtils
 from pixlvault.picture_utils import PictureUtils
 from pixlvault.pixl_logging import get_logger
-from pixlvault.task_runner import BaseTask
+from pixlvault.tasks.base_task import BaseTask
 
 
 logger = get_logger(__name__)
