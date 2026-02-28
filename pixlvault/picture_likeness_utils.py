@@ -22,11 +22,8 @@ from pixlvault.db_models.picture_likeness import (
 logger = get_logger(__name__)
 
 
-class LikenessWorker:
-    """
-    Speed-focused likeness worker for stacking near-identical images.
-    Uses aggressive pruning to avoid N^2 behavior.
-    """
+class PictureLikenessUtils:
+    """Speed-focused likeness utilities for stacking near-identical images."""
 
     BATCH_CANDIDATES = 1024
     MAX_A_PER_CYCLE = 256
@@ -67,7 +64,7 @@ class LikenessWorker:
         self._db = database
 
     @staticmethod
-    def _get_next_work_batch(
+    def get_next_work_batch(
         session: Session, max_a: int
     ) -> List[
         Tuple[
@@ -125,10 +122,9 @@ class LikenessWorker:
                 created_at,
                 emb_blob,
             ) = row
-            a = int(pic_id)
             batch.append(
                 (
-                    a,
+                    int(pic_id),
                     None,
                     None,
                     phash_a,
@@ -144,135 +140,7 @@ class LikenessWorker:
         return batch
 
     @staticmethod
-    def _count_queue(session: Session) -> int:
-        result = session.exec(
-            select(func.count()).select_from(PictureLikenessQueue)
-        ).one()
-        if isinstance(result, (tuple, list)):
-            return result[0]
-        return result or 0
-
-    @staticmethod
-    def _count_total_candidates(session: Session) -> int:
-        result = session.exec(
-            select(func.count())
-            .select_from(Picture)
-            .where(Picture.image_embedding.is_not(None))
-            .where(Picture.likeness_parameters.is_not(None))
-            .where(Picture.perceptual_hash.is_not(None))
-        ).one()
-        if isinstance(result, (tuple, list)):
-            return result[0]
-        return result or 0
-
-    @staticmethod
-    def _fetch_embedding(session: Session, picture_id: int) -> Optional[bytes]:
-        return session.exec(
-            select(Picture.image_embedding).where(Picture.id == picture_id)
-        ).first()
-
-    @staticmethod
-    def _fetch_candidates(
-        session: Session,
-        a_id: int,
-        phash_prefix: str,
-        width_a: Optional[int],
-        height_a: Optional[int],
-        size_a: Optional[int],
-        limit: int,
-    ) -> List[
-        Tuple[
-            int,
-            Optional[str],
-            Optional[int],
-            Optional[int],
-            Optional[int],
-            Optional[bytes],
-            Optional[bytes],
-            Optional[object],
-        ]
-    ]:
-        if not phash_prefix:
-            return []
-        query = select(
-            Picture.id,
-            Picture.perceptual_hash,
-            Picture.width,
-            Picture.height,
-            Picture.size_bytes,
-            Picture.image_embedding,
-            Picture.likeness_parameters,
-            Picture.created_at,
-        ).where(Picture.image_embedding.is_not(None))
-        query = query.where(
-            Picture.perceptual_hash.is_not(None)
-            & (
-                func.substr(Picture.perceptual_hash, 1, len(phash_prefix))
-                == phash_prefix
-            )
-        )
-        query = query.where(Picture.id != a_id)
-        if (
-            isinstance(width_a, int)
-            and isinstance(height_a, int)
-            and width_a > 0
-            and height_a > 0
-        ):
-            min_w, max_w = LikenessWorker._range_with_ratio(
-                width_a, LikenessWorker.MAX_DIM_RATIO_DIFF
-            )
-            min_h, max_h = LikenessWorker._range_with_ratio(
-                height_a, LikenessWorker.MAX_DIM_RATIO_DIFF
-            )
-            query = query.where(
-                (Picture.width >= min_w)
-                & (Picture.width <= max_w)
-                & (Picture.height >= min_h)
-                & (Picture.height <= max_h)
-            )
-        if isinstance(size_a, int) and size_a > 0:
-            min_s, max_s = LikenessWorker._range_with_ratio(
-                size_a, LikenessWorker.MAX_SIZE_RATIO_DIFF
-            )
-            query = query.where(
-                (Picture.size_bytes >= min_s) & (Picture.size_bytes <= max_s)
-            )
-        return session.exec(query.order_by(Picture.id).limit(limit)).all()
-
-    @staticmethod
-    def _fetch_candidates_for_prefixes(
-        session: Session,
-        prefixes: List[str],
-        limit: int,
-    ) -> Dict[str, List[Tuple]]:
-        if not prefixes:
-            return {}
-        results: Dict[str, List[Tuple]] = {prefix: [] for prefix in prefixes}
-        for prefix in prefixes:
-            if not prefix:
-                continue
-            rows = session.exec(
-                select(
-                    Picture.id,
-                    Picture.perceptual_hash,
-                    Picture.width,
-                    Picture.height,
-                    Picture.size_bytes,
-                    Picture.image_embedding,
-                    Picture.likeness_parameters,
-                    Picture.created_at,
-                )
-                .where(Picture.image_embedding.is_not(None))
-                .where(Picture.perceptual_hash.is_not(None))
-                .where(func.substr(Picture.perceptual_hash, 1, len(prefix)) == prefix)
-                .order_by(Picture.id)
-                .limit(limit)
-            ).all()
-            results[prefix] = rows
-        return results
-
-    @staticmethod
-    def _fetch_bulk_candidate_data(session: Session) -> List[Tuple]:
+    def fetch_bulk_candidate_data(session: Session) -> List[Tuple]:
         return session.exec(
             select(
                 Picture.id,
@@ -290,7 +158,7 @@ class LikenessWorker:
             .where(Picture.perceptual_hash.is_not(None))
         ).all()
 
-    def _compute_bulk_likeness(
+    def compute_bulk_likeness(
         self,
         queued_ids: List[int],
         rows: List[Tuple],
@@ -447,54 +315,7 @@ class LikenessWorker:
         return results
 
     @staticmethod
-    def _fetch_date_candidates(
-        session: Session,
-        a_id: int,
-        a_created_at: object,
-        window_seconds: float,
-        limit: int,
-    ) -> List[
-        Tuple[
-            int,
-            Optional[str],
-            Optional[int],
-            Optional[int],
-            Optional[int],
-            Optional[bytes],
-            Optional[bytes],
-            Optional[object],
-        ]
-    ]:
-        if not a_created_at or window_seconds <= 0:
-            return []
-        window = timedelta(seconds=window_seconds)
-        start_time = a_created_at - window
-        end_time = a_created_at + window
-        query = (
-            select(
-                Picture.id,
-                Picture.perceptual_hash,
-                Picture.width,
-                Picture.height,
-                Picture.size_bytes,
-                Picture.image_embedding,
-                Picture.likeness_parameters,
-                Picture.created_at,
-            )
-            .where(
-                (Picture.image_embedding.is_not(None))
-                & (Picture.created_at.is_not(None))
-                & (Picture.created_at >= start_time)
-                & (Picture.created_at <= end_time)
-            )
-            .order_by(Picture.created_at, Picture.id)
-            .limit(limit)
-        )
-        query = query.where(Picture.id != a_id)
-        return session.exec(query).all()
-
-    @staticmethod
-    def _write_results(
+    def write_results(
         session: Session,
         likeness_results: List[PictureLikeness],
         top_k: int,
@@ -506,7 +327,7 @@ class LikenessWorker:
         session.commit()
 
     @staticmethod
-    def _seed_queue(session: Session) -> None:
+    def seed_queue(session: Session) -> None:
         queued_count = session.exec(
             select(func.count()).select_from(PictureLikenessQueue)
         ).one()
@@ -524,26 +345,69 @@ class LikenessWorker:
         PictureLikenessQueue.enqueue(session, ids)
         session.commit()
 
-    @staticmethod
-    def _ack_queue(session: Session, picture_ids: List[int]) -> None:
-        PictureLikenessQueue.dequeue(session, picture_ids)
-        session.commit()
+    @classmethod
+    def compute_param_gap_thresholds(
+        cls, session: Session, percentile: int, sample_limit: int
+    ) -> Dict[LikenessParameter, float]:
+        rows = session.exec(
+            select(Picture.likeness_parameters)
+            .where(Picture.likeness_parameters.is_not(None))
+            .limit(sample_limit)
+        ).all()
+        if not rows:
+            return {}
+        values_by_param: Dict[LikenessParameter, List[float]] = {
+            param: [] for param in cls.GATING_PARAMS
+        }
+        for row in rows:
+            blob = row[0] if isinstance(row, (tuple, list)) else row
+            vec = cls._decode_likeness_parameters(blob, len(LikenessParameter))
+            if vec is None:
+                continue
+            for param in cls.GATING_PARAMS:
+                value = float(vec[int(param)])
+                if value == LIKENESS_PARAMETER_SENTINEL or not math.isfinite(value):
+                    continue
+                values_by_param[param].append(value)
+
+        thresholds: Dict[LikenessParameter, float] = {}
+        for param, values in values_by_param.items():
+            if len(values) < 2:
+                continue
+            values.sort()
+            diffs = []
+            prev = values[0]
+            for value in values[1:]:
+                diff = value - prev
+                if diff >= 0:
+                    diffs.append(diff)
+                prev = value
+            if diffs:
+                thresholds[param] = float(np.percentile(diffs, percentile))
+        return thresholds
 
     @staticmethod
-    def _range_with_ratio(value: int, ratio: float) -> Tuple[int, int]:
-        delta = max(1, int(round(value * ratio)))
-        return max(1, value - delta), value + delta
+    def compute_date_span_seconds(session: Session) -> Optional[float]:
+        row = session.exec(
+            select(func.min(Picture.created_at), func.max(Picture.created_at))
+        ).first()
+        if not row:
+            return None
+        min_date, max_date = row
+        if min_date is None or max_date is None:
+            return None
+        span = max_date - min_date
+        return float(span.total_seconds())
 
     @staticmethod
-    def _embedding_ready(session: Session, picture_id: int) -> bool:
-        return (
-            session.exec(
-                select(Picture.id).where(
-                    (Picture.id == picture_id) & (Picture.image_embedding.is_not(None))
-                )
-            ).first()
-            is not None
-        )
+    def decode_embedding(blob) -> Optional[np.ndarray]:
+        return PictureLikenessUtils._decode_embedding(blob)
+
+    @staticmethod
+    def decode_likeness_parameters(
+        blob: Optional[object], length: int
+    ) -> Optional[np.ndarray]:
+        return PictureLikenessUtils._decode_likeness_parameters(blob, length)
 
     @staticmethod
     def _decode_embedding(blob) -> Optional[np.ndarray]:
@@ -585,85 +449,6 @@ class LikenessWorker:
         return None
 
     @classmethod
-    def _count_param_overlap(
-        cls,
-        a_params: np.ndarray,
-        b_params: np.ndarray,
-        thresholds: Dict[LikenessParameter, float],
-    ) -> int:
-        overlap = 0
-        for param in cls.GATING_PARAMS:
-            threshold = thresholds.get(param)
-            if threshold is None:
-                continue
-            val_a = float(a_params[int(param)])
-            val_b = float(b_params[int(param)])
-            if (
-                val_a == LIKENESS_PARAMETER_SENTINEL
-                or val_b == LIKENESS_PARAMETER_SENTINEL
-                or not math.isfinite(val_a)
-                or not math.isfinite(val_b)
-            ):
-                continue
-            if abs(val_a - val_b) <= threshold:
-                overlap += 1
-        return overlap
-
-    @classmethod
-    def _compute_param_gap_thresholds(
-        cls, session: Session, percentile: int, sample_limit: int
-    ) -> Dict[LikenessParameter, float]:
-        rows = session.exec(
-            select(Picture.likeness_parameters)
-            .where(Picture.likeness_parameters.is_not(None))
-            .limit(sample_limit)
-        ).all()
-        if not rows:
-            return {}
-        values_by_param: Dict[LikenessParameter, List[float]] = {
-            param: [] for param in cls.GATING_PARAMS
-        }
-        for row in rows:
-            blob = row[0] if isinstance(row, (tuple, list)) else row
-            vec = cls._decode_likeness_parameters(blob, len(LikenessParameter))
-            if vec is None:
-                continue
-            for param in cls.GATING_PARAMS:
-                value = float(vec[int(param)])
-                if value == LIKENESS_PARAMETER_SENTINEL or not math.isfinite(value):
-                    continue
-                values_by_param[param].append(value)
-
-        thresholds: Dict[LikenessParameter, float] = {}
-        for param, values in values_by_param.items():
-            if len(values) < 2:
-                continue
-            values.sort()
-            diffs = []
-            prev = values[0]
-            for value in values[1:]:
-                diff = value - prev
-                if diff >= 0:
-                    diffs.append(diff)
-                prev = value
-            if diffs:
-                thresholds[param] = float(np.percentile(diffs, percentile))
-        return thresholds
-
-    @staticmethod
-    def _compute_date_span_seconds(session: Session) -> Optional[float]:
-        row = session.exec(
-            select(func.min(Picture.created_at), func.max(Picture.created_at))
-        ).first()
-        if not row:
-            return None
-        min_date, max_date = row
-        if min_date is None or max_date is None:
-            return None
-        span = max_date - min_date
-        return float(span.total_seconds())
-
-    @classmethod
     def _phash_similarity(cls, hash_a: str, hash_b: str) -> float:
         try:
             int_a = int(hash_a, 16)
@@ -672,47 +457,3 @@ class LikenessWorker:
             return 0.0
         distance = (int_a ^ int_b).bit_count()
         return 1.0 - (distance / float(cls.PHASH_BITS))
-
-    @classmethod
-    def _passes_metadata_filter(
-        cls,
-        width_a: Optional[int],
-        height_a: Optional[int],
-        size_a: Optional[int],
-        width_b: Optional[int],
-        height_b: Optional[int],
-        size_b: Optional[int],
-    ) -> bool:
-        if (
-            isinstance(width_a, int)
-            and isinstance(height_a, int)
-            and isinstance(width_b, int)
-            and isinstance(height_b, int)
-            and width_a > 0
-            and height_a > 0
-            and width_b > 0
-            and height_b > 0
-        ):
-            width_ratio = abs(width_a - width_b) / max(width_a, width_b)
-            height_ratio = abs(height_a - height_b) / max(height_a, height_b)
-            if width_ratio > cls.MAX_DIM_RATIO_DIFF:
-                return False
-            if height_ratio > cls.MAX_DIM_RATIO_DIFF:
-                return False
-            aspect_a = width_a / float(height_a)
-            aspect_b = width_b / float(height_b)
-            aspect_ratio = abs(aspect_a - aspect_b) / max(aspect_a, aspect_b)
-            if aspect_ratio > cls.MAX_ASPECT_RATIO_DIFF:
-                return False
-
-        if (
-            isinstance(size_a, int)
-            and isinstance(size_b, int)
-            and size_a > 0
-            and size_b > 0
-        ):
-            size_ratio = abs(size_a - size_b) / max(size_a, size_b)
-            if size_ratio > cls.MAX_SIZE_RATIO_DIFF:
-                return False
-
-        return True

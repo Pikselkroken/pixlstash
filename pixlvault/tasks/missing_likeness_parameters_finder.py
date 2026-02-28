@@ -1,6 +1,6 @@
 from sqlmodel import Session
 
-from pixlvault.likeness_parameter_worker import LikenessParameterWorker
+from pixlvault.picture_likeness_parameter_utils import PictureLikenessParameterUtils
 
 from .base_task_finder import BaseTaskFinder
 from .likeness_parameters_task import LikenessParametersTask
@@ -25,4 +25,4 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
 
     @staticmethod
     def _count_pending_parameters(session: Session) -> int:
-        return LikenessParameterWorker._count_pending_parameters(session)
+        return PictureLikenessParameterUtils.count_pending_parameters(session)

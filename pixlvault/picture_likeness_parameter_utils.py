@@ -3,13 +3,11 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from sqlmodel import Session, delete, select
-from sqlalchemy import func
 from PIL import Image
+from sqlalchemy import func
+from sqlmodel import Session, delete, select
 
 from pixlvault.database import DBPriority
-from pixlvault.picture_utils import PictureUtils
-from pixlvault.pixl_logging import get_logger
 from pixlvault.db_models.picture import (
     LIKENESS_PARAMETER_SENTINEL,
     LikenessParameter,
@@ -17,6 +15,8 @@ from pixlvault.db_models.picture import (
 )
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
 from pixlvault.db_models.quality import Quality
+from pixlvault.picture_utils import PictureUtils
+from pixlvault.pixl_logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -40,12 +40,8 @@ PHASH_BITS = 64
 PHASH_HEX_LEN = PHASH_BITS // 4
 
 
-class LikenessParameterWorker:
-    """Compute likeness parameter vectors in size-binned batches.
-
-    This worker operates parameter-by-parameter in enum order. For each parameter,
-    it selects a size bin and computes that parameter for a batch of images in the bin.
-    """
+class PictureLikenessParameterUtils:
+    """Compute likeness parameter vectors in size-binned batches."""
 
     BATCH_SIZE = 128
     SCAN_LIMIT = 2048
@@ -54,12 +50,12 @@ class LikenessParameterWorker:
         self._db = database
 
     @staticmethod
-    def _find_next_work(
+    def find_next_work(
         session: Session, batch_size: int, scan_limit: int
     ) -> Optional[Tuple[LikenessParameter, Optional[int], Tuple]]:
         for param in LikenessParameter:
             if param == LikenessParameter.SIZE_BIN:
-                size_bin = LikenessParameterWorker._find_size_bin_batch(
+                size_bin = PictureLikenessParameterUtils._find_size_bin_batch(
                     session, batch_size
                 )
                 if size_bin:
@@ -67,17 +63,17 @@ class LikenessParameterWorker:
                     return param, None, (width, height, ids)
                 continue
 
-            brightness_batch = LikenessParameterWorker._find_parameter_batch(
+            param_batch = PictureLikenessParameterUtils._find_parameter_batch(
                 session, param, batch_size, scan_limit
             )
-            if brightness_batch:
-                size_bin_index, ids, remaining_in_bin = brightness_batch
+            if param_batch:
+                size_bin_index, ids, remaining_in_bin = param_batch
                 return param, size_bin_index, (ids, remaining_in_bin)
 
         return None
 
     @staticmethod
-    def _count_pending_parameters(session: Session) -> int:
+    def count_pending_parameters(session: Session) -> int:
         result = session.exec(
             select(func.count())
             .select_from(Picture)
@@ -165,7 +161,7 @@ class LikenessParameterWorker:
 
             for pic_id, size_bin_index, param_blob in rows:
                 size_bin = int(size_bin_index)
-                vec = LikenessParameterWorker._decode_parameters(
+                vec = PictureLikenessParameterUtils.decode_parameters(
                     param_blob, len(LikenessParameter)
                 )
                 if param in QUALITY_PARAM_FIELDS:
@@ -197,7 +193,7 @@ class LikenessParameterWorker:
             offset += scan_limit
 
     @staticmethod
-    def _update_size_bin(
+    def update_size_bin(
         session: Session,
         ids: List[int],
         size_bin_index: int,
@@ -205,7 +201,7 @@ class LikenessParameterWorker:
     ) -> None:
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         for pic in pics:
-            vec = LikenessParameterWorker._decode_parameters(
+            vec = PictureLikenessParameterUtils.decode_parameters(
                 pic.likeness_parameters, vector_length
             )
             vec[int(LikenessParameter.SIZE_BIN)] = float(size_bin_index)
@@ -215,7 +211,7 @@ class LikenessParameterWorker:
         session.commit()
 
     @staticmethod
-    def _update_parameter_values(
+    def update_parameter_values(
         session: Session,
         ids: List[int],
         param_index: int,
@@ -227,7 +223,7 @@ class LikenessParameterWorker:
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         values_by_id = dict(zip(ids, values))
         for pic in pics:
-            vec = LikenessParameterWorker._decode_parameters(
+            vec = PictureLikenessParameterUtils.decode_parameters(
                 pic.likeness_parameters, vector_length
             )
             value = values_by_id.get(int(pic.id), 0.0)
@@ -235,9 +231,9 @@ class LikenessParameterWorker:
             pic.likeness_parameters = vec
             session.add(pic)
         session.commit()
-        LikenessParameterWorker._reset_likeness_for_pictures(session, ids)
+        PictureLikenessParameterUtils.reset_likeness_for_pictures(session, ids)
 
-    def _fetch_quality_for_ids(self, ids: List[int]) -> Dict[int, Dict[str, float]]:
+    def fetch_quality_for_ids(self, ids: List[int]) -> Dict[int, Dict[str, float]]:
         def fetch_quality(session: Session, ids: List[int]):
             return session.exec(
                 select(
@@ -294,7 +290,7 @@ class LikenessParameterWorker:
             }
         return quality_by_id
 
-    def _fetch_picture_params_for_ids(
+    def fetch_picture_params_for_ids(
         self, ids: List[int]
     ) -> Tuple[Dict[int, Dict[str, float]], Dict[int, Dict[str, object]]]:
         def fetch_picture_params(session: Session, ids: List[int]):
@@ -340,7 +336,7 @@ class LikenessParameterWorker:
                 )
                 if full_path and os.path.exists(full_path):
                     if created_at_value is None:
-                        created_at_value = self._compute_created_at_from_file(
+                        created_at_value = self.compute_created_at_from_file(
                             full_path, file_path
                         )
                         if created_at_value is not None:
@@ -348,9 +344,7 @@ class LikenessParameterWorker:
                                 created_at_value
                             )
                     if not phash_value:
-                        phash_value = self._compute_phash_from_file(
-                            full_path, file_path
-                        )
+                        phash_value = self.compute_phash_from_file(full_path, file_path)
                         if phash_value:
                             updates_by_id.setdefault(int(pic_id), {})[
                                 "perceptual_hash"
@@ -386,7 +380,7 @@ class LikenessParameterWorker:
         return params_by_id, updates_by_id
 
     @staticmethod
-    def _update_picture_metadata(
+    def update_picture_metadata(
         session: Session,
         updates_by_id: Dict[int, Dict[str, object]],
     ) -> None:
@@ -404,7 +398,7 @@ class LikenessParameterWorker:
         session.commit()
 
     @staticmethod
-    def _compute_dhash(image: Image.Image, hash_size: int = 8) -> Optional[str]:
+    def compute_dhash(image: Image.Image, hash_size: int = 8) -> Optional[str]:
         try:
             resample = getattr(Image, "Resampling", Image).LANCZOS
             img = image.convert("L").resize((hash_size + 1, hash_size), resample)
@@ -418,7 +412,7 @@ class LikenessParameterWorker:
         except Exception:
             return None
 
-    def _compute_phash_from_file(
+    def compute_phash_from_file(
         self, full_path: str, rel_path: Optional[str]
     ) -> Optional[str]:
         try:
@@ -427,23 +421,23 @@ class LikenessParameterWorker:
                     full_path, count=3
                 )
                 for frame in frames:
-                    phash = self._compute_dhash(frame)
+                    phash = self.compute_dhash(frame)
                     if phash:
                         return phash
                 return None
             with Image.open(full_path) as img:
                 if img.mode != "RGB":
                     img = img.convert("RGB")
-                return self._compute_dhash(img)
+                return self.compute_dhash(img)
         except Exception as exc:
             logger.warning(
-                "LikenessParameterWorker: Failed to compute phash for %s (%s)",
+                "PictureLikenessParameterUtils: Failed to compute phash for %s (%s)",
                 full_path,
                 exc,
             )
             return None
 
-    def _compute_created_at_from_file(
+    def compute_created_at_from_file(
         self, full_path: str, rel_path: Optional[str]
     ) -> Optional[datetime]:
         try:
@@ -458,14 +452,14 @@ class LikenessParameterWorker:
             )
         except Exception as exc:
             logger.warning(
-                "LikenessParameterWorker: Failed to compute created_at for %s (%s)",
+                "PictureLikenessParameterUtils: Failed to compute created_at for %s (%s)",
                 full_path,
                 exc,
             )
             return None
 
     @staticmethod
-    def _update_quality_values(
+    def update_quality_values(
         session: Session,
         ids: List[int],
         quality_by_id: Dict[int, Dict[str, float]],
@@ -475,7 +469,7 @@ class LikenessParameterWorker:
             return
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         for pic in pics:
-            vec = LikenessParameterWorker._decode_parameters(
+            vec = PictureLikenessParameterUtils.decode_parameters(
                 pic.likeness_parameters, vector_length
             )
             quality_values = quality_by_id.get(int(pic.id), {})
@@ -485,10 +479,10 @@ class LikenessParameterWorker:
             pic.likeness_parameters = vec
             session.add(pic)
         session.commit()
-        LikenessParameterWorker._reset_likeness_for_pictures(session, ids)
+        PictureLikenessParameterUtils.reset_likeness_for_pictures(session, ids)
 
     @staticmethod
-    def _update_picture_values(
+    def update_picture_values(
         session: Session,
         ids: List[int],
         picture_by_id: Dict[int, Dict[str, float]],
@@ -498,7 +492,7 @@ class LikenessParameterWorker:
             return
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         for pic in pics:
-            vec = LikenessParameterWorker._decode_parameters(
+            vec = PictureLikenessParameterUtils.decode_parameters(
                 pic.likeness_parameters, vector_length
             )
             values = picture_by_id.get(int(pic.id), {})
@@ -508,10 +502,10 @@ class LikenessParameterWorker:
             pic.likeness_parameters = vec
             session.add(pic)
         session.commit()
-        LikenessParameterWorker._reset_likeness_for_pictures(session, ids)
+        PictureLikenessParameterUtils.reset_likeness_for_pictures(session, ids)
 
     @staticmethod
-    def _reset_likeness_for_pictures(session: Session, ids: List[int]) -> None:
+    def reset_likeness_for_pictures(session: Session, ids: List[int]) -> None:
         if not ids:
             return
         unique_ids = sorted({int(pid) for pid in ids})
@@ -525,11 +519,11 @@ class LikenessParameterWorker:
         session.commit()
 
     @staticmethod
-    def _size_bin_index(width: int, height: int) -> int:
+    def size_bin_index(width: int, height: int) -> int:
         return (int(width) << 32) + int(height)
 
     @staticmethod
-    def _decode_parameters(blob: Optional[object], length: int) -> np.ndarray:
+    def decode_parameters(blob: Optional[object], length: int) -> np.ndarray:
         if blob is None:
             return np.full(length, LIKENESS_PARAMETER_SENTINEL, dtype=np.float32)
         if isinstance(blob, np.ndarray):
