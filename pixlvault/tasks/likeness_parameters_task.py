@@ -4,8 +4,8 @@ from pixlvault.db_models.picture import (
     LikenessParameter,
     Picture,
 )
-from pixlvault.likeness_parameter_worker import (
-    LikenessParameterWorker,
+from pixlvault.picture_likeness_parameter_utils import (
+    PictureLikenessParameterUtils,
     PICTURE_PARAM_FIELDS,
     QUALITY_PARAM_FIELDS,
 )
@@ -29,7 +29,7 @@ class LikenessParametersTask(BaseTask):
         self._db = database
 
     def _run_task(self):
-        helper = LikenessParameterWorker(self._db)
+        helper = PictureLikenessParameterUtils(self._db)
 
         def submit_low(func, *args, **kwargs):
             return self._db.result_or_throw(
@@ -37,7 +37,7 @@ class LikenessParametersTask(BaseTask):
             )
 
         work = submit_low(
-            LikenessParameterWorker._find_next_work,
+            PictureLikenessParameterUtils.find_next_work,
             self.BATCH_SIZE,
             self.SCAN_LIMIT,
         )
@@ -51,7 +51,7 @@ class LikenessParametersTask(BaseTask):
             width, height, ids = payload
             size_bin_index = helper._size_bin_index(width, height)
             submit_low(
-                LikenessParameterWorker._update_size_bin,
+                PictureLikenessParameterUtils.update_size_bin,
                 ids,
                 size_bin_index,
                 len(LikenessParameter),
@@ -60,24 +60,24 @@ class LikenessParametersTask(BaseTask):
         else:
             ids, _remaining_in_bin = payload
             if param in QUALITY_PARAM_FIELDS:
-                quality_by_id = helper._fetch_quality_for_ids(ids)
+                quality_by_id = helper.fetch_quality_for_ids(ids)
                 submit_low(
-                    LikenessParameterWorker._update_quality_values,
+                    PictureLikenessParameterUtils.update_quality_values,
                     ids,
                     quality_by_id,
                     len(LikenessParameter),
                 )
             elif param in PICTURE_PARAM_FIELDS:
-                picture_by_id, picture_updates = helper._fetch_picture_params_for_ids(
+                picture_by_id, picture_updates = helper.fetch_picture_params_for_ids(
                     ids
                 )
                 if picture_updates:
                     submit_low(
-                        LikenessParameterWorker._update_picture_metadata,
+                        PictureLikenessParameterUtils.update_picture_metadata,
                         picture_updates,
                     )
                 submit_low(
-                    LikenessParameterWorker._update_picture_values,
+                    PictureLikenessParameterUtils.update_picture_values,
                     ids,
                     picture_by_id,
                     len(LikenessParameter),
@@ -85,7 +85,7 @@ class LikenessParametersTask(BaseTask):
             else:
                 values = [LIKENESS_PARAMETER_SENTINEL for _ in ids]
                 submit_low(
-                    LikenessParameterWorker._update_parameter_values,
+                    PictureLikenessParameterUtils.update_parameter_values,
                     ids,
                     int(param),
                     values,
