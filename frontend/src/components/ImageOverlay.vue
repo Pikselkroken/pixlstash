@@ -737,6 +737,16 @@
                   v-if="image"
                   class="section-meta-btn"
                   type="button"
+                  title="Refresh tags"
+                  :disabled="isTagsRefreshing"
+                  @click.stop="refreshPictureTags"
+                >
+                  <v-icon size="16">mdi-refresh</v-icon>
+                </button>
+                <button
+                  v-if="image"
+                  class="section-meta-btn"
+                  type="button"
                   title="Add tag"
                   @click.stop="beginAddTag"
                 >
@@ -1110,6 +1120,11 @@ function setOverlayImageById(nextId) {
     image.value = null;
     return;
   }
+  const currentId = image.value?.id;
+  const isSameImage =
+    currentId !== null &&
+    currentId !== undefined &&
+    String(currentId) === String(nextId);
   const allList = Array.isArray(allImages.value) ? allImages.value : [];
   const targetFromAll = allList.find(
     (item) => String(item?.id) === String(nextId),
@@ -1118,9 +1133,13 @@ function setOverlayImageById(nextId) {
     ? targetFromAll
     : getOverlayImageList().find((item) => String(item?.id) === String(nextId));
   if (target) {
+    const existingTags = TagList(image.value?.tags);
+    const targetTags = TagList(target.tags);
     image.value = {
       ...target,
-      tags: [],
+      tags: dedupeTagList(
+        isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
+      ),
     };
   } else {
     if (!image.value) {
@@ -1128,7 +1147,9 @@ function setOverlayImageById(nextId) {
     }
     return;
   }
-  isTagsRefreshing.value = true;
+  if (!isSameImage) {
+    isTagsRefreshing.value = true;
+  }
 }
 
 // Watch for changes to initialImageId and update local image copy
@@ -4562,6 +4583,38 @@ async function removeAllTag(tag) {
       imageId: image.value.id,
       fields: { tags: true, smartScore: true },
     });
+  }
+}
+
+async function refreshPictureTags() {
+  if (!image.value?.id || !backendUrl.value) return;
+  const tagsToRemove = TagList(imageTags.value).filter(
+    (entry) => tagId(entry) != null,
+  );
+  if (!tagsToRemove.length) return;
+
+  isTagsRefreshing.value = true;
+  try {
+    for (const tag of tagsToRemove) {
+      const key = String(tagId(tag));
+      const label = tagLabel(tag);
+      if (!key || !label) continue;
+      await apiClient.delete(
+        `${backendUrl.value}/pictures/${image.value.id}/tags/${key}`,
+      );
+      if (Array.isArray(image.value.tags)) {
+        const current = TagList(image.value.tags);
+        image.value.tags = current.filter((entry) => entry.tag !== label);
+      }
+    }
+    emit("overlay-change", {
+      imageId: image.value.id,
+      fields: { tags: true, smartScore: true },
+    });
+  } catch (err) {
+    console.warn("Failed to refresh picture tags:", err);
+  } finally {
+    isTagsRefreshing.value = false;
   }
 }
 
