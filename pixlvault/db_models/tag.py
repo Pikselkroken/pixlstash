@@ -28,6 +28,12 @@ DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
     "malformed nipples": 4,
     "waxy skin": 2,
     "flux chin": 1,
+    "silicone breasts": 0,
+    "malformed foot": 4,
+    "missing toe": 4,
+    "extra toe": 4,
+    "fused toes": 3,
+    "incorrect reflection": 3,
 }
 TAG_EMPTY_SENTINEL = ""
 
