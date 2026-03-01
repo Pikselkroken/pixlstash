@@ -150,6 +150,8 @@ class TagTask(BaseTask):
             logger.debug("Tagging image paths: %s", image_paths)
             tag_results = self._picture_tagger.tag_images(image_paths)
             crop_tags_by_pic_id = {}
+            face_crop_tags_by_pic_id = {}
+            hand_crop_tags_by_pic_id = {}
             face_tags_by_face_id = {}
             hand_tags_by_hand_id = {}
             if self._picture_tagger.custom_tagger_ready():
@@ -328,6 +330,9 @@ class TagTask(BaseTask):
                                 existing = crop_tags_by_pic_id.get(pic_id, [])
                                 existing.extend(filtered)
                                 crop_tags_by_pic_id[pic_id] = existing
+                                existing_hc = hand_crop_tags_by_pic_id.get(pic_id, [])
+                                existing_hc.extend(filtered)
+                                hand_crop_tags_by_pic_id[pic_id] = existing_hc
                                 hand_id = item_to_hand_id.get(key)
                                 if hand_id is not None:
                                     existing_hand = hand_tags_by_hand_id.get(
@@ -339,6 +344,9 @@ class TagTask(BaseTask):
                                 existing = crop_tags_by_pic_id.get(pic_id, [])
                                 existing.extend(tags)
                                 crop_tags_by_pic_id[pic_id] = existing
+                                existing_fc = face_crop_tags_by_pic_id.get(pic_id, [])
+                                existing_fc.extend(tags)
+                                face_crop_tags_by_pic_id[pic_id] = existing_fc
                                 face_id = item_to_face_id.get(key)
                                 if face_id is not None:
                                     existing_face = face_tags_by_face_id.get(
@@ -356,13 +364,22 @@ class TagTask(BaseTask):
                 if not pic:
                     continue
                 base_tags = tag_results.get(path, [])
-                if "blurry" in base_tags:
-                    logger.debug(
-                        "[TAG SOURCE] pic_id=%s source=full tag=blurry", pic.id
-                    )
                 extra_tags = crop_tags_by_pic_id.get(pic.id, [])
+                face_crop_tags = face_crop_tags_by_pic_id.get(pic.id, [])
+                hand_crop_tags = hand_crop_tags_by_pic_id.get(pic.id, [])
                 combined = sorted(set(base_tags) | set(extra_tags))
                 if combined:
+                    sources = ["full image"]
+                    if face_crop_tags:
+                        sources.append("face crop")
+                    if hand_crop_tags:
+                        sources.append("hand crop")
+                    logger.info(
+                        "Custom Tags [%s] %s: %s",
+                        ", ".join(sources),
+                        os.path.basename(path),
+                        combined,
+                    )
                     merged_results[path] = combined
             tag_results = merged_results
             logger.debug("Got tag results for %s images.", len(tag_results))
