@@ -1,8 +1,5 @@
 from .character import Character  # noqa: F401
 from .face import Face  # noqa: F401
-from .face_tag import FaceTag  # noqa: F401
-from .hand import Hand  # noqa: F401
-from .hand_tag import HandTag  # noqa: F401
 from .picture import Picture, SortMechanism  # noqa: F401
 from .picture_set import PictureSet, PictureSetMember  # noqa: F401
 from .picture_stack import PictureStack  # noqa: F401

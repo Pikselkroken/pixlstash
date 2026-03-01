@@ -186,15 +186,3 @@ HAND_TAG_BLACKLIST = {
     "tongue",
     "upper body",
 }
-
-
-def is_face_tag(tag: str) -> bool:
-    if not tag:
-        return False
-    return tag not in FACE_TAG_BLACKLIST
-
-
-def is_hand_tag(tag: str) -> bool:
-    if not tag:
-        return False
-    return tag not in HAND_TAG_BLACKLIST

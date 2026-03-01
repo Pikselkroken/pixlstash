@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from pixlvault.server import Server
 from pixlvault.db_models.picture import Picture
-from pixlvault.worker_types import TaskType
+from pixlvault.tasks.task_type import TaskType
 
 
 def test_watch_folder():

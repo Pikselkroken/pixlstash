@@ -46,12 +46,23 @@ UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
 CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
-CUSTOM_TAGGER_THRESHOLD_FULL = 0.9
-CUSTOM_TAGGER_THRESHOLD_CROPS = 0.8
+CUSTOM_TAGGER_THRESHOLD_FULL = 0.85
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
-CUSTOM_TAGGER_IMAGE_SIZE_CROPS = 224
 CUSTOM_TAGGER_BATCH = 16
 CLIP_MODEL_NAME = "ViT-B-32"
+
+# Tags that require close-up face crops to detect reliably at full-image resolution.
+# These are collected from face-crop passes and merged into the picture's flat tag list.
+QUALITY_CROP_TAG_WHITELIST = frozenset(
+    {
+        "pixelated",
+        "blurry",
+        "jpeg artifacts",
+        "chromatic aberration",
+        "scan artifacts",
+        "film grain",
+    }
+)
 CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
 
 
@@ -106,9 +117,7 @@ class PictureTagger:
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._use_custom_tagger = True
         self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
-        self._custom_tagger_threshold_crops = CUSTOM_TAGGER_THRESHOLD_CROPS
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
-        self._custom_tagger_image_size_crops = CUSTOM_TAGGER_IMAGE_SIZE_CROPS
         self._custom_tagger_batch = CUSTOM_TAGGER_BATCH
         self._custom_device = self._device
 
@@ -1115,14 +1124,67 @@ class PictureTagger:
     def custom_tagger_threshold_full(self) -> float:
         return float(self._custom_tagger_threshold_full)
 
-    def custom_tagger_threshold_crops(self) -> float:
-        return float(self._custom_tagger_threshold_crops)
-
     def custom_tagger_image_size_full(self) -> int:
         return int(self._custom_tagger_image_size_full)
 
-    def custom_tagger_image_size_crops(self) -> int:
-        return int(self._custom_tagger_image_size_crops)
+    @staticmethod
+    def _expand_bbox_to_square(bbox, img_width, img_height, target_size):
+        """Expand [x1, y1, x2, y2] outward from its center to a square of
+        ``target_size`` pixels, clamped to image bounds.
+
+        Args:
+            bbox: [x1, y1, x2, y2] face bounding box.
+            img_width: Image width in pixels.
+            img_height: Image height in pixels.
+            target_size: Desired square side length in pixels.
+
+        Returns:
+            Clamped [x1, y1, x2, y2] square region.
+        """
+        x1, y1, x2, y2 = bbox
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+        half = target_size / 2.0
+        nx1 = max(0, int(round(cx - half)))
+        ny1 = max(0, int(round(cy - half)))
+        nx2 = min(img_width, int(round(cx + half)))
+        ny2 = min(img_height, int(round(cy + half)))
+        return [nx1, ny1, nx2, ny2]
+
+    def tag_quality_crops(self, items, stop_event=None):
+        """Run the custom tagger on pre-cropped PIL images and return only
+        quality-relevant tags.
+
+        The crops should already be sized/centred on a face region at the
+        custom tagger's native resolution so no additional downscaling of the
+        full image is needed.
+
+        Args:
+            items: List of ``(key, PIL.Image)`` pairs.
+            stop_event: Optional threading.Event to interrupt inference.
+
+        Returns:
+            Dict mapping key to list of quality tags that passed the whitelist
+            filter.  Keys with no matching quality tags are omitted.
+        """
+        if not items:
+            return {}
+        if not hasattr(self, "_custom_model") or not hasattr(self, "_custom_labels"):
+            logger.debug("Custom tagger not available; skipping quality crop pass.")
+            return {}
+
+        raw = self._tag_custom_items(
+            items,
+            stop_event=stop_event,
+            threshold=self._custom_tagger_threshold_full,
+            image_size=self._custom_tagger_image_size_full,
+        )
+        filtered = {}
+        for key, tags in raw.items():
+            quality_tags = [t for t in tags if t in QUALITY_CROP_TAG_WHITELIST]
+            if quality_tags:
+                filtered[key] = quality_tags
+        return filtered
 
     def _tag_custom_items(
         self, items, stop_event=None, threshold=None, image_size=None

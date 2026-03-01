@@ -231,8 +231,8 @@
           <button
             class="overlay-icon-btn"
             type="button"
-            title="Toggle face/hand bounding boxes"
-            aria-label="Toggle face/hand bounding boxes"
+            title="Toggle face bounding boxes"
+            aria-label="Toggle face bounding boxes"
             @click.stop="toggleFaceBbox"
             :class="{
               hidden: chromeHidden,
@@ -253,22 +253,6 @@
             }"
           >
             <v-icon size="20">mdi-account-plus</v-icon>
-          </button>
-          <button
-            class="overlay-icon-btn"
-            type="button"
-            title="Draw hand bounding box"
-            aria-label="Draw hand bounding box"
-            @click.stop="beginDrawMode('hand')"
-            :class="{
-              hidden: chromeHidden,
-              'overlay-icon-btn--active': drawMode === 'hand',
-            }"
-          >
-            <span class="overlay-hand-plus-icon">
-              <v-icon size="20">mdi-hand-back-left-outline</v-icon>
-              <v-icon size="13">mdi-plus</v-icon>
-            </span>
           </button>
 
           <button
@@ -400,47 +384,18 @@
                   @load="updateOverlayDims"
                 />
               </template>
-              <template v-if="(showFaceBbox || dragState.tag) && overlayReady">
-                <div
-                  v-if="faceBboxes.length === 0 && handBboxes.length === 0"
-                  class="face-bbox-empty"
-                >
+              <template v-if="showFaceBbox && overlayReady">
+                <div v-if="faceBboxes.length === 0" class="face-bbox-empty">
                   No bboxes found
                 </div>
                 <div
                   v-for="(face, idx) in faceBboxes"
                   :key="`face-${idx}`"
-                  :class="[
-                    'face-bbox-overlay',
-                    'bbox-drop-target',
-                    { 'bbox-drop-active': isDragOver('face', face.id) },
-                  ]"
+                  class="face-bbox-overlay"
                   :style="getOverlayBoxStyle(face.bbox, faceBoxColor(idx))"
-                  @dragover.prevent="handleDragOver('face', face.id)"
-                  @dragenter.prevent="handleDragOver('face', face.id)"
-                  @dragleave="handleDragLeave('face', face.id)"
-                  @drop.prevent="handleDropToFace(face)"
                 >
                   <span class="face-bbox-label">
                     {{ face.character_name || `Face ${idx + 1}` }}
-                  </span>
-                </div>
-                <div
-                  v-for="(hand, idx) in handBboxes"
-                  :key="`hand-${idx}`"
-                  :class="[
-                    'hand-bbox-overlay',
-                    'bbox-drop-target',
-                    { 'bbox-drop-active': isDragOver('hand', hand.id) },
-                  ]"
-                  :style="getOverlayBoxStyle(hand.bbox, handBoxColor(idx))"
-                  @dragover.prevent="handleDragOver('hand', hand.id)"
-                  @dragenter.prevent="handleDragOver('hand', hand.id)"
-                  @dragleave="handleDragLeave('hand', hand.id)"
-                  @drop.prevent="handleDropToHand(hand)"
-                >
-                  <span class="hand-bbox-label">
-                    {{ handLabel(hand, idx) }}
                   </span>
                 </div>
               </template>
@@ -812,118 +767,6 @@
                   />
                 </div>
               </div>
-
-              <div
-                v-for="group in faceTagGroups"
-                :key="group.faceKey"
-                class="tag-section"
-              >
-                <div
-                  class="tag-section-title tag-section-title-row"
-                  :style="{ color: group.color }"
-                >
-                  <span>{{ group.label }}</span>
-                  <button
-                    class="tag-section-action"
-                    title="Remove face"
-                    @click.stop="removeFaceDetection(group.face)"
-                  >
-                    <v-icon size="14">mdi-delete</v-icon>
-                  </button>
-                </div>
-                <div
-                  class="tag-drop-zone"
-                  :class="{
-                    'tag-drop-zone--active': isDragOver('face', group.face.id),
-                  }"
-                  @dragover.prevent="handleDragOver('face', group.face.id)"
-                  @dragenter.prevent="handleDragOver('face', group.face.id)"
-                  @dragleave="handleDragLeave('face', group.face.id)"
-                  @drop.prevent="handleDropToFace(group.face)"
-                >
-                  <span
-                    v-for="tag in group.tags"
-                    :key="`face-${group.faceKey}-${tag.id ?? tag.tag}`"
-                    :class="[
-                      'overlay-tag',
-                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
-                    ]"
-                    draggable="true"
-                    @dragstart="
-                      startTagDrag(tagLabel(tag), 'face', group.face.id, $event)
-                    "
-                    @dragend="clearTagDrag"
-                  >
-                    {{ tagLabel(tag) }}
-                    <button
-                      class="tag-delete-btn"
-                      @click.stop="removeTagFromFace(group.face, tag)"
-                      title="Remove tag"
-                    >
-                      <v-icon size="12">mdi-close</v-icon>
-                    </button>
-                  </span>
-                  <div v-if="!group.tags.length" class="tag-drop-placeholder">
-                    Drop tags here
-                  </div>
-                </div>
-              </div>
-
-              <div
-                v-for="group in handTagGroups"
-                :key="group.handKey"
-                class="tag-section"
-              >
-                <div
-                  class="tag-section-title tag-section-title-row"
-                  :style="{ color: group.color }"
-                >
-                  <span>{{ group.label }}</span>
-                  <button
-                    class="tag-section-action"
-                    title="Remove hand"
-                    @click.stop="removeHandDetection(group.hand)"
-                  >
-                    <v-icon size="14">mdi-delete</v-icon>
-                  </button>
-                </div>
-                <div
-                  class="tag-drop-zone"
-                  :class="{
-                    'tag-drop-zone--active': isDragOver('hand', group.hand.id),
-                  }"
-                  @dragover.prevent="handleDragOver('hand', group.hand.id)"
-                  @dragenter.prevent="handleDragOver('hand', group.hand.id)"
-                  @dragleave="handleDragLeave('hand', group.hand.id)"
-                  @drop.prevent="handleDropToHand(group.hand)"
-                >
-                  <span
-                    v-for="tag in group.tags"
-                    :key="`hand-${group.handKey}-${tag.id ?? tag.tag}`"
-                    :class="[
-                      'overlay-tag',
-                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
-                    ]"
-                    draggable="true"
-                    @dragstart="
-                      startTagDrag(tagLabel(tag), 'hand', group.hand.id, $event)
-                    "
-                    @dragend="clearTagDrag"
-                  >
-                    {{ tagLabel(tag) }}
-                    <button
-                      class="tag-delete-btn"
-                      @click.stop="removeTagFromHand(group.hand, tag)"
-                      title="Remove tag"
-                    >
-                      <v-icon size="12">mdi-close</v-icon>
-                    </button>
-                  </span>
-                  <div v-if="!group.tags.length" class="tag-drop-placeholder">
-                    Drop tags here
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
 
@@ -1028,7 +871,6 @@ import {
   faceBoxColor,
   formatUserDate,
   getStackColor,
-  handBoxColor,
   toggleScore,
 } from "../utils/utils.js";
 import {
@@ -2719,8 +2561,6 @@ function toggleFaceBbox() {
     showFaceBbox.value,
     "faceBboxes:",
     faceBboxes.value,
-    "handBboxes:",
-    handBboxes.value,
   );
 }
 
@@ -2736,7 +2576,6 @@ const drawSubmitInFlight = ref(false);
 
 const drawModeLabel = computed(() => {
   if (drawMode.value === "face") return "face";
-  if (drawMode.value === "hand") return "hand";
   return "";
 });
 
@@ -2894,16 +2733,6 @@ async function onDrawEnd(event) {
         imageId: image.value.id,
         fields: { faces: true },
       });
-    } else if (drawMode.value === "hand") {
-      await apiClient.post(
-        `${backendUrl.value}/pictures/${image.value.id}/hand`,
-        payload,
-      );
-      await fetchHandBboxes(image.value.id);
-      emit("overlay-change", {
-        imageId: image.value.id,
-        fields: { hands: true },
-      });
     }
   } catch (e) {
     alert(`Failed to create ${drawModeLabel.value} box: ${e?.message || e}`);
@@ -3060,11 +2889,6 @@ function onTouchEnd() {
 
 // Store multiple face bounding boxes (now full face objects)
 const faceBboxes = ref([]);
-const handBboxes = ref([]);
-const faceTagMap = ref({});
-const handTagMap = ref({});
-const faceTagFetchInFlight = new Set();
-const handTagFetchInFlight = new Set();
 const dragState = reactive({
   tag: null,
   sourceType: null,
@@ -3084,9 +2908,6 @@ const FACE_THUMB_MIN = 28;
 const FACE_THUMB_MAX = 60;
 let metadataRequestId = 0;
 let faceBboxesRequestId = 0;
-let handBboxesRequestId = 0;
-let faceTagsRequestId = 0;
-let handTagsRequestId = 0;
 
 function dedupeDetections(items) {
   if (!Array.isArray(items)) return [];
@@ -3170,7 +2991,6 @@ async function fetchFaceBboxes(imageId) {
     if (faceBboxesRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
     faceBboxes.value = firstFrameFaces;
-    fetchFaceTagsForFaces(firstFrameFaces);
     // Fetch character names asynchronously to avoid delaying tag loading
     Promise.all(
       firstFrameFaces.map(async (face) => {
@@ -3196,241 +3016,6 @@ async function fetchFaceBboxes(imageId) {
   } catch (e) {
     console.error("Error in fetchFaceBboxes:", e);
     faceBboxes.value = [];
-  }
-}
-
-async function fetchHandBboxes(imageId) {
-  if (!imageId || !backendUrl.value) {
-    handBboxes.value = [];
-    return;
-  }
-  const requestId = (handBboxesRequestId += 1);
-  const requestedImageId = imageId;
-  try {
-    const res = await apiClient.get(
-      `${backendUrl.value}/pictures/${imageId}/hands`,
-    );
-    const hands = await res.data;
-    if (handBboxesRequestId !== requestId) return;
-    if (!image.value || image.value.id !== requestedImageId) return;
-    const handArray = Array.isArray(hands) ? hands : hands.hands;
-    const firstFrameHands = dedupeDetections(handArray || []).filter(
-      (h) =>
-        h.frame_index === 0 && Array.isArray(h.bbox) && h.bbox.length === 4,
-    );
-    if (handBboxesRequestId !== requestId) return;
-    if (!image.value || image.value.id !== requestedImageId) return;
-    handBboxes.value = firstFrameHands;
-    await fetchHandTagsForHands(firstFrameHands);
-  } catch (e) {
-    console.error("Error in fetchHandBboxes:", e);
-    handBboxes.value = [];
-  }
-}
-
-async function fetchFaceTagsForFaces(faces, options = {}) {
-  if (!backendUrl.value || !Array.isArray(faces) || !faces.length) {
-    faceTagMap.value = {};
-    return;
-  }
-  const requestId = faceTagsRequestId;
-  const expectedImageId = image.value?.id ?? null;
-  const force = Boolean(options.force);
-  const targets = faces.filter((face) => {
-    if (!face?.id) return false;
-    if (faceTagFetchInFlight.has(face.id)) return false;
-    if (!force && faceTagMap.value?.[face.id]) return false;
-    return true;
-  });
-  if (!targets.length) return;
-  targets.forEach((face) => faceTagFetchInFlight.add(face.id));
-  const entries = await Promise.all(
-    targets.map(async (face) => {
-      try {
-        const res = await apiClient.get(
-          `${backendUrl.value}/faces/${face.id}/tags`,
-        );
-        const payload = await res.data;
-        const tags = Array.isArray(payload) ? payload : payload?.tags;
-        return [face.id, TagList(tags)];
-      } catch (e) {
-        return [face.id, []];
-      } finally {
-        faceTagFetchInFlight.delete(face.id);
-      }
-    }),
-  );
-  const nextMap = { ...faceTagMap.value };
-  for (const [faceId, tags] of entries) {
-    nextMap[faceId] = dedupeTagList(tags);
-  }
-  if (requestId != faceTagsRequestId) return;
-  if (!image.value || image.value.id != expectedImageId) return;
-  faceTagMap.value = nextMap;
-}
-
-async function fetchHandTagsForHands(hands, options = {}) {
-  if (!backendUrl.value || !Array.isArray(hands) || !hands.length) {
-    handTagMap.value = {};
-    return;
-  }
-  const requestId = handTagsRequestId;
-  const expectedImageId = image.value?.id ?? null;
-  const force = Boolean(options.force);
-  const targets = hands.filter((hand) => {
-    if (!hand?.id) return false;
-    if (handTagFetchInFlight.has(hand.id)) return false;
-    if (!force && handTagMap.value?.[hand.id]) return false;
-    return true;
-  });
-  if (!targets.length) return;
-  targets.forEach((hand) => handTagFetchInFlight.add(hand.id));
-  const entries = await Promise.all(
-    targets.map(async (hand) => {
-      try {
-        const res = await apiClient.get(
-          `${backendUrl.value}/hands/${hand.id}/tags`,
-        );
-        const payload = await res.data;
-        const tags = Array.isArray(payload) ? payload : payload?.tags;
-        return [hand.id, TagList(tags)];
-      } catch (e) {
-        return [hand.id, []];
-      } finally {
-        handTagFetchInFlight.delete(hand.id);
-      }
-    }),
-  );
-  const nextMap = { ...handTagMap.value };
-  for (const [handId, tags] of entries) {
-    nextMap[handId] = dedupeTagList(tags);
-  }
-  if (requestId != handTagsRequestId) return;
-  if (!image.value || image.value.id != expectedImageId) return;
-  handTagMap.value = nextMap;
-}
-
-function ensureTagInImage(tag) {
-  if (!image.value) return;
-  const label = tagLabel(tag);
-  if (!label) return;
-  const tags = TagList(image.value.tags);
-  if (!tags.some((entry) => entry.tag === label)) {
-    const next = dedupeTagList([...tags, { id: null, tag: label }]);
-    image.value = { ...image.value, tags: next };
-    emit("add-tag", image.value.id, label);
-  }
-}
-
-async function assignTagToFace(face, tag) {
-  if (!face?.id || !tag || !backendUrl.value) return;
-  const label = tagLabel(tag);
-  if (!label) return;
-  ensureTagInImage(label);
-  const res = await apiClient.post(
-    `${backendUrl.value}/faces/${face.id}/tags`,
-    { tag: label },
-  );
-  const payload = await res.data;
-  const tags = Array.isArray(payload) ? payload : payload?.tags;
-  faceTagMap.value = {
-    ...faceTagMap.value,
-    [face.id]: TagList(tags),
-  };
-}
-
-async function removeTagFromFace(face, tag, options = {}) {
-  if (!face?.id || !tag || !backendUrl.value) return;
-  const key = tagId(tag) ?? tagLabel(tag).trim();
-  if (!key) return;
-  const res = await apiClient.delete(
-    `${backendUrl.value}/faces/${face.id}/tags/${encodeURIComponent(key)}`,
-  );
-  const payload = await res.data;
-  const tags = Array.isArray(payload) ? payload : payload?.tags;
-  faceTagMap.value = {
-    ...faceTagMap.value,
-    [face.id]: TagList(tags),
-  };
-  if (!options.skipRefresh && image.value?.id) {
-    emit("overlay-change", {
-      imageId: image.value.id,
-      fields: { tags: true, faces: true, smartScore: true },
-    });
-  }
-}
-
-async function assignTagToHand(hand, tag) {
-  if (!hand?.id || !tag || !backendUrl.value) return;
-  const label = tagLabel(tag);
-  if (!label) return;
-  ensureTagInImage(label);
-  const res = await apiClient.post(
-    `${backendUrl.value}/hands/${hand.id}/tags`,
-    { tag: label },
-  );
-  const payload = await res.data;
-  const tags = Array.isArray(payload) ? payload : payload?.tags;
-  handTagMap.value = {
-    ...handTagMap.value,
-    [hand.id]: TagList(tags),
-  };
-}
-
-async function removeTagFromHand(hand, tag, options = {}) {
-  if (!hand?.id || !tag || !backendUrl.value) return;
-  const key = tagId(tag) ?? tagLabel(tag).trim();
-  if (!key) return;
-  const res = await apiClient.delete(
-    `${backendUrl.value}/hands/${hand.id}/tags/${encodeURIComponent(key)}`,
-  );
-  const payload = await res.data;
-  const tags = Array.isArray(payload) ? payload : payload?.tags;
-  handTagMap.value = {
-    ...handTagMap.value,
-    [hand.id]: TagList(tags),
-  };
-  if (!options.skipRefresh && image.value?.id) {
-    emit("overlay-change", {
-      imageId: image.value.id,
-      fields: { tags: true, hands: true, smartScore: true },
-    });
-  }
-}
-
-async function removeFaceDetection(face) {
-  if (!face || !image.value?.id || !backendUrl.value) return;
-  const index = face.face_index ?? face.faceIdx ?? null;
-  if (index == null) return;
-  try {
-    await apiClient.delete(
-      `${backendUrl.value}/pictures/${image.value.id}/face/${index}`,
-    );
-    await fetchFaceBboxes(image.value.id);
-    emit("overlay-change", {
-      imageId: image.value.id,
-      fields: { faces: true },
-    });
-  } catch (e) {
-    alert(`Failed to delete face: ${e?.message || e}`);
-  }
-}
-
-async function removeHandDetection(hand) {
-  if (!hand || !image.value?.id || !backendUrl.value) return;
-  const index = hand.hand_index ?? hand.handIdx ?? null;
-  if (index == null) return;
-  try {
-    await apiClient.delete(
-      `${backendUrl.value}/pictures/${image.value.id}/hand/${index}`,
-    );
-    await fetchHandBboxes(image.value.id);
-    emit("overlay-change", {
-      imageId: image.value.id,
-      fields: { hands: true },
-    });
-  } catch (e) {
-    alert(`Failed to delete hand: ${e?.message || e}`);
   }
 }
 
@@ -3703,12 +3288,6 @@ watch(
   () => image.value?.id,
   (newId) => {
     if (newId) {
-      faceTagsRequestId += 1;
-      handTagsRequestId += 1;
-      faceTagMap.value = {};
-      handTagMap.value = {};
-      faceTagFetchInFlight.clear();
-      handTagFetchInFlight.clear();
       overlayDims.value = {
         width: 1,
         height: 1,
@@ -3719,14 +3298,10 @@ watch(
       };
       scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
-      fetchHandBboxes(newId);
       fetchOverlayMetadata(newId);
       fetchOverlayThumbnail(newId);
     } else {
       faceBboxes.value = [];
-      handBboxes.value = [];
-      faceTagMap.value = {};
-      handTagMap.value = {};
       overlayThumbnail.value = null;
       overlayThumbnailFaceMap.value = {};
       overlayThumbnailDims.value = { width: 256, height: 256 };
@@ -3749,12 +3324,6 @@ watch(
     const currentId = String(image.value.id);
     if (pictureIds.length && !pictureIds.includes(currentId)) return;
     fetchOverlayMetadata(image.value.id);
-    if (faceBboxes.value.length) {
-      fetchFaceTagsForFaces(faceBboxes.value, { force: true });
-    }
-    if (handBboxes.value.length) {
-      fetchHandTagsForHands(handBboxes.value, { force: true });
-    }
   },
 );
 
@@ -3779,32 +3348,6 @@ const faceAssignItems = computed(() => {
     faceIdx: idx,
     faceKey: face?.id ?? `face-${idx}`,
     label: `Face ${idx + 1}`,
-  }));
-});
-
-const faceTagGroups = computed(() => {
-  const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
-  return faces.map((face, idx) => {
-    const characterName = face?.character_name;
-    const label = characterName ? `${characterName}'s face` : `Face ${idx + 1}`;
-    return {
-      face,
-      faceKey: face?.id ?? `face-${idx}`,
-      label,
-      tags: filterHiddenTags(TagList(faceTagMap.value?.[face.id])),
-      color: faceBoxColor(idx),
-    };
-  });
-});
-
-const handTagGroups = computed(() => {
-  const hands = Array.isArray(handBboxes.value) ? handBboxes.value : [];
-  return hands.map((hand, idx) => ({
-    hand,
-    handKey: hand?.id ?? `hand-${idx}`,
-    label: handLabel(hand, idx),
-    tags: filterHiddenTags(TagList(handTagMap.value?.[hand.id])),
-    color: handBoxColor(idx),
   }));
 });
 
@@ -3839,24 +3382,8 @@ const imageTags = computed(() => {
   });
 });
 
-const faceTags = computed(() => {
-  const values = Object.values(faceTagMap.value || {});
-  const tags = values.flatMap((list) => TagList(list));
-  return filterHiddenTags(dedupeTagList(tags));
-});
-
-const handTags = computed(() => {
-  const values = Object.values(handTagMap.value || {});
-  const tags = values.flatMap((list) => TagList(list));
-  return filterHiddenTags(dedupeTagList(tags));
-});
-
 const allImageTags = computed(() => {
-  return dedupeTagList([
-    ...imageTags.value,
-    ...faceTags.value,
-    ...handTags.value,
-  ]);
+  return dedupeTagList([...imageTags.value]);
 });
 
 function isPictureTag(tag) {
@@ -3895,56 +3422,19 @@ function isDragOver(type, id) {
 }
 
 async function handleTagDrop(targetType, targetId) {
-  const tag = dragState.tag;
-  const sourceType = dragState.sourceType;
-  const sourceId = dragState.sourceId;
-  if (!tag) return;
-  if (targetType === sourceType && targetId === sourceId) {
-    clearTagDrag();
-    return;
-  }
-
-  if (targetType === "unassigned") {
-    if (sourceType === "face" && sourceId != null) {
-      const face = faceBboxes.value.find((f) => f.id === sourceId);
-      if (face) await removeTagFromFace(face, tag);
-    }
-    if (sourceType === "hand" && sourceId != null) {
-      const hand = handBboxes.value.find((h) => h.id === sourceId);
-      if (hand) await removeTagFromHand(hand, tag);
-    }
-    clearTagDrag();
-    return;
-  }
-
-  if (targetType === "face") {
-    const face = faceBboxes.value.find((f) => f.id === targetId);
-    if (!face) return;
-    await assignTagToFace(face, tag);
-    clearTagDrag();
-    return;
-  }
-
-  if (targetType === "hand") {
-    const hand = handBboxes.value.find((h) => h.id === targetId);
-    if (!hand) return;
-    await assignTagToHand(hand, tag);
-    clearTagDrag();
-  }
+  clearTagDrag();
 }
 
 async function handleDropToUnassigned() {
-  await handleTagDrop("unassigned", null);
+  clearTagDrag();
 }
 
 async function handleDropToFace(face) {
-  if (!face?.id) return;
-  await handleTagDrop("face", face.id);
+  clearTagDrag();
 }
 
 async function handleDropToHand(hand) {
-  if (!hand?.id) return;
-  await handleTagDrop("hand", hand.id);
+  clearTagDrag();
 }
 
 const sortedCharacters = computed(() => {
@@ -4292,14 +3782,6 @@ async function copyMetadataValue(value) {
   }
 }
 
-function handLabel(hand, idx) {
-  const handIndex = hand?.hand_index;
-  if (typeof handIndex === "number" && Number.isFinite(handIndex)) {
-    return `Hand ${handIndex + 1}`;
-  }
-  return `Hand ${idx + 1}`;
-}
-
 function isValidOverlayBBox(bbox) {
   return Array.isArray(bbox) && bbox.length === 4;
 }
@@ -4596,32 +4078,6 @@ async function removeAllTag(tag) {
     }
   }
 
-  const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
-  for (const face of faces) {
-    const tags = TagList(faceTagMap.value?.[face.id]);
-    const nextTags = tags.filter((entry) => entry.tag !== label);
-    if (nextTags.length !== tags.length) {
-      faceTagMap.value = {
-        ...faceTagMap.value,
-        [face.id]: nextTags,
-      };
-      didUpdate = true;
-    }
-  }
-
-  const hands = Array.isArray(handBboxes.value) ? handBboxes.value : [];
-  for (const hand of hands) {
-    const tags = TagList(handTagMap.value?.[hand.id]);
-    const nextTags = tags.filter((entry) => entry.tag !== label);
-    if (nextTags.length !== tags.length) {
-      handTagMap.value = {
-        ...handTagMap.value,
-        [hand.id]: nextTags,
-      };
-      didUpdate = true;
-    }
-  }
-
   if (image.value?.id && backendUrl.value) {
     try {
       await apiClient.post(
@@ -4643,30 +4099,17 @@ async function removeAllTag(tag) {
 
 async function refreshPictureTags() {
   if (!image.value?.id || !backendUrl.value) return;
-  const labelsToRemove = Array.from(
-    new Set(
-      TagList(allImageTags.value)
-        .map((entry) => tagLabel(entry))
-        .map((label) => (typeof label === "string" ? label.trim() : ""))
-        .filter(Boolean),
-    ),
-  );
-  if (!labelsToRemove.length) return;
+  if (!TagList(allImageTags.value).length) return;
 
   isTagsRefreshing.value = true;
   try {
-    for (const label of labelsToRemove) {
-      await apiClient.post(
-        `${backendUrl.value}/pictures/${image.value.id}/tags/remove_all`,
-        { tag: label },
-      );
-    }
+    await apiClient.delete(
+      `${backendUrl.value}/pictures/${image.value.id}/tags`,
+    );
 
     if (image.value && Array.isArray(image.value.tags)) {
       image.value.tags = [];
     }
-    faceTagMap.value = {};
-    handTagMap.value = {};
 
     emit("overlay-change", {
       imageId: image.value.id,
@@ -4674,12 +4117,6 @@ async function refreshPictureTags() {
     });
 
     await fetchOverlayMetadata(image.value.id);
-    if (Array.isArray(faceBboxes.value) && faceBboxes.value.length) {
-      await fetchFaceTagsForFaces(faceBboxes.value, { force: true });
-    }
-    if (Array.isArray(handBboxes.value) && handBboxes.value.length) {
-      await fetchHandTagsForHands(handBboxes.value, { force: true });
-    }
   } catch (err) {
     console.warn("Failed to refresh picture tags:", err);
   } finally {

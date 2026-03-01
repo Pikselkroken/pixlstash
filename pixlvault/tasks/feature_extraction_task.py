@@ -1,7 +1,6 @@
 import gc
 import os
 import platform
-import urllib.request
 from typing import List
 
 import cv2
@@ -12,9 +11,8 @@ from sqlmodel import select
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models.face import Face
-from pixlvault.db_models.hand import Hand
 from pixlvault.db_models.picture import Picture
-from pixlvault.picture_tagger import MODEL_DIR, PictureTagger
+from pixlvault.picture_tagger import PictureTagger
 from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.utils.image_processing.face_utils import FaceUtils
 from pixlvault.pixl_logging import get_logger
@@ -24,16 +22,6 @@ from pixlvault.tasks.base_task import BaseTask
 logger = get_logger(__name__)
 
 
-HAND_MODEL_NAME = "yolov8n-hand.pt"
-HAND_MODEL_URL = "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
-HAND_MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", MODEL_DIR, HAND_MODEL_NAME
-)
-
-HAND_DETECT_IMGSZ = 256
-HAND_DETECT_CONF = 0.3
-HAND_DETECT_MAX_DET = 4
-HAND_DETECT_VIDEO_FRAMES = 1
 CROP_EXPAND_SCALE = 1.25
 
 
@@ -47,7 +35,6 @@ class FeatureExtractionTask(BaseTask):
     """
 
     _global_insightface_app = None
-    _hand_model = None
 
     def __init__(self, database, picture_tagger, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -87,7 +74,6 @@ class FeatureExtractionTask(BaseTask):
     @classmethod
     def release_detection_models(cls):
         cls._global_insightface_app = None
-        cls._hand_model = None
 
         gc.collect()
         try:
@@ -113,31 +99,6 @@ class FeatureExtractionTask(BaseTask):
         except Exception:
             pass
 
-    def _ensure_hand_detector(self):
-        if FeatureExtractionTask._hand_model is not None:
-            return FeatureExtractionTask._hand_model
-        try:
-            from ultralytics import YOLO
-        except Exception as exc:
-            logger.warning("Ultralytics not available for hand detection: %s", exc)
-            return None
-
-        model_path = HAND_MODEL_PATH
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        if not os.path.exists(model_path):
-            try:
-                logger.info("Downloading hand model to %s", model_path)
-                urllib.request.urlretrieve(HAND_MODEL_URL, model_path)
-            except Exception as exc:
-                logger.warning("Failed to download hand model: %s", exc)
-                return None
-        try:
-            FeatureExtractionTask._hand_model = YOLO(model_path)
-        except Exception as exc:
-            logger.warning("Failed to load hand model: %s", exc)
-            FeatureExtractionTask._hand_model = None
-        return FeatureExtractionTask._hand_model
-
     def _init_insightface_app(self):
         if self._insightface_app is not None:
             return
@@ -155,20 +116,6 @@ class FeatureExtractionTask(BaseTask):
         )
         FeatureExtractionTask._global_insightface_app = app
         self._insightface_app = app
-
-    def _predict_hands(self, hand_model, image, file_path):
-        try:
-            results = hand_model.predict(
-                image,
-                imgsz=HAND_DETECT_IMGSZ,
-                conf=HAND_DETECT_CONF,
-                max_det=HAND_DETECT_MAX_DET,
-                verbose=False,
-            )
-            return list(results[0].boxes.xyxy.cpu().numpy())
-        except Exception as exc:
-            logger.warning("Hand detection failed for %s: %s", file_path, exc)
-            return []
 
     @staticmethod
     def _get_loaded_relationship(obj, name):
@@ -189,17 +136,6 @@ class FeatureExtractionTask(BaseTask):
             return (
                 session.exec(
                     select(Face.id).where(Face.picture_id == picture_id)
-                ).first()
-                is not None
-            )
-
-        return bool(self._db.run_immediate_read_task(fetch))
-
-    def _has_hands(self, picture_id: int) -> bool:
-        def fetch(session):
-            return (
-                session.exec(
-                    select(Hand.id).where(Hand.picture_id == picture_id)
                 ).first()
                 is not None
             )
@@ -229,7 +165,6 @@ class FeatureExtractionTask(BaseTask):
         self._init_insightface_app()
 
         updates = []
-        hand_model = self._ensure_hand_detector()
 
         for pic in pics:
             if pic.id is None:
@@ -239,24 +174,17 @@ class FeatureExtractionTask(BaseTask):
                 )
                 continue
             pic_face_ids = []
-            pic_hand_ids = []
             faces_loaded, faces_value = self._get_loaded_relationship(pic, "faces")
-            hands_loaded, hands_value = self._get_loaded_relationship(pic, "hands")
             if faces_loaded:
                 need_faces = not faces_value
             else:
                 need_faces = not self._has_faces(pic.id)
-            if hands_loaded:
-                need_hands = not hands_value
-            else:
-                need_hands = not self._has_hands(pic.id)
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
             file_path = ImageUtils.resolve_picture_path(
                 self._db.image_root, pic.file_path
             )
             ext = os.path.splitext(file_path)[1].lower()
             face_objects = []
-            hand_objects = []
             thumbnail_bytes = None
             thumbnail_crop = None
 
@@ -306,30 +234,10 @@ class FeatureExtractionTask(BaseTask):
                                 output_size=(256, 256),
                             )
 
-                    if need_hands and hand_model is not None:
-                        boxes = self._predict_hands(hand_model, img, file_path)
-                        for box in boxes:
-                            expanded = self._expand_bbox(
-                                box,
-                                img.shape[1],
-                                img.shape[0],
-                                CROP_EXPAND_SCALE,
-                            )
-                            if expanded is None:
-                                continue
-                            hand_objects.append(
-                                Hand(
-                                    picture_id=pic.id,
-                                    hand_index=-1,
-                                    bbox=expanded,
-                                    frame_index=0,
-                                )
-                            )
             elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
-                if need_faces or need_hands:
+                if need_faces:
                     cap = cv2.VideoCapture(file_path)
                     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    hand_frames_used = 0
                     if frame_count < 1:
                         logger.warning("No frames found in video: %s", file_path)
                         cap.release()
@@ -374,30 +282,6 @@ class FeatureExtractionTask(BaseTask):
                                             features=features_bytes,
                                         )
                                     )
-                            if need_hands and hand_model is not None:
-                                if hand_frames_used < HAND_DETECT_VIDEO_FRAMES:
-                                    boxes = self._predict_hands(
-                                        hand_model, frame, file_path
-                                    )
-                                    hand_frames_used += 1
-                                    for box in boxes:
-                                        expanded = self._expand_bbox(
-                                            box,
-                                            frame.shape[1],
-                                            frame.shape[0],
-                                            CROP_EXPAND_SCALE,
-                                        )
-                                        if expanded is None:
-                                            continue
-                                        hand_objects.append(
-                                            Hand(
-                                                picture_id=pic.id,
-                                                hand_index=-1,
-                                                bbox=expanded,
-                                                frame_index=0,
-                                            )
-                                        )
-
                         step = max(1, frame_count // 3)
                         for frame_index in range(step, frame_count, step):
                             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
@@ -443,29 +327,6 @@ class FeatureExtractionTask(BaseTask):
                                             features=features_bytes,
                                         )
                                     )
-                            if need_hands and hand_model is not None:
-                                if hand_frames_used < HAND_DETECT_VIDEO_FRAMES:
-                                    boxes = self._predict_hands(
-                                        hand_model, frame, file_path
-                                    )
-                                    hand_frames_used += 1
-                                    for box in boxes:
-                                        expanded = self._expand_bbox(
-                                            box,
-                                            frame.shape[1],
-                                            frame.shape[0],
-                                            CROP_EXPAND_SCALE,
-                                        )
-                                        if expanded is None:
-                                            continue
-                                        hand_objects.append(
-                                            Hand(
-                                                picture_id=pic.id,
-                                                hand_index=-1,
-                                                bbox=expanded,
-                                                frame_index=frame_index,
-                                            )
-                                        )
                     cap.release()
                     if need_faces and first_frame is not None and first_bboxes:
                         (
@@ -561,71 +422,5 @@ class FeatureExtractionTask(BaseTask):
 
             if need_faces:
                 updates.append((Picture, pic.id, "faces", pic_face_ids))
-
-            if need_hands:
-                for hand in hand_objects:
-                    if hand.picture_id is None:
-                        hand.picture_id = pic.id
-
-                hand_objects.sort(
-                    key=lambda h: (h.bbox[1], h.bbox[0], h.bbox[3], h.bbox[2])
-                )
-                for idx, hand in enumerate(hand_objects):
-                    hand.hand_index = idx
-
-                if not hand_objects:
-                    logger.debug(
-                        "No hands found in %s for picture %s. Inserting sentinel record.",
-                        file_path,
-                        pic.id,
-                    )
-
-                    def insert_hand_sentinel(session):
-                        hand = Hand(
-                            picture_id=pic.id,
-                            hand_index=-1,
-                            frame_index=0,
-                            bbox=None,
-                        )
-                        session.add(hand)
-                        session.commit()
-                        session.refresh(hand)
-                        return hand.id
-
-                    hand_id = self._db.run_task(
-                        insert_hand_sentinel, priority=DBPriority.HIGH
-                    )
-                    pic_hand_ids.append(hand_id)
-                else:
-
-                    def insert_hands(session, hands_to_insert, picture_id):
-                        hand_ids = []
-                        for hand in hands_to_insert:
-                            if hand.picture_id is None:
-                                hand.picture_id = picture_id
-                            if hand.picture_id is None:
-                                logger.warning(
-                                    "Skipping hand insert for %s: missing picture_id",
-                                    file_path,
-                                )
-                                continue
-                            session.add(hand)
-                        session.commit()
-                        for hand in hands_to_insert:
-                            if hand.picture_id is None:
-                                continue
-                            session.refresh(hand)
-                            hand_ids.append(hand.id)
-                        return hand_ids
-
-                    hand_ids = self._db.run_task(
-                        insert_hands,
-                        hand_objects,
-                        pic.id,
-                        priority=DBPriority.HIGH,
-                    )
-                    pic_hand_ids.extend(hand_ids)
-
-                updates.append((Picture, pic.id, "hands", pic_hand_ids))
 
         return updates

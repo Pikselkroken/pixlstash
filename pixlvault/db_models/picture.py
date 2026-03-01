@@ -20,12 +20,7 @@ from sqlmodel import (
 )
 from typing import ClassVar, Optional, List, TYPE_CHECKING
 
-from pixlvault.db_models.face_tag import FaceTag
-from pixlvault.db_models.hand_tag import HandTag
-
-
 from .face import Face
-from .hand import Hand
 from .picture_set import PictureSet, PictureSetMember
 from .picture_stack import PictureStack
 from .quality import Quality
@@ -130,8 +125,6 @@ def _default_likeness_parameters() -> np.ndarray:
 class ExportType(Enum):
     FULL = "full"
     FACE = "face"
-    HAND = "hand"
-    FACE_HAND = "face_hand"
 
     @classmethod
     def from_string(cls, value: str) -> "ExportType":
@@ -193,13 +186,6 @@ class Picture(SQLModel, table=True):
         back_populates="picture",
         sa_relationship_kwargs={
             "overlaps": "characters",
-            "cascade": "all, delete-orphan",
-            "passive_deletes": True,
-        },
-    )
-    hands: List["Hand"] = Relationship(
-        back_populates="picture",
-        sa_relationship_kwargs={
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
         },
@@ -706,52 +692,22 @@ class Picture(SQLModel, table=True):
     @staticmethod
     def fetch_features(session, picture_ids):
         """
-        Fetch faces, hands, and their tags for a list of picture IDs.
+        Fetch faces for a list of picture IDs.
         Returns:
             faces_by_pic: dict[picture_id, list[Face]]
-            hands_by_pic: dict[picture_id, list[Hand]]
-            face_tags_by_face: dict[face_id, list[tag]]
-            hand_tags_by_hand: dict[hand_id, list[tag]]
+            hands_by_pic: dict (empty, hand detection removed)
+            face_tags_by_face: dict (empty, face tags removed)
+            hand_tags_by_hand: dict (empty, hand tags removed)
         """
         faces = session.exec(select(Face).where(Face.picture_id.in_(picture_ids))).all()
-        hands = session.exec(select(Hand).where(Hand.picture_id.in_(picture_ids))).all()
-        face_ids = [face.id for face in faces]
-        hand_ids = [hand.id for hand in hands]
-
-        face_tags = []
-        hand_tags = []
-        if face_ids:
-            face_tags = session.exec(
-                select(FaceTag.face_id, Tag.tag)
-                .join(Tag, Tag.id == FaceTag.tag_id)
-                .where(FaceTag.face_id.in_(face_ids))
-            ).all()
-        if hand_ids:
-            hand_tags = session.exec(
-                select(HandTag.hand_id, Tag.tag)
-                .join(Tag, Tag.id == HandTag.tag_id)
-                .where(HandTag.hand_id.in_(hand_ids))
-            ).all()
 
         faces_by_pic = {}
         for face in faces:
             faces_by_pic.setdefault(face.picture_id, []).append(face)
 
-        hands_by_pic = {}
-        for hand in hands:
-            hands_by_pic.setdefault(hand.picture_id, []).append(hand)
-
-        face_tags_by_face = {}
-        for face_id, tag in face_tags:
-            face_tags_by_face.setdefault(face_id, []).append(tag)
-
-        hand_tags_by_hand = {}
-        for hand_id, tag in hand_tags:
-            hand_tags_by_hand.setdefault(hand_id, []).append(tag)
-
         return (
             faces_by_pic,
-            hands_by_pic,
-            face_tags_by_face,
-            hand_tags_by_hand,
+            {},
+            {},
+            {},
         )

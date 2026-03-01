@@ -189,13 +189,13 @@ class Server:
     def _handle_vault_event(self, event_type: EventType, data=None):
         if not self._ws_loop:
             return
+        coro = self._broadcast_ws_event(event_type, data)
         try:
             logger.debug("Got the following event from vault: %s", event_type)
-            asyncio.run_coroutine_threadsafe(
-                self._broadcast_ws_event(event_type, data), self._ws_loop
-            )
+            asyncio.run_coroutine_threadsafe(coro, self._ws_loop)
         except Exception as exc:
-            logger.debug("Failed to dispatch websocket event: %s", exc)
+            logger.warning("Failed to dispatch websocket event: %s", exc)
+            coro.close()  # prevent 'coroutine never awaited' ResourceWarning
 
     def _should_send_ws_update(self, event_type: EventType, filters: dict) -> bool:
         return event_type in (
@@ -348,13 +348,20 @@ class Server:
 
     @asynccontextmanager
     async def lifespan(self, app):
-        # Startup logic (if needed)
-        self._ws_loop = asyncio.get_running_loop()
+        # Startup logic
+        loop = asyncio.get_running_loop()
+        # Only claim _ws_loop if nothing else (e.g. a WebSocket handler) has set it
+        # yet. This avoids overwriting the WebSocket loop when TestClient creates a
+        # fresh event loop per HTTP request.
+        was_set_by_us = self._ws_loop is None
+        if was_set_by_us:
+            self._ws_loop = loop
         if self._server_config.get("generate_thumbnails_on_startup", True):
-            await self._ws_loop.run_in_executor(None, self._generate_missing_thumbnails)
+            await loop.run_in_executor(None, self._generate_missing_thumbnails)
         yield
-        # Shutdown logic
-        self._ws_loop = None
+        # Shutdown logic — only clear _ws_loop if this lifespan instance set it
+        if was_set_by_us:
+            self._ws_loop = None
         if self._shutdown_on_lifespan and hasattr(self, "vault"):
             self.vault.close()
 
@@ -603,8 +610,10 @@ class Server:
         @self.api.websocket("/ws/updates")
         async def websocket_updates(websocket: WebSocket):
             await websocket.accept()
-            if not self._ws_loop:
-                self._ws_loop = asyncio.get_running_loop()
+            # Always refresh _ws_loop so it tracks the currently-running event loop.
+            # In production (uvicorn) this is always the same loop; in tests each
+            # WebSocket session may run on a different loop than HTTP requests.
+            self._ws_loop = asyncio.get_running_loop()
             client = {"ws": websocket, "filters": {}}
             with self._ws_clients_lock:
                 self._ws_clients.append(client)

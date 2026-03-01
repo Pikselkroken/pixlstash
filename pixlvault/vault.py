@@ -19,8 +19,6 @@ from .database import DBPriority, VaultDatabase
 from .db_models import (
     MetaData,
     Character,
-    Face,
-    Hand,
     Picture,
     PictureSet,
     Tag,
@@ -652,15 +650,7 @@ class Vault:
         result = session.exec(
             select(func.count())
             .select_from(Picture)
-            .where(
-                (~Picture.tags.any(has_real_tag))
-                | Picture.faces.any(
-                    (Face.face_index >= 0) & (~Face.tags.any(has_real_tag))
-                )
-                | Picture.hands.any(
-                    (Hand.hand_index >= 0) & (~Hand.tags.any(has_real_tag))
-                )
-            )
+            .where(~Picture.tags.any(has_real_tag))
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
@@ -669,9 +659,7 @@ class Vault:
     @staticmethod
     def _count_missing_feature_extractions(session: Session) -> int:
         result = session.exec(
-            select(func.count())
-            .select_from(Picture)
-            .where((~Picture.faces.any()) | (~Picture.hands.any()))
+            select(func.count()).select_from(Picture).where(~Picture.faces.any())
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
@@ -773,9 +761,6 @@ class Vault:
 
         model_state["insightface_loaded"] = bool(
             getattr(FeatureExtractionTask, "_global_insightface_app", None) is not None
-        )
-        model_state["hand_detector_loaded"] = bool(
-            getattr(FeatureExtractionTask, "_hand_model", None) is not None
         )
         model_state["workers_busy"] = worker_busy
         logger.info("Model residency status: %s", model_state)

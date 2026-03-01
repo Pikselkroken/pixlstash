@@ -3,13 +3,8 @@ from sqlmodel import SQLModel, Field, Integer, Relationship
 
 from typing import TYPE_CHECKING, Optional
 
-from .face_tag import FaceTag
-from .hand_tag import HandTag
-
 if TYPE_CHECKING:
     from .picture import Picture
-    from .face import Face
-    from .hand import Hand
 
 
 DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT = 3
@@ -33,7 +28,7 @@ DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
     "missing toe": 4,
     "extra toe": 4,
     "fused toes": 3,
-    "incorrect reflection": 3,
+    "pixelated": 2,
 }
 TAG_EMPTY_SENTINEL = ""
 
@@ -63,14 +58,4 @@ class Tag(SQLModel, table=True):
             "passive_deletes": True,
             "foreign_keys": "[Tag.picture_id]",
         },
-    )
-    faces: list["Face"] = Relationship(
-        back_populates="tags",
-        link_model=FaceTag,
-        sa_relationship_kwargs={"passive_deletes": True},
-    )
-    hands: list["Hand"] = Relationship(
-        back_populates="tags",
-        link_model=HandTag,
-        sa_relationship_kwargs={"passive_deletes": True},
     )

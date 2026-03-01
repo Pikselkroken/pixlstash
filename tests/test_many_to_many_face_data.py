@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from pixlvault.server import Server
 from pixlvault.db_models import Face
-from pixlvault.worker_types import TaskType
+from pixlvault.tasks.task_type import TaskType
 from tests.utils import upload_pictures_and_wait
 
 

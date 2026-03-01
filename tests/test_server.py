@@ -20,7 +20,7 @@ from urllib.parse import quote
 from pixlvault.db_models.picture import Picture
 from pixlvault.pixl_logging import get_logger
 from pixlvault.utils.image_processing.image_utils import ImageUtils
-from pixlvault.worker_types import TaskType
+from pixlvault.tasks.task_type import TaskType
 from pixlvault.server import Server
 from tests.utils import upload_pictures_and_wait
 

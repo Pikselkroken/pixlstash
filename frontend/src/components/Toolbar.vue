@@ -381,13 +381,6 @@
               hide-details
             />
             <v-switch
-              v-model="showHandBboxesModel"
-              label="Hand bounding boxes"
-              color="primary"
-              density="compact"
-              hide-details
-            />
-            <v-switch
               v-model="showFormatModel"
               label="Image format"
               color="primary"
@@ -586,7 +579,6 @@ const props = defineProps({
   maxColumns: { type: Number, default: 10 },
   showStars: { type: Boolean, default: true },
   showFaceBboxes: { type: Boolean, default: false },
-  showHandBboxes: { type: Boolean, default: false },
   showFormat: { type: Boolean, default: true },
   showResolution: { type: Boolean, default: true },
   showProblemIcon: { type: Boolean, default: true },
@@ -620,7 +612,6 @@ const emit = defineEmits([
   "update:columns",
   "update:showStars",
   "update:showFaceBboxes",
-  "update:showHandBboxes",
   "update:showFormat",
   "update:showResolution",
   "update:showProblemIcon",
@@ -706,11 +697,6 @@ const showStarsModel = computed({
 const showFaceBboxesModel = computed({
   get: () => props.showFaceBboxes,
   set: (value) => emit("update:showFaceBboxes", value),
-});
-
-const showHandBboxesModel = computed({
-  get: () => props.showHandBboxes,
-  set: (value) => emit("update:showHandBboxes", value),
 });
 
 const showFormatModel = computed({

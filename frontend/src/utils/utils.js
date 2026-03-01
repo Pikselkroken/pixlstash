@@ -93,17 +93,3 @@ export function faceBoxColor(idx) {
   ];
   return palette[idx % palette.length];
 }
-
-export function handBoxColor(idx) {
-  const palette = [
-    '#00e5ff',  // cyan
-    '#ff6d00',  // orange
-    '#00e676',  // green
-    '#f50057',  // pink
-    '#651fff',  // purple
-    '#c0ca33',  // lime
-    '#ff1744',  // red
-    '#18ffff',  // teal
-  ];
-  return palette[idx % palette.length];
-}

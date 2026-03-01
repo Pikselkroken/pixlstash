@@ -10,7 +10,7 @@ from .feature_extraction_task import FeatureExtractionTask
 
 
 class MissingFeatureExtractionFinder(BaseTaskFinder):
-    """Find pictures missing faces or hands and create a feature extraction task."""
+    """Find pictures missing faces and create a feature extraction task."""
 
     def __init__(self, database, picture_tagger_getter: Callable):
         self._db = database
@@ -41,8 +41,8 @@ class MissingFeatureExtractionFinder(BaseTaskFinder):
     def _fetch_missing_features(session: Session, limit: int):
         return session.exec(
             select(Picture)
-            .where((~Picture.faces.any()) | (~Picture.hands.any()))
-            .options(selectinload(Picture.faces), selectinload(Picture.hands))
+            .where(~Picture.faces.any())
+            .options(selectinload(Picture.faces))
             .order_by(Picture.id)
             .limit(limit)
         ).all()

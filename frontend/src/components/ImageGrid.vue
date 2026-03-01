@@ -406,26 +406,6 @@
                 >
                   {{ img.format.toUpperCase() }}
                 </div>
-                <template
-                  v-if="
-                    props.showHandBboxes &&
-                    isThumbnailReady(img.id) &&
-                    img.thumbnail
-                  "
-                >
-                  <div
-                    v-for="overlay in getHandBboxOverlays(img).value"
-                    :key="
-                      overlay.handKey +
-                      '-' +
-                      img.id +
-                      '-' +
-                      (img.thumbnail ? 1 : 0)
-                    "
-                    class="hand-bbox-overlay"
-                    :style="overlay.style"
-                  ></div>
-                </template>
               </template>
               <template v-else>
                 <div class="thumbnail-placeholder">
@@ -520,7 +500,6 @@ import {
   faceBoxColor,
   formatUserDate,
   getStackColor,
-  handBoxColor,
   StackThreshold,
   toggleScore,
 } from "../utils/utils.js";
@@ -554,7 +533,6 @@ const props = defineProps({
   stackThreshold: { type: [String, Number, null], default: null },
   showStars: Boolean,
   showFaceBboxes: Boolean,
-  showHandBboxes: Boolean,
   showFormat: Boolean,
   showResolution: Boolean,
   showProblemIcon: Boolean,
@@ -1963,93 +1941,6 @@ function getFaceBboxOverlays(img) {
       face: entry.face,
       colorIdx,
     }));
-  });
-}
-
-function getHandBboxStyle(bbox, idx, img, containerEl) {
-  if (!bbox || bbox.length !== 4 || !containerEl) return null;
-  const containerWidth = containerEl.clientWidth;
-  const containerHeight = containerEl.clientHeight;
-  const naturalWidth = img.thumbnail_width || img.width || 1;
-  const naturalHeight = img.thumbnail_height || img.height || 1;
-  const scale = Math.max(
-    containerWidth / naturalWidth,
-    containerHeight / naturalHeight,
-  );
-  const displayWidth = naturalWidth * scale;
-  const offsetX = (containerWidth - displayWidth) / 2;
-  const offsetY = 0;
-  const left = offsetX + bbox[0] * scale;
-  const top = offsetY + bbox[1] * scale;
-  const width = (bbox[2] - bbox[0]) * scale;
-  const height = (bbox[3] - bbox[1]) * scale;
-
-  const borderColor = handBoxColor(idx);
-  return {
-    position: "absolute",
-    border: `1.5px dashed ${borderColor}`,
-    background: `${borderColor}22`,
-    "--face-frame-color": `${borderColor}77`,
-    left: `${left}px`,
-    top: `${top}px`,
-    width: `${width}px`,
-    height: `${height}px`,
-  };
-}
-
-function getHandBboxOverlays(img) {
-  return computed(() => {
-    void faceOverlayRedrawKey.value;
-    void getThumbnailLoadedKey(img.id);
-    if (
-      !props.showHandBboxes ||
-      !img.hands ||
-      !img.hands.length ||
-      !(img.thumbnail_width || img.width) ||
-      !(img.thumbnail_height || img.height)
-    ) {
-      return [];
-    }
-    const el = thumbnailRefs[img.id];
-    if (!el) return [];
-    const firstFrameHands = img.hands
-      .map((hand, handIdx) => ({ hand, handIdx }))
-      .filter(
-        (entry) =>
-          entry.hand.frame_index === 0 || entry.hand.frame_index == null,
-      );
-    if (firstFrameHands.length === 0) {
-      console.debug("[hand-bbox] No first-frame hands", {
-        imageId: img.id,
-        hands: img.hands?.map((hand) => ({
-          id: hand?.id,
-          frame_index: hand?.frame_index,
-          bbox: hand?.bbox,
-        })),
-      });
-    }
-    const overlays = firstFrameHands
-      .map((entry, idx) => ({
-        style: getHandBboxStyle(entry.hand.bbox, idx, img, el),
-        handKey: entry.hand.id ?? `hand-${entry.handIdx}`,
-        label: `Hand ${entry.handIdx + 1}`,
-      }))
-      .filter((entry) => entry.style != null);
-    if (!overlays.length && firstFrameHands.length) {
-      console.debug("[hand-bbox] Styles filtered", {
-        imageId: img.id,
-        hands: firstFrameHands.map((entry) => ({
-          id: entry.hand?.id,
-          frame_index: entry.hand?.frame_index,
-          bbox: entry.hand?.bbox,
-        })),
-        thumbnail: {
-          width: img.thumbnail_width,
-          height: img.thumbnail_height,
-        },
-      });
-    }
-    return overlays;
   });
 }
 
@@ -3952,7 +3843,9 @@ function collapseStackImages(images) {
     }
     if (seen.has(stackId)) continue;
     seen.add(stackId);
-    const stackCount = counts.get(stackId) || 1;
+    const localCount = counts.get(stackId) || 1;
+    const serverCount = Number(img?.stack_count ?? img?.stackCount ?? 0);
+    const stackCount = Math.max(localCount, serverCount) || 1;
     if (expandedStackIds.value.has(stackId)) {
       const expanded = buildExpandedStackImages(stackId, img, stackCount);
       if (expanded.length) {
@@ -5270,19 +5163,11 @@ watch(
 );
 
 watch(
-  [
-    () => props.showFaceBboxes,
-    () => props.showHandBboxes,
-    () => allGridImages.value.length,
-  ],
-  ([faceEnabled, handEnabled, length], [prevFace, prevHand, prevLength]) => {
-    if (!faceEnabled && !handEnabled) return;
+  [() => props.showFaceBboxes, () => allGridImages.value.length],
+  ([faceEnabled, length], [prevFace, prevLength]) => {
+    if (!faceEnabled) return;
     if (length <= 0) return;
-    if (
-      faceEnabled === prevFace &&
-      handEnabled === prevHand &&
-      length === prevLength
-    ) {
+    if (faceEnabled === prevFace && length === prevLength) {
       return;
     }
     invalidateVisibleThumbnailRanges();
@@ -5528,9 +5413,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         gridImg.hands =
           thumbObj && Array.isArray(thumbObj.hands) ? thumbObj.hands : [];
         if (props.showFaceBboxes && gridImg.faces.length) {
-          overlayNeedsRedraw = true;
-        }
-        if (props.showHandBboxes && gridImg.hands.length) {
           overlayNeedsRedraw = true;
         }
         gridImg.penalised_tags =

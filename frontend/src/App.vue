@@ -57,7 +57,6 @@ const filteredSearchHistory = computed(() => {
 });
 const showStars = ref(true);
 const showFaceBboxes = ref(false);
-const showHandBboxes = ref(false);
 const showFormat = ref(true);
 const showResolution = ref(true);
 const showProblemIcon = ref(true);
@@ -268,8 +267,6 @@ const exportCaptionOptions = [
 const exportTypeOptions = [
   { title: "Full images", value: "full" },
   { title: "Face crops", value: "face" },
-  { title: "Hand crops", value: "hand" },
-  { title: "Face & hand crops", value: "face_hand" },
 ];
 const exportResolutionOptions = [
   { title: "Original", value: "original" },
@@ -296,7 +293,6 @@ const config = reactive({
   sidebar_thumbnail_size: 64,
   show_stars: true,
   show_face_bboxes: false,
-  show_hand_bboxes: false,
   show_format: true,
   show_resolution: true,
   show_problem_icon: true,
@@ -577,9 +573,6 @@ async function fetchConfig() {
     if (typeof res.data.show_face_bboxes === "boolean") {
       showFaceBboxes.value = res.data.show_face_bboxes;
     }
-    if (typeof res.data.show_hand_bboxes === "boolean") {
-      showHandBboxes.value = res.data.show_hand_bboxes;
-    }
     if (typeof res.data.show_format === "boolean") {
       showFormat.value = res.data.show_format;
     }
@@ -627,10 +620,6 @@ async function fetchConfig() {
       typeof res.data.show_face_bboxes === "boolean"
         ? res.data.show_face_bboxes
         : showFaceBboxes.value;
-    config.show_hand_bboxes =
-      typeof res.data.show_hand_bboxes === "boolean"
-        ? res.data.show_hand_bboxes
-        : showHandBboxes.value;
     config.show_format =
       typeof res.data.show_format === "boolean"
         ? res.data.show_format
@@ -674,7 +663,6 @@ async function fetchConfig() {
           : null,
       show_stars: showStars.value,
       show_face_bboxes: showFaceBboxes.value,
-      show_hand_bboxes: showHandBboxes.value,
       show_format: showFormat.value,
       show_resolution: showResolution.value,
       show_problem_icon: showProblemIcon.value,
@@ -691,7 +679,6 @@ async function fetchConfig() {
     };
     console.debug("[Config] Overlay settings applied", {
       showFaceBboxes: showFaceBboxes.value,
-      showHandBboxes: showHandBboxes.value,
       showFormat: showFormat.value,
       showResolution: showResolution.value,
       showProblemIcon: showProblemIcon.value,
@@ -719,9 +706,6 @@ async function patchConfigUIOptions() {
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
   if (typeof showFaceBboxes.value === "boolean") {
     patch.show_face_bboxes = showFaceBboxes.value;
-  }
-  if (typeof showHandBboxes.value === "boolean") {
-    patch.show_hand_bboxes = showHandBboxes.value;
   }
   if (typeof showFormat.value === "boolean") {
     patch.show_format = showFormat.value;
@@ -977,32 +961,17 @@ watch(showStars, () => {
 });
 
 watch(
-  [
-    showFaceBboxes,
-    showHandBboxes,
-    showFormat,
-    showResolution,
-    showProblemIcon,
-    showStacks,
-  ],
+  [showFaceBboxes, showFormat, showResolution, showProblemIcon, showStacks],
   () => {
     patchConfigUIOptions();
   },
 );
 
 watch(
-  [
-    showFaceBboxes,
-    showHandBboxes,
-    showFormat,
-    showResolution,
-    showProblemIcon,
-    showStacks,
-  ],
-  ([face, hand, format, resolution, problem, stacks]) => {
+  [showFaceBboxes, showFormat, showResolution, showProblemIcon, showStacks],
+  ([face, format, resolution, problem, stacks]) => {
     console.debug("[Config] Overlay settings changed", {
       showFaceBboxes: face,
-      showHandBboxes: hand,
       showFormat: format,
       showResolution: resolution,
       showProblemIcon: problem,
@@ -1177,7 +1146,6 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:columns="columns"
             v-model:showStars="showStars"
             v-model:showFaceBboxes="showFaceBboxes"
-            v-model:showHandBboxes="showHandBboxes"
             v-model:showFormat="showFormat"
             v-model:showResolution="showResolution"
             v-model:showProblemIcon="showProblemIcon"
@@ -1228,7 +1196,6 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :wsPluginProgress="wsPluginProgress"
               :mediaTypeFilter="mediaTypeFilter"
               :showFaceBboxes="showFaceBboxes"
-              :showHandBboxes="showHandBboxes"
               :showFormat="showFormat"
               :showResolution="showResolution"
               :showProblemIcon="showProblemIcon"

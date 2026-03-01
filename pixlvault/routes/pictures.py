@@ -32,9 +32,6 @@ from pixlvault.database import DBPriority
 from pixlvault.db_models import (
     Character,
     Face,
-    FaceTag,
-    Hand,
-    HandTag,
     Picture,
     PictureLikeness,
     PictureSetMember,
@@ -1197,7 +1194,6 @@ def create_router(server) -> APIRouter:
                     "id",
                     "file_path",
                     "faces",
-                    "hands",
                     "thumbnail_left",
                     "thumbnail_top",
                     "thumbnail_side",
@@ -1235,7 +1231,6 @@ def create_router(server) -> APIRouter:
         for pic in pics:
             try:
                 face_entries = []
-                hand_entries = []
                 mapped_any = False
                 raw_face_bboxes = []
                 for face in getattr(pic, "faces", []):
@@ -1259,41 +1254,16 @@ def create_router(server) -> APIRouter:
                                 "frame_index": getattr(face, "frame_index", None),
                             }
                         )
-                for hand in getattr(pic, "hands", []):
-                    bbox = None
-                    try:
-                        bbox = hand.bbox if hasattr(hand, "bbox") else None
-                        if bbox and isinstance(bbox, str):
-                            bbox = ast.literal_eval(bbox)
-                    except Exception:
-                        bbox = None
-                    if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                        hand_entries.append(
-                            {
-                                "id": hand.id,
-                                "bbox": list(bbox),
-                                "frame_index": getattr(hand, "frame_index", None),
-                                "hand_index": getattr(hand, "hand_index", None),
-                            }
-                        )
-
                 face_data = []
-                hand_data = []
                 for entry in face_entries:
                     mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
                     mapped_any = mapped_any or mapped
                     face_data.append({**entry, "bbox": mapped_bbox})
 
-                for entry in hand_entries:
-                    mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
-                    mapped_any = mapped_any or mapped
-                    hand_data.append({**entry, "bbox": mapped_bbox})
-
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp"
                 results[pic.id] = {
                     "thumbnail": thumbnail_url,
                     "faces": face_data,
-                    "hands": hand_data,
                     "thumbnail_width": 256 if mapped_any else None,
                     "thumbnail_height": 256 if mapped_any else None,
                     "penalised_tags": list(
@@ -1307,7 +1277,6 @@ def create_router(server) -> APIRouter:
                 results[pic.id] = {
                     "thumbnail": None,
                     "faces": [],
-                    "hands": [],
                     "penalised_tags": [],
                 }
         response = JSONResponse(results)
@@ -1989,23 +1958,7 @@ def create_router(server) -> APIRouter:
         pic = pics[0]
 
         def fetch_image_only_tags(session: Session, pic_id: int):
-            face_tag_ids = (
-                select(FaceTag.tag_id)
-                .join(Tag, Tag.id == FaceTag.tag_id)
-                .where(Tag.picture_id == pic_id)
-            )
-            hand_tag_ids = (
-                select(HandTag.tag_id)
-                .join(Tag, Tag.id == HandTag.tag_id)
-                .where(Tag.picture_id == pic_id)
-            )
-            return session.exec(
-                select(Tag).where(
-                    Tag.picture_id == pic_id,
-                    ~Tag.id.in_(face_tag_ids),
-                    ~Tag.id.in_(hand_tag_ids),
-                )
-            ).all()
+            return session.exec(select(Tag).where(Tag.picture_id == pic_id)).all()
 
         pic_tags = server.vault.db.run_task(fetch_image_only_tags, pic.id)
         pic_dict = safe_model_dict(pic)
@@ -2145,67 +2098,6 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_PICTURES)
         return safe_model_dict(face)
 
-    @router.post(
-        "/pictures/{id}/hand",
-        summary="Create manual hand entry",
-        description="Adds a hand bounding box to a picture and frame index, updating sentinel/ordering behavior for manual annotations.",
-    )
-    async def create_picture_hand(id: str, payload: dict = Body(...)):
-        try:
-            pic_id = int(id)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid picture id")
-
-        bbox = payload.get("bbox") if isinstance(payload, dict) else None
-        frame_index = payload.get("frame_index", 0) if isinstance(payload, dict) else 0
-        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-            raise HTTPException(status_code=400, detail="bbox must be [x1, y1, x2, y2]")
-        try:
-            bbox_vals = [int(round(float(v))) for v in bbox]
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="bbox values must be numbers")
-        try:
-            frame_index = int(frame_index)
-        except (TypeError, ValueError):
-            frame_index = 0
-
-        def create_hand(session: Session):
-            pic = session.get(Picture, pic_id)
-            if not pic:
-                return None
-            sentinel = session.exec(
-                select(Hand).where(
-                    Hand.picture_id == pic_id,
-                    Hand.frame_index == frame_index,
-                    Hand.hand_index == -1,
-                )
-            ).first()
-            if sentinel is not None:
-                session.delete(sentinel)
-            max_index = session.exec(
-                select(func.max(Hand.hand_index)).where(
-                    Hand.picture_id == pic_id,
-                    Hand.frame_index == frame_index,
-                )
-            ).one()
-            next_index = (max_index or 0) + 1 if max_index is not None else 0
-            hand = Hand(
-                picture_id=pic_id,
-                frame_index=frame_index,
-                hand_index=next_index,
-                bbox=bbox_vals,
-            )
-            session.add(hand)
-            session.commit()
-            session.refresh(hand)
-            return hand
-
-        hand = server.vault.db.run_task(create_hand, priority=DBPriority.IMMEDIATE)
-        if not hand:
-            raise HTTPException(status_code=404, detail="Picture not found")
-        server.vault.notify(EventType.CHANGED_PICTURES)
-        return safe_model_dict(hand)
-
     @router.delete(
         "/pictures/{id}/face/{index}",
         summary="Delete face by index",
@@ -2267,67 +2159,6 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Face not found")
         server.vault.notify(EventType.CHANGED_PICTURES)
         return {"status": "success", "message": "Face deleted."}
-
-    @router.delete(
-        "/pictures/{id}/hand/{index}",
-        summary="Delete hand by index",
-        description="Deletes a hand at frame 0 by index and reindexes remaining hands for stable ordering.",
-    )
-    async def delete_picture_hand(id: str, index: int):
-        try:
-            pic_id = int(id)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid picture id")
-
-        def delete_hand(session: Session):
-            hand = session.exec(
-                select(Hand).where(
-                    Hand.picture_id == pic_id,
-                    Hand.frame_index == 0,
-                    Hand.hand_index == index,
-                )
-            ).first()
-            if not hand:
-                return False
-            session.delete(hand)
-            remaining = session.exec(
-                select(Hand)
-                .where(
-                    Hand.picture_id == pic_id,
-                    Hand.frame_index == 0,
-                    Hand.hand_index >= 0,
-                )
-                .order_by(Hand.hand_index, Hand.id)
-            ).all()
-            for next_idx, entry in enumerate(remaining):
-                if entry.hand_index != next_idx:
-                    entry.hand_index = next_idx
-                    session.add(entry)
-            if not remaining:
-                sentinel = session.exec(
-                    select(Hand).where(
-                        Hand.picture_id == pic_id,
-                        Hand.frame_index == 0,
-                        Hand.hand_index == -1,
-                    )
-                ).first()
-                if sentinel is None:
-                    session.add(
-                        Hand(
-                            picture_id=pic_id,
-                            frame_index=0,
-                            hand_index=-1,
-                            bbox=None,
-                        )
-                    )
-            session.commit()
-            return True
-
-        deleted = server.vault.db.run_task(delete_hand, priority=DBPriority.IMMEDIATE)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Hand not found")
-        server.vault.notify(EventType.CHANGED_PICTURES)
-        return {"status": "success", "message": "Hand deleted."}
 
     @router.get(
         "/pictures/{id}/character_likeness",

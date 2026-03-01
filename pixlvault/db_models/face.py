@@ -15,14 +15,11 @@ from sqlmodel import (
 )
 from typing import List, Optional, TYPE_CHECKING
 
-from pixlvault.db_models.face_tag import FaceTag
-
 from .quality import Quality
 
 if TYPE_CHECKING:
     from .picture import Picture
     from .character import Character
-    from .tag import Tag
 
 
 class Face(SQLModel, table=True):
@@ -55,11 +52,6 @@ class Face(SQLModel, table=True):
     )
     picture: Optional["Picture"] = Relationship(
         back_populates="faces", sa_relationship_kwargs={"overlaps": "character"}
-    )
-    tags: List["Tag"] = Relationship(
-        back_populates="faces",
-        link_model=FaceTag,
-        sa_relationship_kwargs={"passive_deletes": True},
     )
     character: Optional["Character"] = Relationship(
         back_populates="faces", sa_relationship_kwargs={"overlaps": "picture"}

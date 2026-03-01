@@ -132,6 +132,35 @@ class ExportUtils:
         }
 
     @staticmethod
+    def _deduplicate_stacks(pics: list) -> list:
+        """Keep only the stack leader from each stack, drop the rest.
+
+        The leader is the newest picture by ``created_at`` (ties broken by
+        highest ``id``), matching the frontend's ``sortStackMembers`` logic.
+        Pictures not in any stack are passed through unchanged.
+        """
+        by_stack: dict = {}
+        result = []
+        for pic in pics:
+            stack_id = getattr(pic, "stack_id", None)
+            if stack_id is None:
+                result.append(pic)
+            else:
+                by_stack.setdefault(stack_id, []).append(pic)
+
+        for stack_id, members in by_stack.items():
+            leader = max(
+                members,
+                key=lambda p: (
+                    getattr(p, "created_at", None) or "",
+                    getattr(p, "id", 0) or 0,
+                ),
+            )
+            result.append(leader)
+
+        return result
+
+    @staticmethod
     def generate_zip(
         server, request, task_id, export_tasks, TEMP_EXPORT_DIR, background_data
     ):
@@ -245,6 +274,11 @@ class ExportUtils:
                 f"Export task {task_id}: {len(pics)} pictures to be added to the ZIP."
             )
 
+            pics = ExportUtils._deduplicate_stacks(pics)
+            logger.debug(
+                f"Export task {task_id}: {len(pics)} pictures after stack deduplication."
+            )
+
             if not pics:
                 export_tasks[task_id]["status"] = "failed"
                 return
@@ -267,16 +301,14 @@ class ExportUtils:
 
             zip_path = os.path.join(TEMP_EXPORT_DIR, f"export_{task_id}.zip")
             feature_faces_by_pic = {}
-            feature_hands_by_pic = {}
             face_tags_by_face = {}
-            hand_tags_by_hand = {}
 
             if export_type_d != Picture.ExportType.FULL:
                 (
                     feature_faces_by_pic,
-                    feature_hands_by_pic,
+                    _,
                     face_tags_by_face,
-                    hand_tags_by_hand,
+                    _,
                 ) = server.vault.db.run_task(
                     Picture.fetch_features,
                     [pic.id for pic in pics],
@@ -286,14 +318,6 @@ class ExportUtils:
                 total_items = len(pics)
             else:
                 total_items = 0
-                export_faces = export_type_d in {
-                    Picture.ExportType.FACE,
-                    Picture.ExportType.FACE_HAND,
-                }
-                export_hands = export_type_d in {
-                    Picture.ExportType.HAND,
-                    Picture.ExportType.FACE_HAND,
-                }
                 for pic in pics:
                     if not getattr(pic, "file_path", None) or not os.path.exists(
                         ImageUtils.resolve_picture_path(
@@ -306,22 +330,13 @@ class ExportUtils:
                     )
                     if VideoUtils.is_video_file(full_path):
                         continue
-                    if export_faces:
-                        faces = feature_faces_by_pic.get(pic.id, [])
-                        for face in faces:
-                            if getattr(face, "face_index", 0) < 0:
-                                continue
-                            if not face.bbox:
-                                continue
-                            total_items += 1
-                    if export_hands:
-                        hands = feature_hands_by_pic.get(pic.id, [])
-                        for hand in hands:
-                            if getattr(hand, "hand_index", 0) < 0:
-                                continue
-                            if not hand.bbox:
-                                continue
-                            total_items += 1
+                    faces = feature_faces_by_pic.get(pic.id, [])
+                    for face in faces:
+                        if getattr(face, "face_index", 0) < 0:
+                            continue
+                        if not face.bbox:
+                            continue
+                        total_items += 1
 
             export_tasks[task_id]["total"] = total_items
             export_tasks[task_id]["processed"] = 0
@@ -431,14 +446,9 @@ class ExportUtils:
                             try:
                                 with Image.open(full_path) as img:
                                     base_name = f"image_{idx:05d}"
-                                    export_faces = export_type_d in {
-                                        Picture.ExportType.FACE,
-                                        Picture.ExportType.FACE_HAND,
-                                    }
-                                    export_hands = export_type_d in {
-                                        Picture.ExportType.HAND,
-                                        Picture.ExportType.FACE_HAND,
-                                    }
+                                    export_faces = (
+                                        export_type_d == Picture.ExportType.FACE
+                                    )
 
                                     if export_faces:
                                         faces = feature_faces_by_pic.get(pic.id, [])
@@ -457,24 +467,6 @@ class ExportUtils:
                                             scale=scale_factor,
                                         )
                                         export_tasks[task_id]["processed"] += len(faces)
-
-                                    if export_hands:
-                                        hands = feature_hands_by_pic.get(pic.id, [])
-                                        for hand in hands:
-                                            if hand.bbox:
-                                                hand.bbox = ImageUtils.clamp_bbox(
-                                                    hand.bbox, img.width, img.height
-                                                )
-                                        ExportUtils._export_features_to_zip(
-                                            img,
-                                            base_name,
-                                            hands,
-                                            hand_tags_by_hand,
-                                            "hand",
-                                            zip_file,
-                                            scale=scale_factor,
-                                        )
-                                        export_tasks[task_id]["processed"] += len(hands)
                             except Exception as exc:
                                 logger.warning(
                                     "Failed to export features for %s (%s).",

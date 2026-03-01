@@ -4,7 +4,7 @@ import time
 
 from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
-from pixlvault.worker_types import TaskType
+from pixlvault.tasks.task_type import TaskType
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
 from pixlvault.utils.image_processing.image_utils import ImageUtils

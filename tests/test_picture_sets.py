@@ -11,7 +11,7 @@ import tracemalloc
 
 from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
-from pixlvault.worker_types import TaskType
+from pixlvault.tasks.task_type import TaskType
 from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
@@ -110,7 +110,6 @@ def test_add_and_remove_picture_from_set():
             import threading
             import queue
 
-            deadline = time.time() + 10
             imported = False
             messages = queue.Queue()
 
@@ -126,15 +125,17 @@ def test_add_and_remove_picture_from_set():
 
             with open(img_path, "rb") as f:
                 files = {"file": (os.path.basename(img_path), f, "image/png")}
-                import_status = upload_pictures_and_wait(client, files)
+                import_status = upload_pictures_and_wait(client, files, timeout_s=120)
             assert import_status["status"] == "completed"
             # Get picture id
             pic_id = import_status["results"][0]["picture_id"]
             # Add to set
             resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
             assert resp.status_code == 200
-            # Wait for the PICTURE_IMPORTED websocket event before checking membership
-
+            # PICTURE_IMPORTED was fired during the blocking import call above;
+            # the message is already queued.  Reset the deadline so we have a
+            # fresh window to drain it.
+            deadline = time.time() + 5
             while time.time() < deadline:
                 try:
                     payload = messages.get(timeout=0.2)
