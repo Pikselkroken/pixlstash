@@ -516,7 +516,7 @@ class PictureTagger:
                 self._florence_model_name,
                 trust_remote_code=True,
                 revision=FLORENCE_REVISION,
-                dtype=dtype,
+                torch_dtype=dtype,
                 attn_implementation=attn_impl,
             ).to(device)
         except (TypeError, AttributeError) as e:
@@ -526,7 +526,7 @@ class PictureTagger:
                 self._florence_model_name,
                 trust_remote_code=True,
                 revision=FLORENCE_REVISION,
-                dtype=dtype,
+                torch_dtype=dtype,
                 attn_implementation=attn_impl,
             ).to(device)
 
@@ -648,7 +648,6 @@ class PictureTagger:
                             early_stopping=False,
                             do_sample=False,
                             num_beams=1,
-                            use_cache=False,
                             pad_token_id=self._florence_processor.tokenizer.pad_token_id,
                         )
                     generated_text = self._florence_processor.batch_decode(
@@ -713,7 +712,6 @@ class PictureTagger:
                         early_stopping=False,
                         do_sample=False,
                         num_beams=1,
-                        use_cache=False,
                         pad_token_id=self._florence_processor.tokenizer.pad_token_id,
                     )
                 generated_text = self._florence_processor.batch_decode(
@@ -831,7 +829,6 @@ class PictureTagger:
                     early_stopping=False,
                     do_sample=False,
                     num_beams=1,
-                    use_cache=False,
                     pad_token_id=self._florence_processor.tokenizer.pad_token_id,
                 )
             generated_texts = self._florence_processor.batch_decode(
