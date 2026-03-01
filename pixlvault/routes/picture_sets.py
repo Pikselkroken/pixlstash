@@ -25,7 +25,7 @@ from pixlvault.picture_scoring import (
     find_pictures_by_smart_score,
     get_smart_score_penalised_tags_from_request,
 )
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.utils import safe_model_dict, _normalize_hidden_tags
 
 logger = get_logger(__name__)
@@ -346,7 +346,7 @@ def create_router(server) -> APIRouter:
         for picture_id in top_ids:
             file_path = path_map.get(picture_id)
             resolved_path = (
-                PictureUtils.resolve_picture_path(server.vault.image_root, file_path)
+                ImageUtils.resolve_picture_path(server.vault.image_root, file_path)
                 if file_path
                 else None
             )

@@ -19,7 +19,7 @@ from pixlvault.db_models import (
 )
 from pixlvault.event_types import EventType
 from pixlvault.pixl_logging import get_logger
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.picture_scoring import select_reference_faces_for_character
 from pixlvault.utils import _normalize_hidden_tags, safe_model_dict
 
@@ -419,7 +419,7 @@ def create_router(server) -> APIRouter:
             if isinstance(best_pic, list):
                 best_pic = best_pic[0]
 
-            picture_path = PictureUtils.resolve_picture_path(
+            picture_path = ImageUtils.resolve_picture_path(
                 server.vault.image_root, best_pic.file_path
             )
             if isinstance(bbox, str):

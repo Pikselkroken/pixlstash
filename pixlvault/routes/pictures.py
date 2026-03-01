@@ -54,13 +54,14 @@ from pixlvault.picture_scoring import (
     prepare_smart_score_inputs,
     select_reference_faces_for_character,
 )
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlvault.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlvault.utils import (
     safe_model_dict,
     serialize_tag_objects,
     _normalize_hidden_tags,
 )
-from pixlvault.worker_types import WorkerType
+from pixlvault.tasks import TaskType
 
 logger = get_logger(__name__)
 
@@ -123,7 +124,7 @@ def _create_picture_imports(server, uploaded_files, dest_folder):
     """
 
     def create_sha(img_bytes):
-        return PictureUtils.calculate_hash_from_bytes(img_bytes)
+        return ImageUtils.calculate_hash_from_bytes(img_bytes)
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         shas = list(
@@ -149,7 +150,7 @@ def _create_picture_imports(server, uploaded_files, dest_folder):
             img_bytes, ext = file_entry
             pic_uuid = str(uuid.uuid4()) + ext
             logger.debug(f"Importing picture from uploaded bytes as id={pic_uuid}")
-            return PictureUtils.create_picture_from_bytes(
+            return ImageUtils.create_picture_from_bytes(
                 image_root_path=dest_folder,
                 image_bytes=img_bytes,
                 picture_uuid=pic_uuid,
@@ -922,7 +923,7 @@ def create_router(server) -> APIRouter:
                         )
                     )
                     if cand_list:
-                        scores = PictureUtils.calculate_smart_score_batch_numpy(
+                        scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
                             cand_list, good_list, bad_list
                         )
                         smart_score_by_id = {
@@ -987,7 +988,7 @@ def create_router(server) -> APIRouter:
         if not pic or not getattr(pic, "file_path", None):
             raise HTTPException(status_code=404, detail="Picture not found")
 
-        thumb_path = PictureUtils.get_thumbnail_path(
+        thumb_path = ImageUtils.get_thumbnail_path(
             server.vault.image_root, pic.file_path
         )
         if thumb_path and os.path.exists(thumb_path):
@@ -1035,24 +1036,24 @@ def create_router(server) -> APIRouter:
             def build_thumbnail_blocking() -> tuple[
                 str, str | None, bytes | None, str | None
             ]:
-                resolved = PictureUtils.resolve_picture_path(
+                resolved = ImageUtils.resolve_picture_path(
                     server.vault.image_root, pic.file_path
                 )
                 if not resolved or not os.path.exists(resolved):
                     return "missing-source", resolved, None, None
 
-                img = PictureUtils.load_image_or_video(resolved)
+                img = ImageUtils.load_image_or_video(resolved)
                 if img is None:
                     return "load-failed", resolved, None, None
 
                 if not isinstance(img, Image.Image):
                     img = Image.fromarray(img)
 
-                thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(img)
+                thumbnail_bytes = ImageUtils.generate_thumbnail_bytes(img)
                 if not thumbnail_bytes:
                     return "encode-failed", resolved, None, None
 
-                saved_thumb_path = PictureUtils.write_thumbnail_bytes(
+                saved_thumb_path = ImageUtils.write_thumbnail_bytes(
                     server.vault.image_root, pic.file_path, thumbnail_bytes
                 )
                 if saved_thumb_path and os.path.exists(saved_thumb_path):
@@ -1347,7 +1348,9 @@ def create_router(server) -> APIRouter:
             "filename": None,
         }
 
-        from pixlvault.utils.picture_service_utils import PictureServiceUtils
+        from pixlvault.utils.service.export_utils import (
+            ExportUtils as PictureServiceUtils,
+        )
 
         # Gather extra params for the export service
         background_data = {
@@ -1654,7 +1657,7 @@ def create_router(server) -> APIRouter:
         background_tasks: BackgroundTasks,
         file: list[UploadFile] = File(None),
     ):
-        if not server.vault.is_worker_running(WorkerType.FACE):
+        if not server.vault.is_worker_running(TaskType.FACE):
             raise HTTPException(
                 status_code=400,
                 detail="Face worker is not running. Start it before import.",
@@ -1744,7 +1747,7 @@ def create_router(server) -> APIRouter:
         def run_import_task(server):
             running_workers = {
                 worker_type
-                for worker_type in WorkerType.all()
+                for worker_type in TaskType.all()
                 if server.vault.is_worker_running(worker_type)
             }
             workers_resumed = False
@@ -1821,7 +1824,7 @@ def create_router(server) -> APIRouter:
                         workers_resumed = True
                     face_futures = [
                         server.vault.get_worker_future(
-                            WorkerType.FACE, Picture, pic.id, "faces"
+                            TaskType.FACE, Picture, pic.id, "faces"
                         )
                         for pic in new_pictures
                     ]
@@ -1925,7 +1928,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Picture not found")
         pic = pics[0]
 
-        file_path = PictureUtils.resolve_picture_path(
+        file_path = ImageUtils.resolve_picture_path(
             server.vault.image_root, pic.file_path
         )
         if not file_path or not os.path.isfile(file_path):
@@ -2036,7 +2039,7 @@ def create_router(server) -> APIRouter:
                         good_anchors, bad_anchors, candidates
                     )
                     if cand_list:
-                        scores = PictureUtils.calculate_smart_score_batch_numpy(
+                        scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
                             cand_list, good_list, bad_list
                         )
                         if cand_ids:
@@ -2052,7 +2055,7 @@ def create_router(server) -> APIRouter:
 
         embedded_metadata = {}
         try:
-            file_path = PictureUtils.resolve_picture_path(
+            file_path = ImageUtils.resolve_picture_path(
                 server.vault.image_root, pic.file_path
             )
             logger.debug(
@@ -2060,7 +2063,7 @@ def create_router(server) -> APIRouter:
                 pic.id,
                 file_path,
             )
-            embedded_metadata = PictureUtils.extract_embedded_metadata(file_path)
+            embedded_metadata = ImageUtils.extract_embedded_metadata(file_path)
         except Exception as exc:
             logger.warning(
                 "Failed to read embedded metadata for picture id=%s: %s",
@@ -2646,7 +2649,7 @@ def create_router(server) -> APIRouter:
 
         def delete_files(image_root: str, paths: list[str]):
             for rel_path in paths:
-                file_path = PictureUtils.resolve_picture_path(image_root, rel_path)
+                file_path = ImageUtils.resolve_picture_path(image_root, rel_path)
                 if file_path and os.path.isfile(file_path):
                     try:
                         os.remove(file_path)
@@ -2656,7 +2659,7 @@ def create_router(server) -> APIRouter:
                             file_path,
                             e,
                         )
-                thumb_path = PictureUtils.get_thumbnail_path(image_root, rel_path)
+                thumb_path = ImageUtils.get_thumbnail_path(image_root, rel_path)
                 if thumb_path and os.path.isfile(thumb_path):
                     try:
                         os.remove(thumb_path)

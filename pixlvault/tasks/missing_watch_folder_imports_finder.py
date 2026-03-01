@@ -1,7 +1,7 @@
 import os
 import time
 
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.video_utils import VideoUtils
 
 from .base_task_finder import BaseTaskFinder
 from .watch_folder_import_task import (
@@ -92,4 +92,4 @@ class MissingWatchFolderImportsFinder(BaseTaskFinder):
         ext = os.path.splitext(file_path)[1].lower()
         if ext in self._supported_image_exts:
             return True
-        return PictureUtils.is_video_file(file_path)
+        return VideoUtils.is_video_file(file_path)

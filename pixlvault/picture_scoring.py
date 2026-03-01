@@ -17,7 +17,7 @@ from pixlvault.db_models import (
     Tag,
     User,
 )
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.utils import _smart_score_penalised_tags, safe_model_dict
 
@@ -660,7 +660,7 @@ def find_pictures_by_smart_score(
         )
 
         if cand_list:
-            scores = PictureUtils.calculate_smart_score_batch_numpy(
+            scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
                 cand_list, good_list, bad_list
             )
 

@@ -11,7 +11,7 @@ from sqlmodel import create_engine, Session
 from rapidfuzz.distance import Levenshtein
 
 from pixlvault.pixl_logging import get_logger
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 
 # These imports are necessary to register the models with SQLModel
 
@@ -194,7 +194,7 @@ def levenshtein_with_id(concatenated_tags, query, picture_id):
 def init_database(dbapi_conn, conn_record):
     dbapi_conn.create_function("levenshtein", 2, levenshtein)
     dbapi_conn.create_function("levenshtein_with_id", 3, levenshtein_with_id)
-    dbapi_conn.create_function("cosine_similarity", 2, PictureUtils.cosine_similarity)
+    dbapi_conn.create_function("cosine_similarity", 2, ImageUtils.cosine_similarity)
 
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL;")

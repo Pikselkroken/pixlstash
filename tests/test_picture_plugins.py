@@ -10,7 +10,7 @@ from PIL import Image
 from sqlmodel import Session, select
 
 from pixlvault.db_models.picture_set import PictureSet, PictureSetMember
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.server import Server
 
 
@@ -35,11 +35,11 @@ def test_picture_plugins_list_and_run_colour_filter():
             img_b = _make_png_bytes((40, 255, 40))
 
             def add_pictures(session: Session):
-                first = PictureUtils.create_picture_from_bytes(
+                first = ImageUtils.create_picture_from_bytes(
                     image_root_path=server.vault.image_root,
                     image_bytes=img_a,
                 )
-                second = PictureUtils.create_picture_from_bytes(
+                second = ImageUtils.create_picture_from_bytes(
                     image_root_path=server.vault.image_root,
                     image_bytes=img_b,
                 )
@@ -230,11 +230,12 @@ def test_create_picture_from_bytes_preserves_video_extension_format(monkeypatch)
             return None
 
     monkeypatch.setattr(
-        "pixlvault.utils.picture_utils.cv2.VideoCapture", _FakeVideoCapture
+        "pixlvault.utils.image_processing.video_utils.cv2.VideoCapture",
+        _FakeVideoCapture,
     )
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        picture = PictureUtils.create_picture_from_bytes(
+        picture = ImageUtils.create_picture_from_bytes(
             image_root_path=temp_dir,
             image_bytes=b"not-an-image",
             picture_uuid="example.webm",

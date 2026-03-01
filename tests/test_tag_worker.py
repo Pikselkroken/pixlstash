@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from pixlvault.db_models import Picture
 from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
-from pixlvault.worker_types import WorkerType
+from pixlvault.worker_types import TaskType
 from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
@@ -29,7 +29,7 @@ def test_tag_worker_picture_tags():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
-            server.vault.start_workers({WorkerType.FACE})
+            server.vault.start_workers({TaskType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -56,13 +56,13 @@ def test_tag_worker_picture_tags():
             server.vault.db.run_task(set_description)
 
             future = server.vault.get_worker_future(
-                WorkerType.TAGGER, Picture, pic_id, "tags"
+                TaskType.TAGGER, Picture, pic_id, "tags"
             )
 
-            server.vault.start_workers({WorkerType.TAGGER})
+            server.vault.start_workers({TaskType.TAGGER})
 
             assert future.result(timeout=60), "TagWorker did not finish in time"
-            server.vault.stop_workers({WorkerType.TAGGER})
+            server.vault.stop_workers({TaskType.TAGGER})
 
             # Check tags via related Tag object
             def get_tags(session):
@@ -86,7 +86,7 @@ def test_tag_worker_end_to_end():
         os.makedirs(image_root, exist_ok=True)
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
-            server.vault.start_workers({WorkerType.FACE})
+            server.vault.start_workers({TaskType.FACE})
 
             client = TestClient(server.api)
 
@@ -119,11 +119,11 @@ def test_tag_worker_end_to_end():
 
             # Start the tag worker to compute tags
             t_future = server.vault.get_worker_future(
-                WorkerType.TAGGER, Picture, pic_id, "tags"
+                TaskType.TAGGER, Picture, pic_id, "tags"
             )
-            server.vault.start_workers({WorkerType.TAGGER})
+            server.vault.start_workers({TaskType.TAGGER})
             assert t_future.result(timeout=60), "TagWorker did not finish in time"
-            server.vault.stop_workers({WorkerType.TAGGER})
+            server.vault.stop_workers({TaskType.TAGGER})
 
             # Retrieve picture tags
             def get_tags(session):
@@ -146,7 +146,7 @@ def test_tagger_worker_adds_tags():
         # Copy TaggerTest.png into temp dir
         src_img = os.path.join(os.path.dirname(__file__), "../pictures/TaggerTest.png")
         with Server(server_config_path=server_config_path) as server:
-            server.vault.start_workers({WorkerType.FACE})
+            server.vault.start_workers({TaskType.FACE})
 
             client = TestClient(server.api)
 
@@ -166,19 +166,19 @@ def test_tagger_worker_adds_tags():
             logger.info(f"Uploaded TaggerTest.png with picture ID {picture_id}")
 
             future = server.vault.get_worker_future(
-                WorkerType.TAGGER, Picture, picture_id, "tags"
+                TaskType.TAGGER, Picture, picture_id, "tags"
             )
             server.vault.start_workers(
                 {
-                    WorkerType.TAGGER,
-                    WorkerType.DESCRIPTION,
+                    TaskType.TAGGER,
+                    TaskType.DESCRIPTION,
                 }
             )
             assert future.result(timeout=60), "Tagger worker did not finish in time"
             server.vault.stop_workers(
                 {
-                    WorkerType.TAGGER,
-                    WorkerType.DESCRIPTION,
+                    TaskType.TAGGER,
+                    TaskType.DESCRIPTION,
                 }
             )
 

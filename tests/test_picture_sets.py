@@ -11,7 +11,7 @@ import tracemalloc
 
 from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
-from pixlvault.worker_types import WorkerType
+from pixlvault.worker_types import TaskType
 from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
@@ -39,7 +39,7 @@ def setup_server_with_temp_db():
     with open(server_config_path, "w") as f:
         f.write(json.dumps({"port": 8000}))
     server = Server(server_config_path)
-    server.vault.start_workers({WorkerType.FACE})
+    server.vault.start_workers({TaskType.FACE})
     client = TestClient(server.api)
 
     resp = client.post(

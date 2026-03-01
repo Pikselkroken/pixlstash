@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models.picture import Picture
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.stacking import (
     assign_picture_to_stack,
@@ -86,7 +86,7 @@ class WatchFolderImportTask(BaseTask):
                 continue
 
             try:
-                pixel_sha = PictureUtils.calculate_hash_from_file_path(file_path)
+                pixel_sha = ImageUtils.calculate_hash_from_file_path(file_path)
             except Exception as exc:
                 logger.warning("Failed to hash watched file %s: %s", file_path, exc)
                 continue
@@ -102,7 +102,7 @@ class WatchFolderImportTask(BaseTask):
                 continue
 
             try:
-                pic = PictureUtils.create_picture_from_file(
+                pic = ImageUtils.create_picture_from_file(
                     image_root_path=self._db.image_root,
                     source_file_path=file_path,
                     pixel_sha=pixel_sha,

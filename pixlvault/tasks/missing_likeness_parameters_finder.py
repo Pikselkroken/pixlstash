@@ -1,6 +1,6 @@
 from sqlmodel import Session
 
-from pixlvault.utils.picture_likeness_parameter_utils import (
+from pixlvault.utils.likeness.likeness_params import (
     PictureLikenessParameterUtils,
 )
 

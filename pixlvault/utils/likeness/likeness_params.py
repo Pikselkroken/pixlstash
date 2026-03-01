@@ -1,3 +1,5 @@
+"""Likeness parameter vector computation utilities."""
+
 import os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -15,7 +17,8 @@ from pixlvault.db_models.picture import (
 )
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
 from pixlvault.db_models.quality import Quality
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlvault.utils.image_processing.video_utils import VideoUtils
 from pixlvault.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -53,6 +56,7 @@ class PictureLikenessParameterUtils:
     def find_next_work(
         session: Session, batch_size: int, scan_limit: int
     ) -> Optional[Tuple[LikenessParameter, Optional[int], Tuple]]:
+        """Return the next piece of parameter work to perform, or None if idle."""
         for param in LikenessParameter:
             if param == LikenessParameter.SIZE_BIN:
                 size_bin = PictureLikenessParameterUtils._find_size_bin_batch(
@@ -74,6 +78,7 @@ class PictureLikenessParameterUtils:
 
     @staticmethod
     def count_pending_parameters(session: Session) -> int:
+        """Return the count of pictures missing at least one likeness parameter."""
         result = session.exec(
             select(func.count())
             .select_from(Picture)
@@ -199,6 +204,7 @@ class PictureLikenessParameterUtils:
         size_bin_index: int,
         vector_length: int,
     ) -> None:
+        """Assign a size-bin index to a batch of pictures."""
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         for pic in pics:
             vec = PictureLikenessParameterUtils.decode_parameters(
@@ -218,6 +224,7 @@ class PictureLikenessParameterUtils:
         values: List[float],
         vector_length: int,
     ) -> None:
+        """Update a single parameter dimension for a batch of pictures."""
         if not ids:
             return
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
@@ -234,6 +241,8 @@ class PictureLikenessParameterUtils:
         PictureLikenessParameterUtils.reset_likeness_for_pictures(session, ids)
 
     def fetch_quality_for_ids(self, ids: List[int]) -> Dict[int, Dict[str, float]]:
+        """Fetch quality metrics for a list of picture IDs from the database."""
+
         def fetch_quality(session: Session, ids: List[int]):
             return session.exec(
                 select(
@@ -293,6 +302,14 @@ class PictureLikenessParameterUtils:
     def fetch_picture_params_for_ids(
         self, ids: List[int]
     ) -> Tuple[Dict[int, Dict[str, float]], Dict[int, Dict[str, object]]]:
+        """
+        Fetch picture-level parameters (aspect ratio, phash, date) for a list of IDs.
+
+        Returns a tuple of ``(params_by_id, updates_by_id)`` where ``updates_by_id``
+        maps picture IDs to fields that were inferred on the fly and should be
+        written back to the database.
+        """
+
         def fetch_picture_params(session: Session, ids: List[int]):
             return session.exec(
                 select(
@@ -331,7 +348,7 @@ class PictureLikenessParameterUtils:
             phash_value = phash
             full_path = None
             if file_path and (created_at_value is None or not phash_value):
-                full_path = PictureUtils.resolve_picture_path(
+                full_path = ImageUtils.resolve_picture_path(
                     self._db.image_root, file_path
                 )
                 if full_path and os.path.exists(full_path):
@@ -384,6 +401,7 @@ class PictureLikenessParameterUtils:
         session: Session,
         updates_by_id: Dict[int, Dict[str, object]],
     ) -> None:
+        """Write inferred metadata (created_at, perceptual_hash) back to the database."""
         if not updates_by_id:
             return
         ids = list(updates_by_id.keys())
@@ -399,6 +417,7 @@ class PictureLikenessParameterUtils:
 
     @staticmethod
     def compute_dhash(image: Image.Image, hash_size: int = 8) -> Optional[str]:
+        """Compute a difference hash (dHash) for a PIL image."""
         try:
             resample = getattr(Image, "Resampling", Image).LANCZOS
             img = image.convert("L").resize((hash_size + 1, hash_size), resample)
@@ -415,9 +434,10 @@ class PictureLikenessParameterUtils:
     def compute_phash_from_file(
         self, full_path: str, rel_path: Optional[str]
     ) -> Optional[str]:
+        """Compute a perceptual hash for an image or video file."""
         try:
-            if PictureUtils.is_video_file(rel_path or full_path):
-                frames = PictureUtils.extract_representative_video_frames(
+            if VideoUtils.is_video_file(rel_path or full_path):
+                frames = VideoUtils.extract_representative_video_frames(
                     full_path, count=3
                 )
                 for frame in frames:
@@ -440,19 +460,21 @@ class PictureLikenessParameterUtils:
     def compute_created_at_from_file(
         self, full_path: str, rel_path: Optional[str]
     ) -> Optional[datetime]:
+        """Extract (or infer) the creation datetime for an image or video file."""
         try:
-            if PictureUtils.is_video_file(rel_path or full_path):
-                return PictureUtils.extract_created_at_from_metadata(
+            if VideoUtils.is_video_file(rel_path or full_path):
+                return ImageUtils.extract_created_at_from_metadata(
                     b"", fallback_file_path=full_path
                 )
             with open(full_path, "rb") as handle:
                 image_bytes = handle.read()
-            return PictureUtils.extract_created_at_from_metadata(
+            return ImageUtils.extract_created_at_from_metadata(
                 image_bytes, fallback_file_path=full_path
             )
         except Exception as exc:
             logger.warning(
-                "PictureLikenessParameterUtils: Failed to compute created_at for %s (%s)",
+                "PictureLikenessParameterUtils: Failed to compute created_at for"
+                " %s (%s)",
                 full_path,
                 exc,
             )
@@ -465,6 +487,7 @@ class PictureLikenessParameterUtils:
         quality_by_id: Dict[int, Dict[str, float]],
         vector_length: int,
     ) -> None:
+        """Update quality-derived parameter dimensions for a batch of pictures."""
         PictureLikenessParameterUtils._update_values_for_parameters(
             session=session,
             ids=ids,
@@ -481,6 +504,7 @@ class PictureLikenessParameterUtils:
         picture_by_id: Dict[int, Dict[str, float]],
         vector_length: int,
     ) -> None:
+        """Update picture-derived parameter dimensions for a batch of pictures."""
         PictureLikenessParameterUtils._update_values_for_parameters(
             session=session,
             ids=ids,
@@ -515,6 +539,7 @@ class PictureLikenessParameterUtils:
 
     @staticmethod
     def reset_likeness_for_pictures(session: Session, ids: List[int]) -> None:
+        """Delete existing likeness relations and re-queue the given pictures."""
         if not ids:
             return
         unique_ids = sorted({int(pid) for pid in ids})
@@ -529,10 +554,16 @@ class PictureLikenessParameterUtils:
 
     @staticmethod
     def size_bin_index(width: int, height: int) -> int:
+        """Compute a unique integer size-bin index from width and height."""
         return (int(width) << 32) + int(height)
 
     @staticmethod
     def decode_parameters(blob: Optional[object], length: int) -> np.ndarray:
+        """
+        Decode a raw parameter blob to a numpy float32 vector of the given length.
+
+        Returns a sentinel-filled vector if the blob is missing or malformed.
+        """
         if blob is None:
             return np.full(length, LIKENESS_PARAMETER_SENTINEL, dtype=np.float32)
         if isinstance(blob, np.ndarray):

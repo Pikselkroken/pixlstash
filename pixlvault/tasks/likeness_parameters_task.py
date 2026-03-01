@@ -4,7 +4,7 @@ from pixlvault.db_models.picture import (
     LikenessParameter,
     Picture,
 )
-from pixlvault.utils.picture_likeness_parameter_utils import (
+from pixlvault.utils.likeness.likeness_params import (
     PictureLikenessParameterUtils,
     PICTURE_PARAM_FIELDS,
     QUALITY_PARAM_FIELDS,

@@ -7,7 +7,7 @@ from time import time
 from pixlvault.tasks.feature_extraction_task import FeatureExtractionTask
 from pixlvault.db_models.picture import Picture
 from pixlvault.pixl_logging import get_logger
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.server import Server
 
 logger = get_logger(__name__)
@@ -38,7 +38,7 @@ def test_face_extraction_speed_cpu():
                 return picture
 
             for image_file in image_files:
-                pic = PictureUtils.create_picture_from_file(
+                pic = ImageUtils.create_picture_from_file(
                     image_root_path=image_root,
                     source_file_path=os.path.join(src_dir, image_file),
                 )
@@ -87,7 +87,7 @@ def test_face_extraction_speed_gpu():
                 return picture
 
             for image_file in image_files:
-                pic = PictureUtils.create_picture_from_file(
+                pic = ImageUtils.create_picture_from_file(
                     image_root_path=image_root,
                     source_file_path=os.path.join(src_dir, image_file),
                 )

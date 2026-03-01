@@ -6,8 +6,8 @@ from sqlalchemy import func
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models import Picture, Quality
-from pixlvault.utils.picture_quality_utils import PictureQualityUtils
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.quality.quality_utils import PictureQualityUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.tasks.base_task import BaseTask
 
@@ -55,10 +55,10 @@ class QualityTask(BaseTask):
             skipped = []
 
             for pic in batch:
-                file_path = PictureUtils.resolve_picture_path(
+                file_path = ImageUtils.resolve_picture_path(
                     self._db.image_root, pic.file_path
                 )
-                img = PictureUtils.load_image_or_video(file_path)
+                img = ImageUtils.load_image_or_video(file_path)
                 if img is None:
                     skipped.append(pic)
                     continue
@@ -158,10 +158,10 @@ class QualityTask(BaseTask):
             ):
                 continue
 
-            file_path = PictureUtils.resolve_picture_path(
+            file_path = ImageUtils.resolve_picture_path(
                 self._db.image_root, pic.file_path
             )
-            img = PictureUtils.load_image_or_video(file_path)
+            img = ImageUtils.load_image_or_video(file_path)
             if img is None:
                 raise ValueError(
                     f"Cannot infer metadata for picture id={pic.id} path={pic.file_path}: file could not be loaded"

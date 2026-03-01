@@ -1,47 +1,35 @@
+"""ZIP generation and export functionality for pictures and features."""
+
+import logging
 import os
-import sys
 import re
+import sys
 import zipfile
+
 from PIL import Image, PngImagePlugin
 
-from pixlvault.db_models.tag import TAG_EMPTY_SENTINEL
-from .picture_utils import PictureUtils
-from ..db_models.picture import Picture, PictureSet
-from ..db_models.picture_set import PictureSetMember
+from pixlvault.db_models.picture import Picture, PictureSet
+from pixlvault.db_models.picture_set import PictureSetMember
+from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlvault.utils.image_processing.video_utils import VideoUtils
+from pixlvault.utils.service.caption_utils import CaptionUtils
 from sqlmodel import select
-from ..routes.pictures import (
+
+from pixlvault.routes.pictures import (
     _select_pictures_for_listing,
 )
-import logging
 
 logger = logging.getLogger(__name__)
 
 
-class PictureServiceUtils:
-    @staticmethod
-    def _build_tag_caption(picture):
-        tags = []
-        for tag in getattr(picture, "tags", []) or []:
-            tag_value = getattr(tag, "tag", None)
-            if tag_value in (None, TAG_EMPTY_SENTINEL):
-                continue
-            tags.append(tag_value)
-        return ", ".join(tags)
-
-    @staticmethod
-    def _build_character_caption(picture):
-        character_names = []
-        for character in getattr(picture, "characters", []) or []:
-            name_value = getattr(character, "name", None)
-            if name_value:
-                character_names.append(name_value)
-        return ", ".join(character_names)
+class ExportUtils:
+    """Utility methods for ZIP-based picture export."""
 
     @staticmethod
     def _export_features_to_zip(
         img, base_name, features, tags_by_feature, feature_type, zip_file, scale=1.0
     ):
-        """Export face/hand crops and tags to zip."""
+        """Export face/hand crops and tags to a zip file."""
         for feature in features:
             index = getattr(feature, f"{feature_type}_index", 0)
             if index < 0 or not feature.bbox:
@@ -54,7 +42,7 @@ class PictureServiceUtils:
                     resample=Image.LANCZOS,
                 )
             arcname = f"{base_name}_{feature_type}_{(index + 1):03d}.png"
-            PictureServiceUtils._write_image_to_zip(
+            ExportUtils._write_image_to_zip(
                 crop, arcname, zip_file, ext=".png", scale=1.0
             )
             tags = tags_by_feature.get(feature.id, [])
@@ -87,8 +75,9 @@ class PictureServiceUtils:
     @staticmethod
     def _parse_export_params(request, background_data):
         """
-        Parse and normalize export parameters from request and background_data.
-        Returns a dict with all normalized parameters.
+        Parse and normalise export parameters from request and background_data.
+
+        Returns a dict with all normalised parameters.
         """
         export_type_value = (
             request.query_params.get("export_type")
@@ -147,17 +136,19 @@ class PictureServiceUtils:
         server, request, task_id, export_tasks, TEMP_EXPORT_DIR, background_data
     ):
         """
-        Generates a ZIP file for picture export. This is extracted from the route handler for clarity.
+        Generate a ZIP file for picture export.
+
         Args:
-            server: The server instance
-            request: The FastAPI request
-            task_id: The export task ID
-            export_tasks: The export_tasks dict (for progress/status)
-            TEMP_EXPORT_DIR: Directory for temp export files
-            background_data: dict of extra params (query, set_id, threshold, caption_mode, include_character_name, resolution, export_type)
+            server: The server instance.
+            request: The FastAPI request.
+            task_id: The export task ID.
+            export_tasks: The export_tasks dict (for progress/status).
+            TEMP_EXPORT_DIR: Directory for temp export files.
+            background_data: Dict of extra params (query, set_id, threshold,
+                caption_mode, include_character_name, resolution, export_type).
         """
         try:
-            params = PictureServiceUtils._parse_export_params(request, background_data)
+            params = ExportUtils._parse_export_params(request, background_data)
             export_type_d = params["export_type_d"]
             caption_mode_d = params["caption_mode_d"]
             include_character_name_enabled = params["include_character_name_enabled"]
@@ -201,7 +192,7 @@ class PictureServiceUtils:
                 logger.debug("Exporting pictures using search query: {}".format(query))
 
                 def find_by_text(session, query):
-                    words = re.findall(r"\\b\\w+\\b", query.lower())
+                    words = re.findall(r"\b\w+\b", query.lower())
                     query_full = "A photo of " + query
                     return [
                         r[0]
@@ -305,15 +296,15 @@ class PictureServiceUtils:
                 }
                 for pic in pics:
                     if not getattr(pic, "file_path", None) or not os.path.exists(
-                        PictureUtils.resolve_picture_path(
+                        ImageUtils.resolve_picture_path(
                             server.vault.image_root, pic.file_path
                         )
                     ):
                         continue
-                    full_path = PictureUtils.resolve_picture_path(
+                    full_path = ImageUtils.resolve_picture_path(
                         server.vault.image_root, pic.file_path
                     )
-                    if PictureUtils.is_video_file(full_path):
+                    if VideoUtils.is_video_file(full_path):
                         continue
                     if export_faces:
                         faces = feature_faces_by_pic.get(pic.id, [])
@@ -341,12 +332,12 @@ class PictureServiceUtils:
                         hasattr(pic, "file_path")
                         and pic.file_path
                         and os.path.exists(
-                            PictureUtils.resolve_picture_path(
+                            ImageUtils.resolve_picture_path(
                                 server.vault.image_root, pic.file_path
                             )
                         )
                     ):
-                        full_path = PictureUtils.resolve_picture_path(
+                        full_path = ImageUtils.resolve_picture_path(
                             server.vault.image_root, pic.file_path
                         )
                         ext = os.path.splitext(full_path)[1]
@@ -356,7 +347,7 @@ class PictureServiceUtils:
                                 with Image.open(full_path) as img:
                                     if (
                                         scale_factor < 1.0
-                                        and not PictureUtils.is_video_file(full_path)
+                                        and not VideoUtils.is_video_file(full_path)
                                     ):
                                         save_kwargs = {}
                                         exif_bytes = img.info.get("exif")
@@ -377,12 +368,13 @@ class PictureServiceUtils:
                                                 elif isinstance(value, bytes):
                                                     try:
                                                         pnginfo.add_text(
-                                                            key, value.decode("utf-8")
+                                                            key,
+                                                            value.decode("utf-8"),
                                                         )
                                                     except Exception:
                                                         continue
                                             save_kwargs["pnginfo"] = pnginfo
-                                        PictureServiceUtils._write_image_to_zip(
+                                        ExportUtils._write_image_to_zip(
                                             img,
                                             arcname,
                                             zip_file,
@@ -394,7 +386,8 @@ class PictureServiceUtils:
                                         zip_file.write(full_path, arcname=arcname)
                             except Exception as exc:
                                 logger.warning(
-                                    "Failed to resize %s (%s); falling back to original.",
+                                    "Failed to resize %s (%s); falling back to"
+                                    " original.",
                                     full_path,
                                     exc,
                                 )
@@ -404,17 +397,13 @@ class PictureServiceUtils:
                             if caption_mode_d == "description":
                                 caption_text = pic.description or ""
                                 if not caption_text:
-                                    caption_text = (
-                                        PictureServiceUtils._build_tag_caption(pic)
-                                    )
+                                    caption_text = CaptionUtils._build_tag_caption(pic)
                             elif caption_mode_d == "tags":
-                                caption_text = PictureServiceUtils._build_tag_caption(
-                                    pic
-                                )
+                                caption_text = CaptionUtils._build_tag_caption(pic)
 
                             if include_character_name_enabled:
-                                character_names = (
-                                    PictureServiceUtils._build_character_caption(pic)
+                                character_names = CaptionUtils._build_character_caption(
+                                    pic
                                 )
                                 if character_names:
                                     if caption_mode_d == "tags":
@@ -437,7 +426,7 @@ class PictureServiceUtils:
                                 )
                             export_tasks[task_id]["processed"] += 1
                         else:
-                            if PictureUtils.is_video_file(full_path):
+                            if VideoUtils.is_video_file(full_path):
                                 continue
                             try:
                                 with Image.open(full_path) as img:
@@ -455,10 +444,10 @@ class PictureServiceUtils:
                                         faces = feature_faces_by_pic.get(pic.id, [])
                                         for face in faces:
                                             if face.bbox:
-                                                face.bbox = PictureUtils.clamp_bbox(
+                                                face.bbox = ImageUtils.clamp_bbox(
                                                     face.bbox, img.width, img.height
                                                 )
-                                        PictureServiceUtils._export_features_to_zip(
+                                        ExportUtils._export_features_to_zip(
                                             img,
                                             base_name,
                                             faces,
@@ -473,10 +462,10 @@ class PictureServiceUtils:
                                         hands = feature_hands_by_pic.get(pic.id, [])
                                         for hand in hands:
                                             if hand.bbox:
-                                                hand.bbox = PictureUtils.clamp_bbox(
+                                                hand.bbox = ImageUtils.clamp_bbox(
                                                     hand.bbox, img.width, img.height
                                                 )
-                                        PictureServiceUtils._export_features_to_zip(
+                                        ExportUtils._export_features_to_zip(
                                             img,
                                             base_name,
                                             hands,

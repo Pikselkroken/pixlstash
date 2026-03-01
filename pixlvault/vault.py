@@ -28,7 +28,7 @@ from .db_models import (
 )
 from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
-from .utils.picture_utils import PictureUtils
+from .utils.image_processing.image_utils import ImageUtils
 from .tasks.face_quality_task import FaceQualityTask
 from .tasks.feature_extraction_task import FeatureExtractionTask
 from .tasks.image_embedding_task import ImageEmbeddingTask
@@ -37,7 +37,7 @@ from .tasks.quality_task import QualityTask
 from .tasks.base_task import TaskStatus
 from .task_runner import TaskRunner
 from .work_planner import WorkPlanner
-from .worker_types import WorkerType
+from .tasks import TaskType
 
 from pixlvault.event_types import EventType
 
@@ -51,26 +51,26 @@ class Vault:
     # Map event type to list of worker types
     _event_worker_map = {
         EventType.CHANGED_PICTURES: [
-            WorkerType.FACE,
-            WorkerType.TAGGER,
-            WorkerType.QUALITY,
-            WorkerType.DESCRIPTION,
-            WorkerType.IMAGE_EMBEDDING,
-            WorkerType.LIKENESS_PARAMETERS,
+            TaskType.FACE,
+            TaskType.TAGGER,
+            TaskType.QUALITY,
+            TaskType.DESCRIPTION,
+            TaskType.IMAGE_EMBEDDING,
+            TaskType.LIKENESS_PARAMETERS,
         ],
         EventType.CHANGED_FACES: [
-            WorkerType.FACE_QUALITY,
-            WorkerType.TAGGER,
+            TaskType.FACE_QUALITY,
+            TaskType.TAGGER,
         ],
         EventType.CHANGED_CHARACTERS: [
-            WorkerType.DESCRIPTION,
+            TaskType.DESCRIPTION,
         ],
-        EventType.CHANGED_DESCRIPTIONS: [WorkerType.TEXT_EMBEDDING],
+        EventType.CHANGED_DESCRIPTIONS: [TaskType.TEXT_EMBEDDING],
         EventType.QUALITY_UPDATED: [
-            WorkerType.LIKENESS,
-            WorkerType.LIKENESS_PARAMETERS,
+            TaskType.LIKENESS,
+            TaskType.LIKENESS_PARAMETERS,
         ],
-        EventType.CLEARED_TAGS: [WorkerType.TAGGER, WorkerType.TEXT_EMBEDDING],
+        EventType.CLEARED_TAGS: [TaskType.TAGGER, TaskType.TEXT_EMBEDDING],
     }
     _planner_managed_worker_types = set()
 
@@ -145,7 +145,7 @@ class Vault:
         self._task_runner.start()
         self._work_planner.start()
 
-    def stop_workers(self, workers_to_stop: set[WorkerType] = WorkerType.all()):
+    def stop_workers(self, workers_to_stop: set[TaskType] = TaskType.all()):
         logger.debug("Stopping background workers...")
         remaining = []
         for worker in self._workers.values():
@@ -160,7 +160,7 @@ class Vault:
                 ", ".join(sorted(remaining)),
             )
 
-    def start_workers(self, workers_to_start: set[WorkerType] = WorkerType.all()):
+    def start_workers(self, workers_to_start: set[TaskType] = TaskType.all()):
         # Initialize all workers
         logger.debug("Initialise background workers...")
         for worker_type in workers_to_start:
@@ -238,7 +238,7 @@ class Vault:
         if self._closed:
             return
         self._closed = True
-        self.stop_workers(WorkerType.all())
+        self.stop_workers(TaskType.all())
         self._work_planner.stop()
         self._task_runner.stop()
         for worker in self._workers.values():
@@ -332,12 +332,12 @@ class Vault:
             .description
         ).result()
 
-    def initialise_worker_if_necessary(self, worker_type: WorkerType):
+    def initialise_worker_if_necessary(self, worker_type: TaskType):
         """
         Initialize and start a specific worker type.
 
         Args:
-            worker_type (WorkerType): The type of worker to initialize.
+            worker_type (TaskType): The type of worker to initialize.
         """
         if worker_type in self._planner_managed_worker_types:
             if not self._picture_tagger:
@@ -365,47 +365,47 @@ class Vault:
             return
 
         if task.type == "TagTask":
-            self._notify_worker_ids_processed(WorkerType.TAGGER, changed)
+            self._notify_worker_ids_processed(TaskType.TAGGER, changed)
             picture_ids = [pic_id for _, pic_id, _, _ in changed]
             if picture_ids:
                 self.notify(EventType.CHANGED_TAGS, picture_ids)
             return
 
         if task.type == "QualityTask":
-            self._notify_worker_ids_processed(WorkerType.QUALITY, changed)
+            self._notify_worker_ids_processed(TaskType.QUALITY, changed)
             self.notify(EventType.QUALITY_UPDATED)
             return
 
         if task.type == "FaceQualityTask":
-            self._notify_worker_ids_processed(WorkerType.FACE_QUALITY, changed)
+            self._notify_worker_ids_processed(TaskType.FACE_QUALITY, changed)
             return
 
         if task.type == "LikenessParametersTask":
-            self._notify_worker_ids_processed(WorkerType.LIKENESS_PARAMETERS, changed)
+            self._notify_worker_ids_processed(TaskType.LIKENESS_PARAMETERS, changed)
             return
 
         if task.type == "LikenessTask":
-            self._notify_worker_ids_processed(WorkerType.LIKENESS, changed)
+            self._notify_worker_ids_processed(TaskType.LIKENESS, changed)
             return
 
         if task.type == "FeatureExtractionTask":
-            self._notify_worker_ids_processed(WorkerType.FACE, changed)
+            self._notify_worker_ids_processed(TaskType.FACE, changed)
             picture_ids = result.get("picture_ids") or []
             if picture_ids:
                 self.notify(EventType.CHANGED_FACES, picture_ids)
             return
 
         if task.type == "DescriptionTask":
-            self._notify_worker_ids_processed(WorkerType.DESCRIPTION, changed)
+            self._notify_worker_ids_processed(TaskType.DESCRIPTION, changed)
             self.notify(EventType.CHANGED_DESCRIPTIONS)
             return
 
         if task.type == "TextEmbeddingTask":
-            self._notify_worker_ids_processed(WorkerType.TEXT_EMBEDDING, changed)
+            self._notify_worker_ids_processed(TaskType.TEXT_EMBEDDING, changed)
             return
 
         if task.type == "ImageEmbeddingTask":
-            self._notify_worker_ids_processed(WorkerType.IMAGE_EMBEDDING, changed)
+            self._notify_worker_ids_processed(TaskType.IMAGE_EMBEDDING, changed)
             return
 
         if task.type == "WatchFolderImportTask":
@@ -414,16 +414,14 @@ class Vault:
                 self.notify(EventType.CHANGED_PICTURES, picture_ids)
                 self.notify(EventType.PICTURE_IMPORTED, picture_ids)
 
-    def _notify_worker_ids_processed(self, worker_type: WorkerType, changed):
+    def _notify_worker_ids_processed(self, worker_type: TaskType, changed):
         worker = self._workers.get(worker_type)
         if worker is not None:
             worker._notify_ids_processed(changed)
             return
         self._notify_planner_ids_processed(worker_type, changed)
 
-    def _watch_planner_id(
-        self, worker_type: WorkerType, cls: type, object_id, attr: str
-    ):
+    def _watch_planner_id(self, worker_type: TaskType, cls: type, object_id, attr: str):
         future = Future()
         with self._planner_watchers_lock:
             self._planner_watchers[(worker_type, cls, object_id, attr)] = future
@@ -457,7 +455,7 @@ class Vault:
         future.set_result((object_id, payload))
         return future
 
-    def _notify_planner_ids_processed(self, worker_type: WorkerType, changed):
+    def _notify_planner_ids_processed(self, worker_type: TaskType, changed):
         with self._planner_watchers_lock:
             for cls, object_id, attr, payload in changed:
                 future = self._planner_watchers.pop(
@@ -468,12 +466,12 @@ class Vault:
                     future.set_result((object_id, payload))
 
     def get_worker_future(
-        self, worker_type: WorkerType, cls: type, object_id: int, attr: str
+        self, worker_type: TaskType, cls: type, object_id: int, attr: str
     ) -> "concurrent.futures.Future":
         """
         Returns a Future that will be set when the specified worker has processed the given object ID.
         Args:
-            worker_type (WorkerType): The type of worker to wait for.
+            worker_type (TaskType): The type of worker to wait for.
         Returns:
             concurrent.futures.Future: Future set to True when completed.
         """
@@ -496,7 +494,7 @@ class Vault:
 
         return worker.watch_id(cls, object_id, attr)
 
-    def is_worker_running(self, worker_type: WorkerType) -> bool:
+    def is_worker_running(self, worker_type: TaskType) -> bool:
         """
         Check if a specific worker is running.
         """
@@ -507,12 +505,12 @@ class Vault:
 
     def _build_worker_progress_snapshot(self) -> dict:
         progress = {}
-        for worker_type in WorkerType.all():
+        for worker_type in TaskType.all():
             if worker_type in self._planner_managed_worker_types:
                 total = int(
                     self.db.run_immediate_read_task(self._count_total_pictures) or 0
                 )
-                if worker_type == WorkerType.DESCRIPTION:
+                if worker_type == TaskType.DESCRIPTION:
                     missing = int(
                         self.db.run_immediate_read_task(
                             self._count_missing_descriptions
@@ -520,18 +518,18 @@ class Vault:
                         or 0
                     )
                     label = "descriptions_generated"
-                elif worker_type == WorkerType.TAGGER:
+                elif worker_type == TaskType.TAGGER:
                     missing = int(
                         self.db.run_immediate_read_task(self._count_missing_tags) or 0
                     )
                     label = "pictures_tagged"
-                elif worker_type == WorkerType.QUALITY:
+                elif worker_type == TaskType.QUALITY:
                     missing = int(
                         self.db.run_immediate_read_task(self._count_missing_quality)
                         or 0
                     )
                     label = "quality_scored"
-                elif worker_type == WorkerType.FACE_QUALITY:
+                elif worker_type == TaskType.FACE_QUALITY:
                     total = int(
                         self.db.run_immediate_read_task(self._count_total_faces) or 0
                     )
@@ -542,7 +540,7 @@ class Vault:
                         or 0
                     )
                     label = "face_quality_scored"
-                elif worker_type == WorkerType.FACE:
+                elif worker_type == TaskType.FACE:
                     missing = int(
                         self.db.run_immediate_read_task(
                             self._count_missing_feature_extractions
@@ -550,7 +548,7 @@ class Vault:
                         or 0
                     )
                     label = "features_extracted"
-                elif worker_type == WorkerType.TEXT_EMBEDDING:
+                elif worker_type == TaskType.TEXT_EMBEDDING:
                     described = int(
                         self.db.run_immediate_read_task(self._count_total_described)
                         or 0
@@ -563,7 +561,7 @@ class Vault:
                     )
                     total = max(described, 0)
                     label = "text_embeddings"
-                elif worker_type == WorkerType.IMAGE_EMBEDDING:
+                elif worker_type == TaskType.IMAGE_EMBEDDING:
                     missing = int(
                         self.db.run_immediate_read_task(
                             self._count_missing_image_embeddings
@@ -571,7 +569,7 @@ class Vault:
                         or 0
                     )
                     label = "image_embeddings"
-                elif worker_type == WorkerType.LIKENESS_PARAMETERS:
+                elif worker_type == TaskType.LIKENESS_PARAMETERS:
                     missing = int(
                         self.db.run_immediate_read_task(
                             self._count_pending_likeness_parameters
@@ -579,7 +577,7 @@ class Vault:
                         or 0
                     )
                     label = "likeness_parameters"
-                elif worker_type == WorkerType.LIKENESS:
+                elif worker_type == TaskType.LIKENESS:
                     total = int(
                         self.db.run_immediate_read_task(
                             self._count_total_likeness_candidates
@@ -593,7 +591,7 @@ class Vault:
                         or 0
                     )
                     label = "likeness_pairs"
-                elif worker_type == WorkerType.WATCH_FOLDERS:
+                elif worker_type == TaskType.WATCH_FOLDERS:
                     total = 0
                     missing = 0
                     label = "watch_folder_import"
@@ -891,7 +889,7 @@ class Vault:
                 priority=DBPriority.IMMEDIATE,
             )
 
-        picture = PictureUtils.create_picture_from_file(
+        picture = ImageUtils.create_picture_from_file(
             image_root_path=logo_dest_folder,
             source_file_path=logo_src,
         )
@@ -922,7 +920,7 @@ class Vault:
                         "pictures",
                         file,
                     )
-                    pic = PictureUtils.create_picture_from_file(
+                    pic = ImageUtils.create_picture_from_file(
                         image_root_path=logo_dest_folder,
                         source_file_path=src_path,
                     )

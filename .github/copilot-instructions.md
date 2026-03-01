@@ -23,10 +23,18 @@
     8. Private methods in logical order
 ## Project Architecture
 
-- **Backend:** Python FastAPI server (`pixlvault/server.py`), with core logic in `pixlvault/` and `build/pixelurgy_vault/`.
+- **Backend:** Python FastAPI server (`pixlvault/server.py`), with core logic in `pixlvault/routes`.
 - **Frontend:** Vue 3 + Vite app in `frontend/`.
-- **Database:** SQLite (`vault.db`), schema managed via Python and bash scripts.
-- **Image Quality:** Batch processing and metrics in `pixlvault/pictures.py` and `pixlvault/picture_quality.py`.
+- **Database:** SQLite (`vault.db`), schema managed via Python.
+- **Utility functions:** Utilities should be placed in `pixlvault/utils`.
+- **Tasks:** Long-running tasks (e.g., quality calculation) are handled asynchronously with the TaskRunner class in `pixlvault/task_runner.py`.
+
+## Task System
+
+- The TaskRunner class manages asynchronous tasks, allowing for background processing of image quality calculations and other operations without blocking the main server thread.
+- Work is first found using the WorkPlanner which has multiple WorkFinders registered to find different types of work (e.g., quality calculation, metadata extraction).
+- Once work is found a new Task for a batch of images is created and added to the TaskRunner's queue.
+- The TaskRunner continuously processes tasks from the queue, executing the associated work function, reporting progress and handling results.
 
 ## Fixing bugs and default error resolution approach
 - NEVER assume a fix without understanding the root cause.

@@ -15,7 +15,7 @@ class WorkPlanner:
 
     @staticmethod
     def work_finders(database, picture_tagger_getter, config_path=None):
-        from pixlvault.worker_types import WorkerType
+        from pixlvault.tasks import TaskType
         from pixlvault.tasks.missing_description_finder import MissingDescriptionFinder
         from pixlvault.tasks.missing_face_quality_finder import MissingFaceQualityFinder
         from pixlvault.tasks.missing_feature_extraction_finder import (
@@ -38,39 +38,39 @@ class WorkPlanner:
         )
 
         return {
-            WorkerType.FACE: MissingFeatureExtractionFinder(
+            TaskType.FACE: MissingFeatureExtractionFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
-            WorkerType.QUALITY: MissingQualityFinder(
+            TaskType.QUALITY: MissingQualityFinder(
                 database=database,
             ),
-            WorkerType.FACE_QUALITY: MissingFaceQualityFinder(
+            TaskType.FACE_QUALITY: MissingFaceQualityFinder(
                 database=database,
             ),
-            WorkerType.TAGGER: MissingTagsFinder(
-                database=database,
-                picture_tagger_getter=picture_tagger_getter,
-            ),
-            WorkerType.DESCRIPTION: MissingDescriptionFinder(
+            TaskType.TAGGER: MissingTagsFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
-            WorkerType.TEXT_EMBEDDING: MissingTextEmbeddingsFinder(
+            TaskType.DESCRIPTION: MissingDescriptionFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
-            WorkerType.IMAGE_EMBEDDING: MissingImageEmbeddingsFinder(
+            TaskType.TEXT_EMBEDDING: MissingTextEmbeddingsFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
-            WorkerType.LIKENESS_PARAMETERS: MissingLikenessParametersFinder(
+            TaskType.IMAGE_EMBEDDING: MissingImageEmbeddingsFinder(
+                database=database,
+                picture_tagger_getter=picture_tagger_getter,
+            ),
+            TaskType.LIKENESS_PARAMETERS: MissingLikenessParametersFinder(
                 database=database,
             ),
-            WorkerType.LIKENESS: MissingLikenessFinder(
+            TaskType.LIKENESS: MissingLikenessFinder(
                 database=database,
             ),
-            WorkerType.WATCH_FOLDERS: MissingWatchFolderImportsFinder(
+            TaskType.WATCH_FOLDERS: MissingWatchFolderImportsFinder(
                 database=database,
                 config_path=config_path,
             ),

@@ -19,7 +19,7 @@ from datetime import datetime
 from pixlvault.database import DBPriority
 from pixlvault.db_models import Face, Picture, PictureStack, User
 from pixlvault.event_types import EventType
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.stacking import (
     build_stack_filename_prefix,
     get_or_create_stack_for_picture,
@@ -396,7 +396,7 @@ def _import_comfyui_outputs(
         return [], []
 
     shas = [
-        PictureUtils.calculate_hash_from_bytes(img_bytes)
+        ImageUtils.calculate_hash_from_bytes(img_bytes)
         for img_bytes, _ in image_entries
     ]
 
@@ -415,7 +415,7 @@ def _import_comfyui_outputs(
     for (img_bytes, ext), sha in new_entries:
         pic_uuid = f"{uuid.uuid4()}{ext}"
         new_pictures.append(
-            PictureUtils.create_picture_from_bytes(
+            ImageUtils.create_picture_from_bytes(
                 image_root_path=server.vault.image_root,
                 image_bytes=img_bytes,
                 picture_uuid=pic_uuid,
@@ -766,7 +766,7 @@ def create_router(server) -> APIRouter:
             pic = pic_map.get(pic_id)
             if not pic or not getattr(pic, "file_path", None):
                 raise HTTPException(status_code=404, detail="Picture not found")
-            resolved_path = PictureUtils.resolve_picture_path(
+            resolved_path = ImageUtils.resolve_picture_path(
                 server.vault.image_root, pic.file_path
             )
             if not resolved_path or not os.path.isfile(resolved_path):
