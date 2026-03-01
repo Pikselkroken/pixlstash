@@ -2056,58 +2056,82 @@ watch(
   { immediate: true },
 );
 
+const pendingAllImagesUpdate = ref(false);
+
+async function applyAllImagesUpdate() {
+  const currentId = image.value?.id ?? initialImageId.value;
+  if (currentId != null && currentId !== "") {
+    setOverlayImageById(currentId);
+  }
+  void ensureOverlayFilmstripForImage();
+
+  const stackId = getOverlayStackId(image.value);
+  if (!stackId) return;
+  const nextSignature = getOverlayStackSignature(stackId);
+  if (!nextSignature) return;
+
+  const previousSignature = overlayStackSignatures.value.get(stackId) || "";
+  const nextSignatures = new Map(overlayStackSignatures.value);
+  nextSignatures.set(stackId, nextSignature);
+  overlayStackSignatures.value = nextSignatures;
+
+  if (previousSignature === nextSignature) return;
+
+  if (previousSignature) {
+    emit("overlay-change", {
+      imageId: image.value?.id ?? null,
+      fields: { stack: true },
+      stackId,
+    });
+  }
+
+  const nextMembers = new Map(overlayExpandedStackMembers.value);
+  nextMembers.delete(stackId);
+  overlayExpandedStackMembers.value = nextMembers;
+
+  const reloadToken = overlayStackReloadToken.value + 1;
+  overlayStackReloadToken.value = reloadToken;
+
+  await ensureOverlayStackMembersLoaded(stackId, image.value, {
+    force: true,
+  });
+  if (overlayStackReloadToken.value !== reloadToken) return;
+
+  const refreshed = overlayExpandedStackMembers.value.get(stackId);
+  const ids = Array.isArray(refreshed?.ids) ? refreshed.ids : [];
+  const localMembers = getOverlayLocalStackMembers(stackId);
+  const topId =
+    ids.length > 0
+      ? ids[0]
+      : localMembers[0]?.id != null
+        ? String(localMembers[0].id)
+        : null;
+  if (topId && String(image.value?.id ?? "") !== String(topId)) {
+    setOverlayImageById(topId);
+  }
+}
+
 watch(
   () => allImages.value,
   async () => {
-    const currentId = image.value?.id ?? initialImageId.value;
-    if (currentId != null && currentId !== "") {
-      setOverlayImageById(currentId);
+    // Don't disturb the DOM while the user is actively typing — the reactive
+    // update to image.value causes a DOM patch that can blur the focused input.
+    // Set a flag so we apply the update as soon as editing finishes.
+    if (addingTag.value || isEditingDescription.value) {
+      pendingAllImagesUpdate.value = true;
+      return;
     }
-    void ensureOverlayFilmstripForImage();
+    await applyAllImagesUpdate();
+  },
+);
 
-    const stackId = getOverlayStackId(image.value);
-    if (!stackId) return;
-    const nextSignature = getOverlayStackSignature(stackId);
-    if (!nextSignature) return;
-
-    const previousSignature = overlayStackSignatures.value.get(stackId) || "";
-    const nextSignatures = new Map(overlayStackSignatures.value);
-    nextSignatures.set(stackId, nextSignature);
-    overlayStackSignatures.value = nextSignatures;
-
-    if (previousSignature === nextSignature) return;
-
-    if (previousSignature) {
-      emit("overlay-change", {
-        imageId: image.value?.id ?? null,
-        fields: { stack: true },
-        stackId,
-      });
-    }
-
-    const nextMembers = new Map(overlayExpandedStackMembers.value);
-    nextMembers.delete(stackId);
-    overlayExpandedStackMembers.value = nextMembers;
-
-    const reloadToken = overlayStackReloadToken.value + 1;
-    overlayStackReloadToken.value = reloadToken;
-
-    await ensureOverlayStackMembersLoaded(stackId, image.value, {
-      force: true,
-    });
-    if (overlayStackReloadToken.value !== reloadToken) return;
-
-    const refreshed = overlayExpandedStackMembers.value.get(stackId);
-    const ids = Array.isArray(refreshed?.ids) ? refreshed.ids : [];
-    const localMembers = getOverlayLocalStackMembers(stackId);
-    const topId =
-      ids.length > 0
-        ? ids[0]
-        : localMembers[0]?.id != null
-          ? String(localMembers[0].id)
-          : null;
-    if (topId && String(image.value?.id ?? "") !== String(topId)) {
-      setOverlayImageById(topId);
+// Flush any deferred allImages update as soon as the user finishes editing.
+watch(
+  () => addingTag.value || isEditingDescription.value,
+  async (isEditing) => {
+    if (!isEditing && pendingAllImagesUpdate.value) {
+      pendingAllImagesUpdate.value = false;
+      await applyAllImagesUpdate();
     }
   },
 );

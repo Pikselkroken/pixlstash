@@ -2684,6 +2684,13 @@ watch(
       skipNextWsRefresh.value = false;
       return;
     }
+    if (overlayOpen.value) {
+      // Overlay is open — quietly refresh in the background without clearing
+      // allGridImages, so the overlay doesn't lose focus or state mid-edit.
+      debouncedFetchAllGridImages();
+      fetchAllPicturesCount();
+      return;
+    }
     gridReady.value = false;
     emptyStateDelayPassed.value = false;
     if (preserveScrollOnNextFetch.value && scrollWrapper.value) {
