@@ -1,3 +1,5 @@
+"""Quality calculation and persistence utilities."""
+
 from typing import List, Tuple
 
 import cv2
@@ -7,9 +9,8 @@ from sqlmodel import delete
 from pixlvault.db_models.face import Face
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.quality import Quality
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.pixl_logging import get_logger
-
 
 logger = get_logger(__name__)
 
@@ -21,6 +22,7 @@ class PictureQualityUtils:
         self._db = database
 
     def group_pictures_by_format_and_size(self, pics: List[Picture]) -> dict:
+        """Group pictures into a dict keyed by (format, width, height)."""
         groups = {}
         current_key = None
         current_group = []
@@ -53,16 +55,28 @@ class PictureQualityUtils:
         loaded_pics: List[np.ndarray] = None,
         max_side: int = None,
     ) -> List[Quality | None]:
+        """
+        Calculate quality metrics for a batch of pictures.
+
+        Args:
+            pics: List of Picture objects.
+            loaded_pics: Pre-loaded numpy arrays (optional; loaded from disk if None).
+            max_side: If set, downscale images so the longest side is at most this many
+                pixels before computing quality.
+
+        Returns:
+            List of Quality objects (or None for pictures that failed to load).
+        """
         try:
             all_qualities = []
 
             if loaded_pics is None:
                 loaded_pics = []
                 for pic in pics:
-                    file_path = PictureUtils.resolve_picture_path(
+                    file_path = ImageUtils.resolve_picture_path(
                         self._db.image_root, pic.file_path
                     )
-                    img = PictureUtils.load_image_or_video(file_path)
+                    img = ImageUtils.load_image_or_video(file_path)
                     if img is None:
                         logger.warning(
                             "Could not load image for picture_id=%s, file_path=%s",
@@ -117,6 +131,7 @@ class PictureQualityUtils:
 
     @staticmethod
     def downscale_image(img: np.ndarray, max_side: int) -> np.ndarray:
+        """Downscale an image so its longest side is at most ``max_side`` pixels."""
         try:
             height, width = img.shape[:2]
             if max(height, width) <= max_side:
@@ -132,6 +147,7 @@ class PictureQualityUtils:
     def update_quality(
         self, session, pics: List[Picture], qualities: List[Quality | None]
     ) -> List[Tuple[type, object, str, object]]:
+        """Persist quality records for pictures and return a change list."""
         changed = []
         for pic, quality in zip(pics, qualities):
             if quality is None:
@@ -163,6 +179,11 @@ class PictureQualityUtils:
     def group_faces_by_format_and_size(
         self, faces: List[Tuple[Face, Picture]]
     ) -> Tuple[dict, List[Face]]:
+        """
+        Group face-picture pairs by (format, rounded_bbox_width, rounded_bbox_height).
+
+        Returns a tuple of ``(groups_dict, invalid_faces_list)``.
+        """
         groups = {}
         invalid_faces = []
         current_key = None
@@ -175,7 +196,8 @@ class PictureQualityUtils:
             pic_format = pic.format.lower()
             if face.bbox is None or len(face.bbox) != 4:
                 logger.warning(
-                    "Skipping face with missing/invalid bbox for picture_id=%s face_id=%s",
+                    "Skipping face with missing/invalid bbox for picture_id=%s"
+                    " face_id=%s",
                     pic.id,
                     face.id,
                 )
@@ -202,6 +224,15 @@ class PictureQualityUtils:
     def calculate_face_quality(
         self, pics_and_faces: List[Tuple[Picture, Face]]
     ) -> List[Quality]:
+        """
+        Calculate quality metrics for a batch of face crops.
+
+        Args:
+            pics_and_faces: List of ``(Picture, Face)`` tuples.
+
+        Returns:
+            List of Quality objects (one per input pair).
+        """
         try:
             all_qualities = []
             cropped_pics = []
@@ -233,14 +264,15 @@ class PictureQualityUtils:
                 if pic.id in image_cache:
                     img = image_cache[pic.id]
                 else:
-                    file_path = PictureUtils.resolve_picture_path(
+                    file_path = ImageUtils.resolve_picture_path(
                         self._db.image_root, pic.file_path
                     )
-                    img = PictureUtils.load_image_or_video(file_path)
+                    img = ImageUtils.load_image_or_video(file_path)
                     image_cache[pic.id] = img
                 if img is None:
                     logger.warning(
-                        "Could not load image for face quality: picture_id=%s file_path=%s",
+                        "Could not load image for face quality:"
+                        " picture_id=%s file_path=%s",
                         pic.id,
                         pic.file_path,
                     )
@@ -255,7 +287,8 @@ class PictureQualityUtils:
 
                 if x2_clamped <= x1_clamped or y2_clamped <= y1_clamped:
                     logger.warning(
-                        "Invalid bbox after clamping for face quality: file_path=%s bbox=%s clamped=%s",
+                        "Invalid bbox after clamping for face quality:"
+                        " file_path=%s bbox=%s clamped=%s",
                         pic.file_path,
                         face.bbox,
                         (x1_clamped, y1_clamped, x2_clamped, y2_clamped),
@@ -266,7 +299,8 @@ class PictureQualityUtils:
                 crop = img[y1_clamped:y2_clamped, x1_clamped:x2_clamped]
                 if crop.size == 0:
                     logger.warning(
-                        "Empty crop for face quality: file_path=%s bbox=%s crop_shape=%s",
+                        "Empty crop for face quality: file_path=%s bbox=%s"
+                        " crop_shape=%s",
                         pic.file_path,
                         face.bbox,
                         getattr(crop, "shape", None),
@@ -283,7 +317,8 @@ class PictureQualityUtils:
                         )
                     except Exception as resize_error:
                         logger.warning(
-                            "OpenCV resize failed: file_path=%s bbox=%s crop_shape=%s error=%s",
+                            "OpenCV resize failed: file_path=%s bbox=%s"
+                            " crop_shape=%s error=%s",
                             pic.file_path,
                             face.bbox,
                             getattr(crop, "shape", None),
@@ -348,6 +383,7 @@ class PictureQualityUtils:
     def update_face_quality(
         self, session, faces: List[Face], qualities: List[Quality | None]
     ) -> List[Tuple[type, object, str, object]]:
+        """Persist quality records for faces and return a change list."""
         changed = []
         for face, quality in zip(faces, qualities):
             if quality is None:

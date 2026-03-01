@@ -4,10 +4,10 @@ import time
 
 from pixlvault.pixl_logging import get_logger
 from pixlvault.server import Server
-from pixlvault.worker_types import WorkerType
+from pixlvault.worker_types import TaskType
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from sqlalchemy import func
 from sqlmodel import select
 
@@ -40,7 +40,7 @@ def test_likeness_worker():
                 "Expected at least one picture with file_path for quality calculation."
             )
             quality_paths = [
-                PictureUtils.resolve_picture_path(
+                ImageUtils.resolve_picture_path(
                     server.vault.db.image_root, pic.file_path
                 )
                 for pic in quality_pictures
@@ -52,12 +52,12 @@ def test_likeness_worker():
             quality_futures = []
             for pic in quality_pictures:
                 future = server.vault.get_worker_future(
-                    WorkerType.QUALITY, Picture, pic.id, "quality"
+                    TaskType.QUALITY, Picture, pic.id, "quality"
                 )
                 quality_futures.append(future)
             logger.info(f"Queued {len(quality_futures)} quality computations.")
             # Start the quality worker
-            server.vault.start_workers({WorkerType.QUALITY})
+            server.vault.start_workers({TaskType.QUALITY})
             # Wait for all quality computations to complete
             timeout = time.time() + 120
             for future in quality_futures:
@@ -65,12 +65,12 @@ def test_likeness_worker():
 
             logger.info("All picture quality computations completed.")
 
-            server.vault.stop_workers({WorkerType.QUALITY})
+            server.vault.stop_workers({TaskType.QUALITY})
 
             server.vault.start_workers(
                 {
-                    WorkerType.LIKENESS_PARAMETERS,
-                    WorkerType.IMAGE_EMBEDDING,
+                    TaskType.LIKENESS_PARAMETERS,
+                    TaskType.IMAGE_EMBEDDING,
                 }
             )
 
@@ -95,8 +95,8 @@ def test_likeness_worker():
             )
             server.vault.stop_workers(
                 {
-                    WorkerType.LIKENESS_PARAMETERS,
-                    WorkerType.IMAGE_EMBEDDING,
+                    TaskType.LIKENESS_PARAMETERS,
+                    TaskType.IMAGE_EMBEDDING,
                 }
             )
 
@@ -108,7 +108,7 @@ def test_likeness_worker():
                     pairs.append((a, b))
             logger.info(f"Queued {len(pairs)} likeness pairs for processing.")
             # Start the likeness worker
-            server.vault.start_workers({WorkerType.LIKENESS})
+            server.vault.start_workers({TaskType.LIKENESS})
 
             def fetch_queue_remaining(session):
                 return session.exec(
@@ -123,7 +123,7 @@ def test_likeness_worker():
             assert not remaining, (
                 f"Timed out waiting for likeness queue to drain. Remaining={remaining}"
             )
-            server.vault.stop_workers({WorkerType.LIKENESS})
+            server.vault.stop_workers({TaskType.LIKENESS})
             # Check that all likeness results are present
             likeness_results = server.vault.db.run_task(
                 lambda session: PictureLikeness.find(session)

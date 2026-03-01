@@ -4,7 +4,7 @@ from sqlmodel import Session, select
 from pixlvault.database import DBPriority
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
-from pixlvault.utils.picture_likeness_utils import PictureLikenessUtils
+from pixlvault.utils.likeness.likeness_utils import PictureLikenessUtils
 from pixlvault.tasks.base_task import BaseTask
 
 

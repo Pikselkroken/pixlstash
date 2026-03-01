@@ -15,7 +15,8 @@ from pixlvault.db_models.face import Face
 from pixlvault.db_models.hand import Hand
 from pixlvault.db_models.picture import Picture
 from pixlvault.picture_tagger import MODEL_DIR, PictureTagger
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlvault.utils.image_processing.face_utils import FaceUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.tasks.base_task import BaseTask
 
@@ -250,7 +251,7 @@ class FeatureExtractionTask(BaseTask):
             else:
                 need_hands = not self._has_hands(pic.id)
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
-            file_path = PictureUtils.resolve_picture_path(
+            file_path = ImageUtils.resolve_picture_path(
                 self._db.image_root, pic.file_path
             )
             ext = os.path.splitext(file_path)[1].lower()
@@ -298,7 +299,7 @@ class FeatureExtractionTask(BaseTask):
                             (
                                 thumbnail_bytes,
                                 thumbnail_crop,
-                            ) = PictureUtils.generate_face_weighted_thumbnail_with_crop(
+                            ) = FaceUtils.generate_face_weighted_thumbnail_with_crop(
                                 img,
                                 bboxes,
                                 min_side=256,
@@ -470,7 +471,7 @@ class FeatureExtractionTask(BaseTask):
                         (
                             thumbnail_bytes,
                             thumbnail_crop,
-                        ) = PictureUtils.generate_face_weighted_thumbnail_with_crop(
+                        ) = FaceUtils.generate_face_weighted_thumbnail_with_crop(
                             first_frame,
                             first_bboxes,
                             min_side=256,
@@ -527,7 +528,7 @@ class FeatureExtractionTask(BaseTask):
                 pic_face_ids.extend(face_ids)
 
             if need_faces and thumbnail_bytes:
-                saved_thumb = PictureUtils.write_thumbnail_bytes(
+                saved_thumb = ImageUtils.write_thumbnail_bytes(
                     self._db.image_root,
                     pic.file_path,
                     thumbnail_bytes,

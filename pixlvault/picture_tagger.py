@@ -22,7 +22,9 @@ from .pixl_logging import get_logger
 from pixlvault.db_models.picture import Picture
 from pixlvault.tag_naturaliser import TagNaturaliser
 from pixlvault.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlvault.utils.image_processing.face_utils import FaceUtils
+from pixlvault.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
 
@@ -153,7 +155,7 @@ class PictureTagger:
         )
 
     def _resolve_picture_path(self, file_path: str) -> str:
-        return PictureUtils.resolve_picture_path(self._image_root, file_path)
+        return ImageUtils.resolve_picture_path(self._image_root, file_path)
 
     def __enter__(self):
         logger.debug("PictureTagger.__enter__ called.")
@@ -581,9 +583,9 @@ class PictureTagger:
 
             caption = None
             if ext in video_exts:
-                from pixlvault.utils.picture_utils import PictureUtils
+                from pixlvault.utils.image_processing.video_utils import VideoUtils
 
-                frames = PictureUtils.extract_representative_video_frames(
+                frames = VideoUtils.extract_representative_video_frames(
                     image_path, count=3
                 )
                 for idx, pil_img in enumerate(frames):
@@ -1214,7 +1216,7 @@ class PictureTagger:
             path = str(image_path)
             ext = os.path.splitext(path)[1].lower()
             if ext in video_exts:
-                frames = PictureUtils.extract_representative_video_frames(path, count=3)
+                frames = VideoUtils.extract_representative_video_frames(path, count=3)
                 if not frames:
                     logger.error("No frames extracted from video: %s", path)
                     continue
@@ -1557,7 +1559,6 @@ class PictureTagger:
         Generate facial features for a list of face_bboxes in a picture.
         Returns a list of facial_features (np.ndarray or None) for each bbox.
         """
-        from pixlvault.utils.picture_utils import PictureUtils
         import os
         import torch
         from PIL import Image
@@ -1584,7 +1585,7 @@ class PictureTagger:
                 frame = None
             for bbox in face_bboxes:
                 if frame is not None:
-                    crop = PictureUtils.crop_face_from_frame(frame, bbox)
+                    crop = FaceUtils.crop_face_from_frame(frame, bbox)
                     if crop is not None and isinstance(crop, np.ndarray):
                         crop = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
                     face_crops.append(crop)
@@ -1592,9 +1593,7 @@ class PictureTagger:
                     face_crops.append(None)
         else:
             for bbox in face_bboxes:
-                crop = PictureUtils.load_and_crop_square_image_with_face(
-                    file_path, bbox
-                )
+                crop = FaceUtils.load_and_crop_square_image_with_face(file_path, bbox)
                 face_crops.append(crop)
 
         # Try to get a human-friendly description for logging

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from pixlvault.server import Server
 from pixlvault.db_models.picture import Picture
-from pixlvault.worker_types import WorkerType
+from pixlvault.worker_types import TaskType
 
 
 def test_watch_folder():
@@ -53,12 +53,12 @@ def test_watch_folder():
 
             server.vault.start_workers(
                 {
-                    WorkerType.WATCH_FOLDERS,
-                    WorkerType.TAGGER,
-                    WorkerType.IMAGE_EMBEDDING,
+                    TaskType.WATCH_FOLDERS,
+                    TaskType.TAGGER,
+                    TaskType.IMAGE_EMBEDDING,
                 }
             )
-            worker = server.vault._workers.get(WorkerType.WATCH_FOLDERS)
+            worker = server.vault._workers.get(TaskType.WATCH_FOLDERS)
             if worker:
                 worker.notify()
 
@@ -122,12 +122,12 @@ def test_watch_folder_delete_after_import():
 
             server.vault.start_workers(
                 {
-                    WorkerType.WATCH_FOLDERS,
-                    WorkerType.TAGGER,
-                    WorkerType.IMAGE_EMBEDDING,
+                    TaskType.WATCH_FOLDERS,
+                    TaskType.TAGGER,
+                    TaskType.IMAGE_EMBEDDING,
                 }
             )
-            worker = server.vault._workers.get(WorkerType.WATCH_FOLDERS)
+            worker = server.vault._workers.get(TaskType.WATCH_FOLDERS)
             if worker:
                 worker.notify()
 

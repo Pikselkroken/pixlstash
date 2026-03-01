@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple
 
 import cv2
 
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 
 
 DEFAULT_SCALE = 1.75
@@ -68,7 +68,7 @@ def get_media_size(
 def resolve_path(image_root: str, rel_path: Optional[str]) -> Optional[str]:
     if not rel_path:
         return None
-    return PictureUtils.resolve_picture_path(image_root, rel_path)
+    return ImageUtils.resolve_picture_path(image_root, rel_path)
 
 
 def expand_table_bboxes(

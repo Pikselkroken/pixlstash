@@ -7,7 +7,8 @@ from sqlmodel import Session, select, delete
 from pixlvault.database import DBPriority
 from pixlvault.db_models import FaceTag, HandTag, Picture, Tag
 from pixlvault.feature_tag_blacklist import is_face_tag, is_hand_tag
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlvault.utils.image_processing.face_utils import FaceUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.tasks.base_task import BaseTask
 
@@ -137,7 +138,7 @@ class TagTask(BaseTask):
         image_paths = []
         pic_by_path = {}
         for pic in batch:
-            file_path = PictureUtils.resolve_picture_path(
+            file_path = ImageUtils.resolve_picture_path(
                 self._db.image_root, pic.file_path
             )
             image_paths.append(file_path)
@@ -188,7 +189,7 @@ class TagTask(BaseTask):
                         )
                         if not has_face_crops and not has_hand_crops:
                             continue
-                        file_path = PictureUtils.resolve_picture_path(
+                        file_path = ImageUtils.resolve_picture_path(
                             self._db.image_root, pic.file_path
                         )
                         ext = os.path.splitext(file_path)[1].lower()
@@ -208,12 +209,10 @@ class TagTask(BaseTask):
                                 if getattr(face, "face_index", 0) < 0:
                                     continue
                                 bbox = getattr(face, "bbox", None)
-                                clamped = PictureUtils.clamp_bbox(
-                                    bbox, frame_w, frame_h
-                                )
+                                clamped = ImageUtils.clamp_bbox(bbox, frame_w, frame_h)
                                 if clamped is None:
                                     continue
-                                crop = PictureUtils.crop_face_from_frame(frame, clamped)
+                                crop = FaceUtils.crop_face_from_frame(frame, clamped)
                                 if crop is None:
                                     logger.debug(
                                         "Face crop failed for %s bbox=%s",
@@ -232,7 +231,7 @@ class TagTask(BaseTask):
                                         exc,
                                     )
                                     continue
-                                padded = PictureUtils.pad_image_to_square(crop_img)
+                                padded = ImageUtils.pad_image_to_square(crop_img)
                                 if padded is None:
                                     continue
                                 key = f"{file_path}#face{face.id or face.face_index}"
@@ -248,9 +247,7 @@ class TagTask(BaseTask):
                                 if getattr(hand, "hand_index", 0) < 0:
                                     continue
                                 bbox = getattr(hand, "bbox", None)
-                                clamped = PictureUtils.clamp_bbox(
-                                    bbox, frame_w, frame_h
-                                )
+                                clamped = ImageUtils.clamp_bbox(bbox, frame_w, frame_h)
                                 if clamped is None:
                                     continue
                                 ex1, ey1, ex2, ey2 = clamped
@@ -272,7 +269,7 @@ class TagTask(BaseTask):
                                     ]
 
                             for _, bbox, hand in hand_candidates:
-                                crop = PictureUtils.crop_face_from_frame(frame, bbox)
+                                crop = FaceUtils.crop_face_from_frame(frame, bbox)
                                 if crop is None:
                                     logger.debug(
                                         "Hand crop failed for %s bbox=%s",
@@ -292,7 +289,7 @@ class TagTask(BaseTask):
                                         exc,
                                     )
                                     continue
-                                padded = PictureUtils.pad_image_to_square(crop_img)
+                                padded = ImageUtils.pad_image_to_square(crop_img)
                                 if padded is None:
                                     continue
                                 key = f"{file_path}#hand{hand.id or hand.hand_index}"

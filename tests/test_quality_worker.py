@@ -3,9 +3,9 @@ import tempfile
 from fastapi.testclient import TestClient
 
 from pixlvault.db_models import Face, Picture, Quality
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.server import Server
-from pixlvault.worker_types import WorkerType
+from pixlvault.worker_types import TaskType
 from tests.utils import upload_pictures_and_wait
 
 
@@ -27,7 +27,7 @@ def test_quality_worker_face_metrics():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
-            server.vault.start_workers({WorkerType.FACE})
+            server.vault.start_workers({TaskType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -100,7 +100,7 @@ def test_quality_worker_end_to_end():
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
             client = TestClient(server.api)
-            server.vault.start_workers({WorkerType.FACE})
+            server.vault.start_workers({TaskType.FACE})
 
             resp = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
@@ -126,7 +126,7 @@ def test_quality_worker_end_to_end():
             assert imported_picture.file_path, (
                 "Expected imported quality test picture to have file_path."
             )
-            imported_path = PictureUtils.resolve_picture_path(
+            imported_path = ImageUtils.resolve_picture_path(
                 server.vault.db.image_root, imported_picture.file_path
             )
             assert os.path.exists(imported_path), (
@@ -142,13 +142,13 @@ def test_quality_worker_end_to_end():
 
             # Now start the quality workers to compute metrics
             q_future = server.vault.get_worker_future(
-                WorkerType.QUALITY, Picture, pic_id, "quality"
+                TaskType.QUALITY, Picture, pic_id, "quality"
             )
             fq_future = server.vault.get_worker_future(
-                WorkerType.FACE_QUALITY, Face, faces[0].id, "quality"
+                TaskType.FACE_QUALITY, Face, faces[0].id, "quality"
             )
 
-            server.vault.start_workers({WorkerType.QUALITY, WorkerType.FACE_QUALITY})
+            server.vault.start_workers({TaskType.QUALITY, TaskType.FACE_QUALITY})
 
             assert q_future.result(timeout=60), "QualityWorker did not finish in time"
 

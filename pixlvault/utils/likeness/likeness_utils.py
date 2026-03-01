@@ -1,3 +1,5 @@
+"""Likeness computation utilities for stacking near-identical images."""
+
 from __future__ import annotations
 
 import math
@@ -63,22 +65,8 @@ class PictureLikenessUtils:
         self._db = database
 
     @staticmethod
-    def get_next_work_batch(
-        session: Session, max_a: int
-    ) -> List[
-        Tuple[
-            int,
-            int,
-            int,
-            Optional[str],
-            Optional[int],
-            Optional[int],
-            Optional[int],
-            Optional[bytes],
-            Optional[object],
-            Optional[bytes],
-        ]
-    ]:
+    def get_next_work_batch(session: Session, max_a: int) -> List[Tuple]:
+        """Fetch the next batch of pictures from the likeness queue."""
         rows = session.exec(
             select(
                 PictureLikenessQueue.picture_id,
@@ -140,6 +128,7 @@ class PictureLikenessUtils:
 
     @staticmethod
     def fetch_bulk_candidate_data(session: Session) -> List[Tuple]:
+        """Fetch all candidate pictures for bulk likeness computation."""
         return session.exec(
             select(
                 Picture.id,
@@ -164,6 +153,7 @@ class PictureLikenessUtils:
         param_thresholds: Optional[Dict[LikenessParameter, float]],
         date_span_seconds: Optional[float],
     ) -> List[PictureLikeness]:
+        """Compute bulk likeness relationships between queued pictures and all candidates."""
         if not rows or not queued_ids:
             return []
         queued_set = set(int(pid) for pid in queued_ids)
@@ -319,6 +309,7 @@ class PictureLikenessUtils:
         likeness_results: List[PictureLikeness],
         top_k: int,
     ) -> None:
+        """Persist likeness results and prune below top-k."""
         PictureLikeness.bulk_insert_ignore(session, likeness_results)
         processed_as = {pl.picture_id_a for pl in likeness_results}
         for a_id in processed_as:
@@ -327,6 +318,7 @@ class PictureLikenessUtils:
 
     @staticmethod
     def seed_queue(session: Session) -> None:
+        """Seed the likeness queue with all pictures if it is empty."""
         queued_count = session.exec(
             select(func.count()).select_from(PictureLikenessQueue)
         ).one()
@@ -348,6 +340,7 @@ class PictureLikenessUtils:
     def compute_param_gap_thresholds(
         cls, session: Session, percentile: int, sample_limit: int
     ) -> Dict[LikenessParameter, float]:
+        """Compute per-parameter gap thresholds from a sample of the database."""
         rows = session.exec(
             select(Picture.likeness_parameters)
             .where(Picture.likeness_parameters.is_not(None))
@@ -387,6 +380,7 @@ class PictureLikenessUtils:
 
     @staticmethod
     def compute_date_span_seconds(session: Session) -> Optional[float]:
+        """Return the total date span (in seconds) across all pictures, or None."""
         row = session.exec(
             select(func.min(Picture.created_at), func.max(Picture.created_at))
         ).first()
@@ -400,12 +394,14 @@ class PictureLikenessUtils:
 
     @staticmethod
     def decode_embedding(blob) -> Optional[np.ndarray]:
+        """Decode a raw embedding blob to a numpy array."""
         return PictureLikenessUtils._decode_embedding(blob)
 
     @staticmethod
     def decode_likeness_parameters(
         blob: Optional[object], length: int
     ) -> Optional[np.ndarray]:
+        """Decode a raw likeness parameter blob to a numpy array."""
         return PictureLikenessUtils._decode_likeness_parameters(blob, length)
 
     @staticmethod
@@ -449,6 +445,7 @@ class PictureLikenessUtils:
 
     @classmethod
     def _phash_similarity(cls, hash_a: str, hash_b: str) -> float:
+        """Return the normalised perceptual hash similarity between two hex hashes."""
         try:
             int_a = int(hash_a, 16)
             int_b = int(hash_b, 16)

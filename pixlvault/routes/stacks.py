@@ -12,7 +12,7 @@ from pixlvault.picture_scoring import (
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
 )
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.utils import safe_model_dict
 
@@ -82,7 +82,7 @@ def create_router(server) -> APIRouter:
                     candidates,
                 )
                 if cand_list:
-                    scores = PictureUtils.calculate_smart_score_batch_numpy(
+                    scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
                         cand_list, good_list, bad_list
                     )
                     return {

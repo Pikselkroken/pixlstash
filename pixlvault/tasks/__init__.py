@@ -1,3 +1,4 @@
+from .task_type import TaskType
 from .base_task_finder import BaseTaskFinder, TaskFinderRegistry
 from .description_task import DescriptionTask
 from .feature_extraction_task import FeatureExtractionTask
@@ -20,6 +21,7 @@ from .likeness_parameters_task import LikenessParametersTask
 from .likeness_task import LikenessTask
 
 __all__ = [
+    "TaskType",
     "BaseTaskFinder",
     "TaskFinderRegistry",
     "DescriptionTask",

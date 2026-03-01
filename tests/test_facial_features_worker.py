@@ -12,7 +12,7 @@ from pixlvault.db_models import Character, Face, Picture
 from sqlmodel import select
 from pixlvault.server import Server
 from pixlvault.pixl_logging import get_logger
-from pixlvault.worker_types import WorkerType
+from pixlvault.worker_types import TaskType
 
 
 logger = get_logger(__name__)
@@ -49,15 +49,15 @@ def test_facial_features():
                 )
                 futures.append(
                     server.vault.get_worker_future(
-                        WorkerType.FACE, Picture, pic.id, "faces"
+                        TaskType.FACE, Picture, pic.id, "faces"
                     )
                 )
 
-            server.vault.start_workers({WorkerType.FACE})
+            server.vault.start_workers({TaskType.FACE})
             # Wait for all face detection futures to complete
             results = [future.result(timeout=60) for future in futures]
             assert all(results), "Not all pictures were processed in time"
-            server.vault.stop_workers({WorkerType.FACE})
+            server.vault.stop_workers({TaskType.FACE})
 
             # Now run assertions as before
             pics = server.vault.db.run_task(lambda session: Picture.find(session))
@@ -124,11 +124,11 @@ def test_character_thumbnail_endpoint():
                 )
                 futures.append(
                     server.vault.get_worker_future(
-                        WorkerType.FACE, Picture, pic.id, "faces"
+                        TaskType.FACE, Picture, pic.id, "faces"
                     )
                 )
 
-            server.vault.start_workers({WorkerType.FACE})
+            server.vault.start_workers({TaskType.FACE})
             # Wait for all face detection futures to complete
             results = [future.result(timeout=60) for future in futures]
             assert len(results) == len(futures), (
@@ -214,13 +214,13 @@ def test_character_thumbnail_endpoint():
             best_pic = server.vault.db.run_task(
                 lambda session: session.get(Picture, best_face.picture_id)
             )
-            from pixlvault.utils.picture_utils import PictureUtils
+            from pixlvault.utils.image_processing.face_utils import FaceUtils
 
             bbox = best_face.bbox
             logger.info(
                 f"Cropping bbox: {bbox} from picture {best_pic.file_path} with description {best_pic.description}"
             )
-            crop_img = PictureUtils.crop_face_bbox_exact(
+            crop_img = FaceUtils.crop_face_bbox_exact(
                 os.path.join(server.vault.image_root, best_pic.file_path), bbox
             )
             # Save both images for manual inspection

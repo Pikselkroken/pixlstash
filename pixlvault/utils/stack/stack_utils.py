@@ -1,18 +1,23 @@
+"""Stack ordering utilities for picture stacks."""
+
 from typing import List
+
 from pixlvault.db_models import Picture
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 
 
 def picture_order_key(pic: Picture, image_root: str = None):
     """
-    Key for ordering pictures in a likeness stack:
-    - Higher resolution (width*height) first
+    Key for ordering pictures in a likeness stack.
+
+    Ordering priority:
+    - Higher resolution (width * height) first
     - Higher sharpness first
     - Lower noise_level first
     """
     if not pic.height or not pic.width:
-        file_path = PictureUtils.resolve_picture_path(image_root, pic.file_path)
-        pic.width, pic.height, _ = PictureUtils.load_metadata(file_path)
+        file_path = ImageUtils.resolve_picture_path(image_root, pic.file_path)
+        pic.width, pic.height, _ = ImageUtils.load_metadata(file_path)
     resolution = (pic.width * pic.height) if pic.width and pic.height else 0
 
     quality = pic.quality
@@ -25,7 +30,5 @@ def picture_order_key(pic: Picture, image_root: str = None):
 def order_stack_pictures(
     pictures: List[Picture], image_root: str = None
 ) -> List[Picture]:
-    """
-    Return pictures sorted by best-to-worst (resolution, sharpness, noise).
-    """
+    """Return pictures sorted best-to-worst by resolution, sharpness, and noise."""
     return sorted(pictures, key=lambda pic: picture_order_key(pic, image_root))

@@ -40,7 +40,7 @@ from pixlvault.routes.tags import create_router as create_tags_router
 from pixlvault.routes.stacks import create_router as create_stacks_router
 from pixlvault.routes.pictures import create_router as create_pictures_router
 from pixlvault.routes.comfyui import create_router as create_comfyui_router
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 
 
 # Logging will be set up after config is loaded
@@ -273,9 +273,7 @@ class Server:
             pic_id, file_path = row
             if not file_path:
                 continue
-            thumb_path = PictureUtils.get_thumbnail_path(
-                self.vault.image_root, file_path
-            )
+            thumb_path = ImageUtils.get_thumbnail_path(self.vault.image_root, file_path)
             if thumb_path and os.path.exists(thumb_path):
                 continue
             missing.append((pic_id, file_path))
@@ -289,16 +287,14 @@ class Server:
         generated = 0
         skipped = 0
         for index, (pic_id, file_path) in enumerate(missing, start=1):
-            resolved = PictureUtils.resolve_picture_path(
-                self.vault.image_root, file_path
-            )
+            resolved = ImageUtils.resolve_picture_path(self.vault.image_root, file_path)
             if not resolved or not os.path.exists(resolved):
                 skipped += 1
                 logger.warning(
                     "Missing source file for thumbnail generation: %s", resolved
                 )
                 continue
-            img = PictureUtils.load_image_or_video(resolved)
+            img = ImageUtils.load_image_or_video(resolved)
             if img is None:
                 skipped += 1
                 logger.warning(
@@ -307,14 +303,14 @@ class Server:
                 continue
             if not isinstance(img, Image.Image):
                 img = Image.fromarray(img)
-            thumbnail_bytes = PictureUtils.generate_thumbnail_bytes(img)
+            thumbnail_bytes = ImageUtils.generate_thumbnail_bytes(img)
             if not thumbnail_bytes:
                 skipped += 1
                 logger.warning(
                     "Failed to generate thumbnail bytes for picture %s", pic_id
                 )
                 continue
-            saved = PictureUtils.write_thumbnail_bytes(
+            saved = ImageUtils.write_thumbnail_bytes(
                 self.vault.image_root, file_path, thumbnail_bytes
             )
             if saved:

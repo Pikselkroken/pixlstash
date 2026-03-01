@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 
 from pixlvault.db_models import Picture, PictureSetMember, PictureStack
 from pixlvault.image_plugins.base import ImagePlugin
-from pixlvault.utils.picture_utils import PictureUtils
+from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.stacking import get_or_create_stack_for_picture
 
@@ -37,12 +37,12 @@ def _load_input_images(
             raise ValueError(f"Picture not found: {picture_id}")
         if not pic.file_path:
             raise ValueError(f"Picture missing file path: {picture_id}")
-        resolved_path = PictureUtils.resolve_picture_path(
+        resolved_path = ImageUtils.resolve_picture_path(
             server.vault.image_root, pic.file_path
         )
         if not resolved_path or not os.path.isfile(resolved_path):
             raise ValueError(f"Picture file missing: {picture_id}")
-        frame = PictureUtils.load_image_or_video(resolved_path)
+        frame = ImageUtils.load_image_or_video(resolved_path)
         if frame is None:
             raise ValueError(f"Could not load image/video data: {picture_id}")
         try:
@@ -127,7 +127,7 @@ def _import_output_images(
         return [], [], []
 
     shas = [
-        PictureUtils.calculate_hash_from_bytes(image_bytes)
+        ImageUtils.calculate_hash_from_bytes(image_bytes)
         for image_bytes, _ in output_entries
     ]
 
@@ -146,7 +146,7 @@ def _import_output_images(
     for (img_bytes, ext), sha in new_entries:
         picture_uuid = f"{uuid.uuid4()}{ext}"
         new_pictures.append(
-            PictureUtils.create_picture_from_bytes(
+            ImageUtils.create_picture_from_bytes(
                 image_root_path=server.vault.image_root,
                 image_bytes=img_bytes,
                 picture_uuid=picture_uuid,
