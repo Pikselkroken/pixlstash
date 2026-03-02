@@ -79,6 +79,9 @@ class WorkPlanner:
     def __init__(self, task_runner, task_finders: list):
         self._task_runner = task_runner
         self._task_finders = task_finders or []
+        self._task_finders_by_name = {
+            finder.finder_name(): finder for finder in self._task_finders
+        }
 
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -120,7 +123,19 @@ class WorkPlanner:
         with self._lock:
             finder_name = self._finder_by_task_id.pop(getattr(task, "id", None), None)
             if finder_name:
-                self._inflight_by_finder[finder_name] = False
+                inflight_count = int(self._inflight_by_finder.get(finder_name, 0))
+                self._inflight_by_finder[finder_name] = max(0, inflight_count - 1)
+        if finder_name:
+            finder = self._task_finders_by_name.get(finder_name)
+            if finder is not None:
+                try:
+                    finder.on_task_complete(task, error)
+                except Exception as exc:
+                    logger.warning(
+                        "Finder completion callback failed for %s: %s",
+                        finder_name,
+                        exc,
+                    )
         self._wake.set()
 
     def _run(self):
@@ -149,10 +164,11 @@ class WorkPlanner:
             idx = (self._finder_order_idx + offset) % finder_count
             finder = self._task_finders[idx]
             finder_name = finder.finder_name()
+            max_inflight = max(1, int(finder.max_inflight_tasks()))
 
             with self._lock:
-                inflight = bool(self._inflight_by_finder.get(finder_name, False))
-            if inflight:
+                inflight_count = int(self._inflight_by_finder.get(finder_name, 0))
+            if inflight_count >= max_inflight:
                 continue
 
             task = finder.find_task()
@@ -161,7 +177,7 @@ class WorkPlanner:
 
             task_id = self._task_runner.submit(task)
             with self._lock:
-                self._inflight_by_finder[finder_name] = True
+                self._inflight_by_finder[finder_name] = inflight_count + 1
                 self._finder_by_task_id[task_id] = finder_name
 
             self._finder_order_idx = (idx + 1) % finder_count

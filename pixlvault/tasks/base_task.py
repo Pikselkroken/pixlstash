@@ -54,6 +54,9 @@ class BaseTask(ABC):
         finally:
             self.completed_at = datetime.utcnow()
 
+    def on_queued(self) -> None:
+        return None
+
     @abstractmethod
     def _run_task(self) -> Any:
         raise NotImplementedError

@@ -21,3 +21,9 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
     @abstractmethod
     def find_task(self):
         raise NotImplementedError
+
+    def max_inflight_tasks(self) -> int:
+        return 1
+
+    def on_task_complete(self, task, error) -> None:
+        return None

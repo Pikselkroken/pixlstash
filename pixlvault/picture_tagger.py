@@ -29,7 +29,7 @@ from pixlvault.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
 
-DEFAULT_WD14_TAGGER_REPO = "SmilingWolf/wd-v1-4-convnext-tagger-v2"
+DEFAULT_WD14_TAGGER_REPO = "SmilingWolf/wd-convnext-tagger-v3"
 FILES = ["keras_metadata.pb", "saved_model.pb", "selected_tags.csv"]
 FILES_ONNX = ["model.onnx"]
 SUB_DIR = "variables"
@@ -37,7 +37,7 @@ SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
 MODEL_DIR = "downloaded_models"
 BATCH_SIZE = 1
-MAX_CONCURRENT_IMAGES_GPU = 32
+MAX_CONCURRENT_IMAGES_GPU = 64
 MAX_CONCURRENT_IMAGES_CPU = 8
 FLORENCE_BATCH_SIZE_GPU = 4
 FLORENCE_BATCH_SIZE_CPU = 2
@@ -51,6 +51,7 @@ CUSTOM_TAGGER_FILENAME = "best.pt"
 CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.85
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
+CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
 CUSTOM_TAGGER_BATCH = 16
 CLIP_MODEL_NAME = "ViT-B-32"
 
@@ -116,11 +117,11 @@ class PictureTagger:
                 self._device = "cpu"
 
         logger.info(f"PictureTagger initialised with device: {self._device}")
-
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._use_custom_tagger = True
         self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
+        self._custom_tagger_image_size_quality_crop = CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP
         self._custom_tagger_batch = CUSTOM_TAGGER_BATCH
         self._custom_device = self._device
 
@@ -129,6 +130,7 @@ class PictureTagger:
         # Defer heavy model initialization until first use.
         self.ort_sess = None
         self.input_name = None
+        self._onnx_batch_capacity = 1
         self._rating_tags = None
         self._general_tags = None
 
@@ -931,6 +933,24 @@ class PictureTagger:
                     ),
                 )
         self.input_name = self.ort_sess.get_inputs()[0].name
+        self._onnx_batch_capacity = self._resolve_onnx_batch_capacity()
+
+    def _resolve_onnx_batch_capacity(self) -> int:
+        if getattr(self, "ort_sess", None) is None:
+            return 1
+        try:
+            input_meta = self.ort_sess.get_inputs()[0]
+            input_shape = getattr(input_meta, "shape", None)
+            if not input_shape:
+                return 1
+            batch_dim = input_shape[0]
+            if isinstance(batch_dim, int):
+                return max(1, int(batch_dim))
+            if batch_dim is None or isinstance(batch_dim, str):
+                return max(1, int(self.max_concurrent_images()))
+        except Exception as exc:
+            logger.warning("Could not resolve ONNX batch capacity: %s", exc)
+        return 1
 
     def _build_custom_tagger_model(self, arch: str, num_labels: int):
         from torchvision.models import convnext_tiny, convnext_base
@@ -1164,6 +1184,9 @@ class PictureTagger:
     def custom_tagger_image_size_full(self) -> int:
         return int(self._custom_tagger_image_size_full)
 
+    def custom_tagger_image_size_quality_crop(self) -> int:
+        return int(self._custom_tagger_image_size_quality_crop)
+
     @staticmethod
     def _expand_bbox_to_square(bbox, img_width, img_height, target_size):
         """Expand [x1, y1, x2, y2] outward from its center to a square of
@@ -1214,7 +1237,7 @@ class PictureTagger:
             items,
             stop_event=stop_event,
             threshold=self._custom_tagger_threshold_full,
-            image_size=self._custom_tagger_image_size_full,
+            image_size=self._custom_tagger_image_size_quality_crop,
         )
         filtered = {}
         for key, tags in raw.items():
@@ -1296,7 +1319,7 @@ class PictureTagger:
 
         return self._naturalize_tags(results)
 
-    def _tag_images_custom(self, image_paths, stop_event=None):
+    def _tag_images_custom(self, image_paths, stop_event=None, preloaded_images=None):
         from PIL import Image
 
         if not hasattr(self, "_custom_transform"):
@@ -1315,7 +1338,7 @@ class PictureTagger:
             path = str(image_path)
             ext = os.path.splitext(path)[1].lower()
             if ext in video_exts:
-                frames = VideoUtils.extract_representative_video_frames(path, count=3)
+                frames = VideoUtils.extract_representative_video_frames(path, count=1)
                 if not frames:
                     logger.error("No frames extracted from video: %s", path)
                     continue
@@ -1323,7 +1346,10 @@ class PictureTagger:
                     items.append((f"{path}#frame{idx}", frame))
                 continue
             try:
-                image = Image.open(path).convert("RGB")
+                if preloaded_images is not None and path in preloaded_images:
+                    image = preloaded_images[path]
+                else:
+                    image = Image.open(path).convert("RGB")
             except Exception as e:
                 logger.error("Could not load image path: %s, error: %s", path, e)
                 continue
@@ -1340,7 +1366,7 @@ class PictureTagger:
         )
         return self._merge_video_frame_tags(results)
 
-    def tag_images(self, image_paths, stop_event=None):
+    def tag_images(self, image_paths, stop_event=None, preloaded_images=None):
         """
         Tag images using WD14 and optionally extend with the custom tagger.
 
@@ -1358,11 +1384,28 @@ class PictureTagger:
 
         self._ensure_tagging_ready()
 
-        dataset = ImageLoadingDatasetPrepper(image_paths)
+        preloaded_map = preloaded_images or {}
+        remaining_paths = [p for p in image_paths if str(p) not in preloaded_map]
+        logger.info(
+            "[TAG_PRELOAD] total=%s preloaded_hits=%s dataloader_misses=%s",
+            len(image_paths),
+            len(image_paths) - len(remaining_paths),
+            len(remaining_paths),
+        )
+
         if self._device == "cpu":
             max_concurrent = MAX_CONCURRENT_IMAGES_CPU
         else:
             max_concurrent = MAX_CONCURRENT_IMAGES_GPU
+        onnx_batch_capacity = max(1, int(getattr(self, "_onnx_batch_capacity", 1)))
+        inference_batch_size = min(max_concurrent, onnx_batch_capacity)
+
+        logger.info(
+            "[TAG_BATCH] inference_batch_size=%s onnx_batch_capacity=%s max_concurrent=%s",
+            inference_batch_size,
+            onnx_batch_capacity,
+            max_concurrent,
+        )
 
         # On macOS, multiprocessing uses 'spawn' which requires pickling.
         # ONNX InferenceSession cannot be pickled, so disable workers on macOS.
@@ -1370,26 +1413,7 @@ class PictureTagger:
             worker_count = 0
         else:
             worker_count = min(
-                max_concurrent, os.cpu_count() // 2 or 1, len(image_paths)
-            )
-
-        logger.info(
-            "Starting tagger dataloader with worker count: "
-            + str(worker_count)
-            + " and dataset size: "
-            + str(len(dataset))
-        )
-
-        def build_dataloader(worker_count_override: int):
-            data_timeout = TAGGER_DATALOADER_TIMEOUT if worker_count_override > 0 else 0
-            return torch.utils.data.DataLoader(
-                dataset,
-                batch_size=BATCH_SIZE,
-                shuffle=False,
-                num_workers=worker_count_override,
-                collate_fn=self._collate_fn_remove_corrupted,
-                drop_last=False,
-                timeout=data_timeout,
+                max_concurrent, os.cpu_count() // 2 or 1, max(1, len(remaining_paths))
             )
 
         def run_tagging(data_loader):
@@ -1414,7 +1438,7 @@ class PictureTagger:
                         continue
                     image, image_path = data
                     b_imgs_local.append((image_path, image))
-                    if len(b_imgs_local) >= BATCH_SIZE:
+                    if len(b_imgs_local) >= inference_batch_size:
                         b_imgs_local = [
                             (str(image_path), image)
                             for image_path, image in b_imgs_local
@@ -1435,21 +1459,77 @@ class PictureTagger:
                         b_imgs_local.clear()
             return tagging_failed_local, b_imgs_local, results_local
 
-        data = build_dataloader(worker_count)
-        logger.info("Got some tags: %s", data)
+        def run_preloaded_wd14(preloaded_map, results_local):
+            if not preloaded_map:
+                return
+            wd14_batch = []
+            for path in image_paths:
+                loaded_img = preloaded_map.get(str(path))
+                if loaded_img is None:
+                    continue
+                try:
+                    prepared = ImageLoadingDatasetPrepper._preprocess_image(loaded_img)
+                except Exception as exc:
+                    logger.error("Could not preprocess preloaded image %s: %s", path, exc)
+                    continue
+                wd14_batch.append((str(path), prepared))
+                if len(wd14_batch) >= inference_batch_size:
+                    batch_result = self._run_batch(wd14_batch, undesired_tags)
+                    if batch_result is not None:
+                        results_local.update(self._naturalize_tags(batch_result))
+                    wd14_batch.clear()
+            if wd14_batch:
+                batch_result = self._run_batch(wd14_batch, undesired_tags)
+                if batch_result is not None:
+                    results_local.update(self._naturalize_tags(batch_result))
+
         b_imgs = []
         all_results = {}
+        run_preloaded_wd14(preloaded_map, all_results)
         try:
-            _tagging_failed, b_imgs, all_results = run_tagging(data)
+            if remaining_paths:
+                logger.info(
+                    "Starting tagger dataloader with worker count: %s and dataset size: %s",
+                    worker_count,
+                    len(remaining_paths),
+                )
+                dataset = ImageLoadingDatasetPrepper(remaining_paths)
+                data = torch.utils.data.DataLoader(
+                    dataset,
+                    batch_size=inference_batch_size,
+                    shuffle=False,
+                    num_workers=worker_count,
+                    collate_fn=self._collate_fn_remove_corrupted,
+                    drop_last=False,
+                    timeout=(TAGGER_DATALOADER_TIMEOUT if worker_count > 0 else 0),
+                )
+                _tagging_failed, b_imgs, dataloader_results = run_tagging(data)
+                all_results.update(dataloader_results)
+            else:
+                _tagging_failed = False
         except RuntimeError as exc:
             logger.warning("Tagging dataloader stalled: %s", exc)
-            if worker_count > 0 and (stop_event is None or not stop_event.is_set()):
+            if (
+                worker_count > 0
+                and remaining_paths
+                and (stop_event is None or not stop_event.is_set())
+            ):
                 logger.warning(
                     "Retrying tagger dataloader with num_workers=0 for %s items",
-                    len(dataset),
+                    len(remaining_paths),
                 )
-                data = build_dataloader(0)
-                _tagging_failed, b_imgs, all_results = run_tagging(data)
+                dataset = ImageLoadingDatasetPrepper(remaining_paths)
+                data = torch.utils.data.DataLoader(
+                    dataset,
+                    batch_size=inference_batch_size,
+                    shuffle=False,
+                    num_workers=0,
+                    collate_fn=self._collate_fn_remove_corrupted,
+                    drop_last=False,
+                    timeout=0,
+                )
+                _tagging_failed, b_imgs, dataloader_results = run_tagging(data)
+                all_results.update(dataloader_results)
             else:
                 _tagging_failed = True
 
@@ -1467,14 +1547,14 @@ class PictureTagger:
 
         logger.info(f"Completed tagging for {len(all_results)} images.")
         wd14_results = self._merge_video_frame_tags(all_results)
-        for result in wd14_results.values():
-            logger.info(f"WD14 Tags: {result}")
         if not self._use_custom_tagger:
             return wd14_results
 
-        custom_results = self._tag_images_custom(image_paths, stop_event=stop_event)
-        for result in custom_results.values():
-            logger.info(f"Custom Tags: {result}")
+        custom_results = self._tag_images_custom(
+            image_paths,
+            stop_event=stop_event,
+            preloaded_images=preloaded_map,
+        )
 
         combined_results = {}
         for path in set(wd14_results) | set(custom_results):

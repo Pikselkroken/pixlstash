@@ -13,18 +13,12 @@ def reset_tags_for_retag(db_path: str) -> None:
 
         cursor.execute("SELECT COUNT(*) FROM tag")
         tag_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM face_tag")
-        face_tag_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM hand_tag")
-        hand_tag_count = cursor.fetchone()[0]
 
         print(
-            f"Current tags: {tag_count} (face_tag: {face_tag_count}, hand_tag: {hand_tag_count})"
+            f"Current tags: {tag_count}"
         )
 
         print("Clearing face_tag, hand_tag, and tag tables...")
-        cursor.execute("DELETE FROM face_tag")
-        cursor.execute("DELETE FROM hand_tag")
         cursor.execute("DELETE FROM tag")
 
         conn.commit()

@@ -78,6 +78,15 @@ class TaskRunner:
     def submit(self, task: BaseTask) -> str:
         if self._closed or self._stop.is_set():
             raise RuntimeError(f"TaskRunner {self._name} is stopped.")
+        try:
+            task.on_queued()
+        except Exception as exc:
+            logger.warning(
+                "Task %s (%s) queue hook failed: %s",
+                task.id,
+                task.type,
+                exc,
+            )
         self._queue.put(task)
         return task.id
 

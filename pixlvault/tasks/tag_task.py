@@ -1,8 +1,14 @@
 from sqlmodel import Session, select, delete
+import os
+import threading
+import time
+
+from PIL import Image as PILImage
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models import Face, Picture, Tag
 from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlvault.utils.image_processing.video_utils import VideoUtils
 from pixlvault.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
 from pixlvault.pixl_logging import get_logger
 from pixlvault.tasks.base_task import BaseTask
@@ -31,6 +37,56 @@ class TagTask(BaseTask):
         self._db = database
         self._picture_tagger = picture_tagger
         self._pictures = pictures or []
+        self._preloaded_images: dict[str, PILImage.Image] = {}
+        self._preload_lock = threading.Lock()
+        self._preload_thread: threading.Thread | None = None
+        self._preload_started_at: float | None = None
+        self._preload_finished_at: float | None = None
+
+    def on_queued(self) -> None:
+        if self._preload_thread is not None and self._preload_thread.is_alive():
+            return
+        self._preload_started_at = time.perf_counter()
+        self._preload_finished_at = None
+        self._preload_thread = threading.Thread(
+            target=self._preload_images,
+            name=f"TagTaskPreload-{self.id[:8]}",
+            daemon=True,
+        )
+        self._preload_thread.start()
+
+    def _preload_images(self) -> None:
+        preloaded = {}
+        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+        for pic in self._pictures:
+            try:
+                file_path = ImageUtils.resolve_picture_path(
+                    self._db.image_root, pic.file_path
+                )
+                ext = os.path.splitext(str(file_path))[1].lower()
+                if ext in video_exts:
+                    frames = VideoUtils.extract_representative_video_frames(
+                        str(file_path),
+                        count=1,
+                    )
+                    if not frames:
+                        continue
+                    preloaded[file_path] = frames[0].convert("RGB")
+                    continue
+                preloaded[file_path] = PILImage.open(file_path).convert("RGB")
+            except Exception as exc:
+                logger.debug("Preload failed for %s: %s", getattr(pic, "file_path", None), exc)
+        with self._preload_lock:
+            self._preloaded_images = preloaded
+        self._preload_finished_at = time.perf_counter()
+        started_at = self._preload_started_at
+        if started_at is not None:
+            logger.info(
+                "[TAG_PRELOAD] task_id=%s status=ready preloaded=%s preload_s=%.3f",
+                self.id,
+                len(preloaded),
+                self._preload_finished_at - started_at,
+            )
 
     def _run_task(self):
         if not self._pictures:
@@ -84,9 +140,43 @@ class TagTask(BaseTask):
     def _tag_pictures_batch(self) -> list:
         assert self._pictures is not None
 
-        batch = self._pictures[
-            : max(1, int(self._picture_tagger.max_concurrent_images()))
-        ]
+        if self._preload_thread is None:
+            self.on_queued()
+
+        task_start_at = time.perf_counter()
+        preload_started_at = self._preload_started_at
+        preload_headstart_s = (
+            max(0.0, task_start_at - preload_started_at)
+            if preload_started_at is not None
+            else 0.0
+        )
+
+        preload_wait_start = time.perf_counter()
+        if self._preload_thread is not None:
+            self._preload_thread.join()
+        preload_wait_s = time.perf_counter() - preload_wait_start
+
+        preload_finished_at = self._preload_finished_at
+        preload_remaining_at_start_s = (
+            max(0.0, preload_finished_at - task_start_at)
+            if preload_finished_at is not None
+            else preload_wait_s
+        )
+
+        with self._preload_lock:
+            preloaded_images = dict(self._preloaded_images)
+
+        logger.info(
+            "[TAG_PRELOAD] task_id=%s headstart_s=%.3f wait_block_s=%.3f "
+            "remaining_at_start_s=%.3f preloaded=%s",
+            self.id,
+            preload_headstart_s,
+            preload_wait_s,
+            preload_remaining_at_start_s,
+            len(preloaded_images),
+        )
+
+        batch = self._pictures
         image_paths = []
         pic_by_path = {}
         for pic in batch:
@@ -100,7 +190,10 @@ class TagTask(BaseTask):
         if image_paths:
             logger.debug("Tagging %s images", len(image_paths))
             logger.debug("Tagging image paths: %s", image_paths)
-            tag_results = self._picture_tagger.tag_images(image_paths)
+            tag_results = self._picture_tagger.tag_images(
+                image_paths,
+                preloaded_images=preloaded_images,
+            )
             logger.debug("Got tag results for %s images.", len(tag_results))
 
             # --- Quality crop pass ---
@@ -108,14 +201,12 @@ class TagTask(BaseTask):
             # that quality tags (e.g. "pixelated") that are invisible at full-
             # image resolution can still be detected.
             try:
-                from PIL import Image as PILImage
-
                 pic_ids = [p.id for p in batch]
                 faces_by_pic = self._db.run_task(
                     lambda session: self._fetch_faces_for_pictures(session, pic_ids),
                     priority=DBPriority.LOW,
                 )
-                target = self._picture_tagger.custom_tagger_image_size_full()
+                target = self._picture_tagger.custom_tagger_image_size_quality_crop()
                 quality_items = []
                 key_to_path = {}
                 for pic in batch:
@@ -123,21 +214,44 @@ class TagTask(BaseTask):
                         self._db.image_root, pic.file_path
                     )
                     faces = faces_by_pic.get(pic.id, [])
-                    if not faces:
+                    valid_faces = [
+                        face
+                        for face in faces
+                        if face.bbox and getattr(face, "face_index", 0) >= 0
+                    ]
+                    if not valid_faces:
                         continue
                     try:
-                        img = PILImage.open(file_path).convert("RGB")
+                        img = preloaded_images.get(file_path)
+                        if img is None:
+                            ext = os.path.splitext(str(file_path))[1].lower()
+                            if ext in {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}:
+                                frames = VideoUtils.extract_representative_video_frames(
+                                    str(file_path),
+                                    count=1,
+                                )
+                                if not frames:
+                                    continue
+                                img = frames[0].convert("RGB")
+                            else:
+                                img = PILImage.open(file_path).convert("RGB")
+                            preloaded_images[file_path] = img
                         w, h = img.size
-                        for face in faces:
-                            if not face.bbox or getattr(face, "face_index", 0) < 0:
-                                continue
-                            expanded = PictureTagger._expand_bbox_to_square(
-                                face.bbox, w, h, target
-                            )
-                            crop = img.crop(expanded)
-                            key = f"{file_path}#face{face.id}"
-                            quality_items.append((key, crop))
-                            key_to_path[key] = file_path
+                        largest_face = max(
+                            valid_faces,
+                            key=lambda face: max(
+                                0,
+                                (float(face.bbox[2]) - float(face.bbox[0]))
+                                * (float(face.bbox[3]) - float(face.bbox[1])),
+                            ),
+                        )
+                        expanded = PictureTagger._expand_bbox_to_square(
+                            largest_face.bbox, w, h, target
+                        )
+                        crop = img.crop(expanded)
+                        key = f"{file_path}#face{largest_face.id}"
+                        quality_items.append((key, crop))
+                        key_to_path[key] = file_path
                     except Exception as exc:
                         logger.warning(
                             "Could not load %s for quality crop pass: %s",

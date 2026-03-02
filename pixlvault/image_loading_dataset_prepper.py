@@ -30,7 +30,7 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
                 return None
             return (image, img_path)
         elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
-            # Extract first, middle, last frames from video and treat as separate images
+            # Extract only the first frame from video and treat it as one image
             try:
                 import cv2
 
@@ -44,10 +44,6 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
                     cap.release()
                     return None
                 frame_indices = [0]
-                if frame_count > 2:
-                    frame_indices.append(frame_count // 2)
-                if frame_count > 1:
-                    frame_indices.append(frame_count - 1)
                 images = []
                 for idx_frame in frame_indices:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, idx_frame)
@@ -65,7 +61,7 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
                 if not images:
                     logger.error(f"No frames extracted from video: {img_path}")
                     return None
-                # Return a list of (image, img_path#frameX) tuples, one for each frame
+                # Return a single (image, img_path#frameX) tuple list for compatibility
                 return images
             except Exception as e:
                 logger.error(f"Could not process video file: {img_path}, error: {e}")
