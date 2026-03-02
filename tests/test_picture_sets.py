@@ -39,7 +39,6 @@ def setup_server_with_temp_db():
     with open(server_config_path, "w") as f:
         f.write(json.dumps({"port": 8000}))
     server = Server(server_config_path)
-    server.vault.start_workers({TaskType.FACE})
     client = TestClient(server.api)
 
     resp = client.post(

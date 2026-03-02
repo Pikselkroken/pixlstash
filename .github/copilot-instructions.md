@@ -29,6 +29,10 @@
 - **Utility functions:** Utilities should be placed in `pixlvault/utils`.
 - **Tasks:** Long-running tasks (e.g., quality calculation) are handled asynchronously with the TaskRunner class in `pixlvault/task_runner.py`.
 
+## Imports
+- Mostly use imports at the top of the file. Local imports within functions are only acceptable if they are necessary to avoid circular dependencies, to reduce startup time for rarely used modules or if the import is *clearly* optional.
+- Do not use local imports for libraries that are commonly used in the code base, like torch, numpy, PIL, cv2, etc. These should be imported at the top of the file for clarity and consistency.
+
 ## Task System
 
 - The TaskRunner class manages asynchronous tasks, allowing for background processing of image quality calculations and other operations without blocking the main server thread.

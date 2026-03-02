@@ -27,7 +27,6 @@ def test_quality_worker_face_metrics():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
-            server.vault.start_workers({TaskType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(
@@ -100,7 +99,6 @@ def test_quality_worker_end_to_end():
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
             client = TestClient(server.api)
-            server.vault.start_workers({TaskType.FACE})
 
             resp = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
@@ -148,7 +146,6 @@ def test_quality_worker_end_to_end():
                 TaskType.FACE_QUALITY, Face, faces[0].id, "quality"
             )
 
-            server.vault.start_workers({TaskType.QUALITY, TaskType.FACE_QUALITY})
 
             assert q_future.result(timeout=60), "QualityWorker did not finish in time"
 

@@ -187,6 +187,7 @@ class ColourFilterPlugin(ImagePlugin):
                 try:
                     os.remove(temp_path)
                 except OSError:
+                    # Best-effort cleanup: continue if temp file deletion fails.
                     pass
                 temp_path = ""
 

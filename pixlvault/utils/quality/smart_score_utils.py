@@ -139,7 +139,6 @@ class SmartScoreUtils:
 
         # Bad anchors
         bad_component = np.zeros(len(candidates))
-        mask_bad = np.zeros(len(candidates), dtype=bool)
         M_bad = None
         if bad_anchors:
             bad_pairs = [

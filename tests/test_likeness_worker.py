@@ -57,7 +57,6 @@ def test_likeness_worker():
                 quality_futures.append(future)
             logger.info(f"Queued {len(quality_futures)} quality computations.")
             # Start the quality worker
-            server.vault.start_workers({TaskType.QUALITY})
             # Wait for all quality computations to complete
             timeout = time.time() + 120
             for future in quality_futures:
@@ -65,12 +64,6 @@ def test_likeness_worker():
 
             logger.info("All picture quality computations completed.")
 
-            server.vault.start_workers(
-                {
-                    TaskType.LIKENESS_PARAMETERS,
-                    TaskType.IMAGE_EMBEDDING,
-                }
-            )
 
             def fetch_missing_prereqs(session):
                 rows = session.exec(
@@ -99,7 +92,6 @@ def test_likeness_worker():
                     pairs.append((a, b))
             logger.info(f"Queued {len(pairs)} likeness pairs for processing.")
             # Start the likeness worker
-            server.vault.start_workers({TaskType.LIKENESS})
 
             def fetch_queue_remaining(session):
                 return session.exec(

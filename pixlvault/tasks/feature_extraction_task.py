@@ -1,6 +1,7 @@
 import gc
 import os
 import platform
+import torch
 from typing import List
 
 import cv2
@@ -76,13 +77,8 @@ class FeatureExtractionTask(BaseTask):
         cls._global_insightface_app = None
 
         gc.collect()
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         cls._trim_process_memory()
 
     @staticmethod

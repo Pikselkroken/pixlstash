@@ -16,12 +16,22 @@ MAX_TEST_IMAGES = 3 if os.getenv("GITHUB_ACTIONS") == "true" else 50
 @pytest.fixture(scope="module")
 def tagger(request):
     """Create a PictureTagger instance with Florence-2 enabled."""
+    import gc
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     tagger = PictureTagger()
-
     tagger._init_florence_captioning()
 
-    return tagger
+    yield tagger
+
+    tagger.close()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 @pytest.fixture(scope="module")

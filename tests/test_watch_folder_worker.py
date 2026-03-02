@@ -51,17 +51,6 @@ def test_watch_folder():
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
 
-            server.vault.start_workers(
-                {
-                    TaskType.WATCH_FOLDERS,
-                    TaskType.TAGGER,
-                    TaskType.IMAGE_EMBEDDING,
-                }
-            )
-            worker = server.vault._workers.get(TaskType.WATCH_FOLDERS)
-            if worker:
-                worker.notify()
-
             start = time.monotonic()
             pictures = []
             expected_count = len(image_files)
@@ -119,17 +108,6 @@ def test_watch_folder_delete_after_import():
             server_config["watch_folders"] = existing_watch_folders
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
-
-            server.vault.start_workers(
-                {
-                    TaskType.WATCH_FOLDERS,
-                    TaskType.TAGGER,
-                    TaskType.IMAGE_EMBEDDING,
-                }
-            )
-            worker = server.vault._workers.get(TaskType.WATCH_FOLDERS)
-            if worker:
-                worker.notify()
 
             expected_count = len(image_files)
             start = time.monotonic()

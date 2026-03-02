@@ -27,7 +27,6 @@ def test_many_to_many_face_data():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
-            server.vault.start_workers({TaskType.FACE})
             client = TestClient(server.api)
 
             resp = client.post(

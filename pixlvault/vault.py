@@ -116,13 +116,15 @@ class Vault:
         self._task_runner.start()
         self._work_planner.start()
 
-    def start_workers(self, workers_to_start: set[TaskType] = TaskType.all()):
-        """Ensure the picture tagger is ready and wake the work planner."""
+    def ensure_ready(self):
+        """Initialise the picture tagger so the planner can process work immediately.
+
+        Call this at server startup. Tests that do not need the tagger can skip it;
+        tagger init is also triggered lazily by get_worker_future().
+        """
         if not self._picture_tagger:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
-        if self._work_planner and self._work_planner.is_running():
-            self._work_planner.wake()
 
     def notify(self, event_type: EventType, data=None):
         """
@@ -167,6 +169,8 @@ class Vault:
         self._closed = True
         self._work_planner.stop()
         self._task_runner.stop()
+        FeatureExtractionTask.release_detection_models()
+        ImageEmbeddingTask.release_models()
         if self._picture_tagger:
             self._picture_tagger.close()
             del self._picture_tagger
@@ -254,12 +258,6 @@ class Vault:
             .first()
             .description
         ).result()
-
-    def initialise_worker_if_necessary(self, worker_type: TaskType):
-        """Ensure the picture tagger is initialised."""
-        if not self._picture_tagger:
-            self._picture_tagger = PictureTagger(image_root=self.image_root)
-            self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
 
     def submit_task(self, task):
         """Submit an in-memory task to the shared task runner."""
@@ -381,7 +379,9 @@ class Vault:
         Returns:
             concurrent.futures.Future: Future set to True when completed.
         """
-        self.initialise_worker_if_necessary(worker_type)
+        if not self._picture_tagger:
+            self._picture_tagger = PictureTagger(image_root=self.image_root)
+            self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
         resolved_future = self._resolve_planner_future_if_already_processed(
             cls,
             object_id,

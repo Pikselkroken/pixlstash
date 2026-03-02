@@ -102,7 +102,7 @@ def main():
         vault.db.run_task(clear_embeddings, priority=1)
         return
 
-    server.vault.start_workers()
+    server.vault.ensure_ready()
     server.run()
 
 
