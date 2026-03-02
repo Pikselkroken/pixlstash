@@ -57,7 +57,6 @@ def test_facial_features():
             # Wait for all face detection futures to complete
             results = [future.result(timeout=60) for future in futures]
             assert all(results), "Not all pictures were processed in time"
-            server.vault.stop_workers({TaskType.FACE})
 
             # Now run assertions as before
             pics = server.vault.db.run_task(lambda session: Picture.find(session))

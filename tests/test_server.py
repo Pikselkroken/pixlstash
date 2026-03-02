@@ -886,14 +886,6 @@ def test_semantic_search():
 
             wait_for_semantic_ready()
 
-            server.vault.stop_workers(
-                {
-                    TaskType.TAGGER,
-                    TaskType.DESCRIPTION,
-                    TaskType.TEXT_EMBEDDING,
-                }
-            )
-
             # Inspect embeddings for each picture after embedding futures complete
             for pid in picture_ids:
                 meta_resp = client.get(f"/pictures/{pid}/text_embedding")
