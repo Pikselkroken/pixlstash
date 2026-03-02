@@ -4,8 +4,8 @@ from abc import ABC, ABCMeta, abstractmethod
 class TaskFinderRegistry(ABCMeta):
     registry = {}
 
-    def __new__(mcs, name, bases, namespace):
-        cls = super().__new__(mcs, name, bases, namespace)
+    def __new__(cls, name, bases, namespace):
+        cls = super().__new__(cls, name, bases, namespace)
         if not name.startswith("Base"):
             TaskFinderRegistry.registry[name] = cls
         return cls
