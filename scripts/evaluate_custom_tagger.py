@@ -701,7 +701,7 @@ def main() -> None:
     tagger = PictureTagger(silent=True)
     if not tagger._use_custom_tagger:
         print(
-            "ERROR: custom tagger model not found. Check that best.pt exists in downloaded_models/."
+            "ERROR: custom tagger model not found and could not be downloaded from HuggingFace."
         )
         sys.exit(1)
 

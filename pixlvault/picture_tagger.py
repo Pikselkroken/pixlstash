@@ -45,6 +45,8 @@ GENERAL_THRESHOLD = 0.8
 UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
+CUSTOM_TAGGER_HF_REPO = "PersonalJeebus/pixlvault-anomaly-tagger"
+CUSTOM_TAGGER_FILENAME = "best.pt"
 CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.85
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
@@ -139,6 +141,8 @@ class PictureTagger:
         self._custom_label_to_idx = None
         self._custom_transform = None
         self._custom_transform_cache = {}
+        if not os.path.isfile(self._custom_tagger_path):
+            self._download_custom_tagger()
         if not os.path.isfile(self._custom_tagger_path):
             logger.warning(
                 "Custom tagger not found at %s, skipping initialization.",
@@ -991,6 +995,25 @@ class PictureTagger:
 
         self._rating_tags = [row[1] for row in rows[0:] if row[2] == "9"]
         self._general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
+
+    def _download_custom_tagger(self):
+        """Download the custom anomaly tagger weights from HuggingFace if not present locally."""
+        try:
+            from huggingface_hub import hf_hub_download
+
+            dest_dir = os.path.dirname(os.path.abspath(self._custom_tagger_path))
+            os.makedirs(dest_dir, exist_ok=True)
+            logger.info(
+                "Downloading custom tagger from %s ...", CUSTOM_TAGGER_HF_REPO
+            )
+            hf_hub_download(
+                repo_id=CUSTOM_TAGGER_HF_REPO,
+                filename=CUSTOM_TAGGER_FILENAME,
+                local_dir=dest_dir,
+            )
+            logger.info("Custom tagger downloaded to %s", self._custom_tagger_path)
+        except Exception as e:
+            logger.warning("Failed to download custom tagger: %s", e)
 
     def _ensure_model_files(self, force_download):
         # hf_hub_download
