@@ -62,7 +62,6 @@ def test_tag_worker_picture_tags():
             server.vault.start_workers({TaskType.TAGGER})
 
             assert future.result(timeout=60), "TagWorker did not finish in time"
-            server.vault.stop_workers({TaskType.TAGGER})
 
             # Check tags via related Tag object
             def get_tags(session):
@@ -123,7 +122,6 @@ def test_tag_worker_end_to_end():
             )
             server.vault.start_workers({TaskType.TAGGER})
             assert t_future.result(timeout=60), "TagWorker did not finish in time"
-            server.vault.stop_workers({TaskType.TAGGER})
 
             # Retrieve picture tags
             def get_tags(session):
@@ -175,12 +173,6 @@ def test_tagger_worker_adds_tags():
                 }
             )
             assert future.result(timeout=60), "Tagger worker did not finish in time"
-            server.vault.stop_workers(
-                {
-                    TaskType.TAGGER,
-                    TaskType.DESCRIPTION,
-                }
-            )
 
             get_pic_resp = client.get(f"/pictures/{picture_id}/metadata")
             assert get_pic_resp.status_code == 200, (

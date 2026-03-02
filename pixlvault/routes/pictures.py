@@ -1714,20 +1714,7 @@ def create_router(server) -> APIRouter:
         }
 
         def run_import_task(server):
-            running_workers = {
-                worker_type
-                for worker_type in TaskType.all()
-                if server.vault.is_worker_running(worker_type)
-            }
-            workers_resumed = False
             try:
-                if running_workers:
-                    logger.info(
-                        "Pausing %d workers during import.",
-                        len(running_workers),
-                    )
-                    server.vault.stop_workers(running_workers)
-
                 shas, existing_map, new_pictures = _create_picture_imports(
                     server, uploaded_files, dest_folder
                 )
@@ -1737,7 +1724,6 @@ def create_router(server) -> APIRouter:
                 )
 
                 if new_pictures:
-
                     def import_task(session):
                         session.add_all(new_pictures)
                         session.commit()
@@ -1788,9 +1774,6 @@ def create_router(server) -> APIRouter:
                 server.import_tasks[task_id]["processed"] = len(uploaded_files)
                 if new_pictures:
                     server.import_tasks[task_id]["status"] = "processing_faces"
-                    if running_workers and not workers_resumed:
-                        server.vault.start_workers(running_workers)
-                        workers_resumed = True
                     face_futures = [
                         server.vault.get_worker_future(
                             TaskType.FACE, Picture, pic.id, "faces"
@@ -1833,17 +1816,11 @@ def create_router(server) -> APIRouter:
                     server.import_tasks[task_id]["status"] = "completed"
                 else:
                     server.import_tasks[task_id]["status"] = "completed"
-                    if running_workers and not workers_resumed:
-                        server.vault.start_workers(running_workers)
-                        workers_resumed = True
                     server.vault.notify(EventType.CHANGED_PICTURES)
             except Exception as exc:
                 server.import_tasks[task_id]["status"] = "failed"
                 server.import_tasks[task_id]["error"] = str(exc)
                 logger.error(f"Import task {task_id} failed: {exc}")
-            finally:
-                if running_workers and not workers_resumed:
-                    server.vault.start_workers(running_workers)
 
         background_tasks.add_task(run_import_task, server)
         return {"task_id": task_id}
