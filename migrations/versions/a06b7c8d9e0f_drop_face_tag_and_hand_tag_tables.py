@@ -12,10 +12,11 @@ from alembic import op
 import sqlalchemy as sa  # noqa: F401
 
 # revision identifiers, used by Alembic.
-revision: str = "a06b7c8d9e0f"
-down_revision: Union[str, None] = "ff5a6b7c8d9e"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "a06b7c8d9e0f" # noqa: F841
+down_revision: Union[str, None] = "ff5a6b7c8d9e" # noqa: F841
+branch_labels: Union[str, Sequence[str], None] = None # noqa: F841
+depends_on: Union[str, Sequence[str], None] = None # noqa: F841
+
 
 
 def upgrade() -> None:
