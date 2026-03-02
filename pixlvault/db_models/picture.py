@@ -181,7 +181,15 @@ class Picture(SQLModel, table=True):
     stack_position: Optional[int] = Field(default=None, index=True)
 
     # Relationships
-    quality: Optional["Quality"] = Relationship(back_populates="picture")
+    quality: Optional["Quality"] = Relationship(
+        back_populates="picture",
+        sa_relationship_kwargs={
+            # face Quality rows share the same picture_id as their parent picture,
+            # so we must filter to face_id IS NULL to get only picture-level quality.
+            "primaryjoin": "(Quality.picture_id == Picture.id) & (Quality.face_id == None)",
+            "foreign_keys": "[Quality.picture_id]",
+        },
+    )
     faces: List["Face"] = Relationship(
         back_populates="picture",
         sa_relationship_kwargs={
