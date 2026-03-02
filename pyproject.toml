@@ -42,6 +42,7 @@ dependencies = [
     "passlib",
     "bcrypt<4.0.0",
     "nvidia-ml-py",
+    "piexif",
 ]
 
 [project.optional-dependencies]
