@@ -38,6 +38,8 @@ class TaskRunner:
         self._queue: queue.Queue[BaseTask] = queue.Queue()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+        self._closed = False
         self._on_task_complete_callbacks: list[
             Callable[[BaseTask, Optional[BaseException]], None]
         ] = []
@@ -55,19 +57,27 @@ class TaskRunner:
     def start(self):
         if self._thread is not None and self._thread.is_alive():
             return
-        self._stop.clear()
+        with self._lock:
+            self._closed = False
+            self._stop.clear()
         self._thread = threading.Thread(target=self._run, name=self._name, daemon=True)
         self._thread.start()
 
     def stop(self):
-        self._stop.set()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._stop.set()
         self._queue.put(_StopTask())
         if self._thread is not None:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=60)
             if self._thread.is_alive():
                 logger.warning("TaskRunner %s did not stop within timeout.", self._name)
 
     def submit(self, task: BaseTask) -> str:
+        if self._closed or self._stop.is_set():
+            raise RuntimeError(f"TaskRunner {self._name} is stopped.")
         self._queue.put(task)
         return task.id
 

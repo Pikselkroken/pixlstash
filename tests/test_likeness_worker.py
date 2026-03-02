@@ -64,7 +64,6 @@ def test_likeness_worker():
 
             logger.info("All picture quality computations completed.")
 
-
             def fetch_missing_prereqs(session):
                 rows = session.exec(
                     select(Picture.id).where(

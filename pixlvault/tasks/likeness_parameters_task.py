@@ -13,7 +13,7 @@ from pixlvault.tasks.base_task import BaseTask
 
 
 class LikenessParametersTask(BaseTask):
-    """Task that computes one likeness-parameter batch."""
+    """Task that computes one batch of likeness parameters."""
 
     BATCH_SIZE = 128
     SCAN_LIMIT = 2048

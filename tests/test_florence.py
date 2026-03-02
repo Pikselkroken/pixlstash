@@ -4,9 +4,11 @@ Test suite for Florence-2 captioning functionality.
 Tests caption generation, performance, and error handling.
 """
 
+import gc
 import os
 import pytest
 import time
+import torch
 from pathlib import Path
 from pixlvault.picture_tagger import PictureTagger
 
@@ -16,11 +18,9 @@ MAX_TEST_IMAGES = 3 if os.getenv("GITHUB_ACTIONS") == "true" else 50
 @pytest.fixture(scope="module")
 def tagger(request):
     """Create a PictureTagger instance with Florence-2 enabled."""
-    import gc
-    import torch
-
     gc.collect()
     if torch.cuda.is_available():
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
     tagger = PictureTagger()
@@ -31,6 +31,7 @@ def tagger(request):
     tagger.close()
     gc.collect()
     if torch.cuda.is_available():
+        torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
 
@@ -88,15 +89,26 @@ def test_florence_caption_generation(tagger, image_files):
 
 def test_florence_caption_performance(tagger, image_files):
     """Test Florence-2 captioning performance."""
+
     # Use all available test images
     test_images = image_files[:MAX_TEST_IMAGES]
 
+    if not test_images:
+        pytest.fail("No images available for Florence performance test")
+
+    # Warm up once to avoid first-call setup costs skewing throughput.
+    warmup_caption = tagger._generate_florence_caption(test_images[0])
+    assert warmup_caption, "Florence warmup caption failed"
+
+    batch_size = max(1, int(getattr(tagger, "_florence_batch_size", 1) or 1))
+
     start_time = time.time()
     captions = []
-
-    for image_path in test_images:
-        caption = tagger._generate_florence_caption(image_path)
-        captions.append(caption)
+    for offset in range(0, len(test_images), batch_size):
+        chunk = test_images[offset : offset + batch_size]
+        chunk_captions = tagger._generate_florence_captions_batch(chunk)
+        for image_path in chunk:
+            captions.append(chunk_captions.get(image_path))
 
     end_time = time.time()
     total_time = end_time - start_time
@@ -115,6 +127,7 @@ def test_florence_caption_performance(tagger, image_files):
     print(f"  Total time: {total_time:.2f}s")
     print(f"  Time per image: {time_per_image:.3f}s ({time_per_image * 1000:.0f}ms)")
     print(f"  Images per second: {images_per_second:.2f}")
+    print(f"  Batch size: {batch_size}")
 
     # Ensure reasonable minimum time (sanity check)
     assert time_per_image > 0.01, (
@@ -124,9 +137,19 @@ def test_florence_caption_performance(tagger, image_files):
 
     # Relax requirements when running on CPU; Florence takes longer there.
     device = getattr(tagger, "_florence_device", None)
+    expect_gpu = torch.cuda.is_available() and not PictureTagger.FORCE_CPU
+    if expect_gpu and (device is None or getattr(device, "type", "cpu") != "cuda"):
+        pytest.fail(
+            "Florence expected to run on GPU but is on CPU. "
+            "This usually means an earlier CUDA failure triggered fallback via _reload_florence_on_cpu(), "
+            "often due to GPU memory pressure from previous tests."
+        )
+
     if device is not None and getattr(device, "type", "cpu") == "cuda":
         assert time_per_image < 2.5, (
-            f"Performance too slow on GPU: {time_per_image:.3f}s per image"
+            "Performance too slow on GPU: "
+            f"{time_per_image:.3f}s per image; "
+            f"fallback_reason={getattr(tagger, '_last_florence_fallback_reason', None)}"
         )
     else:
         # Increased timeout for slower CI runners (GitHub Actions, etc.)

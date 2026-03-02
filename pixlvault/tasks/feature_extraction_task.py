@@ -1,6 +1,7 @@
 import gc
 import os
 import platform
+import time
 import torch
 from typing import List
 
@@ -158,11 +159,26 @@ class FeatureExtractionTask(BaseTask):
         return [ex1, ey1, ex2, ey2]
 
     def _extract_features(self, pics) -> List[tuple]:
+        profile_enabled = os.getenv("PIXLVAULT_FEATURE_TIMING", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        batch_start = time.time()
         self._init_insightface_app()
 
         updates = []
+        precheck_s = 0.0
+        image_load_s = 0.0
+        inference_s = 0.0
+        db_write_s = 0.0
+        thumb_write_s = 0.0
+        processed_images = 0
+        detected_faces_total = 0
 
         for pic in pics:
+            pic_start = time.time()
             if pic.id is None:
                 logger.warning(
                     "Skipping feature extraction for %s: missing picture id",
@@ -170,11 +186,13 @@ class FeatureExtractionTask(BaseTask):
                 )
                 continue
             pic_face_ids = []
+            check_start = time.time()
             faces_loaded, faces_value = self._get_loaded_relationship(pic, "faces")
             if faces_loaded:
                 need_faces = not faces_value
             else:
                 need_faces = not self._has_faces(pic.id)
+            precheck_s += time.time() - check_start
             logger.debug("Looking for faces in picture %s %s", pic.id, pic.description)
             file_path = ImageUtils.resolve_picture_path(
                 self._db.image_root, pic.file_path
@@ -185,10 +203,15 @@ class FeatureExtractionTask(BaseTask):
             thumbnail_crop = None
 
             if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"]:
+                read_start = time.time()
                 img = cv2.imread(file_path)
+                image_load_s += time.time() - read_start
                 if img is not None:
                     if need_faces:
+                        infer_start = time.time()
                         faces = self._insightface_app.get(img)
+                        inference_s += time.time() - infer_start
+                        detected_faces_total += len(faces)
                         logger.debug(
                             "Found %d faces in image %s", len(faces), file_path
                         )
@@ -232,7 +255,9 @@ class FeatureExtractionTask(BaseTask):
 
             elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
                 if need_faces:
+                    read_start = time.time()
                     cap = cv2.VideoCapture(file_path)
+                    image_load_s += time.time() - read_start
                     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                     if frame_count < 1:
                         logger.warning("No frames found in video: %s", file_path)
@@ -245,7 +270,10 @@ class FeatureExtractionTask(BaseTask):
                         if ret and frame is not None:
                             first_frame = frame
                             if need_faces:
+                                infer_start = time.time()
                                 frame_faces = self._insightface_app.get(frame)
+                                inference_s += time.time() - infer_start
+                                detected_faces_total += len(frame_faces)
                                 face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
                                 for face in frame_faces:
                                     expanded_bbox = Face.expand_face_bbox(
@@ -290,7 +318,10 @@ class FeatureExtractionTask(BaseTask):
                                 )
                                 continue
                             if need_faces:
+                                infer_start = time.time()
                                 frame_faces = self._insightface_app.get(frame)
+                                inference_s += time.time() - infer_start
+                                detected_faces_total += len(frame_faces)
                                 face_expand_fraction = max(0.0, CROP_EXPAND_SCALE - 1.0)
                                 for face in frame_faces:
                                     expanded_bbox = Face.expand_face_bbox(
@@ -365,7 +396,9 @@ class FeatureExtractionTask(BaseTask):
                     session.refresh(face)
                     return face.id
 
+                db_start = time.time()
                 face_id = self._db.run_task(insert_sentinel, priority=DBPriority.HIGH)
+                db_write_s += time.time() - db_start
                 pic_face_ids.append(face_id)
             elif need_faces:
 
@@ -379,17 +412,21 @@ class FeatureExtractionTask(BaseTask):
                         face_ids.append(face.id)
                     return face_ids
 
+                db_start = time.time()
                 face_ids = self._db.run_task(
                     insert_faces, face_objects, priority=DBPriority.HIGH
                 )
+                db_write_s += time.time() - db_start
                 pic_face_ids.extend(face_ids)
 
             if need_faces and thumbnail_bytes:
+                thumb_start = time.time()
                 saved_thumb = ImageUtils.write_thumbnail_bytes(
                     self._db.image_root,
                     pic.file_path,
                     thumbnail_bytes,
                 )
+                thumb_write_s += time.time() - thumb_start
                 if not saved_thumb:
                     logger.warning(
                         "Failed to persist thumbnail for picture %s",
@@ -409,14 +446,43 @@ class FeatureExtractionTask(BaseTask):
                     return picture.id
 
                 if thumbnail_crop:
+                    db_start = time.time()
                     self._db.run_task(
                         update_thumbnail_crop,
                         pic.id,
                         thumbnail_crop,
                         priority=DBPriority.HIGH,
                     )
+                    db_write_s += time.time() - db_start
 
             if need_faces:
                 updates.append((Picture, pic.id, "faces", pic_face_ids))
+
+            processed_images += 1
+            if profile_enabled and (time.time() - pic_start) > 0.75:
+                logger.info(
+                    "[FEATURE_TIMING] Slow image id=%s path=%s elapsed=%.3fs need_faces=%s faces=%s",
+                    pic.id,
+                    pic.file_path,
+                    time.time() - pic_start,
+                    need_faces,
+                    len(pic_face_ids),
+                )
+
+        if profile_enabled:
+            elapsed = time.time() - batch_start
+            logger.info(
+                "[FEATURE_TIMING] batch=%s processed=%s updates=%s faces=%s elapsed=%.3fs precheck=%.3fs load=%.3fs infer=%.3fs db=%.3fs thumb=%.3fs",
+                len(pics),
+                processed_images,
+                len(updates),
+                detected_faces_total,
+                elapsed,
+                precheck_s,
+                image_load_s,
+                inference_s,
+                db_write_s,
+                thumb_write_s,
+            )
 
         return updates

@@ -391,7 +391,6 @@ def test_pictures_stacks():
         with Server(server_config_path) as server:
             client = TestClient(server.api)
 
-
             response = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
             )
@@ -727,7 +726,6 @@ def test_semantic_search():
                 for pic_id in picture_ids
             ]
 
-
             def wait_for_imported_at(timeout_s=60, poll_interval=0.5):
                 start = time.time()
                 pending = set(picture_ids)
@@ -834,7 +832,6 @@ def test_semantic_search():
 
             for future in tag_futures:
                 future.result(timeout=120)
-
 
             # Wait for all text embeddings to be processed
             for future in embeddings_futures:

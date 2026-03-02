@@ -67,10 +67,18 @@ descriptions = [
 # Shared fixture for PictureTagger to avoid repeated model loading
 @pytest.fixture(scope="module")
 def shared_tagger():
+    import gc
+    import torch
+
     tagger = PictureTagger("cuda" if not PictureTagger.FORCE_CPU else "cpu")
     tagger._ensure_clip_ready()
     yield tagger
+    tagger.close()
     del tagger
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
 
 @pytest.mark.parametrize("query", ["Clementine holding a black assault rifle"])
@@ -358,12 +366,18 @@ def test_picture_embedding_storage_and_retrieval():
 
 @pytest.fixture
 def test_server():
-    # Force CPU for all models during test
+    import gc
+    import torch
+
     tmpdir = tempfile.mkdtemp()
     server_config_path = os.path.join(tmpdir, "server_config.json")
-    server = Server(server_config_path)
-    yield server
-    shutil.rmtree(tmpdir)
+    with Server(server_config_path) as server:
+        yield server
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
 
 def test_picture_semantic_search_returns_relevant_result(test_server):

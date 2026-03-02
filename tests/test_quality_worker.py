@@ -146,7 +146,6 @@ def test_quality_worker_end_to_end():
                 TaskType.FACE_QUALITY, Face, faces[0].id, "quality"
             )
 
-
             assert q_future.result(timeout=60), "QualityWorker did not finish in time"
 
             assert fq_future.result(timeout=60), (

@@ -1724,6 +1724,7 @@ def create_router(server) -> APIRouter:
                 )
 
                 if new_pictures:
+
                     def import_task(session):
                         session.add_all(new_pictures)
                         session.commit()

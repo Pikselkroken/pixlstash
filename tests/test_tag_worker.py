@@ -58,7 +58,6 @@ def test_tag_worker_picture_tags():
                 TaskType.TAGGER, Picture, pic_id, "tags"
             )
 
-
             assert future.result(timeout=60), "TagWorker did not finish in time"
 
             # Check tags via related Tag object
@@ -83,7 +82,6 @@ def test_tag_worker_end_to_end():
         os.makedirs(image_root, exist_ok=True)
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
-
             client = TestClient(server.api)
 
             resp = client.post(
@@ -140,7 +138,6 @@ def test_tagger_worker_adds_tags():
         # Copy TaggerTest.png into temp dir
         src_img = os.path.join(os.path.dirname(__file__), "../pictures/TaggerTest.png")
         with Server(server_config_path=server_config_path) as server:
-
             client = TestClient(server.api)
 
             resp = client.post(

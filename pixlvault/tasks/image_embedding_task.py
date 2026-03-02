@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 
 class ImageEmbeddingTask(BaseTask):
-    """Task for generating image embeddings and aesthetic scores for a batch."""
+    """Task for generating image embeddings and aesthetic scores for one batch."""
 
     BATCH_SIZE = 32
     BACKEND_ERROR_LOG_INTERVAL_SECONDS = 60
@@ -279,16 +279,24 @@ class ImageEmbeddingTask(BaseTask):
         return False
 
     def _run_task(self):
+        self._ensure_model()
+        if not self._ensure_embedding_backend():
+            return {"changed_count": 0, "changed": []}
+
         batch = self._db.run_immediate_read_task(
             lambda session: self.fetch_work(session=session)
         )
         if not batch:
             return {"changed_count": 0, "changed": []}
 
-        self._ensure_model()
-        if not self._ensure_embedding_backend():
-            return {"changed_count": 0, "changed": []}
+        changed = self._process_batch(batch)
+        return {"changed_count": len(changed), "changed": changed}
 
+    def _process_batch(self, batch) -> list:
+        """Process one batch of (picture_id, file_path) pairs.
+
+        Returns a list of (model, pic_id, field, value) change tuples.
+        """
         flat_images = []
         flat_pids = []
         flat_hashes = []
@@ -349,7 +357,7 @@ class ImageEmbeddingTask(BaseTask):
                 len(failed_files),
                 failed_files,
             )
-            return {"changed_count": len(changed), "changed": changed}
+            return changed
 
         embeddings = None
         clip_ready = self._ensure_clip_ready()
@@ -403,7 +411,7 @@ class ImageEmbeddingTask(BaseTask):
                 len(failed_files),
                 failed_files,
             )
-            return {"changed_count": 0, "changed": []}
+            return []
 
         aesthetic_scores = []
         if ImageEmbeddingTask._aesthetic_model is not None:
@@ -483,10 +491,7 @@ class ImageEmbeddingTask(BaseTask):
                 failed_files,
             )
 
-        return {
-            "changed_count": len(changed),
-            "changed": changed,
-        }
+        return changed
 
     @staticmethod
     def _save_results(session: Session, updates):

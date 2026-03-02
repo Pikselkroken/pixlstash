@@ -320,6 +320,8 @@ class VaultDatabase:
         # Write queue and worker
         self._task_queue = queue.PriorityQueue()
         self._task_worker_stop_event = threading.Event()
+        self._close_lock = threading.Lock()
+        self._closed = False
         self._task_worker = threading.Thread(target=self._task_worker_loop, daemon=True)
         self._task_worker.start()
 
@@ -329,21 +331,47 @@ class VaultDatabase:
         """
         import gc
 
-        try:
-            self._task_worker_stop_event.set()
-            if self._task_worker:
-                self._task_worker.join(timeout=5)
-                self._task_worker = None
-        except Exception as e:
-            logger.warning(f"VaultDatabase: Exception during worker thread stop: {e}")
-        # Attempt to close SQLAlchemy engine
-        if hasattr(self, "_engine") and self._engine:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+
             try:
-                self._engine.dispose()
-                self._engine = None
-                logger.info("VaultDatabase: SQLAlchemy engine disposed.")
+                self._task_worker_stop_event.set()
+                self._task_queue.put(DatabaseTask(DBPriority.IMMEDIATE, None))
+                if self._task_worker:
+                    self._task_worker.join(timeout=10)
+                    if self._task_worker.is_alive():
+                        logger.warning(
+                            "VaultDatabase: worker thread did not stop cleanly before engine disposal."
+                        )
+                    self._task_worker = None
             except Exception as e:
-                logger.warning(f"VaultDatabase: Exception during engine dispose: {e}")
+                logger.warning(
+                    f"VaultDatabase: Exception during worker thread stop: {e}"
+                )
+
+            while True:
+                try:
+                    pending = self._task_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if getattr(pending, "func", None) is None:
+                    continue
+                if not pending.future.done():
+                    pending.future.set_exception(
+                        RuntimeError("VaultDatabase is closed; task cancelled.")
+                    )
+
+            if hasattr(self, "_engine") and self._engine:
+                try:
+                    self._engine.dispose()
+                    self._engine = None
+                    logger.info("VaultDatabase: SQLAlchemy engine disposed.")
+                except Exception as e:
+                    logger.warning(
+                        f"VaultDatabase: Exception during engine dispose: {e}"
+                    )
 
         gc.collect()
         logger.info("VaultDatabase.close called, resources released.")
@@ -376,6 +404,10 @@ class VaultDatabase:
         future = db.submit_task(update_picture_quality, "pic123", 0.95)
         result = future.result()
         """
+        if self._closed:
+            future = Future()
+            future.set_exception(RuntimeError("VaultDatabase is closed."))
+            return future
         task = DatabaseTask(priority, func, args, kwargs)
         self._task_queue.put(task)
         return task.future
@@ -408,6 +440,8 @@ class VaultDatabase:
             select(Picture).where(Picture.quality > 0.9)
         ).all())
         """
+        if self._closed or self._engine is None:
+            raise RuntimeError("VaultDatabase is closed.")
         with Session(self._engine) as session:
             result = func(session, *args, **kwargs)
         return result
@@ -431,8 +465,22 @@ class VaultDatabase:
             raise
 
     def _task_worker_loop(self):
-        while not self._task_worker_stop_event.is_set():
-            task = self._task_queue.get()
+        while True:
+            try:
+                task = self._task_queue.get(timeout=0.2)
+            except queue.Empty:
+                if self._task_worker_stop_event.is_set():
+                    break
+                continue
+
+            if task.func is None:
+                break
+
+            if self._closed or self._engine is None:
+                if not task.future.done():
+                    task.future.set_exception(RuntimeError("VaultDatabase is closed."))
+                continue
+
             with Session(self._engine) as session:
                 try:
                     result = task.func(session, *task.args, **task.kwargs)

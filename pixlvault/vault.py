@@ -403,9 +403,7 @@ class Vault:
             )
             if worker_type == TaskType.DESCRIPTION:
                 missing = int(
-                    self.db.run_immediate_read_task(
-                        self._count_missing_descriptions
-                    )
+                    self.db.run_immediate_read_task(self._count_missing_descriptions)
                     or 0
                 )
                 label = "descriptions_generated"
@@ -416,8 +414,7 @@ class Vault:
                 label = "pictures_tagged"
             elif worker_type == TaskType.QUALITY:
                 missing = int(
-                    self.db.run_immediate_read_task(self._count_missing_quality)
-                    or 0
+                    self.db.run_immediate_read_task(self._count_missing_quality) or 0
                 )
                 label = "quality_scored"
             elif worker_type == TaskType.FACE_QUALITY:
@@ -425,9 +422,7 @@ class Vault:
                     self.db.run_immediate_read_task(self._count_total_faces) or 0
                 )
                 missing = int(
-                    self.db.run_immediate_read_task(
-                        self._count_missing_face_quality
-                    )
+                    self.db.run_immediate_read_task(self._count_missing_face_quality)
                     or 0
                 )
                 label = "face_quality_scored"
@@ -441,13 +436,10 @@ class Vault:
                 label = "features_extracted"
             elif worker_type == TaskType.TEXT_EMBEDDING:
                 described = int(
-                    self.db.run_immediate_read_task(self._count_total_described)
-                    or 0
+                    self.db.run_immediate_read_task(self._count_total_described) or 0
                 )
                 missing = int(
-                    self.db.run_immediate_read_task(
-                        self._count_missing_text_embeddings
-                    )
+                    self.db.run_immediate_read_task(self._count_missing_text_embeddings)
                     or 0
                 )
                 total = max(described, 0)
@@ -476,9 +468,7 @@ class Vault:
                     or 0
                 )
                 missing = int(
-                    self.db.run_immediate_read_task(
-                        self._count_pending_likeness_queue
-                    )
+                    self.db.run_immediate_read_task(self._count_pending_likeness_queue)
                     or 0
                 )
                 label = "likeness_pairs"
