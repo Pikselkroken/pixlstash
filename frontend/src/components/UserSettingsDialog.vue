@@ -101,6 +101,16 @@ const applyTagFilterLoading = ref(false);
 const keepModelsInMemory = ref(true);
 const keepModelsInMemoryLoading = ref(false);
 const keepModelsInMemoryError = ref("");
+const VRAM_BUDGET_MIN_GB = 2;
+const VRAM_BUDGET_STEP_GB = 2;
+const maxVramGbValue = ref(VRAM_BUDGET_MIN_GB);
+const maxVramGbMax = ref(VRAM_BUDGET_MIN_GB);
+const maxVramGbLoading = ref(false);
+const maxVramGbError = ref("");
+const maxVramGbSuccess = ref("");
+const maxVramGbSavedValue = ref(null);
+const maxVramGbHydrating = ref(false);
+let maxVramGbSaveTimer = null;
 const comfyuiHost = ref("127.0.0.1");
 const comfyuiPort = ref("8188");
 const comfyuiUrlLoading = ref(false);
@@ -176,6 +186,11 @@ function resetSettingsForm() {
   hiddenTagsError.value = "";
   hiddenTagsSuccess.value = "";
   keepModelsInMemoryError.value = "";
+  maxVramGbError.value = "";
+  maxVramGbSuccess.value = "";
+  maxVramGbValue.value = VRAM_BUDGET_MIN_GB;
+  maxVramGbMax.value = VRAM_BUDGET_MIN_GB;
+  maxVramGbSavedValue.value = null;
   comfyuiUrlError.value = "";
   comfyuiUrlSuccess.value = "";
   workflowImportError.value = "";
@@ -191,6 +206,85 @@ function resetSettingsForm() {
   if (comfyuiSaveTimer) {
     clearTimeout(comfyuiSaveTimer);
     comfyuiSaveTimer = null;
+  }
+  if (maxVramGbSaveTimer) {
+    clearTimeout(maxVramGbSaveTimer);
+    maxVramGbSaveTimer = null;
+  }
+}
+
+function deriveMaxVramSliderMax(totalVramGb) {
+  const total = Number(totalVramGb);
+  if (!Number.isFinite(total) || total <= 0) {
+    return VRAM_BUDGET_MIN_GB;
+  }
+  const available = total - 2;
+  const stepped = Math.floor(available / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
+  return Math.max(VRAM_BUDGET_MIN_GB, stepped);
+}
+
+function clampAndSnapVramBudget(value, upperBound = maxVramGbMax.value) {
+  const maxValue = Math.max(VRAM_BUDGET_MIN_GB, Number(upperBound) || VRAM_BUDGET_MIN_GB);
+  const parsed = Number(value);
+  const base = Number.isFinite(parsed) ? parsed : VRAM_BUDGET_MIN_GB;
+  const clamped = Math.min(maxValue, Math.max(VRAM_BUDGET_MIN_GB, base));
+  const stepped = Math.round(clamped / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
+  return Math.min(maxValue, Math.max(VRAM_BUDGET_MIN_GB, stepped));
+}
+
+async function fetchVramSliderBounds() {
+  try {
+    const res = await apiClient.get("/workers/progress");
+    const processData = res.data?.process || res.data?.system || {};
+    const totalVramGb =
+      processData.vram_total_gb ?? processData.vramTotalGb ?? processData.total_vram_gb;
+    maxVramGbMax.value = deriveMaxVramSliderMax(totalVramGb);
+  } catch (e) {
+    maxVramGbMax.value = VRAM_BUDGET_MIN_GB;
+  }
+}
+
+function scheduleMaxVramGbSave() {
+  if (!dialogOpen.value || maxVramGbHydrating.value) return;
+  maxVramGbSuccess.value = "";
+  if (maxVramGbSaveTimer) {
+    clearTimeout(maxVramGbSaveTimer);
+    maxVramGbSaveTimer = null;
+  }
+  maxVramGbSaveTimer = setTimeout(() => {
+    maxVramGbSaveTimer = null;
+    saveMaxVramGb();
+  }, 500);
+}
+
+async function saveMaxVramGb() {
+  if (maxVramGbHydrating.value) return;
+  maxVramGbLoading.value = true;
+  maxVramGbError.value = "";
+  const nextValue = clampAndSnapVramBudget(maxVramGbValue.value);
+  if (maxVramGbSavedValue.value === nextValue) {
+    maxVramGbLoading.value = false;
+    return;
+  }
+  try {
+    await apiClient.patch("/users/me/config", {
+      max_vram_gb: nextValue,
+    });
+    maxVramGbSavedValue.value = nextValue;
+    maxVramGbValue.value = nextValue;
+    maxVramGbSuccess.value = "Saved. Applied immediately.";
+  } catch (e) {
+    maxVramGbError.value =
+      e?.response?.data?.detail || "Failed to update VRAM budget.";
+  } finally {
+    maxVramGbLoading.value = false;
+    if (maxVramGbSuccess.value) {
+      setTimeout(() => {
+        if (maxVramGbSuccess.value === "Saved. Applied immediately.") {
+          maxVramGbSuccess.value = "";
+        }
+      }, 2000);
+    }
   }
 }
 
@@ -305,6 +399,18 @@ async function fetchSmartScoreSettings() {
     } else {
       keepModelsInMemory.value = true;
     }
+    await fetchVramSliderBounds();
+    maxVramGbHydrating.value = true;
+    const parsedMaxVram = Number(res.data?.max_vram_gb);
+    const initialValue = Number.isFinite(parsedMaxVram) && parsedMaxVram > 0
+      ? parsedMaxVram
+      : VRAM_BUDGET_MIN_GB;
+    const snappedValue = clampAndSnapVramBudget(initialValue, maxVramGbMax.value);
+    maxVramGbValue.value = snappedValue;
+    maxVramGbSavedValue.value = snappedValue;
+    maxVramGbError.value = "";
+    maxVramGbSuccess.value = "";
+    maxVramGbHydrating.value = false;
   } catch (e) {
     smartScoreTagsError.value = "Failed to load smart score settings.";
     hiddenTagsError.value = "Failed to load hidden tag settings.";
@@ -1083,6 +1189,10 @@ watch([comfyuiHost, comfyuiPort], () => {
   scheduleComfyuiSave();
 });
 
+watch(maxVramGbValue, () => {
+  scheduleMaxVramGbSave();
+});
+
 const workflowImageInputOptions = computed(() =>
   (workflowImportInputs.value || []).map((entry) => ({
     title: entry.label,
@@ -1221,6 +1331,44 @@ const workflowImportCaptionPreview = computed(() => {
                 />
                 <div v-if="keepModelsInMemoryError" class="settings-error">
                   {{ keepModelsInMemoryError }}
+                </div>
+              </div>
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">VRAM Budget (GB)</div>
+                <div class="settings-section-desc">
+                  Maximum VRAM budget for tagging tasks. Changes apply
+                  immediately.
+                </div>
+                <div class="settings-slider-row">
+                  <span class="settings-slider-value">{{ maxVramGbValue }} GB</span>
+                  <v-slider
+                    v-model="maxVramGbValue"
+                    :min="VRAM_BUDGET_MIN_GB"
+                    :max="maxVramGbMax"
+                    :step="VRAM_BUDGET_STEP_GB"
+                    hide-details
+                    track-color="#666"
+                    thumb-color="primary"
+                    class="settings-slider"
+                    :disabled="maxVramGbLoading || maxVramGbHydrating"
+                  />
+                </div>
+                <div class="settings-section-desc">
+                  Range: {{ VRAM_BUDGET_MIN_GB }}–{{ maxVramGbMax }} GB (step {{
+                    VRAM_BUDGET_STEP_GB
+                  }} GB)
+                </div>
+                <div class="settings-form">
+                  <div v-if="maxVramGbError" class="settings-error">
+                    {{ maxVramGbError }}
+                  </div>
+                  <div v-else-if="maxVramGbSuccess" class="settings-success">
+                    {{ maxVramGbSuccess }}
+                  </div>
+                  <div v-else class="settings-success">
+                    {{ "\u00a0" }}
+                  </div>
                 </div>
               </div>
               <v-divider class="settings-section-divider" />

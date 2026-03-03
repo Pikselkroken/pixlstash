@@ -1,5 +1,6 @@
 import base64
 import json
+import subprocess
 from datetime import date, datetime
 from sqlmodel import SQLModel
 
@@ -55,6 +56,36 @@ def safe_model_dict(obj) -> dict:
     return result
 
 
+def default_max_vram_gb() -> float:
+    """Return default VRAM budget in GB: min(4GB, 25% of available VRAM).
+
+    Falls back to 4GB when VRAM cannot be detected.
+    """
+    try:
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        totals_mb = []
+        for line in output.splitlines():
+            value = line.strip()
+            if not value:
+                continue
+            totals_mb.append(int(float(value)))
+        total_mb = sum(totals_mb)
+        if total_mb <= 0:
+            return 4.0
+        quarter_gb = (total_mb / 1024.0) / 4.0
+        return round(min(4.0, quarter_gb), 2)
+    except Exception:
+        return 4.0
+
+
 def serialize_user_config(user) -> dict:
     from pixlvault.db_models import (
         User,
@@ -84,6 +115,7 @@ def serialize_user_config(user) -> dict:
         "stack_strictness",
         "apply_tag_filter",
         "keep_models_in_memory",
+        "max_vram_gb",
     }
 
     config = {
@@ -115,6 +147,8 @@ def serialize_user_config(user) -> dict:
     )
     config["hidden_tags"] = _normalize_hidden_tags(getattr(source, "hidden_tags", None))
     config["sort_order"] = config["sort"]
+    if config.get("max_vram_gb") is None:
+        config["max_vram_gb"] = default_max_vram_gb()
     return config
 
 
@@ -144,6 +178,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "hidden_tags",
         "apply_tag_filter",
         "keep_models_in_memory",
+        "max_vram_gb",
     }
 
     allowed_date_formats = {
@@ -234,6 +269,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = bool(value)
             if user.keep_models_in_memory != new_value:
                 user.keep_models_in_memory = new_value
+                updated = True
+            continue
+        if key == "max_vram_gb":
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = float(value)
+                if new_value <= 0:
+                    raise ValueError("max_vram_gb must be greater than 0")
+            if user.max_vram_gb != new_value:
+                user.max_vram_gb = new_value
                 updated = True
             continue
         if key == "date_format":

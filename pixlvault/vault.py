@@ -91,6 +91,7 @@ class Vault:
         self._last_aggressive_unload_at = 0.0
         self._last_model_status_log_at = 0.0
         self._keep_models_in_memory = True
+        self._max_vram_gb = None
         self._server_config_path = server_config_path
 
         self._planner_watchers = {}
@@ -125,6 +126,7 @@ class Vault:
         if not self._picture_tagger:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
+            self._picture_tagger.set_max_vram_usage_gb(self._max_vram_gb)
 
     def notify(self, event_type: EventType, data=None):
         """
@@ -196,6 +198,14 @@ class Vault:
             self._last_aggressive_unload_at = 0.0
             progress = self._build_worker_progress_snapshot()
             self._maybe_aggressive_unload(progress)
+
+    def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
+        self._max_vram_gb = max_vram_gb
+        self._task_runner.set_max_vram_usage_gb(max_vram_gb)
+        if self._picture_tagger and hasattr(
+            self._picture_tagger, "set_max_vram_usage_gb"
+        ):
+            self._picture_tagger.set_max_vram_usage_gb(max_vram_gb)
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
@@ -382,6 +392,7 @@ class Vault:
         if not self._picture_tagger:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
+            self._picture_tagger.set_max_vram_usage_gb(self._max_vram_gb)
         resolved_future = self._resolve_planner_future_if_already_processed(
             cls,
             object_id,
@@ -394,6 +405,15 @@ class Vault:
     def is_worker_running(self, worker_type: TaskType) -> bool:
         """Check if a specific worker is running."""
         return bool(self._work_planner and self._work_planner.is_running())
+
+    def _is_worker_active(self, worker_type: TaskType) -> bool:
+        if not self._work_planner or not self._work_planner.is_running():
+            return False
+        finder = self._planner_work_finders.get(worker_type)
+        if finder is None:
+            return False
+        finder_name = finder.finder_name()
+        return self._work_planner.inflight_count(finder_name) > 0
 
     def _build_worker_progress_snapshot(self) -> dict:
         progress = {}
@@ -479,14 +499,16 @@ class Vault:
             else:
                 missing = 0
                 label = "planner_managed"
+            worker_active = self._is_worker_active(worker_type)
             progress[worker_type.value] = {
                 "label": label,
                 "current": max(total - missing, 0),
                 "total": total,
                 "remaining": max(missing, 0),
                 "updated_at": time.time(),
-                "status": "running" if self.is_worker_running(worker_type) else "idle",
-                "running": self.is_worker_running(worker_type),
+                "status": "running" if worker_active else "idle",
+                "running": worker_active,
+                "active": worker_active,
             }
         return progress
 

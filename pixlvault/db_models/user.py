@@ -39,6 +39,7 @@ class User(SQLModel, table=True):
     hidden_tags: Optional[str] = Field(default_factory=lambda: json.dumps([]))
     apply_tag_filter: bool = Field(default=False)
     keep_models_in_memory: bool = Field(default=True)
+    max_vram_gb: Optional[float] = Field(default=None)
 
     tokens: List["UserToken"] = Relationship(
         back_populates="user",

@@ -44,7 +44,14 @@ class MissingTagsFinder(BaseTaskFinder):
         if picture_tagger is None:
             return None
 
-        batch_limit = max(1, int(picture_tagger.max_concurrent_images()))
+        batch_limit = max(
+            1,
+            int(
+                picture_tagger.suggested_tag_task_size()
+                if hasattr(picture_tagger, "suggested_tag_task_size")
+                else picture_tagger.max_concurrent_images()
+            ),
+        )
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing_tags(session, batch_limit * 3)
         )

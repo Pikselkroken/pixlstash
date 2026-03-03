@@ -142,6 +142,7 @@ class Server:
         self.vault.set_keep_models_in_memory(
             getattr(self._user, "keep_models_in_memory", True)
         )
+        self.vault.set_max_vram_usage_gb(getattr(self._user, "max_vram_gb", None))
 
         self.api = FastAPI(
             title="PixlVault API",
@@ -249,7 +250,7 @@ class Server:
             if not self._should_send_ws_update(event_type, filters):
                 continue
             try:
-                logger.info("Sending websocket event: %s", payload)
+                logger.debug("Sending websocket event: %s", payload)
                 await ws.send_json(payload)
             except Exception:
                 stale.append(client)

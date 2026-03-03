@@ -7,6 +7,15 @@ A REST API server for PixlVault
 - Install dependencies: `pip install -e .`
 - Run server: `python -m pixlvault.server`
 
+## Tagger Benchmark
+
+- Benchmark tagging throughput on a folder of media:
+	- `python scripts/benchmark_tagger.py /path/to/images --limit 256 --runs 3`
+- Tune batch/concurrency between runs via env vars:
+	- `PIXLVAULT_TAGGER_MAX_CONCURRENT_GPU=96`
+	- `PIXLVAULT_TAGGER_MAX_CONCURRENT_CPU=8`
+	- `PIXLVAULT_CUSTOM_TAGGER_BATCH=24`
+
 ## Image Plugins
 
 - Built-in plugins live in `image-plugins/built-in/`.

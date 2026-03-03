@@ -115,6 +115,12 @@ class WorkPlanner:
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def inflight_count(self, finder_name: str) -> int:
+        if not finder_name:
+            return 0
+        with self._lock:
+            return int(self._inflight_by_finder.get(finder_name, 0))
+
     def wake(self):
         self._wake.set()
 

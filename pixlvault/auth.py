@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 
 from pixlvault.database import DBPriority, VaultDatabase
 from pixlvault.db_models import User, UserToken
+from pixlvault.utils import default_max_vram_gb
 
 
 class LoginRequest(BaseModel):
@@ -79,12 +80,18 @@ class AuthService:
         def ensure_user(session: Session):
             user = session.exec(select(User)).first()
             if user:
+                if getattr(user, "max_vram_gb", None) is None:
+                    user.max_vram_gb = default_max_vram_gb()
+                    session.add(user)
+                    session.commit()
+                    session.refresh(user)
                 self._logger.info("Found user in the database: %s", user.username)
                 return user
 
             user = User(
                 username=self._server_config.get("USERNAME"),
                 password_hash=self._server_config.get("PASSWORD_HASH"),
+                max_vram_gb=default_max_vram_gb(),
             )
             session.add(user)
             session.commit()
@@ -101,7 +108,7 @@ class AuthService:
         def update_user(session: Session):
             user = session.exec(select(User)).first()
             if user is None:
-                user = User()
+                user = User(max_vram_gb=default_max_vram_gb())
             user.password_hash = hashed_password
             session.add(user)
             session.commit()
@@ -117,7 +124,7 @@ class AuthService:
         def update_user(session: Session):
             user = session.exec(select(User)).first()
             if user is None:
-                user = User()
+                user = User(max_vram_gb=default_max_vram_gb())
             user.username = username
             session.add(user)
             session.commit()
@@ -371,7 +378,7 @@ class AuthService:
                 def set_credentials(session: Session):
                     db_user = session.exec(select(User)).first()
                     if db_user is None:
-                        db_user = User()
+                        db_user = User(max_vram_gb=default_max_vram_gb())
                     db_user.username = request.username
                     db_user.password_hash = hashed_password
                     session.add(db_user)

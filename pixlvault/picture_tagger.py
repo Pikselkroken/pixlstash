@@ -29,6 +29,35 @@ from pixlvault.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+        return max(1, value)
+    except ValueError:
+        logger.warning(
+            "Invalid integer for %s=%r, using default=%s", name, raw, default
+        )
+        return default
+
+
+def _env_float(name: str, default: float | None) -> float | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+        if value <= 0:
+            return None
+        return value
+    except ValueError:
+        logger.warning("Invalid float for %s=%r, using default=%s", name, raw, default)
+        return default
+
+
 DEFAULT_WD14_TAGGER_REPO = "SmilingWolf/wd-convnext-tagger-v3"
 FILES = ["keras_metadata.pb", "saved_model.pb", "selected_tags.csv"]
 FILES_ONNX = ["model.onnx"]
@@ -37,8 +66,8 @@ SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
 MODEL_DIR = "downloaded_models"
 BATCH_SIZE = 1
-MAX_CONCURRENT_IMAGES_GPU = 64
-MAX_CONCURRENT_IMAGES_CPU = 8
+MAX_CONCURRENT_IMAGES_GPU = _env_int("PIXLVAULT_TAGGER_MAX_CONCURRENT_GPU", 64)
+MAX_CONCURRENT_IMAGES_CPU = _env_int("PIXLVAULT_TAGGER_MAX_CONCURRENT_CPU", 8)
 FLORENCE_BATCH_SIZE_GPU = 4
 FLORENCE_BATCH_SIZE_CPU = 2
 TAGGER_DATALOADER_TIMEOUT = 30
@@ -52,8 +81,10 @@ CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "b
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.85
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
 CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
-CUSTOM_TAGGER_BATCH = 16
+CUSTOM_TAGGER_BATCH = _env_int("PIXLVAULT_CUSTOM_TAGGER_BATCH", 16)
 CLIP_MODEL_NAME = "ViT-B-32"
+DEFAULT_MAX_VRAM_GB = _env_float("PIXLVAULT_MAX_VRAM_GB", None)
+EXPECTED_CONCURRENT_TAG_TASKS = _env_int("PIXLVAULT_EXPECTED_TAG_TASKS", 2)
 
 # Tags that require close-up face crops to detect reliably at full-image resolution.
 # These are collected from face-crop passes and merged into the picture's flat tag list.
@@ -90,7 +121,7 @@ class PictureTagger:
         device=None,
         image_root: str = None,
     ):
-        logger.info("Initializing PictureTagger...")
+        logger.debug("Initializing PictureTagger...")
         self._model_location = model_location
         self._silent = silent
         self._image_root = image_root
@@ -121,9 +152,12 @@ class PictureTagger:
         self._use_custom_tagger = True
         self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
-        self._custom_tagger_image_size_quality_crop = CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP
+        self._custom_tagger_image_size_quality_crop = (
+            CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP
+        )
         self._custom_tagger_batch = CUSTOM_TAGGER_BATCH
         self._custom_device = self._device
+        self._max_vram_usage_mb: int | None = None
 
         self._ensure_model_files(force_download=force_download)
 
@@ -171,6 +205,162 @@ class PictureTagger:
             if self._device == "cpu"
             else FLORENCE_BATCH_SIZE_GPU
         )
+        self._expected_concurrent_tag_tasks = EXPECTED_CONCURRENT_TAG_TASKS
+        self.set_max_vram_usage_gb(DEFAULT_MAX_VRAM_GB)
+
+    @staticmethod
+    def _query_total_vram_mb() -> int:
+        try:
+            import subprocess
+
+            output = subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            totals = []
+            for line in output.splitlines():
+                value = line.strip()
+                if not value:
+                    continue
+                totals.append(int(float(value)))
+            return sum(totals)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _query_process_vram_mb() -> int:
+        try:
+            import subprocess
+
+            pid = os.getpid()
+            output = subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "--query-compute-apps=pid,used_memory",
+                    "--format=csv,noheader,nounits",
+                ],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            used_mb = 0
+            for line in output.splitlines():
+                parts = [part.strip() for part in line.split(",")]
+                if len(parts) < 2:
+                    continue
+                try:
+                    line_pid = int(parts[0])
+                    line_used_mb = int(float(parts[1]))
+                except Exception:
+                    continue
+                if line_pid == pid:
+                    used_mb += line_used_mb
+            return used_mb
+        except Exception:
+            return 0
+
+    def _runtime_vram_headroom_mb(self, reserve_mb: int = 128) -> int | None:
+        budget_mb = self._max_vram_usage_mb
+        if self._device != "cuda" or not budget_mb:
+            return None
+        used_mb = self._query_process_vram_mb()
+        if used_mb <= 0:
+            return None
+        return max(0, int(budget_mb - used_mb - max(0, int(reserve_mb))))
+
+    def set_max_vram_usage_gb(self, max_vram_gb: float | None):
+        if max_vram_gb is None:
+            self._max_vram_usage_mb = None
+            return
+        try:
+            requested_mb = int(float(max_vram_gb) * 1024)
+        except Exception:
+            self._max_vram_usage_mb = None
+            return
+        if requested_mb <= 0:
+            self._max_vram_usage_mb = None
+            return
+        total_mb = self._query_total_vram_mb()
+        if total_mb > 0:
+            self._max_vram_usage_mb = max(1, min(requested_mb, total_mb))
+        else:
+            self._max_vram_usage_mb = requested_mb
+        logger.info(
+            "Tagger VRAM budget set to %.2f GB (%s MB)",
+            self._max_vram_usage_mb / 1024.0,
+            self._max_vram_usage_mb,
+        )
+
+    def _vram_limited_batch_cap(self, base_mb: int, per_item_mb: int) -> int:
+        budget_mb = self._max_vram_usage_mb
+        if self._device != "cuda" or not budget_mb:
+            return 10_000
+        expected_tasks = max(1, int(getattr(self, "_expected_concurrent_tag_tasks", 1)))
+        reserve_mb = max(256, int(budget_mb * 0.20))
+        distributable_mb = max(1, budget_mb - reserve_mb)
+        task_budget_mb = max(1, int(distributable_mb / expected_tasks))
+        if task_budget_mb <= base_mb:
+            return 1
+        return max(1, int((task_budget_mb - base_mb) / max(1, per_item_mb)))
+
+    def _effective_wd14_batch_size(self) -> int:
+        max_concurrent = max(1, int(self.max_concurrent_images()))
+        onnx_cap = max(1, int(getattr(self, "_onnx_batch_capacity", 1)))
+        wd14_batch = min(max_concurrent, onnx_cap)
+        if self._device == "cuda":
+            wd14_batch = min(
+                wd14_batch,
+                self._vram_limited_batch_cap(base_mb=900, per_item_mb=220),
+            )
+            runtime_headroom_mb = self._runtime_vram_headroom_mb(reserve_mb=128)
+            if runtime_headroom_mb is not None:
+                runtime_batch_cap = max(1, int(runtime_headroom_mb / 220))
+                wd14_batch = min(wd14_batch, runtime_batch_cap)
+        return max(1, int(wd14_batch))
+
+    def _effective_custom_batch_size(self) -> int:
+        custom_batch = max(1, int(self._custom_tagger_batch))
+        if self._device == "cuda":
+            custom_batch = min(
+                custom_batch,
+                self._vram_limited_batch_cap(base_mb=700, per_item_mb=180),
+            )
+            runtime_headroom_mb = self._runtime_vram_headroom_mb(reserve_mb=128)
+            if runtime_headroom_mb is not None:
+                runtime_batch_cap = max(1, int(runtime_headroom_mb / 180))
+                custom_batch = min(custom_batch, runtime_batch_cap)
+        wd14_batch = self._effective_wd14_batch_size()
+        return max(1, int(min(custom_batch, wd14_batch)))
+
+    def suggested_tag_task_size(self) -> int:
+        wd14_batch = self._effective_wd14_batch_size()
+        custom_batch = self._effective_custom_batch_size()
+        return max(1, min(wd14_batch, custom_batch))
+
+    def estimate_task_vram_mb(self, image_count: int) -> int:
+        image_count = max(1, int(image_count or 1))
+        wd14_batch = min(self._effective_wd14_batch_size(), image_count)
+        custom_batch = min(self._effective_custom_batch_size(), image_count)
+        wd14_estimate = 900 + 220 * wd14_batch
+        custom_estimate = 700 + 180 * custom_batch
+        return int(max(wd14_estimate, custom_estimate, 1200))
+
+    def estimate_task_incremental_vram_mb(self, image_count: int) -> int:
+        wd14_batch = min(
+            self._effective_wd14_batch_size(),
+            max(1, int(image_count or 1)),
+        )
+        custom_batch = min(
+            self._effective_custom_batch_size(),
+            max(1, int(image_count or 1)),
+        )
+        wd14_incremental = 220 * wd14_batch
+        custom_incremental = 180 * custom_batch
+        return int(max(256, wd14_incremental, custom_incremental))
 
     def _resolve_picture_path(self, file_path: str) -> str:
         return ImageUtils.resolve_picture_path(self._image_root, file_path)
@@ -1238,6 +1428,7 @@ class PictureTagger:
             stop_event=stop_event,
             threshold=self._custom_tagger_threshold_full,
             image_size=self._custom_tagger_image_size_quality_crop,
+            pass_name="quality_crops",
         )
         filtered = {}
         for key, tags in raw.items():
@@ -1247,7 +1438,12 @@ class PictureTagger:
         return filtered
 
     def _tag_custom_items(
-        self, items, stop_event=None, threshold=None, image_size=None
+        self,
+        items,
+        stop_event=None,
+        threshold=None,
+        image_size=None,
+        pass_name: str = "full_images",
     ):
         if not items:
             return {}
@@ -1264,8 +1460,12 @@ class PictureTagger:
             transform = self._build_custom_transform(image_size)
             self._custom_transform_cache[image_size] = transform
 
-        logger.info("Performing custom tagging on %d items...", len(items))
-        batch_size = max(1, self._custom_tagger_batch)
+        logger.debug(
+            "Performing custom tagging (%s) on %d items...",
+            pass_name,
+            len(items),
+        )
+        batch_size = self._effective_custom_batch_size()
         results = {}
         for batch_start in range(0, len(items), batch_size):
             if stop_event is not None and stop_event.is_set():
@@ -1363,6 +1563,7 @@ class PictureTagger:
             stop_event=stop_event,
             threshold=self._custom_tagger_threshold_full,
             image_size=self._custom_tagger_image_size_full,
+            pass_name="full_images",
         )
         return self._merge_video_frame_tags(results)
 
@@ -1386,21 +1587,18 @@ class PictureTagger:
 
         preloaded_map = preloaded_images or {}
         remaining_paths = [p for p in image_paths if str(p) not in preloaded_map]
-        logger.info(
+        logger.debug(
             "[TAG_PRELOAD] total=%s preloaded_hits=%s dataloader_misses=%s",
             len(image_paths),
             len(image_paths) - len(remaining_paths),
             len(remaining_paths),
         )
 
-        if self._device == "cpu":
-            max_concurrent = MAX_CONCURRENT_IMAGES_CPU
-        else:
-            max_concurrent = MAX_CONCURRENT_IMAGES_GPU
+        max_concurrent = self._effective_wd14_batch_size()
         onnx_batch_capacity = max(1, int(getattr(self, "_onnx_batch_capacity", 1)))
         inference_batch_size = min(max_concurrent, onnx_batch_capacity)
 
-        logger.info(
+        logger.debug(
             "[TAG_BATCH] inference_batch_size=%s onnx_batch_capacity=%s max_concurrent=%s",
             inference_batch_size,
             onnx_batch_capacity,
@@ -1470,7 +1668,9 @@ class PictureTagger:
                 try:
                     prepared = ImageLoadingDatasetPrepper._preprocess_image(loaded_img)
                 except Exception as exc:
-                    logger.error("Could not preprocess preloaded image %s: %s", path, exc)
+                    logger.error(
+                        "Could not preprocess preloaded image %s: %s", path, exc
+                    )
                     continue
                 wd14_batch.append((str(path), prepared))
                 if len(wd14_batch) >= inference_batch_size:
@@ -1488,7 +1688,7 @@ class PictureTagger:
         run_preloaded_wd14(preloaded_map, all_results)
         try:
             if remaining_paths:
-                logger.info(
+                logger.debug(
                     "Starting tagger dataloader with worker count: %s and dataset size: %s",
                     worker_count,
                     len(remaining_paths),
@@ -1545,7 +1745,7 @@ class PictureTagger:
                     batch_result[k] = tags
                 all_results.update(batch_result)
 
-        logger.info(f"Completed tagging for {len(all_results)} images.")
+        logger.debug(f"Completed tagging for {len(all_results)} images.")
         wd14_results = self._merge_video_frame_tags(all_results)
         if not self._use_custom_tagger:
             return wd14_results
@@ -1680,7 +1880,7 @@ class PictureTagger:
             sbert_model = SentenceTransformer("all-MiniLM-L6-v2", device=self._device)
             self._sbert_model = sbert_model
 
-        logger.info(
+        logger.debug(
             "Generating SBERT embeddings for %s texts on device: %s",
             len(texts),
             sbert_model.device,
@@ -1688,7 +1888,7 @@ class PictureTagger:
         text_embeddings = None
         try:
             text_embeddings = sbert_model.encode(texts, show_progress_bar=False)
-            logger.info("Done generating SBERT embeddings.")
+            logger.debug("Done generating SBERT embeddings.")
         except RuntimeError as e:
             if "CUDA" in str(e):
                 logger.warning(

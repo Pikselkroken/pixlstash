@@ -369,6 +369,8 @@ def create_router(server) -> APIRouter:
             server.vault.set_keep_models_in_memory(
                 getattr(user, "keep_models_in_memory", True)
             )
+        if "max_vram_gb" in patch_data:
+            server.vault.set_max_vram_usage_gb(getattr(user, "max_vram_gb", None))
         elapsed = time.time() - start_time
         logger.debug(
             f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"
