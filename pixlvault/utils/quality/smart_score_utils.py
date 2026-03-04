@@ -43,8 +43,10 @@ class SmartScoreUtils:
             "penalised_tag_cap": 3.5,
             "tag_bonus_cap": 10,
             "topk": 3,
-            "minSim": 0.75,
-            "minBadSim": 0.88,
+            "sim_knee": 0.5,
+            "sim_power": 2.0,
+            "bad_sim_knee": 0.5,
+            "bad_sim_power": 2.0,
             "aest_min": 2.0,
             "aest_max": 7.0,
             "res_min_mpx": 0.2,
@@ -124,17 +126,18 @@ class SmartScoreUtils:
 
         if good_anchors and M_good is not None:
             sims = sim01_batch(M_cand, M_good)
-            max_raw = np.max(sims, axis=1)
-            mask_good = max_raw >= cfg["minSim"]
-            weighted = sims * good_weights
+            knee = float(cfg["sim_knee"])
+            power = float(cfg["sim_power"])
+            smooth = np.clip((sims - knee) / max(1e-6, 1.0 - knee), 0.0, 1.0) ** power
+            weighted = smooth * good_weights
             K = min(cfg["topk"], weighted.shape[1])
             if K > 0:
                 if K < weighted.shape[1]:
                     topk = -np.partition(-weighted, K - 1, axis=1)[:, :K]
                 else:
                     topk = weighted
-                avg_good = np.mean(np.abs(topk), axis=1)
-                good_component = cfg["w_good"] * (avg_good * mask_good)
+                avg_good = np.mean(topk, axis=1)
+                good_component = cfg["w_good"] * avg_good
                 scores += good_component
 
         # Bad anchors
@@ -155,17 +158,21 @@ class SmartScoreUtils:
 
         if bad_anchors and M_bad is not None:
             sims = sim01_batch(M_cand, M_bad)
-            max_raw_bad = np.max(sims, axis=1)
-            mask_bad = max_raw_bad >= cfg["minBadSim"]
-            weighted = sims * bad_weights
+            bad_knee = float(cfg["bad_sim_knee"])
+            bad_power = float(cfg["bad_sim_power"])
+            smooth_bad = (
+                np.clip((sims - bad_knee) / max(1e-6, 1.0 - bad_knee), 0.0, 1.0)
+                ** bad_power
+            )
+            weighted = smooth_bad * bad_weights
             K = min(cfg["topk"], weighted.shape[1])
             if K > 0:
                 if K < weighted.shape[1]:
                     topk = -np.partition(-weighted, K - 1, axis=1)[:, :K]
                 else:
                     topk = weighted
-                avg_bad = np.mean(np.abs(topk), axis=1)
-                bad_component = cfg["w_bad"] * (avg_bad * mask_bad)
+                avg_bad = np.mean(topk, axis=1)
+                bad_component = cfg["w_bad"] * avg_bad
                 scores -= bad_component
 
         # Aesthetic
