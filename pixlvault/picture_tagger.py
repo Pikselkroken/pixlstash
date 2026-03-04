@@ -1430,12 +1430,7 @@ class PictureTagger:
             image_size=self._custom_tagger_image_size_quality_crop,
             pass_name="quality_crops",
         )
-        filtered = {}
-        for key, tags in raw.items():
-            quality_tags = [t for t in tags if t in QUALITY_CROP_TAG_WHITELIST]
-            if quality_tags:
-                filtered[key] = quality_tags
-        return filtered
+        return raw
 
     def _tag_custom_items(
         self,
