@@ -1,6 +1,6 @@
 [project]
 name = "pixlvault"
-version = "0.7.0"
+version = "0.7.1"
 description = "PixlVault Picture Database"
 authors = [
     { name = "PixlVault" }
