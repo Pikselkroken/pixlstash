@@ -554,11 +554,17 @@ class Server:
         return data.get("project", {}).get("version", "unknown")
 
     def _get_frontend_dist_dir(self):
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        dist_dir = os.path.join(base_dir, "frontend", "dist")
-        if not os.path.isdir(dist_dir):
-            return None
-        return dist_dir
+        package_dir = os.path.abspath(os.path.dirname(__file__))
+        packaged_dist_dir = os.path.join(package_dir, "frontend", "dist")
+        if os.path.isdir(packaged_dist_dir):
+            return packaged_dist_dir
+
+        repo_root = os.path.abspath(os.path.join(package_dir, ".."))
+        repo_dist_dir = os.path.join(repo_root, "frontend", "dist")
+        if os.path.isdir(repo_dist_dir):
+            return repo_dist_dir
+
+        return None
 
     def _get_frontend_index_path(self):
         dist_dir = self._get_frontend_dist_dir()

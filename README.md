@@ -37,5 +37,31 @@ PixlVault uses Alembic for schema changes. The server runs migrations on startup
 
 ## Publishing
 
-- Build: `python setup.py sdist bdist_wheel`
+- Build frontend: `cd frontend && npm ci && npm run build && cd ..`
+- Build Python package: `python -m build`
 - Upload: `twine upload dist/*`
+
+### GitHub tagged releases to PyPI
+
+- Workflow file: [.github/workflows/publish-pypi.yml](.github/workflows/publish-pypi.yml)
+- Trigger: push tag matching `v*` (for example `v0.7.0`)
+- Behavior:
+	- builds frontend bundle
+	- verifies tag matches `[project].version` in [pyproject.toml](pyproject.toml)
+	- builds wheel/sdist
+	- publishes to PyPI using Trusted Publishing
+
+One-time PyPI setup:
+
+- In PyPI, open your project → **Publishing** → **Add a new pending publisher**
+- Set:
+	- **Owner**: your GitHub org/user
+	- **Repository**: `pixlvault`
+	- **Workflow name**: `publish-pypi.yml`
+	- **Environment name**: leave blank (unless you add one in the workflow)
+
+Release command sequence:
+
+- Update version in [pyproject.toml](pyproject.toml)
+- Commit and push
+- Create/push tag: `git tag v0.7.0 && git push origin v0.7.0`

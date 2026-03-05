@@ -63,3 +63,14 @@ pixlvault-cli = "pixlvault.cli:main"
 [build-system]
 requires = ["setuptools>=42", "wheel", "twine"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["pixlvault*"]
+
+[tool.setuptools.package-data]
+pixlvault = [
+    "frontend/dist/**/*",
+]

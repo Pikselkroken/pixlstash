@@ -4,6 +4,10 @@ import vue from '@vitejs/plugin-vue'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
+  build: {
+    outDir: '../pixlvault/frontend/dist',
+    emptyOutDir: true,
+  },
   server: {
     host: true, // Listen on all network interfaces
     port: 5173, // Optional: Ensure the port is set to 5173
