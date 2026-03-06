@@ -29,8 +29,8 @@ PrivilegesRequired=admin
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "dist\pixlvault-*.whl"; DestDir: "{app}\dist"; Flags: ignoreversion
-Source: "installer\windows\install-pixlvault.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\pixlvault-*.whl"; DestDir: "{app}\dist"; Flags: ignoreversion
+Source: "install-pixlvault.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}\Start Server"; Filename: "{app}\{#MyAppExeName}"
@@ -40,5 +40,5 @@ Name: "{autodesktop}\{#MyAppName} Server"; Filename: "{app}\{#MyAppExeName}"; Ta
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File \"{app}\install-pixlvault.ps1\" -AppDir \"{app}\""; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install-pixlvault.ps1"" -AppDir ""{app}"""; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch PixlVault Server"; Flags: nowait postinstall skipifsilent
