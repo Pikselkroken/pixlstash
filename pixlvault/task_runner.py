@@ -42,7 +42,9 @@ class TaskRunner:
 
     def __init__(self, name: str = "TaskRunner"):
         self._name = name
-        self._queue: queue.PriorityQueue[tuple[int, int, BaseTask]] = queue.PriorityQueue()
+        self._queue: queue.PriorityQueue[tuple[int, int, BaseTask]] = (
+            queue.PriorityQueue()
+        )
         self._queue_seq = itertools.count()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None

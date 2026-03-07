@@ -25,7 +25,7 @@ def pytest_addoption(parser):
         type=float,
         default=None,
         help="VRAM budget in GB applied to all Server instances (e.g. 4.0). "
-             "Overrides the persisted user config value.",
+        "Overrides the persisted user config value.",
     )
 
 

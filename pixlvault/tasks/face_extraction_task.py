@@ -137,12 +137,16 @@ class FaceExtractionTask(BaseTask):
         if self._cpu_spillover_enabled:
             with FaceExtractionTask._cpu_insightface_lock:
                 if FaceExtractionTask._global_cpu_insightface_app is None:
-                    logger.debug("FaceExtractionTask: initialising CPU spillover InsightFace app (ctx_id=-1).")
+                    logger.debug(
+                        "FaceExtractionTask: initialising CPU spillover InsightFace app (ctx_id=-1)."
+                    )
                     app = FaceAnalysis(providers=["CPUExecutionProvider"])
                     app.prepare(ctx_id=-1, det_thresh=0.25, det_size=(480, 480))
                     FaceExtractionTask._global_cpu_insightface_app = app
                 else:
-                    logger.debug("FaceExtractionTask: reusing CPU spillover InsightFace app.")
+                    logger.debug(
+                        "FaceExtractionTask: reusing CPU spillover InsightFace app."
+                    )
                 self._insightface_app = FaceExtractionTask._global_cpu_insightface_app
             return
 

@@ -133,7 +133,9 @@ class DescriptionTask(BaseTask):
         cpu_spillover_tagger = None
         if self._cpu_spillover_enabled:
             logger.debug(
-                "DescriptionTask %s: using CPU spillover for ids=%s", self.id, picture_ids
+                "DescriptionTask %s: using CPU spillover for ids=%s",
+                self.id,
+                picture_ids,
             )
             cpu_spillover_tagger = self._acquire_cpu_spillover_tagger(
                 self._db.image_root
