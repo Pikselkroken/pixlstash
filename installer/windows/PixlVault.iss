@@ -2,7 +2,7 @@
 #define MyAppPublisher "PixlVault"
 #define MyAppExeName "Start-PixlVault-Server.bat"
 #define EnvAppVersion GetEnv("PIXLVAULT_VERSION")
-#if EnvAppVersion = ""
+#if EnvAppVersion == ""
 	#define MyAppVersion "0.0.0"
 #else
 	#define MyAppVersion EnvAppVersion
