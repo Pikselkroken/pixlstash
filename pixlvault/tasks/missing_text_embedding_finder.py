@@ -19,6 +19,7 @@ class MissingTextEmbeddingFinder(BaseTaskFinder):
         database,
         picture_tagger_getter: Callable,
     ):
+        super().__init__()
         self._db = database
         self._picture_tagger_getter = picture_tagger_getter
 
@@ -33,16 +34,20 @@ class MissingTextEmbeddingFinder(BaseTaskFinder):
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing_text_embeddings(
                 session,
-                self.EMBEDDING_BATCH_SIZE,
+                self.EMBEDDING_BATCH_SIZE * 3,
             )
         )
         if not pictures:
             return None
 
+        selected = self._filter_and_claim(pictures, self.EMBEDDING_BATCH_SIZE)
+        if not selected:
+            return None
+
         return TextEmbeddingTask(
             database=self._db,
             picture_tagger=picture_tagger,
-            pictures=pictures,
+            pictures=selected,
         )
 
     @staticmethod

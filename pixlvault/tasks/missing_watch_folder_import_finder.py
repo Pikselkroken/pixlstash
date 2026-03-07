@@ -40,6 +40,7 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
     }
 
     def __init__(self, database, config_path: str):
+        super().__init__()
         self._db = database
         self._config_path = config_path
 

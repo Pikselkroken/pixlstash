@@ -20,6 +20,7 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
     """Find pictures missing faces and create a feature extraction task."""
 
     def __init__(self, database, picture_tagger_getter: Callable):
+        super().__init__()
         self._db = database
         self._picture_tagger_getter = picture_tagger_getter
 
@@ -37,10 +38,14 @@ class MissingFaceExtractionFinder(BaseTaskFinder):
         if not pictures:
             return None
 
+        selected = self._filter_and_claim(pictures, FACE_EXTRACTION_BATCH_LIMIT)
+        if not selected:
+            return None
+
         return FaceExtractionTask(
             database=self._db,
             picture_tagger=picture_tagger,
-            pictures=pictures,
+            pictures=selected,
         )
 
     @staticmethod

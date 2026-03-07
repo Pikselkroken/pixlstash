@@ -8,6 +8,7 @@ class MissingQualityFinder(BaseTaskFinder):
     """Find missing full-image quality work and create a QualityTask."""
 
     def __init__(self, database):
+        super().__init__()
         self._db = database
 
     def finder_name(self) -> str:

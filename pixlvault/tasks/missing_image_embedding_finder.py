@@ -10,6 +10,7 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
     """Find pending image embedding work and create an ImageEmbeddingTask."""
 
     def __init__(self, database, picture_tagger_getter: Callable):
+        super().__init__()
         self._db = database
         self._picture_tagger_getter = picture_tagger_getter
 

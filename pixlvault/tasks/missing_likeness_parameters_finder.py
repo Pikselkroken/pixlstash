@@ -12,6 +12,7 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
     """Find pending likeness-parameter work and create a task."""
 
     def __init__(self, database):
+        super().__init__()
         self._db = database
 
     def finder_name(self) -> str:

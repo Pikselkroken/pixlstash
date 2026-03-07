@@ -8,6 +8,7 @@ class MissingFaceQualityFinder(BaseTaskFinder):
     """Find missing face-level quality work and create a FaceQualityTask."""
 
     def __init__(self, database):
+        super().__init__()
         self._db = database
 
     def finder_name(self) -> str:

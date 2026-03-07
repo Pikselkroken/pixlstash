@@ -1,5 +1,4 @@
 from typing import Callable
-import threading
 
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
@@ -18,26 +17,15 @@ class MissingTagFinder(BaseTaskFinder):
         database,
         picture_tagger_getter: Callable,
     ):
+        super().__init__()
         self._db = database
         self._picture_tagger_getter = picture_tagger_getter
-        self._claim_lock = threading.Lock()
-        self._claimed_picture_ids: set[int] = set()
 
     def finder_name(self) -> str:
         return "MissingTagFinder"
 
     def max_inflight_tasks(self) -> int:
         return 2
-
-    def on_task_complete(self, task, error) -> None:
-        picture_ids = []
-        if getattr(task, "params", None):
-            picture_ids = task.params.get("picture_ids") or []
-        if not picture_ids:
-            return
-        with self._claim_lock:
-            for picture_id in picture_ids:
-                self._claimed_picture_ids.discard(picture_id)
 
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()
@@ -58,16 +46,7 @@ class MissingTagFinder(BaseTaskFinder):
         if not pictures:
             return None
 
-        selected = []
-        with self._claim_lock:
-            for picture in pictures:
-                picture_id = getattr(picture, "id", None)
-                if picture_id is None or picture_id in self._claimed_picture_ids:
-                    continue
-                self._claimed_picture_ids.add(picture_id)
-                selected.append(picture)
-                if len(selected) >= batch_limit:
-                    break
+        selected = self._filter_and_claim(pictures, batch_limit)
 
         if not selected:
             return None

@@ -8,6 +8,7 @@ class MissingLikenessFinder(BaseTaskFinder):
     """Find pending likeness work and create a LikenessTask."""
 
     def __init__(self, database):
+        super().__init__()
         self._db = database
 
     def finder_name(self) -> str:

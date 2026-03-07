@@ -17,6 +17,7 @@ class MissingDescriptionFinder(BaseTaskFinder):
         database,
         picture_tagger_getter: Callable,
     ):
+        super().__init__()
         self._db = database
         self._picture_tagger_getter = picture_tagger_getter
 
@@ -38,15 +39,19 @@ class MissingDescriptionFinder(BaseTaskFinder):
         )
 
         pictures = self._db.run_immediate_read_task(
-            lambda session: self._fetch_missing_descriptions(session, batch_limit)
+            lambda session: self._fetch_missing_descriptions(session, batch_limit * 3)
         )
         if not pictures:
+            return None
+
+        selected = self._filter_and_claim(pictures, batch_limit)
+        if not selected:
             return None
 
         return DescriptionTask(
             database=self._db,
             picture_tagger=picture_tagger,
-            pictures=pictures,
+            pictures=selected,
         )
 
     @staticmethod
