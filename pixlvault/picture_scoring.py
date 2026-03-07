@@ -59,7 +59,7 @@ def select_reference_faces_for_character(
         .limit(max_refs)
     ).all()
 
-    logger.info(
+    logger.debug(
         "[reference_faces] character_id=%s target_count=%s five_star_rows=%s",
         character_id,
         max_refs,
@@ -81,7 +81,7 @@ def select_reference_faces_for_character(
         .order_by(Picture.created_at.asc(), Picture.id.asc())
         .limit(max_refs - len(representatives))
     ).all()
-    logger.info(
+    logger.debug(
         "[reference_faces] character_id=%s four_five_rows=%s selected_pictures=%s",
         character_id,
         len(remaining_rows),
@@ -102,7 +102,7 @@ def select_reference_faces_for_character(
     remaining_rows = session.exec(
         base_query.where(~Picture.id.in_(selected_picture_ids))
     ).all()
-    logger.info(
+    logger.debug(
         "[reference_faces] character_id=%s remaining_rows=%s selected_pictures=%s",
         character_id,
         len(remaining_rows),
@@ -139,7 +139,7 @@ def select_reference_faces_for_character(
                 row[0].id or 0,
             )
         )
-        logger.info(
+        logger.debug(
             "[reference_faces] character_id=%s penalised_tags=%s",
             character_id,
             len(tag_weights),
@@ -163,7 +163,7 @@ def select_reference_faces_for_character(
         if fallback_face and fallback_face.id not in selected_face_ids:
             representatives.append(fallback_face)
 
-    logger.info(
+    logger.debug(
         "[reference_faces] character_id=%s final_faces=%s",
         character_id,
         len(representatives),
@@ -373,7 +373,7 @@ def find_pictures_by_character_likeness(
     )
     timing_after_fetch = time.perf_counter()
 
-    logger.info(
+    logger.debug(
         "[LIKELINESS TIMING] refs=%.3fms candidates=%.3fms likeness=%.3fms fetch=%.3fms total=%.3fms",
         (timing_after_refs - timing_start) * 1000.0,
         (timing_after_candidates - timing_after_refs) * 1000.0,

@@ -252,7 +252,7 @@ class TagTask(BaseTask):
         active_tagger = self._picture_tagger
         cpu_spillover_tagger = None
         if self._cpu_spillover_enabled:
-            logger.info("TagTask %s using CPU spillover mode", self.id)
+            logger.debug("TagTask %s using CPU spillover mode", self.id)
             cpu_spillover_tagger = self._acquire_cpu_spillover_tagger(
                 self._db.image_root
             )

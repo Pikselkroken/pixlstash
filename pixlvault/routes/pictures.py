@@ -994,7 +994,7 @@ def create_router(server) -> APIRouter:
         )
         if thumb_path and os.path.exists(thumb_path):
             elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
-            logger.info(
+            logger.debug(
                 "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
                 id,
                 thumb_path,
@@ -1005,7 +1005,7 @@ def create_router(server) -> APIRouter:
         cached_bytes = get_cached_thumbnail_bytes(id)
         if cached_bytes:
             elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
-            logger.info(
+            logger.debug(
                 "Thumbnail GET memory-hit: id=%s elapsed_ms=%.1f",
                 id,
                 elapsed_ms,
@@ -1016,7 +1016,7 @@ def create_router(server) -> APIRouter:
         async with lock:
             if thumb_path and os.path.exists(thumb_path):
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
-                logger.info(
+                logger.debug(
                     "Thumbnail GET cache-hit-after-wait: id=%s path=%s elapsed_ms=%.1f",
                     id,
                     thumb_path,
@@ -1027,7 +1027,7 @@ def create_router(server) -> APIRouter:
             cached_bytes = get_cached_thumbnail_bytes(id)
             if cached_bytes:
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
-                logger.info(
+                logger.debug(
                     "Thumbnail GET memory-hit-after-wait: id=%s elapsed_ms=%.1f",
                     id,
                     elapsed_ms,
@@ -1071,7 +1071,7 @@ def create_router(server) -> APIRouter:
 
             if status == "saved" and saved_thumb:
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
-                logger.info(
+                logger.debug(
                     "Thumbnail GET generated: id=%s source=%s elapsed_ms=%.1f",
                     id,
                     resolved_path,
@@ -1125,7 +1125,7 @@ def create_router(server) -> APIRouter:
         if not isinstance(ids, list):
             raise HTTPException(status_code=400, detail="'ids' must be a list")
 
-        logger.info(
+        logger.debug(
             "Thumbnail batch request: client=%s count=%s ids_preview=%s",
             getattr(getattr(request, "client", None), "host", None),
             len(ids),
@@ -1207,7 +1207,7 @@ def create_router(server) -> APIRouter:
             ),
             priority=DBPriority.IMMEDIATE,
         )
-        logger.info(
+        logger.debug(
             "Thumbnail batch resolved: requested=%s found=%s",
             len(ids),
             len(pics or []),
@@ -1526,7 +1526,7 @@ def create_router(server) -> APIRouter:
                 if rows is None:
                     return
                 if not rows:
-                    logger.info(
+                    logger.debug(
                         "Semantic search %s: no results (query=%r, words=%s, threshold=%s, format=%s, only_deleted=%s, candidate_ids=%s)",
                         label,
                         query,
@@ -1544,7 +1544,7 @@ def create_router(server) -> APIRouter:
                     }
                     for pic, score in rows[:10]
                 ]
-                logger.info(
+                logger.debug(
                     "Semantic search %s: results=%d (query=%r, words=%s, threshold=%s, format=%s, only_deleted=%s, candidate_ids=%s) top=%s",
                     label,
                     len(rows),
@@ -1979,8 +1979,6 @@ def create_router(server) -> APIRouter:
         pic_tags = server.vault.db.run_task(fetch_image_only_tags, pic.id)
         pic_dict = safe_model_dict(pic)
         pic_dict["tags"] = serialize_tag_objects(pic_tags)
-
-        logger.info(f"Sending tags: {pic_dict['tags']} for picture id={pic.id}")
 
         if smart_score:
             try:

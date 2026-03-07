@@ -45,7 +45,6 @@ logger = get_logger(__name__)
 
 class Vault:
     AGGRESSIVE_UNLOAD_INTERVAL = 180
-    MODEL_STATUS_LOG_INTERVAL = 60
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -89,7 +88,6 @@ class Vault:
 
         self._picture_tagger = None
         self._last_aggressive_unload_at = 0.0
-        self._last_model_status_log_at = 0.0
         self._keep_models_in_memory = True
         self._max_vram_gb = None
         self._server_config_path = server_config_path
@@ -615,42 +613,7 @@ class Vault:
     def get_worker_progress(self) -> dict:
         progress = self._build_worker_progress_snapshot()
         self._maybe_aggressive_unload(progress)
-        self._maybe_log_model_status(progress)
         return progress
-
-    def _maybe_log_model_status(self, progress: dict):
-        now = time.time()
-        if now - self._last_model_status_log_at < self.MODEL_STATUS_LOG_INTERVAL:
-            return
-
-        worker_busy = 0
-        for snapshot in (progress or {}).values():
-            status = snapshot.get("status")
-            current = int(snapshot.get("current") or 0)
-            total = int(snapshot.get("total") or 0)
-            remaining = snapshot.get("remaining")
-            if remaining is None:
-                remaining = max(0, total - current)
-            else:
-                remaining = max(0, int(remaining))
-            if status not in ("idle", "stopped", "uninitialized") and (
-                remaining > 0 or (total > 0 and current < total)
-            ):
-                worker_busy += 1
-
-        model_state = {}
-        if self._picture_tagger and hasattr(self._picture_tagger, "loaded_model_state"):
-            try:
-                model_state = self._picture_tagger.loaded_model_state()
-            except Exception as exc:
-                model_state = {"error": f"failed_to_collect_tagger_state:{exc}"}
-
-        model_state["insightface_loaded"] = bool(
-            getattr(FaceExtractionTask, "_global_insightface_app", None) is not None
-        )
-        model_state["workers_busy"] = worker_busy
-        logger.info("Model residency status: %s", model_state)
-        self._last_model_status_log_at = now
 
     def _maybe_aggressive_unload(self, progress: dict):
         if self._keep_models_in_memory:

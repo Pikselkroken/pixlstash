@@ -8917,5 +8917,5 @@ class TagNaturaliser:
         else:
             result = ", ".join(descriptors[:10])
 
-        logger.info("Generated description: " + result)
+        logger.debug("Generated description: " + result)
         return result

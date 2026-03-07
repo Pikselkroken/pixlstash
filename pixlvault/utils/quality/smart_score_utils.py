@@ -250,7 +250,7 @@ class SmartScoreUtils:
                 penalised_count = float(penalised_counts[idx])
                 final_score = float(final_scores[idx])
                 if penalised_count <= 0 and final_score <= 1.5:
-                    logger.info(
+                    logger.debug(
                         "[SMART SCORE][MIN] id=%s raw=%.4f clipped=%.4f final=%.4f "
                         "good=%.4f bad=%.4f aest=%.4f res=%.4f noise=%.4f "
                         "edge=%.4f tags=%.4f penalised=%.4f mpx=%.4f w=%s h=%s",
@@ -271,6 +271,6 @@ class SmartScoreUtils:
                         candidate.get("height"),
                     )
         except Exception as exc:
-            logger.info("[SMART SCORE][MIN] logging failed: %s", exc)
+            logger.warning("[SMART SCORE][MIN] logging failed: %s", exc)
 
         return final_scores

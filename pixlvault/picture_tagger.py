@@ -379,7 +379,6 @@ class PictureTagger:
         # For PyTorch: del self.model; torch.cuda.empty_cache()
         import gc
 
-        logger.warning("PictureTagger.close() called, releasing resources...")
         # Explicitly delete all large model objects and set to None
         try:
             if hasattr(self, "_clip_model"):
