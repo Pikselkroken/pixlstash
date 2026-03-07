@@ -655,7 +655,7 @@ def test_benchmark_add_images_by_binary_upload():
     log_resources("END test_benchmark_add_images_by_binary_upload")
 
 
-def test_semantic_search():
+def test_semantic_search(request):
     """Test: Add all images from pictures folder, wait for tagging, perform semantic search, print results, assert count."""
 
     log_resources("START test_semantic_search")
@@ -988,6 +988,14 @@ def test_semantic_search():
             }
 
             regression_path = _REGRESSION_DIR / f"semantic_search_{device_tag}.json"
+
+            if request.config.getoption("--fast-captions", default=False):
+                logger.info(
+                    "Skipping semantic search regression comparison: --fast-captions produces truncated "
+                    "descriptions that differ from the full-caption baseline."
+                )
+                continue
+
             _write_json(regression_path, regression_payload)
 
             diff_result = subprocess.run(
