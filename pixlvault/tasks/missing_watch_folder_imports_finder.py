@@ -12,7 +12,22 @@ from .watch_folder_import_task import (
 
 
 class MissingWatchFolderImportsFinder(BaseTaskFinder):
-    """Find newly modified files in watch folders and create import tasks."""
+    """Find newly modified files in watch folders and create import tasks.
+
+    Watch folder entries are read from the server config file as a list under
+    the ``watch_folders`` key. Each entry must be a dict with the following
+    fields:
+
+        folder (str): Absolute path to the directory to monitor recursively.
+        delete_after_import (bool): When True, source files are deleted from
+            the watch folder after a successful import. Defaults to False.
+        last_checked (float): Unix timestamp of the last scan. Updated
+            automatically after each scan; do not set this manually.
+
+    Example config entry::
+
+        { "folder": "/home/user/downloads/photos", "delete_after_import": false }
+    """
 
     _supported_image_exts = {
         ".jpg",
