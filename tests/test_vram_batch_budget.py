@@ -1,5 +1,5 @@
 from pixlvault.picture_tagger import PictureTagger
-from pixlvault.tasks.missing_tags_finder import MissingTagsFinder
+from pixlvault.tasks.missing_tag_finder import MissingTagFinder
 
 
 def _build_tagger_for_budget_tests(
@@ -115,7 +115,7 @@ def test_missing_tags_finder_uses_suggested_task_size():
 
             return [Picture(i) for i in range(1, 30)]
 
-    finder = MissingTagsFinder(
+    finder = MissingTagFinder(
         database=FakeDB(),
         picture_tagger_getter=lambda: FakeTagger(),
     )

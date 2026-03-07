@@ -1,6 +1,6 @@
 from pixlvault.db_models import Picture
 from pixlvault.db_models.quality import Quality
-from pixlvault.utils.stack.stack_utils import order_stack_pictures
+from pixlvault.utils.stack.stack_utils import StackUtils
 
 
 def test_order_stack_pictures_basic():
@@ -25,7 +25,7 @@ def test_order_stack_pictures_basic():
         ),
     ]
 
-    ordered = order_stack_pictures(pics)
+    ordered = StackUtils.order_stack_pictures(pics)
     assert ordered[0].file_path == "b.jpg"
     assert ordered[1].file_path == "c.jpg"
     assert ordered[2].file_path == "a.jpg"
@@ -52,7 +52,7 @@ def test_order_stack_pictures_tiebreak():
             quality=Quality(sharpness=0.5, noise_level=0.3),
         ),
     ]
-    ordered = order_stack_pictures(pics)
+    ordered = StackUtils.order_stack_pictures(pics)
     assert ordered[0].file_path == "y.jpg"
     assert ordered[1].file_path == "x.jpg"
     assert ordered[2].file_path == "z.jpg"

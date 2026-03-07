@@ -9,7 +9,7 @@ from .base_task_finder import BaseTaskFinder
 from .text_embedding_task import TextEmbeddingTask
 
 
-class MissingTextEmbeddingsFinder(BaseTaskFinder):
+class MissingTextEmbeddingFinder(BaseTaskFinder):
     """Find a batch of pictures missing text embeddings and create a TextEmbeddingTask."""
 
     EMBEDDING_BATCH_SIZE = 32
@@ -23,7 +23,7 @@ class MissingTextEmbeddingsFinder(BaseTaskFinder):
         self._picture_tagger_getter = picture_tagger_getter
 
     def finder_name(self) -> str:
-        return "MissingTextEmbeddingsFinder"
+        return "MissingTextEmbeddingFinder"
 
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()

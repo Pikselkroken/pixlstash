@@ -42,7 +42,7 @@ from pixlvault.picture_tagger import (  # noqa: E402
     PictureTagger,
 )
 from pixlvault.tag_naturaliser import TagNaturaliser  # noqa: E402
-from pixlvault.tasks.feature_extraction_task import CROP_EXPAND_SCALE  # noqa: E402
+from pixlvault.tasks.face_extraction_task import CROP_EXPAND_SCALE  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants

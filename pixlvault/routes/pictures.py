@@ -1634,7 +1634,7 @@ def create_router(server) -> APIRouter:
         _MAX_UPLOAD_BYTES = 5 * 1024**3  # 5 GB per uploaded file / zip
         _MAX_ZIP_ENTRIES = 5_000  # max files inside a zip
         _MAX_ZIP_DECOMPRESSED_BYTES = 10 * 1024**3  # 10 GB total decompressed
-        if not server.vault.is_worker_running(TaskType.FACE):
+        if not server.vault.is_worker_running(TaskType.FACE_EXTRACTION):
             raise HTTPException(
                 status_code=400,
                 detail="Face worker is not running. Start it before import.",
@@ -1815,7 +1815,7 @@ def create_router(server) -> APIRouter:
                     server.import_tasks[task_id]["status"] = "processing_faces"
                     face_futures = [
                         server.vault.get_worker_future(
-                            TaskType.FACE, Picture, pic.id, "faces"
+                            TaskType.FACE_EXTRACTION, Picture, pic.id, "faces"
                         )
                         for pic in new_pictures
                     ]

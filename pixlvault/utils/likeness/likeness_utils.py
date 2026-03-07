@@ -23,7 +23,7 @@ from pixlvault.db_models.picture_likeness import (
 logger = get_logger(__name__)
 
 
-class PictureLikenessUtils:
+class LikenessUtils:
     """Speed-focused likeness utilities for stacking near-identical images."""
 
     BATCH_CANDIDATES = 1024
@@ -395,14 +395,14 @@ class PictureLikenessUtils:
     @staticmethod
     def decode_embedding(blob) -> Optional[np.ndarray]:
         """Decode a raw embedding blob to a numpy array."""
-        return PictureLikenessUtils._decode_embedding(blob)
+        return LikenessUtils._decode_embedding(blob)
 
     @staticmethod
     def decode_likeness_parameters(
         blob: Optional[object], length: int
     ) -> Optional[np.ndarray]:
         """Decode a raw likeness parameter blob to a numpy array."""
-        return PictureLikenessUtils._decode_likeness_parameters(blob, length)
+        return LikenessUtils._decode_likeness_parameters(blob, length)
 
     @staticmethod
     def _decode_embedding(blob) -> Optional[np.ndarray]:

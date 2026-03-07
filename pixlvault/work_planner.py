@@ -18,27 +18,27 @@ class WorkPlanner:
         from pixlvault.tasks import TaskType
         from pixlvault.tasks.missing_description_finder import MissingDescriptionFinder
         from pixlvault.tasks.missing_face_quality_finder import MissingFaceQualityFinder
-        from pixlvault.tasks.missing_feature_extraction_finder import (
-            MissingFeatureExtractionFinder,
+        from pixlvault.tasks.missing_face_extraction_finder import (
+            MissingFaceExtractionFinder,
         )
-        from pixlvault.tasks.missing_image_embeddings_finder import (
-            MissingImageEmbeddingsFinder,
+        from pixlvault.tasks.missing_image_embedding_finder import (
+            MissingImageEmbeddingFinder,
         )
         from pixlvault.tasks.missing_likeness_parameters_finder import (
             MissingLikenessParametersFinder,
         )
         from pixlvault.tasks.missing_likeness_finder import MissingLikenessFinder
         from pixlvault.tasks.missing_quality_finder import MissingQualityFinder
-        from pixlvault.tasks.missing_text_embeddings_finder import (
-            MissingTextEmbeddingsFinder,
+        from pixlvault.tasks.missing_text_embedding_finder import (
+            MissingTextEmbeddingFinder,
         )
-        from pixlvault.tasks.missing_tags_finder import MissingTagsFinder
-        from pixlvault.tasks.missing_watch_folder_imports_finder import (
-            MissingWatchFolderImportsFinder,
+        from pixlvault.tasks.missing_tag_finder import MissingTagFinder
+        from pixlvault.tasks.missing_watch_folder_import_finder import (
+            MissingWatchFolderImportFinder,
         )
 
         return {
-            TaskType.FACE: MissingFeatureExtractionFinder(
+            TaskType.FACE_EXTRACTION: MissingFaceExtractionFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
@@ -48,7 +48,7 @@ class WorkPlanner:
             TaskType.FACE_QUALITY: MissingFaceQualityFinder(
                 database=database,
             ),
-            TaskType.TAGGER: MissingTagsFinder(
+            TaskType.TAGGER: MissingTagFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
@@ -56,11 +56,11 @@ class WorkPlanner:
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
-            TaskType.TEXT_EMBEDDING: MissingTextEmbeddingsFinder(
+            TaskType.TEXT_EMBEDDING: MissingTextEmbeddingFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
-            TaskType.IMAGE_EMBEDDING: MissingImageEmbeddingsFinder(
+            TaskType.IMAGE_EMBEDDING: MissingImageEmbeddingFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
             ),
@@ -70,7 +70,7 @@ class WorkPlanner:
             TaskType.LIKENESS: MissingLikenessFinder(
                 database=database,
             ),
-            TaskType.WATCH_FOLDERS: MissingWatchFolderImportsFinder(
+            TaskType.WATCH_FOLDERS: MissingWatchFolderImportFinder(
                 database=database,
                 config_path=config_path,
             ),

@@ -6,7 +6,7 @@ from .base_task_finder import BaseTaskFinder
 from .image_embedding_task import ImageEmbeddingTask
 
 
-class MissingImageEmbeddingsFinder(BaseTaskFinder):
+class MissingImageEmbeddingFinder(BaseTaskFinder):
     """Find pending image embedding work and create an ImageEmbeddingTask."""
 
     def __init__(self, database, picture_tagger_getter: Callable):
@@ -14,7 +14,7 @@ class MissingImageEmbeddingsFinder(BaseTaskFinder):
         self._picture_tagger_getter = picture_tagger_getter
 
     def finder_name(self) -> str:
-        return "MissingImageEmbeddingsFinder"
+        return "MissingImageEmbeddingFinder"
 
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()

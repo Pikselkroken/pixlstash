@@ -4,8 +4,8 @@ from pixlvault.db_models.picture import (
     LikenessParameter,
     Picture,
 )
-from pixlvault.utils.likeness.likeness_params import (
-    PictureLikenessParameterUtils,
+from pixlvault.utils.likeness.likeness_parameter_utils import (
+    LikenessParameterUtils,
     PICTURE_PARAM_FIELDS,
     QUALITY_PARAM_FIELDS,
 )
@@ -29,7 +29,7 @@ class LikenessParametersTask(BaseTask):
         self._db = database
 
     def _run_task(self):
-        helper = PictureLikenessParameterUtils(self._db)
+        helper = LikenessParameterUtils(self._db)
 
         def submit_low(func, *args, **kwargs):
             return self._db.result_or_throw(
@@ -37,7 +37,7 @@ class LikenessParametersTask(BaseTask):
             )
 
         work = submit_low(
-            PictureLikenessParameterUtils.find_next_work,
+            LikenessParameterUtils.find_next_work,
             self.BATCH_SIZE,
             self.SCAN_LIMIT,
         )
@@ -51,7 +51,7 @@ class LikenessParametersTask(BaseTask):
             width, height, ids = payload
             size_bin_index = helper.size_bin_index(width, height)
             submit_low(
-                PictureLikenessParameterUtils.update_size_bin,
+                LikenessParameterUtils.update_size_bin,
                 ids,
                 size_bin_index,
                 len(LikenessParameter),
@@ -62,7 +62,7 @@ class LikenessParametersTask(BaseTask):
             if param in QUALITY_PARAM_FIELDS:
                 quality_by_id = helper.fetch_quality_for_ids(ids)
                 submit_low(
-                    PictureLikenessParameterUtils.update_quality_values,
+                    LikenessParameterUtils.update_quality_values,
                     ids,
                     quality_by_id,
                     len(LikenessParameter),
@@ -73,11 +73,11 @@ class LikenessParametersTask(BaseTask):
                 )
                 if picture_updates:
                     submit_low(
-                        PictureLikenessParameterUtils.update_picture_metadata,
+                        LikenessParameterUtils.update_picture_metadata,
                         picture_updates,
                     )
                 submit_low(
-                    PictureLikenessParameterUtils.update_picture_values,
+                    LikenessParameterUtils.update_picture_values,
                     ids,
                     picture_by_id,
                     len(LikenessParameter),
@@ -85,7 +85,7 @@ class LikenessParametersTask(BaseTask):
             else:
                 values = [LIKENESS_PARAMETER_SENTINEL for _ in ids]
                 submit_low(
-                    PictureLikenessParameterUtils.update_parameter_values,
+                    LikenessParameterUtils.update_parameter_values,
                     ids,
                     int(param),
                     values,

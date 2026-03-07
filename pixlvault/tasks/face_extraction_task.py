@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 CROP_EXPAND_SCALE = 1.25
 
 
-class FeatureExtractionTask(BaseTask):
+class FaceExtractionTask(BaseTask):
     """Task that extracts and persists face/hand detections for a picture batch.
 
     Args:
@@ -41,7 +41,7 @@ class FeatureExtractionTask(BaseTask):
     def __init__(self, database, picture_tagger, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
-            task_type="FeatureExtractionTask",
+            task_type="FaceExtractionTask",
             params={
                 "picture_ids": picture_ids,
                 "batch_size": len(picture_ids),
@@ -99,9 +99,9 @@ class FeatureExtractionTask(BaseTask):
     def _init_insightface_app(self):
         if self._insightface_app is not None:
             return
-        if FeatureExtractionTask._global_insightface_app is not None:
+        if FaceExtractionTask._global_insightface_app is not None:
             logger.debug("Reusing global InsightFace app")
-            self._insightface_app = FeatureExtractionTask._global_insightface_app
+            self._insightface_app = FaceExtractionTask._global_insightface_app
             return
 
         logger.debug("initialising InsightFace with CPU only (ctx_id=-1)")
@@ -111,7 +111,7 @@ class FeatureExtractionTask(BaseTask):
             det_thresh=0.25,
             det_size=(480, 480),
         )
-        FeatureExtractionTask._global_insightface_app = app
+        FaceExtractionTask._global_insightface_app = app
         self._insightface_app = app
 
     @staticmethod

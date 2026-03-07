@@ -10,7 +10,7 @@ from .base_task_finder import BaseTaskFinder
 from .tag_task import TagTask
 
 
-class MissingTagsFinder(BaseTaskFinder):
+class MissingTagFinder(BaseTaskFinder):
     """Find a batch of pictures missing tags and create a TagTask."""
 
     def __init__(
@@ -24,7 +24,7 @@ class MissingTagsFinder(BaseTaskFinder):
         self._claimed_picture_ids: set[int] = set()
 
     def finder_name(self) -> str:
-        return "MissingTagsFinder"
+        return "MissingTagFinder"
 
     def max_inflight_tasks(self) -> int:
         return 2

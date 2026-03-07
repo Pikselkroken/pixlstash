@@ -28,7 +28,7 @@ from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
 from .utils.image_processing.image_utils import ImageUtils
 from .tasks.face_quality_task import FaceQualityTask
-from .tasks.feature_extraction_task import FeatureExtractionTask
+from .tasks.face_extraction_task import FaceExtractionTask
 from .tasks.image_embedding_task import ImageEmbeddingTask
 from .tasks.likeness_task import LikenessTask
 from .tasks.quality_task import QualityTask
@@ -171,7 +171,7 @@ class Vault:
         self._closed = True
         self._work_planner.stop()
         self._task_runner.stop()
-        FeatureExtractionTask.release_detection_models()
+        FaceExtractionTask.release_detection_models()
         ImageEmbeddingTask.release_models()
         if self._picture_tagger:
             self._picture_tagger.close()
@@ -306,8 +306,8 @@ class Vault:
             self._notify_worker_ids_processed(TaskType.LIKENESS, changed)
             return
 
-        if task.type == "FeatureExtractionTask":
-            self._notify_worker_ids_processed(TaskType.FACE, changed)
+        if task.type == "FaceExtractionTask":
+            self._notify_worker_ids_processed(TaskType.FACE_EXTRACTION, changed)
             picture_ids = result.get("picture_ids") or []
             if picture_ids:
                 self.notify(EventType.CHANGED_FACES, picture_ids)
@@ -446,7 +446,7 @@ class Vault:
                     or 0
                 )
                 label = "face_quality_scored"
-            elif worker_type == TaskType.FACE:
+            elif worker_type == TaskType.FACE_EXTRACTION:
                 missing = int(
                     self.db.run_immediate_read_task(
                         self._count_missing_feature_extractions
@@ -646,7 +646,7 @@ class Vault:
                 model_state = {"error": f"failed_to_collect_tagger_state:{exc}"}
 
         model_state["insightface_loaded"] = bool(
-            getattr(FeatureExtractionTask, "_global_insightface_app", None) is not None
+            getattr(FaceExtractionTask, "_global_insightface_app", None) is not None
         )
         model_state["workers_busy"] = worker_busy
         logger.info("Model residency status: %s", model_state)
@@ -691,7 +691,7 @@ class Vault:
         except Exception as exc:
             logger.warning("Aggressive unload failed for PictureTagger: %s", exc)
         try:
-            FeatureExtractionTask.release_detection_models()
+            FaceExtractionTask.release_detection_models()
         except Exception as exc:
             logger.warning(
                 "Aggressive unload failed for feature extraction models: %s", exc

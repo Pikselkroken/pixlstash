@@ -1,34 +1,7 @@
 PixlVault 1.0 Hardening Plan
 
-Hardening:
-1. Require explicit opt-in for network exposure; default host should stay localhost.
-2. Remove/lock down first-login bootstrap so random network callers cannot claim initial credentials.
-3. Require authentication for WebSocket endpoints (`/ws/updates`, `/comfyui/ws`).
-4. Restrict CORS defaults for credentialed requests (no blanket wildcard regex).
-5. Stop logging session identifiers / active session maps in auth debug logs.
-6. Add basic login rate limiting / lockout protections.
-7. Add upload guardrails for zip imports (size, file count, decompressed size limits).
-
-Cleanup and consistency
-1. Remove dead/obsolete frontend code paths and old debug hooks.
-2. Standardize naming and file organization (routes/workers/utils).
-3. Reduce noisy logs; keep actionable warnings/errors only.
-4. Add/refresh docstrings on core workers and routes.
-
-Speed and memory
-1. Make the VRAM budget cover all tasks and not just tagger.
-2. Profile worker throughput (tagging/quality/likeness) and batch sizes.
-
-Reliability
-1. Add startup self-checks (models, paths, DB schema/version).
-2. Add stronger API timeout/retry handling for external integrations.
-3. Improve error handling to avoid partial state updates.
-4. Add regression tests for stacking, overlay refresh, workflow import/delete.
-
-Packaging and release
-1. Add release checklist (version bump, migration test, changelog, tagged build).
-2. Add install/run docs for Linux/Windows/macOS.
-
-Eventually:
-* Multi-user
-* Backup system
+1. Standardize naming and file organization (routes/workers/utils).
+2. Reduce noisy logs; keep actionable warnings/errors only.
+3. Make the VRAM budget cover all tasks and not just tagger.
+4. Add startup self-checks (models, paths, DB schema/version).
+5. Add regression tests for stacking, overlay refresh, workflow import/delete.

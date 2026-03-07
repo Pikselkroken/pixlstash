@@ -4,7 +4,7 @@ from enum import Enum
 class TaskType(str, Enum):
     """Identifies each background worker / task-runner lane."""
 
-    FACE = "FeatureExtractionTask"
+    FACE_EXTRACTION = "FaceExtractionTask"
     TAGGER = "TagTask"
     QUALITY = "QualityTask"
     FACE_QUALITY = "FaceQualityTask"

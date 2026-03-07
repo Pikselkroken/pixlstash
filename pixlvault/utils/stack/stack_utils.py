@@ -6,29 +6,36 @@ from pixlvault.db_models import Picture
 from pixlvault.utils.image_processing.image_utils import ImageUtils
 
 
-def picture_order_key(pic: Picture, image_root: str = None):
-    """
-    Key for ordering pictures in a likeness stack.
+class StackUtils:
+    """Ordering helpers for picture stacks."""
 
-    Ordering priority:
-    - Higher resolution (width * height) first
-    - Higher sharpness first
-    - Lower noise_level first
-    """
-    if not pic.height or not pic.width:
-        file_path = ImageUtils.resolve_picture_path(image_root, pic.file_path)
-        pic.width, pic.height, _ = ImageUtils.load_metadata(file_path)
-    resolution = (pic.width * pic.height) if pic.width and pic.height else 0
+    @staticmethod
+    def picture_order_key(pic: Picture, image_root: str = None):
+        """Return a sort key for a picture within a likeness stack.
 
-    quality = pic.quality
-    sharp = quality.sharpness if quality and quality.sharpness is not None else 0.0
-    noise = quality.noise_level if quality and quality.noise_level is not None else 1.0
+        Ordering priority:
+        - Higher resolution (width × height) first
+        - Higher sharpness first
+        - Lower noise_level first
+        """
+        if not pic.height or not pic.width:
+            file_path = ImageUtils.resolve_picture_path(image_root, pic.file_path)
+            pic.width, pic.height, _ = ImageUtils.load_metadata(file_path)
+        resolution = (pic.width * pic.height) if pic.width and pic.height else 0
 
-    return (-resolution, -sharp, noise)
+        quality = pic.quality
+        sharp = quality.sharpness if quality and quality.sharpness is not None else 0.0
+        noise = (
+            quality.noise_level if quality and quality.noise_level is not None else 1.0
+        )
 
+        return (-resolution, -sharp, noise)
 
-def order_stack_pictures(
-    pictures: List[Picture], image_root: str = None
-) -> List[Picture]:
-    """Return pictures sorted best-to-worst by resolution, sharpness, and noise."""
-    return sorted(pictures, key=lambda pic: picture_order_key(pic, image_root))
+    @staticmethod
+    def order_stack_pictures(
+        pictures: List[Picture], image_root: str = None
+    ) -> List[Picture]:
+        """Return pictures sorted best-to-worst by resolution, sharpness, and noise."""
+        return sorted(
+            pictures, key=lambda pic: StackUtils.picture_order_key(pic, image_root)
+        )

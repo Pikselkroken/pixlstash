@@ -5,7 +5,7 @@ from sqlalchemy import func
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models import Face, Picture, Quality
-from pixlvault.utils.quality.quality_utils import PictureQualityUtils
+from pixlvault.utils.quality.quality_utils import QualityUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.tasks.base_task import BaseTask
 
@@ -29,7 +29,7 @@ class FaceQualityTask(BaseTask):
 
     def _run_task(self):
         start = time.time()
-        face_quality_helper = PictureQualityUtils(self._db)
+        face_quality_helper = QualityUtils(self._db)
 
         faces_missing_quality = self._db.run_task(self._find_faces_missing_quality)
         if not faces_missing_quality:

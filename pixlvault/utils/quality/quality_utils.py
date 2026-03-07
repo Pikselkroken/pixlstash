@@ -15,7 +15,7 @@ from pixlvault.pixl_logging import get_logger
 logger = get_logger(__name__)
 
 
-class PictureQualityUtils:
+class QualityUtils:
     """Utility helper for picture and face quality calculation and persistence."""
 
     def __init__(self, database):

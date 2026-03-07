@@ -4,7 +4,7 @@ from sqlmodel import Session, select
 from pixlvault.database import DBPriority
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
-from pixlvault.utils.likeness.likeness_utils import PictureLikenessUtils
+from pixlvault.utils.likeness.likeness_utils import LikenessUtils
 from pixlvault.tasks.base_task import BaseTask
 
 
@@ -19,30 +19,30 @@ class LikenessTask(BaseTask):
         self._db = database
 
     def _run_task(self):
-        helper = PictureLikenessUtils(self._db)
+        helper = LikenessUtils(self._db)
 
         def submit_low(func, *args, **kwargs):
             return self._db.result_or_throw(
                 self._db.submit_task(func, *args, priority=DBPriority.LOW, **kwargs)
             )
 
-        submit_low(PictureLikenessUtils.seed_queue)
+        submit_low(LikenessUtils.seed_queue)
         param_thresholds = submit_low(
-            PictureLikenessUtils.compute_param_gap_thresholds,
+            LikenessUtils.compute_param_gap_thresholds,
             helper.PARAM_GAP_PERCENTILE,
             helper.PARAM_THRESHOLD_SAMPLE_LIMIT,
         )
-        date_span_seconds = submit_low(PictureLikenessUtils.compute_date_span_seconds)
+        date_span_seconds = submit_low(LikenessUtils.compute_date_span_seconds)
 
         work_items = submit_low(
-            PictureLikenessUtils.get_next_work_batch,
+            LikenessUtils.get_next_work_batch,
             helper.MAX_A_PER_CYCLE,
         )
         if not work_items:
             return {"changed_count": 0, "changed": [], "pairs_written": 0}
 
         queued_ids = [int(item[0]) for item in work_items]
-        bulk_rows = submit_low(PictureLikenessUtils.fetch_bulk_candidate_data)
+        bulk_rows = submit_low(LikenessUtils.fetch_bulk_candidate_data)
         likeness_results = helper.compute_bulk_likeness(
             queued_ids,
             bulk_rows,
@@ -52,7 +52,7 @@ class LikenessTask(BaseTask):
 
         if likeness_results:
             submit_low(
-                PictureLikenessUtils.write_results,
+                LikenessUtils.write_results,
                 likeness_results,
                 helper.TOP_K,
             )

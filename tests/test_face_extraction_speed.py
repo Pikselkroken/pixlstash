@@ -6,7 +6,7 @@ import torch
 
 from time import time
 
-from pixlvault.tasks.feature_extraction_task import FeatureExtractionTask
+from pixlvault.tasks.face_extraction_task import FaceExtractionTask
 from pixlvault.db_models.picture import Picture
 from pixlvault.pixl_logging import get_logger
 from pixlvault.utils.image_processing.image_utils import ImageUtils
@@ -63,7 +63,7 @@ def test_face_extraction_speed_cpu():
                     import_done - import_start,
                 )
 
-                task = FeatureExtractionTask(server.vault.db, None, pictures)
+                task = FaceExtractionTask(server.vault.db, None, pictures)
                 prepare_start = time()
                 task._insightface_app = insightface.app.FaceAnalysis()
                 task._insightface_app.prepare(ctx_id=-1, det_thresh=0.25)
@@ -140,7 +140,7 @@ def test_face_extraction_speed_gpu():
                     import_done - import_start,
                 )
 
-                task = FeatureExtractionTask(server.vault.db, None, pictures)
+                task = FaceExtractionTask(server.vault.db, None, pictures)
                 prepare_start = time()
                 task._insightface_app = insightface.app.FaceAnalysis(
                     providers=["CUDAExecutionProvider", "CPUExecutionProvider"]

@@ -11,7 +11,7 @@ from .watch_folder_import_task import (
 )
 
 
-class MissingWatchFolderImportsFinder(BaseTaskFinder):
+class MissingWatchFolderImportFinder(BaseTaskFinder):
     """Find newly modified files in watch folders and create import tasks.
 
     Watch folder entries are read from the server config file as a list under
@@ -44,7 +44,7 @@ class MissingWatchFolderImportsFinder(BaseTaskFinder):
         self._config_path = config_path
 
     def finder_name(self) -> str:
-        return "MissingWatchFolderImportsFinder"
+        return "MissingWatchFolderImportFinder"
 
     def find_task(self):
         watch_folders = load_watch_folders(self._config_path)

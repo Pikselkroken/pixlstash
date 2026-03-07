@@ -1,20 +1,20 @@
 from .task_type import TaskType
 from .base_task_finder import BaseTaskFinder, TaskFinderRegistry
 from .description_task import DescriptionTask
-from .feature_extraction_task import FeatureExtractionTask
+from .face_extraction_task import FaceExtractionTask
 from .face_quality_task import FaceQualityTask
 from .quality_task import QualityTask
 from .image_embedding_task import ImageEmbeddingTask
 from .missing_face_quality_finder import MissingFaceQualityFinder
-from .missing_feature_extraction_finder import MissingFeatureExtractionFinder
-from .missing_image_embeddings_finder import MissingImageEmbeddingsFinder
+from .missing_face_extraction_finder import MissingFaceExtractionFinder
+from .missing_image_embedding_finder import MissingImageEmbeddingFinder
 from .missing_likeness_finder import MissingLikenessFinder
 from .missing_likeness_parameters_finder import MissingLikenessParametersFinder
 from .missing_description_finder import MissingDescriptionFinder
 from .missing_quality_finder import MissingQualityFinder
-from .missing_text_embeddings_finder import MissingTextEmbeddingsFinder
-from .missing_tags_finder import MissingTagsFinder
-from .missing_watch_folder_imports_finder import MissingWatchFolderImportsFinder
+from .missing_text_embedding_finder import MissingTextEmbeddingFinder
+from .missing_tag_finder import MissingTagFinder
+from .missing_watch_folder_import_finder import MissingWatchFolderImportFinder
 from .tag_task import TagTask
 from .text_embedding_task import TextEmbeddingTask
 from .likeness_parameters_task import LikenessParametersTask
@@ -26,19 +26,19 @@ __all__ = [
     "TaskFinderRegistry",
     "DescriptionTask",
     "FaceQualityTask",
-    "FeatureExtractionTask",
+    "FaceExtractionTask",
     "ImageEmbeddingTask",
     "QualityTask",
     "MissingFaceQualityFinder",
-    "MissingFeatureExtractionFinder",
-    "MissingImageEmbeddingsFinder",
+    "MissingFaceExtractionFinder",
+    "MissingImageEmbeddingFinder",
     "MissingLikenessFinder",
     "MissingLikenessParametersFinder",
     "MissingDescriptionFinder",
     "MissingQualityFinder",
-    "MissingTextEmbeddingsFinder",
-    "MissingTagsFinder",
-    "MissingWatchFolderImportsFinder",
+    "MissingTextEmbeddingFinder",
+    "MissingTagFinder",
+    "MissingWatchFolderImportFinder",
     "TagTask",
     "TextEmbeddingTask",
     "LikenessParametersTask",

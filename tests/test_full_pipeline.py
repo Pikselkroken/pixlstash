@@ -6,7 +6,7 @@ background tasks to complete, then asserts that each expected field is
 populated on every picture.
 
 Tasks covered:
-    - FeatureExtractionTask (FACE)       → Face records exist per picture
+    - FaceExtractionTask     (FACE_EXTRACTION) → Face records exist per picture
     - TagTask                (TAGGER)    → Picture.tags populated
     - QualityTask            (QUALITY)   → Quality record linked to picture
     - FaceQualityTask        (FACE_QUALITY) → Quality record linked to each real face
@@ -41,7 +41,7 @@ from pixlvault.tasks.likeness_task import LikenessTask
 from pixlvault.tasks.quality_task import QualityTask
 from pixlvault.tasks.task_type import TaskType
 from pixlvault.utils.image_processing.image_utils import ImageUtils
-from pixlvault.utils.likeness.likeness_params import PictureLikenessParameterUtils
+from pixlvault.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
@@ -206,7 +206,7 @@ def test_full_pipeline_on_real_pictures():
             # ------------------------------------------------------------------ #
             face_futures = {
                 pid: server.vault.get_worker_future(
-                    TaskType.FACE, Picture, pid, "faces"
+                    TaskType.FACE_EXTRACTION, Picture, pid, "faces"
                 )
                 for pid in picture_ids
             }
@@ -307,7 +307,7 @@ def test_full_pipeline_on_real_pictures():
             # ------------------------------------------------------------------ #
             _poll_until_zero(
                 server,
-                PictureLikenessParameterUtils.count_pending_parameters,
+                LikenessParameterUtils.count_pending_parameters,
                 "likeness parameters",
             )
             logger.info("Likeness parameters complete for all pictures.")

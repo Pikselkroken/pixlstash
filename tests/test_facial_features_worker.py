@@ -49,7 +49,7 @@ def test_facial_features():
                 )
                 futures.append(
                     server.vault.get_worker_future(
-                        TaskType.FACE, Picture, pic.id, "faces"
+                        TaskType.FACE_EXTRACTION, Picture, pic.id, "faces"
                     )
                 )
 
@@ -122,7 +122,7 @@ def test_character_thumbnail_endpoint():
                 )
                 futures.append(
                     server.vault.get_worker_future(
-                        TaskType.FACE, Picture, pic.id, "faces"
+                        TaskType.FACE_EXTRACTION, Picture, pic.id, "faces"
                     )
                 )
 

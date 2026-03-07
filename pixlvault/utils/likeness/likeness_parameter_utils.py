@@ -43,7 +43,7 @@ PHASH_BITS = 64
 PHASH_HEX_LEN = PHASH_BITS // 4
 
 
-class PictureLikenessParameterUtils:
+class LikenessParameterUtils:
     """Compute likeness parameter vectors in size-binned batches."""
 
     BATCH_SIZE = 128
@@ -59,7 +59,7 @@ class PictureLikenessParameterUtils:
         """Return the next piece of parameter work to perform, or None if idle."""
         for param in LikenessParameter:
             if param == LikenessParameter.SIZE_BIN:
-                size_bin = PictureLikenessParameterUtils._find_size_bin_batch(
+                size_bin = LikenessParameterUtils._find_size_bin_batch(
                     session, batch_size
                 )
                 if size_bin:
@@ -67,7 +67,7 @@ class PictureLikenessParameterUtils:
                     return param, None, (width, height, ids)
                 continue
 
-            param_batch = PictureLikenessParameterUtils._find_parameter_batch(
+            param_batch = LikenessParameterUtils._find_parameter_batch(
                 session, param, batch_size, scan_limit
             )
             if param_batch:
@@ -166,7 +166,7 @@ class PictureLikenessParameterUtils:
 
             for pic_id, size_bin_index, param_blob in rows:
                 size_bin = int(size_bin_index)
-                vec = PictureLikenessParameterUtils.decode_parameters(
+                vec = LikenessParameterUtils.decode_parameters(
                     param_blob, len(LikenessParameter)
                 )
                 if param in QUALITY_PARAM_FIELDS:
@@ -207,7 +207,7 @@ class PictureLikenessParameterUtils:
         """Assign a size-bin index to a batch of pictures."""
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         for pic in pics:
-            vec = PictureLikenessParameterUtils.decode_parameters(
+            vec = LikenessParameterUtils.decode_parameters(
                 pic.likeness_parameters, vector_length
             )
             vec[int(LikenessParameter.SIZE_BIN)] = float(size_bin_index)
@@ -230,7 +230,7 @@ class PictureLikenessParameterUtils:
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         values_by_id = dict(zip(ids, values))
         for pic in pics:
-            vec = PictureLikenessParameterUtils.decode_parameters(
+            vec = LikenessParameterUtils.decode_parameters(
                 pic.likeness_parameters, vector_length
             )
             value = values_by_id.get(int(pic.id), 0.0)
@@ -238,7 +238,7 @@ class PictureLikenessParameterUtils:
             pic.likeness_parameters = vec
             session.add(pic)
         session.commit()
-        PictureLikenessParameterUtils.reset_likeness_for_pictures(session, ids)
+        LikenessParameterUtils.reset_likeness_for_pictures(session, ids)
 
     def fetch_quality_for_ids(self, ids: List[int]) -> Dict[int, Dict[str, float]]:
         """Fetch quality metrics for a list of picture IDs from the database."""
@@ -451,7 +451,7 @@ class PictureLikenessParameterUtils:
                 return self.compute_dhash(img)
         except Exception as exc:
             logger.warning(
-                "PictureLikenessParameterUtils: Failed to compute phash for %s (%s)",
+                "LikenessParameterUtils: Failed to compute phash for %s (%s)",
                 full_path,
                 exc,
             )
@@ -473,8 +473,7 @@ class PictureLikenessParameterUtils:
             )
         except Exception as exc:
             logger.warning(
-                "PictureLikenessParameterUtils: Failed to compute created_at for"
-                " %s (%s)",
+                "LikenessParameterUtils: Failed to compute created_at for %s (%s)",
                 full_path,
                 exc,
             )
@@ -488,14 +487,14 @@ class PictureLikenessParameterUtils:
         vector_length: int,
     ) -> None:
         """Update quality-derived parameter dimensions for a batch of pictures."""
-        PictureLikenessParameterUtils._update_values_for_parameters(
+        LikenessParameterUtils._update_values_for_parameters(
             session=session,
             ids=ids,
             values_by_id=quality_by_id,
             parameter_fields=QUALITY_PARAM_FIELDS,
             vector_length=vector_length,
         )
-        PictureLikenessParameterUtils.reset_likeness_for_pictures(session, ids)
+        LikenessParameterUtils.reset_likeness_for_pictures(session, ids)
 
     @staticmethod
     def update_picture_values(
@@ -505,14 +504,14 @@ class PictureLikenessParameterUtils:
         vector_length: int,
     ) -> None:
         """Update picture-derived parameter dimensions for a batch of pictures."""
-        PictureLikenessParameterUtils._update_values_for_parameters(
+        LikenessParameterUtils._update_values_for_parameters(
             session=session,
             ids=ids,
             values_by_id=picture_by_id,
             parameter_fields=PICTURE_PARAM_FIELDS,
             vector_length=vector_length,
         )
-        PictureLikenessParameterUtils.reset_likeness_for_pictures(session, ids)
+        LikenessParameterUtils.reset_likeness_for_pictures(session, ids)
 
     @staticmethod
     def _update_values_for_parameters(
@@ -526,7 +525,7 @@ class PictureLikenessParameterUtils:
             return
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         for pic in pics:
-            vec = PictureLikenessParameterUtils.decode_parameters(
+            vec = LikenessParameterUtils.decode_parameters(
                 pic.likeness_parameters, vector_length
             )
             values = values_by_id.get(int(pic.id), {})
