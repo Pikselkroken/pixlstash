@@ -47,10 +47,9 @@ export function dataTransferHasSupportedMedia(dataTransfer) {
     if (!item || item.kind !== 'file') continue;
     const mime = item.type || '';
     if (typeof mime === 'string' &&
-        (mime.startsWith('image/') ||
-          mime.startsWith('video/') ||
-          mime === 'application/zip' ||
-          mime === 'application/x-zip-compressed')) {
+        (mime.startsWith('image/') || mime.startsWith('video/') ||
+         mime === 'application/zip' ||
+         mime === 'application/x-zip-compressed')) {
       return true;
     }
     if (!mime && typeof item.getAsFile === 'function') {
@@ -86,7 +85,7 @@ export function MediaFormat(source) {
   return '';
 }
 
-export function PictureId(id) {
+export function getPictureId(id) {
   if (id === null || id === undefined) return null;
   return String(id);
 }
@@ -101,4 +100,19 @@ export function buildMediaUrl({backendUrl, image, format} = {}) {
 
 export function getOverlayFormat(overlayImage) {
   return MediaFormat(overlayImage) || 'png';
+}
+
+export function isFileDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+  return types.includes('Files') || types.includes('application/x-moz-file');
+}
+
+export function isVideo(img) {
+  if (!img) return false;
+  const format = MediaFormat(img);
+  if (format) {
+    return isSupportedVideoFile(`file.${format}`);
+  }
+  return isSupportedVideoFile(img.id || '');
 }

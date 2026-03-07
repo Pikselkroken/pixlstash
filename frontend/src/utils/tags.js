@@ -17,10 +17,8 @@ export function TagItem(tag) {
   return {id: getTagId(tag), tag: label};
 }
 
-export function TagList(tags) {
-  return (Array.isArray(tags) ? tags : [])
-      .map(TagItem)
-      .filter(Boolean);
+export function getTagList(tags) {
+  return (Array.isArray(tags) ? tags : []).map(TagItem).filter(Boolean);
 }
 
 export function dedupeTagList(tags) {
@@ -49,4 +47,14 @@ export function tagMatches(tag, target) {
   if (target?.tag) return tag.tag === target.tag;
   if (typeof target === 'string') return tag.tag === target;
   return false;
+}
+
+export function hasPenalisedTags(img) {
+  return Array.isArray(img?.penalised_tags) && img.penalised_tags.length > 0;
+}
+
+export function penalisedTagsTitle(img) {
+  const tags = Array.isArray(img?.penalised_tags) ? img.penalised_tags : [];
+  if (!tags.length) return '';
+  return `Penalised tags: ${tags.join(', ')}`;
 }

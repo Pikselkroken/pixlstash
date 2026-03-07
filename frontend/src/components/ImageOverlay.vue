@@ -219,7 +219,7 @@
             :picture-ids="[image.id]"
             :include-deleted-members="true"
             :class="{ hidden: chromeHidden }"
-            @added="handleOverlayAddToSet"
+            @added="(payload) => emit('added-to-set', payload)"
           />
           <StarRatingOverlay
             v-if="image"
@@ -273,7 +273,7 @@
             @click="toggleSidebar"
           >
             <v-icon>{{
-              sidebarOpen ? "mdi-dock-right" : "mdi-dock-right"
+              sidebarOpen ? "mdi-arrow-collapse-right" : "mdi-arrow-expand-left"
             }}</v-icon>
           </button>
         </div>
@@ -589,7 +589,7 @@
                   isEditingDescription && !$event.shiftKey && saveDescription()
                 "
                 @keydown="handleDescriptionEditorKey"
-                @blur="isEditingDescription && cancelEditDescription()"
+                @blur="cancelEditDescription"
               ></textarea>
               <div class="description-actions">
                 <template v-if="isEditingDescription">
@@ -728,7 +728,7 @@
                   @dragover.prevent="handleDragOver('unassigned', null)"
                   @dragenter.prevent="handleDragOver('unassigned', null)"
                   @dragleave="handleDragLeave('unassigned', null)"
-                  @drop.prevent="handleDropToUnassigned"
+                  @drop.prevent="clearTagDrag"
                 >
                   <span
                     v-for="tag in allImageTags"
@@ -877,8 +877,7 @@ import {
   dedupeTagList,
   getTagId as tagId,
   getTagLabel as tagLabel,
-  TagList,
-  tagMatches,
+  getTagList,
 } from "../utils/tags.js";
 
 const props = defineProps({
@@ -924,7 +923,6 @@ const image = ref(null);
 const isTagsRefreshing = ref(false);
 const userVisibleHiddenTagKeys = ref(new Set());
 const sidebarOpen = ref(true);
-const filmstripOpen = ref(false);
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
 const zoomMode = ref("fit");
@@ -976,8 +974,8 @@ function setOverlayImageById(nextId) {
     ? targetFromAll
     : getOverlayImageList().find((item) => String(item?.id) === String(nextId));
   if (target) {
-    const existingTags = TagList(image.value?.tags);
-    const targetTags = TagList(target.tags);
+    const existingTags = getTagList(image.value?.tags);
+    const targetTags = getTagList(target.tags);
     image.value = {
       ...target,
       tags: dedupeTagList(
@@ -996,8 +994,6 @@ function setOverlayImageById(nextId) {
   }
 }
 
-// Watch for changes to initialImageId and update local image copy
-
 const emit = defineEmits([
   "close",
   "prev",
@@ -1012,10 +1008,6 @@ const emit = defineEmits([
   "run-plugin",
 ]);
 
-const descriptionRef = ref(null);
-const descriptionScrollMeta = reactive({
-  hasOverflow: false,
-});
 const isEditingDescription = ref(false);
 const isSavingDescription = ref(false);
 const descriptionDraft = ref("");
@@ -1092,12 +1084,6 @@ const activeOverlayPluginSchema = computed(() => {
         String(plugin.name) === String(overlaySelectedPluginName.value),
     ) || null
   );
-});
-
-const overlayPluginParameterFields = computed(() => {
-  const schema = activeOverlayPluginSchema.value;
-  if (!schema || !Array.isArray(schema.parameters)) return [];
-  return schema.parameters.filter((field) => field && field.name);
 });
 
 const COMFYUI_PROMPT_STORAGE_PREFIX = "pixlvault:comfyuiPrompt:";
@@ -1813,7 +1799,7 @@ async function ensureOverlayStackMembersLoaded(
     const res = await apiClient.get(
       `${backendUrl.value}/stacks/${stackId}/pictures?fields=grid`,
     );
-    const data = await res.data;
+    const data = res.data;
     const images = Array.isArray(data) ? data : [];
     const ordered = normalizeOverlayStackMembersForStack(stackId, images);
     const ids = ordered
@@ -1990,13 +1976,10 @@ watch(image, () => {
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
   resetOverlayCopyState();
-  nextTick(updateDescriptionScrollState);
 });
 
 watch(open, (isOpen) => {
-  if (isOpen) {
-    nextTick(updateDescriptionScrollState);
-  } else {
+  if (!isOpen) {
     cancelEditDescription();
     resetCopyState();
     resetOverlayCopyState();
@@ -2042,7 +2025,7 @@ function confirmAddTag() {
     cancelAddTag();
     return;
   }
-  const currentTags = TagList(image.value?.tags);
+  const currentTags = getTagList(image.value?.tags);
   if (currentTags.some((tag) => tag.tag === trimmed)) {
     cancelAddTag();
     return;
@@ -2076,10 +2059,6 @@ function unpinUserVisibleHiddenTag(tag) {
   const next = new Set(userVisibleHiddenTagKeys.value);
   next.delete(key);
   userVisibleHiddenTagKeys.value = next;
-}
-
-function handleOverlayAddToSet(payload) {
-  emit("added-to-set", payload);
 }
 
 function setScore(n) {
@@ -2140,15 +2119,14 @@ function handleKeydown(e) {
   }
 
   if (isEditingDescription.value || addingTag.value) {
-    // Handle editing-specific keydown behavior
     if (e.key === "Escape") {
       if (isEditingDescription.value) {
-        cancelEditDescription(); // Close editing description without saving
+        cancelEditDescription();
       } else if (addingTag.value) {
-        cancelAddTag(); // Close tag editing without saving
+        cancelAddTag();
       }
     }
-    return; // Ignore other overlay key presses when editing
+    return;
   }
 
   if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
@@ -2165,7 +2143,6 @@ function handleKeydown(e) {
     return;
   }
 
-  // Regular keydown behavior
   if (e.key === "Escape") {
     if (drawMode.value) {
       clearDrawMode();
@@ -2350,7 +2327,7 @@ function onPanMove(event) {
   lastPointer.value = { x: event.clientX, y: event.clientY };
 }
 
-function onPanEnd() {
+function onPanEnd(event) {
   isPanning.value = false;
   if (event?.currentTarget?.releasePointerCapture) {
     event.currentTarget.releasePointerCapture(event.pointerId);
@@ -2788,8 +2765,6 @@ onMounted(() => {
   updateViewportMetrics();
   window.addEventListener("resize", updateViewportMetrics);
   window.addEventListener("keydown", handleKeydown);
-  window.addEventListener("resize", updateDescriptionScrollState);
-  nextTick(updateDescriptionScrollState);
   fetchPenalisedTags();
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
@@ -2807,7 +2782,6 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("resize", updateViewportMetrics);
   window.removeEventListener("keydown", handleKeydown);
-  window.removeEventListener("resize", updateDescriptionScrollState);
   if (overlayResizeObserver) {
     overlayResizeObserver.disconnect();
     overlayResizeObserver = null;
@@ -2881,7 +2855,6 @@ function onTouchEnd() {
   }
 }
 
-// Store multiple face bounding boxes (now full face objects)
 const faceBboxes = ref([]);
 const dragState = reactive({
   tag: null,
@@ -2889,10 +2862,6 @@ const dragState = reactive({
   sourceId: null,
 });
 const dragOverTarget = ref({ type: null, id: null });
-const overlayThumbnail = ref(null);
-const overlayThumbnailDims = ref({ width: 256, height: 256 });
-const overlayThumbnailFaceMap = ref({});
-
 const characters = ref([]);
 const charactersLoading = ref(false);
 const characterThumbnails = ref({});
@@ -2929,13 +2898,13 @@ async function fetchOverlayMetadata(imageId) {
     );
     if (metadataRequestId !== requestId) return;
     if (!image.value || image.value.id !== imageId) return;
-    const data = await res.data;
+    const data = res.data;
     if (!data || Array.isArray(data)) return;
     const merged = { ...data, ...image.value };
     if (Object.prototype.hasOwnProperty.call(data, "smartScore")) {
       merged.smartScore = data.smartScore;
     }
-    const dataTags = TagList(data.tags);
+    const dataTags = getTagList(data.tags);
     if (data.tags !== undefined) {
       merged.tags = dedupeTagList(dataTags);
     }
@@ -2961,7 +2930,6 @@ async function fetchOverlayMetadata(imageId) {
   }
 }
 
-// Fetch face bounding boxes for the current image and set character_name for each face
 async function fetchFaceBboxes(imageId) {
   if (!imageId || !backendUrl.value) {
     faceBboxes.value = [];
@@ -2973,7 +2941,7 @@ async function fetchFaceBboxes(imageId) {
     const res = await apiClient.get(
       `${backendUrl.value}/pictures/${imageId}/faces`,
     );
-    const faces = await res.data;
+    const faces = res.data;
     if (faceBboxesRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
@@ -2992,7 +2960,7 @@ async function fetchFaceBboxes(imageId) {
             const res = await apiClient.get(
               `${backendUrl.value}/characters/${face.character_id}/name`,
             );
-            const data = await res.data;
+            const data = res.data;
             face.character_name = data.name || null;
           } catch (e) {
             face.character_name = null;
@@ -3012,83 +2980,6 @@ async function fetchFaceBboxes(imageId) {
   }
 }
 
-async function fetchOverlayThumbnail(imageId) {
-  if (!open.value) {
-    return;
-  }
-  if (!imageId || !backendUrl.value) {
-    overlayThumbnail.value = null;
-    overlayThumbnailFaceMap.value = {};
-    overlayThumbnailDims.value = { width: 256, height: 256 };
-    return;
-  }
-  try {
-    const res = await apiClient.post(
-      `${backendUrl.value}/pictures/thumbnails`,
-      JSON.stringify({ ids: [String(imageId)] }),
-    );
-    const data = await res.data;
-    const entry = data?.[String(imageId)] || null;
-    if (!entry) {
-      overlayThumbnail.value = null;
-      overlayThumbnailFaceMap.value = {};
-      overlayThumbnailDims.value = { width: 256, height: 256 };
-      return;
-    }
-    const thumbnailUrl = entry.thumbnail || null;
-    overlayThumbnail.value = thumbnailUrl
-      ? thumbnailUrl.startsWith("http")
-        ? thumbnailUrl
-        : `${backendUrl.value}${thumbnailUrl}`
-      : null;
-    const width = Number(entry.thumbnail_width);
-    const height = Number(entry.thumbnail_height);
-    const hasThumbDims =
-      Number.isFinite(width) &&
-      width > 0 &&
-      Number.isFinite(height) &&
-      height > 0;
-    const thumbWidth = hasThumbDims ? width : 256;
-    const thumbHeight = hasThumbDims ? height : 256;
-    overlayThumbnailDims.value = {
-      width: thumbWidth,
-      height: thumbHeight,
-    };
-    const sourceWidth = Number(
-      image.value?.width || overlayDims.value.naturalWidth,
-    );
-    const sourceHeight = Number(
-      image.value?.height || overlayDims.value.naturalHeight,
-    );
-    const shouldScale = !hasThumbDims && sourceWidth > 0 && sourceHeight > 0;
-    const scaleX = shouldScale ? thumbWidth / sourceWidth : 1;
-    const scaleY = shouldScale ? thumbHeight / sourceHeight : 1;
-    const faceMap = {};
-    if (Array.isArray(entry.faces)) {
-      entry.faces.forEach((face) => {
-        if (face?.id != null && Array.isArray(face.bbox)) {
-          const bbox = face.bbox;
-          const mapped =
-            shouldScale && bbox.length === 4
-              ? [
-                  Math.round(bbox[0] * scaleX),
-                  Math.round(bbox[1] * scaleY),
-                  Math.round(bbox[2] * scaleX),
-                  Math.round(bbox[3] * scaleY),
-                ]
-              : bbox;
-          faceMap[face.id] = { bbox: mapped };
-        }
-      });
-    }
-    overlayThumbnailFaceMap.value = faceMap;
-  } catch (e) {
-    console.error("Failed to fetch overlay thumbnail:", e);
-    overlayThumbnail.value = null;
-    overlayThumbnailFaceMap.value = {};
-  }
-}
-
 async function fetchCharacters(force = false) {
   if (!backendUrl.value || charactersLoading.value) return;
   if (!force && Array.isArray(characters.value) && characters.value.length) {
@@ -3098,7 +2989,7 @@ async function fetchCharacters(force = false) {
   const requestEpoch = (characterThumbnailEpoch += 1);
   try {
     const res = await apiClient.get(`${backendUrl.value}/characters`);
-    const data = await res.data;
+    const data = res.data;
     const list = Array.isArray(data) ? data : [];
     characters.value = list;
     await Promise.all(
@@ -3276,7 +3167,6 @@ function hasCharacterOption(face) {
   );
 }
 
-// Watch for image changes and fetch bboxes
 watch(
   () => image.value?.id,
   (newId) => {
@@ -3292,12 +3182,8 @@ watch(
       scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
       fetchOverlayMetadata(newId);
-      fetchOverlayThumbnail(newId);
     } else {
       faceBboxes.value = [];
-      overlayThumbnail.value = null;
-      overlayThumbnailFaceMap.value = {};
-      overlayThumbnailDims.value = { width: 256, height: 256 };
     }
   },
   { immediate: true },
@@ -3323,7 +3209,7 @@ watch(
 function handleTagBackspace(event) {
   if (event.key !== "Backspace") return;
   if (newTag.value.trim()) return;
-  const tags = TagList(image.value?.tags);
+  const tags = getTagList(image.value?.tags);
   if (!tags.length) return;
   removeTag(tags[tags.length - 1]);
 }
@@ -3369,14 +3255,10 @@ function filterHiddenTags(tags, options = {}) {
   });
 }
 
-const imageTags = computed(() => {
-  return filterHiddenTags(dedupeTagList(TagList(image.value?.tags)), {
+const allImageTags = computed(() => {
+  return filterHiddenTags(dedupeTagList(getTagList(image.value?.tags)), {
     keepVisible: userVisibleHiddenTagKeys.value,
   });
-});
-
-const allImageTags = computed(() => {
-  return dedupeTagList([...imageTags.value]);
 });
 
 function startTagDrag(tag, sourceType, sourceId, event) {
@@ -3408,10 +3290,6 @@ function handleDragLeave(type, id) {
 
 function isDragOver(type, id) {
   return dragOverTarget.value?.type === type && dragOverTarget.value?.id === id;
-}
-
-async function handleDropToUnassigned() {
-  clearTagDrag();
 }
 
 const sortedCharacters = computed(() => {
@@ -3786,16 +3664,6 @@ function getOverlayBoxStyle(bbox, color) {
   };
 }
 
-function updateDescriptionScrollState() {
-  const el = descriptionRef.value;
-  if (!el) {
-    descriptionScrollMeta.hasOverflow = false;
-    return;
-  }
-
-  descriptionScrollMeta.hasOverflow = false; // Disable overflow logic
-}
-
 function startEditDescription() {
   if (!image.value) return;
   syncDescriptionDraft();
@@ -3811,7 +3679,6 @@ function cancelEditDescription() {
   isEditingDescription.value = false;
   isSavingDescription.value = false;
   syncDescriptionDraft();
-  nextTick(updateDescriptionScrollState);
 }
 
 async function saveDescription() {
@@ -3820,7 +3687,7 @@ async function saveDescription() {
   const newDescription = descriptionDraft.value.trim();
   const payload = { description: newDescription || null };
   try {
-    const res = await apiClient.patch(
+    await apiClient.patch(
       `${backendUrl.value}/pictures/${image.value.id}`,
       payload,
     );
@@ -3838,7 +3705,6 @@ async function saveDescription() {
     }
     emit("update-description", image.value.id, newDescription);
     isEditingDescription.value = false;
-    nextTick(updateDescriptionScrollState);
   } catch (err) {
     alert(`Failed to update description: ${err?.message || err}`);
   } finally {
@@ -4039,15 +3905,15 @@ async function removeAllTag(tag) {
   if (!label) return;
   unpinUserVisibleHiddenTag(label);
   let didUpdate = false;
-  const imageMatch = imageTags.value.find((entry) => entry.tag === label);
+  const imageMatch = allImageTags.value.find((entry) => entry.tag === label);
   if (imageMatch && imageMatch.id != null) {
     if (image.value && Array.isArray(image.value.tags)) {
-      const current = TagList(image.value.tags);
+      const current = getTagList(image.value.tags);
       image.value.tags = current.filter((entry) => entry.tag !== label);
     }
     didUpdate = true;
   } else if (image.value && Array.isArray(image.value.tags)) {
-    const current = TagList(image.value.tags);
+    const current = getTagList(image.value.tags);
     const next = current.filter((entry) => entry.tag !== label);
     if (next.length !== current.length) {
       image.value.tags = next;
@@ -4076,7 +3942,7 @@ async function removeAllTag(tag) {
 
 async function refreshPictureTags() {
   if (!image.value?.id || !backendUrl.value) return;
-  if (!TagList(allImageTags.value).length) return;
+  if (!allImageTags.value.length) return;
 
   isTagsRefreshing.value = true;
   try {
@@ -4107,13 +3973,13 @@ function removeTag(tag) {
     console.warn("Tag id is required to remove a picture tag.", tag);
     return;
   }
-  const current = TagList(image.value.tags);
+  const current = getTagList(image.value.tags);
   const label = tagLabel(tag);
   if (!label) return;
   unpinUserVisibleHiddenTag(label);
   const next = current.filter((entry) => entry.tag !== label);
   image.value.tags = next;
-  emit("remove-tag", image.value.id, tag); // Notify parent component
+  emit("remove-tag", image.value.id, tag);
 }
 
 function downloadComfyWorkflow(workflow) {
@@ -4281,14 +4147,6 @@ function downloadComfyWorkflow(workflow) {
   gap: 4px;
   min-width: 0;
   flex: 1;
-}
-
-.overlay-title-text {
-  font-weight: 600;
-  font-size: 1rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .overlay-desc-teaser {
@@ -4510,10 +4368,6 @@ function downloadComfyWorkflow(workflow) {
   height: 100%;
   min-height: 0;
   position: relative;
-}
-
-.overlay-character-tag {
-  border: 1px solid transparent;
 }
 
 .overlay-canvas {
@@ -4876,13 +4730,6 @@ function downloadComfyWorkflow(workflow) {
   cursor: pointer;
 }
 
-.section-meta-btn--danger {
-  background: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-  border-radius: 6px;
-  padding: 2px 6px;
-}
-
 .section-meta-btn:disabled {
   cursor: default;
   opacity: 0.5;
@@ -5198,42 +5045,6 @@ function downloadComfyWorkflow(workflow) {
   display: none;
 }
 
-.metadata-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-  align-items: start;
-  background: rgba(var(--v-theme-on-dark-surface), 0.05);
-  padding: 8px;
-  border-radius: 8px;
-}
-
-.metadata-key {
-  font-weight: 600;
-  font-size: 0.8rem;
-  color: rgba(var(--v-theme-on-dark-surface), 0.7);
-}
-
-.metadata-value {
-  font-size: 0.8rem;
-  color: rgb(var(--v-theme-on-dark-surface));
-  word-break: break-word;
-}
-
-.metadata-value pre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.metadata-copy {
-  border: none;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.7);
-  cursor: pointer;
-  justify-self: end;
-}
-
 .face-bbox-empty {
   position: absolute;
   left: 8px;
@@ -5258,13 +5069,6 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .face-bbox-overlay {
-  box-sizing: border-box;
-  position: absolute;
-  pointer-events: none;
-  z-index: 1000 !important;
-}
-
-.hand-bbox-overlay {
   box-sizing: border-box;
   position: absolute;
   pointer-events: none;
@@ -5323,36 +5127,6 @@ function downloadComfyWorkflow(workflow) {
   filter: brightness(0.95);
 }
 
-.overlay-hand-plus-icon {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.overlay-hand-plus-icon :nth-child(2) {
-  position: absolute;
-  left: -10px;
-  top: 3px;
-  text-shadow:
-    0 0 8px rgba(0, 0, 0, 0.75),
-    0 0 3px rgba(0, 0, 0, 0.75);
-  font-weight: 700;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.6));
-}
-
-.bbox-drop-target {
-  pointer-events: auto;
-}
-
-.bbox-drop-target:hover {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4);
-}
-
-.bbox-drop-active {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75);
-}
-
 .tag-section {
   display: flex;
   flex-direction: column;
@@ -5365,29 +5139,6 @@ function downloadComfyWorkflow(workflow) {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(255, 255, 255, 0.6);
-}
-
-.tag-section-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.tag-section-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  padding: 0;
-  cursor: pointer;
-  opacity: 0.8;
-}
-
-.tag-section-action:hover {
-  opacity: 1;
 }
 
 .tag-drop-zone {
@@ -5410,17 +5161,6 @@ function downloadComfyWorkflow(workflow) {
 .tag-drop-placeholder {
   font-size: 0.68rem;
   color: rgba(255, 255, 255, 0.45);
-}
-
-.hand-bbox-label {
-  position: absolute;
-  left: 0;
-  top: 0;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  font-size: 0.75rem;
-  padding: 1px 4px;
-  border-bottom-right-radius: 6px;
 }
 
 @media (max-width: 720px) {

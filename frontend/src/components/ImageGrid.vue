@@ -55,7 +55,7 @@
       :show-remove-from-stack="showRemoveFromStack"
       :visible="showSelectionBar"
       @clear-selection="clearSelection"
-      @added-to-set="handleSelectionAddedToSet"
+      @added-to-set="handleOverlayAddedToSet"
       @remove-from-group="removeFromGroup"
       @delete-selected="deleteSelected"
       @add-to-character="handleAddToCharacter"
@@ -73,70 +73,48 @@
       @empty-scrapheap="confirmEmptyScrapheap"
       @restore-scrapheap="confirmRestoreScrapheap"
     />
-    <div
-      v-if="exportProgress.visible"
-      class="export-progress"
-      :class="{ 'export-progress-error': exportProgress.status === 'failed' }"
-    >
-      <div class="export-progress-title">
-        {{ exportProgress.message }}
-      </div>
-      <div class="export-progress-bar">
-        <div
-          class="export-progress-fill"
-          :style="{ width: `${exportProgressPercent}%` }"
-        ></div>
-      </div>
-      <div class="export-progress-meta">
-        {{ exportProgress.processed }} / {{ exportProgress.total }}
-      </div>
-      <button
-        v-if="
-          exportProgress.status !== 'completed' &&
-          exportProgress.status !== 'failed' &&
-          exportProgress.status !== 'cancelled'
-        "
-        class="export-progress-abort"
-        type="button"
-        @click="abortExportZip"
-      >
-        Abort
-      </button>
-    </div>
-    <div
-      v-if="comfyuiProgress.visible"
-      class="comfyui-progress"
-      :class="{ 'comfyui-progress-error': comfyuiProgress.status === 'failed' }"
-    >
-      <div class="comfyui-progress-title">
-        {{ comfyuiProgress.message }}
-      </div>
-      <div class="comfyui-progress-bar">
-        <div
-          class="comfyui-progress-fill"
-          :style="{ width: `${comfyuiProgressPercent}%` }"
-        ></div>
-      </div>
-    </div>
+    <ProgressOverlay
+      :visible="exportProgress.visible"
+      :status="exportProgress.status"
+      :message="exportProgress.message"
+      :percent="exportProgressPercent"
+      :count="exportProgress.processed"
+      :total="exportProgress.total"
+      :abort-label="
+        !['completed', 'failed', 'cancelled'].includes(exportProgress.status)
+          ? 'Abort'
+          : null
+      "
+      anchor="top"
+      @abort="abortExportZip"
+    />
+    <ComfyUiRunner
+      ref="comfyuiRunner"
+      :backendUrl="props.backendUrl"
+      :overlayOpen="overlayOpen"
+      :overlayImageId="overlayImageId"
+      :allGridImages="allGridImages"
+      :lastFetchedGridImages="lastFetchedGridImages"
+      :getPictureStackId="getPictureStackId"
+      :selectNewestStackMember="selectNewestStackMember"
+      @refresh-grid="onComfyuiRefreshGrid"
+      @refresh-sidebar="emit('refresh-sidebar')"
+      @update:overlayImageId="
+        (id) => {
+          overlayImageId.value = id;
+        }
+      "
+    />
 
-    <div
-      v-if="pluginProgress.visible"
-      class="plugin-progress"
-      :class="{ 'plugin-progress-error': pluginProgress.status === 'failed' }"
-    >
-      <div class="plugin-progress-title">
-        {{ pluginProgress.message }}
-      </div>
-      <div class="plugin-progress-bar">
-        <div
-          class="plugin-progress-fill"
-          :style="{ width: `${pluginProgressPercent}%` }"
-        ></div>
-      </div>
-      <div class="plugin-progress-meta">
-        {{ pluginProgress.current }} / {{ pluginProgress.total }}
-      </div>
-    </div>
+    <ProgressOverlay
+      :visible="pluginProgress.visible"
+      :status="pluginProgress.status"
+      :message="pluginProgress.message"
+      :percent="pluginProgressPercent"
+      :count="pluginProgress.current"
+      :total="pluginProgress.total"
+      anchor="bottom"
+    />
 
     <div
       class="grid-scroll-wrapper"
@@ -193,7 +171,6 @@
           :style="{
             gridColumn: '1 / -1',
             height: `${topSpacerHeight}px`,
-            border: '0px solid blue',
           }"
         ></div>
         <div
@@ -234,7 +211,7 @@
               :ref="(el) => setThumbnailContainerRef(img.id, el)"
               draggable="true"
               @dragstart.capture="handleContainerDragStart(img, $event)"
-              @dragend.capture="handleContainerDragEnd(img, $event)"
+              @dragend.capture="handleDragEnd"
               @dragover="handleStackReorderDragOver(img, $event)"
               @drop="handleStackReorderDrop(img, $event)"
               @dragleave="handleStackReorderDragLeave(img, $event)"
@@ -340,7 +317,7 @@
                   @pointerup="handleThumbnailPointerRelease($event)"
                   @pointercancel="handleThumbnailPointerRelease($event)"
                   @dragstart="handleThumbnailNativeDragStart(img, $event)"
-                  @dragend="handleThumbnailNativeDragEnd($event)"
+                  @dragend="handleDragEnd"
                   @error="handleImageError"
                   @load="onThumbnailLoad(img.id, $event)"
                 />
@@ -354,7 +331,7 @@
                 <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
                 <template v-if="isThumbnailReady(img.id) && img.thumbnail">
                   <div
-                    v-for="overlay in getFaceBboxOverlays(img).value"
+                    v-for="overlay in getFaceBboxOverlays(img)"
                     :key="
                       overlay.faceId +
                       '-' +
@@ -450,7 +427,6 @@
           :style="{
             gridColumn: '1 / -1',
             height: `${bottomSpacerHeight}px`,
-            border: '0px solid green',
           }"
         ></div>
       </div>
@@ -480,11 +456,12 @@ import {
   onUnmounted,
 } from "vue";
 import {
+  isFileDrag,
   isSupportedImportFile,
   isSupportedImageFile,
   isSupportedVideoFile,
-  MediaFormat,
-  PictureId,
+  isVideo,
+  getPictureId,
   buildMediaUrl,
   PIL_IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
@@ -495,15 +472,45 @@ import EmptyScrapHeap from "./EmptyScrapHeap.vue";
 import SelectionBar from "./SelectionBar.vue";
 import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
+import ComfyUiRunner from "./ComfyUiRunner.vue";
+import ProgressOverlay from "./ProgressOverlay.vue";
 import { apiClient } from "../utils/apiClient";
 import {
+  applyStackBackgroundAlpha,
+  arraysEqualByString,
   faceBoxColor,
   formatUserDate,
+  getInfoFont,
   getStackColor,
-  StackThreshold,
+  getStackColorIndexFromId,
+  isRangeOverlap,
+  normalizePluginProgressMessage,
+  rangeCovers,
+  shiftRangesForDelta,
+  sleep,
+  getStackThreshold,
   toggleScore,
 } from "../utils/utils.js";
-import { dedupeTagList, getTagId, TagList, tagMatches } from "../utils/tags.js";
+import {
+  dedupeTagList,
+  getTagId,
+  hasPenalisedTags,
+  penalisedTagsTitle,
+  getTagList,
+  tagMatches,
+} from "../utils/tags.js";
+import {
+  applyStackOrderToList,
+  buildStackLeaderMap,
+  buildStackReorderedMembers,
+  getStackBadgeCount,
+  getPictureStackId,
+  normalizeStackIdValue,
+  selectNewestStackMember,
+  shouldShowStackBadge,
+  sortStackMembers,
+  stackBadgeTitle,
+} from "../utils/stack.js";
 import { debounce } from "lodash-es";
 
 const emit = defineEmits([
@@ -556,11 +563,19 @@ const props = defineProps({
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
 });
+
+// ============================================================
+// CONSTANTS
+// ============================================================
 const STACKS_SORT_KEY = "PICTURE_STACKS";
 const STACK_COLOR_STEP = 47;
 const MIN_THUMBNAIL_SIZE = 128;
 const MAX_THUMBNAIL_SIZE = 384;
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
+
+// ============================================================
+// THUMBNAIL SYSTEM STATE
+// ============================================================
 // Store refs for each thumbnail image (non-reactive to avoid render feedback loops)
 const thumbnailRefs = {};
 const thumbnailContainerRefs = {};
@@ -587,6 +602,26 @@ const fullImagePrefetchControllers = new Map();
 const prefetchedFullImageIds = new Set();
 const prefetchedFullImageOrder = [];
 
+// ============================================================
+// DOM ELEMENT REFS
+// ============================================================
+const gridContainer = ref(null);
+const scrollWrapper = ref(null);
+
+// ============================================================
+// GRID DATA STATE
+// ============================================================
+const allGridImages = ref([]);
+const lastFetchedGridImages = ref([]);
+const expandedStackIds = ref(new Set());
+const expandedStackMembers = ref(new Map());
+const expandedStackLoading = ref(new Set());
+const expandedStackLoadPromises = new Map();
+const stackReorderDrag = ref(null);
+
+// ============================================================
+// PLUGIN / EXPORT STATE
+// ============================================================
 const exportProgress = reactive({
   visible: false,
   status: "idle",
@@ -596,12 +631,6 @@ const exportProgress = reactive({
   cancelRequested: false,
 });
 
-const comfyuiProgress = reactive({
-  visible: false,
-  status: "idle",
-  percent: 0,
-  message: "ComfyUI running...",
-});
 const pluginProgress = reactive({
   visible: false,
   status: "idle",
@@ -612,26 +641,8 @@ const pluginProgress = reactive({
   runId: "",
 });
 let pluginProgressHideTimer = null;
-const comfyuiActivePromptIds = ref(new Set());
-const comfyuiCompletedPromptIds = ref(new Set());
-const comfyuiPromptPictureMap = reactive({});
-const comfyuiPromptLastSeen = reactive({});
-const comfyuiLastMessageAt = ref(0);
-const COMFYUI_STALE_MS = 120000;
-const comfyuiPendingOverlayRefresh = ref(false);
-const comfyuiSourcePictureId = ref(null);
-const comfyuiClientId = ref(null);
-const comfyuiRefreshRetryCounts = reactive({});
-const comfyuiWsState = reactive({
-  connecting: false,
-  url: "",
-});
-let comfyuiWs = null;
-let comfyuiHideTimer = null;
-const comfyuiRefreshRetryTimers = new Map();
 
 const availablePlugins = ref([]);
-const pluginRunLoading = ref(false);
 
 async function fetchAvailablePlugins() {
   if (!props.backendUrl) {
@@ -663,45 +674,8 @@ function handlePluginRunRequest(payload) {
   runPluginWithParameters(pluginName, pictureIds, parameters);
 }
 
-function normalizePluginProgressMessage(message, fallback) {
-  const raw = String(message || "").trim() || String(fallback || "").trim();
-  if (!raw) return "";
-
-  let text = raw;
-
-  for (let i = 0; i < 3; i += 1) {
-    const trimmed = text.trim();
-    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
-      break;
-    }
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (typeof parsed !== "string") {
-        break;
-      }
-      text = parsed;
-    } catch {
-      break;
-    }
-  }
-
-  for (let i = 0; i < 5; i += 1) {
-    const next = text
-      .replace(/\\+r\\+n/g, "\n")
-      .replace(/\\+n/g, "\n")
-      .replace(/\\+\n/g, "\n");
-    if (next === text) {
-      break;
-    }
-    text = next;
-  }
-
-  return text;
-}
-
 async function runPluginWithParameters(pluginName, pictureIds, parameters) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
-  pluginRunLoading.value = true;
   try {
     const res = await apiClient.post(
       `${props.backendUrl}/pictures/plugins/${encodeURIComponent(pluginName)}`,
@@ -715,7 +689,7 @@ async function runPluginWithParameters(pluginName, pictureIds, parameters) {
       : [];
     if (createdIds.length) {
       const newIds = createdIds
-        .map((id) => PictureId(id))
+        .map((id) => getPictureId(id))
         .filter((id) => id != null);
       if (newIds.length) {
         triggerNewImageHighlight(newIds);
@@ -736,37 +710,8 @@ async function runPluginWithParameters(pluginName, pictureIds, parameters) {
   } catch (err) {
     console.error("Failed to run plugin:", err);
     alert(err?.response?.data?.detail || err?.message || String(err));
-  } finally {
-    pluginRunLoading.value = false;
   }
 }
-
-function isComfyuiDebugEnabled() {
-  return (
-    typeof window !== "undefined" &&
-    window.localStorage?.getItem("pixlvault:comfyuiDebug") === "1"
-  );
-}
-
-function logComfyuiDebug(message, details = {}) {
-  if (!isComfyuiDebugEnabled()) return;
-  const payload = {
-    at: new Date().toISOString(),
-    ...details,
-  };
-}
-
-function getComfyuiClientId() {
-  if (!comfyuiClientId.value) {
-    comfyuiClientId.value = `pixlvault-${Math.random().toString(36).slice(2, 10)}`;
-  }
-  return comfyuiClientId.value;
-}
-
-const comfyuiProgressPercent = computed(() => {
-  const percent = Number(comfyuiProgress.percent) || 0;
-  return Math.min(100, Math.max(0, Math.round(percent)));
-});
 
 const pluginProgressPercent = computed(() => {
   const percent = Number(pluginProgress.percent) || 0;
@@ -779,6 +724,9 @@ const exportProgressPercent = computed(() => {
   return Math.min(100, Math.max(0, Math.round(percent)));
 });
 
+// ============================================================
+// RECENTLY ADDED / WS STATE
+// ============================================================
 const recentlyAddedIds = ref({});
 const recentlyAddedTimers = new Map();
 const previousImageIds = new Set();
@@ -790,6 +738,9 @@ const preserveScrollOnNextFetch = ref(false);
 const pendingScrollTop = ref(null);
 const skipNextWsRefresh = ref(false);
 
+// ============================================================
+// FACE BBOX STATE
+// ============================================================
 // Key to force face bbox overlay recompute.
 const faceOverlayRedrawKey = ref(0);
 let gridResizeObserver = null;
@@ -798,612 +749,45 @@ function triggerFaceOverlayRedraw() {
   faceOverlayRedrawKey.value++;
 }
 
-function clearComfyuiHideTimer() {
-  if (comfyuiHideTimer) {
-    clearTimeout(comfyuiHideTimer);
-    comfyuiHideTimer = null;
-  }
-}
+// ============================================================
+// COMFYUI
+// ============================================================
+const comfyuiRunner = ref(null);
 
-function scheduleComfyuiHide() {
-  clearComfyuiHideTimer();
-  logComfyuiDebug("schedule-hide", {
-    activeCount: comfyuiActivePromptIds.value.size,
-    percent: comfyuiProgress.percent,
-    status: comfyuiProgress.status,
-  });
-  comfyuiHideTimer = setTimeout(() => {
-    comfyuiProgress.visible = false;
-    comfyuiProgress.status = "idle";
-    comfyuiProgress.percent = 0;
-    comfyuiProgress.message = "ComfyUI running...";
-    logComfyuiDebug("hide-complete");
-  }, 1200);
-}
-
-function finalizeComfyuiProgress({ refresh = true } = {}) {
-  logComfyuiDebug("finalize", {
-    refresh,
-    activeCount: comfyuiActivePromptIds.value.size,
-    percent: comfyuiProgress.percent,
-  });
-  comfyuiProgress.percent = 100;
-  comfyuiProgress.visible = true;
-  comfyuiProgress.status = "completed";
-  comfyuiProgress.message = "ComfyUI complete";
-  if (refresh) {
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-    emit("refresh-sidebar");
-  }
-  if (comfyuiActivePromptIds.value.size === 0) {
-    scheduleComfyuiHide();
-  }
-}
-
-function clearComfyuiRefreshRetries() {
-  for (const timer of comfyuiRefreshRetryTimers.values()) {
-    clearTimeout(timer);
-  }
-  comfyuiRefreshRetryTimers.clear();
-  Object.keys(comfyuiRefreshRetryCounts).forEach((key) => {
-    delete comfyuiRefreshRetryCounts[key];
-  });
-}
-
-function recordComfyuiActivity(promptKey) {
-  const now = Date.now();
-  comfyuiLastMessageAt.value = now;
-  if (promptKey) {
-    comfyuiPromptLastSeen[promptKey] = now;
-  }
-  return now;
-}
-
-function pruneStaleComfyuiPrompts(now = Date.now()) {
-  const active = comfyuiActivePromptIds.value;
-  if (!active.size) return;
-  const lastAny = comfyuiLastMessageAt.value || now;
-  const stale = [];
-  for (const promptKey of active.values()) {
-    const lastSeen = comfyuiPromptLastSeen[promptKey] || lastAny;
-    if (now - lastSeen > COMFYUI_STALE_MS) {
-      stale.push(promptKey);
-    }
-  }
-  for (const promptKey of stale) {
-    logComfyuiDebug("prompt-stale-timeout", { promptKey });
-    markComfyuiPromptComplete(promptKey, "stale-timeout");
-  }
-}
-
-function scheduleComfyuiRefreshRetry(promptKey, pictureId, attempt = 1) {
-  if (!pictureId) return;
-  if (attempt > 8) {
-    const key = promptKey || `pic:${pictureId}`;
-    if (comfyuiRefreshRetryCounts[key]) {
-      delete comfyuiRefreshRetryCounts[key];
-    }
-    logComfyuiDebug("refresh-retry-abandon", {
-      promptKey: key,
-      pictureId,
-    });
-    if (String(comfyuiSourcePictureId.value || "") === String(pictureId)) {
-      comfyuiPendingOverlayRefresh.value = false;
-    }
-    return;
-  }
-  const key = promptKey || `pic:${pictureId}`;
-  const delay = 2000 * attempt;
-  const existing = comfyuiRefreshRetryTimers.get(key);
-  if (existing) {
-    clearTimeout(existing);
-  }
-  comfyuiRefreshRetryCounts[key] = attempt;
-  const timer = setTimeout(() => {
-    comfyuiRefreshRetryTimers.delete(key);
-    if (!comfyuiPendingOverlayRefresh.value) return;
-    logComfyuiDebug("refresh-retry", {
-      promptKey: key,
-      pictureId,
-      attempt,
-    });
-    preserveScrollOnNextFetch.value = true;
-    comfyuiSourcePictureId.value = pictureId;
-    debouncedFetchAllGridImages();
-    emit("refresh-sidebar");
-    scheduleComfyuiRefreshRetry(promptKey, pictureId, attempt + 1);
-  }, delay);
-  comfyuiRefreshRetryTimers.set(key, timer);
-}
-
-function hasComfyuiRefreshRetry(pictureId) {
-  if (!pictureId) return false;
-  const key = `pic:${pictureId}`;
-  if (comfyuiRefreshRetryCounts[key]) return true;
-  return Object.keys(comfyuiRefreshRetryCounts).length > 0;
-}
-
-async function fetchStackIdForPicture(pictureId) {
-  if (!pictureId || !props.backendUrl) return null;
-  try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${pictureId}/metadata`,
-    );
-    const stackId = res.data?.stack_id ?? res.data?.stackId ?? null;
-    return stackId != null ? String(stackId) : null;
-  } catch (err) {
-    logComfyuiDebug("stack-id-fetch-failed", {
-      pictureId,
-      error: err?.message || String(err),
-    });
-    return null;
-  }
-}
-
-async function fetchStackMembersForOverlay(stackId) {
-  if (!stackId || !props.backendUrl) return [];
-  try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/stacks/${stackId}/pictures`,
-      { params: { fields: "grid" } },
-    );
-    return Array.isArray(res.data) ? res.data : [];
-  } catch (err) {
-    logComfyuiDebug("stack-members-fetch-failed", {
-      stackId,
-      error: err?.message || String(err),
-    });
-    return [];
-  }
-}
-
-function markComfyuiPromptComplete(promptKey, reason) {
-  if (!promptKey) return;
-  const completed = comfyuiCompletedPromptIds.value;
-  if (completed.has(promptKey)) return;
-  completed.add(promptKey);
-  comfyuiCompletedPromptIds.value = new Set(completed);
-  const active = comfyuiActivePromptIds.value;
-  if (active.has(promptKey)) {
-    active.delete(promptKey);
-    comfyuiActivePromptIds.value = new Set(active);
-  }
-  const pictureId = comfyuiPromptPictureMap[promptKey] || null;
-  logComfyuiDebug("prompt-complete", {
-    promptKey,
-    reason,
-    pictureId,
-    activeCount: comfyuiActivePromptIds.value.size,
-  });
-  preserveScrollOnNextFetch.value = true;
-  if (pictureId != null) {
-    comfyuiSourcePictureId.value = pictureId;
-    comfyuiPendingOverlayRefresh.value = true;
-  }
-  debouncedFetchAllGridImages();
-  emit("refresh-sidebar");
-  scheduleComfyuiRefreshRetry(promptKey, pictureId, 1);
-  clearComfyuiHideTimer();
-  comfyuiProgress.visible = false;
-  comfyuiProgress.status = "idle";
-  comfyuiProgress.percent = 0;
-  comfyuiProgress.message = "ComfyUI running...";
-  if (comfyuiActivePromptIds.value.size === 0) {
-    finalizeComfyuiProgress({ refresh: false });
-  }
-}
-
-function buildComfyuiWsUrl(baseUrl) {
-  const trimmed = String(baseUrl || "")
-    .trim()
-    .replace(/\/+$/, "");
-  if (!trimmed) return "";
-  const wsBase = trimmed.startsWith("https")
-    ? trimmed.replace(/^https/, "wss")
-    : trimmed.replace(/^http/, "ws");
-  const clientId = getComfyuiClientId();
-  return `${wsBase}/ws/comfyui?clientId=${encodeURIComponent(clientId)}`;
-}
-
-function normalizeComfyuiPercent(value) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return null;
-  if (num <= 0) return 0;
-  if (num <= 1) return num * 100;
-  if (num <= 100) return num;
-  return Math.min(100, num);
-}
-
-function percentFromRange(value, max) {
-  const v = Number(value);
-  const m = Number(max);
-  if (!Number.isFinite(v) || !Number.isFinite(m) || m <= 0) return null;
-  return (v / m) * 100;
-}
-
-function extractOverallComfyuiPercent(payload) {
-  const data = payload?.data || {};
-  const status = data?.status || payload?.status || {};
-  const execInfo = status?.exec_info || status?.execInfo || {};
-  const candidates = [
-    payload?.percent,
-    data?.percent,
-    execInfo?.progress,
-    execInfo?.percent,
-    execInfo?.percentage,
-    status?.progress,
-    status?.percent,
-    data?.progress?.percent,
-    data?.progress?.percentage,
-    data?.progress_state?.percent,
-    data?.total_progress,
-    data?.totalProgress,
-  ];
-  for (const candidate of candidates) {
-    const normalized = normalizeComfyuiPercent(candidate);
-    if (normalized != null) return normalized;
-  }
-
-  const rangeCandidates = [
-    [execInfo?.current, execInfo?.total],
-    [execInfo?.completed, execInfo?.total],
-    [status?.current, status?.total],
-    [data?.current, data?.total],
-    [data?.value, data?.max],
-    [data?.progress?.value, data?.progress?.max],
-    [data?.progress?.current, data?.progress?.total],
-    [data?.progress_state?.value, data?.progress_state?.max],
-    [data?.progress_state?.current, data?.progress_state?.total],
-  ];
-  for (const [value, max] of rangeCandidates) {
-    const computed = percentFromRange(value, max);
-    if (computed != null) return computed;
-  }
-  return null;
-}
-
-function parseComfyuiPayload(raw) {
-  try {
-    return JSON.parse(raw || "{}");
-  } catch (err) {
-    logComfyuiDebug("message-parse-error", {
-      raw: String(raw || "").slice(0, 200),
-    });
-    return null;
-  }
-}
-
-function handleComfyuiPayload(payload) {
-  if (!payload || typeof payload !== "object") return;
-  const type = payload?.type;
-  const data = payload?.data || {};
-  const promptId =
-    data?.prompt_id || data?.promptId || payload?.prompt_id || null;
-  const active = comfyuiActivePromptIds.value;
-  const promptKey = promptId != null ? String(promptId) : null;
-  const isRelevant = !promptKey || active.has(promptKey);
-  const now = recordComfyuiActivity(promptKey);
-  logComfyuiDebug("message", {
-    type,
-    promptKey,
-    activeCount: active.size,
-    status: comfyuiProgress.status,
-    percent: comfyuiProgress.percent,
-    relevant: isRelevant,
-  });
-  if (!isRelevant) {
-    pruneStaleComfyuiPrompts(now);
-    return;
-  }
-
-  const overallPercent = extractOverallComfyuiPercent(payload);
-  if (overallPercent != null) {
-    comfyuiProgress.percent = overallPercent;
-    comfyuiProgress.visible = true;
-    comfyuiProgress.status = "running";
-    comfyuiProgress.message = "ComfyUI running...";
-    if (overallPercent >= 100) {
-      if (promptKey) {
-        logComfyuiDebug("finalize-from-percent", {
-          promptKey,
-          overallPercent,
-        });
-        markComfyuiPromptComplete(promptKey, "overall-percent");
-        pruneStaleComfyuiPrompts(now);
-        return;
-      }
-      if (active.size <= 1) {
-        active.clear();
-        comfyuiActivePromptIds.value = new Set(active);
-        finalizeComfyuiProgress({ refresh: true });
-        pruneStaleComfyuiPrompts(now);
-        return;
-      }
-    }
-  }
-
-  if (type === "progress") {
-    const value = Number(data?.value ?? data?.current ?? 0);
-    const max = Number(data?.max ?? data?.total ?? 0);
-    if (max > 0 && overallPercent == null) {
-      comfyuiProgress.percent = (value / max) * 100;
-      comfyuiProgress.visible = true;
-      comfyuiProgress.status = "running";
-      comfyuiProgress.message = "ComfyUI running...";
-      if (promptKey && value >= max) {
-        markComfyuiPromptComplete(promptKey, "progress-max");
-      }
-    }
-    pruneStaleComfyuiPrompts(now);
-    return;
-  }
-
-  if (type === "progress_state") {
-    const value = Number(data?.value ?? data?.current ?? 0);
-    const max = Number(data?.max ?? data?.total ?? 0);
-    if (promptKey && max > 0 && value >= max) {
-      markComfyuiPromptComplete(promptKey, "progress-state-max");
-      pruneStaleComfyuiPrompts(now);
-      return;
-    }
-  }
-
-  if (type === "status" && overallPercent != null) {
-    pruneStaleComfyuiPrompts(now);
-    return;
-  }
-
-  if (type === "executing") {
-    if (data?.node == null) {
-      if (promptKey) {
-        logComfyuiDebug("finalize-from-executing", { promptKey });
-        markComfyuiPromptComplete(promptKey, "executing-null");
-        pruneStaleComfyuiPrompts(now);
-      } else {
-        active.clear();
-        comfyuiActivePromptIds.value = new Set(active);
-        finalizeComfyuiProgress({ refresh: true });
-        pruneStaleComfyuiPrompts(now);
-      }
-    } else {
-      comfyuiProgress.visible = true;
-      comfyuiProgress.status = "running";
-      if (comfyuiProgress.percent <= 0) {
-        comfyuiProgress.percent = 1;
-      }
-    }
-    pruneStaleComfyuiPrompts(now);
-    return;
-  }
-
-  if (type === "execution_success" && promptKey) {
-    markComfyuiPromptComplete(promptKey, "execution-success");
-    pruneStaleComfyuiPrompts(now);
-    return;
-  }
-
-  if (type === "executed" || type === "execution_cached") {
-    comfyuiProgress.visible = true;
-    comfyuiProgress.status = "running";
-    if (comfyuiProgress.percent <= 0) {
-      comfyuiProgress.percent = 1;
-    }
-  }
-  pruneStaleComfyuiPrompts(now);
-}
-
-function handleComfyuiWsMessage(event) {
-  const raw = event?.data;
-  if (raw instanceof Blob) {
-    raw
-      .text()
-      .then((text) => {
-        const payload = parseComfyuiPayload(text);
-        if (payload) handleComfyuiPayload(payload);
-      })
-      .catch(() => {
-        logComfyuiDebug("message-parse-error", { raw: "[blob]" });
-      });
-    return;
-  }
-  if (raw instanceof ArrayBuffer) {
-    const decoder =
-      typeof TextDecoder !== "undefined" ? new TextDecoder() : null;
-    const text = decoder ? decoder.decode(raw) : "";
-    const payload = parseComfyuiPayload(text);
-    if (payload) handleComfyuiPayload(payload);
-    return;
-  }
-  const payload = parseComfyuiPayload(raw);
-  if (payload) handleComfyuiPayload(payload);
-}
-
-async function ensureComfyuiSocket() {
-  if (comfyuiWsState.connecting) return;
-  if (
-    comfyuiWs &&
-    (comfyuiWs.readyState === WebSocket.OPEN ||
-      comfyuiWs.readyState === WebSocket.CONNECTING)
-  ) {
-    return;
-  }
-  comfyuiWsState.connecting = true;
-  const wsUrl = buildComfyuiWsUrl(props.backendUrl);
-  comfyuiWsState.url = wsUrl;
-  try {
-    if (!wsUrl) {
-      return;
-    }
-    comfyuiWs = new WebSocket(wsUrl);
-    comfyuiWs.onmessage = handleComfyuiWsMessage;
-    comfyuiWs.onclose = () => {
-      comfyuiWs = null;
-    };
-    comfyuiWs.onerror = () => {
-      comfyuiWs = null;
-    };
-  } catch (err) {
-    comfyuiWs = null;
-  } finally {
-    comfyuiWsState.connecting = false;
-  }
-}
+const comfyuiClientId = computed(
+  () => comfyuiRunner.value?.clientId?.value ?? null,
+);
+const comfyuiProgress = computed(
+  () =>
+    comfyuiRunner.value?.progress ?? {
+      visible: false,
+      status: "idle",
+      percent: 0,
+      message: "",
+    },
+);
+const comfyuiProgressPercent = computed(
+  () => comfyuiRunner.value?.progressPercent?.value ?? 0,
+);
 
 function handleComfyuiRun(payload) {
-  const prompts = Array.isArray(payload?.prompts) ? payload.prompts : [];
-  const ids = prompts
-    .map((entry) => entry?.prompt_id || entry?.promptId)
-    .filter((id) => id != null)
-    .map((id) => String(id));
-  if (!ids.length) return;
-  const next = new Set(comfyuiActivePromptIds.value);
-  for (const id of ids) {
-    next.add(id);
-    const entry = prompts.find(
-      (item) => String(item?.prompt_id || item?.promptId) === id,
-    );
-    const pictureId = entry?.picture_id ?? payload?.pictureId ?? null;
-    if (pictureId != null) {
-      comfyuiPromptPictureMap[id] = pictureId;
-    }
-    comfyuiPromptLastSeen[id] = Date.now();
-  }
-  comfyuiActivePromptIds.value = next;
-  logComfyuiDebug("run-queued", {
-    promptIds: ids,
-    activeCount: next.size,
-    pictureId: payload?.pictureId ?? null,
-  });
-  comfyuiProgress.visible = true;
-  comfyuiProgress.status = "queued";
-  comfyuiProgress.percent = 0;
-  comfyuiProgress.message = "ComfyUI queued...";
-  clearComfyuiHideTimer();
-  comfyuiSourcePictureId.value = payload?.pictureId ?? null;
-  comfyuiPendingOverlayRefresh.value = Boolean(comfyuiSourcePictureId.value);
-  void ensureComfyuiSocket();
+  comfyuiRunner.value?.handleComfyuiRun(payload);
 }
 
-function findImageById(imageId, primary, fallback) {
-  if (!imageId) return null;
-  const id = String(imageId);
-  const lists = [primary, fallback].filter(Array.isArray);
-  for (const list of lists) {
-    const found = list.find(
-      (item) => item?.id != null && String(item.id) === id,
-    );
-    if (found) return found;
-  }
-  return null;
+function onComfyuiRefreshGrid({ preserveScroll } = {}) {
+  if (preserveScroll) preserveScrollOnNextFetch.value = true;
+  debouncedFetchAllGridImages();
 }
 
 async function maybeRefreshOverlayForComfyui() {
-  if (!overlayOpen.value || !comfyuiPendingOverlayRefresh.value) return;
-  const sourceId = comfyuiSourcePictureId.value;
-  if (!sourceId) {
-    if (!hasComfyuiRefreshRetry(sourceId)) {
-      comfyuiPendingOverlayRefresh.value = false;
-    }
-    return;
-  }
-  const source = findImageById(
-    sourceId,
-    lastFetchedGridImages.value,
-    allGridImages.value,
-  );
-  let sourceStackId = getPictureStackId(source);
-  if (!sourceStackId) {
-    sourceStackId = await fetchStackIdForPicture(sourceId);
-  }
-  if (!sourceStackId) {
-    logComfyuiDebug("overlay-refresh-missing-stack", {
-      sourceId,
-    });
-    if (!hasComfyuiRefreshRetry(sourceId)) {
-      comfyuiPendingOverlayRefresh.value = false;
-    }
-    return;
-  }
-  const overlayImage = findImageById(
-    overlayImageId.value,
-    lastFetchedGridImages.value,
-    allGridImages.value,
-  );
-  const overlayStackId = getPictureStackId(overlayImage);
-  if (
-    overlayStackId &&
-    overlayStackId !== sourceStackId &&
-    String(overlayImageId.value || "") !== String(sourceId)
-  ) {
-    logComfyuiDebug("overlay-refresh-skip", {
-      sourceId,
-      sourceStackId,
-      overlayStackId,
-      overlayImageId: overlayImageId.value,
-    });
-    if (!hasComfyuiRefreshRetry(sourceId)) {
-      comfyuiPendingOverlayRefresh.value = false;
-    }
-    return;
-  }
-  let members = Array.isArray(lastFetchedGridImages.value)
-    ? lastFetchedGridImages.value.filter(
-        (item) => getPictureStackId(item) === sourceStackId,
-      )
-    : [];
-  if (!members.length) {
-    members = await fetchStackMembersForOverlay(sourceStackId);
-  }
-  if (!members.length) {
-    logComfyuiDebug("overlay-refresh-no-members", {
-      sourceId,
-      sourceStackId,
-    });
-    if (!hasComfyuiRefreshRetry(sourceId)) {
-      comfyuiPendingOverlayRefresh.value = false;
-      clearComfyuiRefreshRetries();
-    }
-    return;
-  }
-  const newest = selectNewestStackMember(members);
-  const currentOverlayId =
-    overlayImageId.value != null ? String(overlayImageId.value) : null;
-  const nextOverlayId = newest?.id != null ? String(newest.id) : null;
-  logComfyuiDebug("overlay-refresh-apply", {
-    sourceId,
-    sourceStackId,
-    memberCount: members.length,
-    selectedId: newest?.id ?? null,
-    currentOverlayId,
-  });
-  if (!nextOverlayId) {
-    if (!hasComfyuiRefreshRetry(sourceId)) {
-      comfyuiPendingOverlayRefresh.value = false;
-      clearComfyuiRefreshRetries();
-    }
-    return;
-  }
-  if (currentOverlayId && currentOverlayId === nextOverlayId) {
-    if (!hasComfyuiRefreshRetry(sourceId)) {
-      comfyuiPendingOverlayRefresh.value = false;
-      clearComfyuiRefreshRetries();
-    }
-    return;
-  }
-  overlayImageId.value = newest.id;
-  comfyuiPendingOverlayRefresh.value = false;
-  clearComfyuiRefreshRetries();
+  await comfyuiRunner.value?.maybeRefreshOverlayForComfyui();
 }
 
+// ============================================================
+// THUMBNAIL INFO TEXT-FITTING
+// ============================================================
 function buildThumbnailInfoKey(imageId, infoKey) {
   return `${imageId}-${infoKey}`;
-}
-
-function getInfoFont(el) {
-  if (typeof window === "undefined" || !el) return null;
-  const style = window.getComputedStyle(el);
-  return `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
 }
 
 function measureTextWidth(text, el) {
@@ -1496,6 +880,8 @@ onMounted(() => {
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   window.addEventListener("drop", clearGridDragOverlay, true);
   window.addEventListener("dragend", clearGridDragOverlay, true);
+  window.addEventListener("keydown", handleKeyDown);
+
   fetchAvailablePlugins();
   fetchAllPicturesCount();
   const mountFetchKey = buildGridFetchKey();
@@ -1549,6 +935,7 @@ onUnmounted(() => {
   window.removeEventListener("resize", triggerFaceOverlayRedraw);
   window.removeEventListener("drop", clearGridDragOverlay, true);
   window.removeEventListener("dragend", clearGridDragOverlay, true);
+  window.removeEventListener("keydown", handleKeyDown);
   if (gridResizeObserver) {
     gridResizeObserver.disconnect();
     gridResizeObserver = null;
@@ -1569,14 +956,9 @@ onUnmounted(() => {
   }
   recentlyAddedTimers.clear();
   recentlyAddedIds.value = {};
-  clearComfyuiHideTimer();
   if (pluginProgressHideTimer) {
     clearTimeout(pluginProgressHideTimer);
     pluginProgressHideTimer = null;
-  }
-  if (comfyuiWs) {
-    comfyuiWs.close();
-    comfyuiWs = null;
   }
 });
 
@@ -1608,7 +990,7 @@ watch(
       ? payload.pictureIds
       : [];
     const dPayloadIds = pictureIds
-      .map((id) => PictureId(id))
+      .map((id) => getPictureId(id))
       .filter((id) => id != null);
     for (const id of dPayloadIds) {
       refreshGridImage(id);
@@ -1681,6 +1063,9 @@ function isImageRecentlyAdded(id) {
   return Boolean(id && recentlyAddedIds.value[id]);
 }
 
+// ============================================================
+// THUMBNAIL HELPERS
+// ============================================================
 function onThumbnailLoad(id, event = null) {
   thumbnailLoadedMap[id] = (thumbnailLoadedMap[id] || 0) + 1;
   const assignedAt = Number(thumbnailAssignedAtMap[id]);
@@ -1692,7 +1077,6 @@ function onThumbnailLoad(id, event = null) {
     thumbnailRefs[id]?.src ||
     null;
   if (Number.isFinite(assignedAt) && assignedAt > 0) {
-    const elapsedMs = performance.now() - assignedAt;
     delete thumbnailAssignedAtMap[id];
   }
   clearThumbnailRetry(id);
@@ -1741,21 +1125,15 @@ function setThumbnailRef(id, el) {
   }
 }
 
-function setDragPreviewRef(id, el) {
+const _makeRefSetter = (map) => (id, el) => {
   if (el) {
-    dragPreviewRefs[id] = el;
+    map[id] = el;
   } else {
-    delete dragPreviewRefs[id];
+    delete map[id];
   }
-}
-
-function setThumbnailContainerRef(id, el) {
-  if (el) {
-    thumbnailContainerRefs[id] = el;
-  } else {
-    delete thumbnailContainerRefs[id];
-  }
-}
+};
+const setDragPreviewRef = _makeRefSetter(dragPreviewRefs);
+const setThumbnailContainerRef = _makeRefSetter(thumbnailContainerRefs);
 
 function isThumbnailReady(id) {
   return Boolean(id && thumbnailReadyMap[id]);
@@ -1772,6 +1150,9 @@ function getVideoThumbnailSrc(img) {
 }
 
 // --- Multi-face selection state ---
+// ============================================================
+// FACE BBOX FUNCTIONS
+// ============================================================
 const selectedFaceIds = ref([]); // Array of { imageId, faceIdx, faceId }
 
 function isFaceSelected(imageId, faceIdx) {
@@ -1876,41 +1257,42 @@ function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
 }
 
 function getFaceBboxOverlays(img) {
-  return computed(() => {
-    void faceOverlayRedrawKey.value; // depend on redraw key
-    void selectedFaceIds.value;
-    void thumbnailReadyMap[img.id];
-    if (
-      !props.showFaceBboxes ||
-      !img.faces ||
-      !img.faces.length ||
-      !(img.thumbnail_width || img.width) ||
-      !(img.thumbnail_height || img.height)
-    ) {
-      return [];
-    }
-    const el = thumbnailRefs[img.id];
-    if (!el) return [];
-    const firstFrameFaces = img.faces
-      .map((face, faceIdx) => ({ face, faceIdx }))
-      .filter((entry) => entry.face.frame_index === 0);
-    return firstFrameFaces.map((entry, colorIdx) => ({
-      style: getFaceBboxStyle(
-        entry.face.bbox,
-        colorIdx,
-        img,
-        el,
-        isFaceSelected(img.id, entry.faceIdx),
-      ),
-      faceIdx: entry.faceIdx,
-      faceId: entry.face.id,
-      face: entry.face,
+  void faceOverlayRedrawKey.value; // depend on redraw key
+  void selectedFaceIds.value;
+  void thumbnailReadyMap[img.id];
+  if (
+    !props.showFaceBboxes ||
+    !img.faces ||
+    !img.faces.length ||
+    !(img.thumbnail_width || img.width) ||
+    !(img.thumbnail_height || img.height)
+  ) {
+    return [];
+  }
+  const el = thumbnailRefs[img.id];
+  if (!el) return [];
+  const firstFrameFaces = img.faces
+    .map((face, faceIdx) => ({ face, faceIdx }))
+    .filter((entry) => entry.face.frame_index === 0);
+  return firstFrameFaces.map((entry, colorIdx) => ({
+    style: getFaceBboxStyle(
+      entry.face.bbox,
       colorIdx,
-    }));
-  });
+      img,
+      el,
+      isFaceSelected(img.id, entry.faceIdx),
+    ),
+    faceIdx: entry.faceIdx,
+    faceId: entry.face.id,
+    face: entry.face,
+    colorIdx,
+  }));
 }
 
 // Track which image is currently hovered
+// ============================================================
+// HOVER STATE + THUMBNAIL INFO DISPLAY ITEMS
+// ============================================================
 const hoveredImageIdx = ref(null);
 
 function handleImageMouseEnter(img) {
@@ -2008,6 +1390,9 @@ function prefetchFullImage(img) {
   preloader.src = url;
 }
 
+// ============================================================
+// SELECTION + DRAG HELPERS
+// ============================================================
 function getDragSelectionIds(img) {
   if (
     img &&
@@ -2073,6 +1458,9 @@ function clearSelection() {
 }
 
 // Video refs for hover play/pause in grid
+// ============================================================
+// VIDEO
+// ============================================================
 const videoRefs = {};
 function setVideoRef(id, el) {
   if (el) {
@@ -2093,15 +1481,9 @@ function pauseVideo(id) {
   }
 }
 
-function isVideo(img) {
-  if (!img) return false;
-  const format = MediaFormat(img);
-  if (format) {
-    return isSupportedVideoFile(`file.${format}`);
-  }
-  return isSupportedVideoFile(img.id || "");
-}
-
+// ============================================================
+// GROUP / SET MEMBERSHIP
+// ============================================================
 function removeFromGroup() {
   if (!selectedImageIds.value.length && !selectedFaceIds.value.length) return;
   const backendUrl = props.backendUrl;
@@ -2220,17 +1602,7 @@ function removeFromGroup() {
       await fetchAllGridImages();
       loadedRanges.value = [];
       updateVisibleThumbnails();
-      // Ensure sidebar counts are refreshed after drag-out
-      if (
-        typeof window !== "undefined" &&
-        window.app &&
-        window.app.fetchPictureSets
-      ) {
-        await window.app.fetchPictureSets();
-      } else {
-        // Fallback: emit refresh-sidebar to parent
-        emit("refresh-sidebar");
-      }
+      emit("refresh-sidebar");
     });
     return;
   }
@@ -2248,10 +1620,6 @@ function handleOverlayAddedToSet(payload) {
     removeImagesById(pictureIds);
   }
   emit("refresh-sidebar");
-}
-
-function handleSelectionAddedToSet(payload) {
-  handleOverlayAddedToSet(payload);
 }
 
 function handleAddToCharacter(payload) {
@@ -2314,6 +1682,9 @@ async function deleteSelected() {
   }
 }
 
+// ============================================================
+// SELECTION BAR + SCRAPHEAP
+// ============================================================
 const isScrapheapView = computed(() => {
   const scrapheapId = String(
     props.scrapheapPicturesId || "SCRAPHEAP",
@@ -2392,11 +1763,7 @@ const showScrapheapBar = computed(() => {
   return isScrapheapView.value && isSelectionEmpty.value;
 });
 const SCRAPHEAP_BAR_HEIGHT_PX = 48;
-const wrapperStyle = computed(() => {
-  return {
-    position: "relative",
-  };
-});
+const wrapperStyle = { position: "relative" };
 const scrollWrapperStyle = computed(() => {
   const offset =
     showSelectionBar.value || showScrapheapBar.value
@@ -2474,6 +1841,9 @@ async function confirmRestoreScrapheap() {
   }
 }
 
+// ============================================================
+// IMPORT
+// ============================================================
 const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
 async function handleImagesUploaded(payload) {
@@ -2523,11 +1893,9 @@ async function handleImagesUploaded(payload) {
   emit("refresh-sidebar");
 }
 
-// Adjust debounce timing to 200ms for better responsiveness
 const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
 const lastGridVersionRefreshAt = ref(0);
 
-// Debounced version of fetchAllGridImages
 watch(
   () => props.gridVersion,
   () => {
@@ -2568,6 +1936,9 @@ watch(
   },
 );
 
+// ============================================================
+// VIEWPORT + RENDER
+// ============================================================
 const VIEW_WINDOW = 100;
 
 const divisibleViewWindow = computed(() => {
@@ -2580,17 +1951,18 @@ const renderBuffer = computed(() =>
   initialRender.value ? 0 : divisibleViewWindow.value,
 );
 
-const isLoadingThumbnails = ref(false);
-const hasMoreImages = ref(true);
-
-// Image overlay
+// ============================================================
+// OVERLAY STATE
+// ============================================================
 const overlayOpen = ref(false);
 const overlayImageId = ref(null);
 const overlayInitialExpandedStackIds = ref([]);
 
-// Drag-and-drop overlay state
+// ============================================================
+// DRAG & DROP STATE + SOURCE HELPERS
+// ============================================================
 const dragOverlayVisible = ref(false);
-const dragOverlayMessage = ref("Drop files here to import");
+const dragOverlayMessage = "Drop files here to import";
 const dragOverlayDepth = ref(0);
 const dragSource = ref(null);
 const dragSourceImageIds = ref(new Set());
@@ -2645,7 +2017,7 @@ async function updateSelectedGroupName() {
       const res = await apiClient.get(
         `${props.backendUrl}/characters/${props.selectedReferenceCharacter}`,
       );
-      const char = await res.data;
+      const char = res.data;
       name = char?.name
         ? `${char.name} - Reference Pictures`
         : "Reference Pictures";
@@ -2661,7 +2033,7 @@ async function updateSelectedGroupName() {
       const res = await apiClient.get(
         `${props.backendUrl}/characters/${props.selectedCharacter}`,
       );
-      const char = await res.data;
+      const char = res.data;
       name = char.name || "";
     } catch (e) {
       console.error("Character fetch failed:", e);
@@ -2671,7 +2043,7 @@ async function updateSelectedGroupName() {
       const res = await apiClient.get(
         `${props.backendUrl}/picture_sets/${props.selectedSet}`,
       );
-      const set = await res.data;
+      const set = res.data;
       name = set.set.name || "";
     } catch (e) {
       console.error("Set fetch failed:", e);
@@ -2692,12 +2064,18 @@ watch(
   { immediate: true },
 );
 
-// --- Multi-selection state ---
+// ============================================================
+// SELECTION STATE
+// ============================================================
 // Local selection state (mirrors parent prop)
 const selectedImageIds = ref([]);
 let lastSelectedImageId = null;
+const isImageSelected = (id) =>
+  selectedImageIds.value && selectedImageIds.value.includes(id);
 
-// --- Overlay ---
+// ============================================================
+// OVERLAY FUNCTIONS
+// ============================================================
 async function fetchImageInfo(imageId, options = {}) {
   try {
     const params = new URLSearchParams();
@@ -2728,9 +2106,9 @@ function invalidateThumbnailIndex(index) {
 
 async function refreshGridImage(imageId, options = {}) {
   if (!imageId) return;
-  const dId = PictureId(imageId);
+  const dId = getPictureId(imageId);
   const idx = allGridImages.value.findIndex(
-    (img) => PictureId(img?.id) === dId,
+    (img) => getPictureId(img?.id) === dId,
   );
   if (idx === -1) return;
   const latestInfo = await fetchImageInfo(imageId, {
@@ -2818,6 +2196,9 @@ function handleOverlayChange(payload) {
   refreshGridImage(imageId);
 }
 
+// ============================================================
+// STACK MANAGEMENT ACTIONS
+// ============================================================
 async function createStackFromSelection() {
   const ids = Array.isArray(selectedImageIds.value)
     ? selectedImageIds.value
@@ -2845,9 +2226,9 @@ async function removeSelectedFromStack() {
     await apiClient.delete(`${props.backendUrl}/stacks/${stackId}/members`, {
       data: { picture_ids: ids },
     });
-    const removed = new Set(ids.map((id) => PictureId(id)));
+    const removed = new Set(ids.map((id) => getPictureId(id)));
     allGridImages.value = allGridImages.value.map((img) => {
-      if (!img || !removed.has(PictureId(img.id))) {
+      if (!img || !removed.has(getPictureId(img.id))) {
         return img;
       }
       return {
@@ -2866,10 +2247,10 @@ async function removeSelectedFromStack() {
     const entry = nextMembers.get(stackId);
     if (entry) {
       const nextIds = Array.isArray(entry.ids)
-        ? entry.ids.filter((id) => !removed.has(PictureId(id)))
+        ? entry.ids.filter((id) => !removed.has(getPictureId(id)))
         : [];
       const nextImages = Array.isArray(entry.images)
-        ? entry.images.filter((img) => !removed.has(PictureId(img?.id)))
+        ? entry.images.filter((img) => !removed.has(getPictureId(img?.id)))
         : [];
       if (nextIds.length || nextImages.length) {
         nextMembers.set(stackId, { ids: nextIds, images: nextImages });
@@ -3004,6 +2385,9 @@ function closeOverlay() {
   comfyuiPendingOverlayRefresh.value = false;
 }
 
+// ============================================================
+// SCORING
+// ============================================================
 async function setScore(img, n) {
   const newScore = toggleScore(img.score, n);
   applyScore(img, newScore);
@@ -3039,20 +2423,17 @@ function invalidateVisibleThumbnailRanges() {
   updateVisibleThumbnails();
 }
 
-function repositionImageByScore(imageId, newScore) {
-  const items = allGridImages.value.slice();
-  const dId = PictureId(imageId);
-  const currentIndex = items.findIndex((item) => PictureId(item?.id) === dId);
-  if (currentIndex === -1) return;
-
-  const target = items[currentIndex];
-  target.score = newScore;
+function _spliceAndReinsert(
+  items,
+  currentIndex,
+  target,
+  targetScore,
+  getScore,
+  descending,
+) {
   items.splice(currentIndex, 1);
-
-  const targetScore = newScore ?? 0;
-  const descending = props.selectedDescending === true;
   let insertIndex = items.findIndex((item) => {
-    const score = item.score ?? 0;
+    const score = getScore(item);
     return descending ? score < targetScore : score > targetScore;
   });
   if (insertIndex === -1) insertIndex = items.length;
@@ -3060,39 +2441,58 @@ function repositionImageByScore(imageId, newScore) {
     const updated = allGridImages.value.slice();
     updated[currentIndex] = { ...target, idx: currentIndex };
     allGridImages.value = updated;
-    return;
+    return null;
   }
   items.splice(insertIndex, 0, target);
-
   for (let i = 0; i < items.length; i += 1) {
     items[i].idx = i;
   }
-
   allGridImages.value = items;
   invalidateVisibleThumbnailRanges();
-  nextTick(() => {
-    const grid = gridContainer.value;
-    if (!grid) return;
-    const card = grid.querySelectorAll(".image-card")[insertIndex];
-    if (card && card.scrollIntoView) {
-      card.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  });
+  return insertIndex;
+}
+
+function repositionImageByScore(imageId, newScore) {
+  const items = allGridImages.value.slice();
+  const dId = getPictureId(imageId);
+  const currentIndex = items.findIndex(
+    (item) => getPictureId(item?.id) === dId,
+  );
+  if (currentIndex === -1) return;
+
+  const target = items[currentIndex];
+  target.score = newScore;
+  const targetScore = newScore ?? 0;
+  const descending = props.selectedDescending === true;
+  const insertIndex = _spliceAndReinsert(
+    items,
+    currentIndex,
+    target,
+    targetScore,
+    (item) => item.score ?? 0,
+    descending,
+  );
+  if (insertIndex !== null) {
+    nextTick(() => {
+      const grid = gridContainer.value;
+      if (!grid) return;
+      const card = grid.querySelectorAll(".image-card")[insertIndex];
+      if (card && card.scrollIntoView) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  }
 }
 
 let smartScoreRepositioning = false;
 
 function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
-  if (smartScoreRepositioning) {
-    return;
-  }
+  if (smartScoreRepositioning) return;
   smartScoreRepositioning = true;
   try {
     const items = allGridImages.value.slice();
     const currentIndex = items.findIndex((item) => item.id === imageId);
-    if (currentIndex === -1) {
-      return;
-    }
+    if (currentIndex === -1) return;
 
     const targetScore = smartScore ?? 0;
     const target = {
@@ -3102,28 +2502,15 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
       thumbnail:
         items[currentIndex]?.thumbnail ?? latestInfo?.thumbnail ?? null,
     };
-    items.splice(currentIndex, 1);
-
     const descending = props.selectedDescending === true;
-    let insertIndex = items.findIndex((item) => {
-      const score = item.smartScore ?? 0;
-      return descending ? score < targetScore : score > targetScore;
-    });
-    if (insertIndex === -1) insertIndex = items.length;
-    if (insertIndex === currentIndex) {
-      const updated = allGridImages.value.slice();
-      updated[currentIndex] = { ...target, idx: currentIndex };
-      allGridImages.value = updated;
-      return;
-    }
-    items.splice(insertIndex, 0, target);
-
-    for (let i = 0; i < items.length; i += 1) {
-      items[i].idx = i;
-    }
-
-    allGridImages.value = items;
-    invalidateVisibleThumbnailRanges();
+    _spliceAndReinsert(
+      items,
+      currentIndex,
+      target,
+      targetScore,
+      (item) => item.smartScore ?? 0,
+      descending,
+    );
   } finally {
     smartScoreRepositioning = false;
   }
@@ -3273,20 +2660,15 @@ async function applyScoresForSelection(imageIds, targetScore) {
   });
 }
 
-// Drag-and-drop overlay handlers
-function isFileDrag(dataTransfer) {
-  if (!dataTransfer) return false;
-  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-  return types.includes("Files") || types.includes("application/x-moz-file");
-}
-
+// ============================================================
+// DRAG & DROP — GRID FILE IMPORT
+// ============================================================
 function handleGridDragEnter(e) {
   if (!e.dataTransfer) return;
   const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
   if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
   dragOverlayDepth.value += 1;
   dragOverlayVisible.value = true;
-  dragOverlayMessage.value = "Drop files here to import";
   e.preventDefault();
 }
 
@@ -3296,7 +2678,6 @@ function handleGridDragOver(e) {
   if (!isFileDrag(e.dataTransfer) && types.length > 0) return;
   if (!dragOverlayVisible.value) {
     dragOverlayVisible.value = true;
-    dragOverlayMessage.value = "Drop files here to import";
   }
   e.preventDefault();
 }
@@ -3344,17 +2725,157 @@ function handleGridDrop(e) {
   }
 }
 
-// Method to handle global key presses from App.vue
+// ============================================================
+// DRAG & DROP — THUMBNAIL NATIVE
+// ============================================================
+function buildDragGhostElement(element) {
+  if (typeof document === "undefined" || !element) return null;
+  const rect = element.getBoundingClientRect?.();
+  const width = Math.max(
+    1,
+    Math.round(rect?.width || element.clientWidth || element.width || 160),
+  );
+  const height = Math.max(
+    1,
+    Math.round(rect?.height || element.clientHeight || element.height || 90),
+  );
+  const computed =
+    typeof window !== "undefined" && element instanceof Element
+      ? window.getComputedStyle(element)
+      : null;
+  const radius = computed?.borderRadius || "0px";
+  const ghost = document.createElement("div");
+  ghost.style.width = `${width}px`;
+  ghost.style.height = `${height}px`;
+  ghost.style.borderRadius = radius;
+  ghost.style.overflow = "hidden";
+  ghost.style.backgroundColor = "transparent";
+  ghost.style.opacity = "1";
+  ghost.style.filter = "none";
+  ghost.style.position = "fixed";
+  ghost.style.left = "-9999px";
+  ghost.style.top = "-9999px";
+  ghost.style.pointerEvents = "none";
+  ghost.style.zIndex = "9999";
+
+  if (element instanceof HTMLImageElement) {
+    const clone = element.cloneNode(true);
+    clone.style.width = "100%";
+    clone.style.height = "100%";
+    clone.style.objectFit = "cover";
+    clone.style.borderRadius = "inherit";
+    clone.style.opacity = "1";
+    clone.style.filter = "none";
+    ghost.appendChild(clone);
+  } else if (element instanceof HTMLVideoElement) {
+    const src = element.currentSrc || element.poster || "";
+    ghost.style.background = src
+      ? `url("${src}") center / cover no-repeat`
+      : "transparent";
+  }
+
+  document.body.appendChild(ghost);
+  return { ghost, width, height };
+}
+
+function setDragImageFromElement(event, element) {
+  if (!element || !event?.dataTransfer?.setDragImage) return;
+  const ghostData = buildDragGhostElement(element);
+  const width = ghostData?.width || element.clientWidth || element.width || 160;
+  const height =
+    ghostData?.height || element.clientHeight || element.height || 90;
+  const dragEl = ghostData?.ghost || element;
+  event.dataTransfer.setDragImage(
+    dragEl,
+    Math.max(1, width / 2),
+    Math.max(1, height / 2),
+  );
+  if (ghostData?.ghost) {
+    requestAnimationFrame(() => {
+      if (ghostData.ghost?.parentNode) {
+        ghostData.ghost.parentNode.removeChild(ghostData.ghost);
+      }
+    });
+  }
+}
+
+function setDragDataForImageIds(event, imageIds) {
+  if (!event?.dataTransfer) return;
+  event.dataTransfer.setData(
+    "application/json",
+    JSON.stringify({
+      type: "image-ids",
+      imageIds,
+    }),
+  );
+}
+
+function handleThumbnailNativeDragStart(img, event) {
+  dragSource.value = "grid";
+  const selectionIds = getDragSelectionIds(img);
+  if (selectionIds.length > 1) {
+    setDragSourceImageIds(selectionIds);
+    setupMultiExportDrag(event, selectionIds);
+    return;
+  }
+  setDragSourceImageIds([img.id]);
+  const target = event?.target;
+  if (target instanceof HTMLImageElement) {
+    setDragImageFromElement(event, target);
+  }
+  setDragDataForImageIds(event, [img.id]);
+}
+
+function handleDragEnd() {
+  dragSource.value = null;
+  stackReorderDrag.value = null;
+  clearDragSourceImageIds();
+  setStackReorderHoverId(null);
+  setStackReorderHoverSide(null);
+}
+
+function handleContainerDragStart(img, event) {
+  if (!img || !event?.dataTransfer) return;
+  if (event.target && event.target.closest?.(".face-bbox-overlay")) {
+    return;
+  }
+  const existing = event.dataTransfer.getData("application/json");
+  if (existing) return;
+  dragSource.value = "grid";
+  const selectionIds = getDragSelectionIds(img);
+  if (selectionIds.length > 1) {
+    setDragSourceImageIds(selectionIds);
+    setupMultiExportDrag(event, selectionIds);
+    return;
+  }
+  setDragSourceImageIds([img.id]);
+  const thumbEl = thumbnailRefs[img.id];
+  if (thumbEl instanceof HTMLImageElement) {
+    setDragImageFromElement(event, thumbEl);
+  }
+  if (isVideo(img)) {
+    const previewEl = dragPreviewRefs[img.id];
+    if (previewEl instanceof HTMLImageElement) {
+      setDragImageFromElement(event, previewEl);
+    }
+  }
+  setDragDataForImageIds(event, [img.id]);
+}
+
+// ============================================================
+// KEYBOARD
+// ============================================================
 function onGlobalKeyPress(key, event) {
   if (scrollWrapper.value) {
     let newScrollTop = scrollWrapper.value.scrollTop;
-    const maxScroll = (() => {
-      const total = allGridImages.value.length;
-      const cols = Math.max(1, props.columns || 1);
-      const totalRows = Math.ceil(total / cols);
-      const totalHeight = totalRows * rowHeight.value;
-      return Math.max(0, totalHeight - scrollWrapper.value.clientHeight);
-    })();
+    const total = allGridImages.value.length;
+    const cols = Math.max(1, props.columns || 1);
+    const totalRows = Math.ceil(total / cols);
+    const totalHeight = totalRows * rowHeight.value;
+    const maxScroll = Math.max(
+      0,
+      totalHeight - scrollWrapper.value.clientHeight,
+    );
     if (key === "Home") {
       newScrollTop = 0;
     } else if (key === "End") {
@@ -3377,8 +2898,9 @@ function onGlobalKeyPress(key, event) {
   }
 }
 
-// Local state for all image IDs
-// Total image count for paging and 'End' key
+// ============================================================
+// GRID FETCH STATE
+// ============================================================
 const imagesLoading = ref(false);
 const imagesError = ref(null);
 const totalAllPicturesCount = ref(0);
@@ -3388,6 +2910,9 @@ const lastFetchKey = ref("");
 const lastFetchError = ref({ key: "", at: 0 });
 const lastFetchSuccess = ref({ key: "", at: 0 });
 
+// ============================================================
+// GRID FETCH FUNCTIONS
+// ============================================================
 function buildGridFetchKey() {
   return JSON.stringify({
     selectedCharacter: props.selectedCharacter ?? null,
@@ -3402,87 +2927,7 @@ function buildGridFetchKey() {
   });
 }
 
-function getStackCardStyle(img) {
-  if (!img) return {};
-  if (!isStackExpandedForImage(img)) {
-    return {};
-  }
-  const color = applyStackBackgroundAlpha(getStackCardColor(img));
-  if (!color) return {};
-  return {
-    backgroundColor: color,
-    borderRadius: "0px",
-    boxShadow: "none",
-  };
-}
-
-function getStackCardColor(img) {
-  if (!img) return null;
-  if (typeof img.stackColor === "string" && img.stackColor) {
-    return img.stackColor;
-  }
-  const stackIndex =
-    typeof img.stackIndex === "number"
-      ? img.stackIndex
-      : typeof img.stack_index === "number"
-        ? img.stack_index
-        : null;
-  if (typeof stackIndex === "number") {
-    return getStackColor(stackIndex, STACK_COLOR_STEP);
-  }
-  const stackId = getPictureStackId(img);
-  const index = getStackColorIndexFromId(stackId);
-  if (index === null) return null;
-  return getStackColor(index, STACK_COLOR_STEP);
-}
-
-function getStackBadgeIconStyle(img) {
-  const color = getStackCardColor(img);
-  if (!color) return {};
-  return {
-    color,
-  };
-}
-
-function applyStackBackgroundAlpha(color) {
-  if (!color || typeof color !== "string") return color;
-  const trimmed = color.trim();
-  if (!trimmed) return color;
-  if (trimmed.startsWith("hsla(") || trimmed.startsWith("rgba(")) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("hsl(")) {
-    const inner = trimmed.slice(4, -1).trim();
-    if (inner.includes(",")) {
-      return `hsla(${inner}, 0.6)`;
-    }
-    return `hsl(${inner} / 0.6)`;
-  }
-  if (trimmed.startsWith("rgb(")) {
-    const inner = trimmed.slice(4, -1).trim();
-    if (inner.includes(",")) {
-      return `rgba(${inner}, 0.6)`;
-    }
-    return `rgb(${inner} / 0.6)`;
-  }
-  return trimmed;
-}
-
-function getStackColorIndexFromId(stackId) {
-  if (stackId === null || stackId === undefined) return null;
-  const numeric = Number(stackId);
-  if (Number.isFinite(numeric)) return numeric;
-  const raw = String(stackId);
-  let hash = 0;
-  for (let i = 0; i < raw.length; i += 1) {
-    hash = (hash * 31 + raw.charCodeAt(i)) % 2147483647;
-  }
-  return hash || null;
-}
-
-function buildPictureIdsQueryParams() {
-  const params = new URLSearchParams();
-  // If a set is selected, filter by set
+function _appendSelectionParams(params) {
   if (
     props.selectedSet &&
     props.selectedSet !== props.allPicturesId &&
@@ -3497,14 +2942,29 @@ function buildPictureIdsQueryParams() {
   ) {
     params.append("character_id", props.selectedCharacter);
   }
+}
 
+function _appendMediaTypeParams(params) {
+  if (props.mediaTypeFilter === "images") {
+    for (const ext of PIL_IMAGE_EXTENSIONS) {
+      params.append("format", ext.toUpperCase());
+    }
+  } else if (props.mediaTypeFilter === "videos") {
+    for (const ext of VIDEO_EXTENSIONS) {
+      params.append("format", ext.toUpperCase());
+    }
+  }
+}
+
+function buildPictureIdsQueryParams() {
+  const params = new URLSearchParams();
+  _appendSelectionParams(params);
   if (
     props.selectedSort === "CHARACTER_LIKENESS" &&
     props.similarityCharacter
   ) {
     params.append("reference_character_id", props.similarityCharacter);
   }
-
   if (props.searchQuery && props.searchQuery.trim()) {
     params.append("query", props.searchQuery.trim());
   } else {
@@ -3521,139 +2981,20 @@ function buildPictureIdsQueryParams() {
     }
   }
   params.append("fields", "grid");
-  // Add format filter for backend media type filtering
-  if (props.mediaTypeFilter === "images") {
-    for (const ext of PIL_IMAGE_EXTENSIONS) {
-      params.append("format", ext.toUpperCase());
-    }
-  } else if (props.mediaTypeFilter === "videos") {
-    for (const ext of VIDEO_EXTENSIONS) {
-      params.append("format", ext.toUpperCase());
-    }
-  }
+  _appendMediaTypeParams(params);
   return params.toString();
 }
 
 function buildStackQueryParams() {
   const params = new URLSearchParams();
-  if (
-    props.selectedSet &&
-    props.selectedSet !== props.allPicturesId &&
-    props.selectedSet !== props.unassignedPicturesId
-  ) {
-    params.append("set_id", props.selectedSet);
-  } else if (
-    props.selectedCharacter !== undefined &&
-    props.selectedCharacter !== null &&
-    props.selectedCharacter !== "" &&
-    props.selectedCharacter !== props.allPicturesId
-  ) {
-    params.append("character_id", props.selectedCharacter);
-  }
-
-  if (props.mediaTypeFilter === "images") {
-    for (const ext of PIL_IMAGE_EXTENSIONS) {
-      params.append("format", ext.toUpperCase());
-    }
-  } else if (props.mediaTypeFilter === "videos") {
-    for (const ext of VIDEO_EXTENSIONS) {
-      params.append("format", ext.toUpperCase());
-    }
-  }
-
+  _appendSelectionParams(params);
+  _appendMediaTypeParams(params);
   return params.toString();
 }
 
-function getPictureStackId(img) {
-  const stackId = img?.stack_id ?? img?.stackId ?? null;
-  if (stackId === null || stackId === undefined) return null;
-  return String(stackId);
-}
-
-function getStackPositionValue(img) {
-  if (!img) return null;
-  const raw = img.stack_position ?? img.stackPosition ?? null;
-  if (raw === null || raw === undefined) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
-
-function getStackSmartScoreValue(img) {
-  const raw = img?.smartScore ?? img?.smart_score ?? null;
-  if (raw === null || raw === undefined) return 0;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function getStackCreatedAtTs(img) {
-  if (!img?.created_at) return 0;
-  const ts = new Date(img.created_at).getTime();
-  return Number.isFinite(ts) ? ts : 0;
-}
-
-function compareStackOrder(a, b) {
-  const posA = getStackPositionValue(a);
-  const posB = getStackPositionValue(b);
-  if (posA !== null || posB !== null) {
-    if (posA === null) return 1;
-    if (posB === null) return -1;
-    if (posA !== posB) return posA - posB;
-  }
-  const scoreA = Number(a?.score ?? 0);
-  const scoreB = Number(b?.score ?? 0);
-  if (scoreA !== scoreB) return scoreB - scoreA;
-  const smartA = getStackSmartScoreValue(a);
-  const smartB = getStackSmartScoreValue(b);
-  if (smartA !== smartB) return smartB - smartA;
-  const dateA = getStackCreatedAtTs(a);
-  const dateB = getStackCreatedAtTs(b);
-  if (dateA !== dateB) return dateB - dateA;
-  const idA = Number(a?.id ?? 0);
-  const idB = Number(b?.id ?? 0);
-  return idA - idB;
-}
-
-function sortStackMembers(members) {
-  if (!Array.isArray(members)) return [];
-  return members.slice().sort(compareStackOrder);
-}
-
-function selectNewestStackMember(members) {
-  if (!Array.isArray(members) || members.length === 0) return null;
-  return members.reduce((best, current) => {
-    if (!best) return current;
-    const bestTs = getStackCreatedAtTs(best);
-    const currentTs = getStackCreatedAtTs(current);
-    if (currentTs !== bestTs) {
-      return currentTs > bestTs ? current : best;
-    }
-    const bestId = Number(best?.id ?? 0);
-    const currentId = Number(current?.id ?? 0);
-    return currentId > bestId ? current : best;
-  }, null);
-}
-
-function buildStackLeaderMap(images) {
-  const byStack = new Map();
-  for (const img of images) {
-    const stackId = getPictureStackId(img);
-    if (!stackId || img?.id == null) continue;
-    if (!byStack.has(stackId)) {
-      byStack.set(stackId, []);
-    }
-    byStack.get(stackId).push(img);
-  }
-  const leaders = new Map();
-  for (const [stackId, members] of byStack.entries()) {
-    const ordered = sortStackMembers(members);
-    const leader = ordered[0];
-    if (leader?.id != null) {
-      leaders.set(stackId, String(leader.id));
-    }
-  }
-  return leaders;
-}
-
+// ============================================================
+// GRID DATA MAPPING
+// ============================================================
 function collapseStackImages(images) {
   if (!Array.isArray(images) || images.length === 0) return [];
   const counts = new Map();
@@ -3700,13 +3041,13 @@ function mapGridImages(images) {
   const existingById = new Map(
     allGridImages.value
       .filter((img) => img && img.id != null)
-      .map((img) => [PictureId(img.id), img]),
+      .map((img) => [getPictureId(img.id), img]),
   );
   const uniqueImages = Array.isArray(images)
     ? (() => {
         const seen = new Set();
         return images.filter((img) => {
-          const id = PictureId(img?.id);
+          const id = getPictureId(img?.id);
           if (id == null) return true;
           if (seen.has(id)) return false;
           seen.add(id);
@@ -3720,7 +3061,7 @@ function mapGridImages(images) {
 }
 
 function hydrateGridImage(img, idx, existingById) {
-  const existing = img?.id ? existingById.get(PictureId(img.id)) : null;
+  const existing = img?.id ? existingById.get(getPictureId(img.id)) : null;
   return {
     ...img,
     idx,
@@ -3739,34 +3080,6 @@ function setGridIndices(items) {
   for (let i = 0; i < items.length; i += 1) {
     items[i].idx = i;
   }
-}
-
-function shiftRangesForDelta(ranges, start, delta, end = null) {
-  if (!Array.isArray(ranges) || !ranges.length || delta === 0) return ranges;
-  const result = [];
-  const useEnd = typeof end === "number";
-  for (const [rangeStart, rangeEnd] of ranges) {
-    if (useEnd) {
-      if (rangeEnd <= start) {
-        result.push([rangeStart, rangeEnd]);
-        continue;
-      }
-      if (rangeStart >= end) {
-        result.push([rangeStart + delta, rangeEnd + delta]);
-        continue;
-      }
-      continue;
-    }
-    if (rangeEnd <= start) {
-      result.push([rangeStart, rangeEnd]);
-      continue;
-    }
-    if (rangeStart >= start) {
-      result.push([rangeStart + delta, rangeEnd + delta]);
-      continue;
-    }
-  }
-  return result;
 }
 
 function adjustScrollWindowForDelta(changeIndex, delta, totalLength) {
@@ -3800,15 +3113,54 @@ function fetchThumbnailsForRangeNow(start, end, reason = "manual-now") {
   void fetchThumbnailsBatch(safeStart, safeEnd, { reason, force: true });
 }
 
-function arraysEqualByString(a, b) {
-  if (!Array.isArray(a) || !Array.isArray(b)) return false;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    if (String(a[i]) !== String(b[i])) return false;
+// ============================================================
+// STACK — VISUAL
+// ============================================================
+function getStackCardStyle(img) {
+  if (!img) return {};
+  if (!isStackExpandedForImage(img)) {
+    return {};
   }
-  return true;
+  const color = applyStackBackgroundAlpha(getStackCardColor(img));
+  if (!color) return {};
+  return {
+    backgroundColor: color,
+    borderRadius: "0px",
+    boxShadow: "none",
+  };
 }
 
+function getStackCardColor(img) {
+  if (!img) return null;
+  if (typeof img.stackColor === "string" && img.stackColor) {
+    return img.stackColor;
+  }
+  const stackIndex =
+    typeof img.stackIndex === "number"
+      ? img.stackIndex
+      : typeof img.stack_index === "number"
+        ? img.stack_index
+        : null;
+  if (typeof stackIndex === "number") {
+    return getStackColor(stackIndex, STACK_COLOR_STEP);
+  }
+  const stackId = getPictureStackId(img);
+  const index = getStackColorIndexFromId(stackId);
+  if (index === null) return null;
+  return getStackColor(index, STACK_COLOR_STEP);
+}
+
+function getStackBadgeIconStyle(img) {
+  const color = getStackCardColor(img);
+  if (!color) return {};
+  return {
+    color,
+  };
+}
+
+// ============================================================
+// STACK — EXPAND / COLLAPSE
+// ============================================================
 function getRenderedStackMemberIds(stackId) {
   if (!stackId) return [];
   return allGridImages.value
@@ -3905,13 +3257,6 @@ function getExpandedStackCount(stackId, fallbackCount) {
   return Number.isFinite(fallback) && fallback > 0 ? fallback : 1;
 }
 
-function normalizeStackIdValue(stackId) {
-  if (stackId === null || stackId === undefined) return null;
-  const asNumber = Number(stackId);
-  if (Number.isNaN(asNumber)) return String(stackId);
-  return asNumber;
-}
-
 function buildExpandedStackImages(stackId, fallbackImg, stackCount) {
   const entry = expandedStackMembers.value.get(stackId);
   const ids = Array.isArray(entry?.ids) ? entry.ids : [];
@@ -3987,7 +3332,7 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
   const existingById = new Map(
     allGridImages.value
       .filter((img) => img && img.id != null)
-      .map((img) => [PictureId(img.id), img]),
+      .map((img) => [getPictureId(img.id), img]),
   );
   const expandedHeader = expanded[0];
   const mergedHeader = hydrateGridImage(
@@ -4266,6 +3611,9 @@ function prefetchStackMembers(img) {
   void ensureStackMembersLoaded(stackId, getStackBadgeCount(img));
 }
 
+// ============================================================
+// STACK — REORDER DRAG
+// ============================================================
 function getStackReorderCount(stackId, fallbackCount) {
   if (!stackId) return 0;
   const entry = expandedStackMembers.value.get(stackId);
@@ -4338,44 +3686,6 @@ function handleStackReorderDragLeave(img, event) {
   if (nextTarget && event?.currentTarget?.contains?.(nextTarget)) return;
   setStackReorderHoverId(null);
   setStackReorderHoverSide(null);
-}
-
-function buildStackReorderedMembers(stackItems, orderedIds, stackCount) {
-  const byId = new Map(
-    stackItems
-      .filter((item) => item && item.id != null)
-      .map((item) => [String(item.id), item]),
-  );
-  return orderedIds
-    .map((id, idx) => {
-      const item = byId.get(String(id));
-      if (!item) return null;
-      const next = { ...item, stack_position: idx };
-      if (idx === 0 && stackCount > 0) {
-        next.stackCount = stackCount;
-      } else {
-        if (next.stackCount !== undefined) delete next.stackCount;
-        if (next.stack_count !== undefined) delete next.stack_count;
-      }
-      return next;
-    })
-    .filter(Boolean);
-}
-
-function applyStackOrderToList(source, stackId, orderedMembers) {
-  if (!Array.isArray(source) || !source.length) return source;
-  const result = [];
-  let inserted = false;
-  for (const item of source) {
-    if (getPictureStackId(item) !== stackId) {
-      result.push(item);
-      continue;
-    }
-    if (inserted) continue;
-    result.push(...orderedMembers);
-    inserted = true;
-  }
-  return result;
 }
 
 function applyStackOrderLocal(stackId, orderedIds) {
@@ -4472,6 +3782,9 @@ function handleStackReorderDrop(img, event) {
 }
 
 // Fetch total image count for current filters
+// ============================================================
+// GRID FETCH
+// ============================================================
 async function fetchAllGridImages(options = {}) {
   const force = options?.force === true;
   const fetchKey = buildGridFetchKey();
@@ -4506,7 +3819,6 @@ async function fetchAllGridImages(options = {}) {
   imagesLoading.value = true;
   imagesError.value = null;
   try {
-    const fetchStart = performance.now();
     let images = [];
     const requestId = Date.now();
     fetchAllGridImages.lastRequestId = requestId;
@@ -4515,13 +3827,10 @@ async function fetchAllGridImages(options = {}) {
       props.selectedReferenceCharacter !== props.allPicturesId &&
       props.selectedReferenceCharacter !== props.unassignedPicturesId
     ) {
-      const refRequestStart = performance.now();
       const refRes = await apiClient.get(
         `${props.backendUrl}/characters/${props.selectedReferenceCharacter}/reference_pictures`,
       );
-      const refRequestEnd = performance.now();
       const refData = await refRes.data;
-      const refParseEnd = performance.now();
       if (fetchAllGridImages.lastRequestId !== requestId) return;
       const referenceIds = Array.isArray(refData?.reference_picture_ids)
         ? refData.reference_picture_ids
@@ -4540,31 +3849,25 @@ async function fetchAllGridImages(options = {}) {
           }
         }
         const picsUrl = `${props.backendUrl}/pictures?${params.toString()}`;
-        const picsRequestStart = performance.now();
         const picsRes = await apiClient.get(picsUrl);
-        const picsRequestEnd = performance.now();
         const picsData = await picsRes.data;
-        const picsParseEnd = performance.now();
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         const picList = Array.isArray(picsData) ? picsData : [];
         const picsById = new Map(
-          picList.map((img) => [PictureId(img?.id), img]),
+          picList.map((img) => [getPictureId(img?.id), img]),
         );
         images = referenceIds
-          .map((id) => picsById.get(PictureId(id)))
+          .map((id) => picsById.get(getPictureId(id)))
           .filter(Boolean);
       }
     } else if (props.selectedSort === STACKS_SORT_KEY) {
-      const threshold = StackThreshold(props.stackThreshold);
+      const threshold = getStackThreshold(props.stackThreshold);
       const stackParams = buildStackQueryParams();
       const url = `${props.backendUrl}/pictures/stacks?threshold=${encodeURIComponent(
         threshold,
       )}${stackParams ? `&${stackParams}` : ""}`;
-      const requestStart = performance.now();
       const res = await apiClient.get(url);
-      const requestEnd = performance.now();
       const data = await res.data;
-      const parseEnd = performance.now();
       if (fetchAllGridImages.lastRequestId !== requestId) return;
       const stackImages = Array.isArray(data) ? data : [];
       images = stackImages.map((img) => {
@@ -4591,11 +3894,8 @@ async function fetchAllGridImages(options = {}) {
       }/pictures/search?query=${encodeURIComponent(
         props.searchQuery.trim(),
       )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
-      const requestStart = performance.now();
       const res = await apiClient.get(url);
-      const requestEnd = performance.now();
       const data = await res.data;
-      const parseEnd = performance.now();
       images = data;
     } else if (
       props.selectedSet &&
@@ -4606,11 +3906,8 @@ async function fetchAllGridImages(options = {}) {
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${
         params ? `?${params}` : ""
       }`;
-      const requestStart = performance.now();
       const res = await apiClient.get(url);
-      const requestEnd = performance.now();
       const data = await res.data;
-      const parseEnd = performance.now();
       images = data.pictures || [];
     } else {
       const params = buildPictureIdsQueryParams();
@@ -4618,11 +3915,8 @@ async function fetchAllGridImages(options = {}) {
       const url = `${props.backendUrl}/pictures?offset=0&limit=10000${
         params ? `&${params}` : ""
       }`;
-      const requestStart = performance.now();
       const res = await apiClient.get(url);
-      const requestEnd = performance.now();
       const data = await res.data;
-      const parseEnd = performance.now();
       images = data;
     }
     lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
@@ -4631,7 +3925,7 @@ async function fetchAllGridImages(options = {}) {
     const shouldHighlight = highlightNextFetch.value && hasLoadedOnce.value;
     const nextIdSet = new Set(
       Array.isArray(images)
-        ? images.map((img) => PictureId(img?.id)).filter((id) => id !== null)
+        ? images.map((img) => getPictureId(img?.id)).filter((id) => id !== null)
         : [],
     );
     if (shouldHighlight) {
@@ -4649,11 +3943,8 @@ async function fetchAllGridImages(options = {}) {
     nextIdSet.forEach((id) => previousImageIds.add(id));
     highlightNextFetch.value = false;
     hasLoadedOnce.value = true;
-    const mapStart = performance.now();
     const newImages = mapGridImages(images);
-    const mapEnd = performance.now();
     allGridImages.value = newImages;
-    const assignEnd = performance.now();
     const cols = props.columns || 1;
     const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
     visibleStart.value = 0;
@@ -4667,10 +3958,7 @@ async function fetchAllGridImages(options = {}) {
     }
     await refreshExpandedStacksAfterFetch();
     await maybeRefreshOverlayForComfyui();
-    const rangeEnd = performance.now();
-    const fetchEnd = performance.now();
     requestAnimationFrame(() => {
-      const rafEnd = performance.now();
       if (initialRender.value) {
         initialRender.value = false;
         updateVisibleThumbnails();
@@ -4716,7 +4004,20 @@ async function fetchAllPicturesCount() {
   }
 }
 
-// Update watchers to use the debounced function
+function _resetGridState() {
+  gridReady.value = false;
+  emptyStateDelayPassed.value = false;
+  resetThumbnailState();
+  allGridImages.value = [];
+  lastFetchedGridImages.value = [];
+  expandedStackIds.value = new Set();
+  expandedStackMembers.value = new Map();
+  expandedStackLoading.value = new Set();
+  selectedImageIds.value = [];
+  lastSelectedImageId = null;
+  initialRender.value = true;
+}
+
 watch(
   [
     () => props.selectedCharacter,
@@ -4727,37 +4028,16 @@ watch(
     () => props.stackThreshold,
   ],
   () => {
-    gridReady.value = false;
-    emptyStateDelayPassed.value = false;
-    resetThumbnailState();
-    allGridImages.value = [];
-    lastFetchedGridImages.value = [];
-    expandedStackIds.value = new Set();
-    expandedStackMembers.value = new Map();
-    expandedStackLoading.value = new Set();
-    selectedImageIds.value = [];
-    lastSelectedImageId = null;
-    initialRender.value = true;
+    _resetGridState();
     updateSelectedGroupName();
     debouncedFetchAllGridImages();
   },
 );
 
 watch([() => props.mediaTypeFilter], () => {
-  gridReady.value = false;
-  emptyStateDelayPassed.value = false;
-  // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
-  resetThumbnailState();
-  selectedImageIds.value = [];
-  lastSelectedImageId = null;
+  _resetGridState();
   visibleStart.value = 0;
   visibleEnd.value = 0;
-  allGridImages.value = [];
-  lastFetchedGridImages.value = [];
-  expandedStackIds.value = new Set();
-  expandedStackMembers.value = new Map();
-  expandedStackLoading.value = new Set();
-  initialRender.value = true;
   fetchAllGridImages().then(() => {
     updateVisibleThumbnails();
   });
@@ -4789,6 +4069,9 @@ watch(
   },
 );
 
+// ============================================================
+// THUMBNAIL TRACKING STATE
+// ============================================================
 // Track loaded batch ranges to avoid duplicate requests
 const loadedRanges = ref([]);
 // Debounce timer for scroll-triggered fetches
@@ -4800,10 +4083,6 @@ const suppressVisibleThumbFetch = ref({
   start: 0,
   end: 0,
 });
-
-function isRangeOverlap(startA, endA, startB, endB) {
-  return Math.max(startA, startB) < Math.min(endA, endB);
-}
 
 function shouldSuppressVisibleWindowFetch(start, end) {
   const now = Date.now();
@@ -4856,13 +4135,9 @@ function resetThumbnailState() {
   }
 }
 
-function rangeCovers(ranges, start, end) {
-  return ranges.some(
-    ([rangeStart, rangeEnd]) => start >= rangeStart && end <= rangeEnd,
-  );
-}
-
-// Track which indices are visible in the grid
+// ============================================================
+// VIEWPORT STATE
+// ============================================================
 
 const visibleStart = ref(0);
 const visibleEnd = ref(0);
@@ -4933,15 +4208,6 @@ const bottomSpacerHeight = computed(() => {
   return height;
 });
 
-// Compute grid images (id, idx, thumbnail)
-const allGridImages = ref([]);
-const lastFetchedGridImages = ref([]);
-const expandedStackIds = ref(new Set());
-const expandedStackMembers = ref(new Map());
-const expandedStackLoading = ref(new Set());
-const expandedStackLoadPromises = new Map();
-const stackReorderDrag = ref(null);
-
 watch(
   [() => expandedStackIds.value, () => lastFetchedGridImages.value],
   () => {
@@ -4962,6 +4228,9 @@ watch(
   },
 );
 
+// ============================================================
+// MEDIA FILTERING + EMPTY STATE
+// ============================================================
 function filterImagesByMediaType(images) {
   let filtered = images;
   if (props.mediaTypeFilter === "images") {
@@ -5062,6 +4331,9 @@ const gridImagesToRender = computed(() => {
 });
 
 // Batch fetch metadata (including thumbnail) for visible range
+// ============================================================
+// THUMBNAIL BATCH FETCH
+// ============================================================
 async function fetchThumbnailsBatch(start, end, meta = {}) {
   if (start === undefined || start === null) {
     start = renderStart.value;
@@ -5081,7 +4353,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
   pendingRanges.push([start, end]);
   // Fetch batch metadata for visible range
   try {
-    const batchStart = performance.now();
     let images = [];
     let ids = [];
     // If a set is selected, use /picture_sets/{id}
@@ -5095,11 +4366,8 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${
         params ? `?${params}` : ""
       }`;
-      const requestStart = performance.now();
       const res = await apiClient.get(url);
-      const requestEnd = performance.now();
       const data = await res.data;
-      const parseEnd = performance.now();
       images = data.pictures ? data.pictures.slice(start, end) : [];
       ids = images.map((img) => img.id);
     } else {
@@ -5131,14 +4399,11 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     let overlayNeedsRedraw = false;
     if (ids.length) {
       ids = Array.from(new Set(ids.map((id) => String(id))));
-      const thumbRequestStart = performance.now();
       const thumbRes = await apiClient.post(
         `${props.backendUrl}/pictures/thumbnails`,
         JSON.stringify({ ids }),
       );
-      const thumbRequestEnd = performance.now();
       const thumbData = await thumbRes.data;
-      const thumbParseEnd = performance.now();
       if (requestEpoch !== thumbnailRequestEpoch.value) {
         return;
       }
@@ -5208,7 +4473,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     if (overlayNeedsRedraw) {
       triggerFaceOverlayRedraw();
     }
-    const batchEnd = performance.now();
   } catch (err) {
     console.error("[BATCH ERROR]", err);
   } finally {
@@ -5218,6 +4482,9 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
   }
 }
 
+// ============================================================
+// SCROLL + VIEWPORT UPDATE
+// ============================================================
 function updateVisibleThumbnails() {
   let start = Math.max(0, visibleStart.value - renderBuffer.value);
   let end = Math.min(
@@ -5242,31 +4509,6 @@ function updateVisibleThumbnails() {
       reason: "visible-window",
     });
   }, 80);
-}
-
-function hasPenalisedTags(img) {
-  return Array.isArray(img?.penalised_tags) && img.penalised_tags.length > 0;
-}
-
-function getStackBadgeCount(img) {
-  const count = Number(img?.stackCount ?? img?.stack_count ?? 0);
-  return Number.isFinite(count) ? count : 0;
-}
-
-function shouldShowStackBadge(img) {
-  return getStackBadgeCount(img) > 1;
-}
-
-function stackBadgeTitle(img) {
-  const count = getStackBadgeCount(img);
-  if (count <= 1) return "";
-  return `Stack of ${count} images`;
-}
-
-function penalisedTagsTitle(img) {
-  const tags = Array.isArray(img?.penalised_tags) ? img.penalised_tags : [];
-  if (!tags.length) return "";
-  return `Penalised tags: ${tags.join(", ")}`;
 }
 
 function onGridScroll(e) {
@@ -5302,156 +4544,9 @@ function onGridScroll(e) {
   }, 50);
 }
 
-// Selection logic
-const isImageSelected = (id) =>
-  selectedImageIds.value && selectedImageIds.value.includes(id);
-
-function buildDragGhostElement(element) {
-  if (typeof document === "undefined" || !element) return null;
-  const rect = element.getBoundingClientRect?.();
-  const width = Math.max(
-    1,
-    Math.round(rect?.width || element.clientWidth || element.width || 160),
-  );
-  const height = Math.max(
-    1,
-    Math.round(rect?.height || element.clientHeight || element.height || 90),
-  );
-  const computed =
-    typeof window !== "undefined" && element instanceof Element
-      ? window.getComputedStyle(element)
-      : null;
-  const radius = computed?.borderRadius || "0px";
-  const ghost = document.createElement("div");
-  ghost.style.width = `${width}px`;
-  ghost.style.height = `${height}px`;
-  ghost.style.borderRadius = radius;
-  ghost.style.overflow = "hidden";
-  ghost.style.backgroundColor = "transparent";
-  ghost.style.opacity = "1";
-  ghost.style.filter = "none";
-  ghost.style.position = "fixed";
-  ghost.style.left = "-9999px";
-  ghost.style.top = "-9999px";
-  ghost.style.pointerEvents = "none";
-  ghost.style.zIndex = "9999";
-
-  if (element instanceof HTMLImageElement) {
-    const clone = element.cloneNode(true);
-    clone.style.width = "100%";
-    clone.style.height = "100%";
-    clone.style.objectFit = "cover";
-    clone.style.borderRadius = "inherit";
-    clone.style.opacity = "1";
-    clone.style.filter = "none";
-    ghost.appendChild(clone);
-  } else if (element instanceof HTMLVideoElement) {
-    const src = element.currentSrc || element.poster || "";
-    ghost.style.background = src
-      ? `url(\"${src}\") center / cover no-repeat`
-      : "transparent";
-  }
-
-  document.body.appendChild(ghost);
-  return { ghost, width, height };
-}
-
-function setDragImageFromElement(event, element) {
-  if (!element || !event?.dataTransfer?.setDragImage) return;
-  const ghostData = buildDragGhostElement(element);
-  const width = ghostData?.width || element.clientWidth || element.width || 160;
-  const height =
-    ghostData?.height || element.clientHeight || element.height || 90;
-  const dragEl = ghostData?.ghost || element;
-  event.dataTransfer.setDragImage(
-    dragEl,
-    Math.max(1, width / 2),
-    Math.max(1, height / 2),
-  );
-  if (ghostData?.ghost) {
-    requestAnimationFrame(() => {
-      if (ghostData.ghost?.parentNode) {
-        ghostData.ghost.parentNode.removeChild(ghostData.ghost);
-      }
-    });
-  }
-}
-
-function setDragDataForImageIds(event, imageIds) {
-  if (!event?.dataTransfer) return;
-  event.dataTransfer.setData(
-    "application/json",
-    JSON.stringify({
-      type: "image-ids",
-      imageIds,
-    }),
-  );
-}
-
-function handleThumbnailNativeDragStart(img, event) {
-  dragSource.value = "grid";
-  const selectionIds = getDragSelectionIds(img);
-  if (selectionIds.length > 1) {
-    setDragSourceImageIds(selectionIds);
-    setupMultiExportDrag(event, selectionIds);
-    return;
-  }
-  setDragSourceImageIds([img.id]);
-  const target = event?.target;
-  if (target instanceof HTMLImageElement) {
-    setDragImageFromElement(event, target);
-  }
-  setDragDataForImageIds(event, [img.id]);
-}
-
-function handleThumbnailNativeDragEnd(event) {
-  dragSource.value = null;
-  stackReorderDrag.value = null;
-  clearDragSourceImageIds();
-  setStackReorderHoverId(null);
-  setStackReorderHoverSide(null);
-}
-
-function handleContainerDragStart(img, event) {
-  if (!img || !event?.dataTransfer) return;
-  if (event.target && event.target.closest?.(".face-bbox-overlay")) {
-    return;
-  }
-  const existing = event.dataTransfer.getData("application/json");
-  if (existing) return;
-  dragSource.value = "grid";
-  const selectionIds = getDragSelectionIds(img);
-  if (selectionIds.length > 1) {
-    setDragSourceImageIds(selectionIds);
-    setupMultiExportDrag(event, selectionIds);
-    return;
-  }
-  setDragSourceImageIds([img.id]);
-  const thumbEl = thumbnailRefs[img.id];
-  if (thumbEl instanceof HTMLImageElement) {
-    setDragImageFromElement(event, thumbEl);
-  }
-  if (isVideo(img)) {
-    const previewEl = dragPreviewRefs[img.id];
-    if (previewEl instanceof HTMLImageElement) {
-      setDragImageFromElement(event, previewEl);
-    }
-  }
-  setDragDataForImageIds(event, [img.id]);
-}
-
-function handleContainerDragEnd(img, event) {
-  if (dragSource.value !== "grid") return;
-  dragSource.value = null;
-  stackReorderDrag.value = null;
-  clearDragSourceImageIds();
-  setStackReorderHoverId(null);
-  setStackReorderHoverSide(null);
-}
-
-// Event handlers: these should emit events or call parent-provided functions
-// Legacy drag logic replaced with native media dragging for Finder compatibility
-
+// ============================================================
+// CLICK HANDLERS
+// ============================================================
 function handleImageCardClick(img, idx, event) {
   if (!img.id) return;
   const isCtrl = event.ctrlKey || event.metaKey;
@@ -5461,7 +4556,8 @@ function handleImageCardClick(img, idx, event) {
   const anchorIndex =
     lastSelectedImageId != null
       ? allGrid.findIndex(
-          (item) => PictureId(item?.id) === PictureId(lastSelectedImageId),
+          (item) =>
+            getPictureId(item?.id) === getPictureId(lastSelectedImageId),
         )
       : -1;
   if (isCtrl) {
@@ -5512,12 +4608,26 @@ function handleGridBackgroundClick(e) {
   }
 }
 
-// --- Text & Display Utilities ---
-
-const gridContainer = ref(null);
-const scrollWrapper = ref(null);
+// ============================================================
+// TAGS + METADATA
+// ============================================================
 
 // updateColumns removed; columns is now controlled by prop
+
+async function _afterTagMutation(imageId) {
+  if (props.applyTagFilter) {
+    lastFetchSuccess.value = { key: "", at: 0 };
+    lastFetchError.value = { key: "", at: 0 };
+    await fetchAllGridImages();
+    updateVisibleThumbnails();
+    return;
+  }
+  if (isSmartScoreSortActive()) {
+    await refreshSmartScoreForImage(imageId);
+  } else {
+    refreshGridImage(imageId);
+  }
+}
 
 async function removeTagFromImage(imageId, tag) {
   if (!imageId) {
@@ -5539,21 +4649,10 @@ async function removeTagFromImage(imageId, tag) {
       (img) => img && img.id === imageId,
     );
     if (gridImg && Array.isArray(gridImg.tags)) {
-      const d = TagList(gridImg.tags);
+      const d = getTagList(gridImg.tags);
       gridImg.tags = d.filter((t) => !tagMatches(t, tag));
     }
-    if (props.applyTagFilter) {
-      lastFetchSuccess.value = { key: "", at: 0 };
-      lastFetchError.value = { key: "", at: 0 };
-      await fetchAllGridImages();
-      updateVisibleThumbnails();
-      return;
-    }
-    if (isSmartScoreSortActive()) {
-      await refreshSmartScoreForImage(imageId);
-    } else {
-      refreshGridImage(imageId);
-    }
+    await _afterTagMutation(imageId);
   } catch (error) {
     console.error("Error removing tag:", error);
   }
@@ -5567,29 +4666,18 @@ async function addTagToImage(imageId, tag) {
         tag: tag,
       },
     );
-    const responseTags = TagList(response?.data?.tags);
+    const responseTags = getTagList(response?.data?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
     if (gridImg) {
-      const current = TagList(gridImg.tags);
+      const current = getTagList(gridImg.tags);
       const merged = responseTags.length
         ? responseTags
         : dedupeTagList([...current, { id: null, tag }]);
       gridImg.tags = merged;
     }
-    if (props.applyTagFilter) {
-      lastFetchSuccess.value = { key: "", at: 0 };
-      lastFetchError.value = { key: "", at: 0 };
-      await fetchAllGridImages();
-      updateVisibleThumbnails();
-      return;
-    }
-    if (isSmartScoreSortActive()) {
-      await refreshSmartScoreForImage(imageId);
-    } else {
-      refreshGridImage(imageId);
-    }
+    await _afterTagMutation(imageId);
   } catch (error) {
     console.error("Error adding tag:", error);
   }
@@ -5603,9 +4691,9 @@ function updateDescriptionForImage(imageId, description) {
   refreshGridImage(imageId);
 }
 
-onMounted(() => {
-  window.addEventListener("keydown", handleKeyDown);
-});
+// ============================================================
+// LIFECYCLE
+// ============================================================
 
 // Clear selection on ESC key
 function handleKeyDown(event) {
@@ -5693,14 +4781,10 @@ watch(
       const newVisibleEnd = Math.ceil(lastVisibleRow) * cols;
       visibleStart.value = newVisibleStart;
       visibleEnd.value = newVisibleEnd;
-      updateVisibleThumbnails(); // test
+      updateVisibleThumbnails();
     });
   },
 );
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", handleKeyDown);
-});
 
 // Expose the grid DOM node to parent
 defineExpose({
@@ -5719,9 +4803,9 @@ function removeImagesById(imageIds) {
     return;
   }
   const dIds = new Set(
-    imageIds.map((id) => PictureId(id)).filter((id) => id !== null),
+    imageIds.map((id) => getPictureId(id)).filter((id) => id !== null),
   );
-  const removeId = (img) => dIds.has(PictureId(img?.id));
+  const removeId = (img) => dIds.has(getPictureId(img?.id));
   allGridImages.value = allGridImages.value.filter((img) => !removeId(img));
   if (Array.isArray(lastFetchedGridImages.value)) {
     lastFetchedGridImages.value = lastFetchedGridImages.value.filter(
@@ -5732,7 +4816,7 @@ function removeImagesById(imageIds) {
   for (const [stackId, entry] of expandedStackMembers.value.entries()) {
     const ids = Array.isArray(entry?.ids) ? entry.ids : [];
     const images = Array.isArray(entry?.images) ? entry.images : [];
-    const nextIds = ids.filter((id) => !dIds.has(PictureId(id)));
+    const nextIds = ids.filter((id) => !dIds.has(getPictureId(id)));
     const nextImages = images.filter((img) => !removeId(img));
     if (nextIds.length || nextImages.length) {
       nextMembers.set(stackId, { ids: nextIds, images: nextImages });
@@ -5740,7 +4824,7 @@ function removeImagesById(imageIds) {
   }
   expandedStackMembers.value = nextMembers;
   selectedImageIds.value = selectedImageIds.value.filter(
-    (id) => !dIds.has(PictureId(id)),
+    (id) => !dIds.has(getPictureId(id)),
   );
   rebuildGridImagesFromLastFetch();
   void refreshExpandedStacksAfterFetch();
@@ -5752,11 +4836,9 @@ function getExportCount() {
   return { selectedCount, totalCount };
 }
 
-// --- Export to Zip ---
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
+// ============================================================
+// EXPORT
+// ============================================================
 async function exportCurrentViewToZip(options = {}) {
   const exportType = options.exportType || "full";
   const captionMode = options.captionMode || "description";
@@ -5802,7 +4884,7 @@ async function exportCurrentViewToZip(options = {}) {
     }
 
     let downloadUrl = null;
-    const maxAttempts = 600;
+    const maxAttempts = 600; // 600 × 1s = 10 minute timeout; suitable for very large collections
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (exportProgress.cancelRequested) {
         exportProgress.status = "cancelled";
@@ -5883,14 +4965,9 @@ function abortExportZip() {
   exportProgress.cancelRequested = true;
 }
 
-// Search functionality
-const searchQuery = ref(props.searchQuery);
-
-onMounted(() => {});
-
-watch(searchQuery, (newQuery) => {});
-
-// Function to clear searchQuery
+// ============================================================
+// SEARCH
+// ============================================================
 function clearSearchQuery() {
   emit("clear-search", "");
 }
@@ -5916,7 +4993,7 @@ function handleEmptyStateReset() {
   justify-content: center;
   pointer-events: none;
   border: 8px solid rgb(var(--v-theme-accent));
-  border-radius: 16px; /* rounded corners */
+  border-radius: 16px;
   box-sizing: border-box;
   transition:
     border-color 0.2s,
@@ -5930,146 +5007,6 @@ function handleEmptyStateReset() {
   padding: 6px 14px;
   background: rgba(var(--v-theme-shadow), 0.35);
   border-radius: 12px;
-}
-
-.export-progress {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  z-index: 120;
-  background: rgba(var(--v-theme-dark-surface), 0.9);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: 10px 12px;
-  border-radius: 8px;
-  min-width: 220px;
-  box-shadow: 0 4px 14px rgba(var(--v-theme-shadow), 0.3);
-}
-
-.export-progress-error {
-  background: rgba(var(--v-theme-error), 0.95);
-}
-
-.export-progress-title {
-  font-size: 0.9em;
-  margin-bottom: 8px;
-}
-
-.export-progress-bar {
-  width: 100%;
-  height: 8px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.15);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.export-progress-fill {
-  height: 100%;
-  background: rgb(var(--v-theme-accent));
-  width: 0;
-  transition: width 0.3s ease;
-}
-
-.export-progress-meta {
-  margin-top: 6px;
-  font-size: 0.8em;
-  opacity: 0.85;
-}
-
-.export-progress-abort {
-  margin-top: 10px;
-  width: 100%;
-  background: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-  border: none;
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 0.85em;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-
-.export-progress-abort:hover {
-  background: rgba(var(--v-theme-error), 0.85);
-}
-
-.comfyui-progress {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-  z-index: 120;
-  background: rgba(var(--v-theme-dark-surface), 0.75);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: 8px 10px;
-  border-radius: 8px;
-  min-width: 180px;
-  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
-  backdrop-filter: blur(6px);
-}
-
-.plugin-progress {
-  position: absolute;
-  bottom: 88px;
-  right: 12px;
-  z-index: 120;
-  background: rgba(var(--v-theme-dark-surface), 0.75);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: 8px 10px;
-  border-radius: 8px;
-  min-width: 220px;
-  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
-  backdrop-filter: blur(6px);
-}
-
-.plugin-progress-error {
-  background: rgba(var(--v-theme-error), 0.95);
-}
-
-.plugin-progress-title {
-  font-size: 0.8em;
-  margin-bottom: 6px;
-  white-space: pre-line;
-}
-
-.plugin-progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.2);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.plugin-progress-fill {
-  height: 100%;
-  background: rgb(var(--v-theme-accent));
-  width: 0;
-  transition: width 0.2s ease;
-}
-
-.plugin-progress-meta {
-  margin-top: 6px;
-  font-size: 0.78em;
-  opacity: 0.85;
-}
-
-.comfyui-progress-title {
-  font-size: 0.8em;
-  margin-bottom: 6px;
-}
-
-.comfyui-progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.2);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.comfyui-progress-fill {
-  height: 100%;
-  background: rgb(var(--v-theme-accent));
-  width: 0;
-  transition: width 0.2s ease;
 }
 
 .thumbnail-badge {
@@ -6087,26 +5024,29 @@ function handleEmptyStateReset() {
   white-space: nowrap;
 }
 
-.thumbnail-badge--top-left {
+.thumbnail-badge--top-left,
+.thumbnail-badge--top-right,
+.thumbnail-badge--bottom-left,
+.thumbnail-badge--bottom-right {
   position: absolute;
+}
+
+.thumbnail-badge--top-left {
   top: 2px;
   left: 2px;
 }
 
 .thumbnail-badge--top-right {
-  position: absolute;
   top: 2px;
   right: 2px;
 }
 
 .thumbnail-badge--bottom-left {
-  position: absolute;
   left: 2px;
   bottom: 2px;
 }
 
 .thumbnail-badge--bottom-right {
-  position: absolute;
   right: 2px;
   bottom: 2px;
 }
@@ -6354,7 +5294,8 @@ function handleEmptyStateReset() {
   border-radius: 8px;
 }
 
-.penalised-tag-indicator {
+.penalised-tag-indicator,
+.stack-indicator {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6364,12 +5305,6 @@ function handleEmptyStateReset() {
 }
 
 .stack-indicator {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 30;
-  pointer-events: auto;
-  padding: 2px;
   cursor: pointer;
 }
 
