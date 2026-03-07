@@ -13,7 +13,16 @@ class ImagePlugin(ABC):
     """Base class for image transformation plugins.
 
     Plugins receive a list of PIL images and JSON-compatible parameters,
-    and return a list of PIL images in the same order.
+    and return a list of PIL images in the same order. Subclasses must
+    implement ``parameter_schema`` and ``run``. Optionally override
+    ``run_video`` to support video inputs.
+
+    Attributes:
+        name: Unique snake_case identifier used to look up the plugin by name.
+        display_name: Human-readable label shown in the UI.
+        description: Short description of what the plugin does.
+        supports_images: Whether the plugin handles still images via ``run``.
+        supports_videos: Whether the plugin handles video files via ``run_video``.
     """
 
     name: str = ""
@@ -23,6 +32,15 @@ class ImagePlugin(ABC):
     supports_videos: bool = False
 
     def plugin_schema(self) -> dict[str, Any]:
+        """Return the JSON-serialisable metadata dict for this plugin.
+
+        Used by the plugin registry to expose plugin capabilities to the
+        frontend. Calls ``parameter_schema`` internally.
+
+        Returns:
+            A dict with keys ``name``, ``display_name``, ``description``,
+            ``supports_images``, ``supports_videos``, and ``parameters``.
+        """
         return {
             "name": self.name,
             "display_name": self.display_name or self.name,
@@ -34,7 +52,18 @@ class ImagePlugin(ABC):
 
     @abstractmethod
     def parameter_schema(self) -> list[dict[str, Any]]:
-        """Return a JSON schema-like parameter definition list."""
+        """Return the parameter definitions for this plugin.
+
+        Each entry in the list is a dict describing one user-facing parameter.
+        Required keys: ``name`` (str, snake_case identifier), ``label`` (str,
+        display label), ``type`` (str, one of ``"number"``, ``"string"``,
+        ``"boolean"``, ``"select"``), ``default`` (Any, value used when the
+        parameter is omitted). Optional keys: ``description`` (str),
+        ``options`` (list[str], required for ``"select"`` type).
+
+        Returns:
+            List of parameter definition dicts, one per parameter.
+        """
 
     @abstractmethod
     def run(
@@ -44,7 +73,25 @@ class ImagePlugin(ABC):
         progress_callback: ProgressCallback | None = None,
         error_callback: ErrorCallback | None = None,
     ) -> list[Image.Image]:
-        """Run plugin on input images and return output images."""
+        """Apply the plugin transform to a batch of images.
+
+        The returned list must be the same length as ``images``. On a
+        per-image failure, append a fallback (e.g. a copy of the original)
+        and call ``self.report_error`` so the caller can surface the problem
+        without aborting the whole batch.
+
+        Args:
+            images: Input images to process.
+            parameters: Parameter values keyed by the ``name`` field from
+                ``parameter_schema``. Missing keys should fall back to defaults.
+            progress_callback: Optional callable invoked after each image via
+                ``self.report_progress``.
+            error_callback: Optional callable invoked on per-image failures via
+                ``self.report_error``.
+
+        Returns:
+            Transformed images in the same order as ``images``.
+        """
 
     def run_video(
         self,
@@ -53,7 +100,22 @@ class ImagePlugin(ABC):
         progress_callback: ProgressCallback | None = None,
         error_callback: ErrorCallback | None = None,
     ) -> bytes | tuple[bytes, str]:
-        """Run plugin on a video source and return encoded bytes (optionally with extension)."""
+        """Apply the plugin transform to a video file.
+
+        Override this method when ``supports_videos = True``. The default
+        implementation raises ``NotImplementedError``.
+
+        Args:
+            source_path: Absolute path to the input video file.
+            parameters: Parameter values keyed by the ``name`` field from
+                ``parameter_schema``. Missing keys should fall back to defaults.
+            progress_callback: Optional callable for reporting progress.
+            error_callback: Optional callable for reporting errors.
+
+        Returns:
+            Encoded video bytes, or a ``(bytes, extension)`` tuple where
+            ``extension`` is the output file extension (e.g. ``".mp4"``).
+        """
         raise NotImplementedError(
             f"Plugin '{self.name or self.__class__.__name__}' does not support video processing"
         )
@@ -66,6 +128,16 @@ class ImagePlugin(ABC):
         total: int,
         message: str,
     ) -> None:
+        """Invoke the progress callback with structured progress data.
+
+        Does nothing if ``progress_callback`` is ``None``.
+
+        Args:
+            progress_callback: Callback to invoke, or ``None``.
+            current: Number of images processed so far (1-based).
+            total: Total number of images in the batch.
+            message: Human-readable status message.
+        """
         if progress_callback is None:
             return
         progress_callback(
@@ -86,6 +158,17 @@ class ImagePlugin(ABC):
         message: str,
         details: dict[str, Any] | None = None,
     ) -> None:
+        """Invoke the error callback with structured error data.
+
+        Does nothing if ``error_callback`` is ``None``.
+
+        Args:
+            error_callback: Callback to invoke, or ``None``.
+            index: Zero-based index of the image that failed.
+            message: Short description of the failure.
+            details: Optional dict with additional context (e.g. exception
+                message, crop shape, file path).
+        """
         if error_callback is None:
             return
         payload: dict[str, Any] = {
