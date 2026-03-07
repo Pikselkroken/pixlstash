@@ -1,3 +1,4 @@
+import itertools
 import queue
 import threading
 import traceback
@@ -8,7 +9,7 @@ import time
 from typing import Any, Callable, Optional
 
 from .pixl_logging import get_logger
-from .tasks.base_task import BaseTask
+from .tasks.base_task import BaseTask, TaskPriority
 
 
 logger = get_logger(__name__)
@@ -41,7 +42,8 @@ class TaskRunner:
 
     def __init__(self, name: str = "TaskRunner"):
         self._name = name
-        self._queue: queue.Queue[BaseTask] = queue.Queue()
+        self._queue: queue.PriorityQueue[tuple[int, int, BaseTask]] = queue.PriorityQueue()
+        self._queue_seq = itertools.count()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -275,7 +277,7 @@ class TaskRunner:
                 return
             self._closed = True
             self._stop.set()
-        self._queue.put(_StopTask())
+        self._queue.put((TaskPriority.HIGH, next(self._queue_seq), _StopTask()))
         if self._thread is not None:
             self._thread.join(timeout=60)
             if self._thread.is_alive():
@@ -293,7 +295,7 @@ class TaskRunner:
                 task.type,
                 exc,
             )
-        self._queue.put(task)
+        self._queue.put((task.priority, next(self._queue_seq), task))
         qsize = self._queue.qsize()
         logger.debug(
             "TaskRunner %s: submitted task id=%s type=%s queue_depth=%s",
@@ -311,7 +313,7 @@ class TaskRunner:
         logger.debug("TaskRunner %s started.", self._name)
         while not self._stop.is_set():
             try:
-                task = self._queue.get(timeout=0.2)
+                _priority, _seq, task = self._queue.get(timeout=0.2)
             except queue.Empty:
                 continue
 

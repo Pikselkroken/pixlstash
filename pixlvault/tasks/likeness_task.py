@@ -5,11 +5,15 @@ from pixlvault.database import DBPriority
 from pixlvault.db_models.picture import Picture
 from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
 from pixlvault.utils.likeness.likeness_utils import LikenessUtils
-from pixlvault.tasks.base_task import BaseTask
+from pixlvault.tasks.base_task import BaseTask, TaskPriority
 
 
 class LikenessTask(BaseTask):
     """Task that processes one likeness queue scoring cycle."""
+
+    @property
+    def priority(self) -> TaskPriority:
+        return TaskPriority.LOW
 
     def __init__(self, database):
         super().__init__(

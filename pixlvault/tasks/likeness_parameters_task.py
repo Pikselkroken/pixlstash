@@ -9,7 +9,7 @@ from pixlvault.utils.likeness.likeness_parameter_utils import (
     PICTURE_PARAM_FIELDS,
     QUALITY_PARAM_FIELDS,
 )
-from pixlvault.tasks.base_task import BaseTask
+from pixlvault.tasks.base_task import BaseTask, TaskPriority
 
 
 class LikenessParametersTask(BaseTask):
@@ -17,6 +17,10 @@ class LikenessParametersTask(BaseTask):
 
     BATCH_SIZE = 128
     SCAN_LIMIT = 2048
+
+    @property
+    def priority(self) -> TaskPriority:
+        return TaskPriority.LOW
 
     def __init__(self, database):
         super().__init__(

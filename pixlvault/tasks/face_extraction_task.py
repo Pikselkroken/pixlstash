@@ -19,7 +19,7 @@ from pixlvault.picture_tagger import PictureTagger
 from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.utils.image_processing.face_utils import FaceUtils
 from pixlvault.pixl_logging import get_logger
-from pixlvault.tasks.base_task import BaseTask
+from pixlvault.tasks.base_task import BaseTask, TaskPriority
 
 
 logger = get_logger(__name__)
@@ -60,6 +60,10 @@ class FaceExtractionTask(BaseTask):
         self._pictures = pictures or []
         self._insightface_app = None
         self._cpu_spillover_enabled = False
+
+    @property
+    def priority(self) -> TaskPriority:
+        return TaskPriority.HIGH
 
     def allow_cpu_spillover(self) -> bool:
         return True

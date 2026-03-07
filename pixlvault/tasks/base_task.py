@@ -14,6 +14,14 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class TaskPriority(int, Enum):
+    """Task execution priority. Lower value = higher priority (min-heap ordering)."""
+
+    HIGH = 1
+    MEDIUM = 2
+    LOW = 3
+
+
 class BaseTask(ABC):
     """In-memory task unit executed by the TaskRunner.
 
@@ -53,6 +61,10 @@ class BaseTask(ABC):
             raise
         finally:
             self.completed_at = datetime.utcnow()
+
+    @property
+    def priority(self) -> TaskPriority:
+        return TaskPriority.MEDIUM
 
     def on_queued(self) -> None:
         return None
