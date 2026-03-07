@@ -31,6 +31,11 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     """Set static attributes on PictureTagger from command line options."""
-    PictureTagger.FORCE_CPU = config.getoption("--force-cpu")
+    force_cpu = config.getoption("--force-cpu")
+    PictureTagger.FORCE_CPU = force_cpu
+    # Persist force-cpu as a Server-level override so startup checks cannot
+    # clobber the flag after conftest sets it (startup checks set FORCE_CPU
+    # based on the server config's default_device value).
+    Server.DEFAULT_FORCE_CPU = True if force_cpu else None
     PictureTagger.FAST_CAPTIONS = config.getoption("--fast-captions")
     Server.DEFAULT_MAX_VRAM_GB = config.getoption("--max-vram-gb")

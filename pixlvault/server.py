@@ -33,6 +33,7 @@ from pixlvault.db_models import (
 
 from pixlvault.event_types import EventType
 from pixlvault.auth import AuthService, LoginRequest
+from pixlvault.picture_tagger import PictureTagger
 from pixlvault.pixl_logging import get_logger, uvicorn_log_config
 from pixlvault.startup_checks import StartupChecks
 from pixlvault.vault import Vault
@@ -107,9 +108,14 @@ class Server:
             (e.g. by the pytest ``--max-vram-gb`` option) it takes precedence
             over the persisted user config value for all Server instances.
             ``None`` means use the user config.
+        DEFAULT_FORCE_CPU: Class-level CPU-inference override. When ``True``,
+            forces CPU inference after startup checks complete, preventing the
+            startup check from clobbering a ``--force-cpu`` flag set by the
+            test framework. ``None`` means startup checks decide.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
+    DEFAULT_FORCE_CPU: bool | None = None
 
     def __init__(
         self,
@@ -133,6 +139,9 @@ class Server:
             server_config_path=self._server_config_path,
             logger=logger,
         ).run()
+        # Re-apply any test-level FORCE_CPU override that startup checks may have clobbered.
+        if Server.DEFAULT_FORCE_CPU is not None:
+            PictureTagger.FORCE_CPU = Server.DEFAULT_FORCE_CPU
         with open(server_config_path, "w") as f:
             json.dump(self._server_config, f, indent=2)
 
@@ -428,7 +437,7 @@ class Server:
                 "cookie_samesite": "Lax",
                 "cookie_secure": False,
                 "image_root": default_image_root,
-                "default_device": "cpu",
+                "default_device": "auto",
                 "min_free_disk_gb": 1.0,
                 "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
@@ -462,7 +471,7 @@ class Server:
                 if "image_root" not in server_config:
                     server_config["image_root"] = default_image_root
                 if "default_device" not in server_config:
-                    server_config["default_device"] = "cpu"
+                    server_config["default_device"] = "auto"
                 if "min_free_disk_gb" not in server_config:
                     server_config["min_free_disk_gb"] = 1.0
                 if "min_free_vram_mb" not in server_config:
