@@ -23,6 +23,22 @@ _CONFIG_LOCK = threading.Lock()
 
 
 def load_watch_folders(config_path: str) -> list[dict]:
+    """Load the watch_folders list from the server config file.
+
+    Each entry in the returned list is a dict with the following fields:
+
+        folder (str): Absolute path to the directory to monitor recursively.
+        delete_after_import (bool): When True, source files are deleted from
+            the watch folder after a successful import. Defaults to False.
+        last_checked (float): Unix timestamp of the last scan. Managed
+            internally by the finder; there is no need to set this manually.
+
+    Args:
+        config_path: Path to the server-config.json file.
+
+    Returns:
+        List of watch folder entry dicts, or an empty list on error.
+    """
     if not config_path or not os.path.exists(config_path):
         return []
     with _CONFIG_LOCK:
