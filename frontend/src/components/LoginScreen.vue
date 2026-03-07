@@ -74,7 +74,6 @@ onMounted(async () => {
   try {
     const status = await checkLoginStatus();
     needsRegistration.value = status?.needs_registration;
-    console.log("Login status:", status);
   } catch (err) {
     console.error("Failed to load login status:", err);
   }

@@ -76,7 +76,6 @@ function clearInput() {
 }
 
 function closeOverlay() {
-  console.log("[SearchOverlay.vue] Closing overlay");
   emit("close");
 }
 
@@ -92,7 +91,6 @@ function handleKeydown(event) {
 }
 
 onMounted(() => {
-  console.log("Mounted: Adding keydown listener"); // Debugging log
   window.addEventListener("keydown", handleKeydown);
 
   nextTick(() => {
@@ -101,7 +99,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  console.log("Unmounted: Removing keydown listener"); // Debugging log
   window.removeEventListener("keydown", handleKeydown);
 });
 </script>

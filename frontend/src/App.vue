@@ -426,7 +426,6 @@ function clearSearchForCategoryChange() {
 
 async function handleSelectCharacter(payload) {
   const { id: charId, label } = SelectionPayload(payload);
-  console.log("[App.vue] handleSelectCharacter called with charId:", charId);
   clearSearchForCategoryChange();
   if (charId == null) {
     selectedCharacter.value = null;
@@ -447,7 +446,6 @@ async function handleSelectCharacter(payload) {
   selectedSet.value = null; // Clear set selection
   selectedReferenceCharacter.value = null;
   await nextTick(); // Ensure reactivity propagates the change
-  console.log("[App.vue] searchQuery preserved:", searchQuery.value);
   closeSidebarIfMobile();
 }
 
@@ -594,7 +592,6 @@ async function fetchConfig() {
   configApplying.value = true;
   try {
     const res = await apiClient.get("/users/me/config");
-    console.log("Fetched config:", res);
     const sortValue = res.data.sort_order ?? res.data.sort;
     if (typeof sortValue === "string" && sortValue) {
       selectedSort.value = sortValue;
@@ -708,12 +705,6 @@ async function fetchConfig() {
       hidden_tags: hiddenTags.value,
       apply_tag_filter: applyTagFilter.value,
     };
-    console.debug("[Config] Overlay settings applied", {
-      showFaceBboxes: showFaceBboxes.value,
-      showFormat: showFormat.value,
-      showResolution: showResolution.value,
-      showProblemIcon: showProblemIcon.value,
-    });
   } catch (e) {
     console.error("Failed to fetch /users/me/config:", e);
   } finally {
@@ -774,12 +765,10 @@ async function patchConfigUIOptions() {
     return;
   }
 
-  console.log("PATCH /users/me/config payload:", changed);
   try {
     const response = await apiClient.patch("/users/me/config", changed);
 
     const updatedConfig = await response.data;
-    console.log("PATCH /users/me/config response:", updatedConfig);
     configSnapshot.value = { ...snapshot, ...changed };
   } catch (e) {
     console.error("Error patching /users/me/config:", e);
@@ -842,7 +831,6 @@ function refreshExportCount() {
 }
 
 function confirmExportZip() {
-  console.log("Exporting current view to zip...");
   gridContainer.value?.exportCurrentViewToZip({
     exportType: exportType.value,
     captionMode: exportCaptionMode.value,
@@ -857,20 +845,16 @@ const searchOverlayVisible = ref(false);
 
 function openSearchOverlay() {
   searchOverlayVisible.value = true;
-  console.log("Search overlay visibility toggled:", searchOverlayVisible.value);
 }
 
 function closeSearchOverlay() {
   searchOverlayVisible.value = false;
-  console.log("Search overlay closed");
 }
 
 function handleClearSearch() {
-  console.log("[App.vue] handleClearSearch called");
   searchQuery.value = "";
   searchInput.value = "";
   isSearchHistoryOpen.value = false;
-  console.log("[App.vue] searchQuery cleared:", searchQuery.value);
   refreshGridVersion(); // Force the ImageGrid to refresh
 }
 
@@ -1001,13 +985,6 @@ watch(
 watch(
   [showFaceBboxes, showFormat, showResolution, showProblemIcon, showStacks],
   ([face, format, resolution, problem, stacks]) => {
-    console.debug("[Config] Overlay settings changed", {
-      showFaceBboxes: face,
-      showFormat: format,
-      showResolution: resolution,
-      showProblemIcon: problem,
-      showStacks: stacks,
-    });
   },
   { immediate: true },
 );

@@ -578,23 +578,6 @@ const thumbnailLoadedMap = reactive({});
 const thumbnailReadyMap = reactive({});
 const thumbnailAssignedAtMap = reactive({});
 
-function getResourceTimingForUrl(url) {
-  if (typeof performance === "undefined" || !url) return null;
-  try {
-    const entries = performance.getEntriesByName(url);
-    if (!Array.isArray(entries) || !entries.length) return null;
-    const last = entries[entries.length - 1];
-    return {
-      durationMs: Number((last.duration || 0).toFixed(1)),
-      transferSize: Number(last.transferSize || 0),
-      encodedBodySize: Number(last.encodedBodySize || 0),
-      decodedBodySize: Number(last.decodedBodySize || 0),
-      responseEnd: Number((last.responseEnd || 0).toFixed(1)),
-    };
-  } catch {
-    return null;
-  }
-}
 const THUMBNAIL_RETRY_DELAY_MS = 10000;
 const THUMBNAIL_RETRY_LIMIT = 1;
 const thumbnailRetryTimers = new Map();
@@ -771,7 +754,6 @@ function logComfyuiDebug(message, details = {}) {
     at: new Date().toISOString(),
     ...details,
   };
-  console.debug(`[ComfyUI] ${message}`, payload);
 }
 
 function getComfyuiClientId() {
@@ -1009,16 +991,6 @@ function markComfyuiPromptComplete(promptKey, reason) {
   comfyuiProgress.message = "ComfyUI running...";
   if (comfyuiActivePromptIds.value.size === 0) {
     finalizeComfyuiProgress({ refresh: false });
-  }
-}
-
-async function fetchComfyuiUrl() {
-  try {
-    const res = await apiClient.get("/users/me/config");
-    const raw = String(res.data?.comfyui_url || "").trim();
-    return raw || "http://127.0.0.1:8188/";
-  } catch (err) {
-    return "http://127.0.0.1:8188/";
   }
 }
 
@@ -1721,12 +1693,6 @@ function onThumbnailLoad(id, event = null) {
     null;
   if (Number.isFinite(assignedAt) && assignedAt > 0) {
     const elapsedMs = performance.now() - assignedAt;
-    console.log("[ImageGrid.vue] thumbnail img load timing", {
-      id,
-      elapsedMs: Number(elapsedMs.toFixed(1)),
-      src,
-      resourceTiming: getResourceTimingForUrl(src),
-    });
     delete thumbnailAssignedAtMap[id];
   }
   clearThumbnailRetry(id);
@@ -1803,10 +1769,6 @@ function getThumbnailSrc(img) {
 function getVideoThumbnailSrc(img) {
   if (!img || !isVideo(img)) return null;
   return buildMediaUrl({ backendUrl: props.backendUrl, image: img }) || null;
-}
-
-function getThumbnailLoadedKey(id) {
-  return thumbnailLoadedMap[id] || 0;
 }
 
 // --- Multi-face selection state ---
@@ -2087,7 +2049,6 @@ function setupMultiExportDrag(event, ids) {
       imageIds: ids,
     };
     event.dataTransfer.setData("application/json", JSON.stringify(dragData));
-    console.debug("[DRAG] Multi-selection drag data set:", dragData);
   } catch (err) {
     console.error("[ERROR] Failed to set drag data:", err);
   }
@@ -2838,57 +2799,6 @@ function reorderStackByScore(stackIndex) {
   invalidateVisibleThumbnailRanges();
 }
 
-function addImageToGrid(imageData) {
-  if (!imageData?.id) return null;
-  const items = allGridImages.value.slice();
-  const dId = PictureId(imageData.id);
-  const existingIndex = items.findIndex((img) => PictureId(img?.id) === dId);
-  if (existingIndex !== -1) {
-    const current = items[existingIndex] || {};
-    items[existingIndex] = {
-      ...current,
-      ...imageData,
-      idx: current.idx ?? existingIndex,
-      thumbnail: current.thumbnail ?? imageData.thumbnail ?? null,
-    };
-    allGridImages.value = items;
-    invalidateThumbnailIndex(existingIndex);
-    fetchThumbnailsBatch(existingIndex, existingIndex + 1);
-    return existingIndex;
-  }
-  const newIndex = items.length;
-  items.push({
-    ...imageData,
-    idx: newIndex,
-    thumbnail: imageData.thumbnail ?? null,
-  });
-  for (let i = 0; i < items.length; i += 1) {
-    items[i].idx = i;
-  }
-  allGridImages.value = items;
-  invalidateThumbnailIndex(newIndex);
-  fetchThumbnailsBatch(newIndex, newIndex + 1);
-  return newIndex;
-}
-
-async function fetchCharacterLikenessForImage(imageId) {
-  if (!imageId || !props.similarityCharacter) return null;
-  const params = new URLSearchParams();
-  params.set("reference_character_id", String(props.similarityCharacter));
-  if (props.selectedCharacter != null) {
-    params.set("character_id", String(props.selectedCharacter));
-  }
-  try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${imageId}/character_likeness?${params.toString()}`,
-    );
-    return res.data;
-  } catch (e) {
-    console.error("Failed to fetch character likeness for image:", e);
-    return null;
-  }
-}
-
 function handleOverlayChange(payload) {
   if (!payload) return;
   const imageId = payload.imageId ?? payload.id ?? payload;
@@ -3105,12 +3015,6 @@ function isScoreSortActive() {
     : false;
 }
 
-function isDateSortActive() {
-  return typeof props.selectedSort === "string"
-    ? props.selectedSort.toUpperCase() === "DATE"
-    : false;
-}
-
 function isCharacterLikenessSortActive() {
   return typeof props.selectedSort === "string"
     ? props.selectedSort.toUpperCase() === "CHARACTER_LIKENESS"
@@ -3176,64 +3080,10 @@ function repositionImageByScore(imageId, newScore) {
   });
 }
 
-function repositionImageByDate(imageId, createdAt) {
-  const items = allGridImages.value.slice();
-  const currentIndex = items.findIndex((item) => item.id === imageId);
-  if (currentIndex === -1) return;
-
-  const target = items[currentIndex];
-  const targetTime =
-    new Date(createdAt || target.created_at || 0).getTime() || 0;
-  items.splice(currentIndex, 1);
-
-  const descending = props.selectedDescending === true;
-  let insertIndex = items.findIndex((item) => {
-    const itemTime = new Date(item.created_at || 0).getTime() || 0;
-    return descending ? itemTime < targetTime : itemTime > targetTime;
-  });
-  if (insertIndex === -1) insertIndex = items.length;
-  items.splice(insertIndex, 0, target);
-
-  for (let i = 0; i < items.length; i += 1) {
-    items[i].idx = i;
-  }
-
-  allGridImages.value = items;
-  invalidateVisibleThumbnailRanges();
-}
-
-function repositionImageByLikeness(imageId) {
-  const items = allGridImages.value.slice();
-  const currentIndex = items.findIndex((item) => item.id === imageId);
-  if (currentIndex === -1) return;
-
-  const target = items[currentIndex];
-  const targetScore =
-    target.character_likeness ?? target.likeness_score ?? target.score ?? 0;
-  items.splice(currentIndex, 1);
-
-  const descending = props.selectedDescending === true;
-  let insertIndex = items.findIndex((item) => {
-    const score =
-      item.character_likeness ?? item.likeness_score ?? item.score ?? 0;
-    return descending ? score < targetScore : score > targetScore;
-  });
-  if (insertIndex === -1) insertIndex = items.length;
-  items.splice(insertIndex, 0, target);
-
-  for (let i = 0; i < items.length; i += 1) {
-    items[i].idx = i;
-  }
-
-  allGridImages.value = items;
-  invalidateVisibleThumbnailRanges();
-}
-
 let smartScoreRepositioning = false;
 
 function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
   if (smartScoreRepositioning) {
-    console.debug("[SmartScore] Reposition skipped (lock active):", imageId);
     return;
   }
   smartScoreRepositioning = true;
@@ -3241,7 +3091,6 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
     const items = allGridImages.value.slice();
     const currentIndex = items.findIndex((item) => item.id === imageId);
     if (currentIndex === -1) {
-      console.debug("[SmartScore] Reposition skipped (not in grid):", imageId);
       return;
     }
 
@@ -3261,13 +3110,6 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
       return descending ? score < targetScore : score > targetScore;
     });
     if (insertIndex === -1) insertIndex = items.length;
-    console.debug("[SmartScore] Reposition", {
-      imageId,
-      currentIndex,
-      insertIndex,
-      targetScore,
-      descending,
-    });
     if (insertIndex === currentIndex) {
       const updated = allGridImages.value.slice();
       updated[currentIndex] = { ...target, idx: currentIndex };
@@ -3289,10 +3131,6 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
 
 async function refreshSmartScoreForImage(imageId) {
   if (!imageId || !isSmartScoreSortActive()) return;
-  console.debug("[SmartScore] Refresh requested", {
-    imageId,
-    sort: props.selectedSort,
-  });
   const latestInfo = await fetchImageInfo(imageId, { smartScore: true });
   if (!latestInfo || Array.isArray(latestInfo)) return;
 
@@ -3301,14 +3139,7 @@ async function refreshSmartScoreForImage(imageId) {
     const current = allGridImages.value[idx] || {};
     const smartScore =
       typeof latestInfo.smartScore === "number" ? latestInfo.smartScore : null;
-    console.debug("[SmartScore] Refresh result", {
-      imageId,
-      smartScore,
-    });
     if (current.smartScore === smartScore) {
-      console.debug("[SmartScore] No score change; skipping reposition", {
-        imageId,
-      });
       return;
     }
     await nextTick();
@@ -3381,7 +3212,6 @@ async function applyScoresByEntries(entries, options = {}) {
 }
 
 async function applyScore(img, newScore) {
-  console.debug("Applying score:", newScore);
   const imageId = img?.id;
   if (!imageId) {
     alert("Failed to set score: image id is missing.");
@@ -3491,15 +3321,12 @@ function handleGridDrop(e) {
     dragSource.value === "grid" ||
     e.dataTransfer.types.includes("application/json")
   ) {
-    console.debug("Drag-and-drop within the grid ignored.");
     dragSource.value = null;
     return;
   }
 
   if (!e.dataTransfer || !e.dataTransfer.files) return;
   const files = Array.from(e.dataTransfer.files).filter(isSupportedImportFile);
-  console.debug("[IMPORT] Files dropped:", e.dataTransfer.files);
-  console.debug("[IMPORT] Supported files after filter:", files);
   if (!files.length) {
     alert("No supported files found.");
     return;
@@ -3685,10 +3512,6 @@ function buildPictureIdsQueryParams() {
       params.append("sort", props.selectedSort.trim());
     }
     if (typeof props.selectedDescending === "boolean") {
-      console.log(
-        "[ImageGrid.vue] Constructing query with descending:",
-        props.selectedDescending,
-      );
       params.append("descending", props.selectedDescending ? "true" : "false");
     } else {
       console.warn(
@@ -4651,7 +4474,6 @@ function handleStackReorderDrop(img, event) {
 // Fetch total image count for current filters
 async function fetchAllGridImages(options = {}) {
   const force = options?.force === true;
-  console.log("[ImageGrid.vue] fetchAllGridImages called.");
   const fetchKey = buildGridFetchKey();
   const now = Date.now();
   if (!force && imagesLoading.value && lastFetchKey.value === fetchKey) {
@@ -4704,11 +4526,6 @@ async function fetchAllGridImages(options = {}) {
       const referenceIds = Array.isArray(refData?.reference_picture_ids)
         ? refData.reference_picture_ids
         : [];
-      console.log("[ImageGrid.vue] /characters/reference_pictures timing", {
-        count: referenceIds.length,
-        requestMs: (refRequestEnd - refRequestStart).toFixed(1),
-        totalMs: (refParseEnd - refRequestStart).toFixed(1),
-      });
 
       if (referenceIds.length) {
         const params = new URLSearchParams();
@@ -4736,11 +4553,6 @@ async function fetchAllGridImages(options = {}) {
         images = referenceIds
           .map((id) => picsById.get(PictureId(id)))
           .filter(Boolean);
-        console.log("[ImageGrid.vue] /pictures by reference ids timing", {
-          count: images.length,
-          requestMs: (picsRequestEnd - picsRequestStart).toFixed(1),
-          totalMs: (picsParseEnd - picsRequestStart).toFixed(1),
-        });
       }
     } else if (props.selectedSort === STACKS_SORT_KEY) {
       const threshold = StackThreshold(props.stackThreshold);
@@ -4755,11 +4567,6 @@ async function fetchAllGridImages(options = {}) {
       const parseEnd = performance.now();
       if (fetchAllGridImages.lastRequestId !== requestId) return;
       const stackImages = Array.isArray(data) ? data : [];
-      console.log("[ImageGrid.vue] /pictures/stacks timing", {
-        count: stackImages.length,
-        requestMs: (requestEnd - requestStart).toFixed(1),
-        totalMs: (parseEnd - requestStart).toFixed(1),
-      });
       images = stackImages.map((img) => {
         const stackIndex =
           typeof img.stack_index === "number"
@@ -4790,11 +4597,6 @@ async function fetchAllGridImages(options = {}) {
       const data = await res.data;
       const parseEnd = performance.now();
       images = data;
-      console.log("[ImageGrid.vue] /pictures/search timing", {
-        count: Array.isArray(images) ? images.length : 0,
-        requestMs: (requestEnd - requestStart).toFixed(1),
-        totalMs: (parseEnd - requestStart).toFixed(1),
-      });
     } else if (
       props.selectedSet &&
       props.selectedSet !== props.allPicturesId &&
@@ -4810,11 +4612,6 @@ async function fetchAllGridImages(options = {}) {
       const data = await res.data;
       const parseEnd = performance.now();
       images = data.pictures || [];
-      console.log("[ImageGrid.vue] /picture_sets timing", {
-        count: images.length,
-        requestMs: (requestEnd - requestStart).toFixed(1),
-        totalMs: (parseEnd - requestStart).toFixed(1),
-      });
     } else {
       const params = buildPictureIdsQueryParams();
       // Only use allowed parameters: sort, offset, limit, threshold
@@ -4827,11 +4624,6 @@ async function fetchAllGridImages(options = {}) {
       const data = await res.data;
       const parseEnd = performance.now();
       images = data;
-      console.log("[ImageGrid.vue] /pictures timing", {
-        count: Array.isArray(images) ? images.length : 0,
-        requestMs: (requestEnd - requestStart).toFixed(1),
-        totalMs: (parseEnd - requestStart).toFixed(1),
-      });
     }
     lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
     syncExpandAllStacksFromFetchedImages();
@@ -4860,9 +4652,6 @@ async function fetchAllGridImages(options = {}) {
     const mapStart = performance.now();
     const newImages = mapGridImages(images);
     const mapEnd = performance.now();
-    console.log("Updating allGridImages with fetched images:", {
-      count: newImages.length,
-    });
     allGridImages.value = newImages;
     const assignEnd = performance.now();
     const cols = props.columns || 1;
@@ -4880,18 +4669,8 @@ async function fetchAllGridImages(options = {}) {
     await maybeRefreshOverlayForComfyui();
     const rangeEnd = performance.now();
     const fetchEnd = performance.now();
-    console.log("[ImageGrid.vue] fetchAllGridImages total timing", {
-      totalMs: (fetchEnd - fetchStart).toFixed(1),
-      count: newImages.length,
-      mapMs: (mapEnd - mapStart).toFixed(1),
-      assignMs: (assignEnd - mapEnd).toFixed(1),
-      rangeMs: (rangeEnd - assignEnd).toFixed(1),
-    });
     requestAnimationFrame(() => {
       const rafEnd = performance.now();
-      console.log("[ImageGrid.vue] post-assign frame timing", {
-        rafMs: (rafEnd - assignEnd).toFixed(1),
-      });
       if (initialRender.value) {
         initialRender.value = false;
         updateVisibleThumbnails();
@@ -4948,9 +4727,6 @@ watch(
     () => props.stackThreshold,
   ],
   () => {
-    console.log(
-      "[ImageGrid.vue] Filters changed. Resetting state and fetching total image count.",
-    );
     gridReady.value = false;
     emptyStateDelayPassed.value = false;
     resetThumbnailState();
@@ -4968,9 +4744,6 @@ watch(
 );
 
 watch([() => props.mediaTypeFilter], () => {
-  console.log(
-    "[ImageGrid.vue] Media Type filters changed. Resetting state and fetching total image count.",
-  );
   gridReady.value = false;
   emptyStateDelayPassed.value = false;
   // Reset loaded ranges, thumbnails, pagination, and fetch new count/images for filter
@@ -5300,19 +5073,9 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
   const requestEpoch = thumbnailRequestEpoch.value;
 
   if (rangeCovers(pendingRanges, start, end)) {
-    console.log("[ImageGrid.vue] thumbnail fetch skipped (pending)", {
-      reason: meta?.reason || "unknown",
-      start,
-      end,
-    });
     return;
   }
   if (!meta?.force && rangeCovers(loadedRanges.value, start, end)) {
-    console.log("[ImageGrid.vue] thumbnail fetch skipped (loaded)", {
-      reason: meta?.reason || "unknown",
-      start,
-      end,
-    });
     return;
   }
   pendingRanges.push([start, end]);
@@ -5338,11 +5101,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       const data = await res.data;
       const parseEnd = performance.now();
       images = data.pictures ? data.pictures.slice(start, end) : [];
-      console.log("[ImageGrid.vue] /picture_sets batch timing", {
-        count: images.length,
-        requestMs: (requestEnd - requestStart).toFixed(1),
-        totalMs: (parseEnd - requestStart).toFixed(1),
-      });
       ids = images.map((img) => img.id);
     } else {
       // Only fetch if we don't already have metadata for this range
@@ -5370,15 +5128,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       )
       .map((img) => img.id);
     const requestedIdPreview = ids.slice(0, 8);
-    console.log("[ImageGrid.vue] thumbnail fetch prepared", {
-      reason: meta?.reason || "unknown",
-      start,
-      end,
-      rangeSize: Math.max(0, end - start),
-      missingCount: ids.length,
-      requestedIdPreview,
-      triggerId: meta?.triggerId ?? null,
-    });
     let overlayNeedsRedraw = false;
     if (ids.length) {
       ids = Array.from(new Set(ids.map((id) => String(id))));
@@ -5390,11 +5139,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       const thumbRequestEnd = performance.now();
       const thumbData = await thumbRes.data;
       const thumbParseEnd = performance.now();
-      console.log("[ImageGrid.vue] /pictures/thumbnails timing", {
-        count: ids.length,
-        requestMs: (thumbRequestEnd - thumbRequestStart).toFixed(1),
-        totalMs: (thumbParseEnd - thumbRequestStart).toFixed(1),
-      });
       if (requestEpoch !== thumbnailRequestEpoch.value) {
         return;
       }
@@ -5450,7 +5194,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     if (requestEpoch !== thumbnailRequestEpoch.value) {
       return;
     }
-    console.log("Updating allGridImages with thumbnails");
     for (let i = 0; i < gridImages.length; i++) {
       const img = gridImages[i];
       img.idx = start + i; // Redundant but explicit for safety
@@ -5466,10 +5209,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       triggerFaceOverlayRedraw();
     }
     const batchEnd = performance.now();
-    console.log("[ImageGrid.vue] fetchThumbnailsBatch total timing", {
-      count: gridImages.length,
-      totalMs: (batchEnd - batchStart).toFixed(1),
-    });
   } catch (err) {
     console.error("[BATCH ERROR]", err);
   } finally {
@@ -5486,24 +5225,10 @@ function updateVisibleThumbnails() {
     visibleEnd.value + renderBuffer.value,
   );
   if (shouldSuppressVisibleWindowFetch(start, end)) {
-    console.log("[ImageGrid.vue] thumbnail fetch suppressed (expand overlap)", {
-      start,
-      end,
-      visibleStart: visibleStart.value,
-      visibleEnd: visibleEnd.value,
-    });
     return;
   }
   if (rangeCovers(loadedRanges.value, start, end)) return;
   if (rangeCovers(pendingRanges, start, end)) return;
-  console.log("[ImageGrid.vue] Updating visible thumbnails:", {
-    start,
-    end,
-    visibleStart: visibleStart.value,
-    visibleEnd: visibleEnd.value,
-    divisibleViewWindow: divisibleViewWindow.value,
-    allGridImagesLength: allGridImages.value.length,
-  });
 
   // Debounce fetches to avoid excessive requests
   if (thumbFetchTimeout) clearTimeout(thumbFetchTimeout);
@@ -5513,7 +5238,6 @@ function updateVisibleThumbnails() {
     if (requestEpoch !== thumbnailRequestEpoch.value) {
       return;
     }
-    console.log("[ImageGrid.vue] Fetching thumbnails batch:", { start, end });
     await fetchThumbnailsBatch(start, end, {
       reason: "visible-window",
     });
@@ -5744,10 +5468,8 @@ function handleImageCardClick(img, idx, event) {
     // Toggle selection
     newSelection = [...selectedImageIds.value];
     if (newSelection.includes(img.id)) {
-      console.debug("Deselecting image ID:", img.id);
       newSelection = newSelection.filter((id) => id !== img.id);
     } else {
-      console.debug("Selecting image ID:", img.id);
       newSelection.push(img.id);
     }
     lastSelectedImageId = img.id;
@@ -5769,11 +5491,9 @@ function handleImageCardClick(img, idx, event) {
     lastSelectedImageId = img.id;
   }
   selectedImageIds.value = newSelection;
-  console.log("New selection:", newSelection);
 }
 
 function handleThumbnailClick(img, idx, event) {
-  console.debug("Thumbnail clicked. Id=", img.id, "Idx=", idx, "event=", event);
   if (!img.id) return;
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
@@ -5787,7 +5507,6 @@ function handleThumbnailClick(img, idx, event) {
 // Clear selection when clicking grid background
 function handleGridBackgroundClick(e) {
   if (!e.target.closest(".image-card")) {
-    console.log("Clearing selection");
     selectedImageIds.value = [];
     lastSelectedImageId = null;
   }
@@ -5848,7 +5567,6 @@ async function addTagToImage(imageId, tag) {
         tag: tag,
       },
     );
-    console.log(`Tag '${tag}' added to image ${imageId}`);
     const responseTags = TagList(response?.data?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
@@ -5995,25 +5713,11 @@ defineExpose({
   clearFaceSelection,
 });
 
-function reindexGridImages() {
-  const items = allGridImages.value.slice();
-  for (let i = 0; i < items.length; i += 1) {
-    const current = items[i];
-    if (!current) continue;
-    if (current.idx !== i) {
-      items[i] = { ...current, idx: i };
-    }
-  }
-  allGridImages.value = items;
-}
-
 // Remove images by ID (for event-driven removal)
 function removeImagesById(imageIds) {
   if (!Array.isArray(imageIds) || !imageIds.length) {
-    console.log("No image IDs provided for removal.");
     return;
   }
-  console.log("Removing images by ID:", imageIds);
   const dIds = new Set(
     imageIds.map((id) => PictureId(id)).filter((id) => id !== null),
   );
@@ -6182,17 +5886,12 @@ function abortExportZip() {
 // Search functionality
 const searchQuery = ref(props.searchQuery);
 
-onMounted(() => {
-  console.log("ImageGrid mounted. Initial search query:", searchQuery.value);
-});
+onMounted(() => {});
 
-watch(searchQuery, (newQuery) => {
-  console.log("Search query updated:", newQuery);
-});
+watch(searchQuery, (newQuery) => {});
 
 // Function to clear searchQuery
 function clearSearchQuery() {
-  console.log("[ImageGrid.vue] clearSearchQuery called");
   emit("clear-search", "");
 }
 

@@ -26,7 +26,6 @@ async function login(username, password) {
   try {
     const response = await apiClient.post('/login', {username, password});
     isAuthenticated.value = true;  // Update authentication state
-    console.log('Login successful:', response.data);
     if (typeof window !== 'undefined' && 'credentials' in navigator &&
         'PasswordCredential' in window && username && password) {
       try {
@@ -37,7 +36,6 @@ async function login(username, password) {
         });
         await navigator.credentials.store(credential);
       } catch (credentialError) {
-        console.debug('Credential store failed:', credentialError);
       }
     }
     return response.data;  // Return response data for further use if needed
@@ -51,7 +49,6 @@ async function login(username, password) {
 async function logout() {
   try {
     await apiClient.post('/logout');
-    console.log('User logged out successfully.');
   } catch (error) {
     console.error('Logout failed:', error);
   }
@@ -63,7 +60,6 @@ async function checkSession() {
   try {
     const response = await apiClient.get('/check-session');
     isAuthenticated.value = true;  // Update authentication state
-    console.log('Session valid:', response.data);
     return {status: 'ok', data: response.data};
   } catch (error) {
     if (error.response && error.response.status === 401) {

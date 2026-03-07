@@ -140,19 +140,6 @@ const smartScoreImportanceOptions = [
   { value: 5, label: "Severe" },
 ];
 
-function stepNumber(value, delta, options = {}) {
-  const { min = null, max = null, precision = null } = options;
-  const current = Number(value);
-  const base = Number.isFinite(current) ? current : 0;
-  let next = base + delta;
-  if (min != null) next = Math.max(min, next);
-  if (max != null) next = Math.min(max, next);
-  if (precision != null && Number.isFinite(precision)) {
-    next = Number(next.toFixed(precision));
-  }
-  return next;
-}
-
 async function fetchSettingsAuth() {
   settingsLoading.value = true;
   settingsError.value = "";
@@ -1170,9 +1157,7 @@ async function submitPasswordChange() {
           password: newPasswordValue,
         });
         await navigator.credentials.store(credential);
-      } catch (credentialError) {
-        console.debug("Credential store failed:", credentialError);
-      }
+      } catch (credentialError) {}
     }
   } catch (e) {
     settingsError.value =
