@@ -1031,7 +1031,7 @@ function buildComfyuiWsUrl(baseUrl) {
     ? trimmed.replace(/^https/, "wss")
     : trimmed.replace(/^http/, "ws");
   const clientId = getComfyuiClientId();
-  return `${wsBase}/comfyui/ws?clientId=${encodeURIComponent(clientId)}`;
+  return `${wsBase}/ws/comfyui?clientId=${encodeURIComponent(clientId)}`;
 }
 
 function normalizeComfyuiPercent(value) {

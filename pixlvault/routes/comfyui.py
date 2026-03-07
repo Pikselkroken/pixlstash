@@ -584,7 +584,7 @@ def _process_comfyui_outputs(
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
-    @router.websocket("/comfyui/ws")
+    @router.websocket("/ws/comfyui")
     async def comfyui_progress_proxy(websocket: WebSocket):
         await websocket.accept()
         session_id = websocket.cookies.get("session_id")
