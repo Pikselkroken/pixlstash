@@ -2556,12 +2556,6 @@ const filmstripCanvasStyle = computed(() => {
 
 function toggleFaceBbox() {
   showFaceBbox.value = !showFaceBbox.value;
-  console.log(
-    "[ImageOverlay] Toggled showFaceBbox:",
-    showFaceBbox.value,
-    "faceBboxes:",
-    faceBboxes.value,
-  );
 }
 
 const drawMode = ref(null);
@@ -2982,7 +2976,6 @@ async function fetchFaceBboxes(imageId) {
     const faces = await res.data;
     if (faceBboxesRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
-    console.log("Faces: ", faces);
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
     const firstFrameFaces = dedupeDetections(faceArray).filter(
       (f) =>
@@ -3386,10 +3379,6 @@ const allImageTags = computed(() => {
   return dedupeTagList([...imageTags.value]);
 });
 
-function isPictureTag(tag) {
-  return imageTags.value.some((entry) => tagMatches(entry, tag));
-}
-
 function startTagDrag(tag, sourceType, sourceId, event) {
   dragState.tag = tag;
   dragState.sourceType = sourceType;
@@ -3421,19 +3410,7 @@ function isDragOver(type, id) {
   return dragOverTarget.value?.type === type && dragOverTarget.value?.id === id;
 }
 
-async function handleTagDrop(targetType, targetId) {
-  clearTagDrag();
-}
-
 async function handleDropToUnassigned() {
-  clearTagDrag();
-}
-
-async function handleDropToFace(face) {
-  clearTagDrag();
-}
-
-async function handleDropToHand(hand) {
   clearTagDrag();
 }
 

@@ -99,27 +99,6 @@ const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
 const settingsDialogOpen = ref(false);
 const taskManagerOpen = ref(false);
-const taskIndicatorCanvasRef = ref(null);
-const taskIndicatorSeries = ref([]);
-const taskIndicatorRunning = ref(false);
-const taskIndicatorProgress = ref({ current: 0, total: 0 });
-const taskIndicatorLast = new Map();
-let taskIndicatorTimer = null;
-const TASK_INDICATOR_WINDOW_SECONDS = 180;
-const TASK_INDICATOR_POLL_MS = 2000;
-
-function getThemeRgb(name) {
-  if (typeof window === "undefined") return null;
-  const root = getComputedStyle(document.documentElement);
-  const value = root.getPropertyValue(`--v-theme-${name}`).trim();
-  return value || null;
-}
-
-function themeRgba(name, alpha, fallback = "0, 0, 0") {
-  const value = getThemeRgb(name) || fallback;
-  return `rgba(${value}, ${alpha})`;
-}
-
 function updateLabelOverflow(key, el = null) {
   const element = el || labelRefs.get(key);
   if (!element) return;
@@ -175,120 +154,6 @@ function mergeTooltipRef(refProps, key) {
     }
     registerLabelRef(key, el);
   };
-}
-
-function startTaskIndicatorPolling() {
-  if (taskIndicatorTimer) return;
-  fetchTaskIndicatorProgress();
-  taskIndicatorTimer = setInterval(
-    fetchTaskIndicatorProgress,
-    TASK_INDICATOR_POLL_MS,
-  );
-}
-
-function stopTaskIndicatorPolling() {
-  if (!taskIndicatorTimer) return;
-  clearInterval(taskIndicatorTimer);
-  taskIndicatorTimer = null;
-}
-
-async function fetchTaskIndicatorProgress() {
-  try {
-    const res = await apiClient.get("/workers/progress");
-    const workers = res.data?.workers || {};
-    const now = Date.now() / 1000;
-    let combinedRate = 0;
-    let combinedCurrent = 0;
-    let combinedTotal = 0;
-    let running = false;
-
-    for (const [key, snapshot] of Object.entries(workers)) {
-      const current = Number(snapshot.current || 0);
-      const total = Number(snapshot.total || 0);
-      const prev = taskIndicatorLast.get(key);
-      let rate = 0;
-      if (prev && now > prev.t) {
-        const delta = current - prev.current;
-        rate = delta > 0 ? delta / (now - prev.t) : 0;
-      }
-      combinedRate += rate;
-      combinedCurrent += current;
-      combinedTotal += total;
-      if (snapshot.running) {
-        running = true;
-      }
-      taskIndicatorLast.set(key, { current, t: now });
-    }
-
-    taskIndicatorRunning.value = running;
-    taskIndicatorProgress.value = {
-      current: combinedCurrent,
-      total: combinedTotal,
-    };
-
-    const nextSeries = [...taskIndicatorSeries.value];
-    nextSeries.push({ t: now, rate: combinedRate });
-    const cutoff = now - TASK_INDICATOR_WINDOW_SECONDS;
-    taskIndicatorSeries.value = nextSeries.filter((item) => item.t >= cutoff);
-    drawTaskIndicator();
-  } catch (err) {
-    // keep last known samples
-  }
-}
-
-function drawTaskIndicator() {
-  const canvas = taskIndicatorCanvasRef.value;
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.floor(rect.width));
-  const height = Math.max(1, Math.floor(rect.height));
-  const dpr = window.devicePixelRatio || 1;
-  const targetWidth = Math.floor(width * dpr);
-  const targetHeight = Math.floor(height * dpr);
-  if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
-  }
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.scale(dpr, dpr);
-
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = themeRgba("shadow", 0.15, "0, 0, 0");
-  ctx.fillRect(0, 0, width, height);
-
-  const samples = taskIndicatorSeries.value || [];
-  if (!samples.length) {
-    const y = height - 3;
-    ctx.beginPath();
-    ctx.moveTo(2, y);
-    ctx.lineTo(width - 2, y);
-    ctx.strokeStyle = themeRgba("on-surface", 0.6, "255, 255, 255");
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    return;
-  }
-
-  const maxRate = Math.max(1, ...samples.map((s) => s.rate || 0));
-  const pad = 2;
-  const plotWidth = width - pad * 2;
-  const plotHeight = height - pad * 2;
-  const step = samples.length > 1 ? plotWidth / (samples.length - 1) : 0;
-
-  ctx.beginPath();
-  samples.forEach((sample, index) => {
-    const x = pad + step * index;
-    const y = pad + plotHeight * (1 - (sample.rate || 0) / maxRate);
-    if (index === 0) {
-      ctx.moveTo(x, y);
-    } else {
-      ctx.lineTo(x, y);
-    }
-  });
-  ctx.strokeStyle = themeRgba("on-surface", 0.9, "255, 255, 255");
-  ctx.lineWidth = 1.2;
-  ctx.stroke();
 }
 
 const sidebarNotice = ref(null);
@@ -471,35 +336,17 @@ const reactiveSelectedDescending = ref(props.selectedDescending);
 watch(
   () => props.selectedDescending,
   (newValue, oldValue) => {
-    console.log(
-      "[SideBar.vue] Prop selectedDescending changed from",
-      oldValue,
-      "to",
-      newValue,
-    );
     reactiveSelectedDescending.value = newValue;
   },
 );
 
 const descendingModel = computed({
   get: () => {
-    console.log(
-      "[SideBar.vue] descendingModel.get() called. Current value:",
-      reactiveSelectedDescending.value,
-    );
     return reactiveSelectedDescending.value;
   },
   set: (value) => {
-    console.log(
-      "[SideBar.vue] descendingModel.set() called. New value:",
-      value,
-    );
     reactiveSelectedDescending.value = value;
     emit("update:selected-sort", { sort: sortModel.value, descending: value });
-    console.log(
-      "[SideBar.vue] descendingModel.set() completed. Updated reactiveSelectedDescending:",
-      reactiveSelectedDescending.value,
-    );
   },
 });
 
@@ -535,7 +382,6 @@ function openSetEditor(set = null) {
 }
 
 function closeSetEditor() {
-  console.log("Closing set editor");
   setEditorOpen.value = false;
   setEditorSet.value = null;
 }
@@ -566,10 +412,6 @@ function selectReferencePictures(
     id: characterId,
     label: referenceLabel || characterLabel,
   });
-}
-
-function searchImages(query) {
-  emit("search-images", query);
 }
 
 function selectSet(setId, label = null) {
@@ -823,7 +665,6 @@ async function fetchCharacters() {
     const res = await apiClient.get(`${props.backendUrl}/characters`);
     const chars = await res.data;
     characters.value = chars;
-    console.log("characters", characters.value);
     for (const char of chars) {
       fetchCharacterThumbnail(char.id);
     }
@@ -835,7 +676,6 @@ async function fetchCharacters() {
 }
 
 function refreshSidebar(options = {}) {
-  console.log("Refreshing sidebar");
   if (options?.flashCounts) {
     flashCountsNextFetch.value = true;
   }
@@ -865,7 +705,6 @@ async function fetchSortOptions() {
     const res = await apiClient.get(`${props.backendUrl}/sort_mechanisms`);
 
     const options = await res.data;
-    console.log("Fetched sort options:", options);
 
     // Filter out CHARACTER_LIKENESS if there are no characters
     const filteredOptions = options.filter((opt) => {
@@ -895,16 +734,6 @@ async function fetchSortOptions() {
   }
 }
 
-// Ensure sortedCharacters is fetched before fetchSortOptions
-async function fetchSortedCharactersAndSortOptions() {
-  try {
-    await fetchCharacters(); // Fetch characters first
-    await fetchSortOptions(); // Then fetch sort options
-  } catch (e) {
-    console.error("Error fetching sorted characters and sort options:", e);
-  }
-}
-
 // --- Picture Sets ---
 async function fetchPictureSets() {
   try {
@@ -913,7 +742,6 @@ async function fetchPictureSets() {
     const sets = await res.data; // Axios responses use `data` for the payload
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
     await updateSetThumbnails(pictureSets.value);
-    console.log("Found picture sets:", pictureSets.value);
   } catch (e) {
     console.error("Error fetching picture sets:", e);
     pictureSets.value = [...pictureSets.value]; // force reactivity on error
@@ -955,10 +783,6 @@ function hasSetThumbnail(pset) {
 function handleSetThumbnailError(setId) {
   if (!setId) return;
   setThumbnails.value = { ...setThumbnails.value, [setId]: null };
-}
-
-function handleCreateSet() {
-  openSetEditor(null);
 }
 
 async function handleDeleteSet() {
@@ -1007,7 +831,6 @@ async function handleDropOnSet(setId, event) {
   }
 
   if (draggedIds.length === 0) {
-    console.log("No images found in drag data");
     return;
   }
 
@@ -1029,10 +852,6 @@ async function handleDropOnSet(setId, event) {
 
     // Emit event to parent to remove images from grid
     emit("images-moved", { imageIds: draggedIds });
-
-    console.log(
-      `Added ${draggedIds.length} image(s) to set "${targetSet.name}"`,
-    );
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || String(e);
     if (typeof detail === "string" && detail.includes("already in set")) {
@@ -1065,9 +884,7 @@ async function onCharacterDrop(characterId, event) {
   let dragType = null;
   try {
     const rawDataStr = event.dataTransfer.getData("application/json");
-    console.log("[DROP] raw drag data string:", rawDataStr);
     const data = JSON.parse(rawDataStr);
-    console.log("onCharacterDrop data:", data);
     dragType = data.type || null;
     if (
       dragType === "face-bbox" &&
@@ -1099,7 +916,6 @@ async function onCharacterDrop(characterId, event) {
     // Assign faces to character
     try {
       const body = { face_ids: faceIds };
-      console.log("Assigning faces to character:", characterId, body);
       const res = await apiClient.post(
         `${props.backendUrl}/characters/${characterId}/faces`,
         body,
@@ -1107,9 +923,6 @@ async function onCharacterDrop(characterId, event) {
       await fetchSidebarData();
       await fetchCharacterThumbnail(characterId);
       emit("faces-assigned-to-character", { characterId, faceIds });
-      console.log(
-        `Assigned ${faceIds.length} face(s) to character ${characterId}`,
-      );
     } catch (e) {
       alert("Failed to assign faces to character: " + (e.message || e));
     }
@@ -1117,24 +930,18 @@ async function onCharacterDrop(characterId, event) {
   }
 
   if (imageIds.length === 0) {
-    console.log("No images found in drag data");
     return;
   }
 
   try {
     // Fallback: assign images to character
     const body = { picture_ids: imageIds };
-    console.log("Assigning images to character:", characterId, body);
     const res = await apiClient.post(
       `${props.backendUrl}/characters/${characterId}/faces`,
       body,
     );
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
-    //emit("faces-assigned-to-character", { characterId, imageIds });
-    console.log(
-      `Assigned ${imageIds.length} image(s) to character ${characterId}`,
-    );
     emit("images-assigned-to-character", { characterId, imageIds });
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || String(e);
@@ -1152,26 +959,6 @@ async function onCharacterDrop(characterId, event) {
   }
 }
 
-// Batched face removal
-async function removeFacesFromCharacter(characterId, faceIds) {
-  try {
-    const res = await apiClient.delete(
-      `${props.backendUrl}/characters/${characterId}/faces`,
-      {
-        data: { face_ids: faceIds },
-      },
-    );
-    await fetchSidebarData();
-    await fetchCharacterThumbnail(characterId);
-    emit("faces-removed-from-character", { characterId, faceIds });
-    console.log(
-      `Removed ${faceIds.length} face(s) from character ${characterId}`,
-    );
-  } catch (e) {
-    alert("Failed to remove faces from character: " + (e.message || e));
-  }
-}
-
 function handleDropOnCharacter(payload) {
   dragOverCharacter.value = null;
   if (!payload || !payload.characterId) return;
@@ -1179,26 +966,6 @@ function handleDropOnCharacter(payload) {
 }
 
 // --- Character Management ---
-function addNewCharacter() {
-  // Open character editor with empty character to create new one
-  let num = nextCharacterNumber.value;
-  let name;
-  const existingNames = new Set(characters.value.map((c) => c.name));
-  do {
-    name = `Character ${num}`;
-    num++;
-  } while (existingNames.has(name));
-  nextCharacterNumber.value = num;
-
-  // Open editor with default values
-  openCharacterEditor({
-    id: null,
-    name: name,
-    description: "",
-    extra_metadata: "",
-  });
-}
-
 async function characterSaved() {
   if (characterEditorCharacter.value && !characterEditorCharacter.value.id) {
     characters.value.push(characterEditorCharacter.value);
@@ -1211,30 +978,7 @@ async function characterSaved() {
   closeCharacterEditor();
 }
 
-async function pictureSetSaved(setData) {
-  // If setData is a new set (no id in pictureSets), add it
-  if (
-    setData &&
-    setData.id &&
-    !pictureSets.value.some((s) => s.id === setData.id)
-  ) {
-    pictureSets.value.push(setData);
-    pictureSets.value = [...pictureSets.value]; // force reactivity
-    emit("select-set", setData.id);
-  }
-  await fetchPictureSets();
-  pictureSets.value = [...pictureSets.value]; // force reactivity
-  await fetchSidebarData();
-  closeSetEditor();
-}
-
 onMounted(() => {
-  console.log(
-    "[SideBar.vue] Initial descendingModel value:",
-    descendingModel.value,
-  );
-  //refreshSidebar();
-  //startTaskIndicatorPolling();
   const handleNoticeReflow = () => {
     updateSidebarNoticePosition();
     updateSidebarErrorPosition();
@@ -1264,7 +1008,6 @@ onBeforeUnmount(() => {
   }
   labelObservers.clear();
   labelRefs.clear();
-  stopTaskIndicatorPolling();
 });
 
 watch(
@@ -2191,23 +1934,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-footer-item {
   margin-bottom: 0;
-}
-
-.sidebar-task-indicator {
-  margin-left: auto;
-  width: 64px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-}
-
-.sidebar-task-indicator-canvas {
-  width: 36px;
-  height: 16px;
-  display: block;
-  border-radius: 4px;
-  background: rgba(var(--v-theme-sidebar-text), 0.06);
 }
 
 .sidebar-list-item.active {

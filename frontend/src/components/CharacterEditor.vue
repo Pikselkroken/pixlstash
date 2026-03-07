@@ -154,7 +154,6 @@ async function saveCharacter(charData) {
       ? `${props.backendUrl}/characters`
       : `${props.backendUrl}/characters/${charData.id}`;
 
-    console.log("URL: ", url);
 
     if (isNew) {
       const res = await apiClient.post(url, JSON.stringify(charData));

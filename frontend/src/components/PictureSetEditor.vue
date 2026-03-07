@@ -146,81 +146,6 @@ async function saveSetFromEditor(setData) {
   }
 }
 
-const exportTaskId = ref(null);
-const exportStatus = ref(null);
-const downloadUrl = ref(null);
-
-async function startExport() {
-  try {
-    const response = await apiClient.get(
-      `${props.backendUrl}/pictures/export`,
-      {
-        params: { set_id: props.set.id },
-      },
-    );
-    exportTaskId.value = response.data.task_id;
-    pollExportStatus();
-  } catch (error) {
-    alert("Failed to start export: " + (error.message || error));
-  }
-}
-
-async function pollExportStatus() {
-  if (!exportTaskId.value) return;
-
-  const interval = setInterval(async () => {
-    try {
-      const response = await apiClient.get(
-        `${props.backendUrl}/pictures/export/status`,
-        { params: { task_id: exportTaskId.value } },
-      );
-
-      exportStatus.value = response.data.status;
-
-      if (response.data.status === "completed") {
-        downloadUrl.value = response.data.download_url;
-        clearInterval(interval);
-      } else if (response.data.status === "failed") {
-        alert("Export failed.");
-        clearInterval(interval);
-      }
-    } catch (error) {
-      console.error("Error checking export status:", error);
-      clearInterval(interval);
-    }
-  }, 2000);
-}
-
-async function downloadExport() {
-  if (downloadUrl.value) {
-    try {
-      const response = await apiClient.get(
-        `${props.backendUrl}${downloadUrl.value}`,
-        {
-          responseType: "blob", // Ensure binary data is handled correctly
-        },
-      );
-
-      console.log("Response headers:", response.headers);
-      console.log("Response status:", response.status);
-      console.log("Blob size:", response.data.size, "bytes");
-
-      // Create a downloadable link for the file
-      const blob = new Blob([response.data], { type: "application/zip" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "exported_pictures.zip"; // Default file name
-      link.click();
-
-      // Clean up the object URL
-      URL.revokeObjectURL(link.href);
-    } catch (error) {
-      console.error("Download failed:", error);
-      alert("Failed to download export: " + (error.message || error));
-    }
-  }
-}
-
 // Add/remove keyboard listener when dialog opens/closes
 watch(
   () => props.open,
@@ -272,12 +197,6 @@ watch(
   padding: 8px 16px 16px;
 }
 
-.export-section {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid rgb(var(--v-theme-border));
-}
-
 .btn {
   padding: 10px 24px;
   border: none;
@@ -315,35 +234,5 @@ watch(
 .btn-save:disabled {
   background: rgb(var(--v-theme-disabled));
   cursor: not-allowed;
-}
-
-.btn-export {
-  background: rgb(var(--v-theme-tertiary));
-  color: rgb(var(--v-theme-on-tertiary));
-  width: 100%;
-}
-
-.export-status {
-  margin-top: 12px;
-  font-size: 0.95rem;
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.status-completed {
-  color: rgb(var(--v-theme-success));
-}
-
-.status-failed {
-  color: rgb(var(--v-theme-error));
-}
-
-.download-link {
-  color: rgb(var(--v-theme-tertiary));
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.download-link:hover {
-  text-decoration: none;
 }
 </style>
