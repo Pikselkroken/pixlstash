@@ -1,5 +1,3 @@
 PixlVault 1.0 Hardening Plan
 
-1. Add startup self-checks (models, paths, DB schema/version).
-2. Add regression tests for stacking, overlay refresh, workflow import/delete.
-3. Improve smart score
+* Improve smart score
