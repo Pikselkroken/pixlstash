@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
 import { isSupportedImportFile } from "../utils/media.js";
-import { apiClient } from "../utils/apiClient";
+import { apiClient } from "../utils/apiClient.js";
 
 const props = defineProps({
   open: { type: Boolean, default: false },

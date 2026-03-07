@@ -13,7 +13,7 @@ import { useTheme } from "vuetify";
 import { apiClient, API_BASE_URL } from "./utils/apiClient";
 
 import SideBar from "./components/SideBar.vue";
-import GooglePhotosImportDialog from "./components/GooglePhotosImportDialog.vue";
+import PhotosImportDialog from "./components/PhotosImportDialog.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import SearchOverlay from "./components/SearchOverlay.vue";
 import Toolbar from "./components/Toolbar.vue";
@@ -93,7 +93,7 @@ const isAllPicturesActive = computed(
 
 const thumbnailSize = ref(256);
 const sidebarThumbnailSize = ref(48);
-const googlePhotosDialogOpen = ref(false);
+const photosDialogOpen = ref(false);
 const columns = ref(4); // Default columns
 const MIN_THUMBNAIL_SIZE = 96;
 const MAX_THUMBNAIL_SIZE = 384;
@@ -324,11 +324,11 @@ function openSettingsDialog() {
 }
 
 function openImportDialog() {
-  googlePhotosDialogOpen.value = true;
+  photosDialogOpen.value = true;
 }
 
 async function handleLocalImport(files) {
-  googlePhotosDialogOpen.value = false;
+  photosDialogOpen.value = false;
   await nextTick();
   sidebarRef.value?.startLocalImport?.(files);
 }
@@ -984,8 +984,7 @@ watch(
 
 watch(
   [showFaceBboxes, showFormat, showResolution, showProblemIcon, showStacks],
-  ([face, format, resolution, problem, stacks]) => {
-  },
+  ([face, format, resolution, problem, stacks]) => {},
   { immediate: true },
 );
 
@@ -1123,8 +1122,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
           class="sidebar-backdrop"
           @click="sidebarVisible = false"
         ></div>
-        <GooglePhotosImportDialog
-          v-model:open="googlePhotosDialogOpen"
+        <PhotosImportDialog
+          v-model:open="photosDialogOpen"
           @local-import="handleLocalImport"
         />
         <main class="main-area" ref="mainAreaRef">
