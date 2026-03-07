@@ -1,6 +1,7 @@
 import json
 import re
 import secrets
+import time
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -45,6 +46,8 @@ class AuthService:
         self.user: Optional[User] = None
         self.password_hash: Optional[str] = None
         self.username: Optional[str] = None
+        self._failed_login_attempts: int = 0
+        self._login_lockout_until: float = 0.0
 
     def ensure_secure_when_required(self, request: Request):
         if self._server_config.get("require_ssl", False):
@@ -322,6 +325,38 @@ class AuthService:
         raise HTTPException(status_code=401, detail="Invalid session")
 
     def login(self, request) -> Response:
+        remaining = self._login_lockout_until - time.monotonic()
+        if remaining > 0:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed login attempts. Try again later.",
+                headers={"Retry-After": str(int(remaining) + 1)},
+            )
+        try:
+            response = self._do_login(request)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                self._failed_login_attempts += 1
+                if self._failed_login_attempts >= 5:
+                    self._login_lockout_until = time.monotonic() + 60
+                    self._logger.warning(
+                        "5 failed login attempts — locked out for 60s."
+                    )
+                else:
+                    self._logger.warning(
+                        "Login failure #%d.", self._failed_login_attempts
+                    )
+            raise
+        if self._failed_login_attempts:
+            self._logger.info(
+                "Login succeeded after %d failure(s). Resetting lockout.",
+                self._failed_login_attempts,
+            )
+        self._failed_login_attempts = 0
+        self._login_lockout_until = 0.0
+        return response
+
+    def _do_login(self, request) -> Response:
         if request.token:
             user = self.get_user()
             if not user:
