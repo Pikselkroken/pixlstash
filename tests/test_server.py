@@ -956,24 +956,22 @@ def test_semantic_search():
                 query_rows.append(
                     {
                         "query": search_text,
-                        "result_count": len(results),
-                        "top_score": round(float(results[0]["likeness_score"]), 6),
+                        "top_score": round(float(results[0]["likeness_score"]), 4),
                         "top_description": results[0].get("description", ""),
                     }
                 )
 
             summary = {
                 "total_queries": len(query_rows),
-                "total_results": int(sum(row["result_count"] for row in query_rows)),
                 "avg_top_score": round(
                     float(
                         sum(row["top_score"] for row in query_rows)
                         / max(1, len(query_rows))
                     ),
-                    6,
+                    4,
                 ),
                 "min_top_score": round(
-                    float(min(row["top_score"] for row in query_rows)), 6
+                    float(min(row["top_score"] for row in query_rows)), 4
                 ),
             }
 
