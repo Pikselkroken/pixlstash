@@ -1811,23 +1811,13 @@ def create_router(server) -> APIRouter:
                 server.import_tasks[task_id]["results"] = results
                 server.import_tasks[task_id]["processed"] = len(uploaded_files)
                 if new_pictures:
-                    server.import_tasks[task_id]["status"] = "processing_faces"
-                    face_futures = [
+                    new_ids = [pic.id for pic in new_pictures if pic.id is not None]
+
+                    # Queue face extraction asynchronously — do not block on it.
+                    for pic in new_pictures:
                         server.vault.get_worker_future(
                             TaskType.FACE_EXTRACTION, Picture, pic.id, "faces"
                         )
-                        for pic in new_pictures
-                    ]
-                    server.vault.notify(EventType.CHANGED_PICTURES)
-                    face_timeout_s = 120
-                    for pic, future in zip(new_pictures, face_futures):
-                        try:
-                            future.result(timeout=face_timeout_s)
-                        except Exception as exc:
-                            raise RuntimeError(
-                                f"Face extraction timed out for picture id={pic.id}"
-                            ) from exc
-                    new_ids = [pic.id for pic in new_pictures if pic.id is not None]
 
                     def mark_imported(session, ids: list[int]):
                         if not ids:
@@ -1846,12 +1836,13 @@ def create_router(server) -> APIRouter:
                         return updated
 
                     imported_ids = server.vault.db.run_task(mark_imported, new_ids)
+                    server.import_tasks[task_id]["status"] = "completed"
+                    server.vault.notify(EventType.CHANGED_PICTURES)
                     if imported_ids:
                         server.vault.notify(
                             EventType.PICTURE_IMPORTED,
                             imported_ids,
                         )
-                    server.import_tasks[task_id]["status"] = "completed"
                 else:
                     server.import_tasks[task_id]["status"] = "completed"
                     server.vault.notify(EventType.CHANGED_PICTURES)
