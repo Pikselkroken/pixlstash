@@ -44,11 +44,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Upgrade pip/wheel
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools
 
-# PyTorch with CUDA 12.6 — must be installed before open_clip_torch pulls CPU torch
+# PyTorch with CUDA 12.8 — required for Blackwell (RTX 5xxx / sm_120) support.
+# Must be installed before open_clip_torch pulls in a CPU-only torch.
 RUN pip install --no-cache-dir \
     torch \
     torchvision \
-    --index-url https://download.pytorch.org/whl/cu126
+    --index-url https://download.pytorch.org/whl/cu128
 
 # onnxruntime-gpu replaces plain onnxruntime for CUDA inference
 RUN pip install --no-cache-dir onnxruntime-gpu
@@ -92,25 +93,39 @@ RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/
 # Download spaCy English model
 RUN python -m spacy download en_core_web_sm
 
+# ── Non-root user ─────────────────────────────────────────────────────────────
+# Run as a non-root user for security.  UID/GID 10001 avoids conflicts with
+# UIDs pre-allocated in the nvidia/cuda base image (which already uses 1000).
+RUN groupadd -f -g 10001 pixlvault \
+    && useradd -r -u 10001 -g 10001 -m -d /home/pixlvault pixlvault \
+    && chown -R pixlvault:pixlvault /app /opt/venv
+
+USER pixlvault
+
 # ── Copy application source ───────────────────────────────────────────────────
-COPY pyproject.toml setup.py MANIFEST.in alembic.ini ./
-COPY pixlvault/ pixlvault/
-COPY migrations/ migrations/
-COPY cpu/ cpu/
-COPY cuda/ cuda/
+COPY --chown=pixlvault:pixlvault pyproject.toml setup.py MANIFEST.in alembic.ini ./
+COPY --chown=pixlvault:pixlvault pixlvault/ pixlvault/
+COPY --chown=pixlvault:pixlvault migrations/ migrations/
+COPY --chown=pixlvault:pixlvault cpu/ cpu/
+COPY --chown=pixlvault:pixlvault cuda/ cuda/
 
 # Install the pixlvault package itself (no deps — already installed above)
 RUN pip install --no-cache-dir --no-deps -e .
 
 # Copy the pre-built frontend into the package's expected location
-COPY --from=frontend-builder /build/pixlvault/frontend/dist pixlvault/frontend/dist/
+COPY --chown=pixlvault:pixlvault --from=frontend-builder /build/pixlvault/frontend/dist pixlvault/frontend/dist/
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
+# Entrypoint is installed as root so it can be found on PATH, then we switch
+# back to the non-root user for the actual process.
+USER root
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+USER pixlvault
 
-# Volume for persistent data (images, vault.db, config, logs)
-VOLUME ["/data"]
+# Volume for persistent data — mount /home/pixlvault to persist config, images,
+# downloaded models, and the database across container restarts.
+VOLUME ["/home/pixlvault"]
 
 EXPOSE 9537
 
