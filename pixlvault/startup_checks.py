@@ -253,6 +253,27 @@ class StartupChecks:
                 "Optional GPU utility missing: nvidia-smi (GPU telemetry may be reduced)."
             )
 
+    def _has_onnxruntime_conflict(self) -> bool:
+        """Return True if both onnxruntime and onnxruntime-gpu are installed.
+
+        Having both packages installed causes ONNX to silently use CPU inference
+        even when a CUDA-capable GPU is present.
+        """
+        cpu_installed = False
+        gpu_installed = False
+        for package_name in ("onnxruntime", "onnxruntime-gpu"):
+            try:
+                metadata.distribution(package_name)
+                if package_name == "onnxruntime":
+                    cpu_installed = True
+                else:
+                    gpu_installed = True
+            except metadata.PackageNotFoundError:
+                continue
+            except Exception:
+                continue
+        return cpu_installed and gpu_installed
+
     def _check_device_and_vram(self, outcome: StartupCheckOutcome) -> None:
         device_value = str(self._server_config.get("default_device", "cpu")).lower()
         if device_value == "gpu":
@@ -296,23 +317,33 @@ class StartupChecks:
         if "CUDAExecutionProvider" not in providers:
             provider_list = ", ".join(providers) if providers else "none"
             onnx_package = self._detect_onnxruntime_package()
-            remediation = self._onnx_cuda_remediation_hint(onnx_package)
-            self._handle_gpu_check_failure(
-                outcome,
-                is_auto_mode,
-                is_explicit_gpu,
-                (
-                    "ONNX CUDAExecutionProvider unavailable "
-                    f"(available providers: {provider_list}; package: {onnx_package}); "
-                    f"forcing CPU inference. {remediation}"
-                ),
-                (
-                    "ONNX CUDAExecutionProvider unavailable while default_device is set to cuda "
-                    f"(available providers: {provider_list}; package: {onnx_package}). "
-                    f"{remediation}"
-                ),
+            gpu_arch_note = self._detect_gpu_arch_note()
+            remediation = self._onnx_cuda_remediation_hint(onnx_package, gpu_arch_note)
+            conflict_note = (
+                " Both 'onnxruntime' and 'onnxruntime-gpu' are installed — "
+                "this conflict likely caused the fallback to CPU. "
+                "Fix with: pip uninstall -y onnxruntime && pip install onnxruntime-gpu."
+                if self._has_onnxruntime_conflict()
+                else ""
             )
-            return
+            # If PyTorch CUDA is available the GPU works — only the ONNX WD14 tagger
+            # will fall back to CPU.  Treat this as a warning, not a hard failure.
+            if is_explicit_gpu:
+                outcome.warnings.append(
+                    "ONNX CUDAExecutionProvider unavailable while default_device is set to cuda "
+                    f"(available providers: {provider_list}; package: {onnx_package}){gpu_arch_note}. "
+                    "PyTorch CUDA will still be used for all non-ONNX inference; "
+                    f"the WD14 tagger ONNX model will run on CPU.{conflict_note} "
+                    f"{remediation}"
+                )
+            else:
+                outcome.warnings.append(
+                    "ONNX CUDAExecutionProvider unavailable "
+                    f"(available providers: {provider_list}; package: {onnx_package}){gpu_arch_note}. "
+                    "PyTorch CUDA will still be used for all non-ONNX inference; "
+                    f"the WD14 tagger ONNX model will run on CPU.{conflict_note} {remediation}"
+                )
+            # Don't return — continue with the VRAM check so other GPU paths work.
 
         min_free_vram_mb = float(
             self._server_config.get(
@@ -382,6 +413,26 @@ class StartupChecks:
             return
         self._force_cpu_with_warning(outcome, fallback_warning)
 
+    def _detect_gpu_arch_note(self) -> str:
+        """Return a human-readable note if the GPU arch may be unsupported by ORT."""
+        if torch is None or not torch.cuda.is_available():
+            return ""
+        try:
+            major, minor = torch.cuda.get_device_capability(0)
+            sm = major * 10 + minor
+            # ORT 1.x releases lag behind new GPU architectures.
+            # sm >= 120 = Blackwell (RTX 5xxx) — not included in ORT until a later release.
+            if sm >= 120:
+                name = torch.cuda.get_device_name(0)
+                return (
+                    f" — GPU {name} (sm_{major}{minor}, Blackwell) may not be supported "
+                    "by the installed onnxruntime-gpu; upgrade to a newer ORT release or "
+                    "build from source"
+                )
+        except Exception:
+            pass
+        return ""
+
     def _detect_onnxruntime_package(self) -> str:
         for package_name in ("onnxruntime-gpu", "onnxruntime"):
             try:
@@ -393,7 +444,7 @@ class StartupChecks:
                 continue
         return "unknown"
 
-    def _onnx_cuda_remediation_hint(self, onnx_package: str) -> str:
+    def _onnx_cuda_remediation_hint(self, onnx_package: str, gpu_arch_note: str = "") -> str:
         config_hint = (
             f"Server config path: {self._server_config_path}.\n"
             "Set `default_device` to `cpu` or `auto` there to avoid strict CUDA startup checks."
