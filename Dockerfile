@@ -6,6 +6,8 @@ COPY frontend/package*.json ./
 RUN npm ci
 
 COPY frontend/ ./
+# Copy pyproject.toml so Vite can read the version at build time
+COPY pyproject.toml /build/pyproject.toml
 RUN npm run build
 
 
