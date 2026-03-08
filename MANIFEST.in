@@ -5,3 +5,4 @@ include pixlvault/alembic.ini
 recursive-include pixlvault/migrations *
 include alembic.ini
 recursive-include migrations *
+recursive-include pixlvault/image_plugins/built-in *.py

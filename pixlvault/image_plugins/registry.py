@@ -152,8 +152,7 @@ _PLUGIN_MANAGER_LOCK = Lock()
 
 
 def _default_plugin_base_dir() -> str:
-    package_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    return os.path.join(package_dir, "image-plugins")
+    return os.path.dirname(__file__)
 
 
 def get_image_plugin_manager() -> ImagePluginManager:
