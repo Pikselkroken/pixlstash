@@ -218,8 +218,6 @@ class Server:
 
         # Temporary storage for export tasks
         self.export_tasks = {}
-        self.TEMP_EXPORT_DIR = "tmp/exports"
-        os.makedirs(self.TEMP_EXPORT_DIR, exist_ok=True)
 
         # Temporary storage for import tasks
         self.import_tasks = {}

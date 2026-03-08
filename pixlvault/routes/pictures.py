@@ -1342,7 +1342,6 @@ def create_router(server) -> APIRouter:
             request,
             task_id,
             server.export_tasks,
-            server.TEMP_EXPORT_DIR,
             background_data,
         )
         return JSONResponse({"task_id": task_id})

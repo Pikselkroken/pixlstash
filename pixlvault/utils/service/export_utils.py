@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import tempfile
 import zipfile
 
 from PIL import Image, PngImagePlugin
@@ -161,9 +162,7 @@ class ExportUtils:
         return result
 
     @staticmethod
-    def generate_zip(
-        server, request, task_id, export_tasks, TEMP_EXPORT_DIR, background_data
-    ):
+    def generate_zip(server, request, task_id, export_tasks, background_data):
         """
         Generate a ZIP file for picture export.
 
@@ -172,10 +171,10 @@ class ExportUtils:
             request: The FastAPI request.
             task_id: The export task ID.
             export_tasks: The export_tasks dict (for progress/status).
-            TEMP_EXPORT_DIR: Directory for temp export files.
             background_data: Dict of extra params (query, set_id, threshold,
                 caption_mode, include_character_name, resolution, export_type).
         """
+        TEMP_EXPORT_DIR = os.path.join(tempfile.gettempdir(), "pixlvault", "exports")
         try:
             params = ExportUtils._parse_export_params(request, background_data)
             export_type_d = params["export_type_d"]
@@ -299,6 +298,7 @@ class ExportUtils:
             filename = f"{filename}_{len(pics)}_images.zip"
             export_tasks[task_id]["filename"] = filename
 
+            os.makedirs(TEMP_EXPORT_DIR, exist_ok=True)
             zip_path = os.path.join(TEMP_EXPORT_DIR, f"export_{task_id}.zip")
             feature_faces_by_pic = {}
             face_tags_by_face = {}
