@@ -26,7 +26,7 @@ from pixlvault.utils.image_processing.image_utils import ImageUtils
 from pixlvault.tasks.task_type import TaskType
 from pixlvault.picture_tagger import PictureTagger
 from pixlvault.server import Server
-from tests.utils import upload_pictures_and_wait
+from tests.utils import upload_pictures_and_wait, wait_for_faces
 
 logger = get_logger(__name__)
 
@@ -339,9 +339,7 @@ def test_characters_summary():
 
             # Wait for facial features to be processed and associate Esmeralda Vault with largest face in each picture
             for pid in picture_ids:
-                faces_resp = client.get(f"/pictures/{pid}/faces")
-                assert faces_resp.status_code == 200
-                faces_data = faces_resp.json().get("faces", [])
+                faces_data = wait_for_faces(client, pid, timeout_s=60)
                 if not faces_data:
                     continue
 
@@ -764,15 +762,9 @@ def test_semantic_search(request):
             # Wait for facial features to be processed and associate Esmeralda Vault with largest face in each picture
             picture_ids_with_chars: set[int] = set()
             for pid in picture_ids:
-                # Fetch faces for this picture
-                faces_resp = client.get(f"/pictures/{pid}/faces")
-                assert faces_resp.status_code == 200, (
-                    f"Failed to get picture info for {pid}"
-                )
-                logging.debug(
-                    f"Received face data for picture ID {pid}: {faces_resp.json().get('faces', [])}"
-                )
-                faces_data = faces_resp.json().get("faces", [])
+                # Fetch faces for this picture — poll because face extraction is async
+                faces_data = wait_for_faces(client, pid, timeout_s=60)
+                logging.debug(f"Received face data for picture ID {pid}: {faces_data}")
                 logging.debug(f"Picture ID {pid} has {len(faces_data)} faces detected")
                 if not faces_data:
                     continue  # No faces detected
