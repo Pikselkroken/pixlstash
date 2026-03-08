@@ -33,11 +33,11 @@
                 :disabled="!selectedPluginName"
               >
                 <v-icon size="16">mdi-tune-variant</v-icon>
-                <span>Apply Filters</span>
+                <span>Filters</span>
               </button>
             </template>
             <div class="plugin-menu-panel">
-              <div class="plugin-menu-header">Filters</div>
+              <div class="plugin-menu-header">Apply Filters</div>
               <div class="plugin-menu-body">
                 <label class="plugin-menu-label">Filters</label>
                 <select v-model="selectedPluginName" class="plugin-run-select">
@@ -187,7 +187,7 @@
           @click="$emit('create-stack')"
         >
           <v-icon size="16">mdi-layers</v-icon>
-          <span>Create Stack</span>
+          <span>Stack</span>
         </button>
         <button
           v-if="showGroupStackButton"
@@ -197,7 +197,7 @@
           @click="$emit('create-stacks-from-groups')"
         >
           <v-icon size="16">mdi-layers-plus</v-icon>
-          <span>Create Stacks from Groups</span>
+          <span>Stack Groups</span>
         </button>
         <button
           v-if="showRemoveButton"
@@ -285,8 +285,8 @@ const removeButtonLabel = computed(() => {
 });
 
 const deleteButtonLabel = computed(() => {
-  if (isScrapheapView.value) return "Permanently Delete Pictures";
-  return "Delete Pictures";
+  if (isScrapheapView.value) return "Permanently Delete";
+  return "Delete";
 });
 
 const showGroupStackButton = computed(() => {
@@ -487,17 +487,26 @@ function runSelectedPlugin() {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
 }
-.selection-count {
+.selection-count,
+.selection-face-count {
   font-weight: bold;
   font-size: 1.1em;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .selection-bar-actions {
   display: flex;
   align-items: center;
   gap: 16px;
   margin-left: auto;
+  flex-shrink: 0;
 }
 .clear-btn {
   background: rgb(var(--v-theme-primary));

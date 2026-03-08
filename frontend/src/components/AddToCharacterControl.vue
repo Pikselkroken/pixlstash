@@ -10,8 +10,8 @@
       :disabled="disabled"
       :aria-expanded="menuOpen"
       aria-haspopup="true"
-      aria-label="Add to character"
-      title="Add to character"
+      aria-label="Set character"
+      title="Set character"
       @click.stop="toggleMenu"
     >
       <v-icon size="18">mdi-account-plus</v-icon>
@@ -70,7 +70,7 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
-  label: { type: String, default: "Add to character" },
+  label: { type: String, default: "Character" },
 });
 
 const emit = defineEmits(["added"]);
