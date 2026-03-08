@@ -184,11 +184,11 @@
               'image-card-stack-reorder-target': isStackReorderTarget(img),
               'image-card-stack-reorder-left': isStackReorderTargetSide(
                 img,
-                'left'
+                'left',
               ),
               'image-card-stack-reorder-right': isStackReorderTargetSide(
                 img,
-                'right'
+                'right',
               ),
             },
           ]"
@@ -348,7 +348,7 @@
                       toggleFaceSelection(
                         img.id,
                         overlay.faceIdx,
-                        overlay.faceId
+                        overlay.faceId,
                       )
                     "
                     @dragstart="
@@ -358,7 +358,7 @@
                           e,
                           img,
                           overlay.faceIdx,
-                          overlay.faceId
+                          overlay.faceId,
                         );
                       }
                     "
@@ -682,7 +682,7 @@ async function runPluginWithParameters(pluginName, pictureIds, parameters) {
       {
         picture_ids: pictureIds,
         parameters: parameters || {},
-      }
+      },
     );
     const createdIds = Array.isArray(res.data?.created_picture_ids)
       ? res.data.created_picture_ids
@@ -755,7 +755,7 @@ function triggerFaceOverlayRedraw() {
 const comfyuiRunner = ref(null);
 
 const comfyuiClientId = computed(
-  () => comfyuiRunner.value?.clientId?.value ?? null
+  () => comfyuiRunner.value?.clientId?.value ?? null,
 );
 const comfyuiProgress = computed(
   () =>
@@ -764,10 +764,10 @@ const comfyuiProgress = computed(
       status: "idle",
       percent: 0,
       message: "",
-    }
+    },
 );
 const comfyuiProgressPercent = computed(
-  () => comfyuiRunner.value?.progressPercent?.value ?? 0
+  () => comfyuiRunner.value?.progressPercent?.value ?? 0,
 );
 
 function handleComfyuiRun(payload) {
@@ -928,7 +928,7 @@ watch(
   () => props.backendUrl,
   () => {
     fetchAvailablePlugins();
-  }
+  },
 );
 
 onUnmounted(() => {
@@ -976,7 +976,7 @@ watch(
     }
     highlightNextFetch.value = true;
     preserveScrollOnNextFetch.value = true;
-  }
+  },
 );
 
 watch(
@@ -995,7 +995,7 @@ watch(
     for (const id of dPayloadIds) {
       refreshGridImage(id);
     }
-  }
+  },
 );
 
 watch(
@@ -1015,7 +1015,7 @@ watch(
     pluginProgress.current = Math.max(0, Number(payload.current || 0));
     pluginProgress.total = Math.max(
       pluginProgress.current,
-      Number(payload.total || pluginProgress.total || 0)
+      Number(payload.total || pluginProgress.total || 0),
     );
     const explicitProgress = Number(payload.progress);
     if (Number.isFinite(explicitProgress)) {
@@ -1027,7 +1027,7 @@ watch(
     const pluginName = String(payload.plugin || "plugin");
     pluginProgress.message = normalizePluginProgressMessage(
       payload.message,
-      `${pluginName}: ${pluginProgress.status}`
+      `${pluginName}: ${pluginProgress.status}`,
     );
     pluginProgress.visible = true;
 
@@ -1040,7 +1040,7 @@ watch(
         pluginProgressHideTimer = null;
       }, 1800);
     }
-  }
+  },
 );
 
 function triggerNewImageHighlight(ids) {
@@ -1157,13 +1157,13 @@ const selectedFaceIds = ref([]); // Array of { imageId, faceIdx, faceId }
 
 function isFaceSelected(imageId, faceIdx) {
   return selectedFaceIds.value.some(
-    (f) => f.imageId === imageId && f.faceIdx === faceIdx
+    (f) => f.imageId === imageId && f.faceIdx === faceIdx,
   );
 }
 
 function toggleFaceSelection(imageId, faceIdx, faceId) {
   const idx = selectedFaceIds.value.findIndex(
-    (f) => f.imageId === imageId && f.faceIdx === faceIdx
+    (f) => f.imageId === imageId && f.faceIdx === faceIdx,
   );
   if (idx !== -1) {
     selectedFaceIds.value.splice(idx, 1);
@@ -1230,7 +1230,7 @@ function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
   // Calculate scale and offset for object-fit: cover
   const scale = Math.max(
     containerWidth / naturalWidth,
-    containerHeight / naturalHeight
+    containerHeight / naturalHeight,
   );
   const displayWidth = naturalWidth * scale;
   const offsetX = (containerWidth - displayWidth) / 2;
@@ -1280,7 +1280,7 @@ function getFaceBboxOverlays(img) {
       colorIdx,
       img,
       el,
-      isFaceSelected(img.id, entry.faceIdx)
+      isFaceSelected(img.id, entry.faceIdx),
     ),
     faceIdx: entry.faceIdx,
     faceId: entry.face.id,
@@ -1505,7 +1505,7 @@ function removeFromGroup() {
       })
       .finally(() => {
         allGridImages.value = allGridImages.value.filter(
-          (img) => !pictureIds.includes(img.id)
+          (img) => !pictureIds.includes(img.id),
         );
         selectedImageIds.value = [];
         clearFaceSelection();
@@ -1532,8 +1532,8 @@ function removeFromGroup() {
           `${backendUrl}/characters/${props.selectedCharacter}/faces`,
           {
             data: { picture_ids: pictureIds },
-          }
-        )
+          },
+        ),
       );
     }
     if (faceIds.length) {
@@ -1542,8 +1542,8 @@ function removeFromGroup() {
           `${backendUrl}/characters/${props.selectedCharacter}/faces`,
           {
             data: { face_ids: faceIds },
-          }
-        )
+          },
+        ),
       );
     }
     if (!requests.length) return;
@@ -1555,7 +1555,7 @@ function removeFromGroup() {
         if (pictureIds.length) {
           // Remove affected images from grid immediately
           allGridImages.value = allGridImages.value.filter(
-            (img) => !pictureIds.includes(img.id)
+            (img) => !pictureIds.includes(img.id),
           );
         }
         selectedImageIds.value = [];
@@ -1584,17 +1584,17 @@ function removeFromGroup() {
       pictureIds.map((id) =>
         apiClient
           .delete(
-            `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`
+            `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`,
           )
 
           .catch((err) => {
             alert(`Error removing image ${id} from set: ${err.message}`);
-          })
-      )
+          }),
+      ),
     ).then(async () => {
       // Remove affected images from grid immediately
       allGridImages.value = allGridImages.value.filter(
-        (img) => !pictureIds.includes(img.id)
+        (img) => !pictureIds.includes(img.id),
       );
       selectedImageIds.value = [];
       clearFaceSelection();
@@ -1647,7 +1647,7 @@ async function deleteSelected() {
   if (isScrapheapSelection) {
     if (
       !confirm(
-        `Permanently delete ${selectedImageIds.value.length} selected image(s)?`
+        `Permanently delete ${selectedImageIds.value.length} selected image(s)?`,
       )
     ) {
       return;
@@ -1666,8 +1666,8 @@ async function deleteSelected() {
         idsToRemove.map((id) =>
           apiClient.delete(`${backendUrl}/pictures/${id}`).catch((err) => {
             alert(`Error deleting image ${id}: ${err.message}`);
-          })
-        )
+          }),
+        ),
       );
     }
     removeImagesById(idsToRemove);
@@ -1687,7 +1687,7 @@ async function deleteSelected() {
 // ============================================================
 const isScrapheapView = computed(() => {
   const scrapheapId = String(
-    props.scrapheapPicturesId || "SCRAPHEAP"
+    props.scrapheapPicturesId || "SCRAPHEAP",
   ).toUpperCase();
   const selected = String(props.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
@@ -1702,7 +1702,7 @@ const selectedStackId = computed(() => {
   const imageById = new Map(
     images
       .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img])
+      .map((img) => [String(img.id), img]),
   );
   let stackId = null;
   for (const id of ids) {
@@ -1732,7 +1732,7 @@ const selectedMediaSupport = computed(() => {
   const imageById = new Map(
     images
       .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img])
+      .map((img) => [String(img.id), img]),
   );
 
   let hasImages = false;
@@ -1794,7 +1794,7 @@ const scrapheapRestoreDisabled = computed(() => {
 async function confirmEmptyScrapheap() {
   if (scrapheapEmptyDisabled.value) return;
   const confirmed = confirm(
-    "Empty scrapheap? This will permanently delete all pictures inside."
+    "Empty scrapheap? This will permanently delete all pictures inside.",
   );
   if (!confirmed) return;
   scrapheapEmptying.value = true;
@@ -1819,7 +1819,7 @@ async function confirmEmptyScrapheap() {
 async function confirmRestoreScrapheap() {
   if (scrapheapRestoreDisabled.value) return;
   const confirmed = confirm(
-    "Restore all scrapheap pictures? This will make them visible again."
+    "Restore all scrapheap pictures? This will make them visible again.",
   );
   if (!confirmed) return;
   scrapheapRestoring.value = true;
@@ -1852,8 +1852,8 @@ async function handleImagesUploaded(payload) {
     new Set(
       results
         .map((entry) => entry?.picture_id)
-        .filter((id) => id !== null && id !== undefined)
-    )
+        .filter((id) => id !== null && id !== undefined),
+    ),
   );
   if (pictureIds.length) {
     try {
@@ -1869,14 +1869,14 @@ async function handleImagesUploaded(payload) {
         await Promise.all(
           pictureIds.map((id) =>
             apiClient.post(
-              `${props.backendUrl}/picture_sets/${selectedSetId}/members/${id}`
-            )
-          )
+              `${props.backendUrl}/picture_sets/${selectedSetId}/members/${id}`,
+            ),
+          ),
         );
       } else if (!skipCharacter && selectedCharacterId != null) {
         await apiClient.post(
           `${props.backendUrl}/characters/${selectedCharacterId}/faces`,
-          { picture_ids: pictureIds }
+          { picture_ids: pictureIds },
         );
       }
     } catch (e) {
@@ -1933,7 +1933,7 @@ watch(
       preserveScrollOnNextFetch.value = false;
     }
     fetchAllPicturesCount();
-  }
+  },
 );
 
 // ============================================================
@@ -1948,7 +1948,7 @@ const divisibleViewWindow = computed(() => {
 
 const initialRender = ref(true);
 const renderBuffer = computed(() =>
-  initialRender.value ? 0 : divisibleViewWindow.value
+  initialRender.value ? 0 : divisibleViewWindow.value,
 );
 
 // ============================================================
@@ -1971,7 +1971,7 @@ const stackReorderHoverSide = ref(null);
 
 function setDragSourceImageIds(ids) {
   const next = new Set(
-    Array.isArray(ids) ? ids.map((id) => String(id)).filter(Boolean) : []
+    Array.isArray(ids) ? ids.map((id) => String(id)).filter(Boolean) : [],
   );
   dragSourceImageIds.value = next;
 }
@@ -2015,7 +2015,7 @@ async function updateSelectedGroupName() {
   ) {
     try {
       const res = await apiClient.get(
-        `${props.backendUrl}/characters/${props.selectedReferenceCharacter}`
+        `${props.backendUrl}/characters/${props.selectedReferenceCharacter}`,
       );
       const char = res.data;
       name = char?.name
@@ -2031,7 +2031,7 @@ async function updateSelectedGroupName() {
   ) {
     try {
       const res = await apiClient.get(
-        `${props.backendUrl}/characters/${props.selectedCharacter}`
+        `${props.backendUrl}/characters/${props.selectedCharacter}`,
       );
       const char = res.data;
       name = char.name || "";
@@ -2041,7 +2041,7 @@ async function updateSelectedGroupName() {
   } else if (props.selectedSet) {
     try {
       const res = await apiClient.get(
-        `${props.backendUrl}/picture_sets/${props.selectedSet}`
+        `${props.backendUrl}/picture_sets/${props.selectedSet}`,
       );
       const set = res.data;
       name = set.set.name || "";
@@ -2061,7 +2061,7 @@ watch(
   () => {
     updateSelectedGroupName();
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 // ============================================================
@@ -2100,7 +2100,7 @@ async function fetchImageInfo(imageId, options = {}) {
 
 function invalidateThumbnailIndex(index) {
   loadedRanges.value = loadedRanges.value.filter(
-    ([rangeStart, rangeEnd]) => index < rangeStart || index >= rangeEnd
+    ([rangeStart, rangeEnd]) => index < rangeStart || index >= rangeEnd,
   );
 }
 
@@ -2108,7 +2108,7 @@ async function refreshGridImage(imageId, options = {}) {
   if (!imageId) return;
   const dId = getPictureId(imageId);
   const idx = allGridImages.value.findIndex(
-    (img) => getPictureId(img?.id) === dId
+    (img) => getPictureId(img?.id) === dId,
   );
   if (idx === -1) return;
   const latestInfo = await fetchImageInfo(imageId, {
@@ -2146,7 +2146,7 @@ function getStackIndexFromItem(item) {
 function reorderStackByScore(stackIndex) {
   const items = allGridImages.value.slice();
   const stackItems = items.filter(
-    (item) => getStackIndexFromItem(item) === stackIndex
+    (item) => getStackIndexFromItem(item) === stackIndex,
   );
   if (stackItems.length <= 1) return;
   stackItems.sort((a, b) => {
@@ -2188,9 +2188,8 @@ function handleOverlayChange(payload) {
   }
   if (!imageId) return;
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
-    refreshGridImage(imageId);
     preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
+    debouncedFetchAllGridImages({ force: true });
     return;
   }
   refreshGridImage(imageId);
@@ -2293,7 +2292,7 @@ async function createStacksFromSelectedGroups() {
   const imageById = new Map(
     images
       .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img])
+      .map((img) => [String(img.id), img]),
   );
 
   const groupIds = new Set();
@@ -2311,10 +2310,10 @@ async function createStacksFromSelectedGroups() {
   const skippedGroups = [];
   for (const groupId of groupIds) {
     const members = images.filter(
-      (img) => getLikenessGroupId(img) === groupId && img?.id != null
+      (img) => getLikenessGroupId(img) === groupId && img?.id != null,
     );
     const memberIds = Array.from(
-      new Set(members.map((img) => Number(img.id)).filter(Number.isFinite))
+      new Set(members.map((img) => Number(img.id)).filter(Number.isFinite)),
     );
     if (memberIds.length < 2) continue;
     const membersByStack = new Map();
@@ -2334,7 +2333,7 @@ async function createStacksFromSelectedGroups() {
       const [stackId, stackedMembers] = Array.from(membersByStack.entries())[0];
       const stackedAnchorId = stackedMembers?.[0]?.id;
       const unstackedIds = memberIds.filter(
-        (id) => !getPictureStackId(imageById.get(String(id)))
+        (id) => !getPictureStackId(imageById.get(String(id))),
       );
       if (!unstackedIds.length) continue;
       const payloadIds = [stackedAnchorId, ...unstackedIds]
@@ -2358,7 +2357,7 @@ async function createStacksFromSelectedGroups() {
     }
     if (skippedGroups.length) {
       alert(
-        `Skipped ${skippedGroups.length} group(s) containing multiple stacks.`
+        `Skipped ${skippedGroups.length} group(s) containing multiple stacks.`,
       );
     }
     clearSelection();
@@ -2372,7 +2371,7 @@ async function createStacksFromSelectedGroups() {
 async function openOverlay(img) {
   if (!img || !img.id) return;
   overlayInitialExpandedStackIds.value = Array.from(
-    expandedStackIds.value || []
+    expandedStackIds.value || [],
   );
   overlayImageId.value = img.id;
   overlayOpen.value = true;
@@ -2415,10 +2414,10 @@ function invalidateVisibleThumbnailRanges() {
   const start = Math.max(0, visibleStart.value - renderBuffer.value);
   const end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + renderBuffer.value
+    visibleEnd.value + renderBuffer.value,
   );
   loadedRanges.value = loadedRanges.value.filter(
-    ([rangeStart, rangeEnd]) => rangeEnd <= start || rangeStart >= end
+    ([rangeStart, rangeEnd]) => rangeEnd <= start || rangeStart >= end,
   );
   updateVisibleThumbnails();
 }
@@ -2429,7 +2428,7 @@ function _spliceAndReinsert(
   target,
   targetScore,
   getScore,
-  descending
+  descending,
 ) {
   items.splice(currentIndex, 1);
   let insertIndex = items.findIndex((item) => {
@@ -2456,7 +2455,7 @@ function repositionImageByScore(imageId, newScore) {
   const items = allGridImages.value.slice();
   const dId = getPictureId(imageId);
   const currentIndex = items.findIndex(
-    (item) => getPictureId(item?.id) === dId
+    (item) => getPictureId(item?.id) === dId,
   );
   if (currentIndex === -1) return;
 
@@ -2470,7 +2469,7 @@ function repositionImageByScore(imageId, newScore) {
     target,
     targetScore,
     (item) => item.score ?? 0,
-    descending
+    descending,
   );
   if (insertIndex !== null) {
     nextTick(() => {
@@ -2509,7 +2508,7 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
       target,
       targetScore,
       (item) => item.smartScore ?? 0,
-      descending
+      descending,
     );
   } finally {
     smartScoreRepositioning = false;
@@ -2546,13 +2545,13 @@ async function applyScoresByEntries(entries, options = {}) {
       chunk.map(([id, score]) =>
         apiClient.patch(`${props.backendUrl}/pictures/${id}`, {
           score,
-        })
-      )
+        }),
+      ),
     );
   }
 
   const scoreMap = new Map(
-    entries.map(([id, score]) => [String(id), Number(score)])
+    entries.map(([id, score]) => [String(id), Number(score)]),
   );
 
   let updatedImages = allGridImages.value.map((img) => {
@@ -2639,7 +2638,7 @@ async function applyScoresForSelection(imageIds, targetScore) {
   const gridById = new Map(
     allGridImages.value
       .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img])
+      .map((img) => [String(img.id), img]),
   );
 
   const entries = [];
@@ -2733,11 +2732,11 @@ function buildDragGhostElement(element) {
   const rect = element.getBoundingClientRect?.();
   const width = Math.max(
     1,
-    Math.round(rect?.width || element.clientWidth || element.width || 160)
+    Math.round(rect?.width || element.clientWidth || element.width || 160),
   );
   const height = Math.max(
     1,
-    Math.round(rect?.height || element.clientHeight || element.height || 90)
+    Math.round(rect?.height || element.clientHeight || element.height || 90),
   );
   const computed =
     typeof window !== "undefined" && element instanceof Element
@@ -2788,7 +2787,7 @@ function setDragImageFromElement(event, element) {
   event.dataTransfer.setDragImage(
     dragEl,
     Math.max(1, width / 2),
-    Math.max(1, height / 2)
+    Math.max(1, height / 2),
   );
   if (ghostData?.ghost) {
     requestAnimationFrame(() => {
@@ -2806,7 +2805,7 @@ function setDragDataForImageIds(event, imageIds) {
     JSON.stringify({
       type: "image-ids",
       imageIds,
-    })
+    }),
   );
 }
 
@@ -2874,7 +2873,7 @@ function onGlobalKeyPress(key, event) {
     const totalHeight = totalRows * rowHeight.value;
     const maxScroll = Math.max(
       0,
-      totalHeight - scrollWrapper.value.clientHeight
+      totalHeight - scrollWrapper.value.clientHeight,
     );
     if (key === "Home") {
       newScrollTop = 0;
@@ -2883,12 +2882,12 @@ function onGlobalKeyPress(key, event) {
     } else if (key === "PageUp") {
       newScrollTop = Math.max(
         0,
-        newScrollTop - scrollWrapper.value.clientHeight
+        newScrollTop - scrollWrapper.value.clientHeight,
       );
     } else if (key === "PageDown") {
       newScrollTop = Math.min(
         maxScroll,
-        newScrollTop + scrollWrapper.value.clientHeight
+        newScrollTop + scrollWrapper.value.clientHeight,
       );
     }
     // Only update if changed
@@ -2976,7 +2975,7 @@ function buildPictureIdsQueryParams() {
     } else {
       console.warn(
         "[ImageGrid.vue] selectedDescending is not boolean, skipping param. Type:",
-        typeof props.selectedDescending
+        typeof props.selectedDescending,
       );
     }
   }
@@ -3041,7 +3040,7 @@ function mapGridImages(images) {
   const existingById = new Map(
     allGridImages.value
       .filter((img) => img && img.id != null)
-      .map((img) => [getPictureId(img.id), img])
+      .map((img) => [getPictureId(img.id), img]),
   );
   const uniqueImages = Array.isArray(images)
     ? (() => {
@@ -3139,8 +3138,8 @@ function getStackCardColor(img) {
     typeof img.stackIndex === "number"
       ? img.stackIndex
       : typeof img.stack_index === "number"
-      ? img.stack_index
-      : null;
+        ? img.stack_index
+        : null;
   if (typeof stackIndex === "number") {
     return getStackColor(stackIndex, STACK_COLOR_STEP);
   }
@@ -3195,7 +3194,7 @@ async function refreshExpandedStacksAfterFetch() {
   for (const stackId of expanded) {
     removeExpandedStackMembers(stackId);
     const header = allGridImages.value.find(
-      (item) => getPictureStackId(item) === stackId
+      (item) => getPictureStackId(item) === stackId,
     );
     if (!header) {
       nextExpanded.delete(stackId);
@@ -3235,7 +3234,7 @@ function cacheExpandedStackMembers(stackId, members) {
     .map((img) =>
       img.stack_id !== undefined || img.stackId !== undefined
         ? img
-        : { ...img, stack_id: normalizeStackIdValue(stackId) }
+        : { ...img, stack_id: normalizeStackIdValue(stackId) },
     );
   if (!ordered.length) return false;
   const nextMembers = new Map(expandedStackMembers.value);
@@ -3265,7 +3264,7 @@ function buildExpandedStackImages(stackId, fallbackImg, stackCount) {
   const imageById = new Map(
     sourceImages
       .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img])
+      .map((img) => [String(img.id), img]),
   );
   const ordered = [];
   const seen = new Set();
@@ -3307,13 +3306,13 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
   const items = allGridImages.value.slice();
   if (!items.length) return 0;
   const headerIndex = items.findIndex(
-    (item) => getPictureStackId(item) === stackId
+    (item) => getPictureStackId(item) === stackId,
   );
   if (headerIndex === -1) return 0;
   const header = items[headerIndex];
   const stackCount = getExpandedStackCount(
     stackId,
-    fallbackCount ?? header?.stackCount
+    fallbackCount ?? header?.stackCount,
   );
   const expanded = buildExpandedStackImages(stackId, header, stackCount);
   if (!expanded.length) return 0;
@@ -3326,19 +3325,19 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
     return false;
   });
   const filteredHeaderIndex = filtered.findIndex(
-    (item) => getPictureStackId(item) === stackId
+    (item) => getPictureStackId(item) === stackId,
   );
   if (filteredHeaderIndex === -1) return 0;
   const existingById = new Map(
     allGridImages.value
       .filter((img) => img && img.id != null)
-      .map((img) => [getPictureId(img.id), img])
+      .map((img) => [getPictureId(img.id), img]),
   );
   const expandedHeader = expanded[0];
   const mergedHeader = hydrateGridImage(
     { ...header, ...expandedHeader, stackCount },
     0,
-    existingById
+    existingById,
   );
   const insertItems = expanded
     .filter((img) => img && img.id != null)
@@ -3355,22 +3354,22 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
     loadedRanges.value = shiftRangesForDelta(
       loadedRanges.value,
       insertIndex,
-      insertCount
+      insertCount,
     );
     pendingRanges = shiftRangesForDelta(
       pendingRanges,
       insertIndex,
-      insertCount
+      insertCount,
     );
     adjustScrollWindowForDelta(insertIndex, insertCount, result.length);
     markVisibleFetchSuppressedForExpand(
       insertIndex,
-      insertIndex + insertCount + 1
+      insertIndex + insertCount + 1,
     );
     fetchThumbnailsForRangeNow(
       insertIndex,
       insertIndex + insertCount + 1,
-      "stack-expand-insert"
+      "stack-expand-insert",
     );
   } else {
     maybeRefreshThumbnailsForRange(insertIndex, insertIndex + 1);
@@ -3383,7 +3382,7 @@ function removeExpandedStackMembers(stackId) {
   const items = allGridImages.value.slice();
   if (!items.length) return;
   const headerIndex = items.findIndex(
-    (item) => getPictureStackId(item) === stackId
+    (item) => getPictureStackId(item) === stackId,
   );
   if (headerIndex === -1) return;
   let removedCount = 0;
@@ -3407,13 +3406,13 @@ function removeExpandedStackMembers(stackId) {
       loadedRanges.value,
       removeStart,
       -removedCount,
-      removeEnd
+      removeEnd,
     );
     pendingRanges = shiftRangesForDelta(
       pendingRanges,
       removeStart,
       -removedCount,
-      removeEnd
+      removeEnd,
     );
     adjustScrollWindowForDelta(removeStart, -removedCount, filtered.length);
     maybeRefreshThumbnailsForRange(removeStart, removeStart + 1);
@@ -3515,7 +3514,7 @@ async function ensureStackMembersLoaded(stackId, expectedCount = null) {
     expandedStackLoading.value = nextLoading;
     try {
       const picsRes = await apiClient.get(
-        `${props.backendUrl}/stacks/${stackId}/pictures?fields=grid`
+        `${props.backendUrl}/stacks/${stackId}/pictures?fields=grid`,
       );
       const picsData = await picsRes.data;
       const pics = Array.isArray(picsData) ? picsData : [];
@@ -3525,7 +3524,7 @@ async function ensureStackMembersLoaded(stackId, expectedCount = null) {
         .map((img) =>
           img.stack_id !== undefined || img.stackId !== undefined
             ? img
-            : { ...img, stack_id: normalizeStackIdValue(stackId) }
+            : { ...img, stack_id: normalizeStackIdValue(stackId) },
         );
       const pictureIds = ordered.map((img) => String(img.id));
       const nextMembers = new Map(expandedStackMembers.value);
@@ -3643,7 +3642,7 @@ function getDragImageIdFromEvent(event) {
 function buildStackReorderDragState(sourceId) {
   if (!sourceId) return null;
   const source = allGridImages.value.find(
-    (item) => item?.id != null && String(item.id) === String(sourceId)
+    (item) => item?.id != null && String(item.id) === String(sourceId),
   );
   if (!source) return null;
   const stackId = getPictureStackId(source);
@@ -3691,17 +3690,17 @@ function handleStackReorderDragLeave(img, event) {
 function applyStackOrderLocal(stackId, orderedIds) {
   const items = allGridImages.value.slice();
   const stackItems = items.filter(
-    (item) => getPictureStackId(item) === stackId && item?.id != null
+    (item) => getPictureStackId(item) === stackId && item?.id != null,
   );
   if (stackItems.length <= 1) return;
   const stackCount = getStackReorderCount(
     stackId,
-    getStackBadgeCount(stackItems[0])
+    getStackBadgeCount(stackItems[0]),
   );
   const orderedMembers = buildStackReorderedMembers(
     stackItems,
     orderedIds,
-    stackCount
+    stackCount,
   );
   if (!orderedMembers.length) return;
   const nextGrid = applyStackOrderToList(items, stackId, orderedMembers);
@@ -3720,7 +3719,7 @@ function applyStackOrderLocal(stackId, orderedIds) {
       ? lastFetchedGridImages.value.slice()
       : [],
     stackId,
-    orderedMembers
+    orderedMembers,
   );
   lastFetchedGridImages.value = nextFetched;
 }
@@ -3759,7 +3758,7 @@ function handleStackReorderDrop(img, event) {
   if (sourceId === targetId) return;
 
   const stackItems = allGridImages.value.filter(
-    (item) => getPictureStackId(item) === stackId && item?.id != null
+    (item) => getPictureStackId(item) === stackId && item?.id != null,
   );
   const currentIds = stackItems.map((item) => String(item.id));
   const fromIndex = currentIds.indexOf(sourceId);
@@ -3792,7 +3791,7 @@ async function fetchAllGridImages(options = {}) {
   if (!force && imagesLoading.value && lastFetchKey.value === fetchKey) {
     const lastActivity = Math.max(
       lastFetchSuccess.value.at || 0,
-      lastFetchError.value.at || 0
+      lastFetchError.value.at || 0,
     );
     if (now - lastActivity < 2500) {
       return;
@@ -3828,7 +3827,7 @@ async function fetchAllGridImages(options = {}) {
       props.selectedReferenceCharacter !== props.unassignedPicturesId
     ) {
       const refRes = await apiClient.get(
-        `${props.backendUrl}/characters/${props.selectedReferenceCharacter}/reference_pictures`
+        `${props.backendUrl}/characters/${props.selectedReferenceCharacter}/reference_pictures`,
       );
       const refData = await refRes.data;
       if (fetchAllGridImages.lastRequestId !== requestId) return;
@@ -3854,7 +3853,7 @@ async function fetchAllGridImages(options = {}) {
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         const picList = Array.isArray(picsData) ? picsData : [];
         const picsById = new Map(
-          picList.map((img) => [getPictureId(img?.id), img])
+          picList.map((img) => [getPictureId(img?.id), img]),
         );
         images = referenceIds
           .map((id) => picsById.get(getPictureId(id)))
@@ -3877,8 +3876,8 @@ async function fetchAllGridImages(options = {}) {
           typeof img.stack_index === "number"
             ? img.stack_index
             : typeof img.stackIndex === "number"
-            ? img.stackIndex
-            : null;
+              ? img.stackIndex
+              : null;
         return {
           ...img,
           stackIndex,
@@ -3894,7 +3893,7 @@ async function fetchAllGridImages(options = {}) {
       const url = `${
         props.backendUrl
       }/pictures/search?query=${encodeURIComponent(
-        props.searchQuery.trim()
+        props.searchQuery.trim(),
       )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
       const res = await apiClient.get(url);
       const data = await res.data;
@@ -3928,7 +3927,7 @@ async function fetchAllGridImages(options = {}) {
     const nextIdSet = new Set(
       Array.isArray(images)
         ? images.map((img) => getPictureId(img?.id)).filter((id) => id !== null)
-        : []
+        : [],
     );
     if (shouldHighlight) {
       const newIds = [];
@@ -3954,7 +3953,7 @@ async function fetchAllGridImages(options = {}) {
     if (initialRender.value) {
       const prefetchEnd = Math.min(
         newImages.length,
-        visibleEnd.value + divisibleViewWindow.value
+        visibleEnd.value + divisibleViewWindow.value,
       );
       fetchThumbnailsBatch(visibleStart.value, prefetchEnd);
     }
@@ -3997,7 +3996,7 @@ async function fetchAllGridImages(options = {}) {
 async function fetchAllPicturesCount() {
   try {
     const res = await apiClient.get(
-      `${props.backendUrl}/characters/${props.allPicturesId}/summary`
+      `${props.backendUrl}/characters/${props.allPicturesId}/summary`,
     );
     const data = await res.data;
     totalAllPicturesCount.value = Number(data.image_count) || 0;
@@ -4033,7 +4032,7 @@ watch(
     _resetGridState();
     updateSelectedGroupName();
     debouncedFetchAllGridImages();
-  }
+  },
 );
 
 watch([() => props.mediaTypeFilter], () => {
@@ -4055,7 +4054,7 @@ watch(
     }
     rebuildGridImagesFromLastFetch();
     await refreshExpandedStacksAfterFetch();
-  }
+  },
 );
 
 watch(
@@ -4068,7 +4067,7 @@ watch(
     requestAnimationFrame(() => {
       triggerFaceOverlayRedraw();
     });
-  }
+  },
 );
 
 // ============================================================
@@ -4148,9 +4147,9 @@ const rowHeight = ref(
   Math.round(
     Math.min(
       MAX_THUMBNAIL_SIZE,
-      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE)
-    ) + THUMBNAIL_INFO_ROW_HEIGHT
-  )
+      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
+    ) + THUMBNAIL_INFO_ROW_HEIGHT,
+  ),
 );
 
 function getGridColumnWidth() {
@@ -4160,14 +4159,14 @@ function getGridColumnWidth() {
   if (!gridWidth) {
     return Math.min(
       MAX_THUMBNAIL_SIZE,
-      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE)
+      Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
     );
   }
   const availableWidth = Math.max(0, gridWidth - 4);
   const rawWidth = availableWidth / cols;
   return Math.min(
     MAX_THUMBNAIL_SIZE,
-    Math.max(MIN_THUMBNAIL_SIZE, rawWidth || MIN_THUMBNAIL_SIZE)
+    Math.max(MIN_THUMBNAIL_SIZE, rawWidth || MIN_THUMBNAIL_SIZE),
   );
 }
 
@@ -4189,7 +4188,7 @@ const renderEnd = computed(() => {
   const cols = props.columns;
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + renderBuffer.value
+    visibleEnd.value + renderBuffer.value,
   );
   return end;
 });
@@ -4215,7 +4214,7 @@ watch(
   () => {
     emitStackStats();
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 watch(
@@ -4227,7 +4226,7 @@ watch(
       return;
     }
     invalidateVisibleThumbnailRanges();
-  }
+  },
 );
 
 // ============================================================
@@ -4394,7 +4393,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     // Now fetch thumbnails only for IDs missing a thumbnail
     ids = gridImages
       .filter(
-        (img) => img.id !== null && img.id !== undefined && !img.thumbnail
+        (img) => img.id !== null && img.id !== undefined && !img.thumbnail,
       )
       .map((img) => img.id);
     const requestedIdPreview = ids.slice(0, 8);
@@ -4403,7 +4402,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       ids = Array.from(new Set(ids.map((id) => String(id))));
       const thumbRes = await apiClient.post(
         `${props.backendUrl}/pictures/thumbnails`,
-        JSON.stringify({ ids })
+        JSON.stringify({ ids }),
       );
       const thumbData = await thumbRes.data;
       if (requestEpoch !== thumbnailRequestEpoch.value) {
@@ -4479,7 +4478,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     console.error("[BATCH ERROR]", err);
   } finally {
     pendingRanges = pendingRanges.filter(
-      ([rangeStart, rangeEnd]) => rangeStart !== start || rangeEnd !== end
+      ([rangeStart, rangeEnd]) => rangeStart !== start || rangeEnd !== end,
     );
   }
 }
@@ -4491,7 +4490,7 @@ function updateVisibleThumbnails() {
   let start = Math.max(0, visibleStart.value - renderBuffer.value);
   let end = Math.min(
     allGridImages.value.length,
-    visibleEnd.value + renderBuffer.value
+    visibleEnd.value + renderBuffer.value,
   );
   if (shouldSuppressVisibleWindowFetch(start, end)) {
     return;
@@ -4558,7 +4557,8 @@ function handleImageCardClick(img, idx, event) {
   const anchorIndex =
     lastSelectedImageId != null
       ? allGrid.findIndex(
-          (item) => getPictureId(item?.id) === getPictureId(lastSelectedImageId)
+          (item) =>
+            getPictureId(item?.id) === getPictureId(lastSelectedImageId),
         )
       : -1;
   if (isCtrl) {
@@ -4644,10 +4644,10 @@ async function removeTagFromImage(imageId, tag) {
     }
     const tagKey = String(tagId);
     await apiClient.delete(
-      `${props.backendUrl}/pictures/${imageId}/tags/${tagKey}`
+      `${props.backendUrl}/pictures/${imageId}/tags/${tagKey}`,
     );
     const gridImg = allGridImages.value.find(
-      (img) => img && img.id === imageId
+      (img) => img && img.id === imageId,
     );
     if (gridImg && Array.isArray(gridImg.tags)) {
       const d = getTagList(gridImg.tags);
@@ -4665,11 +4665,11 @@ async function addTagToImage(imageId, tag) {
       `${props.backendUrl}/pictures/${imageId}/tags`,
       {
         tag: tag,
-      }
+      },
     );
     const responseTags = getTagList(response?.data?.tags);
     const gridImg = allGridImages.value.find(
-      (img) => img && img.id === imageId
+      (img) => img && img.id === imageId,
     );
     if (gridImg) {
       const current = getTagList(gridImg.tags);
@@ -4784,7 +4784,7 @@ watch(
       visibleEnd.value = newVisibleEnd;
       updateVisibleThumbnails();
     });
-  }
+  },
 );
 
 // Expose the grid DOM node to parent
@@ -4804,13 +4804,13 @@ function removeImagesById(imageIds) {
     return;
   }
   const dIds = new Set(
-    imageIds.map((id) => getPictureId(id)).filter((id) => id !== null)
+    imageIds.map((id) => getPictureId(id)).filter((id) => id !== null),
   );
   const removeId = (img) => dIds.has(getPictureId(img?.id));
   allGridImages.value = allGridImages.value.filter((img) => !removeId(img));
   if (Array.isArray(lastFetchedGridImages.value)) {
     lastFetchedGridImages.value = lastFetchedGridImages.value.filter(
-      (img) => !removeId(img)
+      (img) => !removeId(img),
     );
   }
   const nextMembers = new Map();
@@ -4825,7 +4825,7 @@ function removeImagesById(imageIds) {
   }
   expandedStackMembers.value = nextMembers;
   selectedImageIds.value = selectedImageIds.value.filter(
-    (id) => !dIds.has(getPictureId(id))
+    (id) => !dIds.has(getPictureId(id)),
   );
   rebuildGridImagesFromLastFetch();
   void refreshExpandedStacksAfterFetch();
@@ -4895,7 +4895,7 @@ async function exportCurrentViewToZip(options = {}) {
       }
       const statusRes = await apiClient.get(
         `${props.backendUrl}/pictures/export/status`,
-        { params: { task_id: taskId } }
+        { params: { task_id: taskId } },
       );
       const status = statusRes?.data?.status;
       exportProgress.status = status || "in_progress";
@@ -4996,7 +4996,9 @@ function handleEmptyStateReset() {
   border: 8px solid rgb(var(--v-theme-accent));
   border-radius: 16px;
   box-sizing: border-box;
-  transition: border-color 0.2s, background 0.2s;
+  transition:
+    border-color 0.2s,
+    background 0.2s;
   color: rgb(var(--v-theme-on-accent));
   font-size: 3em;
   font-weight: bold;
@@ -5153,7 +5155,9 @@ function handleEmptyStateReset() {
   margin-bottom: 2.2em;
   padding: 0px;
   margin: 0;
-  transition: box-shadow 0.2s, border 0.2s;
+  transition:
+    box-shadow 0.2s,
+    border 0.2s;
   position: relative;
   z-index: 0; /* Ensure stacking context */
   border: 0px solid transparent;
@@ -5236,7 +5240,9 @@ function handleEmptyStateReset() {
   left: 0;
   z-index: 1;
   box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
-  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1), box-shadow 0.18s;
+  transition:
+    transform 0.18s cubic-bezier(0.4, 2, 0.6, 1),
+    box-shadow 0.18s;
 }
 .thumbnail-img:hover {
   box-shadow: 1px 1px 2px 2px rgba(var(--v-theme-shadow), 0.3);
@@ -5263,7 +5269,8 @@ function handleEmptyStateReset() {
   }
   35% {
     transform: translateZ(0) scale(1.015);
-    box-shadow: 0 0 10px rgba(var(--v-theme-accent), 0.5),
+    box-shadow:
+      0 0 10px rgba(var(--v-theme-accent), 0.5),
       0 0 18px rgba(var(--v-theme-accent), 0.25);
   }
   100% {
