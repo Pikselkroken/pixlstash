@@ -35,7 +35,7 @@ class ImageEmbeddingTask(BaseTask):
             "dim": 768,
         },
         "ViT-B-32": {
-            "url": "https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_b_32_linear.pth?raw=true",
+            "url": "https://raw.githubusercontent.com/LAION-AI/aesthetic-predictor/main/sa_0_4_vit_b_32_linear.pth",
             "path": os.path.join(MODEL_DIR, "sa_0_4_vit_b_32_linear.pth"),
             "dim": 512,
         },
@@ -224,9 +224,9 @@ class ImageEmbeddingTask(BaseTask):
 
             if not os.path.exists(model_path):
                 logger.info("Downloading aesthetic model from %s...", model_url)
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
                 response = requests.get(model_url, timeout=30)
                 response.raise_for_status()
-                os.makedirs(os.path.dirname(model_path), exist_ok=True)
                 with open(model_path, "wb") as file_handle:
                     file_handle.write(response.content)
 

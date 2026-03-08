@@ -20,7 +20,8 @@ def test_watch_folder():
         assert os.path.isdir(pictures_dir), "Pictures directory not found"
         image_files = [
             f
-            for f in os.listdir(pictures_dir)
+            for dirpath, _, filenames in os.walk(pictures_dir)
+            for f in filenames
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
         assert image_files, "No images found in pictures directory"
@@ -75,16 +76,20 @@ def test_watch_folder_delete_after_import():
         )
         assert os.path.isdir(source_dir), "Pictures directory not found"
         image_files = [
-            f
-            for f in os.listdir(source_dir)
+            os.path.join(dirpath, f)
+            for dirpath, _, filenames in os.walk(source_dir)
+            for f in filenames
             if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
         ]
         assert image_files, "No images found in pictures directory"
 
         watch_dir = os.path.join(temp_dir, "watch")
         os.makedirs(watch_dir, exist_ok=True)
-        for name in image_files:
-            shutil.copy2(os.path.join(source_dir, name), watch_dir)
+        for src_path in image_files:
+            rel = os.path.relpath(src_path, source_dir)
+            dst = os.path.join(watch_dir, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src_path, dst)
 
         with Server(server_config_path) as server:
             client = TestClient(server.api)
@@ -116,8 +121,9 @@ def test_watch_folder_delete_after_import():
                     lambda session: Picture.find(session)
                 )
                 remaining_files = [
-                    f
-                    for f in os.listdir(watch_dir)
+                    os.path.join(dp, f)
+                    for dp, _, fnames in os.walk(watch_dir)
+                    for f in fnames
                     if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
                 ]
                 if len(pictures) >= expected_count and not remaining_files:
@@ -128,8 +134,9 @@ def test_watch_folder_delete_after_import():
                 f"Expected {expected_count} pictures, got {len(pictures)}"
             )
             remaining_files = [
-                f
-                for f in os.listdir(watch_dir)
+                os.path.join(dp, f)
+                for dp, _, fnames in os.walk(watch_dir)
+                for f in fnames
                 if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
             ]
             assert not remaining_files, "Watch folder did not delete source files"

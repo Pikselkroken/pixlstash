@@ -100,7 +100,7 @@ class StartupChecks:
         port = self._server_config.get("port")
         try:
             port_int = int(port)
-            if port_int < 1 or port_int > 65535:
+            if port_int < 0 or port_int > 65535:
                 raise ValueError()
             self._server_config["port"] = port_int
         except Exception:

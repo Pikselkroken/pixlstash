@@ -155,6 +155,17 @@ class PictureTagger:
                 )
                 self._device = "cpu"
 
+        if self._device == "cpu" and not PictureTagger.FORCE_CPU:
+            if torch.cuda.is_available():
+                logger.warning(
+                    "PictureTagger initialising with CPU inference despite CUDA being available "
+                    "(device was explicitly set to cpu)."
+                )
+            else:
+                logger.warning(
+                    "PictureTagger initialising with CPU inference (CUDA is not available)."
+                )
+
         logger.info(f"PictureTagger initialised with device: {self._device}")
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._use_custom_tagger = True

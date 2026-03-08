@@ -594,11 +594,8 @@ class Server:
             )
 
     def _get_version(self):
-        try:
-            return package_version("pixlvault")
-        except PackageNotFoundError:
-            pass
-
+        # Prefer pyproject.toml when running from the repo so that the version
+        # is always authoritative and never stale from an old editable install.
         try:
             import tomllib
         except ImportError:
@@ -609,8 +606,16 @@ class Server:
         try:
             with open(pyproject_path, "rb") as f:
                 data = tomllib.load(f)
-            return data.get("project", {}).get("version", "unknown")
+            ver = data.get("project", {}).get("version")
+            if ver:
+                return ver
         except OSError:
+            pass
+
+        # Fall back to installed package metadata (pip install / wheel deployment).
+        try:
+            return package_version("pixlvault")
+        except PackageNotFoundError:
             return "unknown"
 
     def _get_frontend_dist_dir(self):
