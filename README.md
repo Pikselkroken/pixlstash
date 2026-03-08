@@ -1,9 +1,4 @@
 # PixlVault
-
-<p align="center">
-  <img src="frontend/public/Logo.png" alt="PixlVault Logo" width="200"/>
-</p>
-
 <p align="center">
   <img src="website/assets/ScreenshotGrid.jpg" alt="PixlVault Screenshot" width="800"/>
 </p>
