@@ -128,7 +128,7 @@ python -m pixlvault.app --server-config "C:\path\to\server-config.json"
 On first run, PixlVault generates a `server-config.json` file in the user config directory:
 
 - **Linux / macOS:** `~/.config/pixlvault/server-config.json`
-- **Windows:** `%APPDATA%\pixlvault\server-config.json`
+- **Windows:** `%LOCALAPPDATA%\pixlvault\server-config.json`
 
 You can also supply a custom path with `--server-config <path>`.
 
