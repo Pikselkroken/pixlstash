@@ -103,22 +103,6 @@ Then open:
 http://localhost:9537
 ```
 
-## Installing plugins
-
-PixlVault supports built-in plugins and user plugins.
-
-- Built-in plugins are in `image-plugins/built-in/`.
-- User plugins are in `image-plugins/user/`.
-- Start from `image-plugins/user/plugin_template.py`.
-
-To add your own plugin:
-
-1. Copy `image-plugins/user/plugin_template.py` to a new `.py` file in `image-plugins/user/`.
-2. Rename the plugin class and plugin id.
-3. Implement the plugin `run()` method.
-4. Restart PixlVault Server.
-
-`plugin_template.py` is ignored by plugin discovery and will not be loaded as a plugin.
 
 ## First run and data location
 
@@ -268,3 +252,27 @@ python -c "import onnxruntime as ort; print(ort.get_available_providers())"
 Expected output should include `CUDAExecutionProvider`.
 
 If you prefer CPU mode, set `"default_device": "cpu"` in `server-config.json`.
+
+## Installing plugins
+
+PixlVault supports built-in plugins and user-created plugins.
+
+### User plugin directory
+
+Place your `.py` plugin files in the platform-specific user data directory. PixlVault logs the exact path on startup.
+
+| OS | Path |
+|----|------|
+| **Linux** | `~/.local/share/pixlvault/image-plugins/user/` |
+| **macOS** | `~/Library/Application Support/pixlvault/image-plugins/user/` |
+| **Windows** | `%LOCALAPPDATA%\pixlvault\image-plugins\user\` |
+
+### Writing a plugin
+
+Use the template from `image-plugins/user/plugin_template.py` in the source repository as a starting point:
+
+1. Create a new `.py` file in your user plugin directory.
+2. Subclass `ImagePlugin`, set a unique `name` and `plugin_id`, and implement `run()`.
+3. Restart PixlVault Server — plugins are loaded at startup.
+
+`plugin_template.py` is ignored by plugin discovery and will not be loaded as a plugin.

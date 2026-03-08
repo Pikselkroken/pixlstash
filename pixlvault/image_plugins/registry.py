@@ -7,6 +7,8 @@ from threading import Lock
 from types import ModuleType
 from typing import Any
 
+from platformdirs import user_data_dir
+
 from pixlvault.image_plugins.base import ImagePlugin
 from pixlvault.pixl_logging import get_logger
 
@@ -24,19 +26,12 @@ class PluginLoadError:
 
 
 class ImagePluginManager:
-    def __init__(self, base_dir: str):
-        self.base_dir = base_dir
+    def __init__(self, built_in_dir: str, user_dir: str):
+        self.built_in_dir = built_in_dir
+        self.user_dir = user_dir
         self._plugins: dict[str, ImagePlugin] = {}
         self._errors: list[PluginLoadError] = []
         self._lock = Lock()
-
-    @property
-    def built_in_dir(self) -> str:
-        return os.path.join(self.base_dir, "built-in")
-
-    @property
-    def user_dir(self) -> str:
-        return os.path.join(self.base_dir, "user")
 
     def plugin_dirs(self) -> list[tuple[str, str]]:
         return [
@@ -48,6 +43,7 @@ class ImagePluginManager:
         with self._lock:
             self._plugins = {}
             self._errors = []
+            logger.info("User image plugins directory: %s", self.user_dir)
             for source, folder in self.plugin_dirs():
                 if not os.path.isdir(folder):
                     continue
@@ -151,14 +147,12 @@ _PLUGIN_MANAGER: ImagePluginManager | None = None
 _PLUGIN_MANAGER_LOCK = Lock()
 
 
-def _default_plugin_base_dir() -> str:
-    return os.path.dirname(__file__)
-
-
 def get_image_plugin_manager() -> ImagePluginManager:
     global _PLUGIN_MANAGER
     with _PLUGIN_MANAGER_LOCK:
         if _PLUGIN_MANAGER is None:
-            _PLUGIN_MANAGER = ImagePluginManager(_default_plugin_base_dir())
+            built_in = os.path.join(os.path.dirname(__file__), "built-in")
+            user = os.path.join(user_data_dir("pixlvault"), "image-plugins", "user")
+            _PLUGIN_MANAGER = ImagePluginManager(built_in, user)
             _PLUGIN_MANAGER.reload()
         return _PLUGIN_MANAGER
