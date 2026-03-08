@@ -8,7 +8,7 @@
     {
       "query": "It was a bright rainy day but Esmeralda needed to get out and get some fresh air, so she dressed for the weather, brought an umbrella and walked out into the countryside.",
       "top_description": "The image shows a young woman holding a black umbrella in the rain. She is wearing a bright yellow raincoat with a hood and a black zipper. The woman has blonde hair and is looking directly at the camera with a serious expression. The background is blurred, but it appears to be a green landscape with trees and mountains in the distance. The raindrops are falling from the sky, creating a dappled effect. The overall mood of the image is gloomy and rainy.",
-      "top_score": 0.6695
+      "top_score": 0.6676
     },
     {
       "query": "Esmeralda smiles as she sits across me in the cafe wearing her grey sweater. The sunlight filters through the window of the empty cafe",
@@ -37,7 +37,7 @@
     }
   ],
   "summary": {
-    "avg_top_score": 0.6786,
+    "avg_top_score": 0.6783,
     "min_top_score": 0.6495,
     "total_queries": 6
   }
