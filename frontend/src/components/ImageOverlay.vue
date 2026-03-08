@@ -50,8 +50,8 @@
                 v-bind="props"
                 class="overlay-icon-btn overlay-comfy-activator"
                 type="button"
-                title="Apply filters"
-                aria-label="Apply filters"
+                title="Filters"
+                aria-label="Filters"
                 :class="{
                   hidden: chromeHidden,
                   'overlay-icon-btn--active': pluginMenuOpen,
