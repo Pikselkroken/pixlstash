@@ -19,6 +19,8 @@ from torchvision import transforms
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 
+from platformdirs import user_data_dir
+
 from .pixl_logging import get_logger
 from pixlvault.db_models.picture import Picture
 from pixlvault.tag_naturaliser import TagNaturaliser
@@ -64,7 +66,7 @@ FILES_ONNX = ["model.onnx"]
 SUB_DIR = "variables"
 SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
 CSV_FILE = FILES[-1]
-MODEL_DIR = "downloaded_models"
+MODEL_DIR = os.path.join(user_data_dir("pixlvault"), "downloaded_models")
 BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = _env_int("PIXLVAULT_TAGGER_MAX_CONCURRENT_GPU", 64)
 MAX_CONCURRENT_IMAGES_CPU = _env_int("PIXLVAULT_TAGGER_MAX_CONCURRENT_CPU", 8)
@@ -77,7 +79,7 @@ CAPTION_SEPARATOR = ", "
 FLORENCE_REVISION = "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac"
 CUSTOM_TAGGER_HF_REPO = "PersonalJeebus/pixlvault-anomaly-tagger"
 CUSTOM_TAGGER_FILENAME = "best.pt"
-CUSTOM_TAGGER_PATH = os.path.join(os.path.dirname(__file__), "..", MODEL_DIR, "best.pt")
+CUSTOM_TAGGER_PATH = os.path.join(MODEL_DIR, "best.pt")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.75
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
 CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320

@@ -112,6 +112,16 @@ On first run, PixlVault creates a user config directory and stores:
 - Database
 - Imported media files
 
+> **Model downloads:** On first startup, PixlVault automatically downloads the AI models required for tagging, captioning, and quality scoring. This includes several hundred MB of model weights. Downloads happen in the background and are stored in the platform user data directory:
+>
+> | OS | Path |
+> |----|------|
+> | **Linux** | `~/.local/share/pixlvault/downloaded_models/` |
+> | **macOS** | `~/Library/Application Support/pixlvault/downloaded_models/` |
+> | **Windows** | `%LOCALAPPDATA%\pixlvault\downloaded_models\` |
+>
+> An internet connection is required the first time the server starts. Subsequent starts use the cached models.
+
 If you need to use a custom config path:
 
 ```bash

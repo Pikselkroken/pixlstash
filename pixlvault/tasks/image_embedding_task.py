@@ -13,7 +13,7 @@ from sqlmodel import Session, select
 
 from pixlvault.database import DBPriority
 from pixlvault.db_models import Picture, PictureLikenessQueue
-from pixlvault.picture_tagger import CLIP_MODEL_NAME
+from pixlvault.picture_tagger import CLIP_MODEL_NAME, MODEL_DIR
 from pixlvault.utils.image_processing.video_utils import VideoUtils
 from pixlvault.pixl_logging import get_logger
 from pixlvault.tasks.base_task import BaseTask
@@ -31,12 +31,12 @@ class ImageEmbeddingTask(BaseTask):
     AESTHETIC_MODELS = {
         "ViT-L-14": {
             "url": "https://github.com/christophschuhmann/improved-aesthetic-predictor/raw/main/sac%2Blogos%2Bava1-l14-linearMSE.pth",
-            "path": "downloaded_models/sac+logos+ava1-l14-linearMSE.pth",
+            "path": os.path.join(MODEL_DIR, "sac+logos+ava1-l14-linearMSE.pth"),
             "dim": 768,
         },
         "ViT-B-32": {
             "url": "https://github.com/LAION-AI/aesthetic-predictor/blob/main/sa_0_4_vit_b_32_linear.pth?raw=true",
-            "path": "downloaded_models/sa_0_4_vit_b_32_linear.pth",
+            "path": os.path.join(MODEL_DIR, "sa_0_4_vit_b_32_linear.pth"),
             "dim": 512,
         },
     }
