@@ -37,6 +37,13 @@ Use this if you want the easiest setup on Windows.
 
 Use this if you already have Python and want a pip install.
 
+NOTE: You really, really should do this in a virtual environment:
+
+```bash
+python -m venv venv
+. venv/bin/activate
+```
+
 Requirements:
 
 - Python 3.10 or newer
