@@ -1,6 +1,9 @@
+import functools
+import pathlib
 import time
 from datetime import datetime
 from collections import defaultdict
+from dataclasses import dataclass
 
 import numpy as np
 from sqlalchemy import exists, desc, func
@@ -22,6 +25,58 @@ from pixlvault.pixl_logging import get_logger
 from pixlvault.utils import _smart_score_penalised_tags, safe_model_dict
 
 logger = get_logger(__name__)
+
+# If the user has fewer than this many rated images in a category, built-in
+# anchor embeddings are added to prevent empty-anchor edge cases.
+_BUILTIN_MIN_GOOD = 10
+_BUILTIN_MIN_BAD = 10
+
+
+@dataclass
+class _BuiltinAnchor:
+    """Thin wrapper so built-in numpy embeddings look like DB anchor rows."""
+
+    image_embedding: np.ndarray
+    score: int
+
+
+@functools.lru_cache(maxsize=1)
+def _load_builtin_anchors() -> tuple[list["_BuiltinAnchor"], list["_BuiltinAnchor"]]:
+    """Load pre-computed built-in CLIP anchor embeddings from package data.
+
+    Returns:
+        Tuple of (good_anchors, bad_anchors) where each element is a list of
+        _BuiltinAnchor objects compatible with prepare_smart_score_inputs.
+    """
+    data_dir = pathlib.Path(__file__).parent / "data" / "anchors"
+    good_path = data_dir / "builtin_good.npy"
+    bad_path = data_dir / "builtin_bad.npy"
+
+    def _load(path: pathlib.Path, score: int) -> list[_BuiltinAnchor]:
+        if not path.is_file():
+            logger.debug("Built-in anchor file not found: %s", path)
+            return []
+        try:
+            arr = np.load(path)
+            if arr.ndim != 2 or arr.shape[1] == 0:
+                logger.warning("Unexpected shape in %s: %s", path.name, arr.shape)
+                return []
+            return [
+                _BuiltinAnchor(image_embedding=arr[i], score=score)
+                for i in range(len(arr))
+            ]
+        except Exception as e:
+            logger.warning("Failed to load built-in anchor file %s: %s", path.name, e)
+            return []
+
+    good = _load(good_path, score=4)
+    bad = _load(bad_path, score=1)
+    logger.debug(
+        "Loaded built-in anchors: %d good, %d bad",
+        len(good),
+        len(bad),
+    )
+    return good, bad
 
 
 def select_reference_faces_for_character(
@@ -480,8 +535,7 @@ def fetch_smart_score_data(
                     "aesthetic_score": aest,
                     "width": pic.width,
                     "height": pic.height,
-                    "noise_level": quality.noise_level if quality else None,
-                    "edge_density": quality.edge_density if quality else None,
+                    "sharpness": quality.sharpness if quality else None,
                 }
             )
             candidate_id_list.append(pic.id)
@@ -508,17 +562,14 @@ def fetch_smart_score_data(
                     )
 
         if candidate_id_list:
-            tag_count_rows = session.exec(
-                select(Tag.picture_id, func.count(Tag.id))
-                .where(
-                    Tag.picture_id.in_(candidate_id_list),
-                    Tag.tag.is_not(None),
-                )
-                .group_by(Tag.picture_id)
-            ).all()
-            tag_count_map = {pic_id: count for pic_id, count in tag_count_rows}
-            for candidate in candidates:
-                candidate["tag_count"] = tag_count_map.get(candidate["id"], 0)
+            pass  # tag_count no longer used by smart score
+
+        # Supplement with built-in anchors when the user has few rated images.
+        builtin_good, builtin_bad = _load_builtin_anchors()
+        if len(good) < _BUILTIN_MIN_GOOD:
+            good = list(good) + builtin_good
+        if len(bad) < _BUILTIN_MIN_BAD:
+            bad = list(bad) + builtin_bad
 
         return good, bad, candidates
 
@@ -616,9 +667,7 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
                     "penalised_tag_count": get_attr(p, "penalised_tag_count") or 0,
                     "width": get_attr(p, "width"),
                     "height": get_attr(p, "height"),
-                    "noise_level": get_attr(p, "noise_level"),
-                    "edge_density": get_attr(p, "edge_density"),
-                    "tag_count": get_attr(p, "tag_count"),
+                    "sharpness": get_attr(p, "sharpness"),
                 }
             )
 

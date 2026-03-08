@@ -104,4 +104,5 @@ pixlvault = [
     "migrations/*.mako",
     "migrations/versions/*.py",
     "image_plugins/built-in/*.py",
+    "data/anchors/*.npy",
 ]

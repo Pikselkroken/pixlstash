@@ -143,18 +143,18 @@ class Quality(SQLModel, table=True):
                 dominant_hue[i] = float((bin_idx + 0.5) / 180.0)
         else:
             dominant_hue = np.zeros((batch_size,), dtype=np.float32)
-        laplacians = np.array(
-            [
-                cv2.Laplacian(gray[i].astype(np.float32), cv2.CV_32F)
-                for i in range(batch_size)
-            ]
+        lap_list = [
+            cv2.Laplacian(gray[i].astype(np.float32), cv2.CV_32F)
+            for i in range(batch_size)
+        ]
+        noise_level = np.clip(
+            np.array([np.abs(lap).mean() / 255.0 for lap in lap_list]), 0, 1
         )
-        noise_level = np.clip(np.abs(laplacians).mean(axis=(1, 2)) / 255.0, 0, 1)
-        sharpness = np.clip(laplacians.var(axis=(1, 2)) / 100.0, 0, 1)
-        edges = np.array(
-            [cv2.Canny(gray[i].astype(np.uint8), 100, 200) for i in range(batch_size)]
-        )
-        edge_density = (edges > 0).sum(axis=(1, 2)) / edges[0].size
+        sharpness = np.array([Quality._cell_sharpness(lap) for lap in lap_list])
+        edges = [
+            cv2.Canny(gray[i].astype(np.uint8), 100, 200) for i in range(batch_size)
+        ]
+        edge_density = np.array([(e > 0).sum() / float(e.size) for e in edges])
 
         # Post-calc None checks
         def fix_none(arr):
@@ -297,11 +297,52 @@ class Quality(SQLModel, table=True):
         return None
 
     @staticmethod
+    def _cell_sharpness(
+        lap: np.ndarray,
+        grid: int = 4,
+        top_k: int = 4,
+        norm: float = 500.0,
+    ) -> float:
+        """Subject sharpness: [0, 1]. High if at least one region of the image is sharp.
+
+        Divides the Laplacian image into a grid of cells and returns the mean
+        Laplacian variance of the top-k sharpest cells, normalised to [0, 1].
+        This rewards images with a sharp subject (face, object, etc.) regardless
+        of overall depth-of-field, and penalises images that are uniformly blurry.
+
+        Args:
+            lap: 2-D Laplacian array (float32).
+            grid: Number of rows/columns in the cell grid.
+            top_k: Number of sharpest cells to average.
+            norm: Normalisation constant — cell variance above this maps to 1.0.
+
+        Returns:
+            Score in [0, 1].
+        """
+        h, w = lap.shape
+        cell_h = max(1, h // grid)
+        cell_w = max(1, w // grid)
+        variances = []
+        for row in range(grid):
+            for col in range(grid):
+                y0 = row * cell_h
+                y1 = min(h, y0 + cell_h)
+                x0 = col * cell_w
+                x1 = min(w, x0 + cell_w)
+                cell = lap[y0:y1, x0:x1]
+                if cell.size > 0:
+                    variances.append(float(cell.var()))
+        if not variances:
+            return 0.0
+        variances.sort(reverse=True)
+        top_mean = float(np.mean(variances[: min(top_k, len(variances))]))
+        return float(min(top_mean / norm, 1.0))
+
+    @staticmethod
     def _calculate_sharpness(image: np.ndarray) -> float:
-        # Example: variance of Laplacian
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        return min(laplacian_var / 100.0, 1.0)
+        lap = cv2.Laplacian(gray.astype(np.float32), cv2.CV_32F)
+        return Quality._cell_sharpness(lap)
 
     @staticmethod
     def _calculate_edge_density(image: np.ndarray) -> float:

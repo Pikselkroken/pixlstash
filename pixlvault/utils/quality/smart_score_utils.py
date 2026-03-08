@@ -32,16 +32,13 @@ class SmartScoreUtils:
             np.ndarray: Array of floating point scores corresponding to candidates.
         """
         cfg = {
-            "w_good": 0.7,
-            "w_bad": 0.1,
-            "w_aest": 0.2,
-            "w_resolution": 0.06,
-            "w_noise": 0.08,
-            "w_edge": 0.05,
-            "w_tags": 0.08,
-            "w_penalised_tag": 0.30,
-            "penalised_tag_cap": 2.5,
-            "tag_bonus_cap": 10,
+            "w_good": 0.13,
+            "w_bad": 0.07,
+            "w_aest": 0.35,
+            "w_sharpness": 0.35,
+            "w_resolution": 0.10,
+            "w_penalised_tag": 0.40,
+            "penalised_tag_cap": 3.5,
             "topk": 3,
             "sim_knee": 0.5,
             "sim_power": 2.0,
@@ -52,8 +49,6 @@ class SmartScoreUtils:
             "res_min_mpx": 0.2,
             "res_max_mpx": 4.0,
             "res_use_log": True,
-            "noise_missing_default": 0.75,
-            "edge_missing_default": 0.75,
         }
         if config:
             cfg.update(config)
@@ -202,42 +197,16 @@ class SmartScoreUtils:
         res_component = cfg["w_resolution"] * res_norm
         scores += res_component
 
-        # Noise
-        noise_vals = np.array(
-            [c.get("noise_level") for c in candidates], dtype=np.float32
+        # Subject sharpness (high if at least one region is in focus)
+        sharpness_vals = np.array(
+            [c.get("sharpness") for c in candidates], dtype=np.float32
         )
-        noise_vals = np.where(np.isfinite(noise_vals), noise_vals, np.nan)
-        noise_vals = np.where(noise_vals < 0, np.nan, noise_vals)
-        noise_vals = np.where(
-            np.isnan(noise_vals),
-            float(cfg.get("noise_missing_default", 0.75)),
-            noise_vals,
-        )
-        noise_vals = np.clip(noise_vals, 0.0, 1.0)
-        noise_component = cfg["w_noise"] * (1.0 - noise_vals)
-        scores += noise_component
-
-        # Edge density
-        edge_vals = np.array(
-            [c.get("edge_density") for c in candidates], dtype=np.float32
-        )
-        edge_vals = np.where(np.isfinite(edge_vals), edge_vals, np.nan)
-        edge_vals = np.where(edge_vals < 0, np.nan, edge_vals)
-        edge_vals = np.where(
-            np.isnan(edge_vals), float(cfg.get("edge_missing_default", 0.75)), edge_vals
-        )
-        edge_vals = np.clip(edge_vals, 0.0, 1.0)
-        edge_component = cfg["w_edge"] * edge_vals
-        scores += edge_component
-
-        # Tag richness bonus
-        tag_counts = np.array(
-            [float(c.get("tag_count") or 0) for c in candidates], dtype=np.float32
-        )
-        tag_cap = max(1.0, float(cfg.get("tag_bonus_cap", 10) or 10))
-        tag_norm = np.log1p(np.clip(tag_counts, 0.0, tag_cap)) / np.log1p(tag_cap)
-        tag_component = cfg["w_tags"] * np.clip(tag_norm, 0.0, 1.0)
-        scores += tag_component
+        sharpness_vals = np.where(np.isfinite(sharpness_vals), sharpness_vals, np.nan)
+        sharpness_vals = np.where(sharpness_vals < 0, np.nan, sharpness_vals)
+        sharpness_vals = np.where(np.isnan(sharpness_vals), 0.5, sharpness_vals)
+        sharpness_vals = np.clip(sharpness_vals, 0.0, 1.0)
+        sharpness_component = cfg["w_sharpness"] * sharpness_vals
+        scores += sharpness_component
 
         # Penalised tags
         penalised_counts = np.array(
@@ -260,8 +229,8 @@ class SmartScoreUtils:
                 if penalised_count <= 0 and final_score <= 1.5:
                     logger.debug(
                         "[SMART SCORE][MIN] id=%s raw=%.4f clipped=%.4f final=%.4f "
-                        "good=%.4f bad=%.4f aest=%.4f res=%.4f noise=%.4f "
-                        "edge=%.4f tags=%.4f penalised=%.4f mpx=%.4f w=%s h=%s",
+                        "good=%.4f bad=%.4f aest=%.4f sharpness=%.4f res=%.4f "
+                        "penalised=%.4f mpx=%.4f w=%s h=%s",
                         candidate.get("id"),
                         float(scores[idx]),
                         float(clipped[idx]),
@@ -269,10 +238,8 @@ class SmartScoreUtils:
                         float(good_component[idx]),
                         float(bad_component[idx]),
                         float(aest_component[idx]),
+                        float(sharpness_component[idx]),
                         float(res_component[idx]),
-                        float(noise_component[idx]),
-                        float(edge_component[idx]),
-                        float(tag_component[idx]),
                         float(penalised_component[idx]),
                         float(mpx[idx]),
                         candidate.get("width"),
