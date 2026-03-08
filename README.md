@@ -173,6 +173,74 @@ You can override the most common settings with environment variables in `docker-
 
 To run without GPU (CPU-only mode), remove the `deploy.resources` block from `docker-compose.yml` and set `"default_device": "cpu"` in your `server-config.json`.
 
+## Option 5: Docker — pre-built image (Linux / WSL2 on Windows)
+
+Use this if you want to run PixlVault without cloning the repository. The image is built automatically on every release and published to the GitHub Container Registry.
+
+### Prerequisites
+
+Same NVIDIA Container Toolkit setup as [Option 4](#option-4-docker-gpu--linux--wsl2-on-windows). Skip if you already completed it.
+
+### Run
+
+Pull and start the container:
+
+```bash
+docker run -d \
+  --runtime nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+  -e PIXLVAULT_HOST=0.0.0.0 \
+  -p 9537:9537 \
+  -v pixlvault-home:/home/pixlvault \
+  --name pixlvault \
+  ghcr.io/pixelurgy/pixlvault:latest
+```
+
+Open `http://localhost:9537` in your browser.
+
+All data (images, database, config, downloaded models) is stored in the `pixlvault-home` named volume and persists across restarts.
+
+To update to the latest release:
+
+```bash
+docker pull ghcr.io/pixelurgy/pixlvault:latest
+docker rm -f pixlvault
+# re-run the docker run command above
+```
+
+To pin to a specific release, replace `latest` with a version tag, e.g. `ghcr.io/pixelurgy/pixlvault:0.9.1`.
+
+#### Optional: docker-compose.yml
+
+If you prefer Compose for easier management:
+
+```yaml
+services:
+  pixlvault:
+    image: ghcr.io/pixelurgy/pixlvault:latest
+    runtime: nvidia
+    ports:
+      - "9537:9537"
+    volumes:
+      - pixlvault-home:/home/pixlvault
+    environment:
+      PIXLVAULT_HOST: "0.0.0.0"
+      PIXLVAULT_PORT: "9537"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    restart: unless-stopped
+
+volumes:
+  pixlvault-home:
+```
+
+```bash
+docker compose up -d
+# To update:
+docker compose pull && docker compose up -d
+```
+
 
 ## First run and data location
 
