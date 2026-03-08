@@ -25,6 +25,11 @@ class TagTask(BaseTask):
     _cpu_spillover_last_used_at: float = 0.0
     _cpu_spillover_lock = threading.Lock()
 
+    # Only one TagTask may execute at a time.  max_inflight_tasks=2 in
+    # MissingTagFinder allows a second task to preload images concurrently
+    # (ping-pong), but currently running them concurrently would hurt rather than help throughput
+    _execution_semaphore = threading.Semaphore(1)
+
     def __init__(
         self,
         database,
@@ -100,7 +105,15 @@ class TagTask(BaseTask):
         if not self._pictures:
             return {"changed_count": 0, "changed": []}
 
-        changed = self._tag_pictures_batch()
+        # Acquire the class-level semaphore so that only one TagTask runs its
+        # GPU inference at a time.  The second in-flight task has already been
+        # preloading images while this one ran, so it will be ready immediately
+        # after the semaphore is released (ping-pong pattern).
+        self._execution_semaphore.acquire()
+        try:
+            changed = self._tag_pictures_batch()
+        finally:
+            self._execution_semaphore.release()
 
         return {
             "changed_count": len(changed),
