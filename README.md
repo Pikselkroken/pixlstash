@@ -100,7 +100,7 @@ http://localhost:9537
 
 ## Option 4: Docker (GPU — Linux / WSL2 on Windows)
 
-Use this if you want a fully self-contained image with CUDA support, or you are running PixlVault on Windows via WSL2.
+Use this if you want a fully self-contained container with CUDA support. A pre-built image is published to the GitHub Container Registry on every release — no clone required.
 
 ### Prerequisites
 
@@ -124,7 +124,7 @@ sudo systemctl restart docker
 3. Verify GPU access:
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
 ```
 
 #### On Windows (WSL2)
@@ -136,52 +136,10 @@ docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
 5. Verify GPU access from WSL2:
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
 ```
 
-### Build and run
-
-Clone the repository and start the server:
-
-```bash
-git clone https://github.com/Pixelurgy/pixlvault.git
-cd pixlvault
-
-docker compose up --build
-```
-
-Then open:
-
-```text
-http://localhost:9537
-```
-
-All data (images, database, config, logs) is stored in a Docker named volume (`pixlvault-data`) and persists across container restarts.
-
-### Configuration
-
-On first start, the container writes a default `server-config.json` to `/data/config/` inside the volume. Edit it and restart the container to apply changes — the file is not overwritten on subsequent starts.
-
-You can override the most common settings with environment variables in `docker-compose.yml`:
-
-| Variable | Default | Description |
-|---|---|---|
-| `PIXLVAULT_HOST` | `0.0.0.0` | Address the server binds to |
-| `PIXLVAULT_PORT` | `9537` | TCP port |
-| `PIXLVAULT_IMAGE_ROOT` | `/data/images` | Where imported images are stored |
-| `PIXLVAULT_CONFIG` | `/data/config/server-config.json` | Path to the config file |
-
-To run without GPU (CPU-only mode), remove the `deploy.resources` block from `docker-compose.yml` and set `"default_device": "cpu"` in your `server-config.json`.
-
-## Option 5: Docker — pre-built image (Linux / WSL2 on Windows)
-
-Use this if you want to run PixlVault without cloning the repository. The image is built automatically on every release and published to the GitHub Container Registry.
-
-### Prerequisites
-
-Same NVIDIA Container Toolkit setup as [Option 4](#option-4-docker-gpu--linux--wsl2-on-windows). Skip if you already completed it.
-
-### Run
+### Run (pre-built image — recommended)
 
 Pull and start the container:
 
@@ -240,6 +198,21 @@ docker compose up -d
 # To update:
 docker compose pull && docker compose up -d
 ```
+
+### Run (build from source)
+
+Use this if you need a custom build or want to run unreleased changes.
+
+```bash
+git clone https://github.com/Pixelurgy/pixlvault.git
+cd pixlvault
+
+docker compose up --build
+```
+
+Then open `http://localhost:9537`.
+
+
 
 
 ## First run and data location
