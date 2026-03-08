@@ -3913,7 +3913,7 @@ async function fetchAllGridImages(options = {}) {
     } else {
       const params = buildPictureIdsQueryParams();
       // Only use allowed parameters: sort, offset, limit, threshold
-      const url = `${props.backendUrl}/pictures?offset=0&limit=10000${
+      const url = `${props.backendUrl}/pictures?offset=0${
         params ? `&${params}` : ""
       }`;
       const res = await apiClient.get(url);
