@@ -426,9 +426,13 @@ def fetch_smart_score_data(
             .limit(200)
         ).all()
 
-        # Candidates
+        # Candidates — join only to picture-level quality rows (face_id IS NULL).
+        # Face quality rows also carry picture_id, so without this filter the
+        # join produces one row per face per picture, causing duplicates in the
+        # candidate list (and thus incorrect score rankings).
         query = select(Picture, Quality).outerjoin(
-            Quality, Quality.picture_id == Picture.id
+            Quality,
+            (Quality.picture_id == Picture.id) & (Quality.face_id.is_(None)),
         )
         if only_deleted:
             query = query.where(Picture.deleted.is_(True))
