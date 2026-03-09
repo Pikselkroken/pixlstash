@@ -1,6 +1,6 @@
 [project]
 name = "pixlvault"
-version = "0.9.1"
+version = "0.9.2.dev0"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
 license = { file = "LICENSE" }
