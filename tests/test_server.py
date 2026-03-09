@@ -610,6 +610,41 @@ def test_read_version():
     log_resources("END test_read_version")
 
 
+def test_version_latest_no_version_fetched():
+    """GET /version/latest returns nulls when no PyPI fetch has been done."""
+    log_resources("START test_version_latest_no_version_fetched")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            # _latest_version starts as None (no background fetch in tests)
+            assert server._latest_version is None
+            client = TestClient(server.api)
+            response = client.get("/version/latest")
+            assert response.status_code == 200
+            assert response.json() == {"latest_version": None, "release_url": None}
+    gc.collect()
+    log_resources("END test_version_latest_no_version_fetched")
+
+
+def test_version_latest_with_newer_version():
+    """GET /version/latest returns version and release URL when a newer version is available."""
+    log_resources("START test_version_latest_with_newer_version")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            server._latest_version = "99.0.0"
+            client = TestClient(server.api)
+            response = client.get("/version/latest")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["latest_version"] == "99.0.0"
+            assert data["release_url"] == (
+                "https://pixelurgy.github.io/pixlvault/upgrade"
+            )
+    gc.collect()
+    log_resources("END test_version_latest_with_newer_version")
+
+
 def test_benchmark_add_images_by_binary_upload():
     log_resources("START test_benchmark_add_images_by_binary_upload")
     with tempfile.TemporaryDirectory() as temp_dir:

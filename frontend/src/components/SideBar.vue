@@ -17,6 +17,12 @@ import { apiClient } from "../utils/apiClient";
 
 const appVersion = __APP_VERSION__;
 
+const latestVersion = ref(null);
+const latestVersionUrl = ref(null);
+const updateAvailable = computed(
+  () => latestVersion.value && latestVersion.value !== appVersion,
+);
+
 const props = defineProps({
   collapsed: { type: Boolean, default: false },
   selectedCharacter: { type: [String, Number, null], default: null },
@@ -981,6 +987,15 @@ async function characterSaved() {
 }
 
 onMounted(() => {
+  // Check for a newer version on PyPI (fire-and-forget, never throws)
+  apiClient
+    .get("/version/latest")
+    .then((resp) => {
+      latestVersion.value = resp.data.latest_version;
+      latestVersionUrl.value = resp.data.release_url;
+    })
+    .catch(() => {});
+
   const handleNoticeReflow = () => {
     updateSidebarNoticePosition();
     updateSidebarErrorPosition();
@@ -1120,18 +1135,33 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   >
     <div class="sidebar-brand">
       <div class="sidebar-brand-left">
-        <img
+        <a
           v-if="!props.collapsed"
-          src="/Logo.png"
-          alt="PixlVault logo"
-          class="sidebar-brand-logo"
-        />
-        <span v-if="!props.collapsed" class="sidebar-brand-title"
-          >PixlVault</span
+          href="https://pixelurgy.github.io/pixlvault/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="sidebar-brand-logo-link"
         >
-        <span v-if="!props.collapsed" class="sidebar-brand-version"
-          >v{{ appVersion }}</span
-        >
+          <img
+            src="/Logo.png"
+            alt="PixlVault logo"
+            class="sidebar-brand-logo"
+          />
+        </a>
+        <div v-if="!props.collapsed" class="sidebar-brand-text">
+          <span class="sidebar-brand-title">PixlVault</span>
+          <div class="sidebar-brand-subtitle-row">
+            <span class="sidebar-brand-version">v{{ appVersion }}</span>
+            <a
+              v-if="updateAvailable"
+              :href="latestVersionUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="sidebar-update-available"
+              >&#x2191; v{{ latestVersion }} available</a
+            >
+          </div>
+        </div>
       </div>
       <v-btn
         icon
@@ -1670,7 +1700,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   justify-content: center;
 }
 
-.sidebar.sidebar-collapsed .sidebar-brand:hover .v-btn {
+.sidebar.sidebar-collapsed .sidebar-brand-toggle:hover {
   justify-content: center;
   background-color: rgba(var(--v-theme-accent), 0.4);
 }
@@ -1695,12 +1725,28 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 }
 
 .sidebar-brand-logo {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
+  transition:
+    filter 0.2s ease,
+    transform 0.2s ease;
 }
 
-.sidebar-brand:hover .v-btn {
+.sidebar-brand-logo-link {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  outline: none;
+}
+
+.sidebar-brand-logo-link:hover .sidebar-brand-logo {
+  filter: drop-shadow(0 0 8px rgba(var(--v-theme-accent), 0.9))
+    drop-shadow(0 0 16px rgba(var(--v-theme-accent), 0.5));
+  transform: scale(1.08);
+}
+
+.sidebar-brand-toggle:hover {
   background-color: rgb(var(--v-theme-accent));
 }
 
@@ -1711,12 +1757,32 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 }
 
 .sidebar-brand-version {
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   opacity: 0.6;
   color: rgb(var(--v-theme-sidebar-text));
-  margin-left: -6px;
-  align-self: flex-end;
-  padding-bottom: 2px;
+}
+
+.sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+}
+
+.sidebar-brand-subtitle-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.sidebar-update-available {
+  font-size: 0.8rem;
+  color: rgba(var(--v-theme-accent), 0.8);
+  text-decoration: none;
+}
+
+.sidebar-update-available:hover {
+  text-decoration: underline;
 }
 
 .sidebar-brand-toggle {

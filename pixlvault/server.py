@@ -223,6 +223,9 @@ class Server:
         self.import_tasks = {}
         self._shutdown_on_lifespan = False
 
+        # Latest version fetched from PyPI at startup (None until fetched)
+        self._latest_version: str | None = None
+
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
         return self
@@ -408,6 +411,31 @@ class Server:
             if hasattr(self, "vault"):
                 self.vault.close()
 
+    async def _fetch_latest_pypi_version(self):
+        """Fetch the latest PixlVault release version from PyPI and cache it.
+
+        Runs as a background task at startup so it never blocks the server.
+        The result is stored in ``self._latest_version``.
+        """
+        import urllib.request
+        import json as _json
+
+        url = "https://pypi.org/pypi/pixlvault/json"
+        loop = asyncio.get_running_loop()
+
+        def _fetch():
+            with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310
+                data = _json.loads(resp.read())
+                return data["info"]["version"]
+
+        try:
+            self._latest_version = await loop.run_in_executor(None, _fetch)
+            logger.info("Latest PixlVault version on PyPI: %s", self._latest_version)
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch latest PixlVault version from PyPI: %s", exc
+            )
+
     @asynccontextmanager
     async def lifespan(self, app):
         # Startup logic
@@ -420,6 +448,7 @@ class Server:
             self._ws_loop = loop
         if self._server_config.get("generate_thumbnails_on_startup", True):
             await loop.run_in_executor(None, self._generate_missing_thumbnails)
+        asyncio.create_task(self._fetch_latest_pypi_version())
         yield
         # Shutdown logic — only clear _ws_loop if this lifespan instance set it
         if was_set_by_us:
@@ -681,6 +710,14 @@ class Server:
         async def read_version():
             version = self._get_version()
             return {"message": "PixlVault REST API", "version": version}
+
+        @self.api.get("/version/latest")
+        async def read_latest_version():
+            latest = self._latest_version
+            release_url = (
+                "https://pixelurgy.github.io/pixlvault/upgrade" if latest else None
+            )
+            return {"latest_version": latest, "release_url": release_url}
 
         @self.api.get("/favicon.ico")
         def favicon():
