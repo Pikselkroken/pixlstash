@@ -623,7 +623,7 @@
             </div>
           </div>
 
-          <div class="sidebar-section">
+          <div class="sidebar-section sidebar-section--faces">
             <div class="section-header">
               <span>Faces</span>
             </div>
@@ -4498,13 +4498,13 @@ function downloadComfyWorkflow(workflow) {
 .zoom-hud {
   position: absolute;
   bottom: 16px;
-  right: 16px;
+  right: calc(16px + var(--sidebar-width));
   padding: 4px 10px;
   border-radius: 999px;
   background: rgba(var(--v-theme-shadow), 0.55);
   color: rgb(var(--v-theme-on-dark-surface));
   font-size: 0.75rem;
-  transition: opacity 0.2s ease;
+  transition: opacity 0.2s ease, right 0.2s ease;
   z-index: 4;
 }
 
@@ -4699,7 +4699,7 @@ function downloadComfyWorkflow(workflow) {
 
 .sidebar-section--tags {
   flex: 1;
-  min-height: 0;
+  min-height: 180px;
   display: flex;
   flex-direction: column;
 }
@@ -4825,6 +4825,9 @@ function downloadComfyWorkflow(workflow) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin-top: 6px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .face-assign-card {
