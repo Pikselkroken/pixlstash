@@ -709,7 +709,7 @@
                 </button>
               </span>
             </div>
-            <div class="tag-list">
+            <div class="tag-list" ref="tagListRef">
               <div v-if="isTagsRefreshing" class="tag-refresh-indicator">
                 <v-progress-circular
                   indeterminate
@@ -976,8 +976,15 @@ function setOverlayImageById(nextId) {
   if (target) {
     const existingTags = getTagList(image.value?.tags);
     const targetTags = getTagList(target.tags);
+    const existingDescription = image.value?.description;
     image.value = {
       ...target,
+      // Preserve the existing description when re-setting the same image from filmstrip
+      // data, which may only carry partial fields (no description). The full description
+      // is loaded separately by fetchOverlayMetadata and must not be overwritten here.
+      ...(isSameImage && existingDescription != null
+        ? { description: existingDescription }
+        : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
       ),
@@ -1035,6 +1042,7 @@ let copyResetTimer = null;
 const addingTag = ref(false);
 const newTag = ref("");
 const tagInputRef = ref(null);
+const tagListRef = ref(null);
 const penalisedTags = ref(new Set());
 const penalisedTagsLoading = ref(false);
 const lastTagUpdateKey = ref(0);
@@ -1970,7 +1978,8 @@ watch(showStacks, (value) => {
   }
 });
 
-watch(image, () => {
+watch(image, (newImage, oldImage) => {
+  if (newImage?.id === oldImage?.id) return;
   resetTagInput();
   syncDescriptionDraft();
   comfyuiCaptionTouched.value = false;
@@ -2009,8 +2018,15 @@ function beginAddTag() {
   newTag.value = "";
   nextTick(() => {
     if (tagInputRef.value) {
-      tagInputRef.value.focus();
+      // Use preventScroll so the browser doesn't auto-scroll the sidebar
+      // (which has overflow:hidden but still acts as a scroll container for
+      // the focus algorithm), which would push the description off the top.
+      tagInputRef.value.focus({ preventScroll: true });
       tagInputRef.value.select?.();
+      // Manually scroll only the tag-list to reveal the input.
+      if (tagListRef.value) {
+        tagListRef.value.scrollTop = tagListRef.value.scrollHeight;
+      }
     }
   });
 }
@@ -2158,7 +2174,10 @@ function handleKeydown(e) {
   } else if (e.key === "i" || e.key === "I") {
     toggleSidebar();
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
-    tagInputRef.value?.focus();
+    tagInputRef.value?.focus({ preventScroll: true });
+    if (tagListRef.value) {
+      tagListRef.value.scrollTop = tagListRef.value.scrollHeight;
+    }
   } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
     const score = parseInt(e.key, 10);
     if (image.value) setScore(score);
@@ -4504,7 +4523,9 @@ function downloadComfyWorkflow(workflow) {
   background: rgba(var(--v-theme-shadow), 0.55);
   color: rgb(var(--v-theme-on-dark-surface));
   font-size: 0.75rem;
-  transition: opacity 0.2s ease, right 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    right 0.2s ease;
   z-index: 4;
 }
 
