@@ -4870,6 +4870,7 @@ function removeImagesById(imageIds) {
   selectedImageIds.value = selectedImageIds.value.filter(
     (id) => !dIds.has(getPictureId(id)),
   );
+  resetThumbnailState();
   rebuildGridImagesFromLastFetch();
   void refreshExpandedStacksAfterFetch();
 }
