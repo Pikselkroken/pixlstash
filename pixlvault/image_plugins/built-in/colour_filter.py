@@ -91,6 +91,7 @@ class ColourFilterPlugin(ImagePlugin):
         parameters: dict[str, Any] | None = None,
         progress_callback=None,
         error_callback=None,
+        captions: list[str] | None = None,
     ) -> list[Image.Image]:
         params = parameters or {}
         mode = str(params.get("mode") or "black_and_white").strip().lower()

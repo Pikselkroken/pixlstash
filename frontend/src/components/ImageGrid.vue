@@ -671,10 +671,18 @@ function handlePluginRunRequest(payload) {
       ? payload.parameters
       : {};
   if (!pluginName || !pictureIds.length) return;
-  runPluginWithParameters(pluginName, pictureIds, parameters);
+  // Build per-image captions from stored descriptions in the grid.
+  const idSet = new Set(pictureIds);
+  const idToDesc = new Map();
+  for (const img of allGridImages.value) {
+    const id = Number(img?.id);
+    if (idSet.has(id)) idToDesc.set(id, img.description || "");
+  }
+  const captions = pictureIds.map((id) => idToDesc.get(id) ?? "");
+  runPluginWithParameters(pluginName, pictureIds, parameters, captions);
 }
 
-async function runPluginWithParameters(pluginName, pictureIds, parameters) {
+async function runPluginWithParameters(pluginName, pictureIds, parameters, captions) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
     const res = await apiClient.post(
@@ -682,6 +690,7 @@ async function runPluginWithParameters(pluginName, pictureIds, parameters) {
       {
         picture_ids: pictureIds,
         parameters: parameters || {},
+        captions: Array.isArray(captions) ? captions : undefined,
       },
     );
     const createdIds = Array.isArray(res.data?.created_picture_ids)

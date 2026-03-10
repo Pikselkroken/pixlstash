@@ -310,6 +310,7 @@ def apply_plugin_to_pictures(
     plugin: ImagePlugin,
     picture_ids: list[int],
     parameters: dict[str, Any] | None,
+    captions: list[str] | None = None,
     progress_reporter=None,
     error_reporter=None,
 ) -> dict[str, Any]:
@@ -319,6 +320,13 @@ def apply_plugin_to_pictures(
     errors: list[dict[str, Any]] = []
 
     params = parameters or {}
+
+    # Build per-image captions: use caller-supplied list when provided,
+    # otherwise fall back to each picture's stored description (or "").
+    if captions and len(captions) == len(loaded):
+        resolved_captions: list[str] = [str(c or "") for c in captions]
+    else:
+        resolved_captions = [str(pic.description or "") for pic, *_ in loaded]
 
     def progress_cb(payload):
         progress_events.append(payload)
@@ -351,11 +359,13 @@ def apply_plugin_to_pictures(
             image_inputs.append(pil_image)
 
     if image_inputs:
+        input_captions = [resolved_captions[i] for i in image_indices]
         image_outputs = plugin.run(
             image_inputs,
             parameters=params,
             progress_callback=progress_cb,
             error_callback=error_cb,
+            captions=input_captions,
         )
         if len(image_outputs) != len(image_inputs):
             raise ValueError(

@@ -72,6 +72,7 @@ class ImagePlugin(ABC):
         parameters: dict[str, Any] | None = None,
         progress_callback: ProgressCallback | None = None,
         error_callback: ErrorCallback | None = None,
+        captions: list[str] | None = None,
     ) -> list[Image.Image]:
         """Apply the plugin transform to a batch of images.
 
@@ -88,6 +89,10 @@ class ImagePlugin(ABC):
                 ``self.report_progress``.
             error_callback: Optional callable invoked on per-image failures via
                 ``self.report_error``.
+            captions: Optional list of caption strings, one per image in the
+                same order as ``images``. Each entry is the stored description
+                for that picture (or an empty string if none). Use these to
+                drive caption-conditioned transforms.
 
         Returns:
             Transformed images in the same order as ``images``.

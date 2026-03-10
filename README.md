@@ -438,7 +438,7 @@ Place your `.py` plugin files in the platform-specific user data directory. Pixl
 
 ### Writing a plugin
 
-Use the template from `image-plugins/user/plugin_template.py` in the source repository as a starting point:
+Use the template from `pixlvault/image_plugins/built-in/plugin_template.py` in the source repository as a starting point:
 
 1. Create a new `.py` file in your user plugin directory.
 2. Subclass `ImagePlugin`, set a unique `name` and `plugin_id`, and implement `run()`.

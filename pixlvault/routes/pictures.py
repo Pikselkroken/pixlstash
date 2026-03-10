@@ -503,6 +503,16 @@ def create_router(server) -> APIRouter:
         if not isinstance(parameters, dict):
             raise HTTPException(status_code=400, detail="parameters must be an object")
 
+        raw_captions = payload.get("captions")
+        captions: list[str] | None = None
+        if isinstance(raw_captions, list):
+            if len(raw_captions) != len(picture_ids):
+                raise HTTPException(
+                    status_code=400,
+                    detail="captions length must match picture_ids length",
+                )
+            captions = [str(c or "") for c in raw_captions]
+
         plugin_run_id = str(uuid.uuid4())
 
         def emit_plugin_progress(progress_payload: dict):
@@ -552,6 +562,7 @@ def create_router(server) -> APIRouter:
                 plugin,
                 picture_ids,
                 parameters,
+                captions,
                 progress_reporter=emit_plugin_progress,
                 error_reporter=emit_plugin_error,
             )

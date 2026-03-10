@@ -44,6 +44,7 @@ class BrightnessContrastPlugin(ImagePlugin):
         parameters: dict[str, Any] | None = None,
         progress_callback=None,
         error_callback=None,
+        captions: list[str] | None = None,
     ) -> list[Image.Image]:
         params = parameters or {}
         brightness = self._coerce_positive_number(params.get("brightness"), 1.0)

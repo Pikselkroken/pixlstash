@@ -58,6 +58,7 @@ class ScalingPlugin(ImagePlugin):
         parameters: dict[str, Any] | None = None,
         progress_callback=None,
         error_callback=None,
+        captions: list[str] | None = None,
     ) -> list[Image.Image]:
         params = parameters or {}
         algorithm = str(params.get("algorithm") or "lanczos").strip().lower()
