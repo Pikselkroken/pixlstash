@@ -6,14 +6,14 @@
       </v-btn>
       <v-card class="editor-card">
         <v-card-title class="editor-header">
-          {{ character?.id ? "Edit Character" : "New Character" }}
+          {{ character?.id ? "Edit Person" : "New Person" }}
         </v-card-title>
         <v-card-text class="editor-body">
           <v-text-field
             ref="nameInputRef"
             v-model="localCharacter.name"
             label="Name *"
-            placeholder="Character name"
+            placeholder="Name"
             density="comfortable"
             variant="filled"
             @keydown.enter="save"
@@ -21,7 +21,7 @@
           <v-textarea
             v-model="localCharacter.description"
             label="Description"
-            placeholder="Character description (used in embeddings)"
+            placeholder="Description (used in embeddings)"
             density="comfortable"
             variant="filled"
             rows="4"
@@ -29,7 +29,7 @@
           <v-textarea
             v-model="localCharacter.extra_metadata"
             label="Metadata"
-            placeholder="Any other metadata associated with the character"
+            placeholder="Any other metadata associated with the person"
             density="comfortable"
             variant="filled"
             rows="3"
@@ -153,7 +153,6 @@ async function saveCharacter(charData) {
     const url = isNew
       ? `${props.backendUrl}/characters`
       : `${props.backendUrl}/characters/${charData.id}`;
-
 
     if (isNew) {
       const res = await apiClient.post(url, JSON.stringify(charData));
