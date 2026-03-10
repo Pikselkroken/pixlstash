@@ -878,10 +878,6 @@ function applyWorkflowOutputTargets(payload, outputTargets) {
 
 async function confirmWorkflowImport() {
   if (!workflowImportPayload.value) return;
-  if (!workflowImportImageTarget.value) {
-    workflowImportError.value = "Select an image input.";
-    return;
-  }
   const name = String(workflowImportName.value || "").trim();
   if (!name) {
     workflowImportError.value = "Workflow name is required.";
@@ -1189,12 +1185,13 @@ watch(maxVramGbValue, () => {
   scheduleMaxVramGbSave();
 });
 
-const workflowImageInputOptions = computed(() =>
-  (workflowImportInputs.value || []).map((entry) => ({
+const workflowImageInputOptions = computed(() => [
+  { title: "None (text-to-image)", value: "" },
+  ...(workflowImportInputs.value || []).map((entry) => ({
     title: entry.label,
     value: entry.id,
   })),
-);
+]);
 
 const workflowCaptionInputOptions = computed(() => [
   { title: "No caption", value: "" },

@@ -680,6 +680,9 @@ def create_router(server) -> APIRouter:
                         "valid": valid,
                         "missing_placeholders": missing,
                         "source": source,
+                        "workflow_type": "t2i"
+                        if PLACEHOLDER_IMAGE in missing
+                        else "i2i",
                     }
                 )
         workflows.sort(key=lambda item: item.get("name", ""))
@@ -830,6 +833,70 @@ def create_router(server) -> APIRouter:
             )
 
         return {"status": "success", "prompts": prompts}
+
+    @router.post(
+        "/comfyui/run_t2i",
+        summary="Run ComfyUI text-to-image",
+        description="Submits a t2i prompt using only a caption and imports generated outputs back into PixlVault.",
+    )
+    async def run_comfyui_t2i(request: Request, payload: dict = Body(...)):
+        workflow_name = _normalize_workflow_name(payload.get("workflow_name"))
+        if not workflow_name:
+            raise HTTPException(status_code=400, detail="workflow_name is required")
+
+        caption = payload.get("caption") or ""
+        if not isinstance(caption, str):
+            caption = str(caption)
+        client_id = payload.get("client_id") or payload.get("clientId") or None
+        if client_id is not None:
+            client_id = str(client_id)
+
+        workflow_path, _ = _resolve_workflow_path(workflow_name)
+        if not workflow_path:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+
+        workflow_payload = _load_workflow_json(workflow_path)
+        if PLACEHOLDER_IMAGE in json.dumps(workflow_payload, ensure_ascii=False):
+            raise HTTPException(
+                status_code=400,
+                detail="This workflow requires an image input and cannot be used for text-to-image generation.",
+            )
+
+        output_node_ids = _extract_output_node_ids(workflow_payload, payload)
+
+        user = server.auth.get_user_for_request(request)
+        comfyui_url = getattr(user, "comfyui_url", None) if user else None
+        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+
+        replacements = {PLACEHOLDER_CAPTION: caption}
+        workflow_instance = _replace_placeholders(
+            deepcopy(workflow_payload), replacements
+        )
+
+        response_payload = _submit_comfyui_prompt(
+            comfyui_url, workflow_instance, client_id
+        )
+        prompt_id = response_payload.get("prompt_id") or response_payload.get("id")
+        if prompt_id:
+            worker = threading.Thread(
+                target=_process_comfyui_outputs,
+                args=(
+                    server,
+                    comfyui_url,
+                    str(prompt_id),
+                    output_node_ids,
+                    None,
+                    None,
+                ),
+                daemon=True,
+            )
+            worker.start()
+
+        return {
+            "status": "success",
+            "prompt_id": prompt_id,
+            "workflow": workflow_name,
+        }
 
     @router.post(
         "/comfyui/workflows/import",

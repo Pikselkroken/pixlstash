@@ -529,6 +529,10 @@ function handleCollapseAllStacks() {
   showStacks.value = false;
 }
 
+function handleComfyuiRunGrid(payload) {
+  gridContainer.value?.runComfyuiOnGridImages(payload);
+}
+
 const selectedSimilarityCharacter = ref(null);
 const similarityCharacterOptions = ref([]);
 function handleUpdateSimilarityCharacter(val) {
@@ -1149,6 +1153,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :stackThreshold="stackThreshold"
             :stackExpandedCount="expandedStackCount"
             :stackTotalCount="totalStackCount"
+            :backendUrl="BACKEND_URL"
             v-model:searchInput="searchInput"
             v-model:isSearchHistoryOpen="isSearchHistoryOpen"
             v-model:columnsMenuOpen="columnsMenuOpen"
@@ -1180,6 +1185,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @open-settings="openSettingsDialog"
             @expand-all-stacks="handleExpandAllStacks"
             @collapse-all-stacks="handleCollapseAllStacks"
+            @comfyui-run-grid="handleComfyuiRunGrid"
           />
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"

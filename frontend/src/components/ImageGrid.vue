@@ -682,7 +682,12 @@ function handlePluginRunRequest(payload) {
   runPluginWithParameters(pluginName, pictureIds, parameters, captions);
 }
 
-async function runPluginWithParameters(pluginName, pictureIds, parameters, captions) {
+async function runPluginWithParameters(
+  pluginName,
+  pictureIds,
+  parameters,
+  captions,
+) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
     const res = await apiClient.post(
@@ -781,6 +786,20 @@ const comfyuiProgressPercent = computed(
 
 function handleComfyuiRun(payload) {
   comfyuiRunner.value?.handleComfyuiRun(payload);
+}
+
+async function runComfyuiOnGridImages({ workflowName, caption = "" } = {}) {
+  if (!workflowName || !props.backendUrl) return;
+  try {
+    const payload = {
+      workflow_name: workflowName,
+      caption: caption || "",
+      client_id: comfyuiClientId.value || undefined,
+    };
+    await apiClient.post(`${props.backendUrl}/comfyui/run_t2i`, payload);
+  } catch (err) {
+    console.error("ComfyUI T2I run failed:", err);
+  }
 }
 
 function onComfyuiRefreshGrid({ preserveScroll } = {}) {
@@ -4848,6 +4867,7 @@ defineExpose({
   getExportCount,
   removeImagesById,
   clearFaceSelection,
+  runComfyuiOnGridImages,
 });
 
 // Remove images by ID (for event-driven removal)

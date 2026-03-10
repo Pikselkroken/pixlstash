@@ -370,7 +370,9 @@ watch(pluginMenuOpen, (isOpen) => {
 
 const validComfyWorkflows = computed(() => {
   if (!Array.isArray(comfyuiWorkflows.value)) return [];
-  return comfyuiWorkflows.value.filter((workflow) => workflow?.valid !== false);
+  return comfyuiWorkflows.value.filter(
+    (workflow) => workflow?.workflow_type === "i2i",
+  );
 });
 
 const canRunComfyWorkflow = computed(() => {

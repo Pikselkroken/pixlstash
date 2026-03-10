@@ -545,6 +545,80 @@
             </v-btn-toggle>
           </div>
         </v-menu>
+        <v-menu
+          v-model="comfyuiMenuOpen"
+          :close-on-content-click="false"
+          location="top end"
+          origin="bottom end"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              icon
+              v-bind="menuProps"
+              :color="comfyuiMenuOpen ? 'primary' : 'surface'"
+              title="Generate with ComfyUI"
+              class="toolbar-action-btn"
+            >
+              <v-icon :color="'on-background'">mdi-robot</v-icon>
+            </v-btn>
+          </template>
+          <div class="toolbar-comfyui-panel">
+            <div class="toolbar-comfyui-header">
+              Generate with ComfyUI (T2I)
+            </div>
+            <div class="toolbar-comfyui-body">
+              <div v-if="comfyuiWorkflowLoading" class="toolbar-comfyui-note">
+                Loading workflows...
+              </div>
+              <div v-else>
+                <div v-if="comfyuiWorkflowError" class="toolbar-comfyui-error">
+                  {{ comfyuiWorkflowError }}
+                </div>
+                <template v-if="validComfyWorkflows.length">
+                  <label class="toolbar-comfyui-label">Workflow</label>
+                  <select
+                    v-model="comfyuiSelectedWorkflow"
+                    class="toolbar-comfyui-select"
+                  >
+                    <option
+                      v-for="workflow in validComfyWorkflows"
+                      :key="workflow.name"
+                      :value="workflow.name"
+                    >
+                      {{ workflow.display_name || workflow.name }}
+                    </option>
+                  </select>
+                  <label class="toolbar-comfyui-label">Caption</label>
+                  <textarea
+                    v-model="comfyuiCaption"
+                    class="toolbar-comfyui-textarea"
+                    rows="3"
+                    placeholder="Optional caption for {{caption}}"
+                    @keydown.stop
+                  ></textarea>
+                  <div class="toolbar-comfyui-actions">
+                    <button
+                      class="toolbar-comfyui-run-btn"
+                      type="button"
+                      :disabled="!canRunComfyWorkflow"
+                      @click="runComfyuiOnGrid"
+                    >
+                      <v-icon size="16">mdi-play</v-icon>
+                      <span>Run on all</span>
+                    </button>
+                  </div>
+                </template>
+                <div v-else class="toolbar-comfyui-note">
+                  No valid workflows found.
+                </div>
+                <div v-if="comfyuiRunError" class="toolbar-comfyui-error">
+                  {{ comfyuiRunError }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </v-menu>
         <v-btn
           icon
           v-bind="props"
@@ -562,6 +636,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
+import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
   isMobile: { type: Boolean, default: false },
@@ -601,6 +676,7 @@ const props = defineProps({
   similarityCharacterOptions: { type: Array, default: () => [] },
   selectedSimilarityCharacter: { type: [String, Number, null], default: null },
   stackThreshold: { type: [String, Number, null], default: null },
+  backendUrl: { type: String, default: "" },
 });
 
 const emit = defineEmits([
@@ -635,6 +711,7 @@ const emit = defineEmits([
   "open-settings",
   "toggle-sidebar",
   "update:selected-sort",
+  "comfyui-run-grid",
 ]);
 
 const searchInputField = ref(null);
@@ -905,6 +982,62 @@ function blurSearchInput() {
   if (document.activeElement instanceof HTMLElement) {
     document.activeElement.blur();
   }
+}
+
+// ============================================================
+// COMFYUI
+// ============================================================
+const comfyuiMenuOpen = ref(false);
+const comfyuiWorkflows = ref([]);
+const comfyuiWorkflowLoading = ref(false);
+const comfyuiWorkflowError = ref("");
+const comfyuiSelectedWorkflow = ref("");
+const comfyuiCaption = ref("");
+const comfyuiRunError = ref("");
+
+const validComfyWorkflows = computed(() => {
+  if (!Array.isArray(comfyuiWorkflows.value)) return [];
+  return comfyuiWorkflows.value.filter((w) => w?.workflow_type === "t2i");
+});
+
+const canRunComfyWorkflow = computed(
+  () => !!comfyuiSelectedWorkflow.value && !!props.backendUrl,
+);
+
+watch(comfyuiMenuOpen, async (isOpen) => {
+  if (!isOpen) return;
+  comfyuiRunError.value = "";
+  await fetchComfyWorkflows();
+  if (!comfyuiSelectedWorkflow.value && validComfyWorkflows.value.length) {
+    comfyuiSelectedWorkflow.value = String(validComfyWorkflows.value[0].name);
+  }
+});
+
+async function fetchComfyWorkflows() {
+  if (comfyuiWorkflowLoading.value) return;
+  if (!props.backendUrl) return;
+  comfyuiWorkflowLoading.value = true;
+  comfyuiWorkflowError.value = "";
+  try {
+    const res = await apiClient.get(`${props.backendUrl}/comfyui/workflows`);
+    const workflows = res.data?.workflows;
+    comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
+  } catch (err) {
+    comfyuiWorkflowError.value =
+      err?.response?.data?.detail || err?.message || String(err);
+    comfyuiWorkflows.value = [];
+  } finally {
+    comfyuiWorkflowLoading.value = false;
+  }
+}
+
+function runComfyuiOnGrid() {
+  if (!canRunComfyWorkflow.value) return;
+  emit("comfyui-run-grid", {
+    workflowName: comfyuiSelectedWorkflow.value,
+    caption: comfyuiCaption.value || "",
+  });
+  comfyuiMenuOpen.value = false;
 }
 
 defineExpose({ blurSearchInput });
@@ -1327,5 +1460,101 @@ defineExpose({ blurSearchInput });
     margin-left: 0;
     justify-content: flex-start;
   }
+}
+
+.toolbar-comfyui-panel {
+  padding: 10px 12px;
+  min-width: 240px;
+  background: rgba(var(--v-theme-background), 0.92);
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 10px;
+  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toolbar-comfyui-header {
+  font-size: 1.02em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.toolbar-comfyui-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.toolbar-comfyui-label {
+  font-size: 0.82em;
+  font-weight: 500;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  display: block;
+  margin-bottom: 2px;
+}
+
+.toolbar-comfyui-select {
+  width: 100%;
+  background: rgba(var(--v-theme-surface), 0.25);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.15);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 0.88em;
+  outline: none;
+}
+
+.toolbar-comfyui-textarea {
+  width: 100%;
+  background: rgba(var(--v-theme-surface), 0.25);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.15);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 0.88em;
+  resize: vertical;
+  outline: none;
+  font-family: inherit;
+}
+
+.toolbar-comfyui-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.toolbar-comfyui-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(var(--v-theme-primary), 0.85);
+  color: rgb(var(--v-theme-on-primary));
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.9em;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.toolbar-comfyui-run-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.toolbar-comfyui-run-btn:not(:disabled):hover {
+  background: rgba(var(--v-theme-primary), 1);
+}
+
+.toolbar-comfyui-note {
+  font-size: 0.85em;
+  color: rgba(var(--v-theme-on-background), 0.6);
+}
+
+.toolbar-comfyui-error {
+  font-size: 0.85em;
+  color: rgb(var(--v-theme-error));
 }
 </style>
