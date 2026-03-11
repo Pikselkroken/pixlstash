@@ -35,7 +35,7 @@ GOOD_URLS = [
 ]
 
 HEADERS = {
-    "User-Agent": "PixlVault-anchor-bootstrap/1.0 (https://github.com/pixlvault; contact via repo issues)"
+    "User-Agent": "PixlStash-anchor-bootstrap/1.0 (https://github.com/pixlstash; contact via repo issues)"
 }
 
 

@@ -790,7 +790,7 @@ function handleGlobalKeydown(e) {
 }
 
 function resolveThemeName(mode) {
-  return mode === "dark" ? "pixlVaultDark" : "pixlVaultLight";
+  return mode === "dark" ? "pixlStashDark" : "pixlStashLight";
 }
 
 async function handleImagesAssignedToCharacter({ characterId, imageIds }) {

@@ -108,7 +108,7 @@ const progressPercent = computed(() => {
 function isComfyuiDebugEnabled() {
   return (
     typeof window !== "undefined" &&
-    window.localStorage?.getItem("pixlvault:comfyuiDebug") === "1"
+    window.localStorage?.getItem("pixlstash:comfyuiDebug") === "1"
   );
 }
 
@@ -126,7 +126,7 @@ function logComfyuiDebug(message, details = {}) {
 
 function getComfyuiClientId() {
   if (!clientId.value) {
-    clientId.value = `pixlvault-${Math.random().toString(36).slice(2, 10)}`;
+    clientId.value = `pixlstash-${Math.random().toString(36).slice(2, 10)}`;
   }
   return clientId.value;
 }

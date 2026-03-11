@@ -307,7 +307,7 @@ watch(dialogOpen, (isOpen) => {
                     and select Google Photos.
                   </li>
                   <li>Download the zip archive.</li>
-                  <li>Drag the zip file into PixlVault to import.</li>
+                  <li>Drag the zip file into PixlStash to import.</li>
                 </ol>
                 <div class="google-photos-note">
                   Importable right now: Takeout zip files or extracted folders.
@@ -340,7 +340,7 @@ watch(dialogOpen, (isOpen) => {
                     the synced download folder.
                   </li>
                   <li>Download the zip files from iCloud.</li>
-                  <li>Drag the zip file into PixlVault to import.</li>
+                  <li>Drag the zip file into PixlStash to import.</li>
                 </ol>
                 <div class="google-photos-note">
                   Importable right now: iCloud zip files or extracted folders.
@@ -363,7 +363,7 @@ watch(dialogOpen, (isOpen) => {
                     and request your archive.
                   </li>
                   <li>When it arrives, download the zip archive.</li>
-                  <li>Drag the zip file into PixlVault to import.</li>
+                  <li>Drag the zip file into PixlStash to import.</li>
                 </ol>
                 <div class="google-photos-note">
                   Importable right now: Flickr zip files or extracted folders.

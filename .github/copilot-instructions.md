@@ -1,4 +1,4 @@
-# Copilot Instructions for PixlVault
+# Copilot Instructions for PixlStash
 
 ## Patch Reliability Policy
 
@@ -23,11 +23,11 @@
     8. Private methods in logical order
 ## Project Architecture
 
-- **Backend:** Python FastAPI server (`pixlvault/server.py`), with core logic in `pixlvault/routes`.
+- **Backend:** Python FastAPI server (`pixlstash/server.py`), with core logic in `pixlstash/routes`.
 - **Frontend:** Vue 3 + Vite app in `frontend/`.
 - **Database:** SQLite (`vault.db`), schema managed via Python.
-- **Utility functions:** Utilities should be placed in `pixlvault/utils`.
-- **Tasks:** Long-running tasks (e.g., quality calculation) are handled asynchronously with the TaskRunner class in `pixlvault/task_runner.py`.
+- **Utility functions:** Utilities should be placed in `pixlstash/utils`.
+- **Tasks:** Long-running tasks (e.g., quality calculation) are handled asynchronously with the TaskRunner class in `pixlstash/task_runner.py`.
 
 ## Imports
 - Mostly use imports at the top of the file. Local imports within functions are only acceptable if they are necessary to avoid circular dependencies, to reduce startup time for rarely used modules or if the import is *clearly* optional.
@@ -56,9 +56,9 @@
 ## Developer Workflows
 
 - **Install dependencies:** `pip install -e .`
-- **Run server:** `python -m pixlvault.server`
+- **Run server:** `python -m pixlstash.server`
 - **Run tests:** `python -m pytest -s -vvv --fast-captions --force-cpu`
-- **Check formatting:** `ruff check pixlvault`
+- **Check formatting:** `ruff check pixlstash`
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 

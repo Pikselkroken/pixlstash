@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple
 
 import cv2
 
-from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 
 DEFAULT_SCALE = 1.75

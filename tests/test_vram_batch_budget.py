@@ -1,5 +1,5 @@
-from pixlvault.picture_tagger import PictureTagger
-from pixlvault.tasks.missing_tag_finder import MissingTagFinder
+from pixlstash.picture_tagger import PictureTagger
+from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 
 
 def _build_tagger_for_budget_tests(

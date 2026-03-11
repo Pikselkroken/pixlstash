@@ -1,9 +1,9 @@
-# PixlVault
+# PixlStash
 <p align="center">
-  <img src="website/assets/ScreenshotGrid.jpg" alt="PixlVault Screenshot" width="800"/>
+  <img src="website/assets/ScreenshotGrid.jpg" alt="PixlStash Screenshot" width="800"/>
 </p>
 
-PixlVault is a local picture library server for organizing, filtering, and reviewing large image collections.
+PixlStash is a local picture library server for organizing, filtering, and reviewing large image collections.
 
 It provides:
 
@@ -14,9 +14,9 @@ It provides:
 - Local storage of your library data
 - Simple keyboard shortcuts for scoring, selection, deletion and navigation.
 
-PixlVault runs on your machine and serves the UI at a local web address.
+PixlStash runs on your machine and serves the UI at a local web address.
 
-## Install PixlVault
+## Install PixlStash
 
 Choose one installation method.
 
@@ -27,7 +27,7 @@ Use this if you want the easiest setup on Windows.
 1. Go to the GitHub Releases page for this repository.
 2. Download the latest Windows installer `.exe`.
 3. Run the installer.
-4. Start PixlVault Server from the Start Menu shortcut.
+4. Start PixlStash Server from the Start Menu shortcut.
 5. Open your browser to `http://localhost:9537`.
 
 > **Windows SmartScreen warning:** Because the installer is not yet signed with a paid code-signing certificate, Windows SmartScreen may show a red "Windows protected your PC" dialog when you run it. This is expected. Click **More info** and then **Run anyway** to proceed with the installation.
@@ -52,13 +52,13 @@ Requirements:
 Install:
 
 ```bash
-pip install pixlvault
+pip install pixlstash
 ```
 
 Run:
 
 ```bash
-pixlvault-server
+pixlstash-server
 ```
 
 Then open:
@@ -80,8 +80,8 @@ Requirements:
 Steps:
 
 ```bash
-git clone https://github.com/Pixelurgy/pixlvault.git
-cd pixlvault
+git clone https://github.com/Pixelurgy/pixlstash.git
+cd pixlstash
 
 python -m venv .venv
 # Windows:
@@ -97,7 +97,7 @@ npm ci
 npm run build
 cd ..
 
-pixlvault-server
+pixlstash-server
 ```
 
 Then open:
@@ -156,26 +156,26 @@ docker run -d \
   --runtime nvidia \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-  -e PIXLVAULT_HOST=0.0.0.0 \
+  -e PIXLSTASH_HOST=0.0.0.0 \
   -p 9537:9537 \
-  -v pixlvault-home:/home/pixlvault \
-  --name pixlvault \
-  ghcr.io/pixelurgy/pixlvault:latest
+  -v pixlstash-home:/home/pixlstash \
+  --name pixlstash \
+  ghcr.io/pixelurgy/pixlstash:latest
 ```
 
 Open `http://localhost:9537` in your browser.
 
-All data (images, database, config, downloaded models) is stored in the `pixlvault-home` named volume and persists across restarts.
+All data (images, database, config, downloaded models) is stored in the `pixlstash-home` named volume and persists across restarts.
 
 To update to the latest release:
 
 ```bash
-docker pull ghcr.io/pixelurgy/pixlvault:latest
-docker rm -f pixlvault
+docker pull ghcr.io/pixelurgy/pixlstash:latest
+docker rm -f pixlstash
 # re-run the docker run command above
 ```
 
-To pin to a specific release, replace `latest` with a version tag, e.g. `ghcr.io/pixelurgy/pixlvault:0.9.1`.
+To pin to a specific release, replace `latest` with a version tag, e.g. `ghcr.io/pixelurgy/pixlstash:0.9.1`.
 
 #### Optional: docker-compose.yml
 
@@ -183,22 +183,22 @@ If you prefer Compose for easier management:
 
 ```yaml
 services:
-  pixlvault:
-    image: ghcr.io/pixelurgy/pixlvault:latest
+  pixlstash:
+    image: ghcr.io/pixelurgy/pixlstash:latest
     runtime: nvidia
     ports:
       - "9537:9537"
     volumes:
-      - pixlvault-home:/home/pixlvault
+      - pixlstash-home:/home/pixlstash
     environment:
-      PIXLVAULT_HOST: "0.0.0.0"
-      PIXLVAULT_PORT: "9537"
+      PIXLSTASH_HOST: "0.0.0.0"
+      PIXLSTASH_PORT: "9537"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     restart: unless-stopped
 
 volumes:
-  pixlvault-home:
+  pixlstash-home:
 ```
 
 ```bash
@@ -212,8 +212,8 @@ docker compose pull && docker compose up -d
 Use this if you need a custom build or want to run unreleased changes.
 
 ```bash
-git clone https://github.com/Pixelurgy/pixlvault.git
-cd pixlvault
+git clone https://github.com/Pixelurgy/pixlstash.git
+cd pixlstash
 
 docker compose up --build
 ```
@@ -225,34 +225,34 @@ Then open `http://localhost:9537`.
 
 ## First run and data location
 
-On first run, PixlVault creates a user config directory and stores:
+On first run, PixlStash creates a user config directory and stores:
 
 - Server config
 - Database
 - Imported media files
 
-> **Model downloads:** On first startup, PixlVault automatically downloads the AI models required for tagging, captioning, and quality scoring. This includes several hundred MB of model weights. Downloads happen in the background and are stored in the platform user data directory:
+> **Model downloads:** On first startup, PixlStash automatically downloads the AI models required for tagging, captioning, and quality scoring. This includes several hundred MB of model weights. Downloads happen in the background and are stored in the platform user data directory:
 >
 > | OS | Path |
 > |----|------|
-> | **Linux** | `~/.local/share/pixlvault/downloaded_models/` |
-> | **macOS** | `~/Library/Application Support/pixlvault/downloaded_models/` |
-> | **Windows** | `%LOCALAPPDATA%\pixlvault\downloaded_models\` |
+> | **Linux** | `~/.local/share/pixlstash/downloaded_models/` |
+> | **macOS** | `~/Library/Application Support/pixlstash/downloaded_models/` |
+> | **Windows** | `%LOCALAPPDATA%\pixlstash\downloaded_models\` |
 >
 > An internet connection is required the first time the server starts. Subsequent starts use the cached models.
 
 If you need to use a custom config path:
 
 ```bash
-python -m pixlvault.app --server-config "C:\path\to\server-config.json"
+python -m pixlstash.app --server-config "C:\path\to\server-config.json"
 ```
 
 ## Server configuration
 
-On first run, PixlVault generates a `server-config.json` file in the user config directory:
+On first run, PixlStash generates a `server-config.json` file in the user config directory:
 
-- **Linux / macOS:** `~/.config/pixlvault/server-config.json`
-- **Windows:** `%LOCALAPPDATA%\pixlvault\server-config.json`
+- **Linux / macOS:** `~/.config/pixlstash/server-config.json`
+- **Windows:** `%LOCALAPPDATA%\pixlstash\server-config.json`
 
 You can also supply a custom path with `--server-config <path>`.
 
@@ -325,7 +325,7 @@ Example:
   "port": 9537,
   "log_level": "info",
   "require_ssl": false,
-  "image_root": "/home/user/.config/pixlvault/images",
+  "image_root": "/home/user/.config/pixlstash/images",
   "watch_folders": [
     { "folder": "/path/to/photos", "delete_after_import": false }
   ],
@@ -335,7 +335,7 @@ Example:
 ```
 ## Installing CUDA 12.8 for GPU Acceleration (Windows & Linux)
 
-PixlVault can run fully on CPU, but GPU acceleration requires **CUDA 12.8** plus the corresponding CUDA-enabled PyTorch and ONNX Runtime packages.
+PixlStash can run fully on CPU, but GPU acceleration requires **CUDA 12.8** plus the corresponding CUDA-enabled PyTorch and ONNX Runtime packages.
 
 1. Install or update your NVIDIA driver (must support CUDA 12.x).
 2. Install the CUDA Toolkit for your distribution from NVIDIA’s CUDA downloads page. [1](https://developer.nvidia.com/cuda-toolkit-archive)
@@ -344,7 +344,7 @@ PixlVault can run fully on CPU, but GPU acceleration requires **CUDA 12.8** plus
    nvcc --version
    nvidia-smi
    ```
-4. Install PyTorch with CUDA 12.8 (from the pixlvault install folder):
+4. Install PyTorch with CUDA 12.8 (from the pixlstash install folder):
    ```bash
    venv\Scripts\Activate
    pip install torch torchvision --force-reinstall --index-url https://download.pytorch.org/whl/cu128
@@ -374,12 +374,12 @@ print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N
 ```
 
 
-## Updating PixlVault
+## Updating PixlStash
 
 ### PyPI install
 
 ```bash
-pip install --upgrade pixlvault
+pip install --upgrade pixlstash
 ```
 
 ### Source install
@@ -424,24 +424,24 @@ If you prefer CPU mode, set `"default_device": "cpu"` in `server-config.json`.
 
 ## Installing plugins
 
-PixlVault supports built-in plugins and user-created plugins.
+PixlStash supports built-in plugins and user-created plugins.
 
 ### User plugin directory
 
-Place your `.py` plugin files in the platform-specific user data directory. PixlVault logs the exact path on startup.
+Place your `.py` plugin files in the platform-specific user data directory. PixlStash logs the exact path on startup.
 
 | OS | Path |
 |----|------|
-| **Linux** | `~/.local/share/pixlvault/image-plugins/user/` |
-| **macOS** | `~/Library/Application Support/pixlvault/image-plugins/user/` |
-| **Windows** | `%LOCALAPPDATA%\pixlvault\image-plugins\user\` |
+| **Linux** | `~/.local/share/pixlstash/image-plugins/user/` |
+| **macOS** | `~/Library/Application Support/pixlstash/image-plugins/user/` |
+| **Windows** | `%LOCALAPPDATA%\pixlstash\image-plugins\user\` |
 
 ### Writing a plugin
 
-Use the template from `pixlvault/image_plugins/built-in/plugin_template.py` in the source repository as a starting point:
+Use the template from `pixlstash/image_plugins/built-in/plugin_template.py` in the source repository as a starting point:
 
 1. Create a new `.py` file in your user plugin directory.
 2. Subclass `ImagePlugin`, set a unique `name` and `plugin_id`, and implement `run()`.
-3. Restart PixlVault Server — plugins are loaded at startup.
+3. Restart PixlStash Server — plugins are loaded at startup.
 
 `plugin_template.py` is ignored by plugin discovery and will not be loaded as a plugin.

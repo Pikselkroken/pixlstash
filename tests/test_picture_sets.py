@@ -9,8 +9,8 @@ import json
 import psutil
 import tracemalloc
 
-from pixlvault.pixl_logging import get_logger
-from pixlvault.server import Server
+from pixlstash.pixl_logging import get_logger
+from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)

@@ -777,8 +777,8 @@ function hasCaptionInputs(entries) {
 function guessWorkflowOutputTargets(payload, outputs) {
   const safeOutputs = outputs ?? [];
   const rawTargets =
-    payload?.pixlvault_output_nodes ??
-    payload?.pixlvault_output_node ??
+    payload?.pixlstash_output_nodes ??
+    payload?.pixlstash_output_node ??
     payload?.output_node_ids ??
     payload?.output_node_id ??
     null;
@@ -861,16 +861,16 @@ function applyWorkflowOutputTargets(payload, outputTargets) {
     ? outputTargets.filter(Boolean).map((value) => String(value))
     : [];
   if (targets.length) {
-    payload.pixlvault_output_nodes = targets;
-    if (payload.pixlvault_output_node != null) {
-      delete payload.pixlvault_output_node;
+    payload.pixlstash_output_nodes = targets;
+    if (payload.pixlstash_output_node != null) {
+      delete payload.pixlstash_output_node;
     }
   } else {
-    if (payload.pixlvault_output_nodes != null) {
-      delete payload.pixlvault_output_nodes;
+    if (payload.pixlstash_output_nodes != null) {
+      delete payload.pixlstash_output_nodes;
     }
-    if (payload.pixlvault_output_node != null) {
-      delete payload.pixlvault_output_node;
+    if (payload.pixlstash_output_node != null) {
+      delete payload.pixlstash_output_node;
     }
   }
   return payload;

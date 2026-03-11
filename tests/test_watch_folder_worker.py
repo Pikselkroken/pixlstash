@@ -6,8 +6,8 @@ import time
 
 from fastapi.testclient import TestClient
 
-from pixlvault.server import Server
-from pixlvault.db_models.picture import Picture
+from pixlstash.server import Server
+from pixlstash.db_models.picture import Picture
 
 
 def test_watch_folder():

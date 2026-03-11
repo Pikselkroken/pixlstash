@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import Session, select
 
-from pixlvault.db_models.picture_set import PictureSet, PictureSetMember
-from pixlvault.utils.image_processing.image_utils import ImageUtils
-from pixlvault.server import Server
+from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
+from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.server import Server
 
 
 def _make_png_bytes(color: tuple[int, int, int]) -> bytes:
@@ -230,7 +230,7 @@ def test_create_picture_from_bytes_preserves_video_extension_format(monkeypatch)
             return None
 
     monkeypatch.setattr(
-        "pixlvault.utils.image_processing.video_utils.cv2.VideoCapture",
+        "pixlstash.utils.image_processing.video_utils.cv2.VideoCapture",
         _FakeVideoCapture,
     )
 

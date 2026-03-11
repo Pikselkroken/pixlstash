@@ -77,17 +77,17 @@ jobs:
           import sys
           import zipfile
 
-          wheel_paths = sorted(glob.glob('dist/pixlvault-*.whl'))
+          wheel_paths = sorted(glob.glob('dist/pixlstash-*.whl'))
           if not wheel_paths:
             print('No wheel found in dist/.')
             sys.exit(1)
 
           wheel = pathlib.Path(wheel_paths[-1])
           required = [
-            'pixlvault/alembic.ini',
-            'pixlvault/migrations/env.py',
-            'pixlvault/migrations/script.py.mako',
-            'pixlvault/migrations/versions/0001_baseline.py',
+            'pixlstash/alembic.ini',
+            'pixlstash/migrations/env.py',
+            'pixlstash/migrations/script.py.mako',
+            'pixlstash/migrations/versions/0001_baseline.py',
           ]
 
           with zipfile.ZipFile(wheel) as archive:

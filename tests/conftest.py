@@ -2,8 +2,8 @@
 Pytest configuration and fixtures for test suite.
 """
 
-from pixlvault.picture_tagger import PictureTagger
-from pixlvault.server import Server
+from pixlstash.picture_tagger import PictureTagger
+from pixlstash.server import Server
 
 
 def pytest_addoption(parser):

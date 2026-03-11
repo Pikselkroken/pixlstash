@@ -11,7 +11,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 # Import models to register SQLModel metadata
-from pixlvault import db_models  # noqa: F401
+from pixlstash import db_models  # noqa: F401
 
 # Alembic Config object
 config = context.config
@@ -32,7 +32,7 @@ target_metadata = SQLModel.metadata
 
 
 def _get_database_url() -> str:
-    env_url = os.getenv("PIXLVAULT_DB_URL")
+    env_url = os.getenv("PIXLSTASH_DB_URL")
     if env_url:
         return env_url
     return config.get_main_option("sqlalchemy.url")

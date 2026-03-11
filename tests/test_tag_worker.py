@@ -6,10 +6,10 @@ from PIL import Image
 from io import BytesIO
 
 from fastapi.testclient import TestClient
-from pixlvault.db_models import Picture
-from pixlvault.pixl_logging import get_logger
-from pixlvault.server import Server
-from pixlvault.tasks.task_type import TaskType
+from pixlstash.db_models import Picture
+from pixlstash.pixl_logging import get_logger
+from pixlstash.server import Server
+from pixlstash.tasks.task_type import TaskType
 from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)

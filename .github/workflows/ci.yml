@@ -31,18 +31,18 @@ jobs:
       - name: Verify wheel includes Alembic assets
         run: |
           set -e
-          python -m pip wheel . --no-deps -w /tmp/pixlvault-wheelcheck
+          python -m pip wheel . --no-deps -w /tmp/pixlstash-wheelcheck
           python - <<'PY'
           import glob
           import sys
           import zipfile
 
-          wheel = sorted(glob.glob('/tmp/pixlvault-wheelcheck/pixlvault-*.whl'))[-1]
+          wheel = sorted(glob.glob('/tmp/pixlstash-wheelcheck/pixlstash-*.whl'))[-1]
           required = [
-              'pixlvault/alembic.ini',
-              'pixlvault/migrations/env.py',
-              'pixlvault/migrations/script.py.mako',
-              'pixlvault/migrations/versions/0001_baseline.py',
+              'pixlstash/alembic.ini',
+              'pixlstash/migrations/env.py',
+              'pixlstash/migrations/script.py.mako',
+              'pixlstash/migrations/versions/0001_baseline.py',
           ]
 
           with zipfile.ZipFile(wheel) as archive:
@@ -60,7 +60,7 @@ jobs:
 
       - name: Check formatting with ruff
         run: |
-          ruff check pixlvault
+          ruff check pixlstash
 
       # Individual test steps for each test file
       - name: Test Florence-2 Captioning

@@ -8,9 +8,9 @@ import tempfile
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
-from pixlvault.server import Server
-from pixlvault.db_models import Picture, Face, Character
-from pixlvault.database import DBPriority
+from pixlstash.server import Server
+from pixlstash.db_models import Picture, Face, Character
+from pixlstash.database import DBPriority
 
 
 def setup_server():

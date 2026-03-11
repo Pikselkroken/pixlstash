@@ -1,20 +1,20 @@
-# PixlVault
+# PixlStash
 
-A REST API server for PixlVault
+A REST API server for PixlStash
 
 ## Development
 
 - Install dependencies: `pip install -e .`
-- Run server: `python -m pixlvault.server`
+- Run server: `python -m pixlstash.server`
 
 ## Tagger Benchmark
 
 - Benchmark tagging throughput on a folder of media:
 	- `python scripts/benchmark_tagger.py /path/to/images --limit 256 --runs 3`
 - Tune batch/concurrency between runs via env vars:
-	- `PIXLVAULT_TAGGER_MAX_CONCURRENT_GPU=96`
-	- `PIXLVAULT_TAGGER_MAX_CONCURRENT_CPU=8`
-	- `PIXLVAULT_CUSTOM_TAGGER_BATCH=24`
+	- `PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU=96`
+	- `PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU=8`
+	- `PIXLSTASH_CUSTOM_TAGGER_BATCH=24`
 
 ## Image Plugins
 
@@ -27,9 +27,9 @@ A REST API server for PixlVault
 
 ## Database Migrations (Alembic)
 
-PixlVault uses Alembic for schema changes. The server runs migrations on startup.
+PixlStash uses Alembic for schema changes. The server runs migrations on startup.
 
-- Set the database URL with `PIXLVAULT_DB_URL` (defaults to `sqlite:///vault.db`).
+- Set the database URL with `PIXLSTASH_DB_URL` (defaults to `sqlite:///vault.db`).
 - Create a new migration after model changes:
 	- `python -m alembic revision --autogenerate -m "describe change"`
 - Apply migrations manually if needed:
@@ -48,7 +48,7 @@ The Docker image is a two-stage build — Node builds the frontend, then Python 
 ### Build
 
 ```bash
-docker build -t pixlvault:dev .
+docker build -t pixlstash:dev .
 ```
 
 Or via Compose (also starts the container):
@@ -67,17 +67,17 @@ docker compose up
 
 ```bash
 # Rebuild only the runtime stage (faster if only Python source changed)
-docker build --target frontend-builder -t pixlvault:frontend .
-docker build -t pixlvault:dev .
+docker build --target frontend-builder -t pixlstash:frontend .
+docker build -t pixlstash:dev .
 
 # Open a shell inside a running container
-docker exec -it pixlvault bash
+docker exec -it pixlstash bash
 
 # Tail logs
-docker logs -f pixlvault
+docker logs -f pixlstash
 
 # Inspect the persistent data volume
-docker volume inspect pixlvault_pixlvault-data
+docker volume inspect pixlstash_pixlstash-data
 ```
 
 ### GPU access
@@ -87,13 +87,13 @@ The image expects the NVIDIA Container Toolkit to be installed on the host. See 
 To test GPU visibility inside the container:
 
 ```bash
-docker run --rm --gpus all pixlvault:dev python -c \
+docker run --rm --gpus all pixlstash:dev python -c \
   "import torch; print(torch.cuda.get_device_name(0))"
 ```
 
 ### CPU-only build (no GPU required)
 
-Remove the `deploy.resources` block from `docker-compose.yml` and set `"default_device": "cpu"` in the generated `server-config.json` (located in the `pixlvault-data` volume at `/data/config/server-config.json`).
+Remove the `deploy.resources` block from `docker-compose.yml` and set `"default_device": "cpu"` in the generated `server-config.json` (located in the `pixlstash-data` volume at `/data/config/server-config.json`).
 
 
 
@@ -112,7 +112,7 @@ One-time PyPI setup:
 - In PyPI, open your project → **Publishing** → **Add a new pending publisher**
 - Set:
 	- **Owner**: your GitHub org/user
-	- **Repository**: `pixlvault`
+	- **Repository**: `pixlstash`
 	- **Workflow name**: `publish-pypi.yml`
 	- **Environment name**: leave blank (unless you add one in the workflow)
 

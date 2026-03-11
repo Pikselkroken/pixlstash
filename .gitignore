@@ -16,6 +16,6 @@ tmp
 cuda
 node_modules
 downloaded_models
-pixlvault/alembic.ini
-pixlvault/migrations/
+pixlstash/alembic.ini
+pixlstash/migrations/
 .DS_Store

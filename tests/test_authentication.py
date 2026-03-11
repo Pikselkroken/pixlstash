@@ -1,6 +1,6 @@
 import tempfile
 from fastapi.testclient import TestClient
-from pixlvault.server import Server
+from pixlstash.server import Server
 
 
 def test_authentication_without_login():

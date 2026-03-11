@@ -1134,7 +1134,7 @@ const activeOverlayPluginSchema = computed(() => {
   );
 });
 
-const COMFYUI_PROMPT_STORAGE_PREFIX = "pixlvault:comfyuiPrompt:";
+const COMFYUI_PROMPT_STORAGE_PREFIX = "pixlstash:comfyuiPrompt:";
 
 function getComfyuiPromptStorageKey() {
   if (typeof window === "undefined") return "";

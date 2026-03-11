@@ -140,7 +140,7 @@ def reset_worker_metrics(db_path: str, measures: list[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Reset worker-related measures in the PixlVault database."
+        description="Reset worker-related measures in the PixlStash database."
     )
     parser.add_argument("db_path", help="Path to vault.db")
     parser.add_argument(

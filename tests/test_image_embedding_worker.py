@@ -4,9 +4,9 @@ import numpy as np
 
 from sqlmodel import Session
 
-from pixlvault.db_models import Picture
-from pixlvault.tasks.image_embedding_task import ImageEmbeddingTask
-from pixlvault.vault import Vault
+from pixlstash.db_models import Picture
+from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
+from pixlstash.vault import Vault
 
 
 def test_fetch_work_includes_empty_embedding_blob(tmp_path):

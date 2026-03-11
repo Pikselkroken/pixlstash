@@ -11,7 +11,7 @@ import * as directives from 'vuetify/directives'
 import Root from './Root.vue'
 
 // Custom theme properties
-const pixlVaultLight = {
+const pixlStashLight = {
   dark: false,
   colors: {
     'sidebar': '#696f76',
@@ -54,7 +54,7 @@ const pixlVaultLight = {
   },
 };
 
-const pixlVaultDark = {
+const pixlStashDark = {
   dark: true,
   colors: {
     'sidebar': '#494f56',
@@ -100,10 +100,10 @@ const pixlVaultDark = {
 
 const vuetify = createVuetify({
   theme: {
-    defaultTheme: 'pixlVaultLight',
+    defaultTheme: 'pixlStashLight',
     themes: {
-      pixlVaultLight,
-      pixlVaultDark,
+      pixlStashLight,
+      pixlStashDark,
     },
   },
   components,

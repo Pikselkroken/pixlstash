@@ -5005,7 +5005,7 @@ async function exportCurrentViewToZip(options = {}) {
       responseType: "blob",
     });
 
-    let filename = "pixlvault_export.zip";
+    let filename = "pixlstash_export.zip";
     const disposition = fileRes.headers["content-disposition"];
     if (disposition) {
       const match = disposition.match(/filename="?([^";]+)"?/);

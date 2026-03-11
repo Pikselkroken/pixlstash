@@ -6,8 +6,8 @@ import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Read the PixlVault version from the root pyproject.toml
-function readPixlVaultVersion() {
+// Read the PixlStash version from the root pyproject.toml
+function readPixlStashVersion() {
   try {
     const toml = readFileSync(resolve(__dirname, '../pyproject.toml'), 'utf-8')
     const match = toml.match(/^version\s*=\s*"([^"]+)"/m)
@@ -21,10 +21,10 @@ function readPixlVaultVersion() {
 export default defineConfig({
   plugins: [vue()],
   define: {
-    __APP_VERSION__: JSON.stringify(readPixlVaultVersion()),
+    __APP_VERSION__: JSON.stringify(readPixlStashVersion()),
   },
   build: {
-    outDir: '../pixlvault/frontend/dist',
+    outDir: '../pixlstash/frontend/dist',
     emptyOutDir: true,
   },
   server: {

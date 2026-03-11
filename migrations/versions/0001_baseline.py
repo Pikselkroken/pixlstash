@@ -11,7 +11,7 @@ from alembic import op
 from sqlmodel import SQLModel
 
 # Import all models to register metadata.
-import pixlvault.db_models  # noqa: F401
+import pixlstash.db_models  # noqa: F401
 
 
 # revision identifiers, used by Alembic.

@@ -1,4 +1,4 @@
-from pixlvault.work_planner import WorkPlanner
+from pixlstash.work_planner import WorkPlanner
 
 
 class _FakeTask:

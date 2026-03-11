@@ -1,5 +1,5 @@
 [project]
-name = "pixlvault"
+name = "pixlstash"
 version = "0.9.3"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
@@ -68,10 +68,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://pixelurgy.github.io/pixlvault"
-Repository = "https://github.com/Pixelurgy/pixlvault"
-"Bug Tracker" = "https://github.com/Pixelurgy/pixlvault/issues"
-Changelog = "https://github.com/Pixelurgy/pixlvault/releases"
+Homepage = "https://pixelurgy.github.io/pixlstash"
+Repository = "https://github.com/Pixelurgy/pixlstash"
+"Bug Tracker" = "https://github.com/Pixelurgy/pixlstash/issues"
+Changelog = "https://github.com/Pixelurgy/pixlstash/releases"
 
 [project.optional-dependencies]
 test = [
@@ -84,7 +84,7 @@ dev = [
 ]
 
 [project.scripts]
-pixlvault-server = "pixlvault.app:main"
+pixlstash-server = "pixlstash.app:main"
 
 [build-system]
 requires = ["setuptools>=42", "wheel", "twine"]
@@ -94,10 +94,10 @@ build-backend = "setuptools.build_meta"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["pixlvault*"]
+include = ["pixlstash*"]
 
 [tool.setuptools.package-data]
-pixlvault = [
+pixlstash = [
     "alembic.ini",
     "frontend/dist/**/*",
     "migrations/*.py",

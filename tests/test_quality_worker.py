@@ -2,10 +2,10 @@ import os
 import tempfile
 from fastapi.testclient import TestClient
 
-from pixlvault.db_models import Face, Picture, Quality
-from pixlvault.utils.image_processing.image_utils import ImageUtils
-from pixlvault.server import Server
-from pixlvault.tasks.task_type import TaskType
+from pixlstash.db_models import Face, Picture, Quality
+from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.server import Server
+from pixlstash.tasks.task_type import TaskType
 import pytest
 from tests.utils import upload_pictures_and_wait, wait_for_faces
 
@@ -44,7 +44,7 @@ def test_quality_worker_face_metrics():
 
             # Simulate worker: insert a face row for the picture
             # Add a face using SQLModel ORM
-            from pixlvault.db_models.face import Face
+            from pixlstash.db_models.face import Face
 
             face = Face(picture_id=pic_id, face_index=0, bbox=[10, 10, 54, 54])
 
@@ -58,7 +58,7 @@ def test_quality_worker_face_metrics():
             def set_metrics(session):
                 face_obj = Face.find(session, picture_id=pic_id, face_index=0)[0]
                 # Create and assign a Quality object
-                from pixlvault.db_models.quality import Quality
+                from pixlstash.db_models.quality import Quality
 
                 quality = Quality(
                     sharpness=0.5,

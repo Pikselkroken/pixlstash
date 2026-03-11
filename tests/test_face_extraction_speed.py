@@ -6,11 +6,11 @@ import torch
 
 from time import time
 
-from pixlvault.tasks.face_extraction_task import FaceExtractionTask
-from pixlvault.db_models.picture import Picture
-from pixlvault.pixl_logging import get_logger
-from pixlvault.utils.image_processing.image_utils import ImageUtils
-from pixlvault.server import Server
+from pixlstash.tasks.face_extraction_task import FaceExtractionTask
+from pixlstash.db_models.picture import Picture
+from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.server import Server
 
 logger = get_logger(__name__)
 
@@ -18,8 +18,8 @@ logger = get_logger(__name__)
 def test_face_extraction_speed_cpu():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        previous_profile = os.environ.get("PIXLVAULT_FEATURE_TIMING")
-        os.environ["PIXLVAULT_FEATURE_TIMING"] = "1"
+        previous_profile = os.environ.get("PIXLSTASH_FEATURE_TIMING")
+        os.environ["PIXLSTASH_FEATURE_TIMING"] = "1"
         test_start = time()
 
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
@@ -85,16 +85,16 @@ def test_face_extraction_speed_cpu():
                     torch.cuda.empty_cache()
         finally:
             if previous_profile is None:
-                os.environ.pop("PIXLVAULT_FEATURE_TIMING", None)
+                os.environ.pop("PIXLSTASH_FEATURE_TIMING", None)
             else:
-                os.environ["PIXLVAULT_FEATURE_TIMING"] = previous_profile
+                os.environ["PIXLSTASH_FEATURE_TIMING"] = previous_profile
 
 
 def test_face_extraction_speed_gpu():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
-        previous_profile = os.environ.get("PIXLVAULT_FEATURE_TIMING")
-        os.environ["PIXLVAULT_FEATURE_TIMING"] = "1"
+        previous_profile = os.environ.get("PIXLSTASH_FEATURE_TIMING")
+        os.environ["PIXLSTASH_FEATURE_TIMING"] = "1"
         test_start = time()
 
         src_dir = os.path.join(os.path.dirname(__file__), "../pictures")
@@ -166,6 +166,6 @@ def test_face_extraction_speed_gpu():
                     torch.cuda.empty_cache()
         finally:
             if previous_profile is None:
-                os.environ.pop("PIXLVAULT_FEATURE_TIMING", None)
+                os.environ.pop("PIXLSTASH_FEATURE_TIMING", None)
             else:
-                os.environ["PIXLVAULT_FEATURE_TIMING"] = previous_profile
+                os.environ["PIXLSTASH_FEATURE_TIMING"] = previous_profile

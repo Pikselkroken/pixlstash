@@ -3,7 +3,7 @@
 
 For each image in the evaluation folder, a sidecar `.txt` file with the same
 stem must exist containing comma-separated ground-truth tags (the same format
-produced by PixlVault's tag-export).
+produced by PixlStash's tag-export).
 
 Model inference is run ONCE; thresholds are swept in post-processing, so even a
 wide grid is fast.
@@ -29,20 +29,20 @@ import numpy as np
 import torch
 
 # ---------------------------------------------------------------------------
-# Project root on path so pixlvault imports work when run as a script.
+# Project root on path so pixlstash imports work when run as a script.
 # ---------------------------------------------------------------------------
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from pixlvault.db_models.face import Face  # noqa: E402
-from pixlvault.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS  # noqa: E402
-from pixlvault.picture_tagger import (  # noqa: E402
+from pixlstash.db_models.face import Face  # noqa: E402
+from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS  # noqa: E402
+from pixlstash.picture_tagger import (  # noqa: E402
     CUSTOM_TAGGER_THRESHOLD_FULL,
     QUALITY_CROP_TAG_WHITELIST,
     PictureTagger,
 )
-from pixlvault.tag_naturaliser import TagNaturaliser  # noqa: E402
-from pixlvault.tasks.face_extraction_task import CROP_EXPAND_SCALE  # noqa: E402
+from pixlstash.tag_naturaliser import TagNaturaliser  # noqa: E402
+from pixlstash.tasks.face_extraction_task import CROP_EXPAND_SCALE  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants

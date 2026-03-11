@@ -33,15 +33,15 @@ import time
 from fastapi.testclient import TestClient
 from sqlmodel import func, select
 
-from pixlvault.db_models import Face, Picture, Quality
-from pixlvault.db_models.picture_likeness import PictureLikeness
-from pixlvault.pixl_logging import get_logger
-from pixlvault.server import Server
-from pixlvault.tasks.likeness_task import LikenessTask
-from pixlvault.tasks.quality_task import QualityTask
-from pixlvault.tasks.task_type import TaskType
-from pixlvault.utils.image_processing.image_utils import ImageUtils
-from pixlvault.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
+from pixlstash.db_models import Face, Picture, Quality
+from pixlstash.db_models.picture_likeness import PictureLikeness
+from pixlstash.pixl_logging import get_logger
+from pixlstash.server import Server
+from pixlstash.tasks.likeness_task import LikenessTask
+from pixlstash.tasks.quality_task import QualityTask
+from pixlstash.tasks.task_type import TaskType
+from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)

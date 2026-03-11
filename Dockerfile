@@ -98,22 +98,22 @@ RUN python -m spacy download en_core_web_sm
 # ── Non-root user ─────────────────────────────────────────────────────────────
 # Run as a non-root user for security.  UID/GID 10001 avoids conflicts with
 # UIDs pre-allocated in the nvidia/cuda base image (which already uses 1000).
-RUN groupadd -f -g 10001 pixlvault \
-    && useradd -r -u 10001 -g 10001 -m -d /home/pixlvault pixlvault \
-    && chown -R pixlvault:pixlvault /app /opt/venv
+RUN groupadd -f -g 10001 pixlstash \
+    && useradd -r -u 10001 -g 10001 -m -d /home/pixlstash pixlstash \
+    && chown -R pixlstash:pixlstash /app /opt/venv
 
-USER pixlvault
+USER pixlstash
 
 # ── Copy application source ───────────────────────────────────────────────────
-COPY --chown=pixlvault:pixlvault pyproject.toml setup.py MANIFEST.in alembic.ini ./
-COPY --chown=pixlvault:pixlvault pixlvault/ pixlvault/
-COPY --chown=pixlvault:pixlvault migrations/ migrations/
+COPY --chown=pixlstash:pixlstash pyproject.toml setup.py MANIFEST.in alembic.ini ./
+COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
+COPY --chown=pixlstash:pixlstash migrations/ migrations/
 
-# Install the pixlvault package itself (no deps — already installed above)
+# Install the pixlstash package itself (no deps — already installed above)
 RUN pip install --no-cache-dir --no-deps -e .
 
 # Copy the pre-built frontend into the package's expected location
-COPY --chown=pixlvault:pixlvault --from=frontend-builder /build/pixlvault/frontend/dist pixlvault/frontend/dist/
+COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 # Entrypoint is installed as root so it can be found on PATH, then we switch
@@ -121,11 +121,11 @@ COPY --chown=pixlvault:pixlvault --from=frontend-builder /build/pixlvault/fronte
 USER root
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-USER pixlvault
+USER pixlstash
 
-# Volume for persistent data — mount /home/pixlvault to persist config, images,
+# Volume for persistent data — mount /home/pixlstash to persist config, images,
 # downloaded models, and the database across container restarts.
-VOLUME ["/home/pixlvault"]
+VOLUME ["/home/pixlstash"]
 
 EXPOSE 9537
 

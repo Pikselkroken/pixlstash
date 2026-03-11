@@ -1,6 +1,6 @@
-from pixlvault.db_models import Picture
-from pixlvault.db_models.quality import Quality
-from pixlvault.utils.stack.stack_utils import StackUtils
+from pixlstash.db_models import Picture
+from pixlstash.db_models.quality import Quality
+from pixlstash.utils.stack.stack_utils import StackUtils
 
 
 def test_order_stack_pictures_basic():

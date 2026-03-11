@@ -1,7 +1,7 @@
 """Generate built-in CLIP anchor embeddings from reference images.
 
-Reads  pictures/good/Good*.{jpg,png,jpeg,webp}  → pixlvault/data/anchors/builtin_good.npy
-Reads  pictures/bad/Bad*.{jpg,png,jpeg,webp}     → pixlvault/data/anchors/builtin_bad.npy
+Reads  pictures/good/Good*.{jpg,png,jpeg,webp}  → pixlstash/data/anchors/builtin_good.npy
+Reads  pictures/bad/Bad*.{jpg,png,jpeg,webp}     → pixlstash/data/anchors/builtin_bad.npy
 
 Each .npy file is shape (N, 512) float32 – one row per image.
 
@@ -30,7 +30,7 @@ EMBEDDING_DIM = 512
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 GOOD_DIR = REPO_ROOT / "pictures" / "good"
 BAD_DIR = REPO_ROOT / "pictures" / "bad"
-OUT_DIR = REPO_ROOT / "pixlvault" / "data" / "anchors"
+OUT_DIR = REPO_ROOT / "pixlstash" / "data" / "anchors"
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -122,7 +122,7 @@ def main():
     np.save(bad_out, bad_emb)
     print(f"Saved → {bad_out}  shape={bad_emb.shape}")
 
-    print("\nDone. Commit pixlvault/data/anchors/builtin_good.npy and builtin_bad.npy.")
+    print("\nDone. Commit pixlstash/data/anchors/builtin_good.npy and builtin_bad.npy.")
 
 
 if __name__ == "__main__":

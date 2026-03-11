@@ -5,7 +5,7 @@ import time
 import tempfile
 import os
 from fastapi.testclient import TestClient
-from pixlvault.server import Server
+from pixlstash.server import Server
 
 BACKEND_URL = "http://localhost:9537"
 

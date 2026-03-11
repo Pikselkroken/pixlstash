@@ -9,10 +9,10 @@ import tempfile
 import os
 
 from sentence_transformers import SentenceTransformer, util
-from pixlvault.db_models.picture import Picture
-from pixlvault.db_models.tag import Tag
-from pixlvault.picture_tagger import PictureTagger
-from pixlvault.server import Server
+from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.tag import Tag
+from pixlstash.picture_tagger import PictureTagger
+from pixlstash.server import Server
 
 
 def cosine_similarity(a, b):
@@ -239,7 +239,7 @@ def test_sqlite_cosine_similarity_matches_numpy(a, b):
     expected = cosine_similarity(a, b)
     # Setup in-memory SQLite DB and register function
     conn = sqlite3.connect(":memory:")
-    from pixlvault.utils.image_processing.image_utils import ImageUtils
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
 
     conn.create_function("cosine_similarity", 2, ImageUtils.cosine_similarity)
     # Store as bytes
@@ -324,7 +324,7 @@ def test_embedding_storage_and_retrieval():
 
 def test_picture_embedding_storage_and_retrieval():
     from sqlmodel import Session
-    from pixlvault.db_models.picture import Picture
+    from pixlstash.db_models.picture import Picture
     import numpy as np
     import tempfile
     import os

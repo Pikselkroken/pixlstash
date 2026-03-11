@@ -3,8 +3,8 @@
     <h1 class="headline">
       {{
         needsRegistration
-          ? "Register Password for PixlVault"
-          : "Log In to PixlVault"
+          ? "Register Password for PixlStash"
+          : "Log In to PixlStash"
       }}
     </h1>
     <p class="subtitle">

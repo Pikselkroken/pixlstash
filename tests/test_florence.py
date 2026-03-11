@@ -10,7 +10,7 @@ import pytest
 import time
 import torch
 from pathlib import Path
-from pixlvault.picture_tagger import PictureTagger
+from pixlstash.picture_tagger import PictureTagger
 
 MAX_TEST_IMAGES = 3 if os.getenv("GITHUB_ACTIONS") == "true" else 50
 

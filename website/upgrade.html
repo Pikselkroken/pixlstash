@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Upgrade PixlVault</title>
+    <title>Upgrade PixlStash</title>
     <meta
       name="description"
-      content="How to upgrade PixlVault — pip, Windows installer, Docker, or from source."
+      content="How to upgrade PixlStash — pip, Windows installer, Docker, or from source."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -303,20 +303,20 @@
     <div class="shell">
       <nav class="nav">
         <a href="index.html" class="brand">
-          <img src="assets/logo.png" alt="PixlVault logo" />
-          <span class="brand-name">PixlVault</span>
+          <img src="assets/logo.png" alt="PixlStash logo" />
+          <span class="brand-name">PixlStash</span>
         </a>
         <div class="nav-links">
           <a href="index.html#features">Features</a>
           <a href="index.html#workflows">Use cases</a>
-          <a href="https://github.com/Pixelurgy/pixlvault">GitHub</a>
+          <a href="https://github.com/Pixelurgy/pixlstash">GitHub</a>
         </div>
       </nav>
 
       <div class="page-hero">
-        <h1>Upgrading PixlVault</h1>
+        <h1>Upgrading PixlStash</h1>
         <p>
-          Choose the box that matches how you installed PixlVault and follow the
+          Choose the box that matches how you installed PixlStash and follow the
           steps to get the latest version.
         </p>
       </div>
@@ -346,10 +346,10 @@
             <div class="step">
               <span class="step-label">2 — Upgrade</span>
               <div class="cmd-block">
-                <code>pip install --upgrade pixlvault</code>
+                <code>pip install --upgrade pixlstash</code>
                 <button
                   class="copy-btn"
-                  data-copy="pip install --upgrade pixlvault"
+                  data-copy="pip install --upgrade pixlstash"
                 >
                   Copy
                 </button>
@@ -359,7 +359,7 @@
               <span class="step-label">3 — Restart the server</span>
               <p class="step-note">
                 Stop the running server and start it again with
-                <code>pixlvault-server</code> (or however you normally launch
+                <code>pixlstash-server</code> (or however you normally launch
                 it). The new version is active immediately.
               </p>
             </div>
@@ -381,7 +381,7 @@
               <p class="step-note">
                 Go to the
                 <a
-                  href="https://github.com/Pixelurgy/pixlvault/releases/latest"
+                  href="https://github.com/Pixelurgy/pixlstash/releases/latest"
                   target="_blank"
                   rel="noopener"
                 >
@@ -393,7 +393,7 @@
             <div class="step">
               <span class="step-label">2 — Stop the running server</span>
               <p class="step-note">
-                Close the PixlVault server window or stop the background service
+                Close the PixlStash server window or stop the background service
                 before running the installer.
               </p>
             </div>
@@ -423,10 +423,10 @@
             <div class="step">
               <span class="step-label">1 — Pull the latest image</span>
               <div class="cmd-block">
-                <code>docker pull ghcr.io/pixelurgy/pixlvault:latest</code>
+                <code>docker pull ghcr.io/pixelurgy/pixlstash:latest</code>
                 <button
                   class="copy-btn"
-                  data-copy="docker pull ghcr.io/pixelurgy/pixlvault:latest"
+                  data-copy="docker pull ghcr.io/pixelurgy/pixlstash:latest"
                 >
                   Copy
                 </button>
@@ -437,9 +437,9 @@
               <div class="cmd-block">
                 <code
                   ># docker-compose docker compose down &amp;&amp; docker
-                  compose up -d # standalone docker stop pixlvault docker rm
-                  pixlvault docker run -d ...
-                  ghcr.io/pixelurgy/pixlvault:latest</code
+                  compose up -d # standalone docker stop pixlstash docker rm
+                  pixlstash docker run -d ...
+                  ghcr.io/pixelurgy/pixlstash:latest</code
                 >
               </div>
             </div>
@@ -463,7 +463,7 @@
             <div class="step">
               <span class="step-label">1 — Pull the latest code</span>
               <div class="cmd-block">
-                <code>cd pixlvault git pull</code>
+                <code>cd pixlstash git pull</code>
                 <button class="copy-btn" data-copy="git pull">Copy</button>
               </div>
             </div>
@@ -493,8 +493,8 @@
             <div class="step">
               <span class="step-label">4 — Restart the server</span>
               <p class="step-note">
-                Stop and restart <code>pixlvault-server</code> (or
-                <code>python -m pixlvault.app</code>) to load the new code.
+                Stop and restart <code>pixlstash-server</code> (or
+                <code>python -m pixlstash.app</code>) to load the new code.
               </p>
             </div>
           </div>
@@ -506,13 +506,13 @@
         <p>
           See the
           <a
-            href="https://github.com/Pixelurgy/pixlvault/releases"
+            href="https://github.com/Pixelurgy/pixlstash/releases"
             target="_blank"
             rel="noopener"
             >full changelog</a
           >
           for what's new in each release. &nbsp;·&nbsp;
-          <a href="index.html">Back to PixlVault home</a>
+          <a href="index.html">Back to PixlStash home</a>
         </p>
       </div>
     </div>

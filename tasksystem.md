@@ -1,8 +1,8 @@
 
-# PixlVault In-Memory Task System Design
+# PixlStash In-Memory Task System Design
 
 ## Overview
-This document describes a Python class-based task orchestration system for PixlVault. Tasks are not persisted in the database, but are in-memory Python objects that operate on the core datatypes defined in `pixlvault/db_models` (e.g., `Picture`, `Face`, `Tag`, `User`). The system supports dependency-aware execution (DAG), extensibility, and robust orchestration, while integrating cleanly with your existing models.
+This document describes a Python class-based task orchestration system for PixlStash. Tasks are not persisted in the database, but are in-memory Python objects that operate on the core datatypes defined in `pixlstash/db_models` (e.g., `Picture`, `Face`, `Tag`, `User`). The system supports dependency-aware execution (DAG), extensibility, and robust orchestration, while integrating cleanly with your existing models.
 
 ## Core Concepts
 
@@ -132,4 +132,4 @@ class TaskRunner:
 - Add UI components for task monitoring and management if needed
 
 ---
-This design leverages PixlVault's existing db_models as the canonical datatypes for all task operations, and supports robust, extensible, and auditable in-memory task orchestration for future features.
+This design leverages PixlStash's existing db_models as the canonical datatypes for all task operations, and supports robust, extensible, and auditable in-memory task orchestration for future features.

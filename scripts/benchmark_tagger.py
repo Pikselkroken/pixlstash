@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Benchmark PixlVault tagger throughput.
+"""Benchmark PixlStash tagger throughput.
 
 Modes:
 - full-path (default): runs real `TagTask` pipeline (WD14 + custom + quality crop pass)
 - tagger-only: runs `PictureTagger.tag_images(...)` directly
 
 Use environment variables to tune batch settings between runs:
-- PIXLVAULT_TAGGER_MAX_CONCURRENT_GPU
-- PIXLVAULT_TAGGER_MAX_CONCURRENT_CPU
-- PIXLVAULT_CUSTOM_TAGGER_BATCH
+- PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU
+- PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU
+- PIXLSTASH_CUSTOM_TAGGER_BATCH
 """
 
 from __future__ import annotations
@@ -27,11 +27,11 @@ from statistics import mean
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from pixlvault.picture_tagger import PictureTagger  # noqa: E402
-from pixlvault.database import VaultDatabase  # noqa: E402
-from pixlvault.db_models import Picture  # noqa: E402
-from pixlvault.tasks.tag_task import TagTask  # noqa: E402
-from pixlvault.utils.image_processing.image_utils import ImageUtils  # noqa: E402
+from pixlstash.picture_tagger import PictureTagger  # noqa: E402
+from pixlstash.database import VaultDatabase  # noqa: E402
+from pixlstash.db_models import Picture  # noqa: E402
+from pixlstash.tasks.tag_task import TagTask  # noqa: E402
+from pixlstash.utils.image_processing.image_utils import ImageUtils  # noqa: E402
 import torch  # noqa: E402
 from sqlalchemy import or_  # noqa: E402
 from sqlmodel import select  # noqa: E402
@@ -350,7 +350,7 @@ def run_single_full_path(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Benchmark PixlVault tagger throughput"
+        description="Benchmark PixlStash tagger throughput"
     )
     parser.add_argument(
         "input_dir", type=Path, help="Directory containing images/videos"
@@ -425,16 +425,16 @@ def main() -> None:
     print(f"  measured_runs: {args.runs}")
     print("  env:")
     print(
-        "    PIXLVAULT_TAGGER_MAX_CONCURRENT_GPU="
-        + str(os.getenv("PIXLVAULT_TAGGER_MAX_CONCURRENT_GPU", "<default>"))
+        "    PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU="
+        + str(os.getenv("PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU", "<default>"))
     )
     print(
-        "    PIXLVAULT_TAGGER_MAX_CONCURRENT_CPU="
-        + str(os.getenv("PIXLVAULT_TAGGER_MAX_CONCURRENT_CPU", "<default>"))
+        "    PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU="
+        + str(os.getenv("PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU", "<default>"))
     )
     print(
-        "    PIXLVAULT_CUSTOM_TAGGER_BATCH="
-        + str(os.getenv("PIXLVAULT_CUSTOM_TAGGER_BATCH", "<default>"))
+        "    PIXLSTASH_CUSTOM_TAGGER_BATCH="
+        + str(os.getenv("PIXLSTASH_CUSTOM_TAGGER_BATCH", "<default>"))
     )
 
     benchmark_db = None

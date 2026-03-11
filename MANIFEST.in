@@ -1,10 +1,10 @@
 include README.md
 include LICENSE
-recursive-include pixlvault/frontend/dist *
-include pixlvault/alembic.ini
-recursive-include pixlvault/migrations *
+recursive-include pixlstash/frontend/dist *
+include pixlstash/alembic.ini
+recursive-include pixlstash/migrations *
 include alembic.ini
 recursive-include migrations *
-recursive-include pixlvault/image_plugins/built-in *.py
-recursive-include pixlvault/data/anchors *.npy
-recursive-include pixlvault/data/comfyui-workflows/built-in *.json
+recursive-include pixlstash/image_plugins/built-in *.py
+recursive-include pixlstash/data/anchors *.npy
+recursive-include pixlstash/data/comfyui-workflows/built-in *.json

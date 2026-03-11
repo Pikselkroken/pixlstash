@@ -1137,19 +1137,19 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
       <div class="sidebar-brand-left">
         <a
           v-if="!props.collapsed"
-          href="https://pixelurgy.github.io/pixlvault/"
+          href="https://pixelurgy.github.io/pixlstash/"
           target="_blank"
           rel="noopener noreferrer"
           class="sidebar-brand-logo-link"
         >
           <img
             src="/Logo.png"
-            alt="PixlVault logo"
+            alt="PixlStash logo"
             class="sidebar-brand-logo"
           />
         </a>
         <div v-if="!props.collapsed" class="sidebar-brand-text">
-          <span class="sidebar-brand-title">PixlVault</span>
+          <span class="sidebar-brand-title">PixlStash</span>
           <div class="sidebar-brand-subtitle-row">
             <span class="sidebar-brand-version">v{{ appVersion }}</span>
             <a

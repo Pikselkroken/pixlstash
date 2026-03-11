@@ -1,10 +1,10 @@
 services:
-  pixlvault:
+  pixlstash:
     build:
       context: .
       dockerfile: Dockerfile
-    image: pixlvault:latest
-    container_name: pixlvault
+    image: pixlstash:latest
+    container_name: pixlstash
     restart: unless-stopped
 
     # GPU access via nvidia-container-runtime.
@@ -17,21 +17,21 @@ services:
     volumes:
       # All persistent data (config, images/database, downloaded AI models) lives
       # under the container user's home directory, mirroring a regular Linux install:
-      #   ~/.config/pixlvault/server-config.json
-      #   ~/.config/pixlvault/images/  ← default image root + vault.db
-      #   ~/.local/share/pixlvault/downloaded_models/
+      #   ~/.config/pixlstash/server-config.json
+      #   ~/.config/pixlstash/images/  ← default image root + vault.db
+      #   ~/.local/share/pixlstash/downloaded_models/
       #
       # To store images on your real filesystem instead, add a bind mount and set
-      # PIXLVAULT_IMAGE_ROOT (see .env.example).
-      - pixlvault-home:/home/pixlvault
+      # PIXLSTASH_IMAGE_ROOT (see .env.example).
+      - pixlstash-home:/home/pixlstash
 
     environment:
-      PIXLVAULT_HOST: "0.0.0.0"
-      PIXLVAULT_PORT: "9537"
+      PIXLSTASH_HOST: "0.0.0.0"
+      PIXLSTASH_PORT: "9537"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       # Optional: uncomment + add a bind mount to put images on your real filesystem
-      # PIXLVAULT_IMAGE_ROOT: "/mnt/photos"
+      # PIXLSTASH_IMAGE_ROOT: "/mnt/photos"
 
 volumes:
-  pixlvault-home:
+  pixlstash-home:

@@ -8,11 +8,11 @@ import time
 import tempfile
 import os
 
-from pixlvault.db_models import Character, Face, Picture
+from pixlstash.db_models import Character, Face, Picture
 from sqlmodel import select
-from pixlvault.server import Server
-from pixlvault.pixl_logging import get_logger
-from pixlvault.tasks.task_type import TaskType
+from pixlstash.server import Server
+from pixlstash.pixl_logging import get_logger
+from pixlstash.tasks.task_type import TaskType
 
 
 logger = get_logger(__name__)
@@ -211,7 +211,7 @@ def test_character_thumbnail_endpoint():
             best_pic = server.vault.db.run_task(
                 lambda session: session.get(Picture, best_face.picture_id)
             )
-            from pixlvault.utils.image_processing.face_utils import FaceUtils
+            from pixlstash.utils.image_processing.face_utils import FaceUtils
 
             bbox = best_face.bbox
             logger.info(

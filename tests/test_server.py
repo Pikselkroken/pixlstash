@@ -20,12 +20,12 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
 
-from pixlvault.db_models.picture import Picture
-from pixlvault.pixl_logging import get_logger
-from pixlvault.utils.image_processing.image_utils import ImageUtils
-from pixlvault.tasks.task_type import TaskType
-from pixlvault.picture_tagger import PictureTagger
-from pixlvault.server import Server
+from pixlstash.db_models.picture import Picture
+from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.tasks.task_type import TaskType
+from pixlstash.picture_tagger import PictureTagger
+from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait, wait_for_faces
 
 logger = get_logger(__name__)
@@ -603,7 +603,7 @@ def test_read_version():
             assert response.status_code == 200
             expected_version = get_project_version()
             assert response.json() == {
-                "message": "PixlVault REST API",
+                "message": "PixlStash REST API",
                 "version": expected_version,
             }
     gc.collect()
@@ -639,7 +639,7 @@ def test_version_latest_with_newer_version():
             data = response.json()
             assert data["latest_version"] == "99.0.0"
             assert data["release_url"] == (
-                "https://pixelurgy.github.io/pixlvault/upgrade"
+                "https://pixelurgy.github.io/pixlstash/upgrade"
             )
     gc.collect()
     log_resources("END test_version_latest_with_newer_version")

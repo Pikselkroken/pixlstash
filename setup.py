@@ -11,14 +11,14 @@ from setuptools.command.sdist import sdist as _sdist
 def _build_frontend() -> None:
     repo_root = Path(__file__).resolve().parent
     frontend_dir = repo_root / "frontend"
-    dist_dir = repo_root / "pixlvault" / "frontend" / "dist"
+    dist_dir = repo_root / "pixlstash" / "frontend" / "dist"
 
     if not frontend_dir.is_dir():
         # Running from an installed/unpacked sdist that already has the built dist
         if dist_dir.is_dir():
             return
         raise FileNotFoundError(
-            "frontend/ source directory not found and pixlvault/frontend/dist/ is missing. "
+            "frontend/ source directory not found and pixlstash/frontend/dist/ is missing. "
             "Cannot build the frontend."
         )
 
@@ -44,7 +44,7 @@ def _sync_migration_assets() -> None:
     src_alembic_ini = repo_root / "alembic.ini"
     src_migrations = repo_root / "migrations"
 
-    dst_package = repo_root / "pixlvault"
+    dst_package = repo_root / "pixlstash"
     dst_alembic_ini = dst_package / "alembic.ini"
     dst_migrations = dst_package / "migrations"
 
@@ -56,7 +56,7 @@ def _sync_migration_assets() -> None:
             return
         raise FileNotFoundError(
             "Expected migration assets either at repository root (alembic.ini and migrations/) "
-            "or already synced in pixlvault/ package paths."
+            "or already synced in pixlstash/ package paths."
         )
 
     dst_package.mkdir(parents=True, exist_ok=True)

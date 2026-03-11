@@ -2,11 +2,11 @@
 set -e
 
 # Platformdirs default config path (mirrors a regular Linux install):
-# ~/.config/pixlvault/server-config.json
-# Override by setting PIXLVAULT_CONFIG in the environment.
-CONFIG_PATH="${PIXLVAULT_CONFIG:-${HOME}/.config/pixlvault/server-config.json}"
-HOST="${PIXLVAULT_HOST:-0.0.0.0}"
-PORT="${PIXLVAULT_PORT:-9537}"
+# ~/.config/pixlstash/server-config.json
+# Override by setting PIXLSTASH_CONFIG in the environment.
+CONFIG_PATH="${PIXLSTASH_CONFIG:-${HOME}/.config/pixlstash/server-config.json}"
+HOST="${PIXLSTASH_HOST:-0.0.0.0}"
+PORT="${PIXLSTASH_PORT:-9537}"
 
 mkdir -p "$(dirname "$CONFIG_PATH")"
 
@@ -18,7 +18,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
     # Default image_root mirrors what Server._init_server_config uses:
     # os.path.join(config_dir, "images")
     DEFAULT_IMAGE_ROOT="$(dirname "$CONFIG_PATH")/images"
-    IMAGE_ROOT="${PIXLVAULT_IMAGE_ROOT:-$DEFAULT_IMAGE_ROOT}"
+    IMAGE_ROOT="${PIXLSTASH_IMAGE_ROOT:-$DEFAULT_IMAGE_ROOT}"
     mkdir -p "$IMAGE_ROOT"
     cat > "$CONFIG_PATH" <<EOF
 {
@@ -39,4 +39,4 @@ if [ ! -f "$CONFIG_PATH" ]; then
 EOF
 fi
 
-exec python -m pixlvault.app --server-config "$CONFIG_PATH" "$@"
+exec python -m pixlstash.app --server-config "$CONFIG_PATH" "$@"

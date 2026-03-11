@@ -7,8 +7,8 @@ from PIL import Image
 from io import BytesIO
 from fastapi.testclient import TestClient
 
-from pixlvault.server import Server
-from pixlvault.db_models import Face
+from pixlstash.server import Server
+from pixlstash.db_models import Face
 from tests.utils import upload_pictures_and_wait
 
 

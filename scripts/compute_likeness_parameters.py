@@ -10,19 +10,19 @@ import statistics
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from typing import Optional
-from pixlvault.likeness_worker import LikenessWorker
+from pixlstash.likeness_worker import LikenessWorker
 from sqlmodel import select
 from sqlalchemy import func
 
-from pixlvault.database import DBPriority, VaultDatabase
-from pixlvault.db_models.picture import (
+from pixlstash.database import DBPriority, VaultDatabase
+from pixlstash.db_models.picture import (
     LIKENESS_PARAMETER_SENTINEL,
     LikenessParameter,
     Picture,
 )
-from pixlvault.db_models.face import Face
-from pixlvault.db_models.quality import Quality
-from pixlvault.likeness_parameter_worker import (
+from pixlstash.db_models.face import Face
+from pixlstash.db_models.quality import Quality
+from pixlstash.likeness_parameter_worker import (
     LikenessParameterWorker,
     PICTURE_PARAM_FIELDS,
     QUALITY_PARAM_FIELDS,

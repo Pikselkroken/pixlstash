@@ -2,12 +2,12 @@ import tempfile
 import os
 import time
 
-from pixlvault.pixl_logging import get_logger
-from pixlvault.server import Server
-from pixlvault.tasks.task_type import TaskType
-from pixlvault.db_models.picture import Picture
-from pixlvault.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
-from pixlvault.utils.image_processing.image_utils import ImageUtils
+from pixlstash.pixl_logging import get_logger
+from pixlstash.server import Server
+from pixlstash.tasks.task_type import TaskType
+from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from sqlalchemy import func
 from sqlmodel import select
 
