@@ -1169,9 +1169,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         :title="props.collapsed ? 'Show sidebar' : 'Hide sidebar'"
         @click.stop="emit('toggle-sidebar')"
       >
-        <v-icon>{{
-          props.collapsed ? "mdi-chevron-right" : "mdi-chevron-left"
-        }}</v-icon>
+        <v-icon>mdi-dock-left</v-icon>
       </v-btn>
     </div>
     <div class="sidebar-collapsed-divider"></div>
@@ -1940,6 +1938,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 @media (max-width: 900px) {
   .sidebar {
+    width: 280px !important;
     height: 100dvh;
     max-height: 100dvh;
   }

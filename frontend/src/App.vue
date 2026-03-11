@@ -1078,11 +1078,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
   <v-app>
     <div class="app-viewport">
       <div class="file-manager">
-        <div
-          class="sidebar-shell"
-          :class="{ open: sidebarVisible }"
-          v-show="sidebarVisible || !isMobile"
-        >
+        <div class="sidebar-shell" :class="{ open: sidebarVisible }">
           <SideBar
             ref="sidebarRef"
             :collapsed="!sidebarVisible && !isMobile"
@@ -1121,16 +1117,24 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @update:set-loading="loading = $event"
           />
         </div>
-        <div
-          v-if="sidebarVisible && isMobile"
-          class="sidebar-backdrop"
-          @click="sidebarVisible = false"
-        ></div>
+        <Transition name="backdrop-fade">
+          <div
+            v-if="sidebarVisible && isMobile"
+            class="sidebar-backdrop"
+            @click="sidebarVisible = false"
+          ></div>
+        </Transition>
         <PhotosImportDialog
           v-model:open="photosDialogOpen"
           @local-import="handleLocalImport"
         />
-        <main class="main-area" ref="mainAreaRef">
+        <main
+          :class="[
+            'main-area',
+            !sidebarVisible && isMobile ? 'sidebar-hidden' : '',
+          ]"
+          ref="mainAreaRef"
+        >
           <Toolbar
             ref="toolbarRef"
             :isMobile="isMobile"

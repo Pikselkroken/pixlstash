@@ -159,7 +159,7 @@
       <div
         class="image-grid"
         :style="{
-          gridTemplateColumns: `repeat(${props.columns}, minmax(${MIN_THUMBNAIL_SIZE}px, ${MAX_THUMBNAIL_SIZE}px))`,
+          gridTemplateColumns: `repeat(${props.columns}, minmax(0, ${MAX_THUMBNAIL_SIZE}px))`,
           position: 'relative',
         }"
         ref="gridContainer"
@@ -4222,7 +4222,7 @@ function getGridColumnWidth() {
   const rawWidth = availableWidth / cols;
   return Math.min(
     MAX_THUMBNAIL_SIZE,
-    Math.max(MIN_THUMBNAIL_SIZE, rawWidth || MIN_THUMBNAIL_SIZE),
+    Math.max(1, rawWidth || MIN_THUMBNAIL_SIZE),
   );
 }
 

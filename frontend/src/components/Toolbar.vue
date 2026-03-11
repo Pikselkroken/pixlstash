@@ -1,5 +1,10 @@
 <template>
-  <div class="top-toolbar">
+  <div
+    :class="[
+      'top-toolbar',
+      isMobile && !sidebarVisible ? 'toolbar-connected' : '',
+    ]"
+  >
     <div class="toolbar-actions">
       <div class="toolbar-search-slot">
         <v-menu
@@ -51,13 +56,18 @@
         <v-btn
           v-if="isMobile"
           icon
-          :color="sidebarVisible ? 'primary' : 'surface'"
+          color="primary"
           @click="emit('toggle-sidebar')"
           title="Toggle sidebar"
-          class="toolbar-action-btn"
+          :class="[
+            'toolbar-action-btn',
+            'toolbar-sidebar-btn',
+            !sidebarVisible ? 'toolbar-sidebar-btn--connected' : '',
+          ]"
         >
-          <v-icon>mdi-dock-left</v-icon>
+          <v-icon color="on-primary">mdi-dock-left</v-icon>
         </v-btn>
+        <div v-if="isMobile" class="toolbar-mobile-spacer"></div>
         <v-btn
           v-if="isMobile"
           icon
@@ -81,11 +91,9 @@
           transition="scale-transition"
         >
           <template #activator="{ props }">
-            <div
-              class="toolbar-split-button"
-              :class="{ 'toolbar-split-button--icon': isMobile }"
-            >
+            <div :class="{ 'toolbar-split-button': !isMobile }">
               <v-btn
+                v-if="!isMobile"
                 class="toolbar-action-btn toolbar-split-toggle"
                 :title="descendingModel ? 'Descending' : 'Ascending'"
                 @click.stop="toggleSortDirection"
@@ -96,7 +104,10 @@
                 v-bind="props"
                 ref="sortButtonRef"
                 :icon="isMobile"
-                class="toolbar-action-btn toolbar-sort-activator toolbar-split-menu"
+                class="toolbar-action-btn"
+                :class="{
+                  'toolbar-sort-activator toolbar-split-menu': !isMobile,
+                }"
                 :title="sortButtonLabel"
               >
                 <v-icon>{{ sortTypeIcon }}</v-icon>
@@ -324,6 +335,34 @@
                 </v-btn>
               </div>
             </div>
+            <div
+              style="
+                font-size: 1.02em;
+                font-weight: 500;
+                letter-spacing: 0.02em;
+                margin-top: 8px;
+                margin-bottom: 4px;
+                color: rgb(var(--v-theme-on-background));
+              "
+            >
+              Media Filter
+            </div>
+            <v-btn-toggle
+              v-model="mediaTypeFilterModel"
+              mandatory
+              class="media-type-toggle"
+              dense
+            >
+              <v-btn value="all" title="Show all media">
+                <v-icon>mdi-multimedia</v-icon>
+              </v-btn>
+              <v-btn value="images" title="Show images only">
+                <v-icon>mdi-image</v-icon>
+              </v-btn>
+              <v-btn value="videos" title="Show videos only">
+                <v-icon>mdi-video</v-icon>
+              </v-btn>
+            </v-btn-toggle>
           </div>
         </v-menu>
         <v-menu
@@ -404,6 +443,7 @@
           </div>
         </v-menu>
         <v-menu
+          v-if="!isMobile"
           v-model="exportMenuOpenModel"
           offset-y
           :close-on-content-click="false"
@@ -490,62 +530,6 @@
         </v-menu>
 
         <v-menu
-          offset-y
-          :close-on-content-click="false"
-          transition="scale-transition"
-        >
-          <template #activator="{ props }">
-            <v-btn
-              icon
-              v-bind="props"
-              :color="props['aria-expanded'] === 'true' ? 'primary' : 'surface'"
-              title="Filter media type"
-              class="toolbar-action-btn"
-            >
-              <v-icon :color="'on-background'">mdi-filter</v-icon>
-            </v-btn>
-          </template>
-          <div
-            style="
-              padding: 10px 12px;
-              min-width: 200px;
-              background: rgba(var(--v-theme-background), 0.9);
-              color: rgb(var(--v-theme-on-background));
-              border-radius: 8px;
-              box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
-              display: flex;
-              flex-direction: column;
-              gap: 10px;
-            "
-          >
-            <div
-              style="
-                font-size: 1.02em;
-                font-weight: 500;
-                letter-spacing: 0.02em;
-              "
-            >
-              Media filter
-            </div>
-            <v-btn-toggle
-              v-model="mediaTypeFilterModel"
-              mandatory
-              class="media-type-toggle"
-              dense
-            >
-              <v-btn value="all" title="Show all media">
-                <v-icon>mdi-multimedia</v-icon>
-              </v-btn>
-              <v-btn value="images" title="Show images only">
-                <v-icon>mdi-image</v-icon>
-              </v-btn>
-              <v-btn value="videos" title="Show videos only">
-                <v-icon>mdi-video</v-icon>
-              </v-btn>
-            </v-btn-toggle>
-          </div>
-        </v-menu>
-        <v-menu
           v-model="comfyuiMenuOpen"
           :close-on-content-click="false"
           location="top end"
@@ -605,7 +589,7 @@
                       @click="runComfyuiOnGrid"
                     >
                       <v-icon size="16">mdi-play</v-icon>
-                      <span>Run on all</span>
+                      <span>Run</span>
                     </button>
                   </div>
                 </template>
@@ -1094,6 +1078,40 @@ defineExpose({ blurSearchInput });
   margin-left: 8px;
 }
 
+.toolbar-mobile-spacer {
+  flex: 1;
+}
+
+.toolbar-action-btn.toolbar-sidebar-btn,
+.toolbar-action-btn.toolbar-sidebar-btn:hover,
+.toolbar-action-btn.toolbar-sidebar-btn:focus-visible {
+  background-color: rgb(var(--v-theme-sidebar)) !important;
+  border: none !important;
+  border-radius: 8px !important;
+}
+
+.toolbar-action-btn.toolbar-sidebar-btn.toolbar-sidebar-btn--connected,
+.toolbar-action-btn.toolbar-sidebar-btn.toolbar-sidebar-btn--connected:hover,
+.toolbar-action-btn.toolbar-sidebar-btn.toolbar-sidebar-btn--connected:focus-visible {
+  border-radius: 0 8px 8px 0 !important;
+}
+
+.toolbar-sidebar-btn .v-icon {
+  color: rgb(var(--v-theme-accent)) !important;
+}
+
+.toolbar-connected {
+  padding-left: 0 !important;
+}
+
+.toolbar-connected .toolbar-actions {
+  gap: 0;
+}
+
+.toolbar-connected .toolbar-sidebar-btn {
+  margin-left: 0 !important;
+}
+
 .toolbar-sort-panel {
   padding: 8px;
   min-width: 340px;
@@ -1393,13 +1411,14 @@ defineExpose({ blurSearchInput });
 }
 
 .toolbar-sort-activator {
-  padding: 0 10px;
+  padding: 0;
   min-width: var(--toolbar-control-height);
-  width: 190px;
+  width: auto;
   justify-content: flex-start;
 }
 
 .toolbar-split-button .toolbar-sort-activator {
+  padding: 0 10px;
   width: 190px;
 }
 
@@ -1409,7 +1428,7 @@ defineExpose({ blurSearchInput });
   padding: 0;
 }
 
-.toolbar-sort-activator :deep(.v-btn__content) {
+.toolbar-split-button .toolbar-sort-activator :deep(.v-btn__content) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1454,11 +1473,20 @@ defineExpose({ blurSearchInput });
 
 @media (max-width: 900px) {
   .toolbar-actions {
-    width: auto;
+    width: 100%;
     flex-wrap: nowrap;
     gap: 2px;
     margin-left: 0;
     justify-content: flex-start;
+  }
+
+  .toolbar-search-slot {
+    flex: 0 0 0;
+  }
+
+  .toolbar-sort-controls {
+    flex: 1;
+    margin-left: 0;
   }
 }
 

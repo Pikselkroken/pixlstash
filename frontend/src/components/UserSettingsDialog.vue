@@ -1223,7 +1223,7 @@ const workflowImportCaptionPreview = computed(() => {
 <template>
   <v-dialog
     v-model="dialogOpen"
-    width="800"
+    max-width="800"
     @click:outside="dialogOpen = false"
   >
     <div class="settings-dialog-shell">
@@ -1241,6 +1241,7 @@ const workflowImportCaptionPreview = computed(() => {
           v-model="settingsTab"
           density="comfortable"
           class="settings-tabs"
+          show-arrows
         >
           <v-tab value="preferences">Preferences</v-tab>
           <v-tab value="smart-score">Smart Score</v-tab>
@@ -1452,7 +1453,15 @@ const workflowImportCaptionPreview = computed(() => {
                     :key="entry.tag"
                     class="settings-tag-chip settings-tag-chip--row"
                   >
-                    <span class="settings-tag-label">{{ entry.tag }}</span>
+                    <v-tooltip :text="entry.tag" location="top">
+                      <template #activator="{ props: tooltipProps }">
+                        <span
+                          class="settings-tag-label"
+                          v-bind="tooltipProps"
+                          >{{ entry.tag }}</span
+                        >
+                      </template>
+                    </v-tooltip>
                     <v-select
                       class="settings-tag-importance"
                       :items="smartScoreImportanceOptions"
@@ -1779,7 +1788,7 @@ const workflowImportCaptionPreview = computed(() => {
     </div>
   </v-dialog>
 
-  <v-dialog v-model="tokenDialogOpen" width="520">
+  <v-dialog v-model="tokenDialogOpen" max-width="520">
     <v-card class="settings-token-dialog">
       <v-card-title class="settings-dialog-title">New API Token</v-card-title>
       <v-card-text class="settings-dialog-body">
@@ -1801,7 +1810,7 @@ const workflowImportCaptionPreview = computed(() => {
     </v-card>
   </v-dialog>
 
-  <v-dialog v-model="tokenDeleteDialogOpen" width="420">
+  <v-dialog v-model="tokenDeleteDialogOpen" max-width="420">
     <v-card class="settings-token-dialog">
       <v-card-title class="settings-dialog-title">Delete token?</v-card-title>
       <v-card-text class="settings-dialog-body">
@@ -1832,7 +1841,7 @@ const workflowImportCaptionPreview = computed(() => {
     @change="handleWorkflowFileChange"
   />
 
-  <v-dialog v-model="workflowImportDialogOpen" width="640">
+  <v-dialog v-model="workflowImportDialogOpen" max-width="640">
     <v-card class="settings-token-dialog">
       <v-card-title class="settings-dialog-title">
         Import Workflow
@@ -1917,17 +1926,28 @@ const workflowImportCaptionPreview = computed(() => {
   color: rgb(var(--v-theme-on-surface));
   border-radius: 12px;
   color-scheme: dark;
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  max-height: calc(85dvh - 20px);
 }
 
 .settings-dialog-shell {
   position: relative;
   width: 100%;
+  max-height: 85dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  padding-top: 20px;
 }
 
 .settings-dialog-close {
   position: absolute;
-  top: -16px;
-  right: -16px;
+  top: 2px;
+  right: -18px;
   background-color: rgb(var(--v-theme-primary));
   border: none;
   color: rgb(var(--v-theme-on-primary));
@@ -1993,6 +2013,7 @@ const workflowImportCaptionPreview = computed(() => {
 
 .settings-tab-body {
   padding-top: 6px;
+  overflow: visible;
 }
 
 .settings-dialog-body {
@@ -2000,6 +2021,9 @@ const workflowImportCaptionPreview = computed(() => {
   flex-direction: column;
   gap: 12px;
   line-height: 1;
+  overflow-y: auto !important;
+  flex: 1 !important;
+  min-height: 0 !important;
 }
 
 .settings-section {
@@ -2228,9 +2252,10 @@ const workflowImportCaptionPreview = computed(() => {
 }
 
 .settings-tag-importance {
-  flex: 0 0 120px;
-  min-width: 120px;
-  max-width: 120px;
+  flex: 0 1 90px;
+  min-width: 0;
+  max-width: 90px;
+  overflow: hidden;
 }
 
 :deep(.settings-tag-importance .v-field) {
@@ -2251,6 +2276,8 @@ const workflowImportCaptionPreview = computed(() => {
   padding-bottom: 0;
   padding-right: 4px;
   font-size: 0.85rem;
+  min-width: 0;
+  overflow: hidden;
 }
 
 :deep(.settings-tag-importance .v-field__append-inner) {
@@ -2261,6 +2288,7 @@ const workflowImportCaptionPreview = computed(() => {
   height: 28px;
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
 :deep(.settings-tag-importance .v-field__overlay),
@@ -2272,6 +2300,11 @@ const workflowImportCaptionPreview = computed(() => {
 :deep(.settings-tag-importance .v-select__selection-text) {
   font-size: 0.85rem;
   line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  display: block;
 }
 
 :deep(.settings-tag-importance .v-field__input input) {
@@ -2282,6 +2315,10 @@ const workflowImportCaptionPreview = computed(() => {
   font-size: 1em;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
 }
 
 .settings-tag-delete {

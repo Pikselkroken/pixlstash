@@ -111,6 +111,7 @@ onUnmounted(() => {
 }
 .search-card {
   width: 600px;
+  max-width: calc(100vw - 32px);
   padding-left: 16px;
   padding-top: 8px;
   position: relative;
