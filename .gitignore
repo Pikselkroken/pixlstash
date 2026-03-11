@@ -19,3 +19,4 @@ downloaded_models
 pixlstash/alembic.ini
 pixlstash/migrations/
 .DS_Store
+ssl
