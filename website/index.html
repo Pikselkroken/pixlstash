@@ -66,7 +66,7 @@
       .shell {
         max-width: 1320px;
         margin: 0 auto;
-        padding: 8px 4px 12px;
+        padding: 8px 20px 12px;
       }
 
       .nav {
@@ -247,16 +247,10 @@
 
       .hero-badges {
         display: flex;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 10px;
         margin-bottom: 30px;
         align-items: flex-start;
-        overflow-x: none;
-        scrollbar-width: none;
-      }
-
-      .hero-badges::-webkit-scrollbar {
-        display: none;
       }
 
       .badge {
@@ -324,7 +318,8 @@
           0 10px 36px rgba(17, 20, 26, 0.26),
           0 2px 8px rgba(17, 20, 26, 0.12);
         border-radius: 1px;
-        flex-shrink: 0;
+        min-width: 0;
+        max-width: 100%;
       }
 
       .testimonial--1 {
@@ -404,7 +399,29 @@
         align-items: center;
         justify-content: center;
         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-        cursor: default;
+        cursor: pointer;
+      }
+
+      .penalty-tooltip {
+        display: none;
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        background: rgba(20, 20, 20, 0.88);
+        color: #f2f5fa;
+        font-family: var(--sans);
+        font-size: 0.75rem;
+        white-space: nowrap;
+        padding: 5px 9px;
+        border-radius: 6px;
+        border: 1px solid rgba(220, 220, 220, 0.2);
+        pointer-events: none;
+        z-index: 10;
+      }
+
+      .testimonial-penalty-badge:hover .penalty-tooltip,
+      .testimonial-penalty-badge.open .penalty-tooltip {
+        display: block;
       }
 
       .hero-panel {
@@ -469,6 +486,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        flex-wrap: wrap;
         gap: 20px;
         margin-bottom: 24px;
       }
@@ -495,7 +513,6 @@
         border-radius: var(--radius-md);
         padding: 18px;
         border: 1px solid rgba(34, 38, 44, 0.1);
-        min-height: 180px;
       }
 
       .feature-card h3 {
@@ -550,7 +567,6 @@
           rgba(235, 239, 244, 0.7)
         );
         position: relative;
-        min-height: 220px;
         overflow: hidden;
       }
 
@@ -671,15 +687,40 @@
         justify-content: space-between;
       }
 
+      @media (max-width: 1100px) {
+        .nav-actions {
+          display: none;
+        }
+
+        .testimonials {
+          flex-direction: column;
+          align-items: center;
+          gap: 20px;
+        }
+
+        .testimonial--1,
+        .testimonial--2 {
+          width: 100%;
+          max-width: 560px;
+          transform: none;
+          margin-top: 0;
+        }
+      }
+
       @media (max-width: 700px) {
+        .shell {
+          padding: 8px 14px 12px;
+        }
+
         .nav {
           flex-direction: column;
           align-items: flex-start;
+          gap: 12px;
         }
 
-        .nav-actions {
-          width: 100%;
-          justify-content: flex-start;
+        .nav-links {
+          flex-wrap: wrap;
+          gap: 12px;
         }
 
         .download-wrap {
@@ -687,15 +728,29 @@
         }
 
         .hero {
-          margin-top: 40px;
+          margin-top: 24px;
+        }
+
+        .testimonial--1,
+        .testimonial--2 {
+          max-width: 420px;
         }
 
         .panel-grid {
           grid-template-columns: 1fr;
         }
 
+        .section-title {
+          font-size: 1.5rem;
+        }
+
         .cta-banner {
-          padding: 22px;
+          padding: 20px;
+        }
+
+        footer {
+          flex-direction: column;
+          align-items: flex-start;
         }
       }
     </style>
@@ -752,8 +807,8 @@
             <span class="badge">Self-hosted</span>
             <span class="badge">Open Source</span>
             <span class="badge">Cross-Platform</span>
-            <span class="badge">AI tagging + search</span>
-            <span class="badge">Simple Image Enhancement</span>
+            <span class="badge">AI tagging/search</span>
+            <span class="badge">Image Enhancement</span>
             <span class="badge">ComfyUI Integration</span>
           </div>
           <h1>Simplify your image workflow.</h1>
@@ -777,8 +832,7 @@
           </div>
           <div class="section-header" style="margin-top: 48px">
             <h2 class="section-title">
-              Let PixlVault organise your pictures so you can focus on work that
-              matters
+              Less time organising, more time creating!
             </h2>
           </div>
           <div class="testimonials">
@@ -801,6 +855,7 @@
                       d="M20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12M22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2A10,10 0 0,1 22,12M15.5,8A1.5,1.5 0 0,1 17,9.5A1.5,1.5 0 0,1 15.5,11A1.5,1.5 0 0,1 14,9.5A1.5,1.5 0 0,1 15.5,8M10.5,8A1.5,1.5 0 0,1 12,9.5A1.5,1.5 0 0,1 10.5,11A1.5,1.5 0 0,1 9,9.5A1.5,1.5 0 0,1 10.5,8M12,14C13.75,14 15.29,14.72 16.19,15.81L14.77,17.23C14.32,16.5 13.25,16 12,16C10.75,16 9.68,16.5 9.23,17.23L7.81,15.81C8.71,14.72 10.25,14 12,14Z"
                     />
                   </svg>
+                  <span class="penalty-tooltip">Grumpy git</span>
                 </span>
                 <span class="testimonial-quote testimonial-quote--bottom-right"
                   >I will never use something as easy as PixlVault</span
@@ -829,6 +884,7 @@
                       d="M20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12M22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2A10,10 0 0,1 22,12M15.5,8A1.5,1.5 0 0,1 17,9.5A1.5,1.5 0 0,1 15.5,11A1.5,1.5 0 0,1 14,9.5A1.5,1.5 0 0,1 15.5,8M10.5,8A1.5,1.5 0 0,1 12,9.5A1.5,1.5 0 0,1 10.5,11A1.5,1.5 0 0,1 9,9.5A1.5,1.5 0 0,1 10.5,8M12,14C13.75,14 15.29,14.72 16.19,15.81L14.77,17.23C14.32,16.5 13.25,16 12,16C10.75,16 9.68,16.5 9.23,17.23L7.81,15.81C8.71,14.72 10.25,14 12,14Z"
                     />
                   </svg>
+                  <span class="penalty-tooltip">Bad anatomy, extra limb</span>
                 </span>
                 <span class="testimonial-quote testimonial-quote--top-right"
                   >I don't need my third arm to use PixlVault</span
@@ -1101,6 +1157,25 @@
       });
 
       lightboxClose.addEventListener("click", closeLightbox);
+
+      // Penalty badge tap-to-show on touch devices
+      document
+        .querySelectorAll(".testimonial-penalty-badge")
+        .forEach((badge) => {
+          badge.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const isOpen = badge.classList.contains("open");
+            document
+              .querySelectorAll(".testimonial-penalty-badge.open")
+              .forEach((b) => b.classList.remove("open"));
+            if (!isOpen) badge.classList.add("open");
+          });
+        });
+      document.addEventListener("click", () => {
+        document
+          .querySelectorAll(".testimonial-penalty-badge.open")
+          .forEach((b) => b.classList.remove("open"));
+      });
       lightbox.addEventListener("click", (event) => {
         if (event.target === lightbox) {
           closeLightbox();
