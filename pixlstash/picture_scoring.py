@@ -102,7 +102,6 @@ def select_reference_faces_for_character(
         .join(Picture, Face.picture_id == Picture.id)
         .where(
             Face.character_id == character_id,
-            Face.face_index == 0,
             Face.features.is_not(None),
             Picture.deleted.is_(False),
         )
