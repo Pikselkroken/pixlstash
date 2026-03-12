@@ -26,7 +26,11 @@ from pixlstash.picture_scoring import (
     get_smart_score_penalised_tags_from_request,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils import safe_model_dict, _normalize_hidden_tags
+from pixlstash.utils import (
+    safe_model_dict,
+    _normalize_hidden_tags,
+    _deduplicate_by_stack,
+)
 
 logger = get_logger(__name__)
 
@@ -467,6 +471,7 @@ def create_router(server) -> APIRouter:
         format: list[str] = Query(None),
         character_id: str | None = Query(None),
         reference_character_id: str | None = Query(None),
+        fields: str = Query(None),
     ):
         sort_mech = None
         if sort:
@@ -513,6 +518,32 @@ def create_router(server) -> APIRouter:
             filter_hidden_ids, picture_ids
         )
 
+        # If any picture in the set belongs to a stack, treat the entire stack
+        # as part of the set — mirroring how stacks work in the regular view.
+        def expand_with_stack_members(session, ids):
+            if not ids:
+                return ids
+            rows = session.exec(
+                select(Picture.id, Picture.stack_id).where(
+                    Picture.id.in_(ids),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+            stack_ids = [int(stack_id) for _, stack_id in rows if stack_id is not None]
+            if not stack_ids:
+                return ids
+            extra = session.exec(
+                select(Picture.id).where(
+                    Picture.stack_id.in_(stack_ids),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+            return list(set(ids) | set(extra))
+
+        picture_ids = server.vault.db.run_immediate_read_task(
+            expand_with_stack_members, picture_ids
+        )
+
         if info:
             set_dict = picture_set.dict()
             set_dict["picture_count"] = len(picture_ids)
@@ -531,6 +562,8 @@ def create_router(server) -> APIRouter:
                 candidate_ids=picture_ids,
                 penalised_tags=penalised_tags,
             )
+            if fields == "grid":
+                pictures = _deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
@@ -549,6 +582,8 @@ def create_router(server) -> APIRouter:
                 descending,
                 candidate_ids=picture_ids,
             )
+            if fields == "grid":
+                pictures = _deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
 
@@ -560,6 +595,7 @@ def create_router(server) -> APIRouter:
                 select_fields=Picture.metadata_fields(),
                 format=format,
                 include_unimported=True,
+                stack_leaders_only=(fields == "grid"),
             )
             return [
                 pic.dict(

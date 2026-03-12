@@ -58,6 +58,7 @@ from pixlstash.utils import (
     safe_model_dict,
     serialize_tag_objects,
     _normalize_hidden_tags,
+    _deduplicate_by_stack,
 )
 from pixlstash.tasks import TaskType
 
@@ -163,6 +164,89 @@ def _create_picture_imports(server, uploaded_files, dest_folder):
     return shas, existing_map, new_pictures
 
 
+def _enrich_stack_counts(server, pics: list[dict]) -> list[dict]:
+    """Add stack_count field to each dict in pics by querying the DB.
+
+    Args:
+        server: The application server with vault.db access.
+        pics: List of picture dicts to enrich.
+
+    Returns:
+        New list with a stack_count key added to every dict.
+    """
+    if not pics:
+        return pics
+    picture_ids = [
+        int(p.get("id"))
+        for p in pics
+        if isinstance(p, dict) and p.get("id") is not None
+    ]
+    if not picture_ids:
+        return pics
+
+    def fetch_stack_info(session: Session, ids: list[int]):
+        id_stack_rows = session.exec(
+            select(Picture.id, Picture.stack_id).where(
+                Picture.id.in_(ids),
+                Picture.deleted.is_(False),
+            )
+        ).all()
+        stack_ids = sorted(
+            {
+                int(stack_id)
+                for _pic_id, stack_id in id_stack_rows
+                if stack_id is not None
+            }
+        )
+        if not stack_ids:
+            return id_stack_rows, []
+        stack_count_rows = session.exec(
+            select(Picture.stack_id, func.count(Picture.id))
+            .where(
+                Picture.stack_id.in_(stack_ids),
+                Picture.deleted.is_(False),
+            )
+            .group_by(Picture.stack_id)
+        ).all()
+        return id_stack_rows, stack_count_rows
+
+    id_stack_rows, stack_count_rows = server.vault.db.run_immediate_read_task(
+        fetch_stack_info, picture_ids
+    )
+    stack_id_by_picture_id = {
+        int(pic_id): stack_id for pic_id, stack_id in id_stack_rows
+    }
+    stack_count_by_stack_id = {
+        int(stack_id): int(count)
+        for stack_id, count in stack_count_rows
+        if stack_id is not None
+    }
+    enriched: list[dict] = []
+    for pic in pics:
+        if not isinstance(pic, dict):
+            enriched.append(pic)
+            continue
+        picture_id = pic.get("id")
+        if picture_id is None:
+            enriched.append(pic)
+            continue
+        numeric_id = int(picture_id)
+        stack_id = pic.get("stack_id")
+        if stack_id is None:
+            stack_id = stack_id_by_picture_id.get(numeric_id)
+        stack_count = 0
+        if stack_id is not None:
+            stack_count = stack_count_by_stack_id.get(int(stack_id), 1)
+        enriched.append(
+            {
+                **pic,
+                "stack_id": stack_id,
+                "stack_count": stack_count,
+            }
+        )
+    return enriched
+
+
 def _select_pictures_for_listing(
     *,
     server,
@@ -174,6 +258,7 @@ def _select_pictures_for_listing(
     metadata_fields,
     return_ids_only: bool = False,
     exclude_query_params: set[str] | None = None,
+    stack_leaders_only: bool = False,
 ):
     def serialize_metadata(pictures):
         return [
@@ -314,6 +399,9 @@ def _select_pictures_for_listing(
                 ]
         if return_ids_only:
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
+        if stack_leaders_only:
+            pics = _deduplicate_by_stack(pics)
+            pics = _enrich_stack_counts(server, pics)
         return pics
     elif sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
         candidate_ids = server.vault.db.run_task(
@@ -349,6 +437,9 @@ def _select_pictures_for_listing(
                 ]
         if return_ids_only:
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
+        if stack_leaders_only:
+            pics = _deduplicate_by_stack(pics)
+            pics = _enrich_stack_counts(server, pics)
         return pics
     elif character_id == "UNASSIGNED":
         pics = server.vault.db.run_task(
@@ -358,6 +449,7 @@ def _select_pictures_for_listing(
             limit=limit,
             format=format,
             metadata_fields=metadata_fields,
+            stack_leaders_only=stack_leaders_only,
         )
     elif only_deleted:
         pics = server.vault.db.run_task(
@@ -369,6 +461,7 @@ def _select_pictures_for_listing(
             format=format,
             only_deleted=True,
             include_unimported=True,
+            stack_leaders_only=stack_leaders_only,
             **query_params,
         )
     else:
@@ -395,6 +488,7 @@ def _select_pictures_for_listing(
             select_fields=metadata_fields,
             format=format,
             include_unimported=True,
+            stack_leaders_only=stack_leaders_only,
             **query_params,
         )
     if pics:
@@ -407,7 +501,10 @@ def _select_pictures_for_listing(
             pics = [pic for pic in pics if pic.id not in hidden_ids]
     if return_ids_only:
         return [pic.id for pic in pics]
-    return serialize_metadata(pics)
+    result = serialize_metadata(pics)
+    if stack_leaders_only:
+        result = _enrich_stack_counts(server, result)
+    return result
 
 
 def create_router(server) -> APIRouter:
@@ -2589,6 +2686,7 @@ def create_router(server) -> APIRouter:
             limit=limit,
             metadata_fields=metadata_fields,
             return_ids_only=False,
+            stack_leaders_only=(fields == "grid"),
         )
 
     return router

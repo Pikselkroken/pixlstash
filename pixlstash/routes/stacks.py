@@ -3,10 +3,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request, Query
 from sqlalchemy import case
-from sqlalchemy.orm import load_only, selectinload
+
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture, PictureStack
+from pixlstash.db_models import Picture, PictureStack, SortMechanism
 from pixlstash.picture_scoring import (
     fetch_smart_score_data,
     get_smart_score_penalised_tags_from_request,
@@ -182,15 +182,28 @@ def create_router(server) -> APIRouter:
         request: Request,
         fields: str = Query("grid"),
         include_deleted: bool = Query(False),
+        sort: Optional[str] = Query(None),
+        descending: bool = Query(True),
     ):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
+
+        # Resolve sort mechanism; treat PICTURE_STACKS as "no sort" (stack order).
+        sort_mech = None
+        if sort:
+            try:
+                candidate = SortMechanism.from_string(sort, descending=descending)
+                if candidate.key != SortMechanism.Keys.PICTURE_STACKS:
+                    sort_mech = candidate
+            except ValueError:
+                pass
 
         def fetch_stack_pictures(
             session: Session,
             stack_id_value: int,
             fields_value: str,
             include_deleted_value: bool,
+            sort_mech_value,
         ):
             stack = session.get(PictureStack, stack_id_value)
             if not stack:
@@ -201,29 +214,14 @@ def create_router(server) -> APIRouter:
                 if fields_value == "grid"
                 else Picture.metadata_fields()
             )
-            query = select(Picture).where(Picture.stack_id == stack_id_value)
-            if not include_deleted_value:
-                query = query.where(Picture.deleted.is_(False))
-            query = query.order_by(Picture.id)
 
-            if select_fields:
-                select_fields = list(set(select_fields) | {"id"})
-                scalar_attrs = [
-                    getattr(Picture, field)
-                    for field in Picture.scalar_fields().intersection(select_fields)
-                ]
-                if scalar_attrs:
-                    query = query.options(load_only(*scalar_attrs))
-                rel_attrs = [
-                    getattr(Picture, field)
-                    for field in Picture.relationship_fields().intersection(
-                        select_fields
-                    )
-                ]
-                for rel_attr in rel_attrs:
-                    query = query.options(selectinload(rel_attr))
-
-            pictures = session.exec(query).all()
+            pictures = Picture.find(
+                session,
+                stack_id=stack_id_value,
+                sort_mech=sort_mech_value,
+                select_fields=select_fields,
+                include_deleted=include_deleted_value,
+            )
             return select_fields, pictures
 
         select_fields, pictures = server.vault.db.run_task(
@@ -231,10 +229,14 @@ def create_router(server) -> APIRouter:
             stack_id,
             fields,
             include_deleted,
+            sort_mech,
         )
         if select_fields is None:
             raise HTTPException(status_code=404, detail="Stack not found")
-        pictures = _ensure_stack_positions(request, stack_id, pictures)
+        # Only apply stack-position ordering when no explicit sort is active;
+        # this also persists positions for stacks that haven't been ordered yet.
+        if sort_mech is None:
+            pictures = _ensure_stack_positions(request, stack_id, pictures)
         return [
             {field: safe_model_dict(pic).get(field) for field in select_fields}
             for pic in pictures
