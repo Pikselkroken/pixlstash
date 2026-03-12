@@ -2185,6 +2185,27 @@ function handleKeydown(e) {
     return;
   }
 
+  // Block shortcuts when any other editable element (e.g. plugin parameter inputs) has focus.
+  // Still allow ESC to close the plugin/comfyui menu if open.
+  const _target = e.target;
+  const _isEditable =
+    _target instanceof HTMLElement &&
+    (_target.isContentEditable ||
+      ["INPUT", "TEXTAREA", "SELECT"].includes(_target.tagName) ||
+      _target.getAttribute("role") === "textbox");
+  if (_isEditable) {
+    if (e.key === "Escape") {
+      if (pluginMenuOpen.value) {
+        pluginMenuOpen.value = false;
+        e.preventDefault();
+      } else if (comfyuiMenuOpen.value) {
+        comfyuiMenuOpen.value = false;
+        e.preventDefault();
+      }
+    }
+    return;
+  }
+
   if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
     const target = e.target;
     const isEditable =
