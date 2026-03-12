@@ -2,10 +2,11 @@ import ast
 import json
 import os
 import time
+import cv2
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from PIL import Image
-from sqlalchemy import exists, func
+from sqlalchemy import case as sa_case, exists, func
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -20,6 +21,7 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.picture_scoring import select_reference_faces_for_character
 from pixlstash.utils import _normalize_hidden_tags, safe_model_dict
 
@@ -318,6 +320,11 @@ def create_router(server) -> APIRouter:
             meta_path = os.path.join(cache_dir, f"character_{id}.json")
 
             def fetch_best_picture_id(session: Session, character_id: int):
+                _video_exts = (".mp4", ".mov", ".webm", ".avi", ".mkv")
+                is_video_expr = sa_case(
+                    *[(Picture.file_path.ilike(f"%{ext}"), 1) for ext in _video_exts],
+                    else_=0,
+                )
                 row = session.exec(
                     select(Picture.id, Picture.score)
                     .join(Face, Face.picture_id == Picture.id)
@@ -326,6 +333,7 @@ def create_router(server) -> APIRouter:
                         Picture.deleted.is_(False),
                     )
                     .order_by(
+                        is_video_expr,  # prefer still images over videos
                         Picture.score.is_(None),
                         Picture.score.desc(),
                         Picture.id.desc(),
@@ -432,7 +440,14 @@ def create_router(server) -> APIRouter:
                     status_code=404, detail="Failed to crop face thumbnail"
                 )
             try:
-                image = Image.open(picture_path).convert("RGB")
+                if VideoUtils.is_video_file(picture_path):
+                    frame_bgr = VideoUtils._read_first_video_frame_bgr(picture_path)
+                    if frame_bgr is None:
+                        raise ValueError("Could not read first frame from video")
+                    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                    image = Image.fromarray(frame_rgb)
+                else:
+                    image = Image.open(picture_path).convert("RGB")
             except Exception:
                 raise HTTPException(
                     status_code=404, detail="Failed to crop face thumbnail"
