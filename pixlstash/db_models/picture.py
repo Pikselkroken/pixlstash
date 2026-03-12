@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto, IntEnum
-from sqlalchemy import String, desc, func
+from sqlalchemy import String, desc, func, or_, text
 from sqlalchemy.orm import load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
@@ -473,6 +473,34 @@ class Picture(SQLModel, table=True):
         return d
 
     @classmethod
+    def _get_stack_leader_ids(cls, session, only_deleted: bool = False) -> set[int]:
+        """Return the set of picture IDs that are the leader of their stack.
+
+        Uses a single window-function query (ROW_NUMBER OVER PARTITION BY stack_id)
+        so cost is O(N) over stacked pictures rather than a correlated subquery
+        that runs once per row. Matches the JS compareStackOrder ranking:
+        lowest stack_position (NULLs last) → highest score → newest created_at → lowest id.
+        """
+        deleted_val = 1 if only_deleted else 0
+        sql = text("""
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY stack_id
+                           ORDER BY COALESCE(stack_position, 999999) ASC,
+                                    COALESCE(score, 0) DESC,
+                                    created_at DESC,
+                                    id ASC
+                       ) AS rn
+                FROM picture
+                WHERE stack_id IS NOT NULL
+                  AND deleted = :deleted
+            ) WHERE rn = 1
+        """)
+        rows = session.execute(sql.bindparams(deleted=deleted_val)).all()
+        return {row[0] for row in rows}
+
+    @classmethod
     def find(
         cls,
         session,
@@ -485,6 +513,7 @@ class Picture(SQLModel, table=True):
         include_deleted: bool = False,
         only_deleted: bool = False,
         include_unimported: bool = True,
+        stack_leaders_only: bool = False,
         **search,
     ) -> List["Picture"]:
         """
@@ -528,6 +557,10 @@ class Picture(SQLModel, table=True):
 
         if format:
             query = query.where(cls.format.in_(format))
+
+        if stack_leaders_only:
+            leader_ids = cls._get_stack_leader_ids(session, only_deleted=only_deleted)
+            query = query.where(or_(cls.stack_id.is_(None), cls.id.in_(leader_ids)))
 
         if sort_mech:
             if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:
@@ -638,6 +671,7 @@ class Picture(SQLModel, table=True):
         limit: int = sys.maxsize,
         format: list[str] | None = None,
         metadata_fields: list[str] | None = None,
+        stack_leaders_only: bool = False,
     ):
         query = select(Picture)
         unassigned_condition = ~exists(
@@ -659,6 +693,12 @@ class Picture(SQLModel, table=True):
 
         if format:
             query = query.where(Picture.format.in_(format))
+
+        if stack_leaders_only:
+            leader_ids = Picture._get_stack_leader_ids(session, only_deleted=False)
+            query = query.where(
+                or_(Picture.stack_id.is_(None), Picture.id.in_(leader_ids))
+            )
 
         select_fields = metadata_fields or cls.metadata_fields()
         if select_fields:

@@ -3228,16 +3228,28 @@ function rebuildGridImagesFromLastFetch() {
 async function refreshExpandedStacksAfterFetch() {
   const expanded = Array.from(expandedStackIds.value || []);
   if (!expanded.length) return;
+
+  // Only eagerly load members for stacks whose leader is within the current
+  // render window. Out-of-viewport stacks stay in expandedStackIds (so the
+  // badge count renders) but their members are fetched lazily on scroll.
+  const fetchStart = Math.max(0, visibleStart.value - renderBuffer.value);
+  const fetchEnd = visibleEnd.value + renderBuffer.value;
+
   const nextExpanded = new Set(expandedStackIds.value);
   for (const stackId of expanded) {
     removeExpandedStackMembers(stackId);
-    const header = allGridImages.value.find(
+    const headerIndex = allGridImages.value.findIndex(
       (item) => getPictureStackId(item) === stackId,
     );
-    if (!header) {
+    if (headerIndex === -1) {
       nextExpanded.delete(stackId);
       continue;
     }
+    // Skip loading for stacks outside the visible+buffer window.
+    if (headerIndex < fetchStart || headerIndex >= fetchEnd) {
+      continue;
+    }
+    const header = allGridImages.value[headerIndex];
     const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
     const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
     if (loaded !== false) {
@@ -3251,6 +3263,51 @@ async function refreshExpandedStacksAfterFetch() {
   }
   if (nextExpanded.size !== expandedStackIds.value.size) {
     expandedStackIds.value = nextExpanded;
+  }
+}
+
+// Load members for expanded stacks that are now in the visible+buffer window
+// but haven't been fetched yet. Called from updateVisibleThumbnails so it
+// triggers automatically as the user scrolls.
+async function loadExpandedStacksInView() {
+  if (!expandedStackIds.value.size) return;
+  const start = Math.max(0, visibleStart.value - renderBuffer.value);
+  const end = Math.min(
+    allGridImages.value.length,
+    visibleEnd.value + renderBuffer.value,
+  );
+  const slice = allGridImages.value.slice(start, end);
+  const seen = new Set();
+  const pending = [];
+  for (const img of slice) {
+    const stackId = getPictureStackId(img);
+    if (!stackId || seen.has(stackId)) continue;
+    seen.add(stackId);
+    if (!expandedStackIds.value.has(stackId)) continue;
+    const entry = expandedStackMembers.value.get(stackId);
+    if (entry && Array.isArray(entry.images) && entry.images.length > 0)
+      continue;
+    pending.push(stackId);
+  }
+  if (!pending.length) return;
+  for (const stackId of pending) {
+    if (!expandedStackIds.value.has(stackId)) continue;
+    const headerIndex = allGridImages.value.findIndex(
+      (item) => getPictureStackId(item) === stackId,
+    );
+    if (headerIndex === -1) continue;
+    const header = allGridImages.value[headerIndex];
+    const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
+    const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
+    if (loaded !== false && expandedStackIds.value.has(stackId)) {
+      removeExpandedStackMembers(stackId);
+      const insertedCount = insertExpandedStackMembers(stackId, fallbackCount);
+      if (insertedCount <= 0) {
+        const nextExpanded = new Set(expandedStackIds.value);
+        nextExpanded.delete(stackId);
+        expandedStackIds.value = nextExpanded;
+      }
+    }
   }
 }
 
@@ -3371,9 +3428,14 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
       .filter((img) => img && img.id != null)
       .map((img) => [getPictureId(img.id), img]),
   );
+  // Keep the existing grid header image as slot-0: it already has the right
+  // thumbnail and idx. The backend may return a different first member
+  // depending on the active sort (e.g. SCORE ASC returns the lowest-score
+  // member first, not the leader shown in the collapsed grid). Spreading header
+  // last ensures its id/thumbnail are never overwritten by the backend response.
   const expandedHeader = expanded[0];
   const mergedHeader = hydrateGridImage(
-    { ...header, ...expandedHeader, stackCount },
+    { ...expandedHeader, ...header, stackCount },
     0,
     existingById,
   );
@@ -3551,12 +3613,28 @@ async function ensureStackMembersLoaded(stackId, expectedCount = null) {
     nextLoading.add(stackId);
     expandedStackLoading.value = nextLoading;
     try {
-      const picsRes = await apiClient.get(
-        `${props.backendUrl}/stacks/${stackId}/pictures?fields=grid`,
+      const stackUrl = new URL(
+        `${props.backendUrl}/stacks/${stackId}/pictures`,
       );
+      stackUrl.searchParams.set("fields", "grid");
+      const activeSort = props.selectedSort ?? "";
+      const isStackSort = !activeSort || activeSort === STACKS_SORT_KEY;
+      if (activeSort) {
+        stackUrl.searchParams.set("sort", activeSort);
+      }
+      if (typeof props.selectedDescending === "boolean") {
+        stackUrl.searchParams.set(
+          "descending",
+          props.selectedDescending ? "true" : "false",
+        );
+      }
+      const picsRes = await apiClient.get(stackUrl.toString());
       const picsData = await picsRes.data;
       const pics = Array.isArray(picsData) ? picsData : [];
-      const sorted = sortStackMembers(pics);
+      // When a real sort is active the backend already ordered the members;
+      // only fall back to client-side stack-order sorting for PICTURE_STACKS
+      // or when no sort is selected.
+      const sorted = isStackSort ? sortStackMembers(pics) : pics;
       const ordered = sorted
         .filter((img) => img && img.id != null)
         .map((img) =>
@@ -4414,26 +4492,13 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
   try {
     let images = [];
     let ids = [];
-    // If a set is selected, use /picture_sets/{id}
-    if (
-      props.selectedSet &&
-      props.selectedSet !== props.allPicturesId &&
-      props.selectedSet !== props.unassignedPicturesId &&
-      !(props.searchQuery && props.searchQuery.trim())
-    ) {
-      const params = buildPictureIdsQueryParams();
-      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${
-        params ? `?${params}` : ""
-      }`;
-      const res = await apiClient.get(url);
-      const data = await res.data;
-      images = data.pictures ? data.pictures.slice(start, end) : [];
-      ids = images.map((img) => img.id);
-    } else {
-      // Only fetch if we don't already have metadata for this range
-      images = allGridImages.value.slice(start, end);
-      ids = images.map((img) => img.id);
-    }
+    // Use allGridImages directly regardless of whether we're in a picture-set
+    // view. The picture-set endpoint returns a flat leader-only list and
+    // doesn't know about expanded stack members; slicing it with absolute
+    // indices would overwrite expanded members with wrong images and leave
+    // placeholder thumbnails permanently broken.
+    images = allGridImages.value.slice(start, end);
+    ids = images.map((img) => img.id);
     // Prepare grid image objects
     const gridImages = images.map((img, idx) => ({
       ...img,
@@ -4568,6 +4633,10 @@ function updateVisibleThumbnails() {
   if (shouldSuppressVisibleWindowFetch(start, end)) {
     return;
   }
+
+  // Lazily load members for expanded stacks that have scrolled into view.
+  void loadExpandedStacksInView();
+
   if (rangeCovers(loadedRanges.value, start, end)) return;
   if (rangeCovers(pendingRanges, start, end)) return;
 
