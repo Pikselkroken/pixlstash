@@ -18,209 +18,13 @@ PixlStash runs on your machine and serves the UI at a local web address.
 
 ## Install PixlStash
 
-Choose one installation method.
+<p align="center">
+  <a href="https://pixlstash.dev/install.html">
+    <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
+  </a>
+</p>
 
-### Option 1: Windows installer
-
-Use this if you want the easiest setup on Windows.
-
-1. Go to the GitHub Releases page for this repository.
-2. Download the latest Windows installer `.exe`.
-3. Run the installer.
-4. Start PixlStash Server from the Start Menu shortcut.
-5. Open your browser to `http://localhost:9537`.
-
-> **Windows SmartScreen warning:** Because the installer is not yet signed with a paid code-signing certificate, Windows SmartScreen may show a red "Windows protected your PC" dialog when you run it. This is expected. Click **More info** and then **Run anyway** to proceed with the installation.
->
-> <img src="website/assets/SmartScreen.png" alt="Windows SmartScreen – click More info then Run anyway" width="420"/>
-
-## Option 2: Install from PyPI
-
-Use this if you already have Python and want a pip install.
-
-NOTE: You really, really should do this in a virtual environment:
-
-```bash
-python -m venv venv
-. venv/bin/activate
-```
-
-Requirements:
-
-- Python 3.10 or newer
-
-Install:
-
-```bash
-pip install pixlstash
-```
-
-Run:
-
-```bash
-pixlstash-server
-```
-
-Then open:
-
-```text
-http://localhost:9537
-```
-
-## Option 3: Clone and run manually
-
-Use this if you want to run from source.
-
-Requirements:
-
-- Python 3.10 or newer
-- Node.js 20 or newer
-- npm
-
-Steps:
-
-```bash
-git clone https://github.com/pikselkroken/pixlstash.git
-cd pixlstash
-
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-# source .venv/bin/activate
-
-pip install --upgrade pip
-pip install -e .
-
-cd frontend
-npm ci
-npm run build
-cd ..
-
-pixlstash-server
-```
-
-Then open:
-
-```text
-http://localhost:9537
-```
-
-## Option 4: Docker (GPU — Linux / WSL2 on Windows)
-
-Use this if you want a fully self-contained container with CUDA support. A pre-built image is published to the GitHub Container Registry on every release — no clone required.
-
-### Prerequisites
-
-#### On Linux (native Docker)
-
-1. Install [Docker Engine](https://docs.docker.com/engine/install/).
-2. Install the NVIDIA Container Toolkit:
-
-```bash
-distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
-    | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -sL "https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list" \
-    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
-    | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
-
-3. Verify GPU access:
-
-```bash
-docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
-```
-
-#### On Windows (WSL2)
-
-1. Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) with Ubuntu 24.04.
-2. Install an NVIDIA Windows driver ≥ 525 from [nvidia.com/drivers](https://www.nvidia.com/drivers) — **do not** install a driver inside WSL2 itself; the Windows driver is shared automatically.
-3. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) with the **WSL2 backend** enabled, or install Docker Engine directly inside WSL2 as per the Linux steps above.
-4. Install the NVIDIA Container Toolkit inside your WSL2 distro (same commands as the Linux section above).
-5. Verify GPU access from WSL2:
-
-```bash
-docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
-```
-
-### Run (pre-built image — recommended)
-
-Pull and start the container:
-
-```bash
-docker run -d \
-  --runtime nvidia \
-  -e NVIDIA_VISIBLE_DEVICES=all \
-  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-  -e PIXLSTASH_HOST=0.0.0.0 \
-  -p 9537:9537 \
-  -v pixlstash-home:/home/pixlstash \
-  --name pixlstash \
-  ghcr.io/pikselkroken/pixlstash:latest
-```
-
-Open `http://localhost:9537` in your browser.
-
-All data (images, database, config, downloaded models) is stored in the `pixlstash-home` named volume and persists across restarts.
-
-To update to the latest release:
-
-```bash
-docker pull ghcr.io/pikselkroken/pixlstash:latest
-docker rm -f pixlstash
-# re-run the docker run command above
-```
-
-To pin to a specific release, replace `latest` with a version tag, e.g. `ghcr.io/pikselkroken/pixlstash:0.9.1`.
-
-#### Optional: docker-compose.yml
-
-If you prefer Compose for easier management:
-
-```yaml
-services:
-  pixlstash:
-    image: ghcr.io/pikselkroken/pixlstash:latest
-    runtime: nvidia
-    ports:
-      - "9537:9537"
-    volumes:
-      - pixlstash-home:/home/pixlstash
-    environment:
-      PIXLSTASH_HOST: "0.0.0.0"
-      PIXLSTASH_PORT: "9537"
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    restart: unless-stopped
-
-volumes:
-  pixlstash-home:
-```
-
-```bash
-docker compose up -d
-# To update:
-docker compose pull && docker compose up -d
-```
-
-### Run (build from source)
-
-Use this if you need a custom build or want to run unreleased changes.
-
-```bash
-git clone https://github.com/pikselkroken/pixlstash.git
-cd pixlstash
-
-docker compose up --build
-```
-
-Then open `http://localhost:9537`.
-
-
+Detailed installation instructions on <a href="http://pixlstash.dev/install.html">pixlstash.dev</a>.
 
 
 ## First run and data location
@@ -333,67 +137,41 @@ Example:
   "generate_thumbnails_on_startup": true
 }
 ```
-## Installing CUDA 12.8 for GPU Acceleration (Windows & Linux)
 
-PixlStash can run fully on CPU, but GPU acceleration requires **CUDA 12.8** plus the corresponding CUDA-enabled PyTorch and ONNX Runtime packages.
+## Upgrade PixlStash
 
-1. Install or update your NVIDIA driver (must support CUDA 12.x).
-2. Install the CUDA Toolkit for your distribution from NVIDIA’s CUDA downloads page. [1](https://developer.nvidia.com/cuda-toolkit-archive)
-3. Verify installation:  
-   ```bash
-   nvcc --version
-   nvidia-smi
-   ```
-4. Install PyTorch with CUDA 12.8 (from the pixlstash install folder):
-   ```bash
-   venv\Scripts\Activate
-   pip install torch torchvision --force-reinstall --index-url https://download.pytorch.org/whl/cu128
-   ```  
-   
-6. Install ONNX Runtime GPU:  
-   ```bash
-   pip uninstall -y onnxruntime
-   pip install onnxruntime-gpu
-   ```
+<p align="center">
+  <a href="https://pixlstash.dev/upgrade.html">
+    <img src="website/assets/upgrade-banner.svg" alt="Upgrade PixlStash" width="320"/>
+  </a>
+</p>
 
-### Verify GPU availability
+Detailed installation instructions on <a href="http://pixlstash.dev/upgrade.html">pixlstash.dev</a>.
 
-#### Linux
+## Installing plugins
 
-```bash
-python - <<EOF
-import torch
-print("CUDA available:", torch.cuda.is_available())
-EOF
-```
+PixlStash supports built-in plugins and user-created plugins.
 
-#### Windows
-```powershell
-py -c "import torch; print('CUDA available:', torch.cuda.is_available()); \
-print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
-```
+### User plugin directory
 
+Place your `.py` plugin files in the platform-specific user data directory. PixlStash logs the exact path on startup.
 
-## Updating PixlStash
+| OS | Path |
+|----|------|
+| **Linux** | `~/.local/share/pixlstash/image-plugins/user/` |
+| **macOS** | `~/Library/Application Support/pixlstash/image-plugins/user/` |
+| **Windows** | `%LOCALAPPDATA%\pixlstash\image-plugins\user\` |
 
-### PyPI install
+### Writing a plugin
 
-```bash
-pip install --upgrade pixlstash
-```
+Use the template from `pixlstash/image_plugins/built-in/plugin_template.py` in the source repository as a starting point:
 
-### Source install
+1. Create a new `.py` file in your user plugin directory.
+2. Subclass `ImagePlugin`, set a unique `name` and `plugin_id`, and implement `run()`.
+3. Restart PixlStash Server — plugins are loaded at startup.
 
-Pull latest changes, rebuild frontend, and reinstall:
+`plugin_template.py` is ignored by plugin discovery and will not be loaded as a plugin.
 
-```bash
-git pull
-cd frontend
-npm ci
-npm run build
-cd ..
-pip install -e .
-```
 
 ## Troubleshooting
 
@@ -422,26 +200,3 @@ Expected output should include `CUDAExecutionProvider`.
 
 If you prefer CPU mode, set `"default_device": "cpu"` in `server-config.json`.
 
-## Installing plugins
-
-PixlStash supports built-in plugins and user-created plugins.
-
-### User plugin directory
-
-Place your `.py` plugin files in the platform-specific user data directory. PixlStash logs the exact path on startup.
-
-| OS | Path |
-|----|------|
-| **Linux** | `~/.local/share/pixlstash/image-plugins/user/` |
-| **macOS** | `~/Library/Application Support/pixlstash/image-plugins/user/` |
-| **Windows** | `%LOCALAPPDATA%\pixlstash\image-plugins\user\` |
-
-### Writing a plugin
-
-Use the template from `pixlstash/image_plugins/built-in/plugin_template.py` in the source repository as a starting point:
-
-1. Create a new `.py` file in your user plugin directory.
-2. Subclass `ImagePlugin`, set a unique `name` and `plugin_id`, and implement `run()`.
-3. Restart PixlStash Server — plugins are loaded at startup.
-
-`plugin_template.py` is ignored by plugin discovery and will not be loaded as a plugin.
