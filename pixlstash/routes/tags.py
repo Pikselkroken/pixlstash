@@ -8,7 +8,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils import serialize_tag_objects
+from pixlstash.utils.service.caption_utils import serialize_tag_objects
 
 logger = get_logger(__name__)
 

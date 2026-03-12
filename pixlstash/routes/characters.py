@@ -23,7 +23,8 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.picture_scoring import select_reference_faces_for_character
-from pixlstash.utils import _normalize_hidden_tags, safe_model_dict
+from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+from pixlstash.utils.service.serialization_utils import safe_model_dict
 
 logger = get_logger(__name__)
 

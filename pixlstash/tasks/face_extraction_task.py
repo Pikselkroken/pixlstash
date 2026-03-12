@@ -9,15 +9,6 @@ from typing import List
 
 import cv2
 from insightface.app import FaceAnalysis
-
-# Suppress noisy FutureWarning from insightface's face_align.py about
-# SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
-# This is a third-party issue we cannot fix directly.
-warnings.filterwarnings(
-    "ignore",
-    category=FutureWarning,
-    module="insightface",
-)
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm.attributes import NO_VALUE
 from sqlmodel import select
@@ -30,6 +21,16 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
+
+# Suppress noisy FutureWarning from insightface's face_align.py about
+# SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
+# This warning is triggered at FaceAnalysis initialization time, not import time,
+# so suppressing it here (after imports) is safe.
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module="insightface",
+)
 
 
 logger = get_logger(__name__)

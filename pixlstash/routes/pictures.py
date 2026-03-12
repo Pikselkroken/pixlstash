@@ -54,12 +54,12 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
-from pixlstash.utils import (
-    safe_model_dict,
-    serialize_tag_objects,
+from pixlstash.utils.service.caption_utils import (
     _normalize_hidden_tags,
-    _deduplicate_by_stack,
+    serialize_tag_objects,
 )
+from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
 from pixlstash.tasks import TaskType
 
 logger = get_logger(__name__)

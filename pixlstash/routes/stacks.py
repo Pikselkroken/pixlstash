@@ -13,8 +13,8 @@ from pixlstash.picture_scoring import (
     prepare_smart_score_inputs,
 )
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
+from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils import safe_model_dict
 
 logger = get_logger(__name__)
 

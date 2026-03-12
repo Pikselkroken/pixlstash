@@ -22,7 +22,10 @@ from sqlmodel import Session
 from pixlstash.database import DBPriority
 from pixlstash.db_models import User
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils import apply_user_config_patch, serialize_user_config
+from pixlstash.utils.service.config_utils import (
+    apply_user_config_patch,
+    serialize_user_config,
+)
 
 logger = get_logger(__name__)
 

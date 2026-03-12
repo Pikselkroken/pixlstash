@@ -20,9 +20,12 @@ from pixlstash.db_models import (
     Tag,
     User,
 )
-from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
+from pixlstash.utils.quality.smart_score_utils import (
+    SmartScoreUtils,
+    _smart_score_penalised_tags,
+)
+from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils import _smart_score_penalised_tags, safe_model_dict
 
 logger = get_logger(__name__)
 

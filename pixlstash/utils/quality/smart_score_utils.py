@@ -1,5 +1,6 @@
 """Smart score calculation utilities."""
 
+import json
 from typing import List, Optional
 
 import numpy as np
@@ -7,6 +8,69 @@ import numpy as np
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _smart_score_penalised_tags(
+    value,
+    fallback=None,
+    allow_empty: bool = False,
+    default_weight: int = 3,
+):
+    """Parse and normalise a smart-score penalised-tags value.
+
+    Args:
+        value: Raw value (JSON string, list, or dict).
+        fallback: Returned when value is None or unparseable.
+        allow_empty: If True, return an empty dict instead of fallback when the
+            parsed result is empty.
+        default_weight: Weight assigned to tags given as a plain list.
+
+    Returns:
+        A dict mapping lowercase tag name to int weight (1-5), or fallback.
+    """
+    if value is None:
+        return fallback
+
+    tags = None
+    if isinstance(value, str):
+        try:
+            tags = json.loads(value)
+        except Exception:
+            return fallback
+    else:
+        tags = value
+
+    if isinstance(tags, list):
+        d = {}
+        for tag in tags:
+            if tag is None:
+                continue
+            clean = str(tag).strip().lower()
+            if not clean:
+                continue
+            d[clean] = default_weight
+    elif isinstance(tags, dict):
+        d = {}
+        for tag, weight in tags.items():
+            if tag is None:
+                continue
+            clean = str(tag).strip().lower()
+            if not clean:
+                continue
+            try:
+                weight_value = int(float(weight))
+            except (TypeError, ValueError):
+                weight_value = default_weight
+            weight_value = max(1, min(5, weight_value))
+            existing = d.get(clean)
+            if existing is None or weight_value > existing:
+                d[clean] = weight_value
+    else:
+        return fallback
+
+    if d:
+        return d
+    return {} if allow_empty else fallback
 
 
 class SmartScoreUtils:

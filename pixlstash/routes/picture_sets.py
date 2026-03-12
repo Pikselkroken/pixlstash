@@ -26,11 +26,9 @@ from pixlstash.picture_scoring import (
     get_smart_score_penalised_tags_from_request,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils import (
-    safe_model_dict,
-    _normalize_hidden_tags,
-    _deduplicate_by_stack,
-)
+from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
 
 logger = get_logger(__name__)
 
