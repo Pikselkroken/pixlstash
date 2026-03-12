@@ -6,6 +6,7 @@
 from typing import Optional
 import open_clip
 import csv
+import json
 import numpy as np
 import onnxruntime as ort
 import os
@@ -77,8 +78,10 @@ GENERAL_THRESHOLD = 0.8
 UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 CUSTOM_TAGGER_HF_REPO = "PersonalJeebus/pixlvault-anomaly-tagger"
-CUSTOM_TAGGER_FILENAME = "best.pt"
-CUSTOM_TAGGER_PATH = os.path.join(MODEL_DIR, "best.pt")
+CUSTOM_TAGGER_FILENAME = "pixlstash-anomaly-tagger.safetensors"
+CUSTOM_TAGGER_META_FILENAME = "pixlstash-anomaly-tagger_meta.json"
+CUSTOM_TAGGER_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.safetensors")
+CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta.json")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.75
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
 CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
@@ -167,6 +170,7 @@ class PictureTagger:
 
         logger.debug(f"PictureTagger initialised with device: {self._device}")
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
+        self._custom_tagger_meta_path = CUSTOM_TAGGER_META_PATH
         self._use_custom_tagger = True
         self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
@@ -196,9 +200,13 @@ class PictureTagger:
         self._custom_label_to_idx = None
         self._custom_transform = None
         self._custom_transform_cache = {}
-        if not os.path.isfile(self._custom_tagger_path):
+        if not os.path.isfile(self._custom_tagger_path) or not os.path.isfile(
+            self._custom_tagger_meta_path
+        ):
             self._download_custom_tagger()
-        if not os.path.isfile(self._custom_tagger_path):
+        if not os.path.isfile(self._custom_tagger_path) or not os.path.isfile(
+            self._custom_tagger_meta_path
+        ):
             logger.warning(
                 "Custom tagger not found at %s, skipping initialization.",
                 self._custom_tagger_path,
@@ -1251,17 +1259,25 @@ class PictureTagger:
             raise FileNotFoundError(
                 f"Custom tagger checkpoint not found: {self._custom_tagger_path}"
             )
-        checkpoint = torch.load(
-            self._custom_tagger_path, map_location=self._custom_device
-        )
-        labels = checkpoint.get("labels")
-        arch = checkpoint.get("arch", "convnext_base")
+        if not os.path.exists(self._custom_tagger_meta_path):
+            raise FileNotFoundError(
+                f"Custom tagger metadata not found: {self._custom_tagger_meta_path}"
+            )
+        with open(self._custom_tagger_meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        labels = meta.get("labels")
+        arch = meta.get("arch", "convnext_base")
         if not labels:
-            raise ValueError("Custom tagger checkpoint missing labels list.")
+            raise ValueError("Custom tagger metadata missing labels list.")
+        from safetensors.torch import load_file
+
+        state_dict = load_file(
+            self._custom_tagger_path, device=str(self._custom_device)
+        )
         self._custom_labels = labels
         self._custom_label_to_idx = {label: i for i, label in enumerate(labels)}
         self._custom_model = self._build_custom_tagger_model(arch, len(labels))
-        self._custom_model.load_state_dict(checkpoint["model_state_dict"])
+        self._custom_model.load_state_dict(state_dict)
         self._custom_model.to(self._custom_device)
         self._custom_model.eval()
         self._custom_transform_cache = {}
@@ -1315,7 +1331,7 @@ class PictureTagger:
         self._general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
 
     def _download_custom_tagger(self):
-        """Download the custom anomaly tagger weights from HuggingFace if not present locally."""
+        """Download the custom anomaly tagger weights and metadata from HuggingFace if not present locally."""
         try:
             from huggingface_hub import hf_hub_download
 
@@ -1325,6 +1341,11 @@ class PictureTagger:
             hf_hub_download(
                 repo_id=CUSTOM_TAGGER_HF_REPO,
                 filename=CUSTOM_TAGGER_FILENAME,
+                local_dir=dest_dir,
+            )
+            hf_hub_download(
+                repo_id=CUSTOM_TAGGER_HF_REPO,
+                filename=CUSTOM_TAGGER_META_FILENAME,
                 local_dir=dest_dir,
             )
             logger.info("Custom tagger downloaded to %s", self._custom_tagger_path)
