@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Install PixlStash</title>
+    <meta
+      name="description"
+      content="Install PixlStash — Windows installer, Docker, pip, or from source."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="pixlstash.css" />
+    <style>
+      /* ── install.html page-specific ── */
+
+      .shell {
+        max-width: 1000px;
+      }
+
+      /* ── Tabs ── */
+      .tab-bar {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 0;
+        border-bottom: 2px solid rgba(34, 38, 44, 0.1);
+        padding-bottom: 0;
+      }
+
+      .tab-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(255, 255, 255, 0.35);
+        border: 1px solid rgba(34, 38, 44, 0.15);
+        border-bottom: 3px solid transparent;
+        margin-bottom: -2px;
+        padding: 10px 18px;
+        font-family: var(--sans);
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text);
+        opacity: 0.6;
+        cursor: pointer;
+        border-radius: 10px 10px 0 0;
+        transition:
+          opacity 0.15s,
+          background 0.15s,
+          border-color 0.15s;
+      }
+
+      .tab-btn:hover {
+        background: rgba(255, 255, 255, 0.6);
+        opacity: 0.85;
+      }
+
+      .tab-btn.active {
+        color: var(--text);
+        opacity: 1;
+        border-color: rgba(34, 38, 44, 0.15);
+        border-bottom-color: var(--accent);
+        background: rgba(255, 255, 255, 0.92);
+      }
+
+      .tab-icon {
+        width: 22px;
+        height: 22px;
+        flex-shrink: 0;
+        display: block;
+      }
+
+      /* ── Tab panels ── */
+      .tab-panels {
+        background: var(--panel);
+        border-radius: 0 var(--radius-lg) var(--radius-lg) var(--radius-lg);
+        border: 1px solid rgba(34, 38, 44, 0.11);
+        border-top: none;
+        box-shadow: 0 8px 32px var(--shadow);
+        padding: 36px 32px;
+      }
+
+      .tab-panel {
+        display: none;
+      }
+
+      .tab-panel.active {
+        display: block;
+      }
+
+      /* ── Content pieces ── */
+      .section-title {
+        font-size: 1.35rem;
+        font-weight: 700;
+        margin: 0 0 6px;
+      }
+
+      .section-subtitle {
+        font-size: 0.9rem;
+        color: var(--muted);
+        margin: 0 0 28px;
+      }
+
+      .divider {
+        height: 1px;
+        background: rgba(34, 38, 44, 0.1);
+        margin: 28px 0;
+      }
+
+      .sub-heading {
+        font-size: 1rem;
+        font-weight: 700;
+        margin: 0 0 12px;
+        color: var(--text);
+      }
+
+      .cmd-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+      }
+
+      .cmd-row > div {
+        flex: 1;
+        min-width: 180px;
+      }
+
+      .cmd-row-label {
+        font-size: 0.73rem;
+        font-weight: 600;
+        color: var(--muted);
+        margin: 0 0 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .smartscreen-img {
+        display: block;
+        max-width: 420px;
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid rgba(34, 38, 44, 0.14);
+        box-shadow: 0 6px 20px var(--shadow);
+        margin-top: 10px;
+      }
+
+      @media (max-width: 700px) {
+        .tab-bar {
+          gap: 4px;
+        }
+
+        .tab-btn {
+          padding: 8px 12px;
+          font-size: 0.85rem;
+        }
+
+        .tab-panels {
+          padding: 24px 18px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <nav class="nav">
+        <a href="index.html" class="brand">
+          <img src="assets/logo.png" alt="PixlStash logo" />
+          <span class="brand-name">PixlStash</span>
+        </a>
+        <div class="nav-links">
+          <a href="index.html#features">Features</a>
+          <a href="index.html#workflows">Use cases</a>
+          <a href="upgrade.html">Upgrade</a>
+          <a href="https://github.com/pikselkroken/pixlstash">GitHub</a>
+        </div>
+      </nav>
+
+      <div class="page-hero">
+        <h1>Install PixlStash</h1>
+        <p>Pick the method that suits your setup and follow the steps below.</p>
+      </div>
+
+      <!-- Tab bar -->
+      <div class="tab-bar" role="tablist">
+        <button
+          class="tab-btn active"
+          role="tab"
+          aria-selected="true"
+          aria-controls="panel-windows"
+          data-tab="windows"
+        >
+          <svg
+            class="tab-icon"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M0 0h7v7H0zm9 0h7v7H9zM0 9h7v7H0zm9 0h7v7H9z" />
+          </svg>
+          Windows Installer
+        </button>
+        <button
+          class="tab-btn"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-docker"
+          data-tab="docker"
+        >
+          <img
+            class="tab-icon"
+            src="assets/docker-mark-black.svg"
+            alt=""
+            aria-hidden="true"
+          />
+          Docker
+        </button>
+        <button
+          class="tab-btn"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-pip"
+          data-tab="pip"
+        >
+          <svg
+            class="tab-icon"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M8 1v8"
+              stroke="currentColor"
+              stroke-width="1.6"
+              fill="none"
+              stroke-linecap="round"
+            />
+            <path
+              d="M5 6.5 8 10l3-3.5"
+              stroke="currentColor"
+              stroke-width="1.6"
+              fill="none"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <rect
+              x="2"
+              y="11"
+              width="12"
+              height="3"
+              rx="1"
+              fill="currentColor"
+            />
+          </svg>
+          pip + venv
+        </button>
+        <button
+          class="tab-btn"
+          role="tab"
+          aria-selected="false"
+          aria-controls="panel-source"
+          data-tab="source"
+        >
+          <svg
+            class="tab-icon"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              d="M5 3 1.5 8 5 13M11 3l3.5 5L11 13"
+              stroke="currentColor"
+              stroke-width="1.7"
+              fill="none"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          From Source
+        </button>
+      </div>
+
+      <!-- Tab panels -->
+      <div class="tab-panels">
+        <!-- ── Windows ── -->
+        <div class="tab-panel active" id="panel-windows" role="tabpanel">
+          <p class="section-title">Windows Installer</p>
+          <p class="section-subtitle">
+            The easiest way to get started on Windows — no Python or Node.js
+            required.
+          </p>
+
+          <div class="method-steps">
+            <div class="step">
+              <span class="step-label">1 — Download the installer</span>
+              <p class="step-note">
+                Go to the
+                <a
+                  href="https://github.com/pikselkroken/pixlstash/releases/latest"
+                  target="_blank"
+                  rel="noopener"
+                  >latest release on GitHub</a
+                >
+                and download the <code>.exe</code> installer.
+              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label">2 — Run the installer</span>
+              <p class="step-note">
+                Double-click the downloaded <code>.exe</code> and follow the
+                prompts.
+              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label">3 — Start PixlStash</span>
+              <p class="step-note">
+                Use the <strong>PixlStash Server</strong> shortcut in the Start
+                Menu, then open your browser to:
+              </p>
+              <div class="cmd-block">
+                <code>http://localhost:9537</code>
+                <button class="copy-btn" data-copy="http://localhost:9537">
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="step">
+              <p class="sub-heading">⚠️ Windows SmartScreen warning</p>
+              <p class="step-note">
+                Because the installer is not yet signed with a paid code-signing
+                certificate, Windows SmartScreen may show a red
+                <em>"Windows protected your PC"</em> dialog. This is expected.
+                Click <strong>More info</strong> and then
+                <strong>Run anyway</strong> to proceed.
+              </p>
+              <img
+                class="smartscreen-img"
+                src="assets/SmartScreen.png"
+                alt="Windows SmartScreen – click More info then Run anyway"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Docker ── -->
+        <div class="tab-panel" id="panel-docker" role="tabpanel">
+          <p class="section-title">Docker</p>
+          <p class="section-subtitle">
+            A pre-built image is published to the GitHub Container Registry on
+            every release — no clone required. Works on Linux, MacOS, and
+            Windows. AI inference runs on CPU by default; GPU is optional.
+          </p>
+
+          <div class="method-steps">
+            <div class="step">
+              <span class="step-label">Requirement: Install Docker</span>
+              <p class="step-note">
+                Download and install
+                <a
+                  href="https://docs.docker.com/get-started/get-docker/"
+                  target="_blank"
+                  rel="noopener"
+                  >Docker Desktop</a
+                >
+                (Windows / macOS) or
+                <a
+                  href="https://docs.docker.com/engine/install/"
+                  target="_blank"
+                  rel="noopener"
+                  >Docker Engine</a
+                >
+                (Linux).
+              </p>
+            </div>
+
+            <div class="method-info">
+              ⚡ <strong>Just want to try it?</strong> Run this one command — no
+              data is saved after you stop it (CPU inference only):
+              <div class="cmd-block" style="margin-top: 10px">
+                <code
+                  >docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537
+                  ghcr.io/pikselkroken/pixlstash:latest</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537 ghcr.io/pikselkroken/pixlstash:latest"
+                >
+                  Copy
+                </button>
+              </div>
+              Press Ctrl+C to stop. Everything is discarded when the container
+              exits.
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="step">
+              <span class="step-label">2 — Pull and start the container</span>
+              <div class="cmd-block">
+                <code
+                  >docker run -d \ -e PIXLSTASH_HOST=0.0.0.0 \ -p 9537:9537 \ -v
+                  pixlstash-home:/home/pixlstash \ --name pixlstash \
+                  ghcr.io/pikselkroken/pixlstash:latest</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="docker run -d \
+  -e PIXLSTASH_HOST=0.0.0.0 \
+  -p 9537:9537 \
+  -v pixlstash-home:/home/pixlstash \
+  --name pixlstash \
+  ghcr.io/pikselkroken/pixlstash:latest"
+                >
+                  Copy
+                </button>
+              </div>
+              <p class="step-note">
+                All data is stored in the <code>pixlstash-home</code> named
+                volume and persists across restarts.
+              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label">3 — Open in browser</span>
+              <div class="cmd-block">
+                <code>http://localhost:9537</code>
+                <button class="copy-btn" data-copy="http://localhost:9537">
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="method-info">
+              💡 To pin to a specific release, replace <code>latest</code> with
+              a version tag, e.g.
+              <code>ghcr.io/pikselkroken/pixlstash:0.9.1</code>.
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="step">
+              <p class="sub-heading">Optional: docker-compose.yml</p>
+              <div class="cmd-block">
+                <code
+                  >services: pixlstash: image:
+                  ghcr.io/pikselkroken/pixlstash:latest ports: - "9537:9537"
+                  volumes: - pixlstash-home:/home/pixlstash environment:
+                  PIXLSTASH_HOST: "0.0.0.0" restart: unless-stopped volumes:
+                  pixlstash-home:</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy='services:
+  pixlstash:
+    image: ghcr.io/pikselkroken/pixlstash:latest
+    ports:
+      - "9537:9537"
+    volumes:
+      - pixlstash-home:/home/pixlstash
+    environment:
+      PIXLSTASH_HOST: "0.0.0.0"
+    restart: unless-stopped
+
+volumes:
+  pixlstash-home:'
+                >
+                  Copy
+                </button>
+              </div>
+              <div class="cmd-block" style="margin-top: 6px">
+                <code>docker compose up -d</code>
+                <button class="copy-btn" data-copy="docker compose up -d">
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="step">
+              <p class="sub-heading">
+                To enable GPU inference with NVIDIA (Linux / WSL2)
+              </p>
+              <p class="step-note">
+                Skip this section if you are happy with CPU inference. To use
+                your NVIDIA GPU, first install the
+                <strong>NVIDIA Container Toolkit</strong>:
+              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label"
+                >Install NVIDIA Container Toolkit (Linux)</span
+              >
+              <div class="cmd-block">
+                <code
+                  >distribution=$(. /etc/os-release; echo $ID$VERSION_ID) curl
+                  -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \ |
+                  sudo gpg --dearmor -o
+                  /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg curl
+                  -sL
+                  "https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list"
+                  \ | sed 's#deb https://#deb
+                  [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg]
+                  https://#g' \ | sudo tee
+                  /etc/apt/sources.list.d/nvidia-container-toolkit.list sudo
+                  apt-get update &amp;&amp; sudo apt-get install -y
+                  nvidia-container-toolkit sudo nvidia-ctk runtime configure
+                  --runtime=docker sudo systemctl restart docker</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+    | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -sL &quot;https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list&quot; \
+    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+    | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker"
+                >
+                  Copy
+                </button>
+              </div>
+              <p class="step-note">
+                On Windows, install
+                <a
+                  href="https://learn.microsoft.com/en-us/windows/wsl/install"
+                  target="_blank"
+                  rel="noopener"
+                  >WSL2</a
+                >
+                with an NVIDIA Windows driver ≥ 525, then run the same commands
+                inside your WSL2 distro.
+              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label">Verify GPU access</span>
+              <div class="cmd-block">
+                <code
+                  >docker run --rm --gpus all
+                  nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">Run the container with GPU support</span>
+              <div class="cmd-block">
+                <code
+                  >docker run -d \ --runtime nvidia \ -e
+                  NVIDIA_VISIBLE_DEVICES=all \ -e
+                  NVIDIA_DRIVER_CAPABILITIES=compute,utility \ -e
+                  PIXLSTASH_HOST=0.0.0.0 \ -p 9537:9537 \ -v
+                  pixlstash-home:/home/pixlstash \ --name pixlstash \
+                  ghcr.io/pikselkroken/pixlstash:latest</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="docker run -d \
+  --runtime nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+  -e PIXLSTASH_HOST=0.0.0.0 \
+  -p 9537:9537 \
+  -v pixlstash-home:/home/pixlstash \
+  --name pixlstash \
+  ghcr.io/pikselkroken/pixlstash:latest"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── pip + venv ── -->
+        <div class="tab-panel" id="panel-pip" role="tabpanel">
+          <p class="section-title">pip + Virtual Environment</p>
+          <p class="section-subtitle">
+            Install from PyPI. Requires Python 3.10 or newer. Using a virtual
+            environment is strongly recommended.
+          </p>
+
+          <div class="method-steps">
+            <div class="step">
+              <span class="step-label"
+                >1 — Create and activate a virtual environment</span
+              >
+              <div class="cmd-block">
+                <code>python -m venv venv</code>
+                <button class="copy-btn" data-copy="python -m venv venv">
+                  Copy
+                </button>
+              </div>
+              <div class="cmd-row">
+                <div>
+                  <p class="cmd-row-label">Linux / macOS</p>
+                  <div class="cmd-block">
+                    <code>source venv/bin/activate</code>
+                    <button
+                      class="copy-btn"
+                      data-copy="source venv/bin/activate"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <p class="cmd-row-label">Windows</p>
+                  <div class="cmd-block">
+                    <code>venv\Scripts\activate</code>
+                    <button class="copy-btn" data-copy="venv\Scripts\activate">
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">2 — Install PixlStash</span>
+              <div class="cmd-block">
+                <code>pip install pixlstash</code>
+                <button class="copy-btn" data-copy="pip install pixlstash">
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">3 — Start the server</span>
+              <div class="cmd-block">
+                <code>pixlstash-server</code>
+                <button class="copy-btn" data-copy="pixlstash-server">
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">4 — Open in browser</span>
+              <div class="cmd-block">
+                <code>http://localhost:9537</code>
+                <button class="copy-btn" data-copy="http://localhost:9537">
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="method-info">
+              💡 On first startup PixlStash downloads AI model weights (several
+              hundred MB). An internet connection is required this first time —
+              subsequent starts use the cached models.
+            </div>
+          </div>
+        </div>
+
+        <!-- ── From source ── -->
+        <div class="tab-panel" id="panel-source" role="tabpanel">
+          <p class="section-title">Clone &amp; Run from Source</p>
+          <p class="section-subtitle">
+            Run directly from the Git repository. Requires Python 3.10+, Node.js
+            20+, and npm.
+          </p>
+
+          <div class="method-steps">
+            <div class="step">
+              <span class="step-label">1 — Clone the repository</span>
+              <div class="cmd-block">
+                <code
+                  >git clone https://github.com/pikselkroken/pixlstash.git cd
+                  pixlstash</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="git clone https://github.com/pikselkroken/pixlstash.git
+cd pixlstash"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label"
+                >2 — Create and activate a virtual environment</span
+              >
+              <div class="cmd-block">
+                <code>python -m venv venv</code>
+                <button class="copy-btn" data-copy="python -m venv venv">
+                  Copy
+                </button>
+              </div>
+              <div class="cmd-row">
+                <div>
+                  <p class="cmd-row-label">Linux / macOS</p>
+                  <div class="cmd-block">
+                    <code>source venv/bin/activate</code>
+                    <button
+                      class="copy-btn"
+                      data-copy="source venv/bin/activate"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <p class="cmd-row-label">Windows</p>
+                  <div class="cmd-block">
+                    <code>venv\Scripts\activate</code>
+                    <button class="copy-btn" data-copy="venv\Scripts\activate">
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">3 — Install Python dependencies</span>
+              <div class="cmd-block">
+                <code>pip install --upgrade pip pip install -e .</code>
+                <button
+                  class="copy-btn"
+                  data-copy="pip install --upgrade pip
+pip install -e ."
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">4 — Build the frontend</span>
+              <div class="cmd-block">
+                <code>cd frontend && npm ci && npm run build && cd ..</code>
+                <button
+                  class="copy-btn"
+                  data-copy="cd frontend
+npm ci
+npm run build
+cd .."
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">5 — Start the server</span>
+              <div class="cmd-block">
+                <code>pixlstash-server</code>
+                <button class="copy-btn" data-copy="pixlstash-server">
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">6 — Open in browser</span>
+              <div class="cmd-block">
+                <code>http://localhost:9537</code>
+                <button class="copy-btn" data-copy="http://localhost:9537">
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="method-info">
+              💡 On first startup PixlStash downloads AI model weights (several
+              hundred MB). An internet connection is required this first time —
+              subsequent starts use the cached models.
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- /tab-panels -->
+
+      <div class="page-footer">
+        <p>
+          Already installed?
+          <a href="upgrade.html">See how to upgrade PixlStash</a>
+          &nbsp;·&nbsp;
+          <a href="index.html">Back to PixlStash home</a>
+        </p>
+      </div>
+    </div>
+
+    <script>
+      // Tab switching
+      const tabBtns = document.querySelectorAll(".tab-btn");
+      const tabPanels = document.querySelectorAll(".tab-panel");
+
+      tabBtns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const target = btn.dataset.tab;
+
+          tabBtns.forEach((b) => {
+            b.classList.remove("active");
+            b.setAttribute("aria-selected", "false");
+          });
+          tabPanels.forEach((p) => p.classList.remove("active"));
+
+          btn.classList.add("active");
+          btn.setAttribute("aria-selected", "true");
+          document.getElementById("panel-" + target).classList.add("active");
+        });
+      });
+
+      // Sync <code> display from data-copy so formatters can't mangle it
+      document.querySelectorAll(".cmd-block").forEach((block) => {
+        const code = block.querySelector("code");
+        const btn = block.querySelector(".copy-btn[data-copy]");
+        if (code && btn) code.textContent = btn.dataset.copy;
+      });
+
+      // Copy buttons
+      document.querySelectorAll(".copy-btn[data-copy]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          navigator.clipboard.writeText(btn.dataset.copy).then(() => {
+            const original = btn.textContent;
+            btn.textContent = "Copied!";
+            btn.classList.add("copied");
+            setTimeout(() => {
+              btn.textContent = original;
+              btn.classList.remove("copied");
+            }, 2000);
+          });
+        });
+      });
+
+      // Activate tab from URL hash, e.g. install.html#docker
+      const hash = location.hash.replace("#", "");
+      if (hash) {
+        const btn = document.querySelector(`.tab-btn[data-tab="${hash}"]`);
+        if (btn) btn.click();
+      }
+    </script>
+  </body>
+</html>

@@ -14,101 +14,22 @@
       href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <link rel="stylesheet" href="pixlstash.css" />
     <style>
-      :root {
-        --bg: #d3d5d7;
-        --bg-2: #d3d5d7;
-        --panel: rgba(255, 255, 255, 0.94);
-        --panel-strong: rgba(225, 229, 235, 0.9);
-        --text: #393f46;
-        --muted: rgba(57, 63, 70, 0.7);
-        --accent: #8ea604;
-        --accent-2: #7f8f1a;
-        --accent-3: #2f8b5f;
-        --warning: #c4942f;
-        --shadow: rgba(17, 20, 26, 0.18);
-        --toolbar: #696f76;
-        --toolbar-text: #f2f5fa;
-        --mono: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
-        --sans: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
-        --radius-lg: 22px;
-        --radius-md: 14px;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        font-family: var(--sans);
-        color: var(--text);
-        background:
-          radial-gradient(
-            circle at 15% 10%,
-            rgba(159, 177, 31, 0.18),
-            transparent 45%
-          ),
-          radial-gradient(
-            circle at 85% 0%,
-            rgba(47, 139, 95, 0.16),
-            transparent 40%
-          ),
-          linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
-        min-height: 100vh;
-      }
-
-      a {
-        color: inherit;
-        text-decoration: none;
-      }
+      /* ── index.html overrides & page-specific ── */
 
       .shell {
         max-width: 1320px;
-        margin: 0 auto;
         padding: 8px 20px 12px;
-      }
-
-      .nav {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 20px;
-        background: var(--toolbar);
-        color: var(--toolbar-text);
-        padding: 14px 18px;
-        border-radius: 16px;
-        box-shadow: 0 16px 34px rgba(17, 20, 26, 0.12);
-      }
-
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        font-weight: 600;
-        font-size: 1.1rem;
-        color: var(--toolbar-text);
       }
 
       .brand img {
         width: 64px;
         height: 64px;
-        object-fit: contain;
       }
 
       .brand-name {
-        font-family: "Press Start 2P", monospace;
         font-size: 1.35rem;
-        letter-spacing: 0.02em;
-        color: var(--toolbar-text);
-      }
-
-      .nav-links {
-        display: flex;
-        align-items: center;
-        gap: 18px;
-        font-size: 0.95rem;
-        color: var(--toolbar-text);
       }
 
       .nav-actions {
@@ -217,10 +138,6 @@
       }
 
       .download-sub:hover {
-        color: var(--accent);
-      }
-
-      .nav-links a:hover {
         color: var(--accent);
       }
 
@@ -712,17 +629,6 @@
           padding: 8px 14px 12px;
         }
 
-        .nav {
-          flex-direction: column;
-          align-items: flex-start;
-          gap: 12px;
-        }
-
-        .nav-links {
-          flex-wrap: wrap;
-          gap: 12px;
-        }
-
         .download-wrap {
           align-items: flex-start;
         }
@@ -766,6 +672,7 @@
           <a href="#features">Features</a>
           <a href="#workflows">Use cases</a>
           <a href="#api">API</a>
+          <a href="install.html">Install</a>
           <a href="https://github.com/pikselkroken/pixlstash">GitHub</a>
         </div>
         <div class="nav-actions">
