@@ -19,7 +19,7 @@
       /* ── install.html page-specific ── */
 
       .shell {
-        max-width: 1000px;
+        max-width: 1200px;
       }
 
       /* ── Tabs ── */
@@ -175,8 +175,11 @@
         <div class="nav-links">
           <a href="index.html#features">Features</a>
           <a href="index.html#workflows">Use cases</a>
-          <a href="upgrade.html">Upgrade</a>
+          <a href="index.html#api">API</a>
           <a href="https://github.com/pikselkroken/pixlstash">GitHub</a>
+        </div>
+        <div class="nav-actions">
+          <a class="download-btn" href="upgrade.html">Upgrade guide</a>
         </div>
       </nav>
 
@@ -362,75 +365,92 @@
 
           <div class="method-steps">
             <div class="step">
-              <span class="step-label">Requirement: Install Docker</span>
-              <p class="step-note">
-                Download and install
-                <a
-                  href="https://docs.docker.com/get-started/get-docker/"
-                  target="_blank"
-                  rel="noopener"
-                  >Docker Desktop</a
-                >
-                (Windows / macOS) or
-                <a
-                  href="https://docs.docker.com/engine/install/"
-                  target="_blank"
-                  rel="noopener"
-                  >Docker Engine</a
-                >
-                (Linux).
-              </p>
-            </div>
-
-            <div class="method-info">
-              ⚡ <strong>Just want to try it?</strong> Run this one command — no
-              data is saved after you stop it (CPU inference only):
-              <div class="cmd-block" style="margin-top: 10px">
-                <code
-                  >docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537
-                  ghcr.io/pikselkroken/pixlstash:latest</code
-                >
-                <button
-                  class="copy-btn"
-                  data-copy="docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537 ghcr.io/pikselkroken/pixlstash:latest"
-                >
-                  Copy
-                </button>
+              <span class="step-label">1 - Install Docker</span>
+              <div class="method-info">
+                <p class="step-note">
+                  Download and install
+                  <a
+                    href="https://docs.docker.com/get-started/get-docker/"
+                    target="_blank"
+                    rel="noopener"
+                    >Docker Desktop</a
+                  >
+                  (Windows / macOS) or
+                  <a
+                    href="https://docs.docker.com/engine/install/"
+                    target="_blank"
+                    rel="noopener"
+                    >Docker Engine</a
+                  >
+                  (Linux).
+                </p>
               </div>
-              Press Ctrl+C to stop. Everything is discarded when the container
-              exits.
+            </div>
+            <div class="step">
+              <span class="step-label">2a - Trial Image </span>
+              <div class="method-info">
+                <strong>Just want to try it?</strong>
+                <br />
+                Run this one command — no data is saved after you stop it (CPU
+                inference only):
+                <div class="cmd-block" style="margin-top: 10px">
+                  <code
+                    >docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537
+                    ghcr.io/pikselkroken/pixlstash:latest</code
+                  >
+                  <button
+                    class="copy-btn"
+                    data-copy="docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537 ghcr.io/pikselkroken/pixlstash:latest"
+                  >
+                    Copy
+                  </button>
+                </div>
+                Press Ctrl+C to stop.
+                <br />
+                <strong
+                  >Everything is discarded when the container exits.</strong
+                >
+              </div>
             </div>
 
-            <div class="divider"></div>
-
-            <div class="step">
-              <span class="step-label">2 — Pull and start the container</span>
-              <div class="cmd-block">
-                <code
-                  >docker run -d \ -e PIXLSTASH_HOST=0.0.0.0 \ -p 9537:9537 \ -v
-                  pixlstash-home:/home/pixlstash \ --name pixlstash \
-                  ghcr.io/pikselkroken/pixlstash:latest</code
-                >
-                <button
-                  class="copy-btn"
-                  data-copy="docker run -d \
+            <div class="step" id="docker-cpu">
+              <span class="step-label">2b - Permanent Storage</span>
+              <div class="method-info">
+                <div class="cmd-block">
+                  <code
+                    >docker run -d \ -e PIXLSTASH_HOST=0.0.0.0 \ -p 9537:9537 \
+                    -v ~/Pictures/pixlstash:/home/pixlstash \ --name pixlstash \
+                    ghcr.io/pikselkroken/pixlstash:latest</code
+                  >
+                  <button
+                    class="copy-btn"
+                    data-copy="docker run -d \
   -e PIXLSTASH_HOST=0.0.0.0 \
   -p 9537:9537 \
-  -v pixlstash-home:/home/pixlstash \
+  -v ~/Pictures/pixlstash:/home/pixlstash \
   --name pixlstash \
   ghcr.io/pikselkroken/pixlstash:latest"
-                >
-                  Copy
-                </button>
+                  >
+                    Copy
+                  </button>
+                </div>
+                <p class="step-note">
+                  Replace <code>~/Pictures/pixlstash</code> with whatever folder
+                  you want to store your data in.
+                </p>
+                <br />
+                <p class="step-note">
+                  The chosen folder will be mapped to the container's internal
+                  folder <code>/home/pixlstash</code>, which PixlStash uses for
+                  all its data storage. This means that all your pictures, tags,
+                  characters, stacks, and settings will be saved to the provided
+                  folder and persist even if you stop or remove the container.
+                </p>
               </div>
-              <p class="step-note">
-                All data is stored in the <code>pixlstash-home</code> named
-                volume and persists across restarts.
-              </p>
             </div>
 
             <div class="step">
-              <span class="step-label">3 — Open in browser</span>
+              <span class="step-label">3 - Open in browser</span>
               <div class="cmd-block">
                 <code>http://localhost:9537</code>
                 <button class="copy-btn" data-copy="http://localhost:9537">
@@ -442,46 +462,7 @@
             <div class="method-info">
               💡 To pin to a specific release, replace <code>latest</code> with
               a version tag, e.g.
-              <code>ghcr.io/pikselkroken/pixlstash:0.9.1</code>.
-            </div>
-
-            <div class="divider"></div>
-
-            <div class="step">
-              <p class="sub-heading">Optional: docker-compose.yml</p>
-              <div class="cmd-block">
-                <code
-                  >services: pixlstash: image:
-                  ghcr.io/pikselkroken/pixlstash:latest ports: - "9537:9537"
-                  volumes: - pixlstash-home:/home/pixlstash environment:
-                  PIXLSTASH_HOST: "0.0.0.0" restart: unless-stopped volumes:
-                  pixlstash-home:</code
-                >
-                <button
-                  class="copy-btn"
-                  data-copy='services:
-  pixlstash:
-    image: ghcr.io/pikselkroken/pixlstash:latest
-    ports:
-      - "9537:9537"
-    volumes:
-      - pixlstash-home:/home/pixlstash
-    environment:
-      PIXLSTASH_HOST: "0.0.0.0"
-    restart: unless-stopped
-
-volumes:
-  pixlstash-home:'
-                >
-                  Copy
-                </button>
-              </div>
-              <div class="cmd-block" style="margin-top: 6px">
-                <code>docker compose up -d</code>
-                <button class="copy-btn" data-copy="docker compose up -d">
-                  Copy
-                </button>
-              </div>
+              <code>ghcr.io/pikselkroken/pixlstash:0.9.5</code>.
             </div>
 
             <div class="divider"></div>
@@ -532,21 +513,31 @@ sudo systemctl restart docker"
                   Copy
                 </button>
               </div>
-              <p class="step-note">
-                On Windows, install
-                <a
-                  href="https://learn.microsoft.com/en-us/windows/wsl/install"
-                  target="_blank"
-                  rel="noopener"
-                  >WSL2</a
-                >
-                with an NVIDIA Windows driver ≥ 525, then run the same commands
-                inside your WSL2 distro.
-              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label">Install for WSL2</span>
+              <div class="method-info">
+                <p class="step-note">
+                  On Windows, install
+                  <a
+                    href="https://learn.microsoft.com/en-us/windows/wsl/install"
+                    target="_blank"
+                    rel="noopener"
+                    >WSL2</a
+                  >
+                  with an NVIDIA Windows driver ≥ 525, then run the same
+                  commands inside your WSL2 distro.
+                </p>
+              </div>
             </div>
 
             <div class="step">
               <span class="step-label">Verify GPU access</span>
+              <p class="step-note">
+                Run the following commands to verify that Docker can access your
+                NVIDIA GPU:
+              </p>
               <div class="cmd-block">
                 <code
                   >docker run --rm --gpus all
@@ -561,7 +552,7 @@ sudo systemctl restart docker"
               </div>
             </div>
 
-            <div class="step">
+            <div class="step" id="docker-gpu">
               <span class="step-label">Run the container with GPU support</span>
               <div class="cmd-block">
                 <code
@@ -569,8 +560,8 @@ sudo systemctl restart docker"
                   NVIDIA_VISIBLE_DEVICES=all \ -e
                   NVIDIA_DRIVER_CAPABILITIES=compute,utility \ -e
                   PIXLSTASH_HOST=0.0.0.0 \ -p 9537:9537 \ -v
-                  pixlstash-home:/home/pixlstash \ --name pixlstash \
-                  ghcr.io/pikselkroken/pixlstash:latest</code
+                  ~/Pictures/pixlstash:/home/pixlstash \ --name pixlstash \
+                  ghcr.io/pikselkroken/pixlstash:latest-gpu</code
                 >
                 <button
                   class="copy-btn"
@@ -580,13 +571,17 @@ sudo systemctl restart docker"
   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
   -e PIXLSTASH_HOST=0.0.0.0 \
   -p 9537:9537 \
-  -v pixlstash-home:/home/pixlstash \
+  -v ~/Pictures/pixlstash:/home/pixlstash \
   --name pixlstash \
-  ghcr.io/pikselkroken/pixlstash:latest"
+  ghcr.io/pikselkroken/pixlstash:latest-gpu"
                 >
                   Copy
                 </button>
               </div>
+              <p class="step-note">
+                Replace <code>~/Pictures/pixlstash</code> with whatever folder
+                you want to store your data in.
+              </p>
             </div>
           </div>
         </div>
@@ -789,6 +784,120 @@ cd .."
               hundred MB). An internet connection is required this first time —
               subsequent starts use the cached models.
             </div>
+
+            <div class="divider"></div>
+
+            <div class="step">
+              <p class="sub-heading">GPU Acceleration (optional)</p>
+              <p class="step-note">
+                Skip this section if you are happy with CPU inference. To use
+                your NVIDIA GPU, install CUDA 12.8 and the matching PyTorch and
+                ONNX Runtime packages.
+              </p>
+            </div>
+
+            <div class="step">
+              <span class="step-label"
+                >A — Install NVIDIA driver and CUDA Toolkit</span
+              >
+              <p class="step-note">
+                Install or update your NVIDIA driver (must support CUDA 12.x),
+                then install the
+                <a
+                  href="https://developer.nvidia.com/cuda-toolkit-archive"
+                  target="_blank"
+                  rel="noopener"
+                  >CUDA 12.8 Toolkit</a
+                >
+                for your OS. Verify the installation:
+              </p>
+              <div class="cmd-block">
+                <code>nvcc --version nvidia-smi</code>
+                <button
+                  class="copy-btn"
+                  data-copy="nvcc --version
+nvidia-smi"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">B — Install PyTorch with CUDA 12.8</span>
+              <div class="cmd-block">
+                <code
+                  >pip install torch torchvision --force-reinstall --index-url
+                  https://download.pytorch.org/whl/cu128</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="pip install torch torchvision --force-reinstall --index-url https://download.pytorch.org/whl/cu128"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">C — Install ONNX Runtime GPU</span>
+              <div class="cmd-block">
+                <code
+                  >pip uninstall -y onnxruntime pip install
+                  onnxruntime-gpu</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="pip uninstall -y onnxruntime
+pip install onnxruntime-gpu"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-label">D — Verify GPU availability</span>
+              <div class="cmd-row">
+                <div>
+                  <p class="cmd-row-label">Linux / macOS</p>
+                  <div class="cmd-block">
+                    <code
+                      >python - &lt;&lt;EOF import torch print("CUDA
+                      available:", torch.cuda.is_available()) EOF</code
+                    >
+                    <button
+                      class="copy-btn"
+                      data-copy="python - <<EOF
+import torch
+print('CUDA available:', torch.cuda.is_available())
+EOF"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <p class="cmd-row-label">Windows</p>
+                  <div class="cmd-block">
+                    <code
+                      >py -c "import torch; print('CUDA available:',
+                      torch.cuda.is_available())"</code
+                    >
+                    <button
+                      class="copy-btn"
+                      data-copy="py -c &quot;import torch; print('CUDA available:', torch.cuda.is_available())&quot;"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p class="step-note">
+                Then set <code>"default_device": "cuda"</code> in your
+                <code>server-config.json</code> to enable GPU inference.
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -847,11 +956,28 @@ cd .."
         });
       });
 
-      // Activate tab from URL hash, e.g. install.html#docker
+      // Activate tab from URL hash, e.g. install.html#docker or install.html#docker-gpu
       const hash = location.hash.replace("#", "");
       if (hash) {
-        const btn = document.querySelector(`.tab-btn[data-tab="${hash}"]`);
-        if (btn) btn.click();
+        let btn = document.querySelector(`.tab-btn[data-tab="${hash}"]`);
+        if (btn) {
+          btn.click();
+        } else {
+          const target = document.getElementById(hash);
+          if (target) {
+            const panel = target.closest(".tab-panel");
+            if (panel) {
+              const panelId = panel.id.replace("panel-", "");
+              btn = document.querySelector(`.tab-btn[data-tab="${panelId}"]`);
+              if (btn) btn.click();
+            }
+            setTimeout(
+              () =>
+                target.scrollIntoView({ behavior: "smooth", block: "start" }),
+              50,
+            );
+          }
+        }
       }
     </script>
   </body>

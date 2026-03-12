@@ -32,115 +32,6 @@
         font-size: 1.35rem;
       }
 
-      .nav-actions {
-        display: flex;
-        align-items: center;
-        gap: 16px;
-      }
-
-      .download-wrap {
-        position: relative;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 6px;
-      }
-
-      .pip-popup {
-        display: none;
-        position: absolute;
-        top: calc(100% + 10px);
-        right: 0;
-        background: var(--panel);
-        border: 1px solid rgba(0, 0, 0, 0.12);
-        border-radius: var(--radius-md);
-        padding: 12px 14px;
-        box-shadow: 0 8px 28px var(--shadow);
-        white-space: nowrap;
-        z-index: 200;
-        min-width: 240px;
-      }
-
-      .pip-popup.open {
-        display: block;
-      }
-
-      .pip-label {
-        display: block;
-        font-size: 0.72rem;
-        color: var(--muted);
-        margin-bottom: 8px;
-        font-weight: 600;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-      }
-
-      .pip-cmd {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        background: var(--panel-strong);
-        border-radius: 8px;
-        padding: 7px 10px;
-      }
-
-      .pip-cmd code {
-        font-family: var(--mono);
-        font-size: 0.85rem;
-        color: var(--text);
-        flex: 1;
-      }
-
-      .pip-copy-btn {
-        background: none;
-        border: none;
-        cursor: pointer;
-        color: var(--accent);
-        font-family: var(--sans);
-        font-size: 0.78rem;
-        font-weight: 600;
-        padding: 2px 4px;
-      }
-
-      .pip-copy-btn:hover {
-        color: var(--accent-2);
-      }
-
-      .pip-copied {
-        display: block;
-        font-size: 0.72rem;
-        color: var(--accent-3);
-        margin-top: 6px;
-        min-height: 1em;
-      }
-
-      .download-btn {
-        background: linear-gradient(130deg, var(--accent), var(--accent-2));
-        color: #ffffff;
-        padding: 10px 16px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.9rem;
-        border: 1px solid transparent;
-        box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
-        transition:
-          transform 0.2s ease,
-          box-shadow 0.2s ease;
-      }
-
-      .download-btn:hover {
-        box-shadow: 0 18px 34px rgba(97, 117, 12, 0.35);
-      }
-
-      .download-sub {
-        font-size: 0.72rem;
-        color: rgba(242, 245, 250, 0.7);
-      }
-
-      .download-sub:hover {
-        color: var(--accent);
-      }
-
       .hero {
         margin-top: 20px;
         display: grid;
@@ -629,10 +520,6 @@
           padding: 8px 14px 12px;
         }
 
-        .download-wrap {
-          align-items: flex-start;
-        }
-
         .hero {
           margin-top: 24px;
         }
@@ -672,39 +559,10 @@
           <a href="#features">Features</a>
           <a href="#workflows">Use cases</a>
           <a href="#api">API</a>
-          <a href="install.html">Install</a>
           <a href="https://github.com/pikselkroken/pixlstash">GitHub</a>
         </div>
         <div class="nav-actions">
-          <div class="download-wrap">
-            <a
-              class="download-btn"
-              id="download-btn"
-              href="https://github.com/pikselkroken/pixlstash/releases/latest"
-            >
-              <span id="download-label">Download</span>
-            </a>
-            <a
-              class="download-sub"
-              id="download-other"
-              href="https://github.com/pikselkroken/pixlstash/releases"
-              >Other platforms</a
-            >
-            <div class="pip-popup" id="pip-popup">
-              <span class="pip-label">Install with pip</span>
-              <div class="pip-cmd">
-                <code>pip install pixlstash</code>
-                <button
-                  class="pip-copy-btn"
-                  id="pip-copy-btn"
-                  title="Copy to clipboard"
-                >
-                  Copy
-                </button>
-              </div>
-              <span id="pip-copied" class="pip-copied"></span>
-            </div>
-          </div>
+          <a class="download-btn" href="install.html">Install</a>
         </div>
       </nav>
 
@@ -802,7 +660,7 @@
         </div>
       </section>
 
-      <section id="screens" class="section">
+      <section id="features" class="section">
         <div class="section-header">
           <h2 class="section-title">A UI focused on the work</h2>
         </div>
@@ -914,7 +772,7 @@
         </div>
       </section>
 
-      <section id="features" class="section">
+      <section id="other-features" class="section">
         <div class="section-header">
           <h2 class="section-title">Other Features</h2>
           <p class="section-subtitle">
@@ -1022,12 +880,7 @@
           <p>Self-host PixlStash and start organizing your work.</p>
         </div>
         <div class="cta-row">
-          <a
-            class="btn btn-primary"
-            href="https://github.com/pikselkroken/pixlstash"
-          >
-            Get PixlStash
-          </a>
+          <a class="btn btn-primary" href="install.html"> Get PixlStash </a>
         </div>
       </section>
 
@@ -1093,88 +946,6 @@
           closeLightbox();
         }
       });
-
-      const downloadBtn = document.getElementById("download-btn");
-      const downloadLabel = document.getElementById("download-label");
-      const downloadOther = document.getElementById("download-other");
-      const pipPopup = document.getElementById("pip-popup");
-      const pipCopyBtn = document.getElementById("pip-copy-btn");
-      const pipCopied = document.getElementById("pip-copied");
-
-      function getPlatformInfo() {
-        const ua = navigator.userAgent || "";
-        const platform = navigator.platform || "";
-        const isMac = /Mac|iPhone|iPad|iPod/i.test(ua) || /Mac/i.test(platform);
-        const isWindows = /Win/i.test(platform) || /Windows/i.test(ua);
-        const isLinux = /Linux/i.test(platform) && !/Android/i.test(ua);
-
-        if (isMac) {
-          return { label: "Download for macOS", mode: "releases" };
-        }
-        if (isWindows) {
-          return { label: "Download for Windows", mode: "windows" };
-        }
-        if (isLinux) {
-          return { label: "Install on Linux", mode: "linux" };
-        }
-        return { label: "Download", mode: "releases" };
-      }
-
-      async function setupDownloadButton() {
-        if (!downloadBtn || !downloadLabel) return;
-        const info = getPlatformInfo();
-        downloadLabel.textContent = info.label;
-
-        if (info.mode === "windows") {
-          try {
-            const resp = await fetch(
-              "https://api.github.com/repos/pikselkroken/pixlstash/releases/latest",
-            );
-            if (resp.ok) {
-              const release = await resp.json();
-              const asset = release.assets?.find((a) =>
-                a.name.endsWith(".exe"),
-              );
-              if (asset) {
-                downloadBtn.href = asset.browser_download_url;
-              }
-            }
-          } catch (_) {
-            // Fall through: href already points to releases/latest
-          }
-        } else if (info.mode === "linux") {
-          downloadBtn.removeAttribute("href");
-          downloadBtn.style.cursor = "pointer";
-          downloadBtn.addEventListener("click", (e) => {
-            e.preventDefault();
-            pipPopup.classList.toggle("open");
-          });
-          if (downloadOther) downloadOther.style.display = "none";
-        }
-      }
-
-      if (pipCopyBtn) {
-        pipCopyBtn.addEventListener("click", () => {
-          navigator.clipboard.writeText("pip install pixlstash").then(() => {
-            pipCopied.textContent = "Copied!";
-            setTimeout(() => {
-              pipCopied.textContent = "";
-            }, 2000);
-          });
-        });
-      }
-
-      document.addEventListener("click", (e) => {
-        if (
-          pipPopup &&
-          !pipPopup.contains(e.target) &&
-          !downloadBtn.contains(e.target)
-        ) {
-          pipPopup.classList.remove("open");
-        }
-      });
-
-      setupDownloadButton();
     </script>
   </body>
 </html>

@@ -92,8 +92,11 @@
         <div class="nav-links">
           <a href="index.html#features">Features</a>
           <a href="index.html#workflows">Use cases</a>
-          <a href="install.html">Install</a>
+          <a href="index.html#api">API</a>
           <a href="https://github.com/pikselkroken/pixlstash">GitHub</a>
+        </div>
+        <div class="nav-actions">
+          <a class="download-btn" href="install.html">Install</a>
         </div>
       </nav>
 
@@ -206,6 +209,7 @@
           <div class="method-steps">
             <div class="step">
               <span class="step-label">1 — Pull the latest image</span>
+              <p class="cmd-row-label">CPU</p>
               <div class="cmd-block">
                 <code>docker pull ghcr.io/pikselkroken/pixlstash:latest</code>
                 <button
@@ -215,21 +219,40 @@
                   Copy
                 </button>
               </div>
+              <p class="cmd-row-label" style="margin-top: 8px">GPU</p>
+              <div class="cmd-block">
+                <code
+                  >docker pull ghcr.io/pikselkroken/pixlstash:latest-gpu</code
+                >
+                <button
+                  class="copy-btn"
+                  data-copy="docker pull ghcr.io/pikselkroken/pixlstash:latest-gpu"
+                >
+                  Copy
+                </button>
+              </div>
             </div>
             <div class="step">
               <span class="step-label">2 — Restart the container</span>
               <div class="cmd-block">
-                <code
-                  ># docker-compose docker compose down &amp;&amp; docker
-                  compose up -d # standalone docker stop pixlstash docker rm
-                  pixlstash docker run -d ...
-                  ghcr.io/pikselkroken/pixlstash:latest</code
+                <code>docker stop pixlstash && docker rm pixlstash</code>
+                <button
+                  class="copy-btn"
+                  data-copy="docker stop pixlstash && docker rm pixlstash"
                 >
+                  Copy
+                </button>
               </div>
+              <p class="step-note">
+                Then re-run your original <code>docker run</code> command — see
+                the install guide for
+                <a href="install.html#docker-cpu">CPU</a> or
+                <a href="install.html#docker-gpu">GPU</a> inference.
+              </p>
             </div>
             <div class="method-warning">
-              ⚠️ Make sure your image root and config are mounted as volumes so
-              they survive the container replacement.
+              ⚠️ Make sure your data folder is mounted as a volume so it
+              survives the container replacement.
             </div>
           </div>
         </div>
