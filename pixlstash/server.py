@@ -382,7 +382,8 @@ class Server:
         version = self._get_version()
         host = self._server_config.get("host", "127.0.0.1")
         port = self._server_config.get("port", 9537)
-        server_url = f"http://{host}:{port}"
+        scheme = "https" if self._server_config.get("require_ssl", False) else "http"
+        server_url = f"{scheme}://{host}:{port}"
         _w = 54
         _b = "═" * _w
         print(
