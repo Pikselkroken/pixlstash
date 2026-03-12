@@ -3,11 +3,21 @@ import os
 import platform
 import threading
 import time
+import warnings
 import torch
 from typing import List
 
 import cv2
 from insightface.app import FaceAnalysis
+
+# Suppress noisy FutureWarning from insightface's face_align.py about
+# SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
+# This is a third-party issue we cannot fix directly.
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module="insightface",
+)
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm.attributes import NO_VALUE
 from sqlmodel import select
