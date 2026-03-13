@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: "0 6 * * *" # daily at 06:00 UTC
   workflow_dispatch: # allow manual runs
+  push:
+    branches:
+      - metrics
 
 permissions:
   contents: write # needed to commit history.json back to the repo
