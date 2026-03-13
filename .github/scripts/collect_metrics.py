@@ -32,12 +32,23 @@ def gh_get(path, token=None):
 
 
 def pypi_get(path):
+    import time
+
     req = urllib.request.Request(
         f"https://pypistats.org/api{path}",
         headers={"User-Agent": f"{REPO}-metrics-collector/1.0"},
     )
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 3:
+                wait = 10 * (attempt + 1)
+                print(f"pypistats rate-limited, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def fetch_stars_and_forks():
@@ -75,13 +86,17 @@ def fetch_release_downloads():
 
 
 def fetch_pypi_downloads():
-    data = pypi_get(f"/packages/{PYPI_PACKAGE}/recent")
-    d = data.get("data", {})
-    return {
-        "last_day": d.get("last_day", 0),
-        "last_week": d.get("last_week", 0),
-        "last_month": d.get("last_month", 0),
-    }
+    try:
+        data = pypi_get(f"/packages/{PYPI_PACKAGE}/recent")
+        d = data.get("data", {})
+        return {
+            "last_day": d.get("last_day", 0),
+            "last_week": d.get("last_week", 0),
+            "last_month": d.get("last_month", 0),
+        }
+    except urllib.error.HTTPError as e:
+        print(f"WARNING: Could not fetch PyPI downloads ({e}) — skipping.")
+        return {"last_day": None, "last_week": None, "last_month": None}
 
 
 def load_history():
