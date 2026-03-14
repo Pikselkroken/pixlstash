@@ -2,8 +2,17 @@
 Pytest configuration and fixtures for test suite.
 """
 
+import socket
+
 from pixlstash.picture_tagger import PictureTagger
 from pixlstash.server import Server
+
+
+def _find_free_port() -> int:
+    """Return an ephemeral port number that is free on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("localhost", 0))
+        return sock.getsockname()[1]
 
 
 def pytest_addoption(parser):
@@ -31,6 +40,9 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     """Set static attributes on PictureTagger from command line options."""
+    # Pick a free port for the test session so Server instances don't collide
+    # with the production app when it is already running on the default port.
+    Server.DEFAULT_PORT = _find_free_port()
     force_cpu = config.getoption("--force-cpu")
     PictureTagger.FORCE_CPU = force_cpu
     # Persist force-cpu as a Server-level override so startup checks cannot

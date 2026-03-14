@@ -112,10 +112,15 @@ class Server:
             forces CPU inference after startup checks complete, preventing the
             startup check from clobbering a ``--force-cpu`` flag set by the
             test framework. ``None`` means startup checks decide.
+        DEFAULT_PORT: Class-level port override. When set (e.g. by the pytest
+            conftest to a free OS-assigned port), it replaces the port from the
+            persisted config for all Server instances. ``None`` means use the
+            config value.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
     DEFAULT_FORCE_CPU: bool | None = None
+    DEFAULT_PORT: int | None = None
 
     def __init__(
         self,
@@ -540,6 +545,12 @@ class Server:
                     server_config["watch_folders"] = []
                 if "generate_thumbnails_on_startup" not in server_config:
                     server_config["generate_thumbnails_on_startup"] = True
+
+        # Apply any test-level port override (set by the pytest conftest before
+        # Server is instantiated). This lets tests run on a free port even when
+        # the production server is already occupying the configured port.
+        if Server.DEFAULT_PORT is not None:
+            server_config["port"] = Server.DEFAULT_PORT
 
         return server_config
 
