@@ -93,7 +93,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pollImportStatus(taskId, uploadedCount, batchCount, totalFiles) {
+async function pollImportStatus(taskId, uploadedCount) {
   const maxAttempts = 600;
   const intervalMs = 1000;
 
@@ -109,16 +109,20 @@ async function pollImportStatus(taskId, uploadedCount, batchCount, totalFiles) {
     );
     const status = statusRes?.data?.status || "in_progress";
     const processed = statusRes?.data?.processed ?? 0;
-    const total = statusRes?.data?.total ?? batchCount;
+    const serverTotal = statusRes?.data?.total ?? 0;
 
     importPhase.value = "processing";
-    const totalUnits = totalFiles * 2;
-    importTotal.value = totalUnits;
-    if (processed > 0) {
-      importProgress.value = Math.min(totalUnits, uploadedCount + processed);
-    } else {
-      importProgress.value = Math.max(importProgress.value, uploadedCount);
+    // Use the real image count from the server (accounts for zip expansion).
+    // Total = one "unit" per uploaded file object (for the upload phase) +
+    //         the actual number of images the server is processing.
+    const totalUnits = uploadedCount + serverTotal;
+    if (totalUnits > importTotal.value) {
+      importTotal.value = totalUnits;
     }
+    importProgress.value = Math.min(
+      importTotal.value,
+      uploadedCount + processed,
+    );
 
     if (status === "completed") {
       return statusRes.data;
@@ -144,7 +148,9 @@ async function startImport(files, options = {}) {
   cancelImport.value = false;
   importInProgress.value = true;
   importProgress.value = 0;
-  importTotal.value = files.length * 2;
+  // Use file-object count as a placeholder; pollImportStatus will update
+  // importTotal once the server reveals the real image count (e.g. from zips).
+  importTotal.value = files.length;
   importError.value = null;
   importPhase.value = "uploading";
   currentImportController.value = null;
@@ -265,12 +271,7 @@ async function startImport(files, options = {}) {
       }
 
       importPhase.value = "processing";
-      const statusPayload = await pollImportStatus(
-        taskId,
-        uploadedCount,
-        batch.length,
-        files.length,
-      );
+      const statusPayload = await pollImportStatus(taskId, uploadedCount);
       if (!statusPayload) {
         return;
       }
@@ -311,7 +312,7 @@ async function startImport(files, options = {}) {
 
     emit("import-finished", {
       importedCount,
-      total: files.length,
+      total: allResults.length,
       phase: importPhase.value,
       results: allResults,
     });
