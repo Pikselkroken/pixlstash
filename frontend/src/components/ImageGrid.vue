@@ -285,7 +285,7 @@
                       setThumbnailRef(img.id, el);
                     }
                   "
-                  preload="metadata"
+                  preload="none"
                   draggable="false"
                   @pointerdown="prepareThumbnailNativeDrag(img, $event)"
                   @pointerup="handleThumbnailPointerRelease($event)"
@@ -1194,7 +1194,13 @@ function getThumbnailSrc(img) {
 
 function getVideoThumbnailSrc(img) {
   if (!img || !isVideo(img)) return null;
-  return buildMediaUrl({ backendUrl: props.backendUrl, image: img }) || null;
+  if (!img.id || !img.format) return null;
+  // Build a stable URL without the pixel_sha cache-buster so the browser treats
+  // this as the same resource as the overlay's videoSrc (which also omits it).
+  // Using buildMediaUrl here would add ?v=pixel_sha, causing two concurrent
+  // requests to different URLs for the same file — the browser aborts one,
+  // leaving the overlay's <video> element stuck loading.
+  return `${props.backendUrl}/pictures/${img.id}.${img.format.toLowerCase()}`;
 }
 
 // --- Multi-face selection state ---
@@ -1519,14 +1525,19 @@ function setVideoRef(id, el) {
 }
 function playVideo(id) {
   const v = videoRefs[id];
-  if (v) v.play();
+  if (!v) return;
+  // Trigger load on-demand only when hovered; do nothing if already loading/playing.
+  v.preload = "auto";
+  v.play().catch(() => {});
 }
 function pauseVideo(id) {
   const v = videoRefs[id];
-  if (v) {
-    v.pause();
-    v.currentTime = 0;
-  }
+  if (!v) return;
+  v.pause();
+  v.currentTime = 0;
+  // Abort any in-progress network fetch so idle tiles consume no bandwidth.
+  v.preload = "none";
+  v.load();
 }
 
 // ============================================================
