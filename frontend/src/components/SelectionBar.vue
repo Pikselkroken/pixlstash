@@ -126,7 +126,7 @@
                     <textarea
                       v-model="comfyuiCaption"
                       class="plugin-menu-textarea"
-                      rows="3"
+                      rows="6"
                       placeholder="Optional caption for {{caption}}"
                       @keydown.stop
                     ></textarea>
@@ -565,8 +565,8 @@ function runSelectedPlugin() {
 }
 
 .plugin-menu-panel {
-  width: 320px;
-  max-width: min(92vw, 420px);
+  width: 420px;
+  max-width: min(92vw, 560px);
   background: rgba(var(--v-theme-surface), 0.96);
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgba(var(--v-theme-primary), 0.3);
@@ -619,7 +619,7 @@ function runSelectedPlugin() {
   color: rgb(var(--v-theme-on-background));
   padding: 8px;
   resize: vertical;
-  min-height: 70px;
+  min-height: 160px;
 }
 
 .plugin-menu-note {

@@ -14,7 +14,7 @@
   },
   "76": {
     "inputs": {
-      "value": "A vintage motorcycle parked in front of a retro diner at sunset, warm orange and pink sky, neon signs glowing, 80s vintage photo style, film grain, warm color cast\n"
+      "value": "{{caption}}"
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -131,7 +131,7 @@
   },
   "75:67": {
     "inputs": {
-      "text": "{{caption}}",
+      "text": "",
       "clip": [
         "75:71",
         0

@@ -182,7 +182,7 @@
                       <textarea
                         v-model="comfyuiCaption"
                         class="overlay-comfy-textarea"
-                        rows="4"
+                        rows="6"
                         @input="comfyuiCaptionTouched = true"
                         @focus="comfyuiCaptionFocused = true"
                         @blur="comfyuiCaptionFocused = false"
@@ -849,11 +849,14 @@
                 >
                   <summary class="metadata-comfy-summary">
                     <span class="metadata-comfy-summary-left">
-                      <span style="font-weight: 500; color: #fff"
-                        >Workflow JSON</span
-                      >
+                      <span style="font-weight: 500; color: #fff">{{
+                        comfyMetadata.isApiFormat
+                          ? "API Workflow JSON"
+                          : "Workflow JSON"
+                      }}</span>
                     </span>
                     <button
+                      v-if="!comfyMetadata.isApiFormat"
                       class="metadata-comfy-workflow-action"
                       type="button"
                       @click.stop="copyMetadataValue(comfyMetadata.workflow)"
@@ -1163,7 +1166,9 @@ const validComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter((workflow) => workflow?.valid),
 );
 const invalidComfyWorkflows = computed(() =>
-  (comfyuiWorkflows.value || []).filter((workflow) => !workflow?.valid),
+  (comfyuiWorkflows.value || []).filter(
+    (workflow) => !workflow?.valid && workflow?.workflow_type !== "t2i",
+  ),
 );
 const selectedComfyWorkflow = computed(() =>
   (comfyuiWorkflows.value || []).find(
@@ -3558,11 +3563,16 @@ const comfyMetadata = computed(() => {
   if (!workflow) return null;
 
   const workflowStats = workflow ? summarizeComfyWorkflow(workflow) : null;
+  const isApiFormat =
+    !Array.isArray(workflow.nodes) &&
+    !Array.isArray(workflow.links) &&
+    typeof workflow.last_node_id !== "number" &&
+    typeof workflow.last_link_id !== "number";
 
   const summaryParts = [];
   if (workflowStats) {
     summaryParts.push(
-      `Workflow · ${workflowStats.nodeCount} nodes` +
+      `${isApiFormat ? "API Workflow" : "Workflow"} · ${workflowStats.nodeCount} nodes` +
         (workflowStats.linkCount !== null
           ? ` · ${workflowStats.linkCount} links`
           : ""),
@@ -3570,6 +3580,7 @@ const comfyMetadata = computed(() => {
   }
   return {
     workflow,
+    isApiFormat,
     summary: summaryParts.join(" · ") || "Detected ComfyUI metadata",
   };
 });
@@ -3677,27 +3688,51 @@ function ComfyWorkflowCandidate(value) {
 }
 
 function isComfyWorkflow(value) {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  // UI format: has nodes/links arrays or last_node_id hint
   const hasNodesArray = Array.isArray(value.nodes);
   const hasLinksArray = Array.isArray(value.links);
   const hasNodeHints =
     typeof value.last_node_id === "number" ||
     typeof value.last_link_id === "number";
-  return hasNodesArray || hasLinksArray || hasNodeHints;
+  if (hasNodesArray || hasLinksArray || hasNodeHints) return true;
+  // API format: top-level values are node dicts with class_type + inputs
+  const vals = Object.values(value);
+  const apiNodeCount = vals.filter(
+    (v) =>
+      v &&
+      typeof v === "object" &&
+      !Array.isArray(v) &&
+      typeof v.class_type === "string" &&
+      "inputs" in v,
+  ).length;
+  return apiNodeCount > 0 && apiNodeCount >= Math.min(vals.length, 2);
 }
 
 function summarizeComfyWorkflow(workflow) {
-  const nodeCount = Array.isArray(workflow.nodes)
-    ? workflow.nodes.length
-    : workflow.nodes && typeof workflow.nodes === "object"
-      ? Object.keys(workflow.nodes).length
-      : 0;
-  const linkCount = Array.isArray(workflow.links)
-    ? workflow.links.length
-    : workflow.links && typeof workflow.links === "object"
-      ? Object.keys(workflow.links).length
-      : null;
-  return { nodeCount, linkCount };
+  // UI format
+  if (
+    Array.isArray(workflow.nodes) ||
+    (workflow.nodes && typeof workflow.nodes === "object") ||
+    Array.isArray(workflow.links)
+  ) {
+    const nodeCount = Array.isArray(workflow.nodes)
+      ? workflow.nodes.length
+      : workflow.nodes && typeof workflow.nodes === "object"
+        ? Object.keys(workflow.nodes).length
+        : 0;
+    const linkCount = Array.isArray(workflow.links)
+      ? workflow.links.length
+      : workflow.links && typeof workflow.links === "object"
+        ? Object.keys(workflow.links).length
+        : null;
+    return { nodeCount, linkCount };
+  }
+  // API format: count entries with class_type
+  const nodeCount = Object.values(workflow).filter(
+    (v) => v && typeof v === "object" && typeof v.class_type === "string",
+  ).length;
+  return { nodeCount, linkCount: null };
 }
 
 function getDisplayDimensions() {
@@ -4425,7 +4460,7 @@ function downloadComfyWorkflow(workflow) {
 
 .overlay-comfy-panel {
   padding: 12px;
-  min-width: 320px;
+  min-width: 420px;
   background: rgba(var(--v-theme-dark-surface), 0.96);
   color: rgb(var(--v-theme-on-dark-surface));
   border-radius: 10px;
@@ -4479,7 +4514,7 @@ function downloadComfyWorkflow(workflow) {
 
 .overlay-comfy-textarea {
   resize: vertical;
-  min-height: 96px;
+  min-height: 220px;
 }
 
 .overlay-comfy-actions {

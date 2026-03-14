@@ -577,10 +577,38 @@
                   <textarea
                     v-model="comfyuiCaption"
                     class="toolbar-comfyui-textarea"
-                    rows="3"
+                    rows="8"
                     placeholder="Optional caption for {{caption}}"
                     @keydown.stop
                   ></textarea>
+                  <label class="toolbar-comfyui-label">Seed</label>
+                  <div class="toolbar-comfyui-seed-row">
+                    <button
+                      type="button"
+                      class="toolbar-comfyui-seed-btn"
+                      :class="{ active: comfyuiSeedMode === 'random' }"
+                      @click="comfyuiSeedMode = 'random'"
+                    >
+                      Random
+                    </button>
+                    <button
+                      type="button"
+                      class="toolbar-comfyui-seed-btn"
+                      :class="{ active: comfyuiSeedMode === 'fixed' }"
+                      @click="comfyuiSeedMode = 'fixed'"
+                    >
+                      Fixed
+                    </button>
+                    <input
+                      v-if="comfyuiSeedMode === 'fixed'"
+                      v-model.number="comfyuiSeed"
+                      type="number"
+                      class="toolbar-comfyui-seed-input"
+                      min="0"
+                      max="4294967295"
+                      @keydown.stop
+                    />
+                  </div>
                   <div class="toolbar-comfyui-actions">
                     <button
                       class="toolbar-comfyui-run-btn"
@@ -978,6 +1006,21 @@ const comfyuiWorkflowError = ref("");
 const comfyuiSelectedWorkflow = ref("");
 const comfyuiCaption = ref("");
 const comfyuiRunError = ref("");
+const comfyuiSeedMode = ref(
+  sessionStorage.getItem("comfyui_t2i_seed_mode") === "fixed"
+    ? "fixed"
+    : "random",
+);
+const _savedSeed = Number(sessionStorage.getItem("comfyui_t2i_seed"));
+const comfyuiSeed = ref(
+  Number.isFinite(_savedSeed) && _savedSeed >= 0 ? _savedSeed : 0,
+);
+watch(comfyuiSeedMode, (val) =>
+  sessionStorage.setItem("comfyui_t2i_seed_mode", val),
+);
+watch(comfyuiSeed, (val) =>
+  sessionStorage.setItem("comfyui_t2i_seed", String(val)),
+);
 
 const validComfyWorkflows = computed(() => {
   if (!Array.isArray(comfyuiWorkflows.value)) return [];
@@ -1020,6 +1063,8 @@ function runComfyuiOnGrid() {
   emit("comfyui-run-grid", {
     workflowName: comfyuiSelectedWorkflow.value,
     caption: comfyuiCaption.value || "",
+    seedMode: comfyuiSeedMode.value,
+    seed: comfyuiSeed.value,
   });
   comfyuiMenuOpen.value = false;
 }
@@ -1492,7 +1537,9 @@ defineExpose({ blurSearchInput });
 
 .toolbar-comfyui-panel {
   padding: 10px 12px;
-  min-width: 240px;
+  min-width: 380px;
+  max-height: 50vh;
+  overflow-y: auto;
   background: rgba(var(--v-theme-background), 0.92);
   color: rgb(var(--v-theme-on-background));
   border-radius: 10px;
@@ -1544,6 +1591,7 @@ defineExpose({ blurSearchInput });
   resize: vertical;
   outline: none;
   font-family: inherit;
+  min-height: 260px;
 }
 
 .toolbar-comfyui-actions {
@@ -1584,5 +1632,42 @@ defineExpose({ blurSearchInput });
 .toolbar-comfyui-error {
   font-size: 0.85em;
   color: rgb(var(--v-theme-error));
+}
+
+.toolbar-comfyui-seed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-comfyui-seed-btn {
+  background: rgba(var(--v-theme-surface), 0.25);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.15);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.85em;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.toolbar-comfyui-seed-btn.active {
+  background: rgba(var(--v-theme-primary), 0.8);
+  color: rgb(var(--v-theme-on-primary));
+  border-color: transparent;
+}
+
+.toolbar-comfyui-seed-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(var(--v-theme-surface), 0.25);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.15);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.88em;
+  outline: none;
 }
 </style>

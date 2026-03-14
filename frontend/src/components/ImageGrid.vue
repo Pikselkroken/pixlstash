@@ -788,15 +788,27 @@ function handleComfyuiRun(payload) {
   comfyuiRunner.value?.handleComfyuiRun(payload);
 }
 
-async function runComfyuiOnGridImages({ workflowName, caption = "" } = {}) {
+async function runComfyuiOnGridImages({
+  workflowName,
+  caption = "",
+  seedMode = "random",
+  seed = 0,
+} = {}) {
   if (!workflowName || !props.backendUrl) return;
   try {
     const payload = {
       workflow_name: workflowName,
       caption: caption || "",
       client_id: comfyuiClientId.value || undefined,
+      seed_mode: seedMode,
+      seed: seedMode === "fixed" ? seed : undefined,
     };
-    await apiClient.post(`${props.backendUrl}/comfyui/run_t2i`, payload);
+    const res = await apiClient.post(
+      `${props.backendUrl}/comfyui/run_t2i`,
+      payload,
+    );
+    const prompts = Array.isArray(res.data?.prompts) ? res.data.prompts : [];
+    handleComfyuiRun({ prompts });
   } catch (err) {
     console.error("ComfyUI T2I run failed:", err);
   }

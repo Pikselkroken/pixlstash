@@ -2,6 +2,7 @@ import asyncio
 import json
 import mimetypes
 import os
+import random
 import threading
 import time
 import uuid
@@ -33,6 +34,8 @@ logger = get_logger(__name__)
 PLACEHOLDER_IMAGE = "{{image_path}}"
 PLACEHOLDER_CAPTION = "{{caption}}"
 DEFAULT_COMFYUI_URL = "http://127.0.0.1:8188/"
+SEED_FIELDS = {"noise_seed", "seed"}
+SEED_NODE_CLASSES = {"RandomNoise", "KSampler", "KSamplerAdvanced"}
 
 
 def _workflow_builtin_dir() -> str:
@@ -108,6 +111,40 @@ def _replace_placeholders(value, replacements: dict[str, str]):
             key: _replace_placeholders(val, replacements) for key, val in value.items()
         }
     return value
+
+
+def _randomize_seeds(workflow: dict) -> None:
+    """Replace seed values in sampler/noise nodes with a fresh random integer.
+
+    This mirrors what the ComfyUI frontend does when 'randomize' is enabled,
+    ensuring repeated runs on the same prompt produce different images.
+    """
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") not in SEED_NODE_CLASSES:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for field in SEED_FIELDS:
+            if field in inputs and isinstance(inputs[field], (int, float)):
+                inputs[field] = random.randint(0, 2**32 - 1)
+
+
+def _apply_fixed_seed(workflow: dict, seed: int) -> None:
+    """Set seed values in sampler/noise nodes to a specific fixed integer."""
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") not in SEED_NODE_CLASSES:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for field in SEED_FIELDS:
+            if field in inputs and isinstance(inputs[field], (int, float)):
+                inputs[field] = seed
 
 
 def _apply_filename_prefix(workflow: dict, prefix: str) -> bool:
@@ -193,7 +230,16 @@ def _submit_comfyui_prompt(
     clean_workflow = {
         k: v for k, v in workflow.items() if not k.startswith("pixlstash_")
     }
-    payload = {"prompt": clean_workflow}
+    # Pass the workflow under extra_pnginfo so ComfyUI embeds it in the
+    # generated PNG automatically (same as the ComfyUI frontend does).
+    payload = {
+        "prompt": clean_workflow,
+        "extra_data": {
+            "extra_pnginfo": {
+                "workflow": clean_workflow,
+            }
+        },
+    }
     if client_id:
         payload["client_id"] = client_id
     try:
@@ -788,6 +834,7 @@ def create_router(server) -> APIRouter:
             workflow_instance = _replace_placeholders(
                 deepcopy(workflow_payload), replacements
             )
+            _randomize_seeds(workflow_instance)
             stack_id = server.vault.db.run_task(
                 get_or_create_stack_for_picture,
                 pic_id,
@@ -874,10 +921,17 @@ def create_router(server) -> APIRouter:
         comfyui_url = getattr(user, "comfyui_url", None) if user else None
         comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
 
+        seed_mode = payload.get("seed_mode", "random")
+        fixed_seed = payload.get("seed")
+
         replacements = {PLACEHOLDER_CAPTION: caption}
         workflow_instance = _replace_placeholders(
             deepcopy(workflow_payload), replacements
         )
+        if seed_mode == "fixed" and fixed_seed is not None:
+            _apply_fixed_seed(workflow_instance, int(fixed_seed))
+        else:
+            _randomize_seeds(workflow_instance)
 
         response_payload = _submit_comfyui_prompt(
             comfyui_url, workflow_instance, client_id
@@ -898,9 +952,12 @@ def create_router(server) -> APIRouter:
             )
             worker.start()
 
+        prompts = []
+        if prompt_id:
+            prompts.append({"prompt_id": prompt_id})
         return {
             "status": "success",
-            "prompt_id": prompt_id,
+            "prompts": prompts,
             "workflow": workflow_name,
         }
 
