@@ -133,19 +133,16 @@ def test_picture_plugins_list_and_run_colour_filter():
             for created_id in created_ids:
                 assert int(created_id) in set_member_ids
 
-            after_resp = client.get("/pictures?fields=grid")
-            assert after_resp.status_code == 200
-            after_pictures = {
-                int(pic["id"]): pic
-                for pic in after_resp.json()
-                if pic.get("id") is not None
-            }
-
+            # Fetch pictures individually to avoid stack_leaders_only filtering
+            # (fields=grid hides non-leader stack members, which includes the
+            # original source pictures after the plugin pushes them to position 1).
             for source_id, created_id in zip(selected_ids, created_ids):
-                source = after_pictures.get(int(source_id))
-                created = after_pictures.get(int(created_id))
-                assert source is not None
-                assert created is not None
+                source_resp = client.get(f"/pictures/{source_id}/metadata")
+                assert source_resp.status_code == 200, source_resp.text
+                source = source_resp.json()
+                created_resp = client.get(f"/pictures/{created_id}/metadata")
+                assert created_resp.status_code == 200, created_resp.text
+                created = created_resp.json()
                 assert source.get("stack_id") is not None
                 assert created.get("stack_id") == source.get("stack_id")
                 assert int(created.get("stack_position")) == 0
@@ -166,18 +163,13 @@ def test_picture_plugins_list_and_run_colour_filter():
             scaled_ids = scale_payload.get("created_picture_ids") or []
             assert len(scaled_ids) == 2
 
-            scaled_after_resp = client.get("/pictures?fields=grid")
-            assert scaled_after_resp.status_code == 200
-            scaled_after_pictures = {
-                int(pic["id"]): pic
-                for pic in scaled_after_resp.json()
-                if pic.get("id") is not None
-            }
             for source_id, scaled_id in zip(selected_ids, scaled_ids):
-                source = scaled_after_pictures.get(int(source_id))
-                scaled = scaled_after_pictures.get(int(scaled_id))
-                assert source is not None
-                assert scaled is not None
+                source_resp = client.get(f"/pictures/{source_id}/metadata")
+                assert source_resp.status_code == 200, source_resp.text
+                source = source_resp.json()
+                scaled_resp = client.get(f"/pictures/{scaled_id}/metadata")
+                assert scaled_resp.status_code == 200, scaled_resp.text
+                scaled = scaled_resp.json()
                 assert int(scaled.get("width")) == int(source.get("width")) * 2
                 assert int(scaled.get("height")) == int(source.get("height")) * 2
 
