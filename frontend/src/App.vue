@@ -364,6 +364,30 @@ function handleWindowDrop(event) {
   sidebarRef.value?.startLocalImport?.(droppedFiles);
 }
 
+function handleWindowPaste(event) {
+  // Ignore paste events originating from editable elements (text inputs etc.)
+  const target = event.target;
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target?.isContentEditable
+  ) {
+    return;
+  }
+  const items = Array.from(event.clipboardData?.items || []);
+  const mediaFiles = items
+    .filter(
+      (item) =>
+        item.kind === "file" &&
+        (item.type.startsWith("image/") || item.type.startsWith("video/")),
+    )
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (!mediaFiles.length) return;
+  event.preventDefault();
+  sidebarRef.value?.startLocalImport?.(mediaFiles);
+}
+
 function updateIsMobile() {
   if (typeof window !== "undefined") {
     isMobile.value = window.innerWidth <= MOBILE_BREAKPOINT;
@@ -1041,6 +1065,7 @@ onMounted(async () => {
   window.addEventListener("keydown", handleGlobalKeydown);
   window.addEventListener("dragover", handleWindowDragOver, true);
   window.addEventListener("drop", handleWindowDrop, true);
+  window.addEventListener("paste", handleWindowPaste, true);
   refreshSidebar();
   updateMaxColumns();
   connectUpdatesSocket();
@@ -1058,6 +1083,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleGlobalKeydown);
   window.removeEventListener("dragover", handleWindowDragOver, true);
   window.removeEventListener("drop", handleWindowDrop, true);
+  window.removeEventListener("paste", handleWindowPaste, true);
   if (mainAreaResizeObserver) {
     mainAreaResizeObserver.disconnect();
     mainAreaResizeObserver = null;
