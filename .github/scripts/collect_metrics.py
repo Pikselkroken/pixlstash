@@ -49,6 +49,7 @@ def pypi_get(path):
                 time.sleep(wait)
             else:
                 raise
+    raise RuntimeError(f"Failed to fetch PyPI stats for path {path!r} after 4 attempts")
 
 
 def fetch_stars_and_forks():
