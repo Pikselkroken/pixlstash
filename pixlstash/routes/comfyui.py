@@ -187,7 +187,13 @@ def _submit_comfyui_prompt(
     workflow: dict,
     client_id: str | None = None,
 ) -> dict:
-    payload = {"prompt": workflow}
+    # Strip PixlStash-specific metadata keys before sending to ComfyUI.
+    # ComfyUI iterates all top-level entries as nodes and will crash on any
+    # non-dict value (e.g. the list stored in "pixlstash_output_nodes").
+    clean_workflow = {
+        k: v for k, v in workflow.items() if not k.startswith("pixlstash_")
+    }
+    payload = {"prompt": clean_workflow}
     if client_id:
         payload["client_id"] = client_id
     try:

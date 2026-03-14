@@ -1,18 +1,9 @@
 {
-  "76": {
-    "inputs": {
-      "value": "{{caption}}"
-    },
-    "class_type": "PrimitiveStringMultiline",
-    "_meta": {
-      "title": "Prompt"
-    }
-  },
-  "78": {
+  "9": {
     "inputs": {
       "filename_prefix": "Flux2-Klein",
       "images": [
-        "77:65",
+        "75:65",
         0
       ]
     },
@@ -21,7 +12,16 @@
       "title": "Save Image"
     }
   },
-  "77:61": {
+  "76": {
+    "inputs": {
+      "value": "A vintage motorcycle parked in front of a retro diner at sunset, warm orange and pink sky, neon signs glowing, 80s vintage photo style, film grain, warm color cast\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Prompt"
+    }
+  },
+  "75:61": {
     "inputs": {
       "sampler_name": "euler"
     },
@@ -30,26 +30,64 @@
       "title": "KSamplerSelect"
     }
   },
-  "77:64": {
+  "75:62": {
+    "inputs": {
+      "steps": 20,
+      "width": [
+        "75:68",
+        0
+      ],
+      "height": [
+        "75:69",
+        0
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2Scheduler"
+    }
+  },
+  "75:63": {
+    "inputs": {
+      "cfg": 5,
+      "model": [
+        "75:70",
+        0
+      ],
+      "positive": [
+        "75:74",
+        0
+      ],
+      "negative": [
+        "75:67",
+        0
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFGGuider"
+    }
+  },
+  "75:64": {
     "inputs": {
       "noise": [
-        "77:73",
+        "75:73",
         0
       ],
       "guider": [
-        "77:63",
+        "75:63",
         0
       ],
       "sampler": [
-        "77:61",
+        "75:61",
         0
       ],
       "sigmas": [
-        "77:62",
+        "75:62",
         0
       ],
       "latent_image": [
-        "77:66",
+        "75:66",
         0
       ]
     },
@@ -58,14 +96,14 @@
       "title": "SamplerCustomAdvanced"
     }
   },
-  "77:65": {
+  "75:65": {
     "inputs": {
       "samples": [
-        "77:64",
+        "75:64",
         0
       ],
       "vae": [
-        "77:72",
+        "75:72",
         0
       ]
     },
@@ -74,14 +112,14 @@
       "title": "VAE Decode"
     }
   },
-  "77:66": {
+  "75:66": {
     "inputs": {
       "width": [
-        "77:68",
+        "75:68",
         0
       ],
       "height": [
-        "77:69",
+        "75:69",
         0
       ],
       "batch_size": 1
@@ -91,36 +129,59 @@
       "title": "Empty Flux 2 Latent"
     }
   },
-  "77:68": {
+  "75:67": {
     "inputs": {
-      "value": 1280
+      "text": "{{caption}}",
+      "clip": [
+        "75:71",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "75:68": {
+    "inputs": {
+      "value": 1024
     },
     "class_type": "PrimitiveInt",
     "_meta": {
       "title": "Width"
     }
   },
-  "77:69": {
+  "75:69": {
     "inputs": {
-      "value": 1920
+      "value": 1024
     },
     "class_type": "PrimitiveInt",
     "_meta": {
       "title": "Height"
     }
   },
-  "77:73": {
+  "75:73": {
     "inputs": {
-      "noise_seed": 431595349983745
+      "noise_seed": 0
     },
     "class_type": "RandomNoise",
     "_meta": {
       "title": "RandomNoise"
     }
   },
-  "77:71": {
+  "75:70": {
     "inputs": {
-      "clip_name": "qwen38BFluxKlein9BTE_38b.safetensors",
+      "unet_name": "flux-2-klein-9b-fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "75:71": {
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
       "type": "flux2",
       "device": "default"
     },
@@ -129,7 +190,7 @@
       "title": "Load CLIP"
     }
   },
-  "77:72": {
+  "75:72": {
     "inputs": {
       "vae_name": "flux2-vae.safetensors"
     },
@@ -138,14 +199,14 @@
       "title": "Load VAE"
     }
   },
-  "77:74": {
+  "75:74": {
     "inputs": {
       "text": [
         "76",
         0
       ],
       "clip": [
-        "77:71",
+        "75:71",
         0
       ]
     },
@@ -154,67 +215,7 @@
       "title": "CLIP Text Encode (Positive Prompt)"
     }
   },
-  "77:70": {
-    "inputs": {
-      "unet_name": "flux-2-klein-9b.safetensors",
-      "weight_dtype": "default"
-    },
-    "class_type": "UNETLoader",
-    "_meta": {
-      "title": "Load Diffusion Model"
-    }
-  },
-  "77:76": {
-    "inputs": {
-      "conditioning": [
-        "77:74",
-        0
-      ]
-    },
-    "class_type": "ConditioningZeroOut",
-    "_meta": {
-      "title": "ConditioningZeroOut"
-    }
-  },
-  "77:63": {
-    "inputs": {
-      "cfg": 1,
-      "model": [
-        "77:70",
-        0
-      ],
-      "positive": [
-        "77:74",
-        0
-      ],
-      "negative": [
-        "77:76",
-        0
-      ]
-    },
-    "class_type": "CFGGuider",
-    "_meta": {
-      "title": "CFGGuider"
-    }
-  },
-  "77:62": {
-    "inputs": {
-      "steps": 4,
-      "width": [
-        "77:68",
-        0
-      ],
-      "height": [
-        "77:69",
-        0
-      ]
-    },
-    "class_type": "Flux2Scheduler",
-    "_meta": {
-      "title": "Flux2Scheduler"
-    }
-  },
   "pixlstash_output_nodes": [
-    "78"
+    "9"
   ]
 }
