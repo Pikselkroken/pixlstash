@@ -331,7 +331,7 @@ def create_router(server) -> APIRouter:
         summary="Get current user config",
         description="Returns the authenticated user's UI and behavior configuration payload.",
     )
-    async def get_me_config(request: Request):
+    def get_me_config(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
         return serialize_user_config(user)
@@ -389,7 +389,7 @@ def create_router(server) -> APIRouter:
         summary="Change current user password",
         description="Changes the authenticated user's password according to auth policy.",
     )
-    async def change_me_password(payload: ChangePasswordRequest, request: Request):
+    def change_me_password(payload: ChangePasswordRequest, request: Request):
         result = server.auth.change_password(request, payload)
         server._user = server.auth.user
         return result
@@ -399,7 +399,7 @@ def create_router(server) -> APIRouter:
         summary="Get auth state",
         description="Returns authentication and session-related information for the current request.",
     )
-    async def get_me_auth(request: Request):
+    def get_me_auth(request: Request):
         return server.auth.get_auth_info(request)
 
     @router.post(
@@ -407,7 +407,7 @@ def create_router(server) -> APIRouter:
         summary="Create API token",
         description="Creates a personal access token for the authenticated user.",
     )
-    async def create_me_token(payload: CreateTokenRequest, request: Request):
+    def create_me_token(payload: CreateTokenRequest, request: Request):
         return server.auth.create_token(request, payload.description)
 
     @router.get(
@@ -415,7 +415,7 @@ def create_router(server) -> APIRouter:
         summary="List API tokens",
         description="Lists personal access tokens owned by the authenticated user.",
     )
-    async def list_me_tokens(request: Request):
+    def list_me_tokens(request: Request):
         return server.auth.list_tokens(request)
 
     @router.delete(
@@ -423,7 +423,7 @@ def create_router(server) -> APIRouter:
         summary="Delete API token",
         description="Deletes one personal access token by id for the authenticated user.",
     )
-    async def delete_me_token(token_id: int, request: Request):
+    def delete_me_token(token_id: int, request: Request):
         return server.auth.delete_token(request, token_id)
 
     @router.get(
@@ -431,7 +431,7 @@ def create_router(server) -> APIRouter:
         summary="Get worker progress",
         description="Returns background worker progress plus process CPU, RAM, and VRAM usage metrics.",
     )
-    async def get_workers_progress(request: Request):
+    def get_workers_progress(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
         return {
@@ -445,7 +445,7 @@ def create_router(server) -> APIRouter:
         summary="List watch folders",
         description="Returns watch-folder paths from server configuration.",
     )
-    async def get_watch_folders(request: Request):
+    def get_watch_folders(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
         config_path, folders = _load_watch_folders()
@@ -460,7 +460,7 @@ def create_router(server) -> APIRouter:
         summary="Open server config location",
         description="Opens the server config path in the operating system file browser.",
     )
-    async def open_server_config(request: Request):
+    def open_server_config(request: Request):
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
         config_path = getattr(server, "_server_config_path", None)

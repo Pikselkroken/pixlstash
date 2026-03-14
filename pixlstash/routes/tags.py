@@ -21,7 +21,7 @@ def create_router(server) -> APIRouter:
         summary="Add tag to picture",
         description="Adds a tag to a picture and removes empty-tag sentinel when appropriate.",
     )
-    async def add_tag_to_picture(id: str, payload: dict = Body(...)):
+    def add_tag_to_picture(id: str, payload: dict = Body(...)):
         try:
             try:
                 pic_id = int(id)
@@ -83,7 +83,7 @@ def create_router(server) -> APIRouter:
         summary="List picture tags",
         description="Returns all tags currently attached to a picture.",
     )
-    async def list_picture_tags(id: str):
+    def list_picture_tags(id: str):
         try:
             try:
                 pic_id = int(id)
@@ -118,7 +118,7 @@ def create_router(server) -> APIRouter:
         summary="Remove picture tag",
         description="Removes one tag from a picture by numeric tag id and restores empty-tag sentinel when needed.",
     )
-    async def remove_tag_from_picture(id: str, tag_id: str):
+    def remove_tag_from_picture(id: str, tag_id: str):
         try:
             try:
                 pic_id = int(id)
@@ -183,7 +183,7 @@ def create_router(server) -> APIRouter:
         summary="Remove tag everywhere on picture",
         description="Removes a tag value from the picture and its face/hand associations for that picture.",
     )
-    async def remove_tag_from_picture_everywhere(id: str, payload: dict = Body(...)):
+    def remove_tag_from_picture_everywhere(id: str, payload: dict = Body(...)):
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
@@ -238,7 +238,7 @@ def create_router(server) -> APIRouter:
         summary="Clear all tags on picture",
         description="Removes all tags from a picture in a single operation and restores the empty-tag sentinel.",
     )
-    async def clear_all_tags_on_picture(id: str):
+    def clear_all_tags_on_picture(id: str):
         try:
             pic_id = int(id)
         except (TypeError, ValueError):

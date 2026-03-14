@@ -398,18 +398,39 @@
           >
             <div ref="mediaInnerRef" class="overlay-media-inner">
               <template v-if="image">
-                <video
-                  v-if="isSupportedVideoFile(getOverlayFormat(image))"
-                  ref="videoRef"
-                  :src="getFullImageUrl(image)"
-                  class="overlay-video"
-                  controls
-                  preload="auto"
-                  playsinline
-                  :draggable="!isZoomed"
-                  @dragstart="handleMediaDragStart"
-                  @loadedmetadata="updateOverlayDims"
-                ></video>
+                <template v-if="isSupportedVideoFile(getOverlayFormat(image))">
+                  <video
+                    v-if="!videoError"
+                    ref="videoRef"
+                    :src="videoSrc"
+                    class="overlay-video"
+                    controls
+                    preload="metadata"
+                    playsinline
+                    :draggable="!isZoomed"
+                    @dragstart="handleMediaDragStart"
+                    @loadedmetadata="updateOverlayDims"
+                    @error="handleVideoError"
+                  ></video>
+                  <div v-else class="overlay-video-error">
+                    <v-icon size="48" color="grey-lighten-1"
+                      >mdi-video-off-outline</v-icon
+                    >
+                    <p class="overlay-video-error-msg">
+                      Your browser cannot play this video format ({{
+                        getOverlayFormat(image).toUpperCase()
+                      }}).
+                    </p>
+                    <a
+                      :href="videoSrc"
+                      download
+                      class="overlay-video-download-btn"
+                    >
+                      <v-icon size="18">mdi-download</v-icon>
+                      Download video
+                    </a>
+                  </div>
+                </template>
                 <img
                   v-else
                   ref="imgRef"
@@ -2675,6 +2696,17 @@ const imgRef = ref(null);
 const videoRef = ref(null);
 const mediaInnerRef = ref(null);
 const videoMeta = ref({ duration: null });
+const videoError = ref(null); // set to MediaError when browser can't play the video
+// Derive the video src from id + format only — deliberately excludes pixel_sha
+// so the URL stays stable across metadata merges (which would otherwise abort
+// the in-progress download). Returns '' while format is not yet known, which
+// also keeps the <video> element from being created prematurely via v-if.
+const videoSrc = computed(() => {
+  const id = image.value?.id;
+  const fmt = image.value?.format;
+  if (!id || !fmt || !isSupportedVideoFile(`file.${fmt}`)) return "";
+  return `${backendUrl.value}/pictures/${id}.${fmt.toLowerCase()}`;
+});
 const overlayDims = ref({
   width: 1,
   height: 1,
@@ -2860,6 +2892,16 @@ function updateOverlayDims() {
 }
 
 watch(image, () => scheduleOverlayDimsUpdate());
+
+function handleVideoError(event) {
+  const err = event.target?.error;
+  const code = err?.code ?? -1;
+  const msg = err?.message ?? String(event);
+  // MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) is the most common — browser doesn't
+  // support the container/codec (e.g. Firefox + .mov/ProRes).
+  console.warn(`Video load error (code ${code}): ${msg}`);
+  videoError.value = err ?? { code, message: msg };
+}
 
 onMounted(() => {
   updateViewportMetrics();
@@ -3334,12 +3376,14 @@ watch(
         offsetX: 0,
         offsetY: 0,
       };
+      videoError.value = null;
       scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
       fetchOverlayMetadata(newId);
       preloadAdjacentImages();
     } else {
       faceBboxes.value = [];
+      videoError.value = null;
     }
   },
   { immediate: true },
@@ -4661,6 +4705,44 @@ function downloadComfyWorkflow(workflow) {
 
 .overlay-video {
   border-radius: 12px;
+}
+
+.overlay-video-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px;
+  border-radius: 12px;
+  background: rgba(var(--v-theme-dark-surface), 0.8);
+  color: rgb(var(--v-theme-on-dark-surface));
+  text-align: center;
+  min-width: 280px;
+}
+
+.overlay-video-error-msg {
+  margin: 0;
+  font-size: 0.9rem;
+  opacity: 0.75;
+  max-width: 300px;
+}
+
+.overlay-video-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  border-radius: 6px;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.overlay-video-download-btn:hover {
+  opacity: 0.85;
 }
 
 .overlay-nav {

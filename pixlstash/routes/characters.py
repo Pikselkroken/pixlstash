@@ -47,7 +47,7 @@ def create_router(server) -> APIRouter:
         summary="Get character category summary",
         description="Returns summary counts and thumbnail reference for ALL, UNASSIGNED, SCRAPHEAP, or a specific character id.",
     )
-    async def get_characters_summary(request: Request, id: str = None):
+    def get_characters_summary(request: Request, id: str = None):
         """
         Return summary statistics for a single category:
         - If character_id is ALL: all pictures
@@ -161,7 +161,7 @@ def create_router(server) -> APIRouter:
         summary="List reference pictures",
         description="Returns picture ids selected as reference faces for the given character.",
     )
-    async def get_character_reference_pictures(id: int):
+    def get_character_reference_pictures(id: int):
         """Return reference picture ids for a character.
 
         Args:
@@ -249,7 +249,7 @@ def create_router(server) -> APIRouter:
         summary="Delete character",
         description="Deletes a character, clears character assignment from faces, and removes its reference set when present.",
     )
-    async def delete_character(id: int):
+    def delete_character(id: int):
         try:
 
             def clear_character_and_nullify_faces(session: Session, character_id: int):
@@ -298,7 +298,7 @@ def create_router(server) -> APIRouter:
         summary="Get character by id",
         description="Returns a single character record by id.",
     )
-    async def get_character_by_id(id: int):
+    def get_character_by_id(id: int):
         try:
             char = server.vault.db.run_immediate_read_task(
                 lambda session: Character.find(session, id=id)
@@ -312,7 +312,7 @@ def create_router(server) -> APIRouter:
         summary="Get character field",
         description="Returns one character field value, including generated thumbnail handling for field=thumbnail.",
     )
-    async def get_character_field_by_id(id: int, field: str):
+    def get_character_field_by_id(id: int, field: str):
         if field == "thumbnail":
             thumbnail_cache_version = 6
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
@@ -540,7 +540,7 @@ def create_router(server) -> APIRouter:
         summary="List characters",
         description="Lists characters, optionally filtered by exact name.",
     )
-    async def get_characters(name: str = Query(None)):
+    def get_characters(name: str = Query(None)):
         try:
             logger.debug(f"Fetching characters with name: {name}")
             characters = server.vault.db.run_immediate_read_task(
@@ -559,7 +559,7 @@ def create_router(server) -> APIRouter:
         summary="Create character",
         description="Creates a character and its linked reference picture set.",
     )
-    async def create_character(payload: dict = Body(...)):
+    def create_character(payload: dict = Body(...)):
         try:
 
             def create_character_and_reference_set(session, payload):
@@ -597,7 +597,7 @@ def create_router(server) -> APIRouter:
         summary="Assign faces to character",
         description="Assigns provided face ids or largest faces from picture ids to a character.",
     )
-    async def assign_face_to_character(character_id: int, payload: dict = Body(...)):
+    def assign_face_to_character(character_id: int, payload: dict = Body(...)):
         face_ids = payload.get("face_ids")
         picture_ids = payload.get("picture_ids")
         if face_ids is not None and not isinstance(face_ids, list):
@@ -703,7 +703,7 @@ def create_router(server) -> APIRouter:
         summary="Unassign faces from character",
         description="Removes character assignment from provided face ids or from faces in provided picture ids.",
     )
-    async def remove_character_from_faces(character_id: int, payload: dict = Body(...)):
+    def remove_character_from_faces(character_id: int, payload: dict = Body(...)):
         face_ids = payload.get("face_ids", None)
         picture_ids = payload.get("picture_ids", None)
         if not isinstance(face_ids, list) and not isinstance(picture_ids, list):

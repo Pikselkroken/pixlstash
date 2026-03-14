@@ -95,7 +95,8 @@ export function buildMediaUrl({backendUrl, image, format} = {}) {
   const ext = MediaFormat(format || image);
   const suffix = ext ? `.${ext}` : '';
   const cacheBuster = image.pixel_sha ? `?v=${image.pixel_sha}` : '';
-  return `${backendUrl}/pictures/${image.id}${suffix}${cacheBuster}`;
+  const url = `${backendUrl}/pictures/${image.id}${suffix}${cacheBuster}`;
+  return url;
 }
 
 export function getOverlayFormat(overlayImage) {

@@ -575,7 +575,7 @@ def fetch_smart_score_data(
 
         return good, bad, candidates
 
-    return server.vault.db.run_task(fetch_data, priority=DBPriority.IMMEDIATE)
+    return server.vault.db.run_immediate_read_task(fetch_data)
 
 
 def fetch_smart_score_unscored_ids(
