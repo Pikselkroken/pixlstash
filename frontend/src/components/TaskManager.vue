@@ -171,16 +171,16 @@ const WORKER_REMOVE_GRACE_SECONDS = 10;
 const nowSeconds = ref(Date.now() / 1000);
 
 const labelMap = {
-  quality_scored: "Quality scored",
+  quality_scored: "Quality",
   face_quality_scored: "Face quality",
-  pictures_tagged: "Pictures tagged",
+  pictures_tagged: "Tags",
   descriptions_generated: "Descriptions",
   text_embeddings: "Text embeddings",
   image_embeddings: "Image embeddings",
   features_extracted: "Features extracted",
   likeness_pairs: "Likeness pairs",
   likeness_parameters: "Likeness params",
-  watch_folder_import: "Watch folder import",
+  watch_folder_import: "Folder import",
 };
 
 function seedSnapshotsIfEmpty() {
