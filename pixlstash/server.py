@@ -7,6 +7,7 @@ import socket
 import asyncio
 import threading
 from importlib.metadata import PackageNotFoundError, version as package_version
+from platformdirs import user_config_dir
 
 
 from contextlib import asynccontextmanager
@@ -482,9 +483,13 @@ class Server:
         config_dir = os.path.dirname(server_config_path)
         os.makedirs(config_dir, exist_ok=True)
 
+        # SSL certs are always stored in the platform user-config dir so they
+        # stay in a consistent, writable location regardless of where the
+        # server-config file itself resides (e.g. a custom --server-config path).
+        _ssl_dir = os.path.join(user_config_dir("pixlstash"), "ssl")
         default_log_path = os.path.join(config_dir, "server.log")
-        default_ssl_cert_path = os.path.join(config_dir, "ssl", "cert.pem")
-        default_ssl_key_path = os.path.join(config_dir, "ssl", "key.pem")
+        default_ssl_cert_path = os.path.join(_ssl_dir, "cert.pem")
+        default_ssl_key_path = os.path.join(_ssl_dir, "key.pem")
         default_image_root = os.path.join(config_dir, "images")
 
         server_config = {}
@@ -545,6 +550,15 @@ class Server:
                     server_config["watch_folders"] = []
                 if "generate_thumbnails_on_startup" not in server_config:
                     server_config["generate_thumbnails_on_startup"] = True
+
+        # Resolve SSL paths that are relative: interpret them relative to the
+        # config file's directory, not the process's CWD, so that the certs
+        # always live alongside the config regardless of where the server is
+        # launched from.
+        for key in ("ssl_keyfile", "ssl_certfile"):
+            value = server_config.get(key)
+            if value and not os.path.isabs(value):
+                server_config[key] = os.path.join(config_dir, value)
 
         # Apply any test-level port override (set by the pytest conftest before
         # Server is instantiated). This lets tests run on a free port even when
