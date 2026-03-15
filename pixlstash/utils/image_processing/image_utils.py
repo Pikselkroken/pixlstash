@@ -181,6 +181,7 @@ class ImageUtils:
             return img
         try:
             with Image.open(file_path) as pil_img:
+                pil_img = ImageOps.exif_transpose(pil_img)
                 if pil_img.mode not in ("RGB", "L"):
                     pil_img = pil_img.convert("RGB")
                 rgb = np.array(pil_img)
@@ -376,6 +377,7 @@ class ImageUtils:
         try:
             try:
                 with Image.open(file_path) as img:
+                    img = ImageOps.exif_transpose(img)
                     return np.array(img.convert("RGB"))
             except Exception:
                 pass
