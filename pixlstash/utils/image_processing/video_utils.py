@@ -2,6 +2,8 @@
 
 import cv2
 import os
+import struct
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import numpy as np
@@ -10,6 +12,9 @@ from PIL import Image
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+# MP4/MOV timestamps count seconds since midnight, 1 January 1904 (UTC).
+_MP4_EPOCH = datetime(1904, 1, 1, tzinfo=timezone.utc)
 
 
 class VideoUtils:
@@ -20,6 +25,54 @@ class VideoUtils:
         """Return True if the file is a supported video format."""
         ext = os.path.splitext(file_path)[1].lower()
         return ext in [".mp4", ".webm", ".avi", ".mov", ".mkv"]
+
+    @staticmethod
+    def extract_created_at_from_bytes(data: bytes) -> Optional[datetime]:
+        """Extract the recording creation time from MP4/MOV container bytes.
+
+        Scans for the ``mvhd`` (movie header) ISOM box and reads its
+        ``creation_time`` field, converting from the MP4 epoch (1904-01-01
+        UTC) to a timezone-aware UTC datetime.
+
+        Args:
+            data: Raw video file bytes.
+
+        Returns:
+            UTC datetime if found, or None if no valid timestamp is present.
+        """
+        pos = 0
+        while pos < len(data) - 8:
+            idx = data.find(b"mvhd", pos)
+            if idx < 4:
+                # Need at least 4 bytes before 'mvhd' for the box size field.
+                break
+            version_pos = idx + 4  # byte immediately after the 4-byte box type
+            if version_pos >= len(data):
+                break
+            version = data[version_pos]
+            # Layout after box type: [version:1][flags:3][creation_time:4 or 8]
+            ct_pos = version_pos + 4  # skip version (1) + flags (3)
+            try:
+                if version == 0:
+                    if ct_pos + 4 > len(data):
+                        break
+                    ct_val = struct.unpack(">I", data[ct_pos : ct_pos + 4])[0]
+                elif version == 1:
+                    if ct_pos + 8 > len(data):
+                        break
+                    ct_val = struct.unpack(">Q", data[ct_pos : ct_pos + 8])[0]
+                else:
+                    pos = idx + 4
+                    continue
+            except struct.error:
+                pos = idx + 4
+                continue
+            if ct_val == 0:
+                # Unset / epoch-0 means not recorded.
+                pos = idx + 4
+                continue
+            return _MP4_EPOCH + timedelta(seconds=ct_val)
+        return None
 
     @staticmethod
     def _read_first_video_frame_bgr(file_path: str) -> Optional[np.ndarray]:

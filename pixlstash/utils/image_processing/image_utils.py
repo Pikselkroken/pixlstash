@@ -319,6 +319,16 @@ class ImageUtils:
         except Exception:
             pass
 
+        # Try to read creation time from the video container (MP4/MOV mvhd box)
+        # before falling back to the filesystem mtime, which reflects the import
+        # time rather than the original recording time for uploaded files.
+        try:
+            video_dt = VideoUtils.extract_created_at_from_bytes(image_bytes)
+            if video_dt is not None:
+                return video_dt
+        except Exception:
+            pass
+
         if fallback_file_path and os.path.exists(fallback_file_path):
             try:
                 ts = os.path.getmtime(fallback_file_path)
