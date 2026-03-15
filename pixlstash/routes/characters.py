@@ -22,7 +22,10 @@ from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
-from pixlstash.picture_scoring import select_reference_faces_for_character
+from pixlstash.picture_scoring import (
+    compute_character_likeness_for_faces,
+    select_reference_faces_for_character,
+)
 from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 
@@ -616,22 +619,40 @@ def create_router(server) -> APIRouter:
             faces_to_assign = []
             existing_faces = []
             if picture_ids:
+                reference_faces = select_reference_faces_for_character(
+                    session, character_id
+                )
+
+                def face_area(face):
+                    try:
+                        return (face.width or 0) * (face.height or 0)
+                    except Exception:
+                        return 0
+
                 for pic_id in picture_ids:
                     faces = Face.find(session, picture_id=pic_id)
                     if not faces:
                         continue
 
-                    def face_area(face):
-                        try:
-                            return (face.width or 0) * (face.height or 0)
-                        except Exception:
-                            return 0
-
-                    largest_face = max(faces, key=face_area)
-                    if largest_face.character_id == character_id:
-                        existing_faces.append(largest_face)
+                    if reference_faces:
+                        faces_with_features = [f for f in faces if f.features]
+                        if faces_with_features:
+                            likeness_map = compute_character_likeness_for_faces(
+                                reference_faces, faces_with_features
+                            )
+                            best_face = max(
+                                faces_with_features,
+                                key=lambda f: (likeness_map.get(f.id, 0.0), face_area(f)),
+                            )
+                        else:
+                            best_face = max(faces, key=face_area)
                     else:
-                        faces_to_assign.append(largest_face)
+                        best_face = max(faces, key=face_area)
+
+                    if best_face.character_id == character_id:
+                        existing_faces.append(best_face)
+                    else:
+                        faces_to_assign.append(best_face)
             if face_ids:
                 for face_id in face_ids:
                     face = session.get(Face, face_id)
