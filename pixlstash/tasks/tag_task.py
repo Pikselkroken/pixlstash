@@ -11,7 +11,7 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tasks.base_task import BaseTask
+from pixlstash.tasks.base_task import BaseTask, TaskPriority
 
 
 logger = get_logger(__name__)
@@ -138,6 +138,10 @@ class TagTask(BaseTask):
             except Exception:
                 return 0
         return 0
+
+    @property
+    def priority(self) -> TaskPriority:
+        return TaskPriority.HIGH
 
     def allow_cpu_spillover(self) -> bool:
         return True

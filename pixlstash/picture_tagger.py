@@ -85,7 +85,7 @@ MODEL_DIR = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
 BATCH_SIZE = 1
 MAX_CONCURRENT_IMAGES_GPU = _env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU", 64)
 MAX_CONCURRENT_IMAGES_CPU = _env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU", 8)
-FLORENCE_BATCH_SIZE_GPU = _env_int("PIXLSTASH_FLORENCE_BATCH_GPU", 32)
+FLORENCE_BATCH_SIZE_GPU = _env_int("PIXLSTASH_FLORENCE_BATCH_GPU", 8)
 FLORENCE_BATCH_SIZE_CPU = _env_int("PIXLSTASH_FLORENCE_BATCH_CPU", 2)
 TAGGER_DATALOADER_TIMEOUT = 30
 GENERAL_THRESHOLD = 0.8
@@ -106,8 +106,8 @@ EXPECTED_CONCURRENT_TAG_TASKS = _env_int("PIXLSTASH_EXPECTED_TAG_TASKS", 2)
 
 # Approximate VRAM footprints for non-tagging GPU pipelines
 INSIGHTFACE_VRAM_MB = 400  # RetinaFace + ArcFace models via CUDA provider
-FLORENCE_BASE_VRAM_MB = 500  # Florence-2-base model footprint
-FLORENCE_PER_IMAGE_VRAM_MB = 150  # Activation scratch per image in a GPU mini-batch
+FLORENCE_BASE_VRAM_MB = 500  # Florence-2-base model footprint (fp16 on GPU)
+FLORENCE_PER_IMAGE_VRAM_MB = 40  # Activation scratch per image in a GPU mini-batch
 
 # Tags that require close-up face crops to detect reliably at full-image resolution.
 # These are collected from face-crop passes and merged into the picture's flat tag list.
@@ -833,12 +833,16 @@ class PictureTagger:
         # Try SDPA first, fall back to eager if not supported
         attn_impl = "sdpa"
         try:
+            # .to(device=device, dtype=dtype) converts both parameters AND
+            # registered buffers (e.g. position embeddings) to the target dtype,
+            # whereas torch_dtype= in from_pretrained only covers parameters.
+            # This prevents Float/Half mismatches during fp16 inference.
             self._florence_model = _from_pretrained_local_first(
                 Florence2ForConditionalGeneration,
                 self._florence_model_name,
                 torch_dtype=dtype,
                 attn_implementation=attn_impl,
-            ).to(device)
+            ).to(device=device, dtype=dtype)
         except (TypeError, AttributeError) as e:
             logger.debug(f"SDPA not supported, falling back to eager attention: {e}")
             attn_impl = "eager"
@@ -847,7 +851,7 @@ class PictureTagger:
                 self._florence_model_name,
                 torch_dtype=dtype,
                 attn_implementation=attn_impl,
-            ).to(device)
+            ).to(device=device, dtype=dtype)
 
         self._florence_model.eval()
 
@@ -1017,20 +1021,14 @@ class PictureTagger:
                     if hasattr(self._florence_model, "dtype")
                     else None
                 )
-                if target_dtype and target_dtype == torch.float16:
-                    inputs = {
-                        k: v.to(florence_device).half()
-                        if torch.is_tensor(v) and v.dtype == torch.float32
-                        else v.to(florence_device)
-                        if torch.is_tensor(v)
-                        else v
-                        for k, v in inputs.items()
-                    }
-                else:
-                    inputs = {
-                        k: v.to(florence_device) if torch.is_tensor(v) else v
-                        for k, v in inputs.items()
-                    }
+                inputs = {
+                    k: v.to(device=florence_device, dtype=target_dtype)
+                    if torch.is_tensor(v) and v.is_floating_point()
+                    else v.to(florence_device)
+                    if torch.is_tensor(v)
+                    else v
+                    for k, v in inputs.items()
+                }
                 logger.debug(f"Inputs moved to {florence_device}")
                 with torch.inference_mode():
                     generated_ids = self._florence_model.generate(
@@ -1137,20 +1135,14 @@ class PictureTagger:
                 if hasattr(self._florence_model, "dtype")
                 else None
             )
-            if target_dtype and target_dtype == torch.float16:
-                inputs = {
-                    k: v.to(florence_device).half()
-                    if torch.is_tensor(v) and v.dtype == torch.float32
-                    else v.to(florence_device)
-                    if torch.is_tensor(v)
-                    else v
-                    for k, v in inputs.items()
-                }
-            else:
-                inputs = {
-                    k: v.to(florence_device) if torch.is_tensor(v) else v
-                    for k, v in inputs.items()
-                }
+            inputs = {
+                k: v.to(device=florence_device, dtype=target_dtype)
+                if torch.is_tensor(v) and v.is_floating_point()
+                else v.to(florence_device)
+                if torch.is_tensor(v)
+                else v
+                for k, v in inputs.items()
+            }
             logger.debug("Batch inputs moved to %s", florence_device)
             with torch.inference_mode():
                 generated_ids = self._florence_model.generate(
