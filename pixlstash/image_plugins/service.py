@@ -309,14 +309,18 @@ def _copy_face_associations(
     server,
     source_picture_ids: list[int],
     ordered_output_ids: list[int],
+    plugin: ImagePlugin | None = None,
+    params: dict[str, Any] | None = None,
 ) -> None:
     """Copy face/character associations from source pictures to their plugin outputs.
 
-    Bounding boxes are scaled proportionally when the output image dimensions
-    differ from the source (e.g. after a scaling plugin).  For same-size
-    outputs (colour filter, brightness/contrast, blur) the boxes are copied
-    as-is.  Sentinel faces (``face_index == -1``) and self-to-self mappings
-    are skipped.
+    Bounding boxes are transformed using the plugin's ``get_bbox_transform``
+    method when available.  Plugins that apply geometric transforms (rotation,
+    scaling, …) override that method to return a callable that correctly maps
+    each ``[x1, y1, x2, y2]`` bbox from source to output coordinates.  When
+    the plugin returns ``None`` the code falls back to a simple proportional
+    scale based on the ratio of output to source dimensions.  Sentinel faces
+    (``face_index == -1``) and self-to-self mappings are always skipped.
     """
     pairs = [
         (src, out)
@@ -368,20 +372,40 @@ def _copy_face_associations(
             source_pic = pic_by_id.get(source_id)
             output_pic = pic_by_id.get(output_id)
 
-            # Determine scale factors for bbox translation.
-            scale_x = 1.0
-            scale_y = 1.0
-            if (
-                source_pic is not None
-                and output_pic is not None
-                and source_pic.width
-                and source_pic.height
-                and output_pic.width
-                and output_pic.height
-                and (source_pic.width != output_pic.width or source_pic.height != output_pic.height)
-            ):
-                scale_x = output_pic.width / source_pic.width
-                scale_y = output_pic.height / source_pic.height
+            src_w = int(source_pic.width or 0) if source_pic else 0
+            src_h = int(source_pic.height or 0) if source_pic else 0
+            out_w = int(output_pic.width or 0) if output_pic else 0
+            out_h = int(output_pic.height or 0) if output_pic else 0
+
+            # Ask the plugin for a bbox transform.  Plugins that apply a
+            # geometric operation (rotate, scale, …) return a callable;
+            # others return None and we fall back to simple ratio scaling.
+            bbox_transform = None
+            if plugin is not None and src_w > 0 and src_h > 0 and out_w > 0 and out_h > 0:
+                bbox_transform = plugin.get_bbox_transform(
+                    params,
+                    (src_w, src_h),
+                    (out_w, out_h),
+                )
+
+            # Fallback: proportional scale when dimensions differ.
+            if bbox_transform is None and src_w > 0 and src_h > 0 and out_w > 0 and out_h > 0:
+                if src_w != out_w or src_h != out_h:
+                    scale_x = out_w / src_w
+                    scale_y = out_h / src_h
+
+                    def _make_scale_transform(sx: float, sy: float):
+                        def _transform(bbox: list[int]) -> list[int]:
+                            x1, y1, x2, y2 = bbox
+                            return [
+                                int(round(x1 * sx)),
+                                int(round(y1 * sy)),
+                                int(round(x2 * sx)),
+                                int(round(y2 * sy)),
+                            ]
+                        return _transform
+
+                    bbox_transform = _make_scale_transform(scale_x, scale_y)
 
             for face in faces:
                 key = (int(output_id), int(face.frame_index), int(face.face_index))
@@ -390,13 +414,10 @@ def _copy_face_associations(
 
                 scaled_bbox = None
                 if face.bbox and len(face.bbox) == 4:
-                    x1, y1, x2, y2 = face.bbox
-                    scaled_bbox = [
-                        int(round(x1 * scale_x)),
-                        int(round(y1 * scale_y)),
-                        int(round(x2 * scale_x)),
-                        int(round(y2 * scale_y)),
-                    ]
+                    if bbox_transform is not None:
+                        scaled_bbox = bbox_transform(face.bbox)
+                    else:
+                        scaled_bbox = list(face.bbox)
 
                 new_face = Face(
                     picture_id=output_id,
@@ -511,7 +532,7 @@ def apply_plugin_to_pictures(
     )
 
     _propagate_output_picture_sets(server, source_picture_ids, ordered_output_ids)
-    _copy_face_associations(server, source_picture_ids, ordered_output_ids)
+    _copy_face_associations(server, source_picture_ids, ordered_output_ids, plugin=plugin, params=params)
 
     for source_id, out_id in zip(source_picture_ids, ordered_output_ids):
         stack_id = server.vault.db.run_task(get_or_create_stack_for_picture, source_id)

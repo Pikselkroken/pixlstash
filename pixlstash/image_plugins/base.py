@@ -98,6 +98,33 @@ class ImagePlugin(ABC):
             Transformed images in the same order as ``images``.
         """
 
+    def get_bbox_transform(
+        self,
+        parameters: dict[str, Any] | None,
+        source_size: tuple[int, int],
+        output_size: tuple[int, int],
+    ) -> Callable[[list[int]], list[int]] | None:
+        """Return a function that maps a bbox from source to output image space.
+
+        The callable receives ``[x1, y1, x2, y2]`` in source pixel coordinates
+        and must return a new ``[x1, y1, x2, y2]`` in output pixel coordinates.
+        Return ``None`` to fall back to the default proportional scaling used
+        by the face-copy logic in ``service.py``.
+
+        Override this in plugins that apply a geometric transformation (rotation,
+        scaling, cropping, etc.) so that face bounding boxes are correctly
+        repositioned on the output image.
+
+        Args:
+            parameters: The same parameter dict passed to ``run``/``run_video``.
+            source_size: ``(width, height)`` of each input image.
+            output_size: ``(width, height)`` of the corresponding output image.
+
+        Returns:
+            A callable ``transform(bbox) -> bbox``, or ``None``.
+        """
+        return None
+
     def run_video(
         self,
         source_path: str,

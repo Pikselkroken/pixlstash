@@ -52,6 +52,26 @@ class ScalingPlugin(ImagePlugin):
             },
         ]
 
+    def get_bbox_transform(self, parameters, source_size, output_size):
+        """Scale bounding boxes proportionally to the output image dimensions."""
+        src_w, src_h = source_size
+        out_w, out_h = output_size
+        if src_w <= 0 or src_h <= 0 or out_w <= 0 or out_h <= 0:
+            return None
+        scale_x = out_w / src_w
+        scale_y = out_h / src_h
+
+        def transform(bbox: list[int]) -> list[int]:
+            x1, y1, x2, y2 = bbox
+            return [
+                int(round(x1 * scale_x)),
+                int(round(y1 * scale_y)),
+                int(round(x2 * scale_x)),
+                int(round(y2 * scale_y)),
+            ]
+
+        return transform
+
     def run(
         self,
         images: list[Image.Image],

@@ -40,7 +40,7 @@
           :class="inputClass ? [inputClass] : ['plugin-ui-input']"
         >
           <option v-for="choice in field.enum" :key="choice" :value="choice">
-            {{ choice }}
+            {{ (field.enumLabels && field.enumLabels[choice]) || choice }}
           </option>
         </select>
 
