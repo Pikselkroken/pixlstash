@@ -1,6 +1,8 @@
 import time
 import os
+import threading
 
+import numpy as np
 from sqlmodel import Session, select
 from sqlalchemy import func
 
@@ -16,33 +18,115 @@ logger = get_logger(__name__)
 
 
 class QualityTask(BaseTask):
-    """Task that calculates full-image quality metrics for one batch."""
+    """Task that calculates full-image quality metrics for one batch.
+
+    Two tasks may be in-flight simultaneously (ping-pong I/O prefetch), but
+    only one may execute compute at a time.  While task N runs compute, task
+    N+1 preloads its images from disk in a background thread so that it is
+    ready to compute the moment the semaphore is released.
+    """
 
     BATCH_SIZE = 64
     FULL_IMAGE_MAX_SIDE = 512
 
-    def __init__(self, database):
+    # Only one QualityTask may run compute at a time.  A second task may be
+    # in-flight and preloading images concurrently (ping-pong pattern).
+    _execution_semaphore = threading.Semaphore(1)
+
+    def __init__(self, database, pictures: list):
+        picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
         super().__init__(
             task_type="QualityTask",
             params={
-                "batch_size": self.BATCH_SIZE,
+                "picture_ids": picture_ids,
+                "batch_size": len(picture_ids),
             },
         )
         self._db = database
+        self._pictures = pictures or []
+        self._preloaded_images: dict[str, np.ndarray | None] = {}
+        self._preload_lock = threading.Lock()
+        self._preload_thread: threading.Thread | None = None
+        self._preload_started_at: float | None = None
+        self._preload_finished_at: float | None = None
+
+    def on_queued(self) -> None:
+        """Start background I/O preload as soon as the task is queued."""
+        if self._preload_thread is not None and self._preload_thread.is_alive():
+            return
+        self._preload_started_at = time.perf_counter()
+        self._preload_thread = threading.Thread(
+            target=self._preload_images,
+            name=f"QualityTaskPreload-{self.id[:8]}",
+            daemon=True,
+        )
+        self._preload_thread.start()
+
+    def _preload_images(self) -> None:
+        """Load every image in the batch from disk into memory (background thread)."""
+        preloaded: dict[str, np.ndarray | None] = {}
+        for pic in self._pictures:
+            file_path = None
+            try:
+                file_path = str(
+                    ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
+                )
+                img = ImageUtils.load_image_or_video(file_path)
+                preloaded[file_path] = img
+            except Exception as exc:
+                logger.debug(
+                    "Preload failed for %s: %s",
+                    getattr(pic, "file_path", None),
+                    exc,
+                )
+                if file_path is not None:
+                    preloaded[file_path] = None
+        with self._preload_lock:
+            self._preloaded_images = preloaded
+        self._preload_finished_at = time.perf_counter()
+        started_at = self._preload_started_at
+        if started_at is not None:
+            logger.debug(
+                "[QUALITY_PRELOAD] task_id=%s status=ready preloaded=%s preload_s=%.3f",
+                self.id,
+                len(preloaded),
+                self._preload_finished_at - started_at,
+            )
+
+    def _wait_for_preload(self) -> dict[str, np.ndarray | None]:
+        """Block until the preload thread finishes and return the image cache."""
+        if self._preload_thread is not None:
+            self._preload_thread.join()
+        with self._preload_lock:
+            return dict(self._preloaded_images)
 
     def _run_task(self):
+        # Acquire the class-level semaphore so that only one QualityTask runs
+        # compute at a time.  The second in-flight task has been preloading
+        # images while this one ran, so it will be ready immediately after the
+        # semaphore is released (ping-pong I/O pattern).
+        self._execution_semaphore.acquire()
+        try:
+            return self._compute()
+        finally:
+            self._execution_semaphore.release()
+
+    def _compute(self):
         start = time.time()
         quality_helper = QualityUtils(self._db)
 
-        pics_missing_quality = self._db.run_task(self._find_pictures_missing_quality)
-        if not pics_missing_quality:
+        pics = self._pictures
+        if not pics:
             return {"changed_count": 0, "changed": []}
 
-        self._backfill_missing_picture_metadata(pics_missing_quality)
+        self._backfill_missing_picture_metadata(pics)
 
-        grouped_full = quality_helper.group_pictures_by_format_and_size(
-            pics_missing_quality
-        )
+        # By the time we reach here the preload thread has had the full
+        # duration of the previous task's compute to finish I/O.  join() will
+        # return immediately in the common case.
+        preloaded = self._wait_for_preload()
+
+        grouped_full = quality_helper.group_pictures_by_format_and_size(pics)
         if not grouped_full:
             return {"changed_count": 0, "changed": []}
 
@@ -55,10 +139,13 @@ class QualityTask(BaseTask):
             skipped = []
 
             for pic in batch:
-                file_path = ImageUtils.resolve_picture_path(
-                    self._db.image_root, pic.file_path
+                file_path = str(
+                    ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
                 )
-                img = ImageUtils.load_image_or_video(file_path)
+                img = preloaded.get(file_path)
+                if img is None:
+                    # Fallback: not preloaded (added after on_queued, or preload failed).
+                    img = ImageUtils.load_image_or_video(file_path)
                 if img is None:
                     skipped.append(pic)
                     continue
@@ -94,6 +181,7 @@ class QualityTask(BaseTask):
                         colorfulness=-1.0,
                         luminance_entropy=-1.0,
                         dominant_hue=-1.0,
+                        text_score=-1.0,
                         color_histogram=None,
                     )
                     for _ in skipped
@@ -117,18 +205,18 @@ class QualityTask(BaseTask):
         }
 
     @staticmethod
-    def _find_pictures_missing_quality(session: Session):
+    def _find_pictures_missing_quality(session: Session, limit: int):
         return session.exec(
             select(Picture)
             .outerjoin(
                 Quality,
                 (Quality.picture_id == Picture.id) & (Quality.face_id.is_(None)),
             )
-            .where(Quality.id.is_(None))
+            .where(Quality.text_score.is_(None))
             .where(Picture.deleted.is_(False))
             .where(Picture.file_path.is_not(None))
             .order_by(Picture.format, Picture.width, Picture.height)
-            .limit(QualityTask.BATCH_SIZE * 8)
+            .limit(limit)
         ).all()
 
     @staticmethod
@@ -140,7 +228,7 @@ class QualityTask(BaseTask):
                 Quality,
                 (Quality.picture_id == Picture.id) & (Quality.face_id.is_(None)),
             )
-            .where(Quality.id.is_(None))
+            .where(Quality.text_score.is_(None))
             .where(Picture.deleted.is_(False))
             .where(Picture.file_path.is_not(None))
         ).one()

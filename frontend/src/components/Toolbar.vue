@@ -940,6 +940,7 @@ const SORT_ICON_MAP = {
   NAME: "mdi-sort-alphabetical",
   IMAGE_SIZE: "mdi-image-size-select-large",
   RANDOM: "mdi-shuffle",
+  TEXT_CONTENT: "mdi-text-recognition",
 };
 
 function getSortIcon(value) {

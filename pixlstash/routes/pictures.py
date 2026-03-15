@@ -36,6 +36,7 @@ from pixlstash.db_models import (
     Picture,
     PictureLikeness,
     PictureSetMember,
+    Quality,
     SortMechanism,
     Tag,
 )
@@ -502,6 +503,26 @@ def _select_pictures_for_listing(
     if return_ids_only:
         return [pic.id for pic in pics]
     result = serialize_metadata(pics)
+    if sort_mech and sort_mech.key == SortMechanism.Keys.TEXT_CONTENT and result:
+        pic_ids = [d["id"] for d in result if d.get("id") is not None]
+
+        def _fetch_text_scores(session, ids):
+            rows = session.exec(
+                select(Quality.picture_id, Quality.text_score).where(
+                    Quality.picture_id.in_(ids),
+                    Quality.face_id.is_(None),
+                )
+            ).all()
+            return {pid: ts for pid, ts in rows}
+
+        text_score_map = server.vault.db.run_immediate_read_task(
+            _fetch_text_scores, pic_ids
+        )
+        for d in result:
+            pid = d.get("id")
+            if pid is not None:
+                ts = text_score_map.get(pid)
+                d["text_score"] = round(ts, 3) if ts is not None and ts >= 0 else None
     if stack_leaders_only:
         result = _enrich_stack_counts(server, result)
     return result
@@ -2032,7 +2053,35 @@ def create_router(server) -> APIRouter:
                 detail="Requested extension does not match picture format",
             )
 
-        media_type = MEDIA_TYPE_BY_FORMAT.get(pic.format.lower())
+        fmt_lower = pic.format.lower()
+
+        # Browsers (Chrome, Firefox) cannot display HEIC/HEIF natively.
+        # Transcode to JPEG on-the-fly so the overlay image loads correctly.
+        if fmt_lower in ("heic", "heif"):
+            try:
+                pil_img = Image.open(file_path)
+                buf = BytesIO()
+                pil_img.convert("RGB").save(buf, format="JPEG", quality=92)
+                buf.seek(0)
+                jpeg_bytes = buf.read()
+            except Exception as exc:
+                logger.error(
+                    "Failed to transcode HEIF to JPEG for picture id=%s: %s",
+                    pic.id,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to transcode HEIF image",
+                )
+            response = Response(
+                content=jpeg_bytes,
+                media_type="image/jpeg",
+            )
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return response
+
+        media_type = MEDIA_TYPE_BY_FORMAT.get(fmt_lower)
         response = FileResponse(file_path, media_type=media_type)
         try:
             stat = os.stat(file_path)
@@ -2076,7 +2125,9 @@ def create_router(server) -> APIRouter:
         def fetch_image_only_tags(session: Session, pic_id: int):
             return session.exec(select(Tag).where(Tag.picture_id == pic_id)).all()
 
-        pic_tags = server.vault.db.run_immediate_read_task(fetch_image_only_tags, pic.id)
+        pic_tags = server.vault.db.run_immediate_read_task(
+            fetch_image_only_tags, pic.id
+        )
         pic_dict = safe_model_dict(pic)
         pic_dict["tags"] = serialize_tag_objects(pic_tags)
 

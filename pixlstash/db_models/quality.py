@@ -39,6 +39,7 @@ class Quality(SQLModel, table=True):
     colorfulness: Optional[float] = Field(default=None, index=True)
     luminance_entropy: Optional[float] = Field(default=None, index=True)
     dominant_hue: Optional[float] = Field(default=None, index=True)
+    text_score: Optional[float] = Field(default=None, index=True)
 
     # Store color histogram as a binary blob (np.float32 array, serialised)
     color_histogram: Optional[bytes] = Field(
@@ -170,6 +171,10 @@ class Quality(SQLModel, table=True):
         colorfulness = fix_none(colorfulness)
         luminance_entropy = fix_none(luminance_entropy)
         dominant_hue = fix_none(dominant_hue)
+        # Compute text score using MSER region detection (per-image loop)
+        text_scores = np.zeros((batch_size,), dtype=np.float32)
+        for i in range(batch_size):
+            text_scores[i] = Quality._calculate_text_score(images[i])
         # Compute color histograms for each image (flattened, float32, d)
         if calculate_histograms:
             histograms = []
@@ -197,6 +202,7 @@ class Quality(SQLModel, table=True):
                     colorfulness=float(colorfulness[i]),
                     luminance_entropy=float(luminance_entropy[i]),
                     dominant_hue=float(dominant_hue[i]),
+                    text_score=float(text_scores[i]),
                     color_histogram=histograms[i],
                 )
             )
@@ -248,6 +254,9 @@ class Quality(SQLModel, table=True):
         t0 = time.time()
         dominant_hue = Quality._calculate_dominant_hue(image)
         timings["dominant_hue"] = time.time() - t0
+        t0 = time.time()
+        text_score = Quality._calculate_text_score(image)
+        timings["text_score"] = time.time() - t0
 
         # Post-calc None checks
         sharpness = -1.0 if sharpness is None else sharpness
@@ -258,6 +267,7 @@ class Quality(SQLModel, table=True):
         colorfulness = -1.0 if colorfulness is None else colorfulness
         luminance_entropy = -1.0 if luminance_entropy is None else luminance_entropy
         dominant_hue = -1.0 if dominant_hue is None else dominant_hue
+        text_score = -1.0 if text_score is None else text_score
         return Quality(
             sharpness=float(sharpness),
             edge_density=float(edge_density),
@@ -267,6 +277,7 @@ class Quality(SQLModel, table=True):
             colorfulness=float(colorfulness),
             luminance_entropy=float(luminance_entropy),
             dominant_hue=float(dominant_hue),
+            text_score=float(text_score),
         )
 
     @staticmethod
@@ -430,6 +441,137 @@ class Quality(SQLModel, table=True):
         bin_idx = int(hist.argmax())
         return float(min(max((bin_idx + 0.5) / 180.0, 0.0), 1.0))
 
+    @staticmethod
+    def _calculate_text_score(image: np.ndarray) -> float:
+        """Estimate the likelihood that an image is a text document (receipt, invoice, etc.).
+
+        Two independent signals are combined with a geometric mean so that *both* must
+        be strong to produce a high score:
+
+        1. **Background uniformity** – documents have a strongly dominant background
+           colour (white paper, dark board) covering most of the image.  Natural photos
+           have a much more spread-out pixel distribution.  A blank white sheet scores
+           0 on signal 2 and therefore still returns 0.
+
+        2. **Character-component density** – after Otsu binarisation against the detected
+           background polarity, connected components that fall within the size range of
+           individual printed characters are counted.  Receipts produce hundreds of such
+           components; a T-shirt with a slogan produces only a handful.
+
+        The geometric mean ensures both signals must be present: a blank page gets 0
+        (no components), a textured photo gets 0 (no dominant background), and only
+        true text documents score high.
+
+        Args:
+            image: RGB or grayscale image as a numpy array.
+
+        Returns:
+            Score in [0, 1].
+        """
+        if image.ndim == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image.copy()
+        h, w = gray.shape
+        area = h * w
+        if area == 0:
+            return 0.0
+
+        # --- Signal 1: background uniformity ---
+        # Find the dominant grey level by smoothing the histogram and finding its peak.
+        hist = np.bincount(gray.ravel(), minlength=256).astype(np.float64)
+        # Box-smooth over ±15 levels to find the broad peak (background colour).
+        kernel = np.ones(31) / 31.0
+        hist_smooth = np.convolve(hist, kernel, mode="same")
+        bg_level = int(np.argmax(hist_smooth))
+        # Fraction of pixels within ±25 levels of the dominant background peak.
+        margin = 25
+        lo = max(0, bg_level - margin)
+        hi = min(255, bg_level + margin)
+        bg_fraction = float(hist[lo : hi + 1].sum()) / area
+        # Ramp from 0 below 0.50 to 1.0 at 0.80.  Landscapes are typically 0.10–0.45;
+        # a scanned document is typically 0.65–0.92.
+        bg_score = float(np.clip((bg_fraction - 0.50) / 0.30, 0.0, 1.0))
+
+        # Also check for a large near-white region — handles receipts photographed on a
+        # dark surface where the dominant histogram peak is the backdrop, not the paper.
+        # Ramp: 20 % paper coverage → score 0; 55 % coverage → score 1.
+        paper_fraction = float((gray > 160).sum()) / area
+        paper_score = float(np.clip((paper_fraction - 0.20) / 0.35, 0.0, 1.0))
+        bg_score = max(bg_score, paper_score)
+
+        # Early exit: no point counting components if the background isn't document-like.
+        if bg_score == 0.0:
+            return 0.0
+
+        # --- Signal 2: character-component density ---
+        # The binarisation strategy depends on whether the document background is light
+        # (scanned / held-up receipt) or whether a bright paper sits on a dark scene
+        # (receipt laid on a table and photographed from above).
+        if bg_level > 128:
+            # Light background, dark text — standard case.
+            _, binary = cv2.threshold(
+                gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+            )
+            fg_fraction = float(np.count_nonzero(binary)) / area
+            # Sparse ink on paper: 2–40 % foreground.
+            # Textured photos split ~50/50 (no true bimodal distribution) → reject.
+            if fg_fraction > 0.40 or fg_fraction < 0.02:
+                return 0.0
+            analysis_binary = binary
+        else:
+            # Dark scene with a bright document region.
+            # Step 1: isolate the paper (bright) region.
+            _, paper_mask = cv2.threshold(
+                gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            paper_px = int(np.count_nonzero(paper_mask))
+            paper_frac = float(paper_px) / area
+            # Require the paper region to cover 15–70 % of the frame.
+            if paper_frac < 0.15 or paper_frac > 0.70:
+                return 0.0
+            # Step 2: re-binarise *within* the paper region to find dark text on white.
+            # Non-paper pixels are set to white so they don't confuse Otsu.
+            paper_gray = np.where(paper_mask > 0, gray, 255).astype(np.uint8)
+            _, analysis_binary = cv2.threshold(
+                paper_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+            )
+            # Text should cover 1–35 % of the paper area (not 50 %, which is texture).
+            text_px = int(np.count_nonzero(analysis_binary))
+            fg_fraction = float(text_px) / max(paper_px, 1)
+            if fg_fraction > 0.35 or fg_fraction < 0.01:
+                return 0.0
+
+        num_labels, _, stats, _ = cv2.connectedComponentsWithStats(
+            analysis_binary, connectivity=8
+        )
+
+        # Character-size bounds scaled to actual image resolution.
+        # At 512 px, a small printed character is roughly 3–30 px on a side.
+        min_char_area = max(8, area // 4000)  # lower bound scales with resolution
+        max_char_area = area // 20  # upper bound: nothing bigger than 5 % of frame
+
+        char_count = 0
+        for i in range(1, num_labels):  # label 0 is the background
+            ca = int(stats[i, cv2.CC_STAT_AREA])
+            if ca < min_char_area or ca > max_char_area:
+                continue
+            cw = int(stats[i, cv2.CC_STAT_WIDTH])
+            ch = int(stats[i, cv2.CC_STAT_HEIGHT])
+            if cw == 0 or ch == 0:
+                continue
+            # Reject very elongated blobs (scan lines, borders, stray marks).
+            if max(cw, ch) / float(min(cw, ch)) > 6.0:
+                continue
+            char_count += 1
+
+        # Normalise: ~250 character-like components = full score.
+        # A dense receipt at 512 px yields 200–500; a T-shirt slogan yields < 30.
+        cc_score = float(min(1.0, char_count / 250.0))
+
+        # Geometric mean: both signals must be strong for a high overall score.
+        return float(np.sqrt(bg_score * cc_score))
+
     @classmethod
     def quality_metric_fields(cls) -> set[str]:
         """
@@ -444,6 +586,7 @@ class Quality(SQLModel, table=True):
             "colorfulness",
             "luminance_entropy",
             "dominant_hue",
+            "text_score",
         ]
 
     @classmethod

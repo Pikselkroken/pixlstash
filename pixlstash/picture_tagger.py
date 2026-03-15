@@ -2021,7 +2021,9 @@ class PictureTagger:
                 )
             except OSError:
                 logger.info("Downloading all-MiniLM-L6-v2 for the first time...")
-                sbert_model = SentenceTransformer("all-MiniLM-L6-v2", device=self._device)
+                sbert_model = SentenceTransformer(
+                    "all-MiniLM-L6-v2", device=self._device
+                )
             self._sbert_model = sbert_model
 
         logger.debug(

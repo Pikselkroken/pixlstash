@@ -1384,6 +1384,13 @@ function getThumbnailInfoItems(img) {
     });
   }
 
+  if (selectedSort === "TEXT_CONTENT" && typeof img.text_score === "number") {
+    items.push({
+      key: "text_score",
+      text: `Text: ${(img.text_score * 100).toFixed(0)}%`,
+    });
+  }
+
   if (
     typeof props.searchQuery === "string" &&
     img.likeness_score !== undefined

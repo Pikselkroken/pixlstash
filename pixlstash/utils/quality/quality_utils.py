@@ -160,6 +160,7 @@ class QualityUtils:
                     colorfulness=-1.0,
                     luminance_entropy=-1.0,
                     dominant_hue=-1.0,
+                    text_score=-1.0,
                     color_histogram=None,
                 )
             session.exec(

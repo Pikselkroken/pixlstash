@@ -46,6 +46,7 @@ class SortMechanism:
         PICTURE_STACKS = auto()
         IMAGE_SIZE = auto()
         SMART_SCORE = auto()
+        TEXT_CONTENT = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -71,6 +72,10 @@ class SortMechanism:
         Keys.IMAGE_SIZE: {
             "field": None,  # Special case, not a direct field
             "description": "Image Size",
+        },
+        Keys.TEXT_CONTENT: {
+            "field": None,  # Special case, requires Quality join
+            "description": "Text Content",
         },
     }
 
@@ -571,6 +576,16 @@ class Picture(SQLModel, table=True):
                     )
                 else:
                     query = query.order_by((cls.width * cls.height).asc(), cls.id.asc())
+            elif sort_mech.key == SortMechanism.Keys.TEXT_CONTENT:
+                query = query.join(
+                    Quality,
+                    (Quality.picture_id == cls.id) & Quality.face_id.is_(None),
+                    isouter=True,
+                )
+                if sort_mech.descending:
+                    query = query.order_by(Quality.text_score.desc(), cls.id.desc())
+                else:
+                    query = query.order_by(Quality.text_score.asc(), cls.id.asc())
             else:
                 field_name = sort_mech.field
                 field = getattr(cls, field_name, None)
@@ -721,6 +736,18 @@ class Picture(SQLModel, table=True):
                 order_expr = Picture.width * Picture.height
                 query = query.order_by(
                     order_expr.desc() if sort_mech.descending else order_expr.asc(),
+                    Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                )
+            elif sort_mech.key == SortMechanism.Keys.TEXT_CONTENT:
+                query = query.join(
+                    Quality,
+                    (Quality.picture_id == Picture.id) & Quality.face_id.is_(None),
+                    isouter=True,
+                )
+                query = query.order_by(
+                    Quality.text_score.desc()
+                    if sort_mech.descending
+                    else Quality.text_score.asc(),
                     Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                 )
             else:
