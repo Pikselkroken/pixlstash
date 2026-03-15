@@ -442,13 +442,11 @@ class ImageEmbeddingTask(BaseTask):
         if ImageEmbeddingTask._aesthetic_model is not None:
             try:
                 with torch.no_grad():
-                    emb_tensor = torch.from_numpy(embeddings).float()
-                    if next(ImageEmbeddingTask._aesthetic_model.parameters()).is_cuda:
-                        emb_tensor = emb_tensor.to(
-                            next(
-                                ImageEmbeddingTask._aesthetic_model.parameters()
-                            ).device
-                        )
+                    model_param = next(ImageEmbeddingTask._aesthetic_model.parameters())
+                    emb_tensor = torch.from_numpy(embeddings).to(
+                        dtype=model_param.dtype,
+                        device=model_param.device,
+                    )
 
                     scores = ImageEmbeddingTask._aesthetic_model(emb_tensor).squeeze()
                     if scores.ndim == 0:
