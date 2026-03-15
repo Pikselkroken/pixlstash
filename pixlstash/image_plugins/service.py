@@ -9,7 +9,7 @@ from typing import Any
 from PIL import Image
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture, PictureSetMember, PictureStack
+from pixlstash.db_models import Face, Picture, PictureSetMember, PictureStack
 from pixlstash.image_plugins.base import ImagePlugin
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
@@ -305,6 +305,125 @@ def _propagate_output_picture_sets(
     server.vault.db.run_task(copy_memberships)
 
 
+def _copy_face_associations(
+    server,
+    source_picture_ids: list[int],
+    ordered_output_ids: list[int],
+) -> None:
+    """Copy face/character associations from source pictures to their plugin outputs.
+
+    Bounding boxes are scaled proportionally when the output image dimensions
+    differ from the source (e.g. after a scaling plugin).  For same-size
+    outputs (colour filter, brightness/contrast, blur) the boxes are copied
+    as-is.  Sentinel faces (``face_index == -1``) and self-to-self mappings
+    are skipped.
+    """
+    pairs = [
+        (src, out)
+        for src, out in zip(source_picture_ids, ordered_output_ids)
+        if src is not None and out is not None and src != out
+    ]
+    if not pairs:
+        return
+
+    all_source_ids = list({src for src, _ in pairs})
+    all_output_ids = list({out for _, out in pairs})
+
+    def copy_faces(session: Session) -> None:
+        # Fetch real (non-sentinel) faces from source pictures.
+        source_faces = session.exec(
+            select(Face)
+            .where(Face.picture_id.in_(all_source_ids))
+            .where(Face.face_index != -1)
+        ).all()
+        if not source_faces:
+            return
+
+        # Index source faces by picture_id.
+        faces_by_source: dict[int, list[Face]] = {}
+        for face in source_faces:
+            faces_by_source.setdefault(int(face.picture_id), []).append(face)
+
+        # Fetch source + output pictures to read their dimensions.
+        all_ids = list(set(all_source_ids) | set(all_output_ids))
+        pictures = session.exec(select(Picture).where(Picture.id.in_(all_ids))).all()
+        pic_by_id: dict[int, Picture] = {int(p.id): p for p in pictures if p.id is not None}
+
+        # Check which (picture_id, frame_index, face_index) combos already exist
+        # on the output pictures to avoid UNIQUE constraint violations.
+        existing_faces = session.exec(
+            select(Face).where(Face.picture_id.in_(all_output_ids))
+        ).all()
+        existing_keys: set[tuple[int, int, int]] = {
+            (int(f.picture_id), int(f.frame_index), int(f.face_index))
+            for f in existing_faces
+        }
+
+        new_faces: list[Face] = []
+        for source_id, output_id in pairs:
+            faces = faces_by_source.get(source_id)
+            if not faces:
+                continue
+
+            source_pic = pic_by_id.get(source_id)
+            output_pic = pic_by_id.get(output_id)
+
+            # Determine scale factors for bbox translation.
+            scale_x = 1.0
+            scale_y = 1.0
+            if (
+                source_pic is not None
+                and output_pic is not None
+                and source_pic.width
+                and source_pic.height
+                and output_pic.width
+                and output_pic.height
+                and (source_pic.width != output_pic.width or source_pic.height != output_pic.height)
+            ):
+                scale_x = output_pic.width / source_pic.width
+                scale_y = output_pic.height / source_pic.height
+
+            for face in faces:
+                key = (int(output_id), int(face.frame_index), int(face.face_index))
+                if key in existing_keys:
+                    continue
+
+                scaled_bbox = None
+                if face.bbox and len(face.bbox) == 4:
+                    x1, y1, x2, y2 = face.bbox
+                    scaled_bbox = [
+                        int(round(x1 * scale_x)),
+                        int(round(y1 * scale_y)),
+                        int(round(x2 * scale_x)),
+                        int(round(y2 * scale_y)),
+                    ]
+
+                new_face = Face(
+                    picture_id=output_id,
+                    frame_index=face.frame_index,
+                    face_index=face.face_index,
+                    character_id=face.character_id,
+                    bbox=scaled_bbox,
+                    # Copy embedding features so the likeness worker can use them
+                    # immediately without re-extracting.
+                    features=face.features,
+                )
+                new_faces.append(new_face)
+                existing_keys.add(key)
+
+        if new_faces:
+            session.add_all(new_faces)
+            session.commit()
+            logger.info(
+                "Copied %d face association(s) from %d source picture(s) to %d output picture(s).",
+                len(new_faces),
+                len(all_source_ids),
+                len(all_output_ids),
+            )
+
+    server.vault.db.run_task(copy_faces)
+
+
 def apply_plugin_to_pictures(
     server,
     plugin: ImagePlugin,
@@ -392,6 +511,7 @@ def apply_plugin_to_pictures(
     )
 
     _propagate_output_picture_sets(server, source_picture_ids, ordered_output_ids)
+    _copy_face_associations(server, source_picture_ids, ordered_output_ids)
 
     for source_id, out_id in zip(source_picture_ids, ordered_output_ids):
         stack_id = server.vault.db.run_task(get_or_create_stack_for_picture, source_id)
