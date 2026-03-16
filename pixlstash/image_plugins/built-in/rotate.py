@@ -63,8 +63,8 @@ class RotatePlugin(ImagePlugin):
             corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
             if direction == "90_left":  # CCW: (x, y) -> (y, src_w - x)
                 rotated = [(y, src_w - x) for x, y in corners]
-            elif direction == "90_right":  # CW: (x, y) -> (y, x)
-                rotated = [(y, x) for x, y in corners]
+            elif direction == "90_right":  # CW: (x, y) -> (src_h - y, x)
+                rotated = [(src_h - y, x) for x, y in corners]
             else:  # 180°: (x, y) -> (src_w - x, src_h - y)
                 rotated = [(src_w - x, src_h - y) for x, y in corners]
             xs = [p[0] for p in rotated]
