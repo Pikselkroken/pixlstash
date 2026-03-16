@@ -3264,6 +3264,8 @@ function getFaceThumbStyle(face, idx) {
 
 async function assignFaceToCharacter(face, character) {
   if (!face?.id || !character?.id || !backendUrl.value) return;
+  // Store imageId before the await in case image.value changes or is nulled during the async operation
+  const capturedImageId = image.value?.id ?? null;
   try {
     await apiClient.post(
       `${backendUrl.value}/characters/${character.id}/faces`,
@@ -3281,9 +3283,9 @@ async function assignFaceToCharacter(face, character) {
         return entry;
       });
     }
-    if (image.value?.id) {
+    if (capturedImageId) {
       emit("overlay-change", {
-        imageId: image.value.id,
+        imageId: capturedImageId,
         fields: { faces: true },
       });
     }
@@ -3294,6 +3296,8 @@ async function assignFaceToCharacter(face, character) {
 
 async function unassignFaceCharacter(face) {
   if (!face?.id || !face?.character_id || !backendUrl.value) return;
+  // Store imageId before the await in case image.value changes or is nulled during the async operation
+  const capturedImageId = image.value?.id ?? null;
   try {
     await apiClient.delete(
       `${backendUrl.value}/characters/${face.character_id}/faces`,
@@ -3307,9 +3311,9 @@ async function unassignFaceCharacter(face) {
         return entry;
       });
     }
-    if (image.value?.id) {
+    if (capturedImageId) {
       emit("overlay-change", {
-        imageId: image.value.id,
+        imageId: capturedImageId,
         fields: { faces: true },
       });
     }
