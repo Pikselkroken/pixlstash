@@ -751,11 +751,31 @@ def create_router(server) -> APIRouter:
                     PictureSetMember.picture_id == picture_id,
                 )
             ).first()
-            if not member:
-                return False
-            session.delete(member)
-            session.commit()
-            return True
+            if member:
+                session.delete(member)
+                session.commit()
+                return True
+            # The picture may be a stack leader that was shown because another
+            # member of the same stack is in the set.  Find that member and
+            # remove it instead.
+            pic = session.get(Picture, picture_id)
+            if pic and pic.stack_id is not None:
+                stack_members = session.exec(
+                    select(PictureSetMember).where(
+                        PictureSetMember.set_id == id,
+                        PictureSetMember.picture_id.in_(
+                            select(Picture.id).where(
+                                Picture.stack_id == pic.stack_id
+                            )
+                        ),
+                    )
+                ).all()
+                if stack_members:
+                    for m in stack_members:
+                        session.delete(m)
+                    session.commit()
+                    return True
+            return False
 
         success = server.vault.db.run_task(
             remove_member,
