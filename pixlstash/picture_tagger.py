@@ -682,11 +682,30 @@ class PictureTagger:
                     try:
                         self._init_custom_tagger()
                     except Exception as exc:
-                        logger.warning(
-                            "Custom tagger reinit failed; disabling custom tagger: %s",
-                            exc,
+                        is_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
+                            "out of memory" in str(exc).lower()
                         )
-                        self._use_custom_tagger = False
+                        if is_oom and str(self._custom_device) != "cpu":
+                            logger.warning(
+                                "Custom tagger GPU load failed (OOM); retrying on CPU: %s",
+                                exc,
+                            )
+                            self._custom_device = "cpu"
+                            try:
+                                self._init_custom_tagger()
+                                logger.info("Custom tagger loaded on CPU successfully.")
+                            except Exception as cpu_exc:
+                                logger.warning(
+                                    "Custom tagger CPU fallback also failed; disabling: %s",
+                                    cpu_exc,
+                                )
+                                self._use_custom_tagger = False
+                        else:
+                            logger.warning(
+                                "Custom tagger reinit failed; disabling custom tagger: %s",
+                                exc,
+                            )
+                            self._use_custom_tagger = False
             self._models_ready = True
 
     def _ensure_captioning_ready(self):
@@ -1498,9 +1517,9 @@ class PictureTagger:
     def custom_tagger_ready(self) -> bool:
         return bool(
             self._use_custom_tagger
-            and hasattr(self, "_custom_transform")
-            and hasattr(self, "_custom_model")
-            and hasattr(self, "_custom_labels")
+            and self._custom_transform is not None
+            and self._custom_model is not None
+            and self._custom_labels is not None
         )
 
     def custom_tagger_threshold_full(self) -> float:
@@ -1554,7 +1573,7 @@ class PictureTagger:
         """
         if not items:
             return {}
-        if not hasattr(self, "_custom_model") or not hasattr(self, "_custom_labels"):
+        if self._custom_model is None or self._custom_labels is None:
             logger.debug("Custom tagger not available; skipping quality crop pass.")
             return {}
 
@@ -1576,6 +1595,9 @@ class PictureTagger:
         pass_name: str = "full_images",
     ):
         if not items:
+            return {}
+        if self._custom_model is None or self._custom_labels is None:
+            logger.warning("Custom tagger model is None; skipping _tag_custom_items.")
             return {}
 
         tag_threshold = (
@@ -1652,10 +1674,10 @@ class PictureTagger:
     def _tag_images_custom(self, image_paths, stop_event=None, preloaded_images=None):
         from PIL import Image
 
-        if not hasattr(self, "_custom_transform"):
+        if self._custom_transform is None:
             logger.warning("Custom tagger not initialised; skipping custom tags.")
             return {}
-        if not hasattr(self, "_custom_model") or not hasattr(self, "_custom_labels"):
+        if self._custom_model is None or self._custom_labels is None:
             logger.warning("Custom tagger model not available; skipping custom tags.")
             return {}
 

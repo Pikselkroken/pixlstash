@@ -295,9 +295,32 @@ class TaskRunner:
 
             # Escape hatch: if nothing is currently in flight (reserved_mb==0),
             # waiting longer cannot help — the overflow comes from loaded models
-            # that won't be freed.  Pass the gate after a grace period so tasks
-            # are not blocked forever.
+            # or an external process (e.g. ComfyUI) that won't be freed.
+            # If the task supports CPU spillover, try that first so we don't
+            # pile more GPU work onto an already-full device.
             if reserved_mb == 0 and waited_s >= self.SPILLOVER_GRACE_SECONDS:
+                if spillover_allowed and not spillover_applied:
+                    try:
+                        getattr(task, "enable_cpu_spillover", lambda: None)()
+                        spillover_applied = True
+                        logger.warning(
+                            "Task %s (%s) VRAM gate escape (external VRAM pressure): "
+                            "enabling CPU spillover (used=%sMB estimated=%sMB budget=%sMB overflow=%sMB).",
+                            task.id,
+                            task.type,
+                            used_mb,
+                            estimated_mb,
+                            budget_mb,
+                            overflow_mb,
+                        )
+                        return estimated_mb
+                    except Exception as exc:
+                        logger.warning(
+                            "Task %s (%s) CPU spillover hook failed during escape: %s",
+                            task.id,
+                            task.type,
+                            exc,
+                        )
                 logger.warning(
                     "Task %s (%s) VRAM gate escape: no tasks in flight after %.1fs; "
                     "running despite overflow (used=%sMB estimated=%sMB budget=%sMB overflow=%sMB). "
