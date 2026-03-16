@@ -453,7 +453,9 @@ def create_router(server) -> APIRouter:
                 else:
                     raw = Image.open(picture_path)
                     raw.load()  # force HEIF/lazy decoders to materialise before conversion
-                    image = raw.convert("RGB").copy()  # detach from any HEIF CtxImage context
+                    image = raw.convert(
+                        "RGB"
+                    ).copy()  # detach from any HEIF CtxImage context
             except Exception:
                 raise HTTPException(
                     status_code=404, detail="Failed to crop face thumbnail"
@@ -642,7 +644,10 @@ def create_router(server) -> APIRouter:
                             )
                             best_face = max(
                                 faces_with_features,
-                                key=lambda f: (likeness_map.get(f.id, 0.0), face_area(f)),
+                                key=lambda f: (
+                                    likeness_map.get(f.id, 0.0),
+                                    face_area(f),
+                                ),
                             )
                         else:
                             best_face = max(faces, key=face_area)

@@ -1396,7 +1396,7 @@ async function runComfyWorkflow() {
       : 0;
     emit("comfyui-run", {
       prompts: Array.isArray(res.data?.prompts) ? res.data.prompts : [],
-      pictureId: image.value?.id ?? null,
+      pictureId: payload.picture_id ?? null,
     });
     comfyuiRunSuccess.value = promptCount
       ? `Queued ${promptCount} run(s) in ComfyUI.`
@@ -2822,16 +2822,18 @@ async function onDrawEnd(event) {
     clearDrawMode();
     return;
   }
+  const capturedImageId = image.value.id;
+  const capturedBackendUrl = backendUrl.value;
   const payload = { bbox: [x1, y1, x2, y2], frame_index: 0 };
   try {
     if (drawMode.value === "face") {
       await apiClient.post(
-        `${backendUrl.value}/pictures/${image.value.id}/face`,
+        `${capturedBackendUrl}/pictures/${capturedImageId}/face`,
         payload,
       );
-      await fetchFaceBboxes(image.value.id);
+      await fetchFaceBboxes(capturedImageId);
       emit("overlay-change", {
-        imageId: image.value.id,
+        imageId: capturedImageId,
         fields: { faces: true },
       });
     }
@@ -3918,17 +3920,21 @@ function cancelEditDescription() {
 async function saveDescription() {
   if (!image.value || isSavingDescription.value) return;
   isSavingDescription.value = true;
+  // Capture before any await in case image.value is nulled by ESC during the request
+  const capturedImageId = image.value.id;
   const newDescription = descriptionDraft.value.trim();
   const payload = { description: newDescription || null };
   try {
     await apiClient.patch(
-      `${backendUrl.value}/pictures/${image.value.id}`,
+      `${backendUrl.value}/pictures/${capturedImageId}`,
       payload,
     );
-    image.value = { ...image.value, description: newDescription };
+    if (image.value) {
+      image.value = { ...image.value, description: newDescription };
+    }
     if (Array.isArray(allImages.value)) {
       const idx = allImages.value.findIndex(
-        (img) => img && img.id === image.value.id,
+        (img) => img && img.id === capturedImageId,
       );
       if (idx !== -1) {
         allImages.value[idx] = {
@@ -3937,7 +3943,7 @@ async function saveDescription() {
         };
       }
     }
-    emit("update-description", image.value.id, newDescription);
+    emit("update-description", capturedImageId, newDescription);
     isEditingDescription.value = false;
   } catch (err) {
     alert(`Failed to update description: ${err?.message || err}`);
@@ -4155,10 +4161,11 @@ async function removeAllTag(tag) {
     }
   }
 
-  if (image.value?.id && backendUrl.value) {
+  const capturedImageId = image.value?.id ?? null;
+  if (capturedImageId && backendUrl.value) {
     try {
       await apiClient.post(
-        `${backendUrl.value}/pictures/${image.value.id}/tags/remove_all`,
+        `${backendUrl.value}/pictures/${capturedImageId}/tags/remove_all`,
         { tag: label },
       );
     } catch (err) {
@@ -4166,9 +4173,9 @@ async function removeAllTag(tag) {
     }
   }
 
-  if (didUpdate && image.value?.id) {
+  if (didUpdate && capturedImageId) {
     emit("overlay-change", {
-      imageId: image.value.id,
+      imageId: capturedImageId,
       fields: { tags: true, smartScore: true },
     });
   }
@@ -4177,11 +4184,13 @@ async function removeAllTag(tag) {
 async function refreshPictureTags() {
   if (!image.value?.id || !backendUrl.value) return;
   if (!allImageTags.value.length) return;
+  // Capture before any await in case image.value is nulled by ESC during the request
+  const capturedImageId = image.value.id;
 
   isTagsRefreshing.value = true;
   try {
     await apiClient.delete(
-      `${backendUrl.value}/pictures/${image.value.id}/tags`,
+      `${backendUrl.value}/pictures/${capturedImageId}/tags`,
     );
 
     if (image.value && Array.isArray(image.value.tags)) {
@@ -4189,11 +4198,11 @@ async function refreshPictureTags() {
     }
 
     emit("overlay-change", {
-      imageId: image.value.id,
+      imageId: capturedImageId,
       fields: { tags: true, smartScore: true },
     });
 
-    await fetchOverlayMetadata(image.value.id);
+    await fetchOverlayMetadata(capturedImageId);
   } catch (err) {
     console.warn("Failed to refresh picture tags:", err);
   } finally {

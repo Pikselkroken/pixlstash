@@ -764,9 +764,7 @@ def create_router(server) -> APIRouter:
                     select(PictureSetMember).where(
                         PictureSetMember.set_id == id,
                         PictureSetMember.picture_id.in_(
-                            select(Picture.id).where(
-                                Picture.stack_id == pic.stack_id
-                            )
+                            select(Picture.id).where(Picture.stack_id == pic.stack_id)
                         ),
                     )
                 ).all()
