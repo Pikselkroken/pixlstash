@@ -41,12 +41,20 @@ def _get_exif_bbox_transform(
     """
     try:
         with Image.open(file_path) as img:
+            # Always read the raw file dimensions directly — don't rely on the
+            # DB-stored picture.width/height which may not have been populated yet.
+            file_w, file_h = img.size
             exif = img.getexif()
             orientation = int(exif.get(_EXIF_ORIENTATION_TAG, 1)) if exif else 1
     except Exception:
         return None, src_w, src_h
 
-    # Orientation 1 (or missing): no transform.
+    # Use actual file dimensions for all transform maths.
+    src_w, src_h = file_w, file_h
+
+    # Orientation 1 (or missing): no transform needed — but still return the
+    # correct file dimensions so callers can use them even when src_w/src_h
+    # passed in were zero.
     if orientation == 1:
         return None, src_w, src_h
 
@@ -466,11 +474,14 @@ def _copy_face_associations(
             # whatever geometric transform the plugin applies.
             exif_transform = None
             inter_w, inter_h = src_w, src_h  # dimensions after EXIF transform
-            if src_w > 0 and src_h > 0 and source_pic is not None:
+            if source_pic is not None:
                 source_file = ImageUtils.resolve_picture_path(
                     server.vault.image_root, source_pic.file_path
                 )
                 if source_file:
+                    # _get_exif_bbox_transform always reads actual dimensions
+                    # from the file, so this also fills in inter_w/inter_h even
+                    # when src_w/src_h are 0 (picture.width/height not yet set).
                     exif_transform, inter_w, inter_h = _get_exif_bbox_transform(
                         source_file, src_w, src_h
                     )
