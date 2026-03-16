@@ -65,45 +65,59 @@ def _get_exif_bbox_transform(
     # apply the point transform to all four corners and take axis-aligned bounds.
 
     if orientation == 2:  # FLIP_LEFT_RIGHT: (x,y) -> (W-x, y) — dims unchanged
+
         def _t2(b: list[int]) -> list[int]:
             x1, y1, x2, y2 = b
             return [src_w - x2, y1, src_w - x1, y2]
+
         return _t2, src_w, src_h
 
     if orientation == 3:  # ROTATE_180: (x,y) -> (W-x, H-y) — dims unchanged
+
         def _t3(b: list[int]) -> list[int]:
             x1, y1, x2, y2 = b
             return [src_w - x2, src_h - y2, src_w - x1, src_h - y1]
+
         return _t3, src_w, src_h
 
     if orientation == 4:  # FLIP_TOP_BOTTOM: (x,y) -> (x, H-y) — dims unchanged
+
         def _t4(b: list[int]) -> list[int]:
             x1, y1, x2, y2 = b
             return [x1, src_h - y2, x2, src_h - y1]
+
         return _t4, src_w, src_h
 
     if orientation == 5:  # TRANSPOSE (flip+90°CCW): (x,y) -> (y, x) — swaps dims
+
         def _t5(b: list[int]) -> list[int]:
             x1, y1, x2, y2 = b
             return [y1, x1, y2, x2]
+
         return _t5, src_h, src_w
 
     if orientation == 6:  # ROTATE_270 (90°CW): (x,y) -> (H-y, x) — swaps dims
+
         def _t6(b: list[int]) -> list[int]:
             x1, y1, x2, y2 = b
             return [src_h - y2, x1, src_h - y1, x2]
+
         return _t6, src_h, src_w
 
     if orientation == 7:  # TRANSVERSE (flip+90°CW): (x,y) -> (H-y, W-x) — swaps dims
+
         def _t7(b: list[int]) -> list[int]:
             x1, y1, x2, y2 = b
             return [src_h - y2, src_w - x2, src_h - y1, src_w - x1]
+
         return _t7, src_h, src_w
 
     if orientation == 8:  # ROTATE_90 (90°CCW): (x,y) -> (y, W-x) — swaps dims
+
         def _t8(b: list[int]) -> list[int]:
             x1, y1, x2, y2 = b
             return [y1, src_w - x2, y2, src_w - x1]
+
         return _t8, src_h, src_w
 
     # Unknown orientation value — leave bboxes as-is.
@@ -441,7 +455,9 @@ def _copy_face_associations(
         # Fetch source + output pictures to read their dimensions.
         all_ids = list(set(all_source_ids) | set(all_output_ids))
         pictures = session.exec(select(Picture).where(Picture.id.in_(all_ids))).all()
-        pic_by_id: dict[int, Picture] = {int(p.id): p for p in pictures if p.id is not None}
+        pic_by_id: dict[int, Picture] = {
+            int(p.id): p for p in pictures if p.id is not None
+        }
 
         # Check which (picture_id, frame_index, face_index) combos already exist
         # on the output pictures to avoid UNIQUE constraint violations.
@@ -489,7 +505,13 @@ def _copy_face_associations(
             # Step 2: ask the plugin for its geometric bbox transform, using the
             # post-EXIF (intermediate) dimensions as the logical source size.
             bbox_transform = None
-            if plugin is not None and inter_w > 0 and inter_h > 0 and out_w > 0 and out_h > 0:
+            if (
+                plugin is not None
+                and inter_w > 0
+                and inter_h > 0
+                and out_w > 0
+                and out_h > 0
+            ):
                 bbox_transform = plugin.get_bbox_transform(
                     params,
                     (inter_w, inter_h),
@@ -497,7 +519,13 @@ def _copy_face_associations(
                 )
 
             # Step 3: fallback — proportional scale when dimensions differ.
-            if bbox_transform is None and inter_w > 0 and inter_h > 0 and out_w > 0 and out_h > 0:
+            if (
+                bbox_transform is None
+                and inter_w > 0
+                and inter_h > 0
+                and out_w > 0
+                and out_h > 0
+            ):
                 if inter_w != out_w or inter_h != out_h:
                     scale_x = out_w / inter_w
                     scale_y = out_h / inter_h
@@ -511,6 +539,7 @@ def _copy_face_associations(
                                 int(round(x2 * sx)),
                                 int(round(y2 * sy)),
                             ]
+
                         return _transform
 
                     bbox_transform = _make_scale_transform(scale_x, scale_y)
@@ -644,7 +673,9 @@ def apply_plugin_to_pictures(
     )
 
     _propagate_output_picture_sets(server, source_picture_ids, ordered_output_ids)
-    _copy_face_associations(server, source_picture_ids, ordered_output_ids, plugin=plugin, params=params)
+    _copy_face_associations(
+        server, source_picture_ids, ordered_output_ids, plugin=plugin, params=params
+    )
 
     for source_id, out_id in zip(source_picture_ids, ordered_output_ids):
         stack_id = server.vault.db.run_task(get_or_create_stack_for_picture, source_id)
