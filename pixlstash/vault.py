@@ -335,12 +335,6 @@ class Vault:
     def _notify_worker_ids_processed(self, worker_type: TaskType, changed):
         self._notify_planner_ids_processed(worker_type, changed)
 
-    def _watch_planner_id(self, worker_type: TaskType, cls: type, object_id, attr: str):
-        future = Future()
-        with self._planner_watchers_lock:
-            self._planner_watchers[(worker_type, cls, object_id, attr)] = future
-        return future
-
     def _planner_attr_current_value(self, cls: type, object_id: int, attr: str):
         def fetch(session: Session):
             obj = session.get(cls, object_id)
@@ -355,19 +349,6 @@ class Vault:
             return value is not None, value
 
         return self.db.run_immediate_read_task(fetch)
-
-    def _resolve_planner_future_if_already_processed(
-        self,
-        cls: type,
-        object_id: int,
-        attr: str,
-    ) -> Future | None:
-        is_ready, payload = self._planner_attr_current_value(cls, object_id, attr)
-        if not is_ready:
-            return None
-        future = Future()
-        future.set_result((object_id, payload))
-        return future
 
     def _notify_planner_ids_processed(self, worker_type: TaskType, changed):
         with self._planner_watchers_lock:
@@ -393,14 +374,29 @@ class Vault:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
             self._picture_tagger.set_max_vram_usage_gb(self._max_vram_gb)
-        resolved_future = self._resolve_planner_future_if_already_processed(
-            cls,
-            object_id,
-            attr,
-        )
-        if resolved_future is not None:
-            return resolved_future
-        return self._watch_planner_id(worker_type, cls, object_id, attr)
+
+        # Register the watcher BEFORE checking the DB to avoid a TOCTOU race where
+        # the task completes (and fires _notify_planner_ids_processed) in the gap
+        # between the "already done?" check and registering the watcher, causing the
+        # notification to be silently dropped and the future to never resolve.
+        future = Future()
+        with self._planner_watchers_lock:
+            self._planner_watchers[(worker_type, cls, object_id, attr)] = future
+
+        # Double-check: if the value is already in the DB (either it was ready all
+        # along, or the task completed before we registered the watcher), resolve
+        # the future ourselves.  If _notify_planner_ids_processed already fired and
+        # resolved it, the pop will return None and we skip the duplicate set_result.
+        is_ready, payload = self._planner_attr_current_value(cls, object_id, attr)
+        if is_ready:
+            with self._planner_watchers_lock:
+                popped = self._planner_watchers.pop(
+                    (worker_type, cls, object_id, attr), None
+                )
+            if popped is not None:
+                future.set_result((object_id, payload))
+
+        return future
 
     def is_worker_running(self, worker_type: TaskType) -> bool:
         """Check if a specific worker is running."""
