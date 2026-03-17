@@ -251,6 +251,7 @@ const exportMenuOpen = ref(false);
 const exportType = ref("full");
 const exportCaptionMode = ref("description");
 const exportIncludeCharacterName = ref(true);
+const exportUseOriginalFileNames = ref(false);
 const exportResolution = ref("original");
 const exportSelectedCount = ref(0);
 const exportTotalCount = ref(0);
@@ -863,6 +864,7 @@ function confirmExportZip() {
     exportType: exportType.value,
     captionMode: exportCaptionMode.value,
     includeCharacterName: exportIncludeCharacterName.value,
+    useOriginalFileNames: exportUseOriginalFileNames.value,
     resolution: exportResolution.value,
   });
   exportMenuOpen.value = false;
@@ -1200,6 +1202,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:exportCaptionMode="exportCaptionMode"
             v-model:exportResolution="exportResolution"
             v-model:exportIncludeCharacterName="exportIncludeCharacterName"
+            v-model:exportUseOriginalFileNames="exportUseOriginalFileNames"
             v-model:mediaTypeFilter="mediaTypeFilter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"

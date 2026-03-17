@@ -1448,6 +1448,7 @@ def create_router(server) -> APIRouter:
         threshold: float = Query(0.0),
         caption_mode: str = Query("description"),
         include_character_name: bool = Query(False),
+        use_original_file_names: bool = Query(False),
         resolution: str = Query("original"),
         export_type: str = Query("full"),
     ):
@@ -1471,6 +1472,7 @@ def create_router(server) -> APIRouter:
             "threshold": threshold,
             "caption_mode": caption_mode,
             "include_character_name": include_character_name,
+            "use_original_file_names": use_original_file_names,
             "resolution": resolution,
             "export_type": export_type,
         }

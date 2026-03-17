@@ -523,6 +523,12 @@
                 exportCaptionMode === 'none' || exportTypeLocksCaptions
               "
             />
+            <v-switch
+              v-model="exportUseOriginalFileNamesModel"
+              label="Use original file names"
+              color="primary"
+              density="comfortable"
+            />
             <v-btn color="primary" @click="emit('confirm-export-zip')">
               Export
             </v-btn>
@@ -676,6 +682,7 @@ const props = defineProps({
   exportType: { type: String, default: "full" },
   exportCaptionMode: { type: String, default: "description" },
   exportIncludeCharacterName: { type: Boolean, default: true },
+  exportUseOriginalFileNames: { type: Boolean, default: false },
   exportResolution: { type: String, default: "original" },
   exportTypeLocksCaptions: { type: Boolean, default: false },
   exportCaptionOptions: { type: Array, default: () => [] },
@@ -710,6 +717,7 @@ const emit = defineEmits([
   "update:exportCaptionMode",
   "update:exportResolution",
   "update:exportIncludeCharacterName",
+  "update:exportUseOriginalFileNames",
   "update:mediaTypeFilter",
   "update:similarity-character",
   "update:stack-threshold",
@@ -831,6 +839,11 @@ const exportResolutionModel = computed({
 const exportIncludeCharacterNameModel = computed({
   get: () => props.exportIncludeCharacterName,
   set: (value) => emit("update:exportIncludeCharacterName", value),
+});
+
+const exportUseOriginalFileNamesModel = computed({
+  get: () => props.exportUseOriginalFileNames,
+  set: (value) => emit("update:exportUseOriginalFileNames", value),
 });
 
 const mediaTypeFilterModel = computed({
