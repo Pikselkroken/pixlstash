@@ -1,3 +1,0 @@
-PixlStash 1.0 Hardening Plan
-
-* Improve smart score
