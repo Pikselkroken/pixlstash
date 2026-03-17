@@ -820,7 +820,15 @@ async function handleDeleteSet() {
 
 async function handleDropOnSet(setId, event) {
   dragOverSet.value = null;
-  if (event?.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+  // If this is an internal grid drag (has application/json payload), skip the
+  // file-import path — browsers also populate dataTransfer.files for <img> drags.
+  const isInternalDrag =
+    event?.dataTransfer?.types?.includes("application/json");
+  if (
+    !isInternalDrag &&
+    event?.dataTransfer?.files &&
+    event.dataTransfer.files.length > 0
+  ) {
     const files = Array.from(event.dataTransfer.files);
     pendingImportTarget.value = { type: "set", id: setId };
     imageImporterRef.value?.startImport(files);
@@ -880,7 +888,15 @@ function handleDragLeaveCharacter() {
 
 async function onCharacterDrop(characterId, event) {
   dragOverCharacter.value = null;
-  if (event?.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+  // If this is an internal grid drag (has application/json payload), skip the
+  // file-import path — browsers also populate dataTransfer.files for <img> drags.
+  const isInternalDrag =
+    event?.dataTransfer?.types?.includes("application/json");
+  if (
+    !isInternalDrag &&
+    event?.dataTransfer?.files &&
+    event.dataTransfer.files.length > 0
+  ) {
     const files = Array.from(event.dataTransfer.files);
     pendingImportTarget.value = { type: "character", id: characterId };
     imageImporterRef.value?.startImport(files);
