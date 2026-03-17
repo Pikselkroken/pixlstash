@@ -97,6 +97,8 @@ class ExportUtils:
             bool(include_character_name) and caption_mode_d != "none"
         )
 
+        use_original_file_names = background_data.get("use_original_file_names", False)
+
         if export_type_d != Picture.ExportType.FULL:
             caption_mode_d = "tags"
             include_character_name_enabled = False
@@ -130,6 +132,7 @@ class ExportUtils:
             "only_deleted": only_deleted,
             "picture_ids": picture_ids,
             "select_fields": select_fields,
+            "use_original_file_names": use_original_file_names,
         }
 
     @staticmethod
@@ -184,6 +187,8 @@ class ExportUtils:
             only_deleted = params["only_deleted"]
             picture_ids = params["picture_ids"]
             select_fields = params["select_fields"]
+            use_original_file_names = params.get("use_original_file_names", False)
+            used_names: dict = {}
 
             pics = []
             set_id = background_data.get("set_id")
@@ -257,6 +262,7 @@ class ExportUtils:
                         "include_character_name",
                         "export_type",
                         "resolution",
+                        "use_original_file_names",
                     },
                 )
                 if ordered_ids:
@@ -357,13 +363,24 @@ class ExportUtils:
                         )
                         ext = os.path.splitext(full_path)[1]
                         if export_type_d == Picture.ExportType.FULL:
-                            arcname = f"image_{idx:05d}{ext}"
-                            try:
-                                with Image.open(full_path) as img:
-                                    if (
-                                        scale_factor < 1.0
-                                        and not VideoUtils.is_video_file(full_path)
-                                    ):
+                            orig_name = getattr(pic, "original_file_name", None)
+                            if use_original_file_names and orig_name:
+                                orig_stem, orig_ext = os.path.splitext(orig_name)
+                                file_ext = orig_ext or ext
+                                count = used_names.get(orig_stem, 0) + 1
+                                used_names[orig_stem] = count
+                                name_stem = (
+                                    orig_stem if count == 1 else f"{orig_stem}_{count}"
+                                )
+                                arcname = f"{name_stem}{file_ext}"
+                            else:
+                                name_stem = f"image_{idx:05d}"
+                                arcname = f"{name_stem}{ext}"
+                            if scale_factor < 1.0 and not VideoUtils.is_video_file(
+                                full_path
+                            ):
+                                try:
+                                    with Image.open(full_path) as img:
                                         save_kwargs = {}
                                         exif_bytes = img.info.get("exif")
                                         if exif_bytes:
@@ -397,15 +414,15 @@ class ExportUtils:
                                             scale=scale_factor,
                                             save_kwargs=save_kwargs,
                                         )
-                                    else:
-                                        zip_file.write(full_path, arcname=arcname)
-                            except Exception as exc:
-                                logger.warning(
-                                    "Failed to resize %s (%s); falling back to"
-                                    " original.",
-                                    full_path,
-                                    exc,
-                                )
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Failed to resize %s (%s); falling back to"
+                                        " original.",
+                                        full_path,
+                                        exc,
+                                    )
+                                    zip_file.write(full_path, arcname=arcname)
+                            else:
                                 zip_file.write(full_path, arcname=arcname)
 
                             caption_text = None
@@ -436,7 +453,7 @@ class ExportUtils:
 
                             if caption_mode_d != "none" and caption_text is not None:
                                 zip_file.writestr(
-                                    f"image_{idx:05d}.txt",
+                                    f"{name_stem}.txt",
                                     f"{caption_text}\n",
                                 )
                             export_tasks[task_id]["processed"] += 1

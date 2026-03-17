@@ -5024,9 +5024,20 @@ async function exportCurrentViewToZip(options = {}) {
   const exportType = options.exportType || "full";
   const captionMode = options.captionMode || "description";
   const includeCharacterName = options.includeCharacterName !== false;
+  const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   let url = `${props.backendUrl}/pictures/export`;
-  const params = buildPictureIdsQueryParams();
+  let params;
+  const selectedIds = selectedImageIds.value;
+  if (selectedIds && selectedIds.length > 0) {
+    const selParams = new URLSearchParams();
+    for (const id of selectedIds) {
+      selParams.append("id", getPictureId(id));
+    }
+    params = selParams.toString();
+  } else {
+    params = buildPictureIdsQueryParams();
+  }
   const extraParams = new URLSearchParams();
   if (exportType) {
     extraParams.append("export_type", exportType);
@@ -5036,6 +5047,9 @@ async function exportCurrentViewToZip(options = {}) {
   }
   if (includeCharacterName) {
     extraParams.append("include_character_name", "true");
+  }
+  if (useOriginalFileNames) {
+    extraParams.append("use_original_file_names", "true");
   }
   if (resolution) {
     extraParams.append("resolution", resolution);
