@@ -3,6 +3,7 @@ import ctypes
 import platform
 
 import datetime
+import json
 import os
 import time
 import threading
@@ -16,6 +17,7 @@ from sqlalchemy import func
 
 
 from .database import DBPriority, VaultDatabase
+from .utils.model_locations import ModelLocations
 from .db_models import (
     MetaData,
     Character,
@@ -92,6 +94,10 @@ class Vault:
         self._max_vram_gb = None
         self._server_config_path = server_config_path
 
+        self._model_locations = self._load_model_locations(server_config_path)
+        FaceExtractionTask._model_locations = self._model_locations
+        ImageEmbeddingTask._model_locations = self._model_locations
+
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
         self._event_listeners = []
@@ -115,6 +121,23 @@ class Vault:
         self._task_runner.start()
         self._work_planner.start()
 
+    @staticmethod
+    def _load_model_locations(server_config_path: str | None) -> ModelLocations:
+        """Read model_locations from the server config file and return a ModelLocations instance."""
+        raw: dict = {}
+        if server_config_path and os.path.isfile(server_config_path):
+            try:
+                with open(server_config_path, "r", encoding="utf-8") as fh:
+                    cfg = json.load(fh)
+                raw = cfg.get("model_locations") or {}
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read model_locations from %s: %s",
+                    server_config_path,
+                    exc,
+                )
+        return ModelLocations(raw)
+
     def ensure_ready(self):
         """Initialise the picture tagger so the planner can process work immediately.
 
@@ -122,7 +145,10 @@ class Vault:
         tagger init is also triggered lazily by get_worker_future().
         """
         if not self._picture_tagger:
-            self._picture_tagger = PictureTagger(image_root=self.image_root)
+            self._picture_tagger = PictureTagger(
+                image_root=self.image_root,
+                model_locations=self._model_locations,
+            )
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
             self._picture_tagger.set_max_vram_usage_gb(self._max_vram_gb)
 
@@ -371,7 +397,10 @@ class Vault:
             concurrent.futures.Future: Future set to True when completed.
         """
         if not self._picture_tagger:
-            self._picture_tagger = PictureTagger(image_root=self.image_root)
+            self._picture_tagger = PictureTagger(
+                image_root=self.image_root,
+                model_locations=self._model_locations,
+            )
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
             self._picture_tagger.set_max_vram_usage_gb(self._max_vram_gb)
 

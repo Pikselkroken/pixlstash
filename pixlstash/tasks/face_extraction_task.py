@@ -56,6 +56,8 @@ class FaceExtractionTask(BaseTask):
     _global_insightface_app = None
     _global_cpu_insightface_app = None
     _cpu_insightface_lock = threading.Lock()
+    # Set by Vault at startup when model_locations are configured
+    _model_locations = None
 
     def __init__(self, database, picture_tagger, pictures: list):
         picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
@@ -151,7 +153,15 @@ class FaceExtractionTask(BaseTask):
                     logger.debug(
                         "FaceExtractionTask: initialising CPU spillover InsightFace app (ctx_id=-1)."
                     )
-                    app = FaceAnalysis(providers=["CPUExecutionProvider"])
+                    _face_root = (
+                        FaceExtractionTask._model_locations.path("face_detector")
+                        if FaceExtractionTask._model_locations is not None
+                        else None
+                    )
+                    _fa_kwargs = {"providers": ["CPUExecutionProvider"]}
+                    if _face_root is not None:
+                        _fa_kwargs["root"] = _face_root
+                    app = FaceAnalysis(**_fa_kwargs)
                     app.prepare(ctx_id=-1, det_thresh=0.25, det_size=(480, 480))
                     FaceExtractionTask._global_cpu_insightface_app = app
                 else:
@@ -171,12 +181,20 @@ class FaceExtractionTask(BaseTask):
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         else:
             providers = ["CPUExecutionProvider"]
+        _face_root = (
+            FaceExtractionTask._model_locations.path("face_detector")
+            if FaceExtractionTask._model_locations is not None
+            else None
+        )
         logger.debug(
             "Initialising InsightFace with providers=%s (ctx_id=%d)",
             providers,
             0 if use_cuda else -1,
         )
-        app = FaceAnalysis(providers=providers)
+        _fa_kwargs = {"providers": providers}
+        if _face_root is not None:
+            _fa_kwargs["root"] = _face_root
+        app = FaceAnalysis(**_fa_kwargs)
         app.prepare(
             ctx_id=0 if use_cuda else -1,
             det_thresh=0.25,

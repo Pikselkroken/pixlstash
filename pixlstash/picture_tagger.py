@@ -29,6 +29,7 @@ from pixlstash.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.model_locations import ModelLocations
 
 logger = get_logger(__name__)
 
@@ -66,11 +67,21 @@ def _from_pretrained_local_first(cls, model_name, **kwargs):
 
     Tries ``local_files_only=True`` first so no network requests are made
     when the model is already cached.  Falls back to a normal (online) load
-    only on the first run, when the files aren't present yet.
+    only when no custom ``cache_dir`` is set (auto-path mode).
+
+    Raises:
+        RuntimeError: When a custom ``cache_dir`` is provided but the model is
+            not available there (custom paths require pre-populated files).
     """
     try:
         return cls.from_pretrained(model_name, local_files_only=True, **kwargs)
     except OSError:
+        if "cache_dir" in kwargs:
+            raise RuntimeError(
+                f"Florence model not found at '{kwargs['cache_dir']}' for "
+                f"{model_name!r}. Custom paths require pre-populated model files "
+                "(model_locations.florence_captioner.path)."
+            )
         logger.info("Downloading %s for the first time...", model_name)
         return cls.from_pretrained(model_name, **kwargs)
 
@@ -144,9 +155,14 @@ class PictureTagger:
         silent=True,
         device=None,
         image_root: str = None,
+        model_locations: ModelLocations | None = None,
     ):
         logger.debug("Initializing PictureTagger...")
+        self._model_locations = model_locations
         self._model_location = model_location
+        # Override WD14 path if a custom location is configured
+        if model_locations is not None and not model_locations.is_auto("wd14_tagger"):
+            self._model_location = model_locations.path("wd14_tagger")
         self._silent = silent
         self._image_root = image_root
         self._model_init_lock = threading.Lock()
@@ -190,6 +206,13 @@ class PictureTagger:
         logger.debug(f"PictureTagger initialised with device: {self._device}")
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._custom_tagger_meta_path = CUSTOM_TAGGER_META_PATH
+        # Override custom tagger paths if a custom location is configured
+        if model_locations is not None and not model_locations.is_auto("custom_tagger"):
+            _ct_dir = model_locations.path("custom_tagger")
+            self._custom_tagger_path = os.path.join(_ct_dir, CUSTOM_TAGGER_FILENAME)
+            self._custom_tagger_meta_path = os.path.join(
+                _ct_dir, CUSTOM_TAGGER_META_FILENAME
+            )
         self._use_custom_tagger = True
         self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
@@ -241,6 +264,13 @@ class PictureTagger:
 
         self._florence_device = None
         self._florence_model_name = "florence-community/Florence-2-base"
+        self._florence_cache_dir: str | None = None
+        # Use the configured directory as cache_dir so HuggingFace snapshot
+        # layout resolves correctly inside the custom directory.
+        if model_locations is not None and not model_locations.is_auto(
+            "florence_captioner"
+        ):
+            self._florence_cache_dir = model_locations.path("florence_captioner")
         self._last_florence_fallback_reason = None
         self._last_florence_fallback_at = None
 
@@ -251,6 +281,15 @@ class PictureTagger:
             else FLORENCE_BATCH_SIZE_GPU
         )
         self._expected_concurrent_tag_tasks = EXPECTED_CONCURRENT_TAG_TASKS
+        # Store custom paths and download flags for lazily-loaded models
+        self._clip_path: str | None = (
+            model_locations.path("clip") if model_locations is not None else None
+        )
+        self._sbert_path: str | None = (
+            model_locations.path("sentence_transformer")
+            if model_locations is not None
+            else None
+        )
         self.set_max_vram_usage_gb(DEFAULT_MAX_VRAM_GB)
 
     @staticmethod
@@ -636,9 +675,23 @@ class PictureTagger:
             pass
 
     def _init_clip_model(self):
+        clip_path = getattr(self, "_clip_path", None)
+        clip_kwargs: dict = {}
+        if clip_path is not None:
+            # Custom path: the weight file must already be present.
+            weight_file = os.path.join(clip_path, "open_clip_pytorch_model.bin")
+            if not os.path.isfile(weight_file):
+                raise RuntimeError(
+                    f"CLIP model file not found at '{weight_file}'. "
+                    "Custom paths require pre-populated model files "
+                    "(model_locations.clip.path)."
+                )
+            clip_pretrained = weight_file
+        else:
+            clip_pretrained = CLIP_MODEL_WEIGHTS
         self._clip_model, _, self._clip_preprocess = (
             open_clip.create_model_and_transforms(
-                CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS
+                CLIP_MODEL_NAME, pretrained=clip_pretrained, **clip_kwargs
             )
         )
         self._clip_device = self._device
@@ -844,9 +897,14 @@ class PictureTagger:
         if not isinstance(device, torch.device):
             device = torch.device(device)
 
+        _fl_kwargs: dict = {}
+        if self._florence_cache_dir is not None:
+            _fl_kwargs["cache_dir"] = self._florence_cache_dir
+
         self._florence_processor = _from_pretrained_local_first(
             Florence2Processor,
             self._florence_model_name,
+            **_fl_kwargs,
         )
 
         # Try SDPA first, fall back to eager if not supported
@@ -861,6 +919,7 @@ class PictureTagger:
                 self._florence_model_name,
                 torch_dtype=dtype,
                 attn_implementation=attn_impl,
+                **_fl_kwargs,
             ).to(device=device, dtype=dtype)
         except (TypeError, AttributeError) as e:
             logger.debug(f"SDPA not supported, falling back to eager attention: {e}")
@@ -870,6 +929,7 @@ class PictureTagger:
                 self._florence_model_name,
                 torch_dtype=dtype,
                 attn_implementation=attn_impl,
+                **_fl_kwargs,
             ).to(device=device, dtype=dtype)
 
         self._florence_model.eval()
@@ -1369,6 +1429,13 @@ class PictureTagger:
 
     def _download_custom_tagger(self):
         """Download the custom anomaly tagger weights and metadata from HuggingFace if not present locally."""
+        ml = getattr(self, "_model_locations", None)
+        if ml is not None and not ml.download_enabled("custom_tagger"):
+            logger.debug(
+                "Custom tagger download skipped: "
+                "model_locations.custom_tagger.download=false."
+            )
+            return
         try:
             from huggingface_hub import hf_hub_download
 
@@ -1403,6 +1470,13 @@ class PictureTagger:
         )
 
         if not files_present or force_download:
+            ml = getattr(self, "_model_locations", None)
+            if ml is not None and not ml.download_enabled("wd14_tagger"):
+                raise RuntimeError(
+                    f"WD14 tagger model files not found at '{self._model_location}' "
+                    "and download is disabled "
+                    "(model_locations.wd14_tagger.download=false)."
+                )
             os.makedirs(self._model_location, exist_ok=True)
             logger.debug(
                 f"downloading wd14 tagger model from hf_hub. id: {DEFAULT_WD14_TAGGER_REPO}"
@@ -2029,15 +2103,21 @@ class PictureTagger:
         # Generate text embedding using SBERT
         sbert_model = getattr(self, "_sbert_model", None)
         if sbert_model is None:
+            _sbert_name = getattr(self, "_sbert_path", None) or "all-MiniLM-L6-v2"
+            _sbert_is_custom = getattr(self, "_sbert_path", None) is not None
             try:
                 sbert_model = SentenceTransformer(
-                    "all-MiniLM-L6-v2", device=self._device, local_files_only=True
+                    _sbert_name, device=self._device, local_files_only=True
                 )
             except OSError:
-                logger.info("Downloading all-MiniLM-L6-v2 for the first time...")
-                sbert_model = SentenceTransformer(
-                    "all-MiniLM-L6-v2", device=self._device
-                )
+                if _sbert_is_custom:
+                    raise RuntimeError(
+                        f"Sentence transformer model not found at '{_sbert_name}'. "
+                        "Custom paths require pre-populated model files "
+                        "(model_locations.sentence_transformer.path)."
+                    )
+                logger.info("Downloading %s for the first time...", _sbert_name)
+                sbert_model = SentenceTransformer(_sbert_name, device=self._device)
             self._sbert_model = sbert_model
 
         logger.debug(
@@ -2054,12 +2134,22 @@ class PictureTagger:
                 logger.warning(
                     f"SBERT embedding failed on CUDA: {e}. Falling back to CPU."
                 )
+                _sbert_name_fb = (
+                    getattr(self, "_sbert_path", None) or "all-MiniLM-L6-v2"
+                )
+                _sbert_is_custom_fb = getattr(self, "_sbert_path", None) is not None
                 try:
                     sbert_model = SentenceTransformer(
-                        "all-MiniLM-L6-v2", device="cpu", local_files_only=True
+                        _sbert_name_fb, device="cpu", local_files_only=True
                     )
                 except OSError:
-                    sbert_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+                    if _sbert_is_custom_fb:
+                        raise RuntimeError(
+                            f"Sentence transformer model not found at '{_sbert_name_fb}'. "
+                            "Custom paths require pre-populated model files "
+                            "(model_locations.sentence_transformer.path)."
+                        )
+                    sbert_model = SentenceTransformer(_sbert_name_fb, device="cpu")
                 self._sbert_model = sbert_model
                 logger.info("Falling back to CPU for SBERT embeddings.")
                 text_embeddings = sbert_model.encode(texts, show_progress_bar=False)

@@ -482,10 +482,8 @@ class StartupChecks:
         """Validate the model_locations section of server_config.
 
         - Parses each entry and reports configuration errors as hard failures.
-        - For models with ``download: false``: verifies that required files are
-          present at the specified path; missing files are hard failures.
-        - For models with ``download: true``: logs a note listing them so the
-          operator knows a network download will happen on first use.
+        - Verifies that required files are present at custom paths; missing
+          files are hard failures.
         """
         raw = self._server_config.get("model_locations") or {}
         if not raw:
@@ -500,21 +498,6 @@ class StartupChecks:
         errors = locations.validation_errors()
         for err in errors:
             outcome.hard_failures.append(err)
-
-        # Note which custom paths will trigger a first-run download
-        download_pending = [
-            key
-            for key, entry in raw.items()
-            if isinstance(entry, dict)
-            and entry.get("path", "auto") != "auto"
-            and entry.get("download", True) is True
-        ]
-        if download_pending:
-            outcome.notes.append(
-                "model_locations: the following models have custom paths with "
-                "download=true — weights will be downloaded on first use if not "
-                f"already present: {', '.join(sorted(download_pending))}"
-            )
 
         if not errors:
             custom_paths = [

@@ -5,7 +5,7 @@ from pixlstash.pixl_logging import get_logger
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Files that must exist in the directory when download=false
+# Files that must exist at configured custom paths
 # ---------------------------------------------------------------------------
 
 # Models where we can enumerate exact required filenames
@@ -37,8 +37,7 @@ class ModelLocations:
 
     Raises:
         ValueError: If the config structure is malformed (wrong types, relative
-            path when absolute is required, or ``download: false`` combined
-            with ``path: "auto"``).
+            path when absolute is required, or an unsupported ``download`` key).
     """
 
     def __init__(self, config: dict | None) -> None:
@@ -68,31 +67,18 @@ class ModelLocations:
             return None
         return entry["path"]
 
-    def download_enabled(self, key: str) -> bool:
-        """Return whether automatic download is enabled for this model.
-
-        Always returns True for auto-path models (they download by default).
-        For explicit-path models returns the configured ``download`` value.
-        """
-        entry = self._entries.get(key)
-        if entry is None or entry["path"] == "auto":
-            return True
-        return entry["download"]
-
     def validation_errors(self) -> list[str]:
         """Return hard-failure messages for misconfigured model locations.
 
         Checks:
         - Path must be absolute.
-        - When ``download=false``: directory must exist, required files must
-          be present.
-        - When ``download=true``: if the path exists it must be a directory
-          (not a file).
+        - Directory must exist and required files must be present (custom paths
+          always require pre-populated model files; automatic download is only
+          used for auto-path models).
         """
         errors: list[str] = []
         for key, entry in self._entries.items():
             path = entry["path"]
-            download = entry["download"]
             if path == "auto":
                 continue
 
@@ -103,59 +89,48 @@ class ModelLocations:
                 )
                 continue
 
-            if download:
-                # The directory will be created at runtime; just make sure it
-                # is not pointing at an existing non-directory (e.g. a file).
-                if os.path.exists(path) and not os.path.isdir(path):
+            # Custom path: model files must already be present.
+            if not os.path.isdir(path):
+                errors.append(
+                    f"model_locations.{key}: path '{path}' does not exist or is "
+                    "not a directory."
+                )
+                continue
+
+            if key == "face_detector":
+                # InsightFace uses <root>/models/ sub-layout
+                models_dir = os.path.join(path, "models")
+                if not os.path.isdir(models_dir):
                     errors.append(
-                        f"model_locations.{key}: path '{path}' exists but is not a "
-                        "directory."
+                        f"model_locations.{key}: path '{path}' must contain a "
+                        "'models' subdirectory with InsightFace model packs "
+                        "(e.g. models/buffalo_l/)."
                     )
+                continue
+
+            if key == "aesthetic_predictor":
+                errors.extend(self._check_aesthetic_predictor(path))
+                continue
+
+            required = _REQUIRED_FILES.get(key, [])
+            if required:
+                for fname in required:
+                    if not os.path.isfile(os.path.join(path, fname)):
+                        errors.append(
+                            f"model_locations.{key}: required file '{fname}' not "
+                            f"found in '{path}'."
+                        )
             else:
-                # download=false: the model must already be there
-                if not os.path.isdir(path):
+                # No specific file list: just require a non-empty directory
+                try:
+                    if not any(os.scandir(path)):
+                        errors.append(
+                            f"model_locations.{key}: path '{path}' is empty."
+                        )
+                except OSError as exc:
                     errors.append(
-                        f"model_locations.{key}: path '{path}' does not exist or is "
-                        "not a directory (download is disabled for this model)."
+                        f"model_locations.{key}: cannot read path '{path}': {exc}"
                     )
-                    continue
-
-                if key == "face_detector":
-                    # InsightFace uses <root>/models/ sub-layout
-                    models_dir = os.path.join(path, "models")
-                    if not os.path.isdir(models_dir):
-                        errors.append(
-                            f"model_locations.{key}: path '{path}' must contain a "
-                            "'models' subdirectory with InsightFace model packs "
-                            "(e.g. models/buffalo_l/). "
-                            "download is disabled for this model."
-                        )
-                    continue
-
-                if key == "aesthetic_predictor":
-                    errors.extend(self._check_aesthetic_predictor(path))
-                    continue
-
-                required = _REQUIRED_FILES.get(key, [])
-                if required:
-                    for fname in required:
-                        if not os.path.isfile(os.path.join(path, fname)):
-                            errors.append(
-                                f"model_locations.{key}: required file '{fname}' not "
-                                f"found in '{path}' (download is disabled for this model)."
-                            )
-                else:
-                    # No specific file list: just require a non-empty directory
-                    try:
-                        if not any(os.scandir(path)):
-                            errors.append(
-                                f"model_locations.{key}: path '{path}' is empty "
-                                "(download is disabled for this model)."
-                            )
-                    except OSError as exc:
-                        errors.append(
-                            f"model_locations.{key}: cannot read path '{path}': {exc}"
-                        )
 
         return errors
 
@@ -168,8 +143,16 @@ class ModelLocations:
         if not isinstance(raw, dict):
             raise ValueError(
                 f"model_locations.{key}: entry must be a JSON object with a "
-                '"path" field and optionally a "download" field, '
+                '"path" field, '
                 f"got {type(raw).__name__}."
+            )
+
+        if "download" in raw:
+            raise ValueError(
+                f'model_locations.{key}: the "download" key is no longer supported. '
+                "Custom paths always require pre-populated model files. "
+                'Remove the "download" key and ensure the model files are present '
+                "at the configured path."
             )
 
         path = raw.get("path", "auto")
@@ -180,23 +163,7 @@ class ModelLocations:
             )
         path = path.strip()
 
-        if "download" in raw:
-            download = raw["download"]
-            if not isinstance(download, bool):
-                raise ValueError(
-                    f'model_locations.{key}: "download" must be a boolean '
-                    f"(true or false), got {type(download).__name__}."
-                )
-            if path == "auto" and not download:
-                raise ValueError(
-                    f'model_locations.{key}: "download": false has no effect '
-                    'when path is "auto".'
-                )
-        else:
-            # Default: download=true for custom paths, irrelevant for auto
-            download = True
-
-        return {"path": path, "download": download}
+        return {"path": path}
 
     @staticmethod
     def _check_aesthetic_predictor(path: str) -> list[str]:
@@ -212,8 +179,7 @@ class ModelLocations:
             try:
                 if not any(os.scandir(path)):
                     return [
-                        f"model_locations.aesthetic_predictor: path '{path}' is empty "
-                        "(download is disabled for this model)."
+                        f"model_locations.aesthetic_predictor: path '{path}' is empty."
                     ]
             except OSError:
                 logger.warning(
@@ -225,7 +191,7 @@ class ModelLocations:
         if not os.path.isfile(os.path.join(path, fname)):
             return [
                 f"model_locations.aesthetic_predictor: required file '{fname}' not "
-                f"found in '{path}' (download is disabled for this model). "
+                f"found in '{path}'. "
                 f"Expected filename is determined by the active CLIP model "
                 f"({CLIP_MODEL_NAME})."
             ]

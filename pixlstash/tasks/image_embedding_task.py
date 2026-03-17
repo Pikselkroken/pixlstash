@@ -28,6 +28,9 @@ class ImageEmbeddingTask(BaseTask):
     BATCH_SIZE = 32
     BACKEND_ERROR_LOG_INTERVAL_SECONDS = 60
 
+    # Set by Vault at startup when model_locations are configured
+    _model_locations = None
+
     AESTHETIC_MODELS = {
         "ViT-L-14": {
             "url": "https://github.com/christophschuhmann/improved-aesthetic-predictor/raw/main/sac%2Blogos%2Bava1-l14-linearMSE.pth",
@@ -222,7 +225,24 @@ class ImageEmbeddingTask(BaseTask):
             model_url = config["url"]
             model_dim = config["dim"]
 
+            # Override path if a custom location is configured
+            ml = ImageEmbeddingTask._model_locations
+            if ml is not None and not ml.is_auto("aesthetic_predictor"):
+                ae_dir = ml.path("aesthetic_predictor")
+                model_path = os.path.join(ae_dir, os.path.basename(model_path))
+                if not ml.download_enabled("aesthetic_predictor"):
+                    model_url = None
+
             if not os.path.exists(model_path):
+                if model_url is None:
+                    logger.warning(
+                        "ImageEmbeddingTask: aesthetic model not found at '%s' and "
+                        "download is disabled "
+                        "(model_locations.aesthetic_predictor.download=false).",
+                        model_path,
+                    )
+                    ImageEmbeddingTask._aesthetic_disabled = True
+                    return
                 logger.info("Downloading aesthetic model from %s...", model_url)
                 os.makedirs(os.path.dirname(model_path), exist_ok=True)
                 response = requests.get(model_url, timeout=30)
