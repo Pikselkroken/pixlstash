@@ -8,27 +8,27 @@
     {
       "query": "It was a bright rainy day but Esmeralda needed to get out and get some fresh air, so she dressed for the weather, brought an umbrella and walked out into the countryside.",
       "top_description": "The image shows a young woman holding a black umbrella in the rain. She is wearing a bright yellow raincoat with a hood and a black zipper. The woman has blonde hair and is looking directly at the camera with a serious expression. The background is blurred, but it appears to be a green landscape with trees and mountains in the distance. The raindrops are falling from the sky, creating a dappled effect. The overall mood of the image is gloomy and rainy.",
-      "top_score": 0.5677
+      "top_score": 0.5717
     },
     {
       "query": "Esmeralda smiles as she sits across me in the cafe wearing her grey sweater. The sunlight filters through the window of the empty cafe",
       "top_description": "The image is a portrait of a young woman sitting in a restaurant. She is smiling and looking directly at the camera. She has shoulder-length blonde hair that is styled in loose waves and falls over her shoulders. She appears to be wearing a beige sweater and is sitting at a table with a plate of food in front of her. The restaurant has wooden tables and chairs, and there are plants and lights on the walls. Through the window, we can see a view of a street and buildings outside. The overall mood of the image is happy and relaxed.",
-      "top_score": 0.5416
+      "top_score": 0.5461
     },
     {
       "query": "It was a bright winter morning, and Esmeralda decided to go for a walk in the woods. The snow had fallen the night before, and she enjoyed the glistening trees and the crisp air. She was glad to have her scarf and her warm coat to keep her cozy.",
       "top_description": "The image is a portrait of a young woman standing in a snowy forest. She is wearing a beige coat and a gray scarf around her neck. She has long blonde hair that is styled in loose waves and is smiling at the camera. The background is blurred, but it appears to be a snowy road with trees on either side. The overall mood of the image is peaceful and serene.",
-      "top_score": 0.5546
+      "top_score": 0.5922
     },
     {
       "query": "Esmeralda spent hours in her garden tending to her grass and bushes wearing her dungarees. The greenery made her smile. Especially when the sky was blue",
       "top_description": "The image shows a young woman standing in a garden. She is wearing a pair of olive green overalls with brown straps and a brown belt. She has blonde hair styled in loose waves and is smiling at the camera. The woman is holding a basket of greens in her right hand. In the background, there are various plants and flowers, including yellow flowers and green shrubs. The garden appears to be well-maintained and well-manicured.",
-      "top_score": 0.5565
+      "top_score": 0.5507
     },
     {
       "query": "Do I look like a man? Esmeralda asked, raising an eyebrow as she posed with her grey business suit, complete with shirt, jacket and tie.",
       "top_description": "The image is a portrait of a young woman wearing a formal suit. She is standing in front of a plain beige background and is posing with her hands in her pockets. The woman is wearing a grey suit with a white shirt and a navy blue tie. She has long blonde hair styled in loose waves and is looking directly at the camera with a serious expression. The suit has a single-breasted design with a notched lapel and two buttons on the front. The overall look is sophisticated and sophisticated.",
-      "top_score": 0.6585
+      "top_score": 0.6621
     },
     {
       "query": "Esmeralda sat down on the wooden park bench and considered her predicament. She was in serious trouble.",
@@ -37,7 +37,7 @@
     }
   ],
   "summary": {
-    "avg_top_score": 0.5691,
+    "avg_top_score": 0.5764,
     "min_top_score": 0.5355,
     "total_queries": 6
   }
