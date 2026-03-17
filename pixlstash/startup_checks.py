@@ -20,6 +20,7 @@ except Exception:
     torch = None
 
 from pixlstash.picture_tagger import PictureTagger
+from pixlstash.utils.model_locations import ModelLocations
 
 
 class StartupCheckError(Exception):
@@ -67,6 +68,7 @@ class StartupChecks:
         self._check_migration_assets(outcome)
         self._check_watch_folders(outcome)
         self._check_optional_dependencies(outcome)
+        self._check_model_locations(outcome)
         self._check_device_and_vram(outcome)
 
         for note in outcome.notes:
@@ -475,6 +477,56 @@ class StartupChecks:
             "Ensure ONNX Runtime CUDA dependencies are installed and accessible on this machine.\n"
             f"{config_hint}"
         )
+
+    def _check_model_locations(self, outcome: StartupCheckOutcome) -> None:
+        """Validate the model_locations section of server_config.
+
+        - Parses each entry and reports configuration errors as hard failures.
+        - For models with ``download: false``: verifies that required files are
+          present at the specified path; missing files are hard failures.
+        - For models with ``download: true``: logs a note listing them so the
+          operator knows a network download will happen on first use.
+        """
+        raw = self._server_config.get("model_locations") or {}
+        if not raw:
+            return  # all auto — nothing to check
+
+        try:
+            locations = ModelLocations(raw)
+        except ValueError as exc:
+            outcome.hard_failures.append(f"model_locations config error: {exc}")
+            return
+
+        errors = locations.validation_errors()
+        for err in errors:
+            outcome.hard_failures.append(err)
+
+        # Note which custom paths will trigger a first-run download
+        download_pending = [
+            key
+            for key, entry in raw.items()
+            if isinstance(entry, dict)
+            and entry.get("path", "auto") != "auto"
+            and entry.get("download", True) is True
+        ]
+        if download_pending:
+            outcome.notes.append(
+                "model_locations: the following models have custom paths with "
+                "download=true — weights will be downloaded on first use if not "
+                f"already present: {', '.join(sorted(download_pending))}"
+            )
+
+        if not errors:
+            custom_paths = [
+                key
+                for key in raw
+                if isinstance(raw[key], dict) and raw[key].get("path", "auto") != "auto"
+            ]
+            if custom_paths:
+                outcome.notes.append(
+                    "model_locations: custom paths validated OK for: "
+                    + ", ".join(sorted(custom_paths))
+                )
 
     def _assert_dir_writable(
         self,

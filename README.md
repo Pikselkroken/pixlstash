@@ -37,13 +37,15 @@ On first run, PixlStash creates a user config directory and stores:
 - Database
 - Imported media files
 
-> **Model downloads:** On first startup, PixlStash automatically downloads the AI models required for tagging, captioning, and quality scoring. This includes several hundred MB of model weights. Downloads are stored in the platform user data directory:
+> **Model downloads:** On first startup, PixlStash automatically downloads the AI models required for tagging, captioning, and quality scoring. This includes several hundred MB of model weights. PixlStash-managed models are stored in the platform user data directory:
 >
 > | OS | Path |
 > |----|------|
 > | **Linux** | `~/.local/share/pixlstash/downloaded_models/` |
 > | **macOS** | `~/Library/Application Support/pixlstash/downloaded_models/` |
 > | **Windows** | `%LOCALAPPDATA%\pixlstash\downloaded_models\` |
+>
+> Third-party models (Florence-2, CLIP, sentence-transformers, InsightFace) are cached by their respective libraries in the standard library cache directories (`~/.cache/huggingface/`, `~/.cache/torch/hub/`, `~/.insightface/`).
 >
 > An internet connection is required the first time the server starts. Subsequent starts use the cached models.
 
@@ -123,6 +125,92 @@ Example:
 | `log_level` | `"info"`                  | Log verbosity (`"debug"`, `"info"`, `"warning"`, `"error"`). |
 | `log_file`  | `<config_dir>/server.log` | Path to the log file.                                        |
 
+### Model locations
+
+Different models use different automatic cache locations by default. PixlStash-managed models go into the platform user data directory, while third-party libraries (HuggingFace, open_clip, InsightFace) use their own caches. **If you don't care about this, this section of the README is not for you.**
+
+If you DO care, the optional `model_locations` key lets you redirect individual models to a directory you control. Add `model_locations` to finetune the location of the models.
+
+Each entry follows this schema:
+
+```json
+"<model-key>": {
+  "path": "/absolute/path/to/directory",
+  "download": true | false
+}
+```
+
+- **`path`** — An absolute directory path, or `"auto"` (the default).
+- **`download`** — Only meaningful when `path` is not `"auto"`.
+  - `true` (default): download model weights into `path` the first time they are needed; the directory is created automatically.
+  - `false`: require the model files to be **already present** at `path`; startup fails with a clear error if they are missing.
+
+Any model key absent from `model_locations` defaults to `{"path": "auto"}`.
+
+| Key                    | Default location (`"auto"`)                                      | Required files / layout when `download: false`                                                 |
+| ---------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `wd14_tagger`          | `<user_data_dir>/pixlstash/downloaded_models/`                   | `model.onnx`, `selected_tags.csv`                                                              |
+| `custom_tagger`        | `<user_data_dir>/pixlstash/downloaded_models/`                   | `pixlstash-anomaly-tagger.safetensors`, `pixlstash-anomaly-tagger_meta.json`                   |
+| `aesthetic_predictor`  | `<user_data_dir>/pixlstash/downloaded_models/`                   | `sa_0_4_vit_b_32_linear.pth` (for the default ViT-B-32 CLIP model)                            |
+| `florence_captioner`   | HuggingFace transformers cache (`~/.cache/huggingface/`)         | `config.json` + model weights (standard HuggingFace snapshot)                                  |
+| `sentence_transformer` | HuggingFace / sentence-transformers cache (`~/.cache/huggingface/`) | `config.json` + model weights (standard HuggingFace snapshot)                              |
+| `clip`                 | open_clip / torch hub cache (`~/.cache/torch/hub/`)              | `open_clip_pytorch_model.bin` (see note below)                                                 |
+| `face_detector`        | InsightFace default (`~/.insightface/`)                          | `models/buffalo_l/` subdirectory (see note below)                                              |
+
+`<user_data_dir>` is platform-specific:
+
+| OS | Path |
+|----|------|
+| **Linux** | `~/.local/share` |
+| **macOS** | `~/Library/Application Support` |
+| **Windows** | `%LOCALAPPDATA%` |
+
+Example — all models redirected to a central read-only share:
+
+```json
+"model_locations": {
+  "wd14_tagger":          { "path": "/opt/models/wd14",          "download": false },
+  "florence_captioner":   { "path": "/opt/models/florence",      "download": false },
+  "clip":                 { "path": "/opt/models/clip",          "download": false },
+  "custom_tagger":        { "path": "/opt/models/custom_tagger", "download": false },
+  "aesthetic_predictor":  { "path": "/opt/models/aesthetic",     "download": false },
+  "sentence_transformer": { "path": "/opt/models/sbert",        "download": false },
+  "face_detector":        { "path": "/opt/models/insightface",  "download": false }
+}
+```
+
+Startup validates every `download: false` entry and fails with an explicit error if any required file is missing.
+
+#### CLIP directory layout
+
+Download `open_clip_pytorch_model.bin` from the HuggingFace repository [`laion/CLIP-ViT-B-32-laion2B-s34B-b79K`](https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K/tree/main) and place it directly inside the configured `path`. The directory must look like:
+
+```
+<path>/
+  open_clip_pytorch_model.bin
+```
+
+#### InsightFace directory layout
+
+InsightFace expects its model pack under a fixed subdirectory structure inside the configured `path`:
+
+```
+<path>/
+  models/
+    buffalo_l/
+      det_10g.onnx
+      genderage.onnx
+      w600k_r50.onnx
+```
+
+To stage this offline, run the following on an internet-connected machine first, then copy the `<path>/models/buffalo_l/` directory to your target host:
+
+```python
+from insightface.app import FaceAnalysis
+app = FaceAnalysis(root="<path>")
+app.prepare(ctx_id=-1)  # downloads buffalo_l on first call
+```
+
 ### Example config
 
 ```json
@@ -136,7 +224,8 @@ Example:
     { "folder": "/path/to/photos", "delete_after_import": false }
   ],
   "default_device": "cpu",
-  "generate_thumbnails_on_startup": true
+  "generate_thumbnails_on_startup": true,
+  "model_locations": {}
 }
 ```
 

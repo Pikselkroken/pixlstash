@@ -510,6 +510,7 @@ class Server:
                 "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
                 "watch_folders": [],
+                "model_locations": {},
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -550,6 +551,8 @@ class Server:
                     server_config["watch_folders"] = []
                 if "generate_thumbnails_on_startup" not in server_config:
                     server_config["generate_thumbnails_on_startup"] = True
+                if "model_locations" not in server_config:
+                    server_config["model_locations"] = {}
 
         # Resolve SSL paths that are relative: interpret them relative to the
         # config file's directory, not the process's CWD, so that the certs
