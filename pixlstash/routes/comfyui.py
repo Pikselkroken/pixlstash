@@ -20,6 +20,7 @@ from datetime import datetime
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Face, Picture, PictureStack, User
 from pixlstash.event_types import EventType
+from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.stacking import (
     build_stack_filename_prefix,
@@ -1016,5 +1017,50 @@ def create_router(server) -> APIRouter:
             "name": name,
             "workflow_dir": workflow_dir,
         }
+
+    @router.get(
+        "/comfyui/pictures/{picture_id}/workflow",
+        summary="Get ComfyUI workflow for a picture",
+        description=(
+            "Extracts and returns the ComfyUI workflow embedded in a picture's "
+            "file metadata, if present."
+        ),
+    )
+    def get_picture_comfyui_workflow(picture_id: str):
+        pics = server.vault.db.run_immediate_read_task(
+            Picture.find, id=picture_id, select_fields=["id", "file_path"]
+        )
+        if not pics:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        pic = pics[0]
+
+        file_path = ImageUtils.resolve_picture_path(
+            server.vault.image_root, pic.file_path
+        )
+        if not file_path:
+            raise HTTPException(
+                status_code=404, detail="Picture file path could not be resolved"
+            )
+
+        try:
+            embedded_metadata = ImageUtils.extract_embedded_metadata(file_path)
+        except Exception as exc:
+            logger.warning(
+                "[comfyui] Failed to read embedded metadata for picture id=%s: %s",
+                pic.id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to read embedded metadata"
+            ) from exc
+
+        workflow_info = extract_comfy_workflow_info(embedded_metadata)
+        if not workflow_info:
+            raise HTTPException(
+                status_code=404,
+                detail="No ComfyUI workflow found in picture metadata",
+            )
+
+        return workflow_info
 
     return router
