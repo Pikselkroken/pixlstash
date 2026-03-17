@@ -518,6 +518,7 @@ class ImageUtils:
             picture_uuid=picture_uuid,
             pixel_sha=pixel_sha,
             created_at=created_at,
+            original_file_name=os.path.basename(source_file_path),
         )
 
     @staticmethod
@@ -527,6 +528,7 @@ class ImageUtils:
         picture_uuid: Optional[str] = None,
         pixel_sha: Optional[str] = None,
         created_at: Optional[str] = None,
+        original_file_name: Optional[str] = None,
     ) -> Picture:
         """Create a Picture from raw bytes, deriving metadata and saving the file."""
         if not pixel_sha:
@@ -624,6 +626,7 @@ class ImageUtils:
             size_bytes=size_bytes,
             created_at=created_at,
             pixel_sha=pixel_sha,
+            original_file_name=original_file_name,
         )
         return pic
 

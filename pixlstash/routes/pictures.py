@@ -116,7 +116,9 @@ def _fetch_hidden_picture_ids(server, request: Request, picture_ids: list[int]):
     )
 
 
-def _create_picture_imports(server, uploaded_files, dest_folder, progress_callback=None):
+def _create_picture_imports(
+    server, uploaded_files, dest_folder, progress_callback=None
+):
     """
     Given a list of (img_bytes, ext), create Picture objects for new images,
     skipping duplicates based on pixel_sha hash.
@@ -135,7 +137,7 @@ def _create_picture_imports(server, uploaded_files, dest_folder, progress_callba
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         shas = list(
-            executor.map(create_sha, (img_bytes for img_bytes, _ in uploaded_files))
+            executor.map(create_sha, (img_bytes for img_bytes, *_ in uploaded_files))
         )
 
     existing_pictures = server.vault.db.run_immediate_read_task(
@@ -153,7 +155,7 @@ def _create_picture_imports(server, uploaded_files, dest_folder, progress_callba
     if importable:
         new_pictures = []
         for file_entry, sha in importable:
-            img_bytes, ext = file_entry
+            img_bytes, ext, original_name = file_entry
             pic_uuid = str(uuid.uuid4()) + ext
             logger.debug(f"Importing picture from uploaded bytes as id={pic_uuid}")
             pic = ImageUtils.create_picture_from_bytes(
@@ -161,6 +163,7 @@ def _create_picture_imports(server, uploaded_files, dest_folder, progress_callba
                 image_bytes=img_bytes,
                 picture_uuid=pic_uuid,
                 pixel_sha=sha,
+                original_file_name=original_name,
             )
             new_pictures.append(pic)
             if progress_callback is not None:
@@ -1832,7 +1835,9 @@ def create_router(server) -> APIRouter:
                                     data = handle.read()
                                 if not data:
                                     continue
-                                uploaded_files.append((data, inner_ext))
+                                uploaded_files.append(
+                                    (data, inner_ext, os.path.basename(info.filename))
+                                )
                                 added += 1
                             if added == 0:
                                 logger.warning(
@@ -1851,7 +1856,7 @@ def create_router(server) -> APIRouter:
                         raise HTTPException(
                             status_code=400, detail="Invalid file extension"
                         )
-                    uploaded_files.append((contents, ext))
+                    uploaded_files.append((contents, ext, upload.filename))
         else:
             logger.error("No files provided for import")
             raise HTTPException(status_code=400, detail="No image provided")
@@ -1863,7 +1868,7 @@ def create_router(server) -> APIRouter:
                 detail="No valid media files found for import",
             )
 
-        total_import_bytes = sum(len(data) for data, _ in uploaded_files)
+        total_import_bytes = sum(len(data) for data, *_ in uploaded_files)
         free_bytes = shutil.disk_usage(dest_folder).free
         required_bytes = int(total_import_bytes * 1.1)  # 10% headroom
         if required_bytes > free_bytes:
@@ -1895,7 +1900,10 @@ def create_router(server) -> APIRouter:
                     task["processed"] = task.get("processed", 0) + 1
 
                 shas, existing_map, new_pictures = _create_picture_imports(
-                    server, uploaded_files, dest_folder, progress_callback=_on_picture_written
+                    server,
+                    uploaded_files,
+                    dest_folder,
+                    progress_callback=_on_picture_written,
                 )
 
                 # Duplicates are instantly "processed" — credit them now so that
@@ -2107,6 +2115,12 @@ def create_router(server) -> APIRouter:
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         except OSError:
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        if pic.original_file_name:
+            # Suggest the original filename when using "Save image as" in the browser.
+            # Using 'inline' keeps the image rendering in-page while still providing
+            # the filename hint — no URL change needed.
+            safe_name = pic.original_file_name.replace('"', "")
+            response.headers["Content-Disposition"] = f'inline; filename="{safe_name}"'
         origin = request.headers.get("origin")
         if origin and (
             origin in server.allow_origins

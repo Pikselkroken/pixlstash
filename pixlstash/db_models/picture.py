@@ -189,6 +189,10 @@ class Picture(SQLModel, table=True):
         default=None, foreign_key="picturestack.id", index=True
     )
     stack_position: Optional[int] = Field(default=None, index=True)
+    original_file_name: Optional[str] = Field(
+        default=None,
+        sa_column=Column("original_file_name", String, default=None, nullable=True),
+    )
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
