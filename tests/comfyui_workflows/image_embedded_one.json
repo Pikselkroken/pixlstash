@@ -1,0 +1,1000 @@
+{
+  "id": "3f7962b6-43a2-4f43-8cf6-7e956241380f",
+  "revision": 0,
+  "last_node_id": 117,
+  "last_link_id": 423,
+  "nodes": [
+    {
+      "id": 41,
+      "type": "Textbox",
+      "pos": [
+        -656.1168183270786,
+        245.12126395485177
+      ],
+      "size": [
+        210,
+        36.388889948527016
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "passthrough",
+          "shape": 7,
+          "type": "STRING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "title": "Positive Prompt",
+      "properties": {
+        "cnr_id": "ComfyUI-Chibi-Nodes",
+        "ver": "9a9734f9c17bab3b4775c04291d26f48cbff2791",
+        "Node name for S&R": "Textbox",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        "A middle-aged ginger man is sitting at a desk with his feet on the desk and his hands on his belly. He is barefoot."
+      ],
+      "color": "#000000",
+      "bgcolor": "#000000"
+    },
+    {
+      "id": 64,
+      "type": "CLIPTextEncode",
+      "pos": [
+        487.35341726862475,
+        177.3612639548519
+      ],
+      "size": [
+        218.00000610351563,
+        36.388889948527016
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "CLIPTextEncode",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        "A photo of three people in a bar. First, in focus, on the left is a beautiful 19-year old girl named sarah of undeniable european heritage, with a round face, round cheeks, full lips, large expressive blue eyes and a turned up nose. Her make-up and lipstick has a natural and effortless look. She is slim but with very large breasts. She wears a casual grey tall-necked jumper.\nShe has chestnut colored, short wavy hair and subtle freckles on her cheeks. To the right is a an average looking, chubby, blonde woman in her thirties with a square face, a huge hawk nose, thin and cracked lips, a strongly cleft chin that protrudes and brown eyes with low and thin bleached eyebrows. She has short, unkempt hair and a short forehead. The two women are sitting around a table talking with a pint of lager besides each of them and are talking to each other and looking at each other. Behind them, out of focus at the bar is an elderly man with a wide face, greek nose and lots of wrinkles. All the people in the photo are visually distinct, with no resemblance or genetic relation with clearly unique facial features."
+      ]
+    },
+    {
+      "id": 66,
+      "type": "VAEDecode",
+      "pos": [
+        1689.0685051592493,
+        -375.1229407570622
+      ],
+      "size": [
+        187.5,
+        89.72222010294597
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 391
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 422
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            345
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "VAEDecode",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 91,
+      "type": "CLIPTextEncode",
+      "pos": [
+        267.7476286944058,
+        390.4788787009459
+      ],
+      "size": [
+        400,
+        230
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 419
+        },
+        {
+          "name": "text",
+          "type": "STRING",
+          "widget": {
+            "name": "text"
+          },
+          "link": 423
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            403
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "CLIPTextEncode",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 101,
+      "type": "PhotoFilmGrain",
+      "pos": [
+        2279.403593049875,
+        -524.7467514870424
+      ],
+      "size": [
+        284.0416717529297,
+        311.9444529215495
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 382
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            383
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-advanced-photo-grain",
+        "ver": "1.4.0",
+        "Node name for S&R": "PhotoFilmGrain",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        "poisson",
+        0.015,
+        1.3,
+        0.15,
+        0.15,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": 87,
+      "type": "UpscaleModelLoader",
+      "pos": [
+        1564.8290642412808,
+        -618.9324420998355
+      ],
+      "size": [
+        270,
+        98.61111323038737
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "UPSCALE_MODEL",
+          "type": "UPSCALE_MODEL",
+          "links": [
+            344
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "UpscaleModelLoader",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        "RealESRGAN_x2.pth"
+      ]
+    },
+    {
+      "id": 88,
+      "type": "ImageUpscaleWithModel",
+      "pos": [
+        1998.1520159014372,
+        -527.7222501442691
+      ],
+      "size": [
+        232.87999572753907,
+        89.72222010294597
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "upscale_model",
+          "type": "UPSCALE_MODEL",
+          "link": 344
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 345
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            382
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "ImageUpscaleWithModel",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 113,
+      "type": "UNETLoader",
+      "pos": [
+        -561.2122282791413,
+        -758.8874979947731
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            417
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.14.1",
+        "Node name for S&R": "UNETLoader",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.2"
+        }
+      },
+      "widgets_values": [
+        "z_image_turbo_bf16.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 114,
+      "type": "CLIPLoader",
+      "pos": [
+        -222.44263115389788,
+        -247.30953566262028
+      ],
+      "size": [
+        270,
+        106
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            418,
+            419
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.14.1",
+        "Node name for S&R": "CLIPLoader",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.2"
+        }
+      },
+      "widgets_values": [
+        "zImageTurbo_textEncoder.safetensors",
+        "lumina2",
+        "default"
+      ]
+    },
+    {
+      "id": 65,
+      "type": "CLIPTextEncode",
+      "pos": [
+        339.1519511665683,
+        -185.649296873858
+      ],
+      "size": [
+        400,
+        230
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 418
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            366
+          ]
+        }
+      ],
+      "title": "Negative Prompt",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "CLIPTextEncode",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 117,
+      "type": "VAELoader",
+      "pos": [
+        1378.276748925337,
+        -245.4809977573765
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            422
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.14.1",
+        "Node name for S&R": "VAELoader",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.2"
+        }
+      },
+      "widgets_values": [
+        "zImageTurbo_vae.safetensors"
+      ]
+    },
+    {
+      "id": 108,
+      "type": "Text Multiline",
+      "pos": [
+        -804.2210310966673,
+        32.0359270880168
+      ],
+      "size": [
+        400,
+        296
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "was-ns",
+        "ver": "3.0.1",
+        "Node name for S&R": "Text Multiline",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.2"
+        }
+      },
+      "widgets_values": [
+        "A 3D rendered image of an furry green-brown animated platypus with a long orange beak wearing a roman toga and smiling happily"
+      ]
+    },
+    {
+      "id": 104,
+      "type": "ModelSamplingAuraFlow",
+      "pos": [
+        454.32644794042864,
+        -448.2640645201697
+      ],
+      "size": [
+        310,
+        60
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 416
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "slot_index": 0,
+          "links": [
+            388
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.64",
+        "Node name for S&R": "ModelSamplingAuraFlow",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.5.1",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        5
+      ]
+    },
+    {
+      "id": 105,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        23.89940343055726,
+        -634.9415425215083
+      ],
+      "size": [
+        270,
+        125.27777353922527
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 417
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            416
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "LoraLoaderModelOnly",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        "barry-zib-3.0.safetensors",
+        1
+      ]
+    },
+    {
+      "id": 9,
+      "type": "SaveImage",
+      "pos": [
+        3595.103589761974,
+        -24.352416768055065
+      ],
+      "size": [
+        2123.4214689272876,
+        1579.732753635986
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 383
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "SaveImage",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.5.1",
+          "input_ue_unconnectable": {}
+        }
+      },
+      "widgets_values": [
+        "Clementine"
+      ],
+      "color": "#000000",
+      "bgcolor": "#000000"
+    },
+    {
+      "id": 94,
+      "type": "KSamplerAdvanced",
+      "pos": [
+        1019.399703889721,
+        -373.2969233010074
+      ],
+      "size": [
+        312.3333231608073,
+        576.0000101725261
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 388
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 403
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 366
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 367
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            391
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.8.2",
+        "Node name for S&R": "KSamplerAdvanced",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        "enable",
+        1012949075958313,
+        "randomize",
+        9,
+        1,
+        "euler",
+        "simple",
+        0,
+        9,
+        "disable"
+      ]
+    },
+    {
+      "id": 67,
+      "type": "EmptySD3LatentImage",
+      "pos": [
+        435.0740105303432,
+        134.6280431296566
+      ],
+      "size": [
+        270,
+        149.72222646077475
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            367
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75",
+        "Node name for S&R": "EmptySD3LatentImage",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        1024,
+        1024,
+        8
+      ]
+    },
+    {
+      "id": 68,
+      "type": "LoRACharacterPromptBuilder",
+      "pos": [
+        -721.4504583225593,
+        447.06191376236416
+      ],
+      "size": [
+        546.9721984863281,
+        388.3611043294271
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "custom_expressions",
+          "shape": 7,
+          "type": "STRING",
+          "link": null
+        },
+        {
+          "name": "custom_situations",
+          "shape": 7,
+          "type": "STRING",
+          "link": null
+        },
+        {
+          "name": "custom_outfits",
+          "shape": 7,
+          "type": "STRING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            423
+          ]
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "aux_id": "Pixelurgy/ComfyUI-LoRA-Assistant",
+        "ver": "81b8f784cd6e6e1a37496df00dd4786f9226e709",
+        "Node name for S&R": "LoRACharacterPromptBuilder",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.1"
+        }
+      },
+      "widgets_values": [
+        819768448773537,
+        "randomize",
+        "",
+        "A middle-aged ginger man is sitting at a desk with his feet on the desk and his hands on his belly. He is barefoot.",
+        "Random",
+        "Blank",
+        "Random"
+      ]
+    }
+  ],
+  "links": [
+    [
+      344,
+      87,
+      0,
+      88,
+      0,
+      "UPSCALE_MODEL"
+    ],
+    [
+      345,
+      66,
+      0,
+      88,
+      1,
+      "IMAGE"
+    ],
+    [
+      366,
+      65,
+      0,
+      94,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      367,
+      67,
+      0,
+      94,
+      3,
+      "LATENT"
+    ],
+    [
+      382,
+      88,
+      0,
+      101,
+      0,
+      "IMAGE"
+    ],
+    [
+      383,
+      101,
+      0,
+      9,
+      0,
+      "IMAGE"
+    ],
+    [
+      388,
+      104,
+      0,
+      94,
+      0,
+      "MODEL"
+    ],
+    [
+      391,
+      94,
+      0,
+      66,
+      0,
+      "LATENT"
+    ],
+    [
+      403,
+      91,
+      0,
+      94,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      416,
+      105,
+      0,
+      104,
+      0,
+      "MODEL"
+    ],
+    [
+      417,
+      113,
+      0,
+      105,
+      0,
+      "MODEL"
+    ],
+    [
+      418,
+      114,
+      0,
+      65,
+      0,
+      "CLIP"
+    ],
+    [
+      419,
+      114,
+      0,
+      91,
+      0,
+      "CLIP"
+    ],
+    [
+      422,
+      117,
+      0,
+      66,
+      1,
+      "VAE"
+    ],
+    [
+      423,
+      68,
+      0,
+      91,
+      1,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "frontendVersion": "1.41.19",
+    "ue_links": [],
+    "links_added_by_ue": [],
+    "ds": {
+      "scale": 1.1,
+      "offset": [
+        959.9503572491027,
+        184.1630312033097
+      ]
+    },
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true,
+    "workflowRendererVersion": "LG"
+  },
+  "version": 0.4,
+  "seed_widgets": {
+    "68": 0,
+    "94": 1
+  }
+}
+
+
