@@ -63,9 +63,16 @@ _PRIMITIVE_STRING_CLASSES = {
 _MAX_FOLLOW_DEPTH = 8
 
 # String values in widgets_values that are control tokens, not prompt text.
-_TEXT_CONTROL_VALUES = frozenset({
-    "randomize", "increment", "decrement", "fixed", "enable", "disable",
-})
+_TEXT_CONTROL_VALUES = frozenset(
+    {
+        "randomize",
+        "increment",
+        "decrement",
+        "fixed",
+        "enable",
+        "disable",
+    }
+)
 
 
 # ── UI-format helpers ─────────────────────────────────────────────────────────
@@ -83,11 +90,7 @@ def _build_ui_maps(workflow: dict) -> tuple[dict, dict]:
         ``{id, origin_id, origin_slot, target_id, target_slot, type}``
     Both formats are handled.
     """
-    node_map = {
-        str(n["id"]): n
-        for n in (workflow.get("nodes") or [])
-        if "id" in n
-    }
+    node_map = {str(n["id"]): n for n in (workflow.get("nodes") or []) if "id" in n}
     link_map: dict[str, str] = {}
     for link in workflow.get("links") or []:
         if isinstance(link, list) and len(link) >= 3:
@@ -150,8 +153,11 @@ def _extract_text_from_node_ui(node: dict | None) -> str | None:
     # Fallback: longest non-trivial string in widgets_values (covers custom nodes)
     wv = node.get("widgets_values") or []
     candidates = [
-        v for v in wv
-        if isinstance(v, str) and v.strip() and v.strip().lower() not in _TEXT_CONTROL_VALUES
+        v
+        for v in wv
+        if isinstance(v, str)
+        and v.strip()
+        and v.strip().lower() not in _TEXT_CONTROL_VALUES
     ]
     if candidates:
         return max(candidates, key=len).strip()
@@ -241,7 +247,10 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
             elif node_type in _SAMPLER_CLASSES:
                 if positive_prompt is None:
                     for inp in node.get("inputs") or []:
-                        if inp.get("name") == "positive" and inp.get("link") is not None:
+                        if (
+                            inp.get("name") == "positive"
+                            and inp.get("link") is not None
+                        ):
                             upstream_id = link_map.get(str(inp["link"]))
                             if upstream_id:
                                 positive_prompt = _follow_positive_ui(
@@ -257,7 +266,11 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
                     if seed is None and node_type == "KSamplerAdvanced":
                         # noise_seed not declared in inputs[]; layout: [add_noise, noise_seed, ...]
                         wv = node.get("widgets_values") or []
-                        if len(wv) >= 2 and wv[0] == "enable" and isinstance(wv[1], int):
+                        if (
+                            len(wv) >= 2
+                            and wv[0] == "enable"
+                            and isinstance(wv[1], int)
+                        ):
                             seed = wv[1]
 
             elif node_type in _SEED_CLASSES and seed is None:
@@ -280,10 +293,7 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
                 if node.get("type") not in _PRIMITIVE_STRING_CLASSES:
                     continue
                 # Only consider nodes that have at least one outgoing link (are wired up)
-                has_link = any(
-                    out.get("links")
-                    for out in (node.get("outputs") or [])
-                )
+                has_link = any(out.get("links") for out in (node.get("outputs") or []))
                 if not has_link:
                     continue
                 text = _extract_text_from_node_ui(node)
@@ -293,7 +303,12 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
             if positive_prompt is not None:
                 break
 
-    return {"models": models, "loras": loras, "positive_prompt": positive_prompt, "seed": seed}
+    return {
+        "models": models,
+        "loras": loras,
+        "positive_prompt": positive_prompt,
+        "seed": seed,
+    }
 
 
 # ── API-format helpers ────────────────────────────────────────────────────────
@@ -405,7 +420,12 @@ def _extract_generation_info_api(workflow: dict) -> dict:
                     seed = val
                     break
 
-    return {"models": models, "loras": loras, "positive_prompt": positive_prompt, "seed": seed}
+    return {
+        "models": models,
+        "loras": loras,
+        "positive_prompt": positive_prompt,
+        "seed": seed,
+    }
 
 
 # ── public extraction API ─────────────────────────────────────────────────────
