@@ -3160,11 +3160,8 @@ async function fetchFaceBboxes(imageId) {
   }
 }
 
-async function fetchCharacters(force = false) {
+async function fetchCharacters() {
   if (!backendUrl.value || charactersLoading.value) return;
-  if (!force && Array.isArray(characters.value) && characters.value.length) {
-    return;
-  }
   charactersLoading.value = true;
   const requestEpoch = (characterThumbnailEpoch += 1);
   try {
