@@ -2218,27 +2218,35 @@ function handleKeydown(e) {
 
   // Block shortcuts when any other editable element (e.g. plugin parameter inputs) has focus.
   // Still allow ESC to close the plugin/comfyui menu if open.
-  const _target = e.target;
-  const _isEditable =
-    _target instanceof HTMLElement &&
-    (_target.isContentEditable ||
-      ["INPUT", "TEXTAREA", "SELECT"].includes(_target.tagName) ||
-      _target.getAttribute("role") === "textbox");
-  if (_isEditable) {
+  const target = e.target;
+  const isEditable =
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
+      target.getAttribute("role") === "textbox");
+  if (isEditable) {
     if (e.key === "Escape") {
+      console.log(
+        "ESC pressed in editable element, checking for open menus...",
+      );
       if (pluginMenuOpen.value) {
         pluginMenuOpen.value = false;
         e.preventDefault();
       } else if (comfyuiMenuOpen.value) {
         comfyuiMenuOpen.value = false;
         e.preventDefault();
+      } else if (target.tagName === "SELECT") {
+        // Close the select dropdown on ESC, since it doesn't do that by default.
+        target.blur();
+      } else {
+        return;
       }
+    } else {
+      return;
     }
-    return;
   }
 
   if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
-    const target = e.target;
     const isEditable =
       target &&
       (target instanceof HTMLInputElement ||
