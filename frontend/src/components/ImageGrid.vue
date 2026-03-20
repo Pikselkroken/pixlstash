@@ -2031,6 +2031,9 @@ const renderBuffer = computed(() =>
 const overlayOpen = ref(false);
 const overlayImageId = ref(null);
 const overlayInitialExpandedStackIds = ref([]);
+// Set to true when a tag mutation was deferred (applyTagFilter=true, overlay
+// open). Triggers a filtered grid refetch once the overlay closes.
+const pendingTagFilterRefresh = ref(false);
 
 // ============================================================
 // DRAG & DROP STATE + SOURCE HELPERS
@@ -2459,6 +2462,12 @@ function closeOverlay() {
   overlayInitialExpandedStackIds.value = [];
   if (comfyuiRunner.value?.comfyuiPendingOverlayRefresh) {
     comfyuiRunner.value.comfyuiPendingOverlayRefresh.value = false;
+  }
+  if (pendingTagFilterRefresh.value) {
+    pendingTagFilterRefresh.value = false;
+    lastFetchSuccess.value = { key: "", at: 0 };
+    lastFetchError.value = { key: "", at: 0 };
+    debouncedFetchAllGridImages();
   }
 }
 
@@ -4144,7 +4153,11 @@ async function fetchAllGridImages(options = {}) {
     lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
   } catch (e) {
     imagesError.value = e.message;
-    allGridImages.value = [];
+    // Don't wipe the grid on a transient error while the overlay is open —
+    // the user would see the grid flash empty behind the overlay.
+    if (!overlayOpen.value) {
+      allGridImages.value = [];
+    }
     lastFetchError.value = { key: fetchKey, at: Date.now() };
   } finally {
     if (loadId === gridLoadEpoch.value) {
@@ -4799,6 +4812,14 @@ function handleGridBackgroundClick(e) {
 
 async function _afterTagMutation(imageId) {
   if (props.applyTagFilter) {
+    if (overlayOpen.value) {
+      // The overlay is showing live tag state already. Defer the full
+      // tag-filtered refetch until the overlay is closed to prevent the
+      // grid from unexpectedly going empty in the background.
+      pendingTagFilterRefresh.value = true;
+      refreshGridImage(imageId);
+      return;
+    }
     lastFetchSuccess.value = { key: "", at: 0 };
     lastFetchError.value = { key: "", at: 0 };
     await fetchAllGridImages();
