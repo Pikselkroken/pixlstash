@@ -2359,8 +2359,11 @@ function handleBackdropClick() {
 }
 
 function handleUserActivity() {
+  if (chromeHidden.value) {
+    chromeRevealTimestamp.value = Date.now();
+  }
+
   chromeHidden.value = false;
-  chromeRevealTimestamp.value = Date.now();
 }
 
 function handleMouseActivity() {
@@ -2382,7 +2385,10 @@ function handleOverlayClick(event) {
     handleUserActivity();
     return;
   }
-  if (Date.now() - chromeRevealTimestamp.value < 250) {
+  if (Date.now() - chromeRevealTimestamp.value < 500) {
+    console.log(
+      "Aborting overlay click handling to avoid immediate re-hiding of chrome",
+    );
     return;
   }
   const interactiveSelector =
