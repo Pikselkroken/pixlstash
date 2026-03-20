@@ -1041,6 +1041,7 @@ function setOverlayImageById(nextId) {
     const existingTags = getTagList(image.value?.tags);
     const targetTags = getTagList(target.tags);
     const existingDescription = image.value?.description;
+    const existingSmartScore = image.value?.smartScore;
     image.value = {
       ...target,
       // Preserve the existing description when re-setting the same image from filmstrip
@@ -1048,6 +1049,10 @@ function setOverlayImageById(nextId) {
       // is loaded separately by fetchOverlayMetadata and must not be overwritten here.
       ...(isSameImage && existingDescription != null
         ? { description: existingDescription }
+        : {}),
+      // Preserve smartScore fetched by fetchOverlayMetadata — grid images don't carry it.
+      ...(isSameImage && existingSmartScore != null
+        ? { smartScore: existingSmartScore }
         : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],

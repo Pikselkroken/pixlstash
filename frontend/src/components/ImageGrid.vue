@@ -2000,7 +2000,9 @@ watch(
       selectedImageIds.value = [];
       lastSelectedImageId = null;
     }
-    debouncedFetchAllGridImages();
+    // Force the refetch to bypass the 1200ms de-dup cache: if the grid was
+    // just cleared we must not skip the fetch, otherwise the grid stays blank.
+    debouncedFetchAllGridImages({ force: true });
     if (preserveScrollOnNextFetch.value) {
       preserveScrollOnNextFetch.value = false;
     }
@@ -2083,7 +2085,8 @@ async function updateSelectedGroupName() {
   if (
     props.selectedReferenceCharacter &&
     props.selectedReferenceCharacter !== `${props.allPicturesId}` &&
-    props.selectedReferenceCharacter !== `${props.unassignedPicturesId}`
+    props.selectedReferenceCharacter !== `${props.unassignedPicturesId}` &&
+    props.selectedReferenceCharacter !== `${props.scrapheapPicturesId}`
   ) {
     try {
       const res = await apiClient.get(
@@ -2099,7 +2102,8 @@ async function updateSelectedGroupName() {
   } else if (
     props.selectedCharacter &&
     props.selectedCharacter !== `${props.allPicturesId}` &&
-    props.selectedCharacter !== `${props.unassignedPicturesId}`
+    props.selectedCharacter !== `${props.unassignedPicturesId}` &&
+    props.selectedCharacter !== `${props.scrapheapPicturesId}`
   ) {
     try {
       const res = await apiClient.get(
