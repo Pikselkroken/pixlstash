@@ -336,17 +336,17 @@
 
       <div
         v-if="comfyuiProgress && comfyuiProgress.visible"
-        class="overlay-comfyui-progress"
+        class="overlay-progress overlay-progress--comfyui"
         :class="{
-          'overlay-comfyui-progress-error': comfyuiProgress.status === 'failed',
+          'overlay-progress--error': comfyuiProgress.status === 'failed',
         }"
       >
-        <div class="overlay-comfyui-progress-title">
+        <div class="overlay-progress-title">
           {{ comfyuiProgress.message }}
         </div>
-        <div class="overlay-comfyui-progress-bar">
+        <div class="overlay-progress-bar">
           <div
-            class="overlay-comfyui-progress-fill"
+            class="overlay-progress-fill"
             :style="{ width: `${comfyuiProgressPercent}%` }"
           ></div>
         </div>
@@ -354,21 +354,21 @@
 
       <div
         v-if="pluginProgress && pluginProgress.visible"
-        class="overlay-plugin-progress"
+        class="overlay-progress overlay-progress--plugin"
         :class="{
-          'overlay-plugin-progress-error': pluginProgress.status === 'failed',
+          'overlay-progress--error': pluginProgress.status === 'failed',
         }"
       >
-        <div class="overlay-plugin-progress-title">
+        <div class="overlay-progress-title">
           {{ pluginProgress.message }}
         </div>
-        <div class="overlay-plugin-progress-bar">
+        <div class="overlay-progress-bar">
           <div
-            class="overlay-plugin-progress-fill"
+            class="overlay-progress-fill"
             :style="{ width: `${pluginProgressPercent}%` }"
           ></div>
         </div>
-        <div class="overlay-plugin-progress-meta">
+        <div class="overlay-progress-meta">
           {{ pluginProgress.current || 0 }} / {{ pluginProgress.total || 0 }}
         </div>
       </div>
@@ -4209,65 +4209,39 @@ function downloadComfyWorkflow(workflow) {
   pointer-events: none;
 }
 
-.overlay-comfyui-progress {
+.overlay-progress {
   position: absolute;
+  right: calc(16px + var(--sidebar-width));
+  z-index: 6;
+  background: rgba(var(--v-theme-dark-surface), 0.75);
+  color: rgb(var(--v-theme-on-dark-surface));
+  padding: 8px 10px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
+  backdrop-filter: blur(6px);
+}
+
+.overlay-progress--comfyui {
   bottom: 64px;
-  right: calc(16px + var(--sidebar-width));
-  z-index: 6;
-  background: rgba(var(--v-theme-dark-surface), 0.75);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: 8px 10px;
-  border-radius: 8px;
   min-width: 180px;
-  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
-  backdrop-filter: blur(6px);
 }
 
-.overlay-comfyui-progress-title {
-  font-size: 0.8em;
-  margin-bottom: 6px;
-}
-
-.overlay-comfyui-progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.2);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.overlay-comfyui-progress-fill {
-  height: 100%;
-  background: rgb(var(--v-theme-accent));
-  width: 0;
-  transition: width 0.2s ease;
-}
-
-.overlay-plugin-progress {
-  position: absolute;
+.overlay-progress--plugin {
   bottom: 128px;
-  right: calc(16px + var(--sidebar-width));
-  z-index: 6;
-  background: rgba(var(--v-theme-dark-surface), 0.75);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: 8px 10px;
-  border-radius: 8px;
   min-width: 220px;
-  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
-  backdrop-filter: blur(6px);
 }
 
-.overlay-plugin-progress-error {
+.overlay-progress--error {
   background: rgba(var(--v-theme-error), 0.95);
 }
 
-.overlay-plugin-progress-title {
+.overlay-progress-title {
   font-size: 0.8em;
   margin-bottom: 6px;
   white-space: pre-line;
 }
 
-.overlay-plugin-progress-bar {
+.overlay-progress-bar {
   width: 100%;
   height: 6px;
   background: rgba(var(--v-theme-on-dark-surface), 0.2);
@@ -4275,14 +4249,14 @@ function downloadComfyWorkflow(workflow) {
   overflow: hidden;
 }
 
-.overlay-plugin-progress-fill {
+.overlay-progress-fill {
   height: 100%;
   background: rgb(var(--v-theme-accent));
   width: 0;
   transition: width 0.2s ease;
 }
 
-.overlay-plugin-progress-meta {
+.overlay-progress-meta {
   margin-top: 6px;
   font-size: 0.78em;
   opacity: 0.85;
@@ -4524,12 +4498,17 @@ function downloadComfyWorkflow(workflow) {
   cursor: default;
 }
 
-.overlay-comfy-warning {
-  background: rgba(var(--v-theme-warning), 0.2);
-  color: rgb(var(--v-theme-on-warning));
+.overlay-comfy-warning,
+.overlay-comfy-error,
+.overlay-comfy-success {
   border-radius: 8px;
   padding: 6px 8px;
   font-size: 0.78rem;
+}
+
+.overlay-comfy-warning {
+  background: rgba(var(--v-theme-warning), 0.2);
+  color: rgb(var(--v-theme-on-warning));
 }
 
 .overlay-comfy-note {
@@ -4545,17 +4524,11 @@ function downloadComfyWorkflow(workflow) {
 .overlay-comfy-error {
   background: rgba(var(--v-theme-error), 0.2);
   color: rgb(var(--v-theme-on-error));
-  border-radius: 8px;
-  padding: 6px 8px;
-  font-size: 0.78rem;
 }
 
 .overlay-comfy-success {
   background: rgba(var(--v-theme-primary), 0.18);
   color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: 8px;
-  padding: 6px 8px;
-  font-size: 0.78rem;
 }
 
 .zoom-btn {
@@ -4900,7 +4873,6 @@ function downloadComfyWorkflow(workflow) {
 .overlay-sidebar.open {
   width: 320px;
   padding: 16px;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -4999,9 +4971,6 @@ function downloadComfyWorkflow(workflow) {
   padding: 1px 2px 1px 6px;
   font-size: 0.72rem;
   line-height: 1.2;
-  margin-bottom: 0px;
-  margin-right: 0px;
-  margin-left: 0px;
   justify-content: center;
   vertical-align: middle;
   cursor: pointer;
@@ -5129,13 +5098,17 @@ function downloadComfyWorkflow(workflow) {
   gap: 10px;
 }
 
-.metadata-info-card {
+.metadata-info-card,
+.metadata-comfy-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   padding: 10px;
   border-radius: 10px;
   background: rgba(var(--v-theme-on-dark-surface), 0.06);
+}
+
+.metadata-info-card {
+  gap: 8px;
 }
 
 .metadata-info-header {
@@ -5171,12 +5144,7 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .metadata-comfy-card {
-  display: flex;
-  flex-direction: column;
   gap: 10px;
-  padding: 10px;
-  border-radius: 10px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
 }
 
 .metadata-comfy-header {
