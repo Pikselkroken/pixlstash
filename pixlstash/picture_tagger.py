@@ -26,6 +26,7 @@ from .pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
 from pixlstash.tag_naturaliser import TagNaturaliser
 from pixlstash.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
+from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -73,6 +74,18 @@ def _from_pretrained_local_first(cls, model_name, **kwargs):
     except OSError:
         logger.info("Downloading %s for the first time...", model_name)
         return cls.from_pretrained(model_name, **kwargs)
+
+
+def _clean_asset_name(filename: str) -> str:
+    """Strip file extension and replace underscores/hyphens with spaces.
+
+    Used to produce human-readable model and LoRA names for text embedding.
+    Example: 'z_image_turbo_bf16.safetensors' -> 'z image turbo bf16'
+    """
+    name = os.path.basename(filename or "")
+    name = os.path.splitext(name)[0]
+    name = name.replace("_", " ").replace("-", " ")
+    return name.strip()
 
 
 DEFAULT_WD14_TAGGER_REPO = "SmilingWolf/wd-convnext-tagger-v3"
@@ -1998,6 +2011,16 @@ class PictureTagger:
             if char.get("description"):
                 flat.append(str(char["description"]))
 
+        comfyui = texts.get("comfyui") or {}
+        if comfyui.get("positive_prompt"):
+            flat.append(str(comfyui["positive_prompt"]))
+        models = [_clean_asset_name(m) for m in (comfyui.get("models") or []) if m]
+        if models:
+            flat.append(", ".join(models))
+        loras = [_clean_asset_name(lf) for lf in (comfyui.get("loras") or []) if lf]
+        if loras:
+            flat.append(", ".join(loras))
+
         return flat
 
     def generate_text_embedding(
@@ -2017,6 +2040,25 @@ class PictureTagger:
         else:
             for picture in pictures or []:
                 text = picture.text_embedding_data()
+                file_path = getattr(picture, "file_path", None)
+                if file_path:
+                    resolved = self._resolve_picture_path(file_path)
+                    if resolved:
+                        try:
+                            embedded_metadata = ImageUtils.extract_embedded_metadata(resolved)
+                            workflow_info = extract_comfy_workflow_info(embedded_metadata)
+                            if workflow_info:
+                                text["comfyui"] = {
+                                    "positive_prompt": workflow_info.get("positive_prompt"),
+                                    "models": workflow_info.get("models") or [],
+                                    "loras": workflow_info.get("loras") or [],
+                                }
+                        except Exception as exc:
+                            logger.debug(
+                                "ComfyUI extraction failed for picture %s: %s",
+                                getattr(picture, "id", None),
+                                exc,
+                            )
                 flat_text = PictureTagger._flatten_texts(text)
                 filtered_text = self._filter_texts(flat_text)
                 full_text = ". ".join(filtered_text)
