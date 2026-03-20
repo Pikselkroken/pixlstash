@@ -2183,7 +2183,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   font-size: 0.9em;
   color: rgb(var(--v-theme-sidebar-text));
   min-width: 2.6em;
-  width: 2.6em;
   text-align: right;
   margin: 0;
   font-weight: 400;
