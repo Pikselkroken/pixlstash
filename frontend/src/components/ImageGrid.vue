@@ -559,6 +559,8 @@ const props = defineProps({
     default: () => ({ key: 0, payload: null }),
   },
   mediaTypeFilter: { type: String, default: "all" },
+  comfyuiModelFilter: { type: Array, default: () => [] },
+  comfyuiLoraFilter: { type: Array, default: () => [] },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
@@ -3010,6 +3012,8 @@ function buildGridFetchKey() {
     stackThreshold: props.stackThreshold ?? null,
     mediaTypeFilter: props.mediaTypeFilter ?? "all",
     similarityCharacter: props.similarityCharacter ?? null,
+    comfyuiModelFilter: props.comfyuiModelFilter ?? [],
+    comfyuiLoraFilter: props.comfyuiLoraFilter ?? [],
   });
 }
 
@@ -3068,6 +3072,12 @@ function buildPictureIdsQueryParams() {
   }
   params.append("fields", "grid");
   _appendMediaTypeParams(params);
+  (props.comfyuiModelFilter || []).forEach((m) =>
+    params.append("comfyui_model", m),
+  );
+  (props.comfyuiLoraFilter || []).forEach((l) =>
+    params.append("comfyui_lora", l),
+  );
   return params.toString();
 }
 
@@ -4224,14 +4234,21 @@ watch(
   },
 );
 
-watch([() => props.mediaTypeFilter], () => {
-  _resetGridState();
-  visibleStart.value = 0;
-  visibleEnd.value = 0;
-  fetchAllGridImages().then(() => {
-    updateVisibleThumbnails();
-  });
-});
+watch(
+  [
+    () => props.mediaTypeFilter,
+    () => props.comfyuiModelFilter,
+    () => props.comfyuiLoraFilter,
+  ],
+  () => {
+    _resetGridState();
+    visibleStart.value = 0;
+    visibleEnd.value = 0;
+    fetchAllGridImages().then(() => {
+      updateVisibleThumbnails();
+    });
+  },
+);
 
 watch(
   () => props.showStacks,
