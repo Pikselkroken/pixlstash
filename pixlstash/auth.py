@@ -34,6 +34,30 @@ class LoginRequest(BaseModel):
     )
 
 
+# Paths and prefixes that bypass authentication — also used by rate limiting.
+AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
+    {
+        "/login",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/docs/oauth2-redirect",
+        "/favicon.ico",
+        "/",
+        "/version",
+        "/version/latest",
+        "/check-session",
+        "/logout",
+    }
+)
+AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
+    "/assets/",
+    "/pictures/shared/",
+    "/docs/",
+    "/redoc/",
+)
+
+
 class AuthService:
     def __init__(
         self, db: VaultDatabase, server_config: dict, server_config_path: str, logger
@@ -469,30 +493,11 @@ class AuthService:
     async def auth_middleware(
         self, request: Request, call_next, allow_origins, allow_origin_regex
     ):
-        excluded_paths = [
-            "/login",
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-            "/docs/oauth2-redirect",
-            "/favicon.ico",
-            "/",
-            "/version",
-            "/version/latest",
-            "/check-session",
-            "/logout",
-        ]
-        excluded_prefixes = [
-            "/assets/",
-            "/pictures/shared/",
-            "/docs/",
-            "/redoc/",
-        ]
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        if request.url.path not in excluded_paths and not any(
-            request.url.path.startswith(prefix) for prefix in excluded_prefixes
+        if request.url.path not in AUTH_EXCLUDED_PATHS and not any(
+            request.url.path.startswith(prefix) for prefix in AUTH_EXCLUDED_PREFIXES
         ):
             session_id = request.cookies.get("session_id")
             if session_id not in self.active_session_ids:
