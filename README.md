@@ -69,6 +69,9 @@ On first run in an interactive terminal, PixlStash now launches a short setup wi
 - `require_ssl` (HTTP/HTTPS)
 - `watch_folders`
 
+Before the server starts, bootstrap also offers to set (or replace) the
+initial username/password.
+
 You can rerun the wizard at any time with:
 
 ```bash

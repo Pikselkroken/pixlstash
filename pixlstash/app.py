@@ -3,8 +3,10 @@ import argparse
 import logging
 import sys
 import json
+import getpass
 
 from platformdirs import user_config_dir
+from passlib.hash import bcrypt
 
 
 from pixlstash.pixl_logging import setup_logging, get_logger
@@ -191,11 +193,11 @@ def _should_prompt_bootstrap(server_config_path: str, force: bool) -> bool:
         return True
 
 
-def _bootstrap_server_config(server_config_path: str, force: bool = False) -> None:
+def _bootstrap_server_config(server_config_path: str, force: bool = False) -> bool:
     if not _should_prompt_bootstrap(server_config_path, force):
-        return
+        return False
     if not sys.stdin.isatty():
-        return
+        return False
 
     config = Server._init_server_config(server_config_path)
 
@@ -244,6 +246,61 @@ def _bootstrap_server_config(server_config_path: str, force: bool = False) -> No
 
     print(f"\nSaved setup to: {server_config_path}")
     print("You can rerun this wizard later with --bootstrap.\n")
+    return True
+
+
+def _prompt_bootstrap_credentials(server) -> None:
+    if not sys.stdin.isatty():
+        return
+
+    user = server.auth.user or server.auth.ensure_user()
+    has_existing_credentials = bool(user and user.username and user.password_hash)
+
+    if has_existing_credentials:
+        keep_input = input("Keep existing username/password? [Y/n]: ").strip()
+        keep_existing = _parse_yes_no(keep_input, True)
+        if keep_existing:
+            return
+    else:
+        setup_input = input(
+            "Set username/password now before launch? [Y/n]: "
+        ).strip()
+        should_setup = _parse_yes_no(setup_input, True)
+        if not should_setup:
+            return
+
+    existing_username = str(user.username).strip() if user and user.username else ""
+    username = existing_username
+    while True:
+        prompt_suffix = f" [{existing_username}]" if existing_username else ""
+        username_input = input(f"Username{prompt_suffix}: ").strip()
+        if username_input:
+            username = username_input
+        if username:
+            break
+        print("Username cannot be empty.")
+
+    while True:
+        password = getpass.getpass("Password (min 8 chars): ")
+        if len(password) < 8:
+            print("Password must be at least 8 characters.")
+            continue
+        try:
+            password_bytes = len(password.encode("utf-8"))
+        except Exception:
+            password_bytes = len(password)
+        if password_bytes > 72:
+            print("Password cannot exceed 72 bytes.")
+            continue
+        password_confirm = getpass.getpass("Confirm password: ")
+        if password != password_confirm:
+            print("Passwords do not match.")
+            continue
+        break
+
+    server.auth.set_username(username)
+    server.auth.set_password_hash(bcrypt.hash(password))
+    print("Bootstrap credentials saved.\n")
 
 
 def main():
@@ -286,7 +343,7 @@ def main():
     )
     args = parser.parse_args()
 
-    _bootstrap_server_config(args.server_config, force=args.bootstrap)
+    ran_bootstrap = _bootstrap_server_config(args.server_config, force=args.bootstrap)
     Server.DEFAULT_CLEANUP_MISSING_PICTURES = bool(args.cleanup_missing_pictures)
 
     server_config = Server._init_server_config(args.server_config)
@@ -308,6 +365,10 @@ def main():
         for failure in exc.failures:
             print(f"- {failure}")
         return 1
+
+    if ran_bootstrap:
+        _prompt_bootstrap_credentials(server)
+
     if args.remove_password:
         server.remove_password_hash()
         # Continue running the server after removing the password hash

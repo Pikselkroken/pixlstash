@@ -346,13 +346,23 @@ class Server:
         logger.info("Generating %s missing thumbnails at startup.", total)
         generated = 0
         skipped = 0
+        missing_source_count = 0
         for index, (pic_id, file_path) in enumerate(missing, start=1):
             resolved = ImageUtils.resolve_picture_path(self.vault.image_root, file_path)
             if not resolved or not os.path.exists(resolved):
+                missing_source_count += 1
                 skipped += 1
                 logger.warning(
                     "Missing source file for thumbnail generation: %s", resolved
                 )
+                if (
+                    missing_source_count == 1
+                    and not Server.DEFAULT_CLEANUP_MISSING_PICTURES
+                ):
+                    logger.info(
+                        "Startup cleanup tip: run with '--cleanup-missing-pictures' "
+                        "to remove stale picture records that point to missing files."
+                    )
                 continue
             img = ImageUtils.load_image_or_video(resolved)
             if img is None:
@@ -382,9 +392,10 @@ class Server:
                 logger.info("Thumbnail generation progress: %s/%s", index, total)
 
         logger.info(
-            "Thumbnail generation completed: %s generated, %s skipped.",
+            "Thumbnail generation completed: %s generated, %s skipped (%s missing source files).",
             generated,
             skipped,
+            missing_source_count,
         )
 
     def _cleanup_missing_pictures(self):
@@ -536,10 +547,6 @@ class Server:
             self._ws_loop = loop
         if Server.DEFAULT_CLEANUP_MISSING_PICTURES:
             await loop.run_in_executor(None, self._cleanup_missing_pictures)
-        else:
-            logger.info(
-                "Startup cleanup tip: run with '--cleanup-missing-pictures' to remove stale picture records that point to missing files."
-            )
         if self._server_config.get("generate_thumbnails_on_startup", True):
             await loop.run_in_executor(None, self._generate_missing_thumbnails)
         asyncio.create_task(self._fetch_latest_pypi_version())
