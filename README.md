@@ -62,6 +62,26 @@ On first run, PixlStash generates a `server-config.json` file in the user config
 
 You can also supply a custom path with `--server-config <path>`.
 
+On first run in an interactive terminal, PixlStash now launches a short setup wizard for:
+
+- `image_root` (storage path)
+- `port`
+- `require_ssl` (HTTP/HTTPS)
+- `watch_folders`
+
+You can rerun the wizard at any time with:
+
+```bash
+python -m pixlstash.app --bootstrap
+```
+
+When rerunning the wizard, pressing Enter keeps existing values as defaults.
+For watch folders:
+
+- Press `A` to add one or more folders (and set `delete_after_import` for each).
+- Press `E` to edit `delete_after_import` on existing folders.
+- Press Enter to keep the existing list unchanged.
+
 Edit the file and restart the server to apply changes.
 
 ### Network and port
@@ -115,6 +135,12 @@ Example:
 | -------------------------------- | ------- | ---------------------------------------------------- |
 | `default_device`                 | `"cpu"` | Device used for AI processing (`"cpu"` or `"cuda"`). |
 | `generate_thumbnails_on_startup` | `true`  | Generate missing thumbnails when the server starts.  |
+
+To remove stale database records for missing source files at startup, run:
+
+```bash
+python -m pixlstash.app --cleanup-missing-pictures
+```
 
 ### Logging
 

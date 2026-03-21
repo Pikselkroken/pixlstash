@@ -117,11 +117,15 @@ class Server:
             conftest to a free OS-assigned port), it replaces the port from the
             persisted config for all Server instances. ``None`` means use the
             config value.
+        DEFAULT_CLEANUP_MISSING_PICTURES: Class-level startup cleanup toggle.
+            When ``True``, startup removes picture rows that point to missing
+            source files before thumbnail generation. ``False`` means disabled.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
     DEFAULT_FORCE_CPU: bool | None = None
     DEFAULT_PORT: int | None = None
+    DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
 
     def __init__(
         self,
@@ -383,6 +387,68 @@ class Server:
             skipped,
         )
 
+    def _cleanup_missing_pictures(self):
+        def fetch_pictures(session):
+            return session.exec(select(Picture.id, Picture.file_path)).all()
+
+        rows = self.vault.db.run_immediate_read_task(fetch_pictures)
+        if not rows:
+            logger.info("No pictures found for startup missing-file cleanup.")
+            return
+
+        missing_ids = []
+        thumbnail_candidates = []
+        for row in rows:
+            pic_id, file_path = row
+            resolved = None
+            if file_path:
+                resolved = ImageUtils.resolve_picture_path(
+                    self.vault.image_root, file_path
+                )
+            if not resolved or not os.path.isfile(resolved):
+                missing_ids.append(pic_id)
+                if file_path:
+                    thumbnail_candidates.append(file_path)
+
+        if not missing_ids:
+            logger.info("Startup missing-file cleanup found no stale picture records.")
+            return
+
+        logger.warning(
+            "Startup missing-file cleanup removing %s stale picture records.",
+            len(missing_ids),
+        )
+
+        def delete_rows(session, ids: list[int]):
+            deleted_count = 0
+            pictures = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
+            for pic in pictures:
+                session.delete(pic)
+                deleted_count += 1
+            session.commit()
+            return deleted_count
+
+        deleted_count = self.vault.db.run_task(delete_rows, missing_ids)
+
+        thumbnails_removed = 0
+        for rel_path in thumbnail_candidates:
+            thumb_path = ImageUtils.get_thumbnail_path(self.vault.image_root, rel_path)
+            if not thumb_path or not os.path.isfile(thumb_path):
+                continue
+            try:
+                os.remove(thumb_path)
+                thumbnails_removed += 1
+            except Exception as exc:
+                logger.warning(
+                    "Failed to delete orphan thumbnail %s: %s", thumb_path, exc
+                )
+
+        logger.info(
+            "Startup missing-file cleanup completed: %s records removed, %s orphan thumbnails removed.",
+            deleted_count,
+            thumbnails_removed,
+        )
+
     def run(self):
         self._shutdown_on_lifespan = True
         version = self._get_version()
@@ -468,6 +534,12 @@ class Server:
         was_set_by_us = self._ws_loop is None
         if was_set_by_us:
             self._ws_loop = loop
+        if Server.DEFAULT_CLEANUP_MISSING_PICTURES:
+            await loop.run_in_executor(None, self._cleanup_missing_pictures)
+        else:
+            logger.info(
+                "Startup cleanup tip: run with '--cleanup-missing-pictures' to remove stale picture records that point to missing files."
+            )
         if self._server_config.get("generate_thumbnails_on_startup", True):
             await loop.run_in_executor(None, self._generate_missing_thumbnails)
         asyncio.create_task(self._fetch_latest_pypi_version())
