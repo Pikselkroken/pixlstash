@@ -3065,6 +3065,7 @@ const FACE_THUMB_MIN = 28;
 const FACE_THUMB_MAX = 60;
 let metadataRequestId = 0;
 let faceBboxesRequestId = 0;
+let comfyWorkflowRequestId = 0;
 
 function dedupeDetections(items) {
   if (!Array.isArray(items)) return [];
@@ -3084,10 +3085,14 @@ function dedupeDetections(items) {
 
 async function fetchComfyWorkflow(imageId) {
   if (!imageId || !backendUrl.value) return;
+  const requestId = (comfyWorkflowRequestId += 1);
+  const requestedImageId = imageId;
   try {
     const res = await apiClient.get(
       `${backendUrl.value}/comfyui/pictures/${imageId}/workflow`,
     );
+    if (comfyWorkflowRequestId !== requestId) return;
+    if (!image.value || image.value.id !== requestedImageId) return;
     const data = res.data;
     comfyMetadata.value = data
       ? {
@@ -3101,6 +3106,7 @@ async function fetchComfyWorkflow(imageId) {
     if (e?.response?.status !== 404) {
       console.error("Failed to fetch ComfyUI workflow:", e);
     }
+    if (comfyWorkflowRequestId !== requestId) return;
     comfyMetadata.value = null;
   }
 }

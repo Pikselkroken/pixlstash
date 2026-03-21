@@ -9,6 +9,8 @@ import uuid
 
 from datetime import datetime, timezone
 from fractions import Fraction
+import json
+
 from io import BytesIO
 from typing import Optional
 
@@ -22,6 +24,7 @@ except Exception:  # pragma: no cover - optional import
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
+from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
@@ -618,6 +621,31 @@ class ImageUtils:
         if not created_at:
             created_at = datetime.now(timezone.utc)
 
+        # Extract ComfyUI generation metadata once at import time so that
+        # text-embedding generation can read it from the DB without re-opening
+        # the file on every embedding run.
+        comfyui_positive_prompt = None
+        # Always set to at least "[]" for non-video pictures so that
+        # comfyui_models IS NULL can serve as the "not yet checked" sentinel.
+        comfyui_models_json = None
+        comfyui_loras_json = None
+        if not is_video:
+            models = []
+            loras = []
+            try:
+                embedded_metadata = ImageUtils.extract_embedded_metadata(full_path)
+                workflow_info = extract_comfy_workflow_info(embedded_metadata)
+                if workflow_info:
+                    comfyui_positive_prompt = (
+                        workflow_info.get("positive_prompt") or None
+                    )
+                    models = workflow_info.get("models") or []
+                    loras = workflow_info.get("loras") or []
+            except Exception as exc:
+                logger.debug("ComfyUI extraction failed for %s: %s", full_path, exc)
+            comfyui_models_json = json.dumps(models)
+            comfyui_loras_json = json.dumps(loras)
+
         pic = Picture(
             file_path=file_name,
             format=img_format,
@@ -627,6 +655,9 @@ class ImageUtils:
             created_at=created_at,
             pixel_sha=pixel_sha,
             original_file_name=original_file_name,
+            comfyui_positive_prompt=comfyui_positive_prompt,
+            comfyui_models=comfyui_models_json,
+            comfyui_loras=comfyui_loras_json,
         )
         return pic
 

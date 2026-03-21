@@ -14,6 +14,7 @@ class TaskType(str, Enum):
     TEXT_EMBEDDING = "TextEmbeddingTask"
     IMAGE_EMBEDDING = "ImageEmbeddingTask"
     WATCH_FOLDERS = "WatchFolderImportTask"
+    COMFYUI_EXTRACTION = "ComfyUIExtractionTask"
 
     @staticmethod
     def all():

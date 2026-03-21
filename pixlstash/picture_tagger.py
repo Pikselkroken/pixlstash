@@ -26,7 +26,6 @@ from .pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
 from pixlstash.tag_naturaliser import TagNaturaliser
 from pixlstash.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
-from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -2040,25 +2039,6 @@ class PictureTagger:
         else:
             for picture in pictures or []:
                 text = picture.text_embedding_data()
-                file_path = getattr(picture, "file_path", None)
-                if file_path:
-                    resolved = self._resolve_picture_path(file_path)
-                    if resolved:
-                        try:
-                            embedded_metadata = ImageUtils.extract_embedded_metadata(resolved)
-                            workflow_info = extract_comfy_workflow_info(embedded_metadata)
-                            if workflow_info:
-                                text["comfyui"] = {
-                                    "positive_prompt": workflow_info.get("positive_prompt"),
-                                    "models": workflow_info.get("models") or [],
-                                    "loras": workflow_info.get("loras") or [],
-                                }
-                        except Exception as exc:
-                            logger.debug(
-                                "ComfyUI extraction failed for picture %s: %s",
-                                getattr(picture, "id", None),
-                                exc,
-                            )
                 flat_text = PictureTagger._flatten_texts(text)
                 filtered_text = self._filter_texts(flat_text)
                 full_text = ". ".join(filtered_text)
