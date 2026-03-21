@@ -363,6 +363,143 @@
                 <v-icon>mdi-video</v-icon>
               </v-btn>
             </v-btn-toggle>
+            <template
+              v-if="comfyuiModelOptions.length || comfyuiLoraOptions.length"
+            >
+              <div
+                style="
+                  font-size: 1.02em;
+                  font-weight: 500;
+                  letter-spacing: 0.02em;
+                  margin-top: 10px;
+                  margin-bottom: 6px;
+                  color: rgb(var(--v-theme-on-background));
+                "
+              >
+                ComfyUI Filter
+              </div>
+              <template v-if="comfyuiModelOptions.length">
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 4px;
+                    width: 100%;
+                  "
+                >
+                  <span
+                    style="
+                      font-size: 0.85em;
+                      font-weight: 600;
+                      color: rgb(var(--v-theme-on-background));
+                      text-transform: uppercase;
+                      letter-spacing: 0.06em;
+                    "
+                    >Models</span
+                  >
+                  <v-btn
+                    v-if="comfyuiModelFilterModel.length"
+                    variant="text"
+                    density="compact"
+                    size="x-small"
+                    color="primary"
+                    style="
+                      min-width: 0;
+                      padding: 0 4px;
+                      height: 18px;
+                      font-size: 0.75em;
+                    "
+                    @click="comfyuiModelFilterModel = []"
+                    >Clear</v-btn
+                  >
+                </div>
+                <div
+                  style="
+                    width: 100%;
+                    max-height: 220px;
+                    overflow-y: auto;
+                    margin-bottom: 8px;
+                    border: 1px solid rgba(var(--v-theme-on-background), 0.18);
+                    border-radius: 6px;
+                    padding: 2px 4px;
+                    background: rgba(var(--v-theme-on-background), 0.04);
+                    color: rgb(var(--v-theme-on-background));
+                  "
+                >
+                  <v-checkbox
+                    v-for="m in comfyuiModelOptions"
+                    :key="m"
+                    v-model="comfyuiModelFilterModel"
+                    :value="m"
+                    :label="m.replace(/\.[^/.]+$/, '')"
+                    density="compact"
+                    hide-details
+                    color="primary"
+                  />
+                </div>
+              </template>
+              <template v-if="comfyuiLoraOptions.length">
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 4px;
+                    width: 100%;
+                  "
+                >
+                  <span
+                    style="
+                      font-size: 0.85em;
+                      font-weight: 600;
+                      color: rgb(var(--v-theme-on-background));
+                      text-transform: uppercase;
+                      letter-spacing: 0.06em;
+                    "
+                    >LoRAs</span
+                  >
+                  <v-btn
+                    v-if="comfyuiLoraFilterModel.length"
+                    variant="text"
+                    density="compact"
+                    size="x-small"
+                    color="primary"
+                    style="
+                      min-width: 0;
+                      padding: 0 4px;
+                      height: 18px;
+                      font-size: 0.75em;
+                    "
+                    @click="comfyuiLoraFilterModel = []"
+                    >Clear</v-btn
+                  >
+                </div>
+                <div
+                  style="
+                    width: 100%;
+                    max-height: 220px;
+                    overflow-y: auto;
+                    border: 1px solid rgba(var(--v-theme-on-background), 0.18);
+                    border-radius: 6px;
+                    padding: 2px 4px;
+                    background: rgba(var(--v-theme-on-background), 0.04);
+                    color: rgb(var(--v-theme-on-background));
+                  "
+                >
+                  <v-checkbox
+                    v-for="l in comfyuiLoraOptions"
+                    :key="l"
+                    v-model="comfyuiLoraFilterModel"
+                    :value="l"
+                    :label="l.replace(/\.[^/.]+$/, '')"
+                    density="compact"
+                    hide-details
+                    color="primary"
+                  />
+                </div>
+              </template>
+            </template>
           </div>
         </v-menu>
         <v-menu
@@ -689,6 +826,8 @@ const props = defineProps({
   exportTypeOptions: { type: Array, default: () => [] },
   exportResolutionOptions: { type: Array, default: () => [] },
   mediaTypeFilter: { type: String, default: "all" },
+  comfyuiModelFilter: { type: Array, default: () => [] },
+  comfyuiLoraFilter: { type: Array, default: () => [] },
   sortOptions: { type: Array, default: () => [] },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: true },
@@ -719,6 +858,8 @@ const emit = defineEmits([
   "update:exportIncludeCharacterName",
   "update:exportUseOriginalFileNames",
   "update:mediaTypeFilter",
+  "update:comfyuiModelFilter",
+  "update:comfyuiLoraFilter",
   "update:similarity-character",
   "update:stack-threshold",
   "open-search-overlay",
@@ -779,9 +920,23 @@ watch(
 
 watch(
   () => columnsMenuOpenModel.value,
-  (isOpen) => {
+  async (isOpen) => {
     if (isOpen) {
       pendingColumns.value = props.columns;
+      if (
+        props.backendUrl &&
+        !comfyuiModelOptions.value.length &&
+        !comfyuiLoraOptions.value.length
+      ) {
+        try {
+          const [mRes, lRes] = await Promise.all([
+            apiClient.get(`${props.backendUrl}/pictures/comfyui_models`),
+            apiClient.get(`${props.backendUrl}/pictures/comfyui_loras`),
+          ]);
+          comfyuiModelOptions.value = Array.isArray(mRes.data) ? mRes.data : [];
+          comfyuiLoraOptions.value = Array.isArray(lRes.data) ? lRes.data : [];
+        } catch {}
+      }
     }
   },
 );
@@ -850,6 +1005,17 @@ const mediaTypeFilterModel = computed({
   get: () => props.mediaTypeFilter,
   set: (value) => emit("update:mediaTypeFilter", value),
 });
+
+const comfyuiModelFilterModel = computed({
+  get: () => props.comfyuiModelFilter,
+  set: (value) => emit("update:comfyuiModelFilter", value ?? []),
+});
+const comfyuiLoraFilterModel = computed({
+  get: () => props.comfyuiLoraFilter,
+  set: (value) => emit("update:comfyuiLoraFilter", value ?? []),
+});
+const comfyuiModelOptions = ref([]);
+const comfyuiLoraOptions = ref([]);
 
 const sortMenuOpen = ref(false);
 const sortButtonRef = ref(null);

@@ -109,6 +109,8 @@ const MOBILE_BREAKPOINT = 1024;
 
 // --- Media Type Filter State ---
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
+const comfyuiModelFilter = ref([]);
+const comfyuiLoraFilter = ref([]);
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
@@ -948,6 +950,8 @@ function handleResetToAll() {
   selectedSimilarityCharacter.value = null;
   searchQuery.value = "";
   mediaTypeFilter.value = "all";
+  comfyuiModelFilter.value = [];
+  comfyuiLoraFilter.value = [];
   refreshGridVersion();
   closeSidebarIfMobile();
 }
@@ -1204,6 +1208,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:exportIncludeCharacterName="exportIncludeCharacterName"
             v-model:exportUseOriginalFileNames="exportUseOriginalFileNames"
             v-model:mediaTypeFilter="mediaTypeFilter"
+            v-model:comfyuiModelFilter="comfyuiModelFilter"
+            v-model:comfyuiLoraFilter="comfyuiLoraFilter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @update:stack-threshold="handleUpdateStackThreshold"
@@ -1245,6 +1251,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :wsTagUpdate="wsTagUpdate"
               :wsPluginProgress="wsPluginProgress"
               :mediaTypeFilter="mediaTypeFilter"
+              :comfyuiModelFilter="comfyuiModelFilter"
+              :comfyuiLoraFilter="comfyuiLoraFilter"
               :showFaceBboxes="showFaceBboxes"
               :showFormat="showFormat"
               :showResolution="showResolution"

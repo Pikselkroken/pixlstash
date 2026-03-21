@@ -6,7 +6,7 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto, IntEnum
-from sqlalchemy import String, desc, func, or_, text
+from sqlalchemy import String, and_, desc, func, or_, text
 from sqlalchemy.orm import load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
@@ -565,6 +565,8 @@ class Picture(SQLModel, table=True):
         only_deleted: bool = False,
         include_unimported: bool = True,
         stack_leaders_only: bool = False,
+        comfyui_models_filter: Optional[List[str]] = None,
+        comfyui_loras_filter: Optional[List[str]] = None,
         **search,
     ) -> List["Picture"]:
         """
@@ -609,9 +611,50 @@ class Picture(SQLModel, table=True):
         if format:
             query = query.where(cls.format.in_(format))
 
+        # Build comfyui filter conditions (applied below, aware of stack_leaders_only)
+        comfyui_conditions = []
+        if comfyui_models_filter:
+            comfyui_conditions.extend(
+                text(
+                    f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :comfyui_model_{i})"
+                ).bindparams(**{f"comfyui_model_{i}": m})
+                for i, m in enumerate(comfyui_models_filter)
+            )
+        if comfyui_loras_filter:
+            comfyui_conditions.extend(
+                text(
+                    f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :comfyui_lora_{i})"
+                ).bindparams(**{f"comfyui_lora_{i}": m})
+                for i, m in enumerate(comfyui_loras_filter)
+            )
+
         if stack_leaders_only:
             leader_ids = cls._get_stack_leader_ids(session, only_deleted=only_deleted)
-            query = query.where(or_(cls.stack_id.is_(None), cls.id.in_(leader_ids)))
+            if comfyui_conditions:
+                # Find stack_ids that contain at least one picture matching the filter,
+                # then show the leader of those stacks (plus any unstacked matches).
+                matching_stack_subq = (
+                    select(cls.stack_id)
+                    .where(
+                        cls.stack_id.is_not(None),
+                        cls.deleted.is_(False),
+                        or_(*comfyui_conditions),
+                    )
+                    .distinct()
+                )
+                query = query.where(
+                    or_(
+                        and_(cls.stack_id.is_(None), or_(*comfyui_conditions)),
+                        and_(
+                            cls.id.in_(leader_ids),
+                            cls.stack_id.in_(matching_stack_subq),
+                        ),
+                    )
+                )
+            else:
+                query = query.where(or_(cls.stack_id.is_(None), cls.id.in_(leader_ids)))
+        elif comfyui_conditions:
+            query = query.where(or_(*comfyui_conditions))
 
         if sort_mech:
             if sort_mech.key == SortMechanism.Keys.IMAGE_SIZE:

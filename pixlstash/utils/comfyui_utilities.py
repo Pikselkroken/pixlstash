@@ -220,6 +220,9 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
 
         for node in graph.get("nodes") or []:
             node_type = node.get("type", "")
+            # mode 2 = muted/never, mode 4 = bypassed — skip both
+            if node.get("mode", 0) not in (0, None):
+                continue
 
             if node_type in _CHECKPOINT_CLASSES:
                 name = _get_widget_value_ui(node, "ckpt_name")

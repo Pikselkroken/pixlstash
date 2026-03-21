@@ -26,7 +26,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import delete, exists, func
+from sqlalchemy import delete, exists, func, text
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -291,6 +291,14 @@ def _select_pictures_for_listing(
                 query_params["id"] = picture_ids
             else:
                 query_params.pop("id", None)
+            comfyui_models = request.query_params.getlist("comfyui_model")
+            if comfyui_models:
+                query_params["comfyui_models_filter"] = comfyui_models
+            query_params.pop("comfyui_model", None)
+            comfyui_loras = request.query_params.getlist("comfyui_lora")
+            if comfyui_loras:
+                query_params["comfyui_loras_filter"] = comfyui_loras
+            query_params.pop("comfyui_lora", None)
         return format, query_params
 
     def _character_id(value):
@@ -741,6 +749,40 @@ def create_router(server) -> APIRouter:
             "status": "success",
             **result,
         }
+
+    @router.get(
+        "/pictures/comfyui_models",
+        summary="List distinct ComfyUI model names",
+    )
+    def get_comfyui_models():
+        def fetch(session):
+            rows = session.execute(
+                text(
+                    "SELECT DISTINCT j.value FROM picture p, json_each(p.comfyui_models) j "
+                    "WHERE p.comfyui_models IS NOT NULL AND p.comfyui_models != '[]' "
+                    "AND p.deleted = 0 ORDER BY j.value"
+                )
+            ).all()
+            return [r[0] for r in rows if r and r[0]]
+
+        return server.vault.db.run_immediate_read_task(fetch)
+
+    @router.get(
+        "/pictures/comfyui_loras",
+        summary="List distinct ComfyUI LoRA names",
+    )
+    def get_comfyui_loras():
+        def fetch(session):
+            rows = session.execute(
+                text(
+                    "SELECT DISTINCT j.value FROM picture p, json_each(p.comfyui_loras) j "
+                    "WHERE p.comfyui_loras IS NOT NULL AND p.comfyui_loras != '[]' "
+                    "AND p.deleted = 0 ORDER BY j.value"
+                )
+            ).all()
+            return [r[0] for r in rows if r and r[0]]
+
+        return server.vault.db.run_immediate_read_task(fetch)
 
     @router.get(
         "/pictures/stacks",
