@@ -1,4 +1,5 @@
 import base64
+import json
 import sys
 import numpy as np
 
@@ -193,6 +194,26 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("original_file_name", String, default=None, nullable=True),
     )
+    comfyui_positive_prompt: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            "comfyui_positive_prompt", String, default=None, nullable=True
+        ),
+    )
+    # JSON-serialised list[str] of checkpoint / UNET names used at generation time.
+    # NULL means this picture has never been checked for ComfyUI metadata;
+    # "[]" is the sentinel meaning checked but no models found.
+    comfyui_models: Optional[str] = Field(
+        default=None,
+        sa_column=Column("comfyui_models", String, default=None, nullable=True),
+    )
+    # JSON-serialised list[str] of LoRA names used at generation time.
+    # NULL means this picture has never been checked for ComfyUI metadata;
+    # "[]" is the sentinel meaning checked but no LoRAs found.
+    comfyui_loras: Optional[str] = Field(
+        default=None,
+        sa_column=Column("comfyui_loras", String, default=None, nullable=True),
+    )
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
@@ -262,7 +283,8 @@ class Picture(SQLModel, table=True):
 
     def text_embedding_data(self):
         """
-        Returns a structured dict for embedding: description, tags, and character info.
+        Returns a structured dict for embedding: description, tags, character info,
+        and ComfyUI generation metadata (positive prompt, models, LoRAs) when stored.
         """
         data = {
             "description": self.description or None,
@@ -279,6 +301,21 @@ class Picture(SQLModel, table=True):
                 "description": getattr(character, "description", None),
             }
             data["characters"].append(char_info)
+        # comfyui_models is NULL when not yet checked; "[]" is the sentinel for
+        # "checked, no models".  Only add the comfyui key when there is actually
+        # something useful to embed.
+        comfyui_models_list = (
+            json.loads(self.comfyui_models) if self.comfyui_models else []
+        )
+        comfyui_loras_list = (
+            json.loads(self.comfyui_loras) if self.comfyui_loras else []
+        )
+        if self.comfyui_positive_prompt or comfyui_models_list or comfyui_loras_list:
+            data["comfyui"] = {
+                "positive_prompt": self.comfyui_positive_prompt or None,
+                "models": comfyui_models_list,
+                "loras": comfyui_loras_list,
+            }
         return data
 
     @classmethod

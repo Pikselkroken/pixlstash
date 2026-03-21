@@ -15,6 +15,8 @@ from .missing_quality_finder import MissingQualityFinder
 from .missing_text_embedding_finder import MissingTextEmbeddingFinder
 from .missing_tag_finder import MissingTagFinder
 from .missing_watch_folder_import_finder import MissingWatchFolderImportFinder
+from .missing_comfyui_extraction_finder import MissingComfyUIExtractionFinder
+from .comfyui_extraction_task import ComfyUIExtractionTask
 from .tag_task import TagTask
 from .text_embedding_task import TextEmbeddingTask
 from .likeness_parameters_task import LikenessParametersTask
@@ -39,6 +41,8 @@ __all__ = [
     "MissingTextEmbeddingFinder",
     "MissingTagFinder",
     "MissingWatchFolderImportFinder",
+    "MissingComfyUIExtractionFinder",
+    "ComfyUIExtractionTask",
     "TagTask",
     "TextEmbeddingTask",
     "LikenessParametersTask",

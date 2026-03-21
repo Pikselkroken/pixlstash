@@ -101,6 +101,7 @@ class Vault:
             database=self.db,
             picture_tagger_getter=lambda: self._picture_tagger,
             config_path=self._server_config_path,
+            image_root=self.image_root,
         )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
@@ -492,6 +493,14 @@ class Vault:
                 total = 0
                 missing = 0
                 label = "watch_folder_import"
+            elif worker_type == TaskType.COMFYUI_EXTRACTION:
+                missing = int(
+                    self.db.run_immediate_read_task(
+                        self._count_missing_comfyui_extraction
+                    )
+                    or 0
+                )
+                label = "comfyui_extraction"
             else:
                 missing = 0
                 label = "planner_managed"
@@ -577,6 +586,18 @@ class Vault:
             .select_from(Picture)
             .where(Picture.description.is_not(None))
             .where(Picture.text_embedding.is_(None))
+        ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_comfyui_extraction(session: Session) -> int:
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.comfyui_models.is_(None))
+            .where(Picture.deleted.is_(False))
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]

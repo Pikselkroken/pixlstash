@@ -56,6 +56,7 @@ _SEED_FIELDS = {"seed", "noise_seed"}
 _PRIMITIVE_STRING_CLASSES = {
     "PrimitiveStringMultiline",
     "TextBox",
+    "Textbox",
     "String Literal",
     "StringNode",
 }

@@ -14,7 +14,9 @@ class WorkPlanner:
     BACKOFF_FACTOR = 1.8
 
     @staticmethod
-    def work_finders(database, picture_tagger_getter, config_path=None):
+    def work_finders(
+        database, picture_tagger_getter, config_path=None, image_root=None
+    ):
         from pixlstash.tasks import TaskType
         from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
         from pixlstash.tasks.missing_face_quality_finder import MissingFaceQualityFinder
@@ -35,6 +37,9 @@ class WorkPlanner:
         from pixlstash.tasks.missing_tag_finder import MissingTagFinder
         from pixlstash.tasks.missing_watch_folder_import_finder import (
             MissingWatchFolderImportFinder,
+        )
+        from pixlstash.tasks.missing_comfyui_extraction_finder import (
+            MissingComfyUIExtractionFinder,
         )
 
         return {
@@ -73,6 +78,10 @@ class WorkPlanner:
             TaskType.WATCH_FOLDERS: MissingWatchFolderImportFinder(
                 database=database,
                 config_path=config_path,
+            ),
+            TaskType.COMFYUI_EXTRACTION: MissingComfyUIExtractionFinder(
+                database=database,
+                image_root=image_root or "",
             ),
         }
 

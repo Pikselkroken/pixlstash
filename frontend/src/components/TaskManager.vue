@@ -181,6 +181,7 @@ const labelMap = {
   likeness_pairs: "Likeness pairs",
   likeness_parameters: "Likeness params",
   watch_folder_import: "Folder import",
+  comfyui_extraction: "ComfyUI backfill",
 };
 
 function seedSnapshotsIfEmpty() {
