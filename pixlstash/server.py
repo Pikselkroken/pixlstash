@@ -46,6 +46,7 @@ from pixlstash.routes.stacks import create_router as create_stacks_router
 from pixlstash.routes.pictures import create_router as create_pictures_router
 from pixlstash.routes.comfyui import create_router as create_comfyui_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.rate_limiter import RateLimitMiddleware
 
 
 # Logging will be set up after config is loaded
@@ -805,6 +806,11 @@ class Server:
         return index_path
 
     def _setup_routes(self):
+        ###############################
+        # Rate limiting              ##
+        ###############################
+        self.api.add_middleware(RateLimitMiddleware)
+
         ###############################
         # Static file endpoints      ##
         ###############################
