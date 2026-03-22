@@ -861,31 +861,32 @@ class PictureTagger:
             self._florence_model_name,
         )
 
-        # Try SDPA first, fall back to eager if not supported
-        attn_impl = "sdpa"
-        try:
-            # low_cpu_mem_usage=False prevents transformers from staging weights
-            # on the "meta" (placeholder) device, which would make the subsequent
-            # .to(device, dtype) call fail with "Cannot copy out of meta tensor".
-            # Slightly higher peak RAM during load but safe on all transformers versions.
-            self._florence_model = _from_pretrained_local_first(
-                Florence2ForConditionalGeneration,
-                self._florence_model_name,
-                torch_dtype=dtype,
-                attn_implementation=attn_impl,
-                low_cpu_mem_usage=False,
-            ).to(device=device, dtype=dtype)
-        except (TypeError, AttributeError) as e:
-            logger.debug(f"SDPA not supported, falling back to eager attention: {e}")
-            attn_impl = "eager"
-            self._florence_model = _from_pretrained_local_first(
-                Florence2ForConditionalGeneration,
-                self._florence_model_name,
-                torch_dtype=dtype,
-                attn_implementation=attn_impl,
-                low_cpu_mem_usage=False,
-            ).to(device=device, dtype=dtype)
+        # Try SDPA first, fall back to eager if not supported.
+        # Important: torch_dtype is intentionally NOT passed to from_pretrained.
+        # When torch_dtype is specified, newer transformers uses a dtype-casting
+        # load path that can still place tied / missing weights (Florence-2's
+        # shared embed_tokens / lm_head) on the meta device even when
+        # low_cpu_mem_usage=False, causing "Cannot copy out of meta tensor" on
+        # the subsequent .to() call. Loading in float32 first and then casting
+        # keeps all tensors in real CPU memory throughout, so .to() is safe.
+        model = None
+        for attn_impl in ("sdpa", "eager"):
+            try:
+                model = _from_pretrained_local_first(
+                    Florence2ForConditionalGeneration,
+                    self._florence_model_name,
+                    attn_implementation=attn_impl,
+                    low_cpu_mem_usage=False,
+                )
+                break
+            except (TypeError, AttributeError, NotImplementedError) as e:
+                if attn_impl == "eager":
+                    raise
+                logger.debug(
+                    f"SDPA not supported, falling back to eager attention: {e}"
+                )
 
+        self._florence_model = model.to(device=device, dtype=dtype)
         self._florence_model.eval()
 
         # Try to compile the model for better performance (PyTorch 2.0+)
