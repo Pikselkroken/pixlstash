@@ -821,7 +821,7 @@
                     ref="tagInputRef"
                     v-model="newTag"
                     @keydown.enter.prevent="confirmAddTag"
-                    @keydown="handleTagBackspace"
+                    @keydown="handleTagInputKey"
                     @blur="cancelAddTag"
                     class="tag-add-input"
                     placeholder="New tag"
@@ -909,6 +909,25 @@
       </div>
     </div>
   </div>
+  <Teleport to="body">
+    <div
+      v-if="addingTag && tagSuggestions.length && tagInputRect"
+      class="tag-autocomplete-dropdown"
+      :style="{
+        top: tagInputRect.bottom + 4 + 'px',
+        left: tagInputRect.left + 'px',
+        minWidth: Math.max(tagInputRect.width, 160) + 'px',
+      }"
+    >
+      <button
+        v-for="(item, idx) in tagSuggestions"
+        :key="item.tag"
+        class="tag-autocomplete-item"
+        :class="{ 'tag-autocomplete-item--active': idx === tagSuggestionIndex }"
+        @mousedown.prevent="selectTagSuggestion(item)"
+      >{{ item.tag }}</button>
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -1109,6 +1128,8 @@ const descriptionTeaser = computed(() => {
 let copyResetTimer = null;
 
 const addingTag = ref(false);
+const tagSuggestionIndex = ref(-1);
+const tagInputRect = ref(null);
 const newTag = ref("");
 const tagInputRef = ref(null);
 const tagListRef = ref(null);
@@ -2071,6 +2092,7 @@ watch(open, (isOpen) => {
 function resetTagInput() {
   addingTag.value = false;
   newTag.value = "";
+  tagSuggestionIndex.value = -1;
 }
 
 function syncDescriptionDraft() {
@@ -2089,6 +2111,7 @@ function resetComfyState() {
 function beginAddTag() {
   addingTag.value = true;
   newTag.value = "";
+  fetchAllAvailableTags();
   nextTick(() => {
     if (tagInputRef.value) {
       // Use preventScroll so the browser doesn't auto-scroll the sidebar
@@ -2108,7 +2131,22 @@ function cancelAddTag() {
   resetTagInput();
 }
 
+function selectTagSuggestion(item) {
+  newTag.value = typeof item === "string" ? item : item.tag;
+  tagSuggestionIndex.value = -1;
+  nextTick(() => confirmAddTag());
+}
+
 function confirmAddTag() {
+  // If a suggestion is highlighted, use it directly.
+  if (
+    tagSuggestionIndex.value >= 0 &&
+    tagSuggestions.value.length > tagSuggestionIndex.value
+  ) {
+    const item = tagSuggestions.value[tagSuggestionIndex.value];
+    newTag.value = typeof item === "string" ? item : item.tag;
+    tagSuggestionIndex.value = -1;
+  }
   const trimmed = newTag.value.trim();
   if (!trimmed) {
     cancelAddTag();
@@ -2276,10 +2314,8 @@ function handleKeydown(e) {
   } else if (e.key === "i" || e.key === "I") {
     toggleSidebar();
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
-    tagInputRef.value?.focus({ preventScroll: true });
-    if (tagListRef.value) {
-      tagListRef.value.scrollTop = tagListRef.value.scrollHeight;
-    }
+    e.preventDefault();
+    beginAddTag();
   } else if (["1", "2", "3", "4", "5"].includes(e.key)) {
     const score = parseInt(e.key, 10);
     if (image.value) setScore(score);
@@ -3461,12 +3497,84 @@ watch(
   },
 );
 
-function handleTagBackspace(event) {
-  if (event.key !== "Backspace") return;
-  if (newTag.value.trim()) return;
-  const tags = getTagList(image.value?.tags);
-  if (!tags.length) return;
-  removeTag(tags[tags.length - 1]);
+const allAvailableTags = ref([]);
+let allAvailableTagsFetchedAt = 0;
+
+async function fetchAllAvailableTags() {
+  if (!backendUrl.value) return;
+  const now = Date.now();
+  // Re-fetch at most once per 30 seconds
+  if (now - allAvailableTagsFetchedAt < 30_000) return;
+  try {
+    const res = await apiClient.get(`${backendUrl.value}/tags`);
+    const data = res.data;
+    if (Array.isArray(data)) {
+      allAvailableTags.value = data;
+      allAvailableTagsFetchedAt = now;
+    }
+  } catch (e) {
+    // Non-critical — autocomplete just stays empty
+  }
+}
+
+const tagSuggestions = computed(() => {
+  const query = newTag.value.trim().toLowerCase();
+  if (!query) return [];
+  const currentTags = new Set(getTagList(image.value?.tags).map((t) => t.tag));
+  return allAvailableTags.value
+    .filter((item) => {
+      const t = typeof item === "string" ? item : item.tag;
+      return !currentTags.has(t) && t.toLowerCase().startsWith(query);
+    })
+    .slice(0, 8);
+});
+
+watch(newTag, () => {
+  tagSuggestionIndex.value = -1;
+});
+
+watch(
+  [addingTag, tagSuggestions],
+  () => {
+    if (addingTag.value && tagSuggestions.value.length) {
+      nextTick(() => {
+        tagInputRect.value = tagInputRef.value
+          ? tagInputRef.value.getBoundingClientRect()
+          : null;
+      });
+    } else {
+      tagInputRect.value = null;
+    }
+  },
+  { deep: false },
+);
+
+function handleTagInputKey(event) {
+  if (event.key === "ArrowDown") {
+    if (tagSuggestions.value.length) {
+      event.preventDefault();
+      tagSuggestionIndex.value = Math.min(
+        tagSuggestionIndex.value + 1,
+        tagSuggestions.value.length - 1,
+      );
+    }
+  } else if (event.key === "ArrowUp") {
+    if (tagSuggestions.value.length) {
+      event.preventDefault();
+      tagSuggestionIndex.value = Math.max(tagSuggestionIndex.value - 1, -1);
+    }
+  } else if (event.key === "Tab") {
+    if (tagSuggestions.value.length) {
+      event.preventDefault();
+      const idx = tagSuggestionIndex.value >= 0 ? tagSuggestionIndex.value : 0;
+      selectTagSuggestion(tagSuggestions.value[idx]);
+    }
+  } else if (event.key === "Backspace") {
+    if (newTag.value.trim()) return;
+    const tags = getTagList(image.value?.tags);
+    if (!tags.length) return;
+    removeTag(tags[tags.length - 1]);
+  }
 }
 
 const metadataEntries = computed(() => {
@@ -5013,6 +5121,40 @@ function downloadComfyWorkflow(workflow) {
   border-radius: 999px;
   padding: 1px 6px;
   font-size: 0.7rem;
+}
+
+.tag-autocomplete-dropdown {
+  position: fixed;
+  z-index: 9999;
+  background: color-mix(in srgb, rgb(var(--v-theme-shadow)) 85%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.tag-autocomplete-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: none;
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-autocomplete-item:hover,
+.tag-autocomplete-item--active {
+  background: rgba(var(--v-theme-primary), 0.22);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .face-assign-grid {
