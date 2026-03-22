@@ -1189,11 +1189,13 @@ function persistComfyuiPromptToSession() {
 }
 
 const validComfyWorkflows = computed(() =>
-  (comfyuiWorkflows.value || []).filter((workflow) => workflow?.valid),
+  (comfyuiWorkflows.value || []).filter(
+    (workflow) => workflow?.valid && workflow?.workflow_type === "i2i",
+  ),
 );
 const invalidComfyWorkflows = computed(() =>
   (comfyuiWorkflows.value || []).filter(
-    (workflow) => !workflow?.valid && workflow?.workflow_type !== "t2i",
+    (workflow) => !workflow?.valid && workflow?.workflow_type === "i2i",
   ),
 );
 const selectedComfyWorkflow = computed(() =>

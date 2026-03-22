@@ -1081,7 +1081,9 @@ function copyToken() {
   if (!newlyCreatedToken.value) return;
   navigator.clipboard.writeText(newlyCreatedToken.value);
   tokenCopied.value = true;
-  setTimeout(() => { tokenCopied.value = false; }, 2000);
+  setTimeout(() => {
+    tokenCopied.value = false;
+  }, 2000);
 }
 
 async function createUserToken() {
@@ -1634,7 +1636,11 @@ const workflowImportCaptionPreview = computed(() => {
                         class="settings-tag-label"
                         :style="{ opacity: workflow.valid ? 0.65 : 1 }"
                       >
-                        {{ workflow.valid ? "valid" : "invalid" }}
+                        {{
+                          workflow.valid
+                            ? `valid ${workflow.workflow_type || "i2i"}`
+                            : "invalid"
+                        }}
                       </span>
                       <v-btn
                         v-if="workflow.source !== 'built-in'"
@@ -1813,7 +1819,9 @@ const workflowImportCaptionPreview = computed(() => {
             :title="tokenCopied ? 'Copied!' : 'Copy token'"
             @click="copyToken"
           >
-            <v-icon size="18">{{ tokenCopied ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
+            <v-icon size="18">{{
+              tokenCopied ? "mdi-check" : "mdi-content-copy"
+            }}</v-icon>
           </v-btn>
         </div>
       </v-card-text>
