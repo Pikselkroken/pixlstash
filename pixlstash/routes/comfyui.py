@@ -635,6 +635,43 @@ def _process_comfyui_outputs(
         logger.warning("Failed to import ComfyUI outputs: %s", exc)
 
 
+def _comfyui_abort(base_url: str) -> dict:
+    """Interrupt the currently running ComfyUI execution and clear the queue.
+
+    Calls ComfyUI's ``POST /interrupt`` to stop the active run, then
+    ``POST /queue`` with ``{"clear": true}`` to remove pending items.
+    Returns a dict with ``interrupted`` and ``queue_cleared`` booleans.
+    """
+    result = {"interrupted": False, "queue_cleared": False}
+    try:
+        resp = requests.post(f"{base_url}/interrupt", timeout=10)
+        result["interrupted"] = resp.status_code < 300
+        if not result["interrupted"]:
+            logger.warning(
+                "ComfyUI /interrupt returned %s: %s",
+                resp.status_code,
+                (resp.text or "").strip()[:200],
+            )
+    except requests.RequestException as exc:
+        logger.warning("ComfyUI /interrupt request failed: %s", exc)
+
+    try:
+        resp = requests.post(
+            f"{base_url}/queue", json={"clear": True}, timeout=10
+        )
+        result["queue_cleared"] = resp.status_code < 300
+        if not result["queue_cleared"]:
+            logger.warning(
+                "ComfyUI /queue clear returned %s: %s",
+                resp.status_code,
+                (resp.text or "").strip()[:200],
+            )
+    except requests.RequestException as exc:
+        logger.warning("ComfyUI /queue clear request failed: %s", exc)
+
+    return result
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -771,6 +808,18 @@ def create_router(server) -> APIRouter:
             logger.warning("Failed to delete workflow %s: %s", normalized, exc)
             raise HTTPException(status_code=500, detail="Failed to delete workflow")
         return {"status": "success", "name": normalized}
+
+    @router.post(
+        "/comfyui/abort",
+        summary="Abort ComfyUI execution",
+        description="Interrupts the currently running ComfyUI prompt and clears the pending queue.",
+    )
+    async def abort_comfyui(request: Request):
+        user = server.auth.get_user_for_request(request)
+        comfyui_url = getattr(user, "comfyui_url", None) if user else None
+        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+        result = _comfyui_abort(comfyui_url)
+        return {"status": "success", **result}
 
     @router.post(
         "/comfyui/run_i2i",

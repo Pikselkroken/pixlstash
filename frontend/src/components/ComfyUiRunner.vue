@@ -4,8 +4,19 @@
     class="comfyui-progress"
     :class="{ 'comfyui-progress-error': progress.status === 'failed' }"
   >
-    <div class="comfyui-progress-title">
-      {{ progress.message }}
+    <div class="comfyui-progress-header">
+      <div class="comfyui-progress-title">
+        {{ progress.message }}
+      </div>
+      <button
+        v-if="progress.status !== 'completed' && progress.status !== 'failed'"
+        class="comfyui-abort-btn"
+        :disabled="isAborting"
+        title="Abort ComfyUI workflow"
+        @click.stop="abortComfyui"
+      >
+        {{ isAborting ? "…" : "✕" }}
+      </button>
     </div>
     <div class="comfyui-progress-bar">
       <div
@@ -84,6 +95,7 @@ const comfyuiPendingOverlayRefresh = ref(false);
 const comfyuiSourcePictureId = ref(null);
 const clientId = ref(null);
 const comfyuiRefreshRetryCounts = reactive({});
+const isAborting = ref(false);
 const comfyuiWsState = reactive({
   connecting: false,
   url: "",
@@ -601,6 +613,44 @@ async function ensureComfyuiSocket() {
 }
 
 // ---------------------------------------------------------------------------
+// Abort
+// ---------------------------------------------------------------------------
+
+async function abortComfyui() {
+  if (isAborting.value) return;
+  isAborting.value = true;
+  try {
+    await apiClient.post(`${props.backendUrl}/comfyui/abort`);
+  } catch (err) {
+    // Best-effort abort — ignore errors and still reset local state
+    logComfyuiDebug("abort-error", { error: err?.message || String(err) });
+  } finally {
+    isAborting.value = false;
+  }
+  // Clear all tracked state so the UI resets cleanly
+  comfyuiActivePromptIds.value = new Set();
+  comfyuiCompletedPromptIds.value = new Set();
+  Object.keys(comfyuiPromptPictureMap).forEach(
+    (k) => delete comfyuiPromptPictureMap[k],
+  );
+  Object.keys(comfyuiPromptLastSeen).forEach(
+    (k) => delete comfyuiPromptLastSeen[k],
+  );
+  clearComfyuiHideTimer();
+  clearComfyuiRefreshRetries();
+  progress.visible = true;
+  progress.status = "failed";
+  progress.percent = 0;
+  progress.message = "Aborted";
+  comfyuiHideTimer = setTimeout(() => {
+    progress.visible = false;
+    progress.status = "idle";
+    progress.percent = 0;
+    progress.message = "ComfyUI running...";
+  }, 1800);
+}
+
+// ---------------------------------------------------------------------------
 // Public API: handleComfyuiRun
 // ---------------------------------------------------------------------------
 
@@ -778,6 +828,7 @@ defineExpose({
   progress,
   progressPercent,
   comfyuiPendingOverlayRefresh,
+  abortComfyui,
 });
 </script>
 
@@ -796,9 +847,44 @@ defineExpose({
   backdrop-filter: blur(6px);
 }
 
+.comfyui-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .comfyui-progress-title {
   font-size: 0.8em;
-  margin-bottom: 6px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comfyui-abort-btn {
+  flex-shrink: 0;
+  background: rgba(var(--v-theme-on-dark-surface), 0.15);
+  border: none;
+  border-radius: 4px;
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: pointer;
+  font-size: 0.75em;
+  line-height: 1;
+  padding: 2px 5px;
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.comfyui-abort-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(220, 60, 60, 0.7);
+}
+
+.comfyui-abort-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .comfyui-progress-bar {
