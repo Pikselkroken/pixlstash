@@ -51,6 +51,7 @@ class ProjectAttachment(SQLModel, table=True):
         stored_path: Relative path inside image_root where the copy lives.
         mime_type: MIME type detected at upload time.
         file_size: Size in bytes of the stored copy.
+        url: Optional URL for link-type attachments (no file stored when set).
         created_at: UTC timestamp set on insert.
     """
 
@@ -67,6 +68,7 @@ class ProjectAttachment(SQLModel, table=True):
     stored_path: str = Field(nullable=False)
     mime_type: Optional[str] = Field(default=None)
     file_size: int = Field(nullable=False)
+    url: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
 
     # Relationships

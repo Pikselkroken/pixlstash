@@ -1,16 +1,20 @@
+import io
+import json
 import mimetypes
 import os
+import re
 import shutil
 import uuid
+import zipfile
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Body, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Character, PictureSet
+from pixlstash.db_models import Character, Face, Picture, PictureSet, PictureSetMember
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
 
@@ -224,6 +228,210 @@ def create_router(server) -> APIRouter:
         return {"status": "deleted", "id": project_id}
 
     # -------------------------------------------------------------------------
+    # Export
+    # -------------------------------------------------------------------------
+
+    @router.get(
+        "/projects/{project_id}/export",
+        summary="Export project as ZIP",
+        description="Download a ZIP archive of the project: metadata, attachment files, and optionally all pictures belonging to its characters and picture sets.",
+    )
+    def export_project(
+        request: Request,
+        project_id: int,
+        include_pictures: bool = Query(default=True),
+    ):
+        server.auth.require_user_id(request)
+
+        def _safe(name: str) -> str:
+            """Slugify a name for use as a directory component."""
+            slug = re.sub(r"[^\w\-. ]", "_", name or "unnamed").strip()
+            return slug[:64] or "unnamed"
+
+        def _unique_name(used: set, name: str) -> str:
+            """Return a deduplicated variant of name, updating used in-place."""
+            if name not in used:
+                used.add(name)
+                return name
+            stem, _, ext = name.rpartition(".")
+            if not stem:
+                stem, ext = name, ""
+                ext_dot = ""
+            else:
+                ext_dot = "." + ext
+            i = 1
+            while True:
+                candidate = f"{stem} ({i}){ext_dot}"
+                if candidate not in used:
+                    used.add(candidate)
+                    return candidate
+                i += 1
+
+        def gather(session: Session, pid: int):
+            project = session.get(Project, pid)
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+            project_data = {
+                "id": project.id,
+                "name": project.name,
+                "description": project.description,
+                "extra_metadata": project.extra_metadata,
+                "created_at": project.created_at.isoformat()
+                if project.created_at
+                else None,
+            }
+
+            characters_data = [
+                {"id": c.id, "name": c.name, "description": c.description}
+                for c in session.exec(
+                    select(Character).where(Character.project_id == pid)
+                ).all()
+            ]
+            picture_sets_data = [
+                {"id": s.id, "name": s.name, "description": s.description}
+                for s in session.exec(
+                    select(PictureSet).where(PictureSet.project_id == pid)
+                ).all()
+            ]
+            attachments_data = [
+                {"stored_path": a.stored_path, "original_filename": a.original_filename}
+                for a in session.exec(
+                    select(ProjectAttachment)
+                    .where(ProjectAttachment.project_id == pid)
+                    .order_by(ProjectAttachment.created_at)
+                ).all()
+            ]
+
+            char_pictures: dict = {}
+            set_pictures: dict = {}
+            if include_pictures:
+                for char in characters_data:
+                    pic_ids = session.exec(
+                        select(Face.picture_id)
+                        .where(Face.character_id == char["id"])
+                        .distinct()
+                    ).all()
+                    paths = []
+                    for pid_inner in pic_ids:
+                        pic = session.get(Picture, pid_inner)
+                        if pic and not pic.deleted and pic.file_path:
+                            paths.append(pic.file_path)
+                    char_pictures[char["id"]] = paths
+
+                for pset in picture_sets_data:
+                    pic_ids = session.exec(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.set_id == pset["id"]
+                        )
+                    ).all()
+                    paths = []
+                    for pid_inner in pic_ids:
+                        pic = session.get(Picture, pid_inner)
+                        if pic and not pic.deleted and pic.file_path:
+                            paths.append(pic.file_path)
+                    set_pictures[pset["id"]] = paths
+
+            return (
+                project_data,
+                characters_data,
+                picture_sets_data,
+                attachments_data,
+                char_pictures,
+                set_pictures,
+            )
+
+        (
+            project_data,
+            characters_data,
+            picture_sets_data,
+            attachments_data,
+            char_pictures,
+            set_pictures,
+        ) = server.vault.db.run_immediate_read_task(gather, project_id)
+
+        root = _safe(project_data["name"])
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            # project.json
+            zf.writestr(
+                f"{root}/project.json",
+                json.dumps(
+                    {
+                        **project_data,
+                        "exported_at": datetime.utcnow().isoformat(),
+                    },
+                    indent=2,
+                ),
+            )
+
+            # Characters
+            for char in characters_data:
+                char_dir = f"{root}/characters/{_safe(char['name'])}"
+                zf.writestr(
+                    f"{char_dir}/character.json",
+                    json.dumps(char, indent=2),
+                )
+                if include_pictures:
+                    char_slug = _safe(char["name"])
+                    for i, file_path in enumerate(
+                        char_pictures.get(char["id"], []), start=1
+                    ):
+                        full = os.path.join(server.vault.image_root, file_path)
+                        if not os.path.isfile(full):
+                            continue
+                        ext = os.path.splitext(file_path)[1].lower()
+                        fname = f"{char_slug}_{i:03d}{ext}"
+                        try:
+                            zf.write(full, f"{char_dir}/pictures/{fname}")
+                        except OSError:
+                            pass
+
+            # Picture sets
+            for pset in picture_sets_data:
+                set_dir = f"{root}/picture_sets/{_safe(pset['name'])}"
+                zf.writestr(
+                    f"{set_dir}/pictureset.json",
+                    json.dumps(pset, indent=2),
+                )
+                if include_pictures:
+                    set_slug = _safe(pset["name"])
+                    for i, file_path in enumerate(
+                        set_pictures.get(pset["id"], []), start=1
+                    ):
+                        full = os.path.join(server.vault.image_root, file_path)
+                        if not os.path.isfile(full):
+                            continue
+                        ext = os.path.splitext(file_path)[1].lower()
+                        fname = f"{set_slug}_{i:03d}{ext}"
+                        try:
+                            zf.write(full, f"{set_dir}/pictures/{fname}")
+                        except OSError:
+                            pass
+
+            # Attachments
+            used_attachment_names: set = set()
+            for att in attachments_data:
+                full = os.path.join(server.vault.image_root, att["stored_path"])
+                if not os.path.isfile(full):
+                    continue
+                fname = _unique_name(used_attachment_names, att["original_filename"])
+                try:
+                    zf.write(full, f"{root}/attachments/{fname}")
+                except OSError:
+                    pass
+
+        buf.seek(0)
+        safe_filename = re.sub(r"[^\w\-.]", "_", project_data["name"] or "project")
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_filename}.zip"'
+            },
+        )
+
+    # -------------------------------------------------------------------------
     # Attachments
     # -------------------------------------------------------------------------
 
@@ -252,6 +460,7 @@ def create_router(server) -> APIRouter:
                 "original_filename": a.original_filename,
                 "mime_type": a.mime_type,
                 "file_size": a.file_size,
+                "url": a.url,
                 "created_at": a.created_at,
             }
             for a in attachments
@@ -320,6 +529,47 @@ def create_router(server) -> APIRouter:
             "original_filename": attachment.original_filename,
             "mime_type": attachment.mime_type,
             "file_size": attachment.file_size,
+            "url": attachment.url,
+            "created_at": attachment.created_at,
+        }
+
+    @router.post(
+        "/projects/{project_id}/attachments/url",
+        summary="Add a URL bookmark to a project",
+    )
+    def add_url_attachment(request: Request, project_id: int, body: dict):
+        server.auth.require_user_id(request)
+        url = (body.get("url") or "").strip()
+        title = (body.get("title") or "").strip() or url
+        if not url:
+            raise HTTPException(status_code=422, detail="url is required")
+
+        def check_and_insert(session: Session):
+            if session.get(Project, project_id) is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+            attachment = ProjectAttachment(
+                project_id=project_id,
+                original_filename=title,
+                stored_path="",
+                mime_type=None,
+                file_size=0,
+                url=url,
+                created_at=datetime.utcnow(),
+            )
+            session.add(attachment)
+            session.commit()
+            session.refresh(attachment)
+            return attachment
+
+        attachment = server.vault.db.run_task(
+            check_and_insert, priority=DBPriority.IMMEDIATE
+        )
+        return {
+            "id": attachment.id,
+            "original_filename": attachment.original_filename,
+            "mime_type": attachment.mime_type,
+            "file_size": attachment.file_size,
+            "url": attachment.url,
             "created_at": attachment.created_at,
         }
 
@@ -369,12 +619,15 @@ def create_router(server) -> APIRouter:
         stored_path = server.vault.db.run_task(
             remove, project_id, attachment_id, priority=DBPriority.IMMEDIATE
         )
-        full_path = os.path.join(server.vault.image_root, stored_path)
-        try:
-            if os.path.isfile(full_path):
-                os.remove(full_path)
-        except OSError as exc:
-            logger.warning("Could not remove attachment file %s: %s", full_path, exc)
+        if stored_path:
+            full_path = os.path.join(server.vault.image_root, stored_path)
+            try:
+                if os.path.isfile(full_path):
+                    os.remove(full_path)
+            except OSError as exc:
+                logger.warning(
+                    "Could not remove attachment file %s: %s", full_path, exc
+                )
 
         return {"status": "deleted", "id": attachment_id}
 

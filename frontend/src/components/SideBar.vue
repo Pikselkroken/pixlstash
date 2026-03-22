@@ -11,6 +11,7 @@ import ImageImporter from "./ImageImporter.vue";
 import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
 import ProjectEditor from "./ProjectEditor.vue";
+import ProjectFiles from "./ProjectFiles.vue";
 import TaskManager from "./TaskManager.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
@@ -246,7 +247,9 @@ function updateSidebarErrorPosition() {
 }
 
 function createSet() {
-  setEditorSet.value = null;
+  const defaultProjectId =
+    projectViewMode.value === "project" ? selectedProjectId.value : null;
+  setEditorSet.value = defaultProjectId !== null ? { project_id: defaultProjectId } : null;
   setEditorOpen.value = true;
 }
 
@@ -263,6 +266,15 @@ function createProject() {
   projectMenuOpen.value = false;
   projectEditorProject.value = null;
   projectEditorOpen.value = true;
+}
+
+function exportProject(project) {
+  projectMenuOpen.value = false;
+  const url = `${props.backendUrl}/projects/${project.id}/export`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${project.name}.zip`;
+  a.click();
 }
 
 function openProjectEditor(project) {
@@ -525,6 +537,8 @@ function createCharacter() {
     name: name,
     description: "",
     extra_metadata: "",
+    project_id:
+      projectViewMode.value === "project" ? selectedProjectId.value : null,
   });
 }
 
@@ -1492,7 +1506,17 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
           </button>
         </div>
       </div>
-      <div class="sidebar-collections-context">{{ collectionsContextLabel }}</div>
+      <div class="sidebar-collections-context-row">
+        <span class="sidebar-collections-context">{{ collectionsContextLabel }}</span>
+        <button
+          v-if="projectViewMode === 'project' && selectedProjectId !== null"
+          class="sidebar-collections-export-btn"
+          @click="exportProject(selectedProjectObj)"
+          title="Export project as ZIP"
+        >
+          <v-icon size="15">mdi-download-outline</v-icon>
+        </button>
+      </div>
       <div v-if="projectViewMode === 'project'" class="sidebar-project-menu-wrap" ref="projectMenuRef">
         <button class="sidebar-project-trigger" @click.stop="toggleProjectMenu">
           <v-icon size="14">mdi-folder-outline</v-icon>
@@ -1763,6 +1787,12 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         </div>
       </template>
 
+      <ProjectFiles
+        v-if="projectViewMode === 'project' && selectedProjectId !== null"
+        :projectId="selectedProjectId"
+        :backendUrl="props.backendUrl"
+      />
+
       <div
         class="sidebar-searchbar-wrapper"
         style="
@@ -1817,12 +1847,38 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   background: rgba(var(--v-theme-border), 0.35);
 }
 
-.sidebar-collections-context {
-  font-size: 0.75rem;
-  font-style: italic;
-  color: rgba(var(--v-theme-sidebar-text), 0.45);
-  text-align: center;
+.sidebar-collections-context-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 0 8px 4px;
+}
+
+.sidebar-collections-context {
+  font-size: 0.82rem;
+  font-style: italic;
+  color: rgba(var(--v-theme-sidebar-text), 0.55);
+}
+
+.sidebar-collections-export-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--v-theme-accent), 0.2);
+  border: 1px solid rgba(var(--v-theme-accent), 0.4);
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: rgb(var(--v-theme-accent));
+  line-height: 1;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.sidebar-collections-export-btn:hover {
+  background: rgb(var(--v-theme-accent));
+  border-color: rgb(var(--v-theme-accent));
+  color: #fff;
 }
 
 .sidebar-subsection-header {
@@ -1868,8 +1924,8 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 }
 
 .sidebar-view-tab.active {
-  background: rgb(var(--v-theme-accent));
-  color: #fff;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
 }
 
 .sidebar-view-tab:hover:not(.active) {
