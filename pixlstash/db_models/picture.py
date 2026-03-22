@@ -567,6 +567,7 @@ class Picture(SQLModel, table=True):
         stack_leaders_only: bool = False,
         comfyui_models_filter: Optional[List[str]] = None,
         comfyui_loras_filter: Optional[List[str]] = None,
+        min_score: Optional[int] = None,
         **search,
     ) -> List["Picture"]:
         """
@@ -610,6 +611,9 @@ class Picture(SQLModel, table=True):
 
         if format:
             query = query.where(cls.format.in_(format))
+
+        if min_score is not None:
+            query = query.where(cls.score >= min_score)
 
         # Build comfyui filter conditions (applied below, aware of stack_leaders_only)
         comfyui_conditions = []
@@ -777,6 +781,7 @@ class Picture(SQLModel, table=True):
         format: list[str] | None = None,
         metadata_fields: list[str] | None = None,
         stack_leaders_only: bool = False,
+        min_score: Optional[int] = None,
     ):
         query = select(Picture)
         unassigned_condition = ~exists(
@@ -798,6 +803,9 @@ class Picture(SQLModel, table=True):
 
         if format:
             query = query.where(Picture.format.in_(format))
+
+        if min_score is not None:
+            query = query.where(Picture.score >= min_score)
 
         if stack_leaders_only:
             leader_ids = Picture._get_stack_leader_ids(session, only_deleted=False)

@@ -111,6 +111,7 @@ const MOBILE_BREAKPOINT = 1024;
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
 const comfyuiModelFilter = ref([]);
 const comfyuiLoraFilter = ref([]);
+const minScoreFilter = ref(null);
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
@@ -952,6 +953,7 @@ function handleResetToAll() {
   mediaTypeFilter.value = "all";
   comfyuiModelFilter.value = [];
   comfyuiLoraFilter.value = [];
+  minScoreFilter.value = null;
   refreshGridVersion();
   closeSidebarIfMobile();
 }
@@ -1210,6 +1212,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:mediaTypeFilter="mediaTypeFilter"
             v-model:comfyuiModelFilter="comfyuiModelFilter"
             v-model:comfyuiLoraFilter="comfyuiLoraFilter"
+            v-model:minScoreFilter="minScoreFilter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @update:stack-threshold="handleUpdateStackThreshold"
@@ -1253,6 +1256,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :mediaTypeFilter="mediaTypeFilter"
               :comfyuiModelFilter="comfyuiModelFilter"
               :comfyuiLoraFilter="comfyuiLoraFilter"
+              :minScoreFilter="minScoreFilter"
               :showFaceBboxes="showFaceBboxes"
               :showFormat="showFormat"
               :showResolution="showResolution"
