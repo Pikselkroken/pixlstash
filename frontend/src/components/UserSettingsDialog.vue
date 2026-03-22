@@ -233,9 +233,15 @@ async function fetchVramSliderBounds() {
       processData.vram_total_gb ??
       processData.vramTotalGb ??
       processData.total_vram_gb;
-    maxVramGbMax.value = deriveMaxVramSliderMax(totalVramGb);
+    const derived = deriveMaxVramSliderMax(totalVramGb);
+    // Only ever increase maxVramGbMax — never reduce it. A transient low
+    // available-VRAM reading must not shrink the slider and cause Vuetify to
+    // auto-clamp (and thus overwrite) the user's saved budget.
+    if (derived > maxVramGbMax.value) {
+      maxVramGbMax.value = derived;
+    }
   } catch (e) {
-    maxVramGbMax.value = VRAM_BUDGET_MIN_GB;
+    // Leave maxVramGbMax unchanged on failure.
   }
 }
 
@@ -256,7 +262,12 @@ async function saveMaxVramGb() {
   if (maxVramGbHydrating.value) return;
   maxVramGbLoading.value = true;
   maxVramGbError.value = "";
-  const nextValue = clampAndSnapVramBudget(maxVramGbValue.value);
+  // Snap to step and enforce the minimum only — do not cap against maxVramGbMax
+  // so that a stale or temporarily-low slider bound cannot corrupt the saved value.
+  const nextValue = clampAndSnapVramBudget(
+    maxVramGbValue.value,
+    Math.max(maxVramGbMax.value, maxVramGbValue.value),
+  );
   if (maxVramGbSavedValue.value === nextValue) {
     maxVramGbLoading.value = false;
     return;
@@ -401,6 +412,13 @@ async function fetchSmartScoreSettings() {
       Number.isFinite(parsedMaxVram) && parsedMaxVram > 0
         ? parsedMaxVram
         : VRAM_BUDGET_MIN_GB;
+    // Ensure the slider's upper bound is at least the saved value before we
+    // assign it to v-model. Vuetify auto-clamps v-model to [min, max], so if
+    // maxVramGbMax is still at the fallback minimum (e.g. fetchVramSliderBounds
+    // failed), we'd otherwise silently reduce — and then save — the user's budget.
+    if (initialValue > maxVramGbMax.value) {
+      maxVramGbMax.value = initialValue;
+    }
     const snappedValue = clampAndSnapVramBudget(
       initialValue,
       maxVramGbMax.value,
