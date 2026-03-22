@@ -83,6 +83,7 @@ const tokensError = ref("");
 const tokens = ref([]);
 const tokenDescription = ref("");
 const newlyCreatedToken = ref("");
+const tokenCopied = ref(false);
 const tokenDialogOpen = ref(false);
 const tokenDeleteDialogOpen = ref(false);
 const tokenToDelete = ref(null);
@@ -1076,6 +1077,13 @@ async function fetchUserTokens() {
   }
 }
 
+function copyToken() {
+  if (!newlyCreatedToken.value) return;
+  navigator.clipboard.writeText(newlyCreatedToken.value);
+  tokenCopied.value = true;
+  setTimeout(() => { tokenCopied.value = false; }, 2000);
+}
+
 async function createUserToken() {
   tokensError.value = "";
   const description = tokenDescription.value.trim() || null;
@@ -1795,7 +1803,19 @@ const workflowImportCaptionPreview = computed(() => {
         <div class="settings-token-warning">
           Copy this token now. You won’t be able to see it again.
         </div>
-        <div class="settings-token-value">{{ newlyCreatedToken }}</div>
+        <div class="settings-token-value-row">
+          <div class="settings-token-value">{{ newlyCreatedToken }}</div>
+          <v-btn
+            icon
+            variant="text"
+            size="small"
+            class="settings-token-copy-btn"
+            :title="tokenCopied ? 'Copied!' : 'Copy token'"
+            @click="copyToken"
+          >
+            <v-icon size="18">{{ tokenCopied ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
+          </v-btn>
+        </div>
       </v-card-text>
       <v-card-actions class="settings-dialog-actions">
         <v-spacer />
@@ -2345,12 +2365,28 @@ const workflowImportCaptionPreview = computed(() => {
   margin-bottom: 6px;
 }
 
+.settings-token-value-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .settings-token-value {
+  flex: 1;
   word-break: break-all;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   background: rgba(var(--v-theme-surface), 0.2);
   border-radius: 8px;
   padding: 2px 4px;
+}
+
+.settings-token-copy-btn {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.settings-token-copy-btn:hover {
+  opacity: 1;
 }
 
 .settings-section-divider {
