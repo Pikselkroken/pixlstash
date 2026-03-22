@@ -6,6 +6,7 @@ from .face import Face
 if TYPE_CHECKING:
     from .picture import Picture
     from .picture_set import PictureSet
+    from .project import Project
 
 
 class Character(SQLModel, table=True):
@@ -16,6 +17,9 @@ class Character(SQLModel, table=True):
 
     reference_picture_set_id: Optional[int] = Field(
         default=None, foreign_key="pictureset.id"
+    )
+    project_id: Optional[int] = Field(
+        default=None, foreign_key="project.id", index=True
     )
 
     # Relationships
@@ -31,6 +35,7 @@ class Character(SQLModel, table=True):
     reference_picture_set: Optional["PictureSet"] = Relationship(
         back_populates="reference_character"
     )
+    project: Optional["Project"] = Relationship(back_populates="characters")
 
     @classmethod
     def find(

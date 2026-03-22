@@ -28,6 +28,17 @@
             @keydown.ctrl.enter="save"
             @keydown.meta.enter="save"
           />
+          <v-select
+            v-model="localSet.project_id"
+            :items="projectItems"
+            item-title="name"
+            item-value="id"
+            label="Project"
+            density="comfortable"
+            variant="filled"
+            clearable
+            clear-icon="mdi-close"
+          />
         </v-card-text>
         <v-card-actions class="editor-footer">
           <v-spacer></v-spacer>
@@ -51,6 +62,7 @@ import {
   VCardTitle,
   VDialog,
   VIcon,
+  VSelect,
   VSpacer,
   VTextField,
   VTextarea,
@@ -61,7 +73,13 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   set: { type: Object, default: null },
   backendUrl: { type: String, required: true },
+  projects: { type: Array, default: () => [] },
 });
+
+const projectItems = computed(() => [
+  { id: null, name: "— No project —" },
+  ...props.projects,
+]);
 
 const emit = defineEmits(["close", "saved", "refresh-sidebar"]);
 
@@ -69,6 +87,7 @@ const localSet = ref({
   id: null,
   name: "",
   description: "",
+  project_id: null,
 });
 
 const nameInputRef = ref(null);
@@ -102,12 +121,14 @@ watch(
         id: newSet.id,
         name: newSet.name || "",
         description: newSet.description || "",
+        project_id: newSet.project_id ?? null,
       };
     } else {
       localSet.value = {
         id: null,
         name: "",
         description: "",
+        project_id: null,
       };
     }
   },

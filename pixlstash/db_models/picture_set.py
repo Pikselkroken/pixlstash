@@ -6,6 +6,7 @@ from typing import List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from pixlstash.db_models.character import Character
     from pixlstash.db_models.picture import Picture
+    from pixlstash.db_models.project import Project
 
 
 class PictureSetMember(SQLModel, table=True):
@@ -43,6 +44,9 @@ class PictureSet(SQLModel, table=True):
     id: int = Field(default=None, primary_key=True)
     name: str = Field(index=True, nullable=False)
     description: Optional[str] = Field(default=None)
+    project_id: Optional[int] = Field(
+        default=None, foreign_key="project.id", index=True
+    )
 
     # Relationships
     members: List["Picture"] = Relationship(
@@ -51,3 +55,4 @@ class PictureSet(SQLModel, table=True):
     reference_character: Optional["Character"] = Relationship(
         back_populates="reference_picture_set"
     )
+    project: Optional["Project"] = Relationship(back_populates="picture_sets")

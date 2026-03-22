@@ -41,6 +41,7 @@ from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
 from pixlstash.routes.picture_sets import create_router as create_picture_sets_router
+from pixlstash.routes.projects import create_router as create_projects_router
 from pixlstash.routes.tags import create_router as create_tags_router
 from pixlstash.routes.stacks import create_router as create_stacks_router
 from pixlstash.routes.pictures import create_router as create_pictures_router
@@ -96,6 +97,10 @@ API_OPENAPI_TAGS = [
     {
         "name": "comfyui",
         "description": "ComfyUI workflow management and image-to-image execution.",
+    },
+    {
+        "name": "projects",
+        "description": "Project management, including character/set scoping and file attachments.",
     },
 ]
 
@@ -590,6 +595,7 @@ class Server:
                 "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
                 "watch_folders": [],
+                "max_attachment_size_mb": 50,
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -628,6 +634,8 @@ class Server:
                     server_config["cors_origins"] = []
                 if "watch_folders" not in server_config:
                     server_config["watch_folders"] = []
+                if "max_attachment_size_mb" not in server_config:
+                    server_config["max_attachment_size_mb"] = 50
                 if "generate_thumbnails_on_startup" not in server_config:
                     server_config["generate_thumbnails_on_startup"] = True
 
@@ -893,6 +901,7 @@ class Server:
         self.api.include_router(create_config_router(self), tags=["config"])
         self.api.include_router(create_characters_router(self), tags=["characters"])
         self.api.include_router(create_picture_sets_router(self), tags=["picture_sets"])
+        self.api.include_router(create_projects_router(self), tags=["projects"])
         self.api.include_router(create_tags_router(self), tags=["tags"])
         self.api.include_router(create_stacks_router(self), tags=["stacks"])
         self.api.include_router(create_pictures_router(self), tags=["pictures"])

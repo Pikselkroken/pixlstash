@@ -34,6 +34,17 @@
             variant="filled"
             rows="3"
           />
+          <v-select
+            v-model="localCharacter.project_id"
+            :items="projectItems"
+            item-title="name"
+            item-value="id"
+            label="Project"
+            density="comfortable"
+            variant="filled"
+            clearable
+            clear-icon="mdi-close"
+          />
         </v-card-text>
         <v-card-actions class="editor-footer">
           <v-spacer></v-spacer>
@@ -57,6 +68,7 @@ import {
   VCardTitle,
   VDialog,
   VIcon,
+  VSelect,
   VSpacer,
   VTextField,
   VTextarea,
@@ -67,7 +79,13 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   character: { type: Object, default: null },
   backendUrl: { type: String, required: true },
+  projects: { type: Array, default: () => [] },
 });
+
+const projectItems = computed(() => [
+  { id: null, name: "— No project —" },
+  ...props.projects,
+]);
 
 const emit = defineEmits(["close", "saved"]);
 
@@ -76,6 +94,7 @@ const localCharacter = ref({
   name: "",
   description: "",
   extra_metadata: "",
+  project_id: null,
 });
 
 const nameInputRef = ref(null);
@@ -112,6 +131,7 @@ watch(
         name: newChar.name || "",
         description: newChar.description || "",
         extra_metadata: newChar.extra_metadata || "",
+        project_id: newChar.project_id ?? null,
       };
     } else {
       localCharacter.value = {
@@ -119,6 +139,7 @@ watch(
         name: "",
         description: "",
         extra_metadata: "",
+        project_id: null,
       };
     }
   },

@@ -32,6 +32,8 @@ from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
 
 logger = get_logger(__name__)
 
+_UNSET = object()
+
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
@@ -619,8 +621,9 @@ def create_router(server) -> APIRouter:
     def update_picture_set(id: int, payload: dict = Body(...)):
         name = payload.get("name")
         description = payload.get("description")
+        project_id = payload.get("project_id", _UNSET)
 
-        def update_set(session, id, name, description):
+        def update_set(session, id, name, description, project_id):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
@@ -628,12 +631,14 @@ def create_router(server) -> APIRouter:
                 picture_set.name = name
             if description is not None:
                 picture_set.description = description
+            if project_id is not _UNSET:
+                picture_set.project_id = project_id
 
             session.commit()
             return True
 
         success = server.vault.db.run_task(
-            update_set, id, name, description, priority=DBPriority.IMMEDIATE
+            update_set, id, name, description, project_id, priority=DBPriority.IMMEDIATE
         )
         if not success:
             raise HTTPException(status_code=404, detail="Picture set not found")
