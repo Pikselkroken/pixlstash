@@ -265,4 +265,27 @@ def create_router(server) -> APIRouter:
         server.vault.notify(EventType.CHANGED_TAGS)
         return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
 
+    @router.get(
+        "/tags",
+        summary="List all tags",
+        description="Returns all unique tag values with their usage count, sorted by count descending then alphabetically.",
+    )
+    def list_all_tags():
+        try:
+            from sqlalchemy import func
+
+            def fetch(session: Session):
+                rows = session.exec(
+                    select(Tag.tag, func.count(Tag.id).label("count"))
+                    .where(Tag.tag.is_not(None), Tag.tag != TAG_EMPTY_SENTINEL)
+                    .group_by(Tag.tag)
+                    .order_by(func.count(Tag.id).desc(), Tag.tag)
+                ).all()
+                return [{"tag": tag, "count": count} for tag, count in rows if tag]
+
+            return server.vault.db.run_task(fetch)
+        except Exception as exc:
+            logger.error("Failed to list all tags: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to list tags")
+
     return router

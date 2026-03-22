@@ -37,6 +37,7 @@
   />
   <div :style="wrapperStyle">
     <SelectionBar
+      ref="selectionBarRef"
       v-if="showSelectionBar"
       :selectedCount="selectedImageIds.length"
       :selectedFaceCount="selectedFaceIds.length"
@@ -64,6 +65,7 @@
       @create-stacks-from-groups="createStacksFromSelectedGroups"
       @run-plugin="handlePluginRunRequest"
       @comfyui-run="handleComfyuiRun"
+      @tags-applied="fetchAllGridImages({ force: true })"
     />
     <EmptyScrapHeap
       v-if="showScrapheapBar"
@@ -610,6 +612,7 @@ const prefetchedFullImageOrder = [];
 // ============================================================
 const gridContainer = ref(null);
 const scrollWrapper = ref(null);
+const selectionBarRef = ref(null);
 
 // ============================================================
 // GRID DATA STATE
@@ -4965,6 +4968,12 @@ function handleKeyDown(event) {
       .map((img) => img.id);
     selectedImageIds.value = Array.from(allIds);
     lastSelectedImageId = null;
+  } else if (
+    (event.key === "t" || event.key === "T") &&
+    selectedImageIds.value.length > 0
+  ) {
+    event.preventDefault();
+    selectionBarRef.value?.openTagInput();
   } else if (
     (hoveredImageIdx.value !== null || selectedImageIds.value.length > 0) &&
     !overlayOpen.value &&

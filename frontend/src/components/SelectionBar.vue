@@ -208,6 +208,59 @@
         >
           {{ removeButtonLabel }}
         </button>
+        <div
+          v-if="selectedCount > 0 && !isScrapheapView"
+          class="plugin-run-controls"
+        >
+          <v-menu
+            v-model="tagMenuOpen"
+            :close-on-content-click="false"
+            location-strategy="connected"
+            location="bottom end"
+            origin="top end"
+            transition="scale-transition"
+          >
+            <template #activator="{ props: menuProps }">
+              <button
+                v-bind="menuProps"
+                ref="tagBtnRef"
+                class="stack-btn"
+                type="button"
+              >
+                <v-icon size="16">mdi-tag-plus</v-icon>
+                <span>Tag</span>
+              </button>
+            </template>
+            <div class="plugin-menu-panel">
+              <div class="plugin-menu-header">
+                Tag {{ selectedCount }} Image{{ selectedCount !== 1 ? 's' : '' }}
+              </div>
+              <div class="plugin-menu-body">
+                <input
+                  ref="tagInputRef"
+                  v-model="tagInput"
+                  class="tag-menu-input"
+                  placeholder="Tag name..."
+                  autocomplete="off"
+                  @keydown.enter.prevent="applyTag"
+                  @keydown="handleTagKey"
+                />
+                <div class="plugin-menu-actions">
+                  <button
+                    class="stack-btn"
+                    type="button"
+                    :disabled="!tagInput.trim() || tagLoading"
+                    @click="applyTag"
+                  >
+                    {{ tagLoading ? 'Applying...' : 'Apply to All' }}
+                  </button>
+                </div>
+                <div v-if="tagError" class="plugin-menu-error">{{ tagError }}</div>
+                <div v-if="tagSuccess" class="plugin-menu-success">{{ tagSuccess }}</div>
+              </div>
+            </div>
+          </v-menu>
+        </div>
         <button
           v-if="selectedCount > 0"
           class="delete-btn"
@@ -218,10 +271,29 @@
       </div>
     </div>
   </div>
+  <Teleport to="body">
+    <div
+      v-if="tagMenuOpen && tagSuggestions.length && tagInputRect"
+      class="sb-tag-autocomplete-dropdown"
+      :style="{
+        top: tagInputRect.bottom + 4 + 'px',
+        left: tagInputRect.left + 'px',
+        minWidth: Math.max(tagInputRect.width, 180) + 'px',
+      }"
+    >
+      <button
+        v-for="(item, idx) in tagSuggestions"
+        :key="item.tag"
+        class="sb-tag-autocomplete-item"
+        :class="{ 'sb-tag-autocomplete-item--active': idx === tagSuggestionIndex }"
+        @mousedown.prevent="selectTagSuggestion(item)"
+      >{{ item.tag }}</button>
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { apiClient } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToCharacterControl from "./AddToCharacterControl.vue";
@@ -259,6 +331,7 @@ const emit = defineEmits([
   "delete-selected",
   "run-plugin",
   "comfyui-run",
+  "tags-applied",
 ]);
 
 const STACKS_SORT_KEY = "PICTURE_STACKS";
@@ -481,6 +554,148 @@ function runSelectedPlugin() {
   });
   pluginMenuOpen.value = false;
 }
+
+// ── Bulk tag ──────────────────────────────────────────────────────────────────
+const tagMenuOpen = ref(false);
+const tagBtnRef = ref(null);
+const tagInputRef = ref(null);
+const tagInput = ref("");
+const tagLoading = ref(false);
+const tagError = ref("");
+const tagSuccess = ref("");
+const allTagsSB = ref([]);
+let allTagsFetchedAt = 0;
+const tagSuggestionIndex = ref(-1);
+const tagInputRect = ref(null);
+
+const tagSuggestions = computed(() => {
+  const query = tagInput.value.trim().toLowerCase();
+  if (!query) return [];
+  return allTagsSB.value
+    .filter((item) => item.tag.toLowerCase().startsWith(query))
+    .slice(0, 8);
+});
+
+watch(tagInput, () => {
+  tagSuggestionIndex.value = -1;
+});
+
+watch(
+  () => [tagMenuOpen.value, tagSuggestions.value.length],
+  () => {
+    if (tagMenuOpen.value && tagSuggestions.value.length) {
+      nextTick(() => {
+        tagInputRect.value = tagInputRef.value
+          ? tagInputRef.value.getBoundingClientRect()
+          : null;
+      });
+    } else {
+      tagInputRect.value = null;
+    }
+  },
+);
+
+watch(tagMenuOpen, async (isOpen) => {
+  if (!isOpen) {
+    tagInput.value = "";
+    tagError.value = "";
+    tagSuccess.value = "";
+    tagSuggestionIndex.value = -1;
+    return;
+  }
+  await fetchTagsSB();
+  nextTick(() => tagInputRef.value?.focus());
+});
+
+async function fetchTagsSB() {
+  if (!props.backendUrl) return;
+  const now = Date.now();
+  if (now - allTagsFetchedAt < 30_000) return;
+  try {
+    const res = await apiClient.get(`${props.backendUrl}/tags`);
+    if (Array.isArray(res.data)) {
+      allTagsSB.value = res.data;
+      allTagsFetchedAt = now;
+    }
+  } catch (_e) {
+    // non-critical
+  }
+}
+
+function selectTagSuggestion(item) {
+  tagInput.value = typeof item === "string" ? item : item.tag;
+  tagSuggestionIndex.value = -1;
+  nextTick(() => applyTag());
+}
+
+function handleTagKey(event) {
+  if (event.key === "ArrowDown") {
+    if (tagSuggestions.value.length) {
+      event.preventDefault();
+      tagSuggestionIndex.value = Math.min(
+        tagSuggestionIndex.value + 1,
+        tagSuggestions.value.length - 1,
+      );
+    }
+  } else if (event.key === "ArrowUp") {
+    if (tagSuggestions.value.length) {
+      event.preventDefault();
+      tagSuggestionIndex.value = Math.max(tagSuggestionIndex.value - 1, -1);
+    }
+  } else if (event.key === "Tab") {
+    if (tagSuggestions.value.length) {
+      event.preventDefault();
+      const idx = tagSuggestionIndex.value >= 0 ? tagSuggestionIndex.value : 0;
+      selectTagSuggestion(tagSuggestions.value[idx]);
+    }
+  } else if (event.key === "Escape") {
+    tagMenuOpen.value = false;
+  }
+}
+
+async function applyTag() {
+  if (
+    tagSuggestionIndex.value >= 0 &&
+    tagSuggestions.value.length > tagSuggestionIndex.value
+  ) {
+    const item = tagSuggestions.value[tagSuggestionIndex.value];
+    tagInput.value = typeof item === "string" ? item : item.tag;
+    tagSuggestionIndex.value = -1;
+    nextTick(() => applyTag());
+    return;
+  }
+  const tag = tagInput.value.trim();
+  if (!tag) return;
+  const ids = (Array.isArray(props.selectedImageIds) ? props.selectedImageIds : [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return;
+  tagLoading.value = true;
+  tagError.value = "";
+  tagSuccess.value = "";
+  try {
+    await Promise.all(
+      ids.map((id) =>
+        apiClient.post(`${props.backendUrl}/pictures/${id}/tags`, { tag }),
+      ),
+    );
+    tagSuccess.value = `Tagged ${ids.length} image${ids.length !== 1 ? "s" : ""} with "${tag}"`;
+    tagInput.value = "";
+    // Invalidate the tag cache so new tags appear in suggestions
+    allTagsFetchedAt = 0;
+    emit("tags-applied", { tag, pictureIds: ids });
+  } catch (err) {
+    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+  } finally {
+    tagLoading.value = false;
+  }
+}
+
+function openTagInput() {
+  tagMenuOpen.value = true;
+}
+
+defineExpose({ openTagInput });
 </script>
 
 <style scoped>
@@ -654,5 +869,54 @@ function runSelectedPlugin() {
   margin-top: 8px;
   color: rgb(var(--v-theme-success));
   font-size: 0.8rem;
+}
+
+.tag-menu-input {
+  width: 100%;
+  height: 32px;
+  border-radius: 4px;
+  border: 1px solid rgba(var(--v-theme-primary), 0.4);
+  background: rgba(var(--v-theme-background), 0.7);
+  color: rgb(var(--v-theme-on-background));
+  padding: 0 8px;
+  font-size: 0.85rem;
+  outline: none;
+}
+
+.tag-menu-input:focus {
+  border-color: rgba(var(--v-theme-primary), 0.8);
+}
+
+.sb-tag-autocomplete-dropdown {
+  position: fixed;
+  z-index: 9999;
+  background: color-mix(in srgb, rgb(var(--v-theme-surface)) 92%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(var(--v-theme-primary), 0.3);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sb-tag-autocomplete-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  background: transparent;
+  border: none;
+  color: rgb(var(--v-theme-on-surface));
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sb-tag-autocomplete-item:hover,
+.sb-tag-autocomplete-item--active {
+  background: rgba(var(--v-theme-primary), 0.22);
 }
 </style>

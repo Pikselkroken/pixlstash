@@ -6,8 +6,8 @@
       :disabled="disabled"
       :aria-expanded="menuOpen"
       aria-haspopup="true"
-      aria-label="Add to set"
-      title="Add to set"
+      aria-label="Set"
+      title="Set"
       @click.stop="toggleMenu"
     >
       <v-icon size="18">mdi-folder-plus</v-icon>
@@ -64,7 +64,7 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
-  label: { type: String, default: "Add to set" },
+  label: { type: String, default: "Set" },
   includeDeletedMembers: { type: Boolean, default: false },
 });
 
