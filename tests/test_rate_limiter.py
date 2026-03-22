@@ -4,7 +4,6 @@ A minimal FastAPI app is used so tests run fast without a real Server instance.
 ``_LIMIT`` is patched to a small value to keep the tests short.
 """
 
-import tempfile
 from unittest.mock import patch
 
 import pytest
