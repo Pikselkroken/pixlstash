@@ -5299,7 +5299,7 @@ function handleEmptyStateReset() {
 }
 .face-bbox-label {
   font-size: 0.7em;
-  background-color: rgba(var(--v-theme-shadow), 0.3);
+  background-color: rgba(var(--v-theme-surface), 0.3);
   color: rgb(var(--v-theme-on-surface));
   text-overflow: ellipsis;
   overflow-y: hidden;
