@@ -12,13 +12,12 @@ from fastapi.testclient import TestClient
 
 import pixlstash.utils.rate_limiter as rl_module
 from pixlstash.auth import AUTH_EXCLUDED_PATHS
-from pixlstash.utils.rate_limiter import RateLimitMiddleware
 
 
 def _make_app() -> FastAPI:
     """Return a minimal app with only the rate-limit middleware registered."""
     app = FastAPI()
-    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(rl_module.RateLimitMiddleware)
 
     # One public (unauthenticated) endpoint that is in AUTH_EXCLUDED_PATHS.
     @app.get("/login")
