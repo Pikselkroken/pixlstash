@@ -864,15 +864,16 @@ class PictureTagger:
         # Try SDPA first, fall back to eager if not supported
         attn_impl = "sdpa"
         try:
-            # .to(device=device, dtype=dtype) converts both parameters AND
-            # registered buffers (e.g. position embeddings) to the target dtype,
-            # whereas torch_dtype= in from_pretrained only covers parameters.
-            # This prevents Float/Half mismatches during fp16 inference.
+            # low_cpu_mem_usage=False prevents transformers from staging weights
+            # on the "meta" (placeholder) device, which would make the subsequent
+            # .to(device, dtype) call fail with "Cannot copy out of meta tensor".
+            # Slightly higher peak RAM during load but safe on all transformers versions.
             self._florence_model = _from_pretrained_local_first(
                 Florence2ForConditionalGeneration,
                 self._florence_model_name,
                 torch_dtype=dtype,
                 attn_implementation=attn_impl,
+                low_cpu_mem_usage=False,
             ).to(device=device, dtype=dtype)
         except (TypeError, AttributeError) as e:
             logger.debug(f"SDPA not supported, falling back to eager attention: {e}")
@@ -882,6 +883,7 @@ class PictureTagger:
                 self._florence_model_name,
                 torch_dtype=dtype,
                 attn_implementation=attn_impl,
+                low_cpu_mem_usage=False,
             ).to(device=device, dtype=dtype)
 
         self._florence_model.eval()
