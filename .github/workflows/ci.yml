@@ -23,10 +23,25 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-py3.12-
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install .[test,dev]
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/picture_tagger.py') }}
+          restore-keys: hf-models-${{ runner.os }}-
 
       - name: Verify wheel includes Alembic assets
         run: |
