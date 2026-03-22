@@ -262,9 +262,7 @@ def _prompt_bootstrap_credentials(server) -> None:
         if keep_existing:
             return
     else:
-        setup_input = input(
-            "Set username/password now before launch? [Y/n]: "
-        ).strip()
+        setup_input = input("Set username/password now before launch? [Y/n]: ").strip()
         should_setup = _parse_yes_no(setup_input, True)
         if not should_setup:
             return

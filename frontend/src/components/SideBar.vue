@@ -10,6 +10,7 @@ import {
 import ImageImporter from "./ImageImporter.vue";
 import CharacterEditor from "./CharacterEditor.vue";
 import PictureSetEditor from "./PictureSetEditor.vue";
+import ProjectEditor from "./ProjectEditor.vue";
 import TaskManager from "./TaskManager.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
@@ -98,6 +99,15 @@ const nextCharacterNumber = ref(1);
 
 // --- Picture Sets State ---
 const pictureSets = ref([]);
+
+// --- Project State ---
+const projects = ref([]);
+const projectViewMode = ref("global"); // 'global' | 'project'
+const selectedProjectId = ref(null); // null = 'No project' in project view
+const projectEditorOpen = ref(false);
+const projectMenuOpen = ref(false);
+const projectMenuRef = ref(null);
+const projectEditorProject = ref(null);
 
 // --- Character Editor State ---
 const characterEditorOpen = ref(false);
@@ -240,6 +250,36 @@ function createSet() {
   setEditorOpen.value = true;
 }
 
+function toggleProjectMenu() {
+  projectMenuOpen.value = !projectMenuOpen.value;
+}
+
+function selectProject(id) {
+  selectedProjectId.value = id;
+  projectMenuOpen.value = false;
+}
+
+function createProject() {
+  projectMenuOpen.value = false;
+  projectEditorProject.value = null;
+  projectEditorOpen.value = true;
+}
+
+function openProjectEditor(project) {
+  projectEditorProject.value = project;
+  projectEditorOpen.value = true;
+}
+
+function closeProjectEditor() {
+  projectEditorOpen.value = false;
+  projectEditorProject.value = null;
+}
+
+async function projectSaved() {
+  closeProjectEditor();
+  await fetchProjects();
+}
+
 const sortedCharacters = computed(() => {
   return [...characters.value]
     .filter((c) => c && typeof c.name === "string" && c.name.trim() !== "")
@@ -278,6 +318,32 @@ const selectedSetObj = computed(() => {
 const nonReferenceSets = computed(() =>
   pictureSets.value.filter((pset) => !pset.reference_character),
 );
+
+const selectedProjectObj = computed(() =>
+  projectViewMode.value === "project" && selectedProjectId.value !== null
+    ? projects.value.find((p) => p.id === selectedProjectId.value) || null
+    : null,
+);
+
+const collectionsContextLabel = computed(() => {
+  if (projectViewMode.value === "global") return "Showing all collections";
+  if (selectedProjectId.value === null) return "Showing unassigned collections";
+  return `Showing ${selectedProjectObj.value?.name ?? ""} collections`;
+});
+
+const visibleCharacters = computed(() => {
+  if (projectViewMode.value === "global") return sortedCharacters.value;
+  return sortedCharacters.value.filter(
+    (c) => c.project_id === selectedProjectId.value,
+  );
+});
+
+const visibleSets = computed(() => {
+  if (projectViewMode.value === "global") return nonReferenceSets.value;
+  return nonReferenceSets.value.filter(
+    (s) => s.project_id === selectedProjectId.value,
+  );
+});
 
 // --- Similarity Character Dropdown State ---
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS"; // Adjust if backend uses a different key
@@ -689,6 +755,7 @@ function refreshSidebar(options = {}) {
   }
   fetchCharacters();
   fetchPictureSets();
+  fetchProjects();
   fetchSidebarData();
 }
 
@@ -743,6 +810,16 @@ async function fetchSortOptions() {
 }
 
 // --- Picture Sets ---
+async function fetchProjects() {
+  try {
+    const res = await apiClient.get(`${props.backendUrl}/projects`);
+    projects.value = Array.isArray(res.data) ? res.data : [];
+  } catch (e) {
+    console.error("Error fetching projects:", e);
+    projects.value = [];
+  }
+}
+
 async function fetchPictureSets() {
   try {
     const res = await apiClient.get(`${props.backendUrl}/picture_sets`);
@@ -1028,6 +1105,18 @@ onMounted(() => {
     }
     window.removeEventListener("resize", handleNoticeReflow);
   };
+
+  const handleProjectMenuOutsideClick = (e) => {
+    if (projectMenuRef.value && !projectMenuRef.value.contains(e.target)) {
+      projectMenuOpen.value = false;
+    }
+  };
+  document.addEventListener("mousedown", handleProjectMenuOutsideClick);
+  const _origCleanup = sidebarNoticeCleanup;
+  sidebarNoticeCleanup = () => {
+    _origCleanup();
+    document.removeEventListener("mousedown", handleProjectMenuOutsideClick);
+  };
 });
 
 let sidebarNoticeCleanup = null;
@@ -1120,6 +1209,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
     :open="characterEditorOpen"
     :character="characterEditorCharacter"
     :backendUrl="props.backendUrl"
+    :projects="projects"
     @close="closeCharacterEditor"
     @saved="characterSaved"
   />
@@ -1127,8 +1217,16 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
     :open="setEditorOpen"
     :set="setEditorSet"
     :backendUrl="props.backendUrl"
+    :projects="projects"
     @close="closeSetEditor"
     @refresh-sidebar="refreshSidebar"
+  />
+  <ProjectEditor
+    :open="projectEditorOpen"
+    :project="projectEditorProject"
+    :backend-url="props.backendUrl"
+    @close="closeProjectEditor"
+    @saved="projectSaved"
   />
   <UserSettingsDialog
     v-model:open="settingsDialogOpen"
@@ -1369,7 +1467,73 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         </span>
       </div>
 
+      <div class="sidebar-section-divider"></div>
+
       <div class="sidebar-section-header">
+        Collections
+      </div>
+      <div class="sidebar-view-tabs-row">
+        <div class="sidebar-view-tabs">
+          <button
+            class="sidebar-view-tab"
+            :class="{ active: projectViewMode === 'global' }"
+            @click="projectViewMode = 'global'"
+          >
+            <v-icon size="13">mdi-earth</v-icon>
+            Global
+          </button>
+          <button
+            class="sidebar-view-tab"
+            :class="{ active: projectViewMode === 'project' }"
+            @click="projectViewMode = 'project'"
+          >
+            <v-icon size="13">mdi-folder-outline</v-icon>
+            By Project
+          </button>
+        </div>
+      </div>
+      <div class="sidebar-collections-context">{{ collectionsContextLabel }}</div>
+      <div v-if="projectViewMode === 'project'" class="sidebar-project-menu-wrap" ref="projectMenuRef">
+        <button class="sidebar-project-trigger" @click.stop="toggleProjectMenu">
+          <v-icon size="14">mdi-folder-outline</v-icon>
+          <span class="sidebar-project-trigger-label">
+            {{ selectedProjectId === null ? 'No project' : (selectedProjectObj?.name ?? '—') }}
+          </span>
+          <v-icon size="14" class="sidebar-project-trigger-chevron">
+            {{ projectMenuOpen ? 'mdi-chevron-up' : 'mdi-chevron-down' }}
+          </v-icon>
+        </button>
+        <div v-if="projectMenuOpen" class="sidebar-project-menu">
+          <div
+            class="sidebar-project-menu-item"
+            :class="{ active: selectedProjectId === null }"
+            @click="selectProject(null)"
+          >
+            <span class="sidebar-project-menu-item-label">No project</span>
+          </div>
+          <div
+            v-for="p in projects"
+            :key="p.id"
+            class="sidebar-project-menu-item"
+            :class="{ active: selectedProjectId === p.id }"
+            @click="selectProject(p.id)"
+          >
+            <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
+            <v-icon
+              size="14"
+              class="sidebar-project-menu-item-edit"
+              @click.stop="openProjectEditor(p)"
+              title="Edit project"
+            >mdi-pencil</v-icon>
+          </div>
+          <div class="sidebar-project-menu-add" @click="createProject">
+            <v-icon size="14">mdi-plus</v-icon>
+            Add new project
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-subsection-header">
         People
         <span class="sidebar-header-spacer"></span>
         <div class="sidebar-header-actions">
@@ -1418,14 +1582,14 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
       >
         {{ sidebarError }}
       </div>
-      <div v-if="sortedCharacters.length === 0" class="sidebar-character-group">
+      <div v-if="visibleCharacters.length === 0" class="sidebar-character-group">
         <div class="sidebar-list-item">
           No characters found. Click the + button to add one.
         </div>
       </div>
       <div
-        v-if="sortedCharacters.length > 0"
-        v-for="char in sortedCharacters"
+        v-if="visibleCharacters.length > 0"
+        v-for="char in visibleCharacters"
         :key="char.id"
         class="sidebar-character-group"
       >
@@ -1512,7 +1676,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         </div>
       </div>
 
-      <div class="sidebar-section-header">
+      <div class="sidebar-subsection-header">
         Picture Sets
         <span class="sidebar-header-spacer"></span>
         <div class="sidebar-header-actions">
@@ -1542,13 +1706,11 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
           </v-icon>
         </div>
       </div>
-      <div v-if="pictureSets.length === 0" class="sidebar-list-item">
+      <div v-if="visibleSets.length === 0" class="sidebar-list-item">
         No picture sets. Click the + button to create one.
       </div>
       <template
-        v-for="(pset, idx) in pictureSets.filter(
-          (pset) => pset.reference_character == null,
-        )"
+        v-for="(pset, idx) in visibleSets"
         :key="pset.id"
       >
         <div
@@ -1637,6 +1799,201 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 </template>
 
 <style scoped>
+.sidebar-project-header {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  justify-content: center;
+}
+
+.sidebar-view-tabs-row {
+  display: flex;
+  justify-content: center;
+  padding: 0 8px 4px;
+}
+
+.sidebar-section-divider {
+  height: 1px;
+  margin: 6px 12px;
+  background: rgba(var(--v-theme-border), 0.35);
+}
+
+.sidebar-collections-context {
+  font-size: 0.75rem;
+  font-style: italic;
+  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  text-align: center;
+  padding: 0 8px 4px;
+}
+
+.sidebar-subsection-header {
+  position: relative;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  min-height: 30px;
+  padding: 2px 8px;
+  padding-right: var(--sidebar-header-action-right-edge) !important;
+  display: flex;
+  align-items: center;
+  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  margin-left: 8px;
+}
+
+.sidebar-view-tabs {
+  display: flex;
+  background: rgba(var(--v-theme-shadow), 0.25);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.sidebar-view-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 1;
+  padding: 5px 12px;
+  border-radius: 0;
+  border: none;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  background: transparent;
+  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  transition: background 0.15s, color 0.15s;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.sidebar-view-tab.active {
+  background: rgb(var(--v-theme-accent));
+  color: #fff;
+}
+
+.sidebar-view-tab:hover:not(.active) {
+  background: rgba(var(--v-theme-surface), 0.5);
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-project-menu-wrap {
+  position: relative;
+  padding: 4px 8px 6px 8px;
+}
+
+.sidebar-project-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(var(--v-theme-border), 0.5);
+  background: rgba(var(--v-theme-surface), 0.3);
+  color: rgb(var(--v-theme-sidebar-text));
+  font-size: 0.92rem;
+  cursor: pointer;
+  transition: background 0.15s, border 0.15s;
+  text-align: left;
+}
+
+.sidebar-project-trigger:hover {
+  background: rgba(var(--v-theme-surface), 0.5);
+  border-color: rgba(var(--v-theme-border), 0.9);
+}
+
+.sidebar-project-trigger-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-project-trigger-chevron {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.sidebar-project-menu {
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 8px;
+  right: 8px;
+  z-index: 200;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-border), 0.7);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.35);
+  overflow: hidden;
+}
+
+.sidebar-project-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: rgb(var(--v-theme-on-surface));
+  transition: background 0.12s;
+  gap: 6px;
+}
+
+.sidebar-project-menu-item:hover {
+  background: rgba(var(--v-theme-accent), 0.1);
+}
+
+.sidebar-project-menu-item.active {
+  background: rgba(var(--v-theme-accent), 0.18);
+  color: rgb(var(--v-theme-accent));
+  font-weight: 600;
+}
+
+.sidebar-project-menu-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-project-menu-item-edit {
+  flex-shrink: 0;
+  opacity: 0;
+  color: rgb(var(--v-theme-on-surface)) !important;
+  transition: opacity 0.12s;
+}
+
+.sidebar-project-menu-item:hover .sidebar-project-menu-item-edit {
+  opacity: 0.6;
+}
+
+.sidebar-project-menu-item-edit:hover {
+  opacity: 1 !important;
+}
+
+.sidebar-project-menu-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: rgb(var(--v-theme-accent));
+  border-top: 1px solid rgba(var(--v-theme-border), 0.4);
+  transition: background 0.12s;
+}
+
+.sidebar-project-menu-add:hover {
+  background: rgba(var(--v-theme-accent), 0.1);
+}
+
+.sidebar-project-select {
+  flex: 1;
+  width: 100%;
+  margin-left: 0;
+}
+
 .sidebar-native-select {
   background: rgba(var(--v-theme-surface), 0.3);
   color: rgb(var(--v-theme-on-surface));

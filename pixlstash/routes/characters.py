@@ -31,6 +31,8 @@ from pixlstash.utils.service.serialization_utils import safe_model_dict
 
 logger = get_logger(__name__)
 
+_UNSET = object()
+
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
@@ -211,10 +213,13 @@ def create_router(server) -> APIRouter:
         data = await request.json()
         name = data.get("name")
         description = data.get("description")
+        project_id = data.get("project_id", _UNSET)
         char = None
         try:
 
-            def alter_char(session: Session, id: int, name: str, description: str):
+            def alter_char(
+                session: Session, id: int, name: str, description: str, project_id
+            ):
                 character = session.get(Character, id)
                 if character is None:
                     raise KeyError("Character not found")
@@ -224,6 +229,9 @@ def create_router(server) -> APIRouter:
                     updated = True
                 if description is not None and description != character.description:
                     character.description = description
+                    updated = True
+                if project_id is not _UNSET and project_id != character.project_id:
+                    character.project_id = project_id
                     updated = True
                 if updated:
                     session.add(character)
@@ -238,7 +246,12 @@ def create_router(server) -> APIRouter:
                 return character
 
             char = server.vault.db.run_task(
-                alter_char, id, name, description, priority=DBPriority.IMMEDIATE
+                alter_char,
+                id,
+                name,
+                description,
+                project_id,
+                priority=DBPriority.IMMEDIATE,
             )
             server.vault.notify(EventType.CHANGED_CHARACTERS)
 
