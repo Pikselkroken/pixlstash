@@ -220,18 +220,21 @@ def create_router(server) -> APIRouter:
     def create_picture_set(payload: dict = Body(...)):
         name = payload.get("name")
         description = payload.get("description", "")
+        project_id = payload.get("project_id") or None
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
 
-        def create_set(session, name, description):
-            picture_set = PictureSet(name=name, description=description)
+        def create_set(session, name, description, project_id):
+            picture_set = PictureSet(
+                name=name, description=description, project_id=project_id
+            )
             session.add(picture_set)
             session.commit()
             session.refresh(picture_set)
             return picture_set.dict()
 
         set_dict = server.vault.db.run_task(
-            create_set, name, description, priority=DBPriority.IMMEDIATE
+            create_set, name, description, project_id, priority=DBPriority.IMMEDIATE
         )
         return {"status": "success", "picture_set": set_dict}
 
