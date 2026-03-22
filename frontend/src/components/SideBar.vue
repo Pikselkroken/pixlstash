@@ -108,6 +108,9 @@ const selectedProjectId = ref(null); // null = 'No project' in project view
 const projectEditorOpen = ref(false);
 const projectMenuOpen = ref(false);
 const projectMenuRef = ref(null);
+const collapsedProjectBtnRef = ref(null);
+const collapsedProjectMenuRef = ref(null);
+const collapsedProjectMenuPos = ref({ top: 0, left: 0 });
 const projectEditorProject = ref(null);
 
 // --- Character Editor State ---
@@ -249,11 +252,20 @@ function updateSidebarErrorPosition() {
 function createSet() {
   const defaultProjectId =
     projectViewMode.value === "project" ? selectedProjectId.value : null;
-  setEditorSet.value = defaultProjectId !== null ? { project_id: defaultProjectId } : null;
+  setEditorSet.value =
+    defaultProjectId !== null ? { project_id: defaultProjectId } : null;
   setEditorOpen.value = true;
 }
 
 function toggleProjectMenu() {
+  if (
+    !projectMenuOpen.value &&
+    props.collapsed &&
+    collapsedProjectBtnRef.value
+  ) {
+    const rect = collapsedProjectBtnRef.value.getBoundingClientRect();
+    collapsedProjectMenuPos.value = { top: rect.top, left: rect.right + 4 };
+  }
   projectMenuOpen.value = !projectMenuOpen.value;
 }
 
@@ -1121,9 +1133,14 @@ onMounted(() => {
   };
 
   const handleProjectMenuOutsideClick = (e) => {
-    if (projectMenuRef.value && !projectMenuRef.value.contains(e.target)) {
-      projectMenuOpen.value = false;
+    if (
+      (projectMenuRef.value && projectMenuRef.value.contains(e.target)) ||
+      (collapsedProjectMenuRef.value &&
+        collapsedProjectMenuRef.value.contains(e.target))
+    ) {
+      return;
     }
+    projectMenuOpen.value = false;
   };
   document.addEventListener("mousedown", handleProjectMenuOutsideClick);
   const _origCleanup = sidebarNoticeCleanup;
@@ -1292,6 +1309,15 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         </div>
       </div>
       <v-btn
+        v-if="!props.collapsed"
+        icon
+        class="sidebar-brand-task-btn"
+        title="Task Manager"
+        @click.stop="taskManagerOpen = true"
+      >
+        <v-icon size="18">mdi-timeline-clock-outline</v-icon>
+      </v-btn>
+      <v-btn
         icon
         class="sidebar-brand-toggle"
         :title="props.collapsed ? 'Show sidebar' : 'Hide sidebar'"
@@ -1300,7 +1326,16 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         <v-icon>mdi-dock-left</v-icon>
       </v-btn>
     </div>
-    <div class="sidebar-collapsed-divider"></div>
+    <div
+      v-if="props.collapsed"
+      class="sidebar-collapsed-item"
+      style="margin: 0 auto"
+      title="Task Manager"
+      @click.stop="taskManagerOpen = true"
+    >
+      <v-icon>mdi-timeline-clock-outline</v-icon>
+    </div>
+    <div v-if="props.collapsed" class="sidebar-collapsed-divider"></div>
     <template v-if="props.collapsed">
       <div class="sidebar-collapsed-list">
         <div
@@ -1336,8 +1371,99 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
           <v-icon>mdi-trash-can-outline</v-icon>
         </div>
         <div class="sidebar-collapsed-divider"></div>
+        <div class="sidebar-collapsed-project-wrap" ref="projectMenuRef">
+          <div
+            :class="[
+              'sidebar-collapsed-item',
+              {
+                active:
+                  projectViewMode === 'project' && selectedProjectId !== null,
+              },
+            ]"
+            style="margin: 0 auto"
+            :title="
+              projectViewMode === 'global'
+                ? 'Global (all projects)'
+                : selectedProjectId === null
+                  ? 'No project'
+                  : (selectedProjectObj?.name ?? 'Project')
+            "
+            ref="collapsedProjectBtnRef"
+            @click.stop="toggleProjectMenu"
+          >
+            <v-icon size="20">{{
+              projectViewMode === "global" ? "mdi-earth" : "mdi-folder-outline"
+            }}</v-icon>
+          </div>
+          <Teleport to="body">
+            <div
+              v-if="projectMenuOpen && props.collapsed"
+              ref="collapsedProjectMenuRef"
+              class="sidebar-collapsed-project-menu"
+              :style="{
+                top: collapsedProjectMenuPos.top + 'px',
+                left: collapsedProjectMenuPos.left + 'px',
+              }"
+            >
+              <div
+                class="sidebar-project-menu-item"
+                :class="{ active: projectViewMode === 'global' }"
+                @click="
+                  projectViewMode = 'global';
+                  projectMenuOpen = false;
+                "
+              >
+                <v-icon size="14">mdi-earth</v-icon>
+                <span class="sidebar-project-menu-item-label">Global</span>
+              </div>
+              <div
+                class="sidebar-project-menu-item"
+                :class="{
+                  active:
+                    projectViewMode === 'project' && selectedProjectId === null,
+                }"
+                @click="
+                  projectViewMode = 'project';
+                  selectProject(null);
+                "
+              >
+                <v-icon size="14">mdi-folder-outline</v-icon>
+                <span class="sidebar-project-menu-item-label">No project</span>
+              </div>
+              <div
+                v-for="p in projects"
+                :key="p.id"
+                class="sidebar-project-menu-item"
+                :class="{
+                  active:
+                    projectViewMode === 'project' && selectedProjectId === p.id,
+                }"
+                @click="
+                  projectViewMode = 'project';
+                  selectProject(p.id);
+                "
+              >
+                <v-icon size="14">mdi-folder</v-icon>
+                <span class="sidebar-project-menu-item-label">{{
+                  p.name
+                }}</span>
+              </div>
+              <div
+                class="sidebar-project-menu-add"
+                @click="
+                  createProject;
+                  projectMenuOpen = false;
+                "
+              >
+                <v-icon size="14">mdi-plus</v-icon>
+                Add new project
+              </div>
+            </div>
+          </Teleport>
+        </div>
+        <div class="sidebar-collapsed-divider"></div>
         <button
-          v-for="char in sortedCharacters"
+          v-for="char in visibleCharacters"
           :key="char.id"
           :class="[
             'sidebar-collapsed-thumb',
@@ -1363,12 +1489,9 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
             class="sidebar-character-thumb"
           />
         </button>
+        <div v-if="visibleSets.length" class="sidebar-collapsed-divider"></div>
         <div
-          v-if="nonReferenceSets.length"
-          class="sidebar-collapsed-divider"
-        ></div>
-        <div
-          v-for="pset in nonReferenceSets"
+          v-for="pset in visibleSets"
           :key="pset.id"
           :class="[
             'sidebar-collapsed-item',
@@ -1393,14 +1516,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
             @error="handleSetThumbnailError(pset.id)"
           />
           <v-icon width="40" size="40" v-else>mdi-image-album</v-icon>
-        </div>
-        <div class="sidebar-collapsed-spacer"></div>
-        <div
-          class="sidebar-collapsed-item"
-          title="Task Manager"
-          @click.stop="taskManagerOpen = true"
-        >
-          <v-icon>mdi-timeline-clock-outline</v-icon>
         </div>
       </div>
     </template>
@@ -1481,11 +1596,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         </span>
       </div>
 
-      <div class="sidebar-section-divider"></div>
-
-      <div class="sidebar-section-header">
-        Collections
-      </div>
+      <div class="sidebar-section-header">Collections</div>
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
           <button
@@ -1507,7 +1618,9 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         </div>
       </div>
       <div class="sidebar-collections-context-row">
-        <span class="sidebar-collections-context">{{ collectionsContextLabel }}</span>
+        <span class="sidebar-collections-context">{{
+          collectionsContextLabel
+        }}</span>
         <button
           v-if="projectViewMode === 'project' && selectedProjectId !== null"
           class="sidebar-collections-export-btn"
@@ -1517,14 +1630,22 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
           <v-icon size="15">mdi-download-outline</v-icon>
         </button>
       </div>
-      <div v-if="projectViewMode === 'project'" class="sidebar-project-menu-wrap" ref="projectMenuRef">
+      <div
+        v-if="projectViewMode === 'project'"
+        class="sidebar-project-menu-wrap"
+        ref="projectMenuRef"
+      >
         <button class="sidebar-project-trigger" @click.stop="toggleProjectMenu">
           <v-icon size="14">mdi-folder-outline</v-icon>
           <span class="sidebar-project-trigger-label">
-            {{ selectedProjectId === null ? 'No project' : (selectedProjectObj?.name ?? '—') }}
+            {{
+              selectedProjectId === null
+                ? "No project"
+                : (selectedProjectObj?.name ?? "—")
+            }}
           </span>
           <v-icon size="14" class="sidebar-project-trigger-chevron">
-            {{ projectMenuOpen ? 'mdi-chevron-up' : 'mdi-chevron-down' }}
+            {{ projectMenuOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}
           </v-icon>
         </button>
         <div v-if="projectMenuOpen" class="sidebar-project-menu">
@@ -1548,7 +1669,8 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
               class="sidebar-project-menu-item-edit"
               @click.stop="openProjectEditor(p)"
               title="Edit project"
-            >mdi-pencil</v-icon>
+              >mdi-pencil</v-icon
+            >
           </div>
           <div class="sidebar-project-menu-add" @click="createProject">
             <v-icon size="14">mdi-plus</v-icon>
@@ -1606,7 +1728,10 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
       >
         {{ sidebarError }}
       </div>
-      <div v-if="visibleCharacters.length === 0" class="sidebar-character-group">
+      <div
+        v-if="visibleCharacters.length === 0"
+        class="sidebar-character-group"
+      >
         <div class="sidebar-list-item">
           No characters found. Click the + button to add one.
         </div>
@@ -1733,10 +1858,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
       <div v-if="visibleSets.length === 0" class="sidebar-list-item">
         No picture sets. Click the + button to create one.
       </div>
-      <template
-        v-for="(pset, idx) in visibleSets"
-        :key="pset.id"
-      >
+      <template v-for="(pset, idx) in visibleSets" :key="pset.id">
         <div
           :class="[
             'sidebar-list-item',
@@ -1802,18 +1924,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
           align-items: stretch;
         "
       ></div>
-      <div class="sidebar-footer-spacer"></div>
-      <div class="sidebar-footer">
-        <div
-          class="sidebar-list-item sidebar-footer-item"
-          @click="taskManagerOpen = true"
-        >
-          <span class="sidebar-list-icon">
-            <v-icon>mdi-timeline-clock-outline</v-icon>
-          </span>
-          <span class="sidebar-list-label">Task Manager</span>
-        </div>
-      </div>
     </template>
   </aside>
   <div
@@ -1872,7 +1982,10 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   cursor: pointer;
   color: rgb(var(--v-theme-accent));
   line-height: 1;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .sidebar-collections-export-btn:hover {
@@ -1918,7 +2031,9 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   cursor: pointer;
   background: transparent;
   color: rgba(var(--v-theme-sidebar-text), 0.6);
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
   line-height: 1.6;
   white-space: nowrap;
 }
@@ -1931,6 +2046,31 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 .sidebar-view-tab:hover:not(.active) {
   background: rgba(var(--v-theme-surface), 0.5);
   color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-collapsed-project-wrap {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sidebar-collapsed-project-menu {
+  position: fixed;
+  z-index: 300;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-border), 0.7);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.35);
+  overflow: hidden;
+  min-width: 180px;
+  white-space: nowrap;
+}
+
+.sidebar-collapsed-project-menu .sidebar-project-menu-item,
+.sidebar-collapsed-project-menu .sidebar-project-menu-add {
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .sidebar-project-menu-wrap {
@@ -1950,7 +2090,9 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   color: rgb(var(--v-theme-sidebar-text));
   font-size: 0.92rem;
   cursor: pointer;
-  transition: background 0.15s, border 0.15s;
+  transition:
+    background 0.15s,
+    border 0.15s;
   text-align: left;
 }
 
@@ -2210,6 +2352,24 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-update-available:hover {
   text-decoration: underline;
+}
+
+.sidebar-brand-task-btn {
+  min-width: 30px;
+  min-height: 30px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  opacity: 0.6;
+}
+
+.sidebar-brand-task-btn:hover {
+  opacity: 1;
+  background-color: rgba(var(--v-theme-accent), 0.25);
 }
 
 .sidebar-brand-toggle {
@@ -2506,7 +2666,8 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-list-icon .v-icon,
 .sidebar-collapsed-item .v-icon,
-.sidebar-brand-toggle .v-icon {
+.sidebar-brand-toggle .v-icon,
+.sidebar-brand-task-btn .v-icon {
   color: rgb(var(--v-theme-sidebar-text));
 }
 
