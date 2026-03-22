@@ -1,4 +1,13 @@
+# [1.0.0b4] - 2026-03-22
 # [1.0.0b3] - 2026-03-21
+
+### Added
+- **Server bootstrapping on first run:** set image path, username/password and watch folders
+- **Minor UI improvements:** copy button for tokens, 
+
+### Fixed
+- **Florence-2 failed on newer transformer versions:** important compatibility fix to let
+  PixlStash run properly on newer transformers.
 
 ### Added
 - **ComfyUI workflow metadata:** LoRA names, model name, prompt text and
