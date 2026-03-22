@@ -886,6 +886,15 @@ class PictureTagger:
                     f"SDPA not supported, falling back to eager attention: {e}"
                 )
 
+        # Florence-2 uses weight tying: lm_head and embed_tokens share the same
+        # underlying tensor, but that tensor is NOT stored as a separate key in
+        # the checkpoint. Transformers therefore leaves those weight slots on the
+        # meta device after from_pretrained (they're "missing" in the load
+        # report). Calling tie_weights() resolves those references to the already-
+        # materialised embedding tensor, so the subsequent .to() call never
+        # touches a meta tensor.
+        model.tie_weights()
+
         self._florence_model = model.to(device=device, dtype=dtype)
         self._florence_model.eval()
 
