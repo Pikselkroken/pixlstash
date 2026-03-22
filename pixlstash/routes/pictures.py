@@ -318,6 +318,8 @@ def _select_pictures_for_listing(
     limit = int(query_params.pop("limit", limit))
     character_id = _character_id(query_params.pop("character_id", None))
     reference_character_id = query_params.pop("reference_character_id", None)
+    min_score_raw = query_params.pop("min_score", None)
+    min_score = int(min_score_raw) if min_score_raw is not None else None
     only_deleted = False
 
     try:
@@ -468,6 +470,7 @@ def _select_pictures_for_listing(
             format=format,
             metadata_fields=metadata_fields,
             stack_leaders_only=stack_leaders_only,
+            min_score=min_score,
         )
     elif only_deleted:
         pics = server.vault.db.run_task(
@@ -480,6 +483,7 @@ def _select_pictures_for_listing(
             only_deleted=True,
             include_unimported=True,
             stack_leaders_only=stack_leaders_only,
+            min_score=min_score,
             **query_params,
         )
     else:
@@ -507,6 +511,7 @@ def _select_pictures_for_listing(
             format=format,
             include_unimported=True,
             stack_leaders_only=stack_leaders_only,
+            min_score=min_score,
             **query_params,
         )
     if pics:

@@ -561,6 +561,7 @@ const props = defineProps({
   mediaTypeFilter: { type: String, default: "all" },
   comfyuiModelFilter: { type: Array, default: () => [] },
   comfyuiLoraFilter: { type: Array, default: () => [] },
+  minScoreFilter: { type: Number, default: null },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
@@ -3078,6 +3079,9 @@ function buildPictureIdsQueryParams() {
   (props.comfyuiLoraFilter || []).forEach((l) =>
     params.append("comfyui_lora", l),
   );
+  if (props.minScoreFilter != null) {
+    params.append("min_score", props.minScoreFilter);
+  }
   return params.toString();
 }
 
@@ -4239,6 +4243,7 @@ watch(
     () => props.mediaTypeFilter,
     () => props.comfyuiModelFilter,
     () => props.comfyuiLoraFilter,
+    () => props.minScoreFilter,
   ],
   () => {
     _resetGridState();

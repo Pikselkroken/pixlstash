@@ -363,6 +363,52 @@
                 <v-icon>mdi-video</v-icon>
               </v-btn>
             </v-btn-toggle>
+            <div
+              style="
+                font-size: 1.02em;
+                font-weight: 500;
+                letter-spacing: 0.02em;
+                margin-top: 10px;
+                margin-bottom: 4px;
+                color: rgb(var(--v-theme-on-background));
+              "
+            >
+              Score Filter
+            </div>
+            <div style="display: flex; align-items: center; gap: 2px">
+              <v-btn
+                v-for="n in 5"
+                :key="n"
+                :icon="true"
+                size="x-small"
+                variant="text"
+                :color="
+                  minScoreFilterModel != null && n <= minScoreFilterModel
+                    ? 'warning'
+                    : undefined
+                "
+                :title="`Show ${n}+ star pictures`"
+                @click="
+                  minScoreFilterModel = minScoreFilterModel === n ? null : n
+                "
+              >
+                <v-icon size="20">{{
+                  minScoreFilterModel != null && n <= minScoreFilterModel
+                    ? "mdi-star"
+                    : "mdi-star-outline"
+                }}</v-icon>
+              </v-btn>
+              <span
+                v-if="minScoreFilterModel != null"
+                style="
+                  font-size: 0.78em;
+                  margin-left: 4px;
+                  color: rgb(var(--v-theme-on-background));
+                  opacity: 0.8;
+                "
+                >{{ minScoreFilterModel }}+ stars</span
+              >
+            </div>
             <template
               v-if="comfyuiModelOptions.length || comfyuiLoraOptions.length"
             >
@@ -828,6 +874,7 @@ const props = defineProps({
   mediaTypeFilter: { type: String, default: "all" },
   comfyuiModelFilter: { type: Array, default: () => [] },
   comfyuiLoraFilter: { type: Array, default: () => [] },
+  minScoreFilter: { type: Number, default: null },
   sortOptions: { type: Array, default: () => [] },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: true },
@@ -860,6 +907,7 @@ const emit = defineEmits([
   "update:mediaTypeFilter",
   "update:comfyuiModelFilter",
   "update:comfyuiLoraFilter",
+  "update:minScoreFilter",
   "update:similarity-character",
   "update:stack-threshold",
   "open-search-overlay",
@@ -1013,6 +1061,11 @@ const comfyuiModelFilterModel = computed({
 const comfyuiLoraFilterModel = computed({
   get: () => props.comfyuiLoraFilter,
   set: (value) => emit("update:comfyuiLoraFilter", value ?? []),
+});
+
+const minScoreFilterModel = computed({
+  get: () => props.minScoreFilter,
+  set: (value) => emit("update:minScoreFilter", value ?? null),
 });
 const comfyuiModelOptions = ref([]);
 const comfyuiLoraOptions = ref([]);
