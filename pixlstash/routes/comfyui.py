@@ -95,7 +95,15 @@ def _find_placeholder_usage(payload: dict) -> tuple[bool, list[str]]:
         missing.append(PLACEHOLDER_IMAGE)
     if PLACEHOLDER_CAPTION not in dump:
         missing.append(PLACEHOLDER_CAPTION)
-    return PLACEHOLDER_IMAGE not in missing, missing
+    is_t2i = PLACEHOLDER_IMAGE in missing
+    if is_t2i:
+        # t2i workflow: valid when the caption placeholder is present
+        valid = PLACEHOLDER_CAPTION not in missing
+    else:
+        # i2i workflow: valid as long as image placeholder is present;
+        # caption is optional (hidden in UI when absent)
+        valid = True
+    return valid, missing
 
 
 def _replace_placeholders(value, replacements: dict[str, str]):
@@ -656,9 +664,7 @@ def _comfyui_abort(base_url: str) -> dict:
         logger.warning("ComfyUI /interrupt request failed: %s", exc)
 
     try:
-        resp = requests.post(
-            f"{base_url}/queue", json={"clear": True}, timeout=10
-        )
+        resp = requests.post(f"{base_url}/queue", json={"clear": True}, timeout=10)
         result["queue_cleared"] = resp.status_code < 300
         if not result["queue_cleared"]:
             logger.warning(

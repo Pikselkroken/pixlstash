@@ -122,14 +122,16 @@
                       </option>
                     </select>
 
-                    <label class="plugin-menu-label">Caption</label>
-                    <textarea
-                      v-model="comfyuiCaption"
-                      class="plugin-menu-textarea"
-                      rows="6"
-                      placeholder="Optional caption for {{caption}}"
-                      @keydown.stop
-                    ></textarea>
+                    <template v-if="showComfyuiCaptionInput">
+                      <label class="plugin-menu-label">Caption</label>
+                      <textarea
+                        v-model="comfyuiCaption"
+                        class="plugin-menu-textarea"
+                        rows="6"
+                        placeholder="Optional caption for {{caption}}"
+                        @keydown.stop
+                      ></textarea>
+                    </template>
 
                     <div class="plugin-menu-actions">
                       <button
@@ -373,6 +375,21 @@ const validComfyWorkflows = computed(() => {
   return comfyuiWorkflows.value.filter(
     (workflow) => workflow?.workflow_type === "i2i",
   );
+});
+
+const selectedComfyWorkflow = computed(() =>
+  (comfyuiWorkflows.value || []).find(
+    (workflow) => workflow?.name === comfyuiSelectedWorkflow.value,
+  ),
+);
+
+const showComfyuiCaptionInput = computed(() => {
+  const missing = Array.isArray(
+    selectedComfyWorkflow.value?.missing_placeholders,
+  )
+    ? selectedComfyWorkflow.value.missing_placeholders
+    : [];
+  return !missing.includes("{{caption}}");
 });
 
 const canRunComfyWorkflow = computed(() => {
