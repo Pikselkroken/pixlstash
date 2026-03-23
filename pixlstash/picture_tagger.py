@@ -135,6 +135,9 @@ QUALITY_CROP_TAG_WHITELIST = frozenset(
     }
 )
 CLIP_MODEL_WEIGHTS = "laion2b_s34b_b79k"
+FLORENCE_MODEL_REVISION = "00921df66db728a9ceb750f5eca43e5c203a2051"
+SENTENCE_TRANSFORMER_MODEL_NAME = "all-MiniLM-L6-v2"
+SENTENCE_TRANSFORMER_MODEL_REVISION = "c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
 
 
 class PictureTagger:
@@ -865,6 +868,7 @@ class PictureTagger:
         self._florence_processor = _from_pretrained_local_first(
             Florence2Processor,
             self._florence_model_name,
+            revision=FLORENCE_MODEL_REVISION,
         )
 
         for attn_impl in ("sdpa", "eager"):
@@ -875,6 +879,7 @@ class PictureTagger:
                     torch_dtype=dtype,
                     device_map=device_map,
                     attn_implementation=attn_impl,
+                    revision=FLORENCE_MODEL_REVISION,
                 )
                 break
             except (TypeError, AttributeError, NotImplementedError) as e:
@@ -2059,12 +2064,17 @@ class PictureTagger:
         if sbert_model is None:
             try:
                 sbert_model = SentenceTransformer(
-                    "all-MiniLM-L6-v2", device=self._device, local_files_only=True
+                    SENTENCE_TRANSFORMER_MODEL_NAME,
+                    device=self._device,
+                    local_files_only=True,
+                    revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
                 )
             except OSError:
-                logger.info("Downloading all-MiniLM-L6-v2 for the first time...")
+                logger.info("Downloading %s for the first time...", SENTENCE_TRANSFORMER_MODEL_NAME)
                 sbert_model = SentenceTransformer(
-                    "all-MiniLM-L6-v2", device=self._device
+                    SENTENCE_TRANSFORMER_MODEL_NAME,
+                    device=self._device,
+                    revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
                 )
             self._sbert_model = sbert_model
 
@@ -2084,10 +2094,17 @@ class PictureTagger:
                 )
                 try:
                     sbert_model = SentenceTransformer(
-                        "all-MiniLM-L6-v2", device="cpu", local_files_only=True
+                        SENTENCE_TRANSFORMER_MODEL_NAME,
+                        device="cpu",
+                        local_files_only=True,
+                        revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
                     )
                 except OSError:
-                    sbert_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+                    sbert_model = SentenceTransformer(
+                        SENTENCE_TRANSFORMER_MODEL_NAME,
+                        device="cpu",
+                        revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
+                    )
                 self._sbert_model = sbert_model
                 logger.info("Falling back to CPU for SBERT embeddings.")
                 text_embeddings = sbert_model.encode(texts, show_progress_bar=False)
