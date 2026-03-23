@@ -856,27 +856,25 @@ class PictureTagger:
         if not isinstance(device, torch.device):
             device = torch.device(device)
 
+        # device_map routes loading through Accelerate, which correctly handles
+        # Florence-2's tied weights (lm_head / embed_tokens) and places all
+        # tensors on the target device during from_pretrained — no post-load
+        # .to() call is needed, eliminating "Cannot copy out of meta tensor".
+        device_map = str(device)
+
         self._florence_processor = _from_pretrained_local_first(
             Florence2Processor,
             self._florence_model_name,
         )
 
-        # Try SDPA first, fall back to eager if not supported.
-        # Important: torch_dtype is intentionally NOT passed to from_pretrained.
-        # When torch_dtype is specified, newer transformers uses a dtype-casting
-        # load path that can still place tied / missing weights (Florence-2's
-        # shared embed_tokens / lm_head) on the meta device even when
-        # low_cpu_mem_usage=False, causing "Cannot copy out of meta tensor" on
-        # the subsequent .to() call. Loading in float32 first and then casting
-        # keeps all tensors in real CPU memory throughout, so .to() is safe.
-        model = None
         for attn_impl in ("sdpa", "eager"):
             try:
                 model = _from_pretrained_local_first(
                     Florence2ForConditionalGeneration,
                     self._florence_model_name,
+                    torch_dtype=dtype,
+                    device_map=device_map,
                     attn_implementation=attn_impl,
-                    low_cpu_mem_usage=False,
                 )
                 break
             except (TypeError, AttributeError, NotImplementedError) as e:
@@ -886,17 +884,13 @@ class PictureTagger:
                     f"SDPA not supported, falling back to eager attention: {e}"
                 )
 
-        # Florence-2 uses weight tying: lm_head and embed_tokens share the same
-        # underlying tensor, but that tensor is NOT stored as a separate key in
-        # the checkpoint. Transformers therefore leaves those weight slots on the
-        # meta device after from_pretrained (they're "missing" in the load
-        # report). Calling tie_weights() resolves those references to the already-
-        # materialised embedding tensor, so the subsequent .to() call never
-        # touches a meta tensor.
+        # lm_head and embed_tokens are tied weights absent from the checkpoint.
+        # Accelerate leaves them on the meta device after dispatch; tie_weights()
+        # resolves their references to the already-materialised shared embedding.
         model.tie_weights()
 
-        self._florence_model = model.to(device=device, dtype=dtype)
-        self._florence_model.eval()
+        model.eval()
+        self._florence_model = model
 
         # Try to compile the model for better performance (PyTorch 2.0+)
         try:
