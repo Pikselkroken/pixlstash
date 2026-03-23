@@ -47,6 +47,7 @@ dependencies = [
     "python-multipart",
     "onnxruntime",
     "requests",
+    "accelerate",
     "transformers>=4.40,<5.4.0",
     "torch",
     "torchvision",
