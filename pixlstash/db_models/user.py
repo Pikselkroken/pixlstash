@@ -30,7 +30,7 @@ class User(SQLModel, table=True):
     show_stacks: Optional[bool] = Field(default=True)
     date_format: Optional[str] = Field(default="locale")
     theme_mode: Optional[str] = Field(default="light")
-    comfyui_url: Optional[str] = Field(default="http://127.0.0.1:8188/")
+    comfyui_url: Optional[str] = Field(default=None)
     similarity_character: Optional[int] = Field(default=None)
     stack_strictness: Optional[float] = Field(default=0.92)
     smart_score_penalised_tags: Optional[str] = Field(

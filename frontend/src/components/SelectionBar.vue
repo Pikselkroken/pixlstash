@@ -79,6 +79,7 @@
           class="plugin-run-controls"
         >
           <v-menu
+            v-if="props.comfyuiConfigured"
             v-model="comfyuiMenuOpen"
             :close-on-content-click="false"
             location-strategy="connected"
@@ -233,7 +234,9 @@
             </template>
             <div class="plugin-menu-panel">
               <div class="plugin-menu-header">
-                Tag {{ selectedCount }} Image{{ selectedCount !== 1 ? 's' : '' }}
+                Tag {{ selectedCount }} Image{{
+                  selectedCount !== 1 ? "s" : ""
+                }}
               </div>
               <div class="plugin-menu-body">
                 <input
@@ -252,11 +255,15 @@
                     :disabled="!tagInput.trim() || tagLoading"
                     @click="applyTag"
                   >
-                    {{ tagLoading ? 'Applying...' : 'Apply to All' }}
+                    {{ tagLoading ? "Applying..." : "Apply to All" }}
                   </button>
                 </div>
-                <div v-if="tagError" class="plugin-menu-error">{{ tagError }}</div>
-                <div v-if="tagSuccess" class="plugin-menu-success">{{ tagSuccess }}</div>
+                <div v-if="tagError" class="plugin-menu-error">
+                  {{ tagError }}
+                </div>
+                <div v-if="tagSuccess" class="plugin-menu-success">
+                  {{ tagSuccess }}
+                </div>
               </div>
             </div>
           </v-menu>
@@ -285,9 +292,13 @@
         v-for="(item, idx) in tagSuggestions"
         :key="item.tag"
         class="sb-tag-autocomplete-item"
-        :class="{ 'sb-tag-autocomplete-item--active': idx === tagSuggestionIndex }"
+        :class="{
+          'sb-tag-autocomplete-item--active': idx === tagSuggestionIndex,
+        }"
         @mousedown.prevent="selectTagSuggestion(item)"
-      >{{ item.tag }}</button>
+      >
+        {{ item.tag }}
+      </button>
     </div>
   </Teleport>
 </template>
@@ -316,6 +327,7 @@ const props = defineProps({
     default: () => ({ hasImages: false, hasVideos: false }),
   },
   comfyuiClientId: { type: String, default: "" },
+  comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   availablePlugins: { type: Array, default: () => [] },
 });
@@ -666,7 +678,9 @@ async function applyTag() {
   }
   const tag = tagInput.value.trim();
   if (!tag) return;
-  const ids = (Array.isArray(props.selectedImageIds) ? props.selectedImageIds : [])
+  const ids = (
+    Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
+  )
     .map((id) => Number(id))
     .filter((id) => Number.isFinite(id) && id > 0);
   if (!ids.length) return;

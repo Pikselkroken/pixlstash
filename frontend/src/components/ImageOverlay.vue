@@ -110,7 +110,7 @@
               </div>
             </div>
           </v-menu>
-          <div class="overlay-menu-anchor">
+          <div v-if="comfyuiConfigured" class="overlay-menu-anchor">
             <button
               class="overlay-icon-btn overlay-comfy-activator"
               type="button"
@@ -981,6 +981,7 @@ const props = defineProps({
   pluginProgress: { type: Object, default: null },
   pluginProgressPercent: { type: Number, default: 0 },
   comfyuiClientId: { type: String, default: "" },
+  comfyuiConfigured: { type: Boolean, default: false },
 });
 
 const {
@@ -1000,6 +1001,7 @@ const {
   pluginProgress,
   pluginProgressPercent,
   comfyuiClientId,
+  comfyuiConfigured,
 } = toRefs(props);
 
 const image = ref(null);

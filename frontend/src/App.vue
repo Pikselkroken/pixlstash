@@ -111,6 +111,7 @@ const MOBILE_BREAKPOINT = 1024;
 const mediaTypeFilter = ref("all"); // 'all', 'images', 'videos'
 const comfyuiModelFilter = ref([]);
 const comfyuiLoraFilter = ref([]);
+const comfyuiConfigured = ref(false);
 const minScoreFilter = ref(null);
 
 const gridVersion = ref(0);
@@ -737,6 +738,7 @@ async function fetchConfig() {
       hidden_tags: hiddenTags.value,
       apply_tag_filter: applyTagFilter.value,
     };
+    comfyuiConfigured.value = Boolean(res.data?.comfyui_url);
   } catch (e) {
     console.error("Failed to fetch /users/me/config:", e);
   } finally {
@@ -1134,6 +1136,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @update:sort-options="handleUpdateSortOptions"
             @update:hidden-tags="handleUpdateHiddenTags"
             @update:apply-tag-filter="handleUpdateApplyTagFilter"
+            @update:comfyui-configured="comfyuiConfigured = $event"
             @update:date-format="handleUpdateDateFormat"
             @update:theme-mode="handleUpdateThemeMode"
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
@@ -1192,6 +1195,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :stackExpandedCount="expandedStackCount"
             :stackTotalCount="totalStackCount"
             :backendUrl="BACKEND_URL"
+            :comfyuiConfigured="comfyuiConfigured"
             v-model:searchInput="searchInput"
             v-model:isSearchHistoryOpen="isSearchHistoryOpen"
             v-model:columnsMenuOpen="columnsMenuOpen"
@@ -1256,6 +1260,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :mediaTypeFilter="mediaTypeFilter"
               :comfyuiModelFilter="comfyuiModelFilter"
               :comfyuiLoraFilter="comfyuiLoraFilter"
+              :comfyuiConfigured="comfyuiConfigured"
               :minScoreFilter="minScoreFilter"
               :showFaceBboxes="showFaceBboxes"
               :showFormat="showFormat"
