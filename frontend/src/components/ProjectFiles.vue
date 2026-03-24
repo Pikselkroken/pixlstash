@@ -9,7 +9,9 @@
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
     >
-      <v-icon size="15" class="pf-header-icon">mdi-folder-multiple-outline</v-icon>
+      <v-icon size="14" class="pf-header-icon"
+        >mdi-folder-multiple-outline</v-icon
+      >
       <span class="pf-title">Project Files</span>
       <span v-if="files.length > 0" class="pf-count">{{ files.length }}</span>
       <span class="pf-spacer"></span>
@@ -37,7 +39,10 @@
       <div v-else-if="files.length === 0 && !uploading" class="pf-empty">
         <v-icon size="30" class="pf-empty-icon">mdi-upload-outline</v-icon>
         <span>Drag files or URLs here to add</span>
-        <button class="pf-add-url-btn pf-add-url-btn--empty" @click.stop="showUrlForm = !showUrlForm">
+        <button
+          class="pf-add-url-btn pf-add-url-btn--empty"
+          @click.stop="showUrlForm = !showUrlForm"
+        >
           <v-icon size="13">mdi-link-plus</v-icon>
           Add a URL
         </button>
@@ -67,9 +72,13 @@
             <v-icon size="13">mdi-close</v-icon>
           </button>
           <v-icon size="34" class="pf-file-icon">{{ fileIcon(file) }}</v-icon>
-          <div class="pf-file-name">{{ file.url ? urlLabel(file) : file.original_filename }}</div>
+          <div class="pf-file-name">
+            {{ file.url ? urlLabel(file) : file.original_filename }}
+          </div>
           <div v-if="!file.url" class="pf-file-meta">
-            {{ formatBytes(file.file_size) }}<br />{{ formatDate(file.created_at) }}
+            {{ formatBytes(file.file_size) }}<br />{{
+              formatDate(file.created_at)
+            }}
           </div>
         </div>
       </div>
@@ -103,8 +112,16 @@
           @keydown.escape="showUrlForm = false"
         />
         <div class="pf-url-form-actions">
-          <button class="pf-url-save" @click="addUrl" :disabled="!urlInput.trim()">Add</button>
-          <button class="pf-url-cancel" @click="showUrlForm = false">Cancel</button>
+          <button
+            class="pf-url-save"
+            @click="addUrl"
+            :disabled="!urlInput.trim()"
+          >
+            Add
+          </button>
+          <button class="pf-url-cancel" @click="showUrlForm = false">
+            Cancel
+          </button>
         </div>
       </div>
 
@@ -138,7 +155,9 @@ let dragLeaveTimer = null;
 
 async function fetchFiles() {
   try {
-    const resp = await apiClient.get(`/projects/${props.projectId}/attachments`);
+    const resp = await apiClient.get(
+      `/projects/${props.projectId}/attachments`,
+    );
     files.value = resp.data;
   } catch {
     files.value = [];
@@ -175,7 +194,8 @@ async function onDrop(e) {
 
   // --- URL drop (dragging a tab or link from a browser) ---
   const dt = e.dataTransfer;
-  const uriList = dt?.getData("text/uri-list") || dt?.getData("text/plain") || "";
+  const uriList =
+    dt?.getData("text/uri-list") || dt?.getData("text/plain") || "";
   const droppedUrls = uriList
     .split(/\r?\n/)
     .map((u) => u.trim())
@@ -207,9 +227,13 @@ async function onDrop(e) {
     for (const file of droppedFiles) {
       const formData = new FormData();
       formData.append("file", file);
-      await apiClient.post(`/projects/${props.projectId}/attachments`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      await apiClient.post(
+        `/projects/${props.projectId}/attachments`,
+        formData,
+        {
+          headers: { "Content-Type": "multipart/form-data" },
+        },
+      );
     }
     await fetchFiles();
   } catch (err) {
@@ -240,7 +264,7 @@ async function deleteFile(file) {
   if (!window.confirm(`Remove "${file.original_filename}"?`)) return;
   try {
     await apiClient.delete(
-      `/projects/${props.projectId}/attachments/${file.id}`
+      `/projects/${props.projectId}/attachments/${file.id}`,
     );
     files.value = files.value.filter((f) => f.id !== file.id);
   } catch {
@@ -347,7 +371,7 @@ watch(
     files.value = [];
     uploadError.value = null;
     if (expanded.value) fetchFiles();
-  }
+  },
 );
 
 onMounted(() => {
@@ -360,8 +384,9 @@ onMounted(() => {
   margin: 4px 8px 8px;
   border-radius: 6px;
   overflow: visible;
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  background: rgba(var(--v-theme-surface), 0.2);
+  font-size: 0.92rem;
+  border: 1px solid rgba(var(--v-theme-border), 0.5);
+  background: rgba(var(--v-theme-surface), 0.3);
 }
 
 .pf-header {
@@ -374,10 +399,8 @@ onMounted(() => {
   user-select: none;
   transition: background 0.15s;
   color: rgb(var(--v-theme-sidebar-text));
-  font-size: 0.88rem;
+  font-size: 0.92rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
@@ -494,7 +517,9 @@ onMounted(() => {
   cursor: pointer;
   background: transparent;
   border: 1px solid transparent;
-  transition: background 0.1s, border-color 0.1s;
+  transition:
+    background 0.1s,
+    border-color 0.1s;
   overflow: hidden;
   text-align: center;
 }
@@ -522,7 +547,9 @@ onMounted(() => {
   justify-content: center;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s, background 0.12s;
+  transition:
+    opacity 0.12s,
+    background 0.12s;
   color: rgba(var(--v-theme-on-surface), 0.5);
   padding: 0;
 }
@@ -661,7 +688,9 @@ onMounted(() => {
   border-radius: 4px;
   border: none;
   cursor: pointer;
-  transition: background 0.12s, opacity 0.12s;
+  transition:
+    background 0.12s,
+    opacity 0.12s;
 }
 
 .pf-url-save {

@@ -1609,7 +1609,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
             :class="{ active: projectViewMode === 'global' }"
             @click="projectViewMode = 'global'"
           >
-            <v-icon size="13">mdi-earth</v-icon>
+            <v-icon size="14">mdi-earth</v-icon>
             Global
           </button>
           <button
@@ -1617,7 +1617,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
             :class="{ active: projectViewMode === 'project' }"
             @click="projectViewMode = 'project'"
           >
-            <v-icon size="13">mdi-folder-outline</v-icon>
+            <v-icon size="14">mdi-folder-outline</v-icon>
             By Project
           </button>
         </div>
@@ -1633,7 +1633,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         ref="projectMenuRef"
       >
         <button class="sidebar-project-trigger" @click.stop="toggleProjectMenu">
-          <v-icon size="14">mdi-folder-outline</v-icon>
+          <v-icon size="14">mdi-folder-multiple-outline</v-icon>
           <span class="sidebar-project-trigger-label">
             {{
               selectedProjectId === null
