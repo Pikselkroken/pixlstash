@@ -65,6 +65,7 @@ const emit = defineEmits([
   "update:sort-options",
   "update:hidden-tags",
   "update:apply-tag-filter",
+  "update:comfyui-configured",
   "open-import-dialog",
 ]);
 
@@ -1266,6 +1267,9 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
     v-model:theme-mode="themeModeModel"
     @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
     @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
+    @update:comfyui-configured="
+      (value) => emit('update:comfyui-configured', value)
+    "
   />
 
   <v-dialog v-model="taskManagerOpen" width="980">
@@ -1520,6 +1524,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
       </div>
     </template>
     <template v-else>
+      <div class="sidebar-section-divider"></div>
       <div class="sidebar-section-header">
         Pictures
         <span class="sidebar-header-spacer"></span>
@@ -1596,6 +1601,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         </span>
       </div>
 
+      <div class="sidebar-section-divider"></div>
       <div class="sidebar-section-header">Collections</div>
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
@@ -1617,18 +1623,10 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
           </button>
         </div>
       </div>
-      <div class="sidebar-collections-context-row">
-        <span class="sidebar-collections-context">{{
+      <div class="sidebar-collections-help-row">
+        <span class="sidebar-collections-help">{{
           collectionsContextLabel
         }}</span>
-        <button
-          v-if="projectViewMode === 'project' && selectedProjectId !== null"
-          class="sidebar-collections-export-btn"
-          @click="exportProject(selectedProjectObj)"
-          title="Export project as ZIP"
-        >
-          <v-icon size="15">mdi-download-outline</v-icon>
-        </button>
       </div>
       <div
         v-if="projectViewMode === 'project'"
@@ -1666,7 +1664,14 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
             <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
             <v-icon
               size="14"
-              class="sidebar-project-menu-item-edit"
+              class="sidebar-project-menu-item-action"
+              @click.stop="exportProject(p)"
+              title="Export project as ZIP"
+              >mdi-download-outline</v-icon
+            >
+            <v-icon
+              size="14"
+              class="sidebar-project-menu-item-action"
               @click.stop="openProjectEditor(p)"
               title="Edit project"
               >mdi-pencil</v-icon
@@ -1730,11 +1735,11 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
       </div>
       <div
         v-if="visibleCharacters.length === 0"
-        class="sidebar-character-group"
+        class="sidebar-collections-help-row"
       >
-        <div class="sidebar-list-item">
-          No characters found. Click the + button to add one.
-        </div>
+        <span class="sidebar-collections-help">
+          Click the + button to add one.
+        </span>
       </div>
       <div
         v-if="visibleCharacters.length > 0"
@@ -1855,8 +1860,10 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
           </v-icon>
         </div>
       </div>
-      <div v-if="visibleSets.length === 0" class="sidebar-list-item">
-        No picture sets. Click the + button to create one.
+      <div v-if="visibleSets.length === 0" class="sidebar-collections-help-row">
+        <span class="sidebar-collections-help">
+          Click the + button to add one.
+        </span>
       </div>
       <template v-for="(pset, idx) in visibleSets" :key="pset.id">
         <div
@@ -1957,7 +1964,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   background: rgba(var(--v-theme-border), 0.35);
 }
 
-.sidebar-collections-context-row {
+.sidebar-collections-help-row {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1965,48 +1972,10 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   padding: 0 8px 4px;
 }
 
-.sidebar-collections-context {
-  font-size: 0.82rem;
+.sidebar-collections-help {
+  font-size: 0.9rem;
   font-style: italic;
-  color: rgba(var(--v-theme-sidebar-text), 0.55);
-}
-
-.sidebar-collections-export-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(var(--v-theme-accent), 0.2);
-  border: 1px solid rgba(var(--v-theme-accent), 0.4);
-  padding: 3px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  color: rgb(var(--v-theme-accent));
-  line-height: 1;
-  transition:
-    color 0.15s,
-    background 0.15s,
-    border-color 0.15s;
-}
-
-.sidebar-collections-export-btn:hover {
-  background: rgb(var(--v-theme-accent));
-  border-color: rgb(var(--v-theme-accent));
-  color: #fff;
-}
-
-.sidebar-subsection-header {
-  position: relative;
-  font-size: 0.88rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  min-height: 30px;
-  padding: 2px 8px;
-  padding-right: var(--sidebar-header-action-right-edge) !important;
-  display: flex;
-  align-items: center;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
-  margin-left: 8px;
+  color: rgba(var(--v-theme-sidebar-text), 0.5);
 }
 
 .sidebar-view-tabs {
@@ -2154,18 +2123,18 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   white-space: nowrap;
 }
 
-.sidebar-project-menu-item-edit {
+.sidebar-project-menu-item-action {
   flex-shrink: 0;
   opacity: 0;
   color: rgb(var(--v-theme-on-surface)) !important;
   transition: opacity 0.12s;
 }
 
-.sidebar-project-menu-item:hover .sidebar-project-menu-item-edit {
+.sidebar-project-menu-item:hover .sidebar-project-menu-item-action {
   opacity: 0.6;
 }
 
-.sidebar-project-menu-item-edit:hover {
+.sidebar-project-menu-item-action:hover {
   opacity: 1 !important;
 }
 
@@ -2552,14 +2521,28 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-section-header {
   position: relative;
-  font-size: 1.1rem;
+  font-size: 1.2rem;
   font-weight: bold;
   min-height: 42px;
-  padding: 2px 8px;
+  padding: 4px 12px;
   padding-right: var(--sidebar-header-action-right-edge) !important;
   display: flex;
   align-items: center;
   color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-subsection-header {
+  position: relative;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  min-height: 30px;
+  padding: 2px 8px;
+  padding-right: var(--sidebar-header-action-right-edge) !important;
+  display: flex;
+  align-items: center;
+  color: rgba(var(--v-theme-sidebar-text), 0.6);
 }
 
 .fade-enter-active,
