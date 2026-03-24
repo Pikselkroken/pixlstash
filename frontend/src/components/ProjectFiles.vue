@@ -400,7 +400,6 @@ onMounted(() => {
   transition: background 0.15s;
   color: rgb(var(--v-theme-sidebar-text));
   font-size: 0.92rem;
-  font-weight: 700;
   white-space: nowrap;
 }
 

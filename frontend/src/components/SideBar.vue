@@ -1354,18 +1354,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         <div
           :class="[
             'sidebar-collapsed-item',
-            { active: props.selectedCharacter === props.unassignedPicturesId },
-          ]"
-          title="Unassigned Pictures"
-          @click="
-            selectCharacter(props.unassignedPicturesId, 'Unassigned Pictures')
-          "
-        >
-          <v-icon>mdi-help-circle-outline</v-icon>
-        </div>
-        <div
-          :class="[
-            'sidebar-collapsed-item',
             { active: props.selectedCharacter === props.scrapheapPicturesId },
           ]"
           title="Scrapheap"
@@ -1524,83 +1512,43 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
     </template>
     <template v-else>
       <div class="sidebar-section-divider"></div>
-      <div class="sidebar-section-header">
-        Pictures
-        <span class="sidebar-header-spacer"></span>
-        <div class="sidebar-header-actions">
-          <v-icon
-            class="upload-pictures-inline"
-            @click.stop="openImportDialog"
+      <div class="sidebar-all-pictures-row">
+        <div
+          :class="[
+            'sidebar-list-item',
+            { active: props.selectedCharacter === props.allPicturesId },
+          ]"
+          @click="selectCharacter(props.allPicturesId, 'All Pictures')"
+        >
+          <span class="sidebar-list-icon">
+            <v-icon size="44">mdi-image-multiple</v-icon>
+          </span>
+          <span class="sidebar-list-label">All Pictures</span>
+        </div>
+        <div class="sidebar-all-pictures-actions">
+          <div
+            class="sidebar-inline-btn sidebar-inline-btn--upload"
             title="Import photos"
+            @click.stop="openImportDialog"
           >
-            mdi-cloud-upload-outline
-          </v-icon>
+            <v-icon size="20">mdi-cloud-upload-outline</v-icon>
+          </div>
+          <div
+            :class="[
+              'sidebar-inline-btn',
+              'sidebar-inline-btn--scrapheap',
+              { active: props.selectedCharacter === props.scrapheapPicturesId },
+            ]"
+            title="Scrapheap"
+            @click.stop="
+              selectCharacter(props.scrapheapPicturesId, 'Scrapheap')
+            "
+          >
+            <v-icon size="20">mdi-trash-can-outline</v-icon>
+          </div>
         </div>
       </div>
-      <div
-        :class="[
-          'sidebar-list-item',
-          { active: props.selectedCharacter === props.allPicturesId },
-        ]"
-        @click="selectCharacter(props.allPicturesId, 'All Pictures')"
-      >
-        <span class="sidebar-list-icon">
-          <v-icon size="44">mdi-image-multiple</v-icon>
-        </span>
-        <span class="sidebar-list-label">All Pictures</span>
-        <span class="sidebar-list-count">
-          <span v-if="isCountNew(props.allPicturesId)" class="sidebar-new-tag">
-            new
-          </span>
-          {{ categoryCounts[props.allPicturesId] ?? "" }}
-        </span>
-      </div>
-      <div
-        :class="[
-          'sidebar-list-item',
-          { active: selectedCharacter === props.unassignedPicturesId },
-        ]"
-        @click="
-          selectCharacter(props.unassignedPicturesId, 'Unassigned Pictures')
-        "
-      >
-        <span class="sidebar-list-icon">
-          <v-icon size="44">mdi-help-circle-outline</v-icon>
-        </span>
-        <span class="sidebar-list-label">Unassigned Pictures</span>
-        <span class="sidebar-list-count">
-          <span
-            v-if="isCountNew(props.unassignedPicturesId)"
-            class="sidebar-new-tag"
-          >
-            new
-          </span>
-          {{ categoryCounts[props.unassignedPicturesId] ?? "" }}
-        </span>
-      </div>
-      <div
-        :class="[
-          'sidebar-list-item',
-          { active: selectedCharacter === props.scrapheapPicturesId },
-        ]"
-        @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
-      >
-        <span class="sidebar-list-icon">
-          <v-icon size="44">mdi-trash-can-outline</v-icon>
-        </span>
-        <span class="sidebar-list-label">Scrapheap</span>
-        <span class="sidebar-list-count">
-          <span
-            v-if="isCountNew(props.scrapheapPicturesId)"
-            class="sidebar-new-tag"
-          >
-            new
-          </span>
-          {{ categoryCounts[props.scrapheapPicturesId] ?? "" }}
-        </span>
-      </div>
 
-      <div class="sidebar-section-divider"></div>
       <div class="sidebar-section-header">Collections</div>
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
@@ -1959,7 +1907,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-section-divider {
   height: 1px;
-  margin: 6px 12px;
+  margin: 6px 0;
   background: rgba(var(--v-theme-border), 0.35);
 }
 
@@ -2008,7 +1956,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 }
 
 .sidebar-view-tab.active {
-  background: rgb(var(--v-theme-primary));
+  background: rgb(var(--v-theme-tertiary));
   color: rgb(var(--v-theme-on-primary));
 }
 
@@ -2572,7 +2520,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   transition:
     background 0.18s,
     color 0.18s;
-  width: 100%;
 }
 
 .sidebar-footer-spacer {
@@ -2833,23 +2780,83 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   color: rgb(var(--v-theme-on-primary)) !important;
 }
 
-.upload-pictures-inline {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: 1.2rem;
-  cursor: pointer;
+.sidebar-quick-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+.sidebar-all-pictures-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+.sidebar-all-pictures-row .sidebar-list-item {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  padding-right: 4px !important;
+  overflow: hidden;
+}
+
+.sidebar-all-pictures-row:hover {
+  background: rgba(var(--v-theme-accent), 0.6);
+}
+
+.sidebar-all-pictures-row:has(.sidebar-list-item.active) {
+  background: rgba(var(--v-theme-primary), 0.6);
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.sidebar-all-pictures-row .sidebar-list-item:hover,
+.sidebar-all-pictures-row .sidebar-list-item.active {
   background: transparent;
-  border-radius: 8px;
-  width: 32px;
-  height: 32px;
+}
+
+.sidebar-all-pictures-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.sidebar-inline-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 32px;
-  transition: background 0.2s;
+  cursor: pointer;
+  width: max(52px, calc(var(--sidebar-thumb-size) + 8px));
+  flex-shrink: 0;
+  border-radius: 0;
+  color: rgb(var(--v-theme-sidebar-text));
+  opacity: 0.55;
+  transition:
+    background 0.18s,
+    opacity 0.18s,
+    color 0.18s;
 }
 
-.upload-pictures-inline:hover {
-  background: rgb(var(--v-theme-accent));
+.sidebar-inline-btn .v-icon {
+  color: inherit;
+}
+
+.sidebar-inline-btn:hover {
+  opacity: 1;
+}
+
+.sidebar-inline-btn--upload:hover {
+  color: rgb(var(--v-theme-success));
+}
+
+.sidebar-inline-btn--scrapheap:hover {
+  color: rgb(var(--v-theme-error));
+}
+
+.sidebar-inline-btn--scrapheap.active {
+  opacity: 1;
+  color: rgb(var(--v-theme-error));
 }
 
 .delete-character-inline {
