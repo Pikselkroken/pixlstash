@@ -1,5 +1,5 @@
 <template>
-  <v-dialog :model-value="open" max-width="600" @click:outside="emit('close')">
+  <v-dialog :model-value="open" max-width="640" @click:outside="emit('close')">
     <div class="editor-shell">
       <v-btn icon size="36px" class="close-icon" @click="emit('close')">
         <v-icon size="24px">mdi-close</v-icon>
@@ -45,6 +45,37 @@
             clearable
             clear-icon="mdi-close"
           />
+          <div v-if="character?.id" class="ref-pictures-section">
+            <div class="ref-pictures-header">
+              <span class="ref-pictures-title">Reference Images</span>
+            </div>
+            <p class="ref-pictures-help">
+              Automatically selected from the highest-scoring images of this
+              person.
+            </p>
+            <div v-if="referencePictures.length > 0" class="ref-pictures-grid">
+              <div
+                v-for="pic in referencePictures"
+                :key="pic.id"
+                class="ref-picture-item"
+                @click="previewPic = pic"
+              >
+                <img
+                  :src="`${props.backendUrl}/pictures/thumbnails/${pic.id}.webp`"
+                  class="ref-picture-thumb"
+                  loading="lazy"
+                />
+                <StarRatingOverlay
+                  :score="pic.score || 0"
+                  :max="5"
+                  :compact="true"
+                />
+              </div>
+            </div>
+            <p v-else-if="!referencePicturesLoading" class="ref-pictures-empty">
+              No reference images yet — add more scored pictures of this person.
+            </p>
+          </div>
         </v-card-text>
         <v-card-actions class="editor-footer">
           <v-spacer></v-spacer>
@@ -56,6 +87,20 @@
       </v-card>
     </div>
   </v-dialog>
+
+  <Teleport to="body">
+    <div
+      v-if="previewPic"
+      class="ref-preview-overlay"
+      @click="previewPic = null"
+    >
+      <img
+        :src="`${props.backendUrl}/pictures/thumbnails/${previewPic.id}.webp`"
+        class="ref-preview-img"
+        @click.stop
+      />
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -74,6 +119,7 @@ import {
   VTextarea,
 } from "vuetify/components";
 import { apiClient } from "../utils/apiClient";
+import StarRatingOverlay from "./StarRatingOverlay.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -98,6 +144,50 @@ const localCharacter = ref({
 });
 
 const nameInputRef = ref(null);
+
+const referencePictures = ref([]);
+const referencePicturesLoading = ref(false);
+const previewPic = ref(null);
+
+async function fetchReferencePictures(characterId) {
+  referencePicturesLoading.value = true;
+  try {
+    const refRes = await apiClient.get(
+      `${props.backendUrl}/characters/${characterId}/reference_pictures`,
+    );
+    const ids = refRes.data?.reference_picture_ids ?? [];
+    if (!ids.length) {
+      referencePictures.value = [];
+      return;
+    }
+    const params = new URLSearchParams();
+    ids.forEach((id) => params.append("id", String(id)));
+    const picsRes = await apiClient.get(
+      `${props.backendUrl}/pictures?${params.toString()}`,
+    );
+    const pics = Array.isArray(picsRes.data) ? picsRes.data : [];
+    const picsById = new Map(pics.map((p) => [String(p.id), p]));
+    referencePictures.value = ids
+      .map((id) => picsById.get(String(id)))
+      .filter(Boolean);
+  } catch {
+    referencePictures.value = [];
+  } finally {
+    referencePicturesLoading.value = false;
+  }
+}
+
+watch(
+  () => [props.open, props.character?.id],
+  ([isOpen, charId]) => {
+    if (isOpen && charId) {
+      fetchReferencePictures(charId);
+    } else {
+      referencePictures.value = [];
+    }
+  },
+  { immediate: true },
+);
 
 const isValid = computed(() => {
   return (
@@ -228,6 +318,85 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.ref-pictures-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(var(--v-theme-border, 127 127 127), 0.25);
+}
+
+.ref-pictures-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ref-pictures-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.ref-pictures-help {
+  font-size: 0.82rem;
+  color: rgba(var(--v-theme-on-surface), 0.5);
+  margin: 0;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.ref-pictures-empty {
+  font-size: 0.82rem;
+  color: rgba(var(--v-theme-on-surface), 0.4);
+  font-style: italic;
+  margin: 0;
+}
+
+.ref-pictures-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ref-picture-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.ref-picture-thumb {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-surface-variant, 127 127 127), 0.15);
+  cursor: pointer;
+}
+
+.ref-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+
+.ref-preview-img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  cursor: default;
 }
 
 .editor-footer {

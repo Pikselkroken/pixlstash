@@ -2070,7 +2070,10 @@ class PictureTagger:
                     revision=SENTENCE_TRANSFORMER_MODEL_REVISION,
                 )
             except OSError:
-                logger.info("Downloading %s for the first time...", SENTENCE_TRANSFORMER_MODEL_NAME)
+                logger.info(
+                    "Downloading %s for the first time...",
+                    SENTENCE_TRANSFORMER_MODEL_NAME,
+                )
                 sbert_model = SentenceTransformer(
                     SENTENCE_TRANSFORMER_MODEL_NAME,
                     device=self._device,

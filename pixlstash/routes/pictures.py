@@ -19,6 +19,7 @@ from fastapi import (
     BackgroundTasks,
     Body,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -320,6 +321,7 @@ def _select_pictures_for_listing(
     reference_character_id = query_params.pop("reference_character_id", None)
     min_score_raw = query_params.pop("min_score", None)
     min_score = int(min_score_raw) if min_score_raw is not None else None
+    project_id_raw = query_params.pop("project_id", None)
     only_deleted = False
 
     try:
@@ -379,6 +381,8 @@ def _select_pictures_for_listing(
         if formats:
             query = query.where(Picture.format.in_(formats))
         return list(session.exec(query).all())
+
+    logger.info("Getting pictures with project id = %s", project_id_raw)
 
     if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
         if not reference_character_id:
@@ -501,6 +505,36 @@ def _select_pictures_for_listing(
             if not picture_ids:
                 return []
             query_params["id"] = picture_ids
+        elif project_id_raw is not None:
+            # Project filter only applies when not already filtering by character/set.
+            # "UNASSIGNED" means pictures with no project (project_id IS NULL).
+            # A numeric value filters to that specific project.
+            if project_id_raw == "UNASSIGNED":
+
+                def get_unassigned_project_ids(session):
+                    from pixlstash.db_models.picture import Picture as Pic
+
+                    rows = session.exec(
+                        select(Pic.id).where(
+                            Pic.project_id.is_(None),
+                            Pic.deleted.is_(False),
+                        )
+                    ).all()
+                    return list(rows)
+
+                project_pic_ids = server.vault.db.run_task(get_unassigned_project_ids)
+                if not project_pic_ids:
+                    return []
+                existing_ids = query_params.get("id")
+                if existing_ids:
+                    query_params["id"] = list(set(existing_ids) & set(project_pic_ids))
+                else:
+                    query_params["id"] = project_pic_ids
+            else:
+                try:
+                    query_params["project_id"] = int(project_id_raw)
+                except (TypeError, ValueError):
+                    pass
 
         pics = server.vault.db.run_task(
             Picture.find,
@@ -1816,6 +1850,7 @@ def create_router(server) -> APIRouter:
     async def import_pictures(
         background_tasks: BackgroundTasks,
         file: list[UploadFile] = File(None),
+        project_id: int | None = Form(None),
     ):
         _MAX_UPLOAD_BYTES = 5 * 1024**3  # 5 GB per uploaded file / zip
         _MAX_ZIP_ENTRIES = 5_000  # max files inside a zip
@@ -1965,6 +2000,9 @@ def create_router(server) -> APIRouter:
                 )
 
                 if new_pictures:
+                    if project_id is not None:
+                        for pic in new_pictures:
+                            pic.project_id = project_id
 
                     def import_task(session):
                         session.add_all(new_pictures)

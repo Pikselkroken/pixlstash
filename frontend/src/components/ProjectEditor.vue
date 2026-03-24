@@ -8,11 +8,12 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
 });
 
-const emit = defineEmits(["close", "saved"]);
+const emit = defineEmits(["close", "saved", "deleted"]);
 
 const name = ref("");
 const description = ref("");
 const saving = ref(false);
+const deleting = ref(false);
 const error = ref(null);
 
 watch(
@@ -40,17 +41,38 @@ async function save() {
         name: name.value.trim(),
         description: description.value.trim() || null,
       });
+      emit("saved", null);
     } else {
-      await apiClient.post(`${props.backendUrl}/projects`, {
+      const res = await apiClient.post(`${props.backendUrl}/projects`, {
         name: name.value.trim(),
         description: description.value.trim() || null,
       });
+      emit("saved", res.data?.id ?? null);
     }
-    emit("saved");
   } catch (e) {
     error.value = e?.response?.data?.detail || e.message || "Save failed.";
   } finally {
     saving.value = false;
+  }
+}
+
+async function deleteProject() {
+  if (!props.project?.id) return;
+  if (
+    !window.confirm(
+      `Delete project "${props.project.name}"? This cannot be undone.`,
+    )
+  )
+    return;
+  deleting.value = true;
+  error.value = null;
+  try {
+    await apiClient.delete(`${props.backendUrl}/projects/${props.project.id}`);
+    emit("deleted", props.project.id);
+  } catch (e) {
+    error.value = e?.response?.data?.detail || e.message || "Delete failed.";
+  } finally {
+    deleting.value = false;
   }
 }
 </script>
@@ -82,9 +104,26 @@ async function save() {
         <div v-if="error" class="text-error text-caption mt-1">{{ error }}</div>
       </v-card-text>
       <v-card-actions>
+        <v-btn
+          v-if="project?.id"
+          color="error"
+          variant="flat"
+          :loading="deleting"
+          :disabled="saving"
+          @click="deleteProject"
+          >Delete</v-btn
+        >
         <v-spacer />
-        <v-btn :disabled="saving" @click="emit('close')">Cancel</v-btn>
-        <v-btn color="primary" :loading="saving" @click="save">Save</v-btn>
+        <v-btn :disabled="saving || deleting" @click="emit('close')"
+          >Cancel</v-btn
+        >
+        <v-btn
+          color="primary"
+          :loading="saving"
+          :disabled="deleting"
+          @click="save"
+          >Save</v-btn
+        >
       </v-card-actions>
     </v-card>
   </v-dialog>

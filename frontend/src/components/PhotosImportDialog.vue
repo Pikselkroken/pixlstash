@@ -2,12 +2,15 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { isSupportedImportFile } from "../utils/media.js";
 import { apiClient } from "../utils/apiClient.js";
+import ProjectEditor from "./ProjectEditor.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
+  defaultProjectId: { type: [Number, null], default: null },
+  backendUrl: { type: String, default: "" },
 });
 
-const emit = defineEmits(["update:open", "local-import"]);
+const emit = defineEmits(["update:open", "local-import", "project-created"]);
 
 const dialogOpen = computed({
   get: () => props.open,
@@ -24,6 +27,53 @@ const watchFoldersLoading = ref(false);
 const watchFoldersError = ref("");
 const watchFoldersLoaded = ref(false);
 const watchFoldersOpening = ref(false);
+
+const projects = ref([]);
+const selectedProjectId = ref(null);
+const projectEditorOpen = ref(false);
+
+const projectSelectItems = computed(() => [
+  { title: "No project", value: null },
+  ...[...projects.value]
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    )
+    .map((p) => ({ title: p.name, value: p.id })),
+  { title: "+ New project\u2026", value: "__new__" },
+]);
+
+function handleProjectChange(newVal) {
+  if (newVal === "__new__") {
+    projectEditorOpen.value = true;
+  } else {
+    selectedProjectId.value = newVal;
+  }
+}
+
+function onProjectSaved(newId) {
+  projectEditorOpen.value = false;
+  fetchProjects().then(() => {
+    if (newId != null) selectedProjectId.value = newId;
+  });
+  if (newId != null) emit("project-created", newId);
+}
+
+watch(
+  () => props.defaultProjectId,
+  (val) => {
+    selectedProjectId.value = val ?? null;
+  },
+  { immediate: true },
+);
+
+async function fetchProjects() {
+  try {
+    const res = await apiClient.get("/projects");
+    projects.value = Array.isArray(res.data) ? res.data : [];
+  } catch {
+    projects.value = [];
+  }
+}
 
 const dropMessage = computed(() => {
   const count = localFiles.value.length;
@@ -83,7 +133,7 @@ async function triggerLocalImport(files) {
   if (!files.length) return;
   emit("update:open", false);
   await nextTick();
-  emit("local-import", files);
+  emit("local-import", { files, projectId: selectedProjectId.value });
   clearLocalSelection();
 }
 
@@ -165,6 +215,7 @@ watch(
 watch(dialogOpen, (isOpen) => {
   if (isOpen) {
     watchFoldersLoaded.value = false;
+    fetchProjects();
   }
 });
 </script>
@@ -181,8 +232,30 @@ watch(dialogOpen, (isOpen) => {
         <v-icon size="24px">mdi-close</v-icon>
       </v-btn>
       <v-card class="google-photos-card">
-        <v-card-title class="google-photos-title">Import photos</v-card-title>
+        <v-card-title class="google-photos-title">
+          <span class="import-title-text">Import photos to</span>
+          <v-select
+            :model-value="selectedProjectId"
+            :items="projectSelectItems"
+            item-title="title"
+            item-value="value"
+            variant="outlined"
+            density="compact"
+            hide-details
+            single-line
+            class="import-project-select"
+            color="primary"
+            @update:model-value="handleProjectChange"
+          />
+        </v-card-title>
         <v-card-text class="google-photos-body">
+          <ProjectEditor
+            :open="projectEditorOpen"
+            :project="null"
+            :backend-url="props.backendUrl"
+            @close="projectEditorOpen = false"
+            @saved="onProjectSaved"
+          />
           <v-tabs v-model="activeTab" class="photo-import-tabs">
             <v-tab value="local">Local import</v-tab>
             <v-tab value="monitoring">Automatic Folder Monitoring</v-tab>
@@ -399,6 +472,62 @@ watch(dialogOpen, (isOpen) => {
 
 .google-photos-title {
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.import-title-text {
+  white-space: nowrap;
+}
+
+.import-project-select {
+  min-width: 150px;
+  max-width: 260px;
+  font-weight: 700;
+}
+
+.import-project-select :deep(.v-field__outline__start),
+.import-project-select :deep(.v-field__outline__notch),
+.import-project-select :deep(.v-field__outline__end) {
+  border-color: rgba(var(--v-theme-primary), 0.5);
+}
+
+.import-project-select :deep(.v-field--focused .v-field__outline__start),
+.import-project-select :deep(.v-field--focused .v-field__outline__notch),
+.import-project-select :deep(.v-field--focused .v-field__outline__end) {
+  border-color: rgb(var(--v-theme-primary));
+}
+
+.import-project-select :deep(.v-field__input) {
+  color: rgb(var(--v-theme-primary));
+  font-weight: 700;
+  font-size: 1rem;
+  min-height: unset;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.import-project-select :deep(.v-field) {
+  background: rgba(var(--v-theme-primary), 0.1);
+  border-radius: 6px;
+}
+
+.import-project-select :deep(.v-field:hover .v-field__outline__start),
+.import-project-select :deep(.v-field:hover .v-field__outline__notch),
+.import-project-select :deep(.v-field:hover .v-field__outline__end) {
+  border-color: rgb(var(--v-theme-primary));
+}
+
+.import-project-select :deep(.v-select__selection-text) {
+  color: rgb(var(--v-theme-primary));
+  font-weight: 700;
+}
+
+.import-project-select :deep(.v-field__append-inner .v-icon) {
+  color: rgb(var(--v-theme-primary));
+  opacity: 0.8;
 }
 
 .google-photos-body {

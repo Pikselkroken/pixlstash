@@ -32,7 +32,8 @@ const toolbarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
-const selectedReferenceCharacter = ref(null);
+const projectViewMode = ref("global"); // 'global' | 'project'
+const selectedProjectId = ref(null); // null = unassigned in project mode
 const selectedSort = ref("");
 const selectedDescending = ref(true);
 const stackThreshold = ref(null);
@@ -42,7 +43,6 @@ const searchQuery = ref("");
 const searchInput = ref("");
 const lastSelectedCharacterLabel = ref("All Pictures");
 const lastSelectedSetLabel = ref("Picture Set");
-const lastSelectedReferenceLabel = ref("Reference Pictures");
 const searchHistory = ref([]);
 const isSearchHistoryOpen = ref(false);
 const MAX_SEARCH_HISTORY = 8;
@@ -71,9 +71,6 @@ const activeCategoryLabel = computed(() => {
   if (selectedSet.value) {
     return lastSelectedSetLabel.value || "Picture Set";
   }
-  if (selectedReferenceCharacter.value) {
-    return lastSelectedReferenceLabel.value || "Reference Pictures";
-  }
   if (selectedCharacter.value === ALL_PICTURES_ID) return "All Pictures";
   if (selectedCharacter.value === UNASSIGNED_PICTURES_ID)
     return "Unassigned Pictures";
@@ -85,10 +82,7 @@ const activeCategoryLabel = computed(() => {
 });
 
 const isAllPicturesActive = computed(
-  () =>
-    !selectedSet.value &&
-    !selectedReferenceCharacter.value &&
-    selectedCharacter.value === ALL_PICTURES_ID,
+  () => !selectedSet.value && selectedCharacter.value === ALL_PICTURES_ID,
 );
 
 const thumbnailSize = ref(256);
@@ -213,6 +207,8 @@ function connectUpdatesSocket() {
         wsUpdateKey.value = Date.now();
         refreshGridVersion();
       }
+    } else if (payload?.type === "characters_changed") {
+      refreshSidebar();
     } else if (payload?.type === "tags_changed") {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
@@ -332,10 +328,10 @@ function openImportDialog() {
   photosDialogOpen.value = true;
 }
 
-async function handleLocalImport(files) {
+async function handleLocalImport({ files, projectId } = {}) {
   photosDialogOpen.value = false;
   await nextTick();
-  sidebarRef.value?.startLocalImport?.(files);
+  sidebarRef.value?.startLocalImport?.(files, projectId ?? null);
 }
 
 function isInsideImageGrid(event) {
@@ -366,7 +362,8 @@ function handleWindowDrop(event) {
   }
   const droppedFiles = Array.from(event.dataTransfer?.files || []);
   if (!droppedFiles.length) return;
-  sidebarRef.value?.startLocalImport?.(droppedFiles);
+  const projectId = sidebarRef.value?.currentProjectId ?? null;
+  sidebarRef.value?.startLocalImport?.(droppedFiles, projectId);
 }
 
 function handleWindowPaste(event) {
@@ -390,7 +387,8 @@ function handleWindowPaste(event) {
     .filter(Boolean);
   if (!mediaFiles.length) return;
   event.preventDefault();
-  sidebarRef.value?.startLocalImport?.(mediaFiles);
+  const projectId = sidebarRef.value?.currentProjectId ?? null;
+  sidebarRef.value?.startLocalImport?.(mediaFiles, projectId);
 }
 
 function updateIsMobile() {
@@ -458,7 +456,6 @@ async function handleSelectCharacter(payload) {
   clearSearchForCategoryChange();
   if (charId == null) {
     selectedCharacter.value = null;
-    selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
@@ -472,26 +469,11 @@ async function handleSelectCharacter(payload) {
     lastSelectedCharacterLabel.value = "Scrapheap";
   }
   selectedCharacter.value = charId;
-  selectedSet.value = null; // Clear set selection
-  selectedReferenceCharacter.value = null;
-  await nextTick(); // Ensure reactivity propagates the change
-  closeSidebarIfMobile();
-}
-
-async function handleSelectReferencePictures(payload) {
-  const { id: charId, label } = SelectionPayload(payload);
-  clearSearchForCategoryChange();
-  if (charId == null) {
-    selectedReferenceCharacter.value = null;
-    await nextTick();
-    return;
+  if (charId === ALL_PICTURES_ID) {
+    refreshGridVersion();
   }
-  lastSelectedReferenceLabel.value =
-    label || lastSelectedReferenceLabel.value || "Reference Pictures";
-  selectedReferenceCharacter.value = charId;
-  selectedCharacter.value = null;
-  selectedSet.value = null;
-  await nextTick();
+  selectedSet.value = null; // Clear set selection
+  await nextTick(); // Ensure reactivity propagates the change
   closeSidebarIfMobile();
 }
 
@@ -500,7 +482,6 @@ async function handleSelectSet(payload) {
   clearSearchForCategoryChange();
   if (setId == null) {
     selectedSet.value = null;
-    selectedReferenceCharacter.value = null;
     await nextTick();
     return;
   }
@@ -509,14 +490,12 @@ async function handleSelectSet(payload) {
   }
   selectedSet.value = setId;
   selectedCharacter.value = null; // Clear character selection
-  selectedReferenceCharacter.value = null;
   closeSidebarIfMobile();
 }
 
 function handleSearchAllPictures() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
-  selectedReferenceCharacter.value = null;
   lastSelectedCharacterLabel.value = "All Pictures";
 }
 
@@ -525,6 +504,14 @@ async function handleUpdateSearchQuery(value) {
   searchInput.value = nextQuery;
   searchQuery.value = nextQuery; // Ensure searchQuery is always a string
   addToSearchHistory(nextQuery);
+}
+
+function handleUpdateProjectViewMode(mode) {
+  projectViewMode.value = mode;
+}
+
+function handleUpdateSelectedProjectId(id) {
+  selectedProjectId.value = id;
 }
 
 async function handleUpdateSelectedSort({ sort, descending }) {
@@ -946,7 +933,6 @@ function commitSearch() {
 function handleResetToAll() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
-  selectedReferenceCharacter.value = null;
   lastSelectedCharacterLabel.value = "All Pictures";
   selectedSort.value = "DATE";
   selectedDescending.value = true;
@@ -1119,7 +1105,6 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             ref="sidebarRef"
             :collapsed="!sidebarVisible && !isMobile"
             :selectedCharacter="selectedCharacter"
-            :selectedReferenceCharacter="selectedReferenceCharacter"
             :allPicturesId="ALL_PICTURES_ID"
             :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
             :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
@@ -1140,8 +1125,9 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @update:date-format="handleUpdateDateFormat"
             @update:theme-mode="handleUpdateThemeMode"
             @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
+            @update:project-view-mode="handleUpdateProjectViewMode"
+            @update:selected-project-id="handleUpdateSelectedProjectId"
             @select-character="handleSelectCharacter"
-            @select-reference-pictures="handleSelectReferencePictures"
             @select-set="handleSelectSet"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMovedToSet"
@@ -1163,7 +1149,10 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
         </Transition>
         <PhotosImportDialog
           v-model:open="photosDialogOpen"
+          :default-project-id="sidebarRef?.currentProjectId ?? null"
+          :backend-url="BACKEND_URL"
           @local-import="handleLocalImport"
+          @project-created="refreshSidebar"
         />
         <main
           :class="[
@@ -1243,7 +1232,6 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :sidebarVisible="sidebarVisible"
               :backendUrl="BACKEND_URL"
               :selectedCharacter="selectedCharacter"
-              :selectedReferenceCharacter="selectedReferenceCharacter"
               :selectedSet="selectedSet"
               :searchQuery="searchQuery"
               :activeCategoryLabel="activeCategoryLabel"
@@ -1273,6 +1261,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
+              :projectViewMode="projectViewMode"
+              :selectedProjectId="selectedProjectId"
               :columns="columns"
               @clear-search="handleClearSearch"
               @search-all="handleSearchAllPictures"

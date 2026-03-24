@@ -11,12 +11,21 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Character, Face, Picture, PictureSet, PictureSetMember
+from pixlstash.db_models import (
+    Character,
+    Face,
+    Picture,
+    PictureSet,
+    PictureSetMember,
+    Tag,
+)
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
 
 logger = get_logger(__name__)
 
@@ -196,6 +205,12 @@ def create_router(server) -> APIRouter:
                 picture_set.project_id = None
                 session.add(picture_set)
 
+            for picture in session.exec(
+                select(Picture).where(Picture.project_id == pid)
+            ).all():
+                picture.project_id = None
+                session.add(picture)
+
             session.delete(project)  # cascade-deletes ProjectAttachment rows
             session.commit()
             return attachment_paths
@@ -226,6 +241,58 @@ def create_router(server) -> APIRouter:
             )
 
         return {"status": "deleted", "id": project_id}
+
+    @router.get(
+        "/projects/{project_id}/summary",
+        summary="Get project picture count",
+        description="Returns the number of pictures assigned to a project. Use 'UNASSIGNED' as project_id to count pictures with no project.",
+    )
+    def get_project_summary(request: Request, project_id: str):
+        server.auth.require_user_id(request)
+
+        try:
+            user = server.auth.get_user_for_request(request)
+        except HTTPException:
+            user = server.auth.get_user()
+        hidden_tags = []
+        if user and getattr(user, "apply_tag_filter", False):
+            hidden_tags = (
+                _normalize_hidden_tags(getattr(user, "hidden_tags", None)) or []
+            )
+        hidden_tag_set = {str(t).strip().lower() for t in hidden_tags if t}
+        hidden_tag_filter = None
+        if hidden_tag_set:
+            hidden_tag_filter = ~exists(
+                select(Tag.id).where(
+                    Tag.picture_id == Picture.id,
+                    Tag.tag.is_not(None),
+                    func.lower(Tag.tag).in_(hidden_tag_set),
+                )
+            )
+
+        if project_id == "UNASSIGNED":
+            conditions = [
+                Picture.deleted.is_(False),
+                Picture.project_id.is_(None),
+            ]
+        else:
+            try:
+                pid = int(project_id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="Invalid project_id")
+            conditions = [
+                Picture.deleted.is_(False),
+                Picture.project_id == pid,
+            ]
+
+        if hidden_tag_filter is not None:
+            conditions.append(hidden_tag_filter)
+
+        def count_for_project(session: Session) -> int:
+            return session.exec(select(func.count(Picture.id)).where(*conditions)).one()
+
+        image_count = server.vault.db.run_immediate_read_task(count_for_project)
+        return {"image_count": image_count}
 
     # -------------------------------------------------------------------------
     # Export

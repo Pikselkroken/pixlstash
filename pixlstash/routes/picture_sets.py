@@ -634,8 +634,16 @@ def create_router(server) -> APIRouter:
                 picture_set.name = name
             if description is not None:
                 picture_set.description = description
-            if project_id is not _UNSET:
+            if project_id is not _UNSET and project_id != picture_set.project_id:
                 picture_set.project_id = project_id
+                members = session.exec(
+                    select(PictureSetMember).where(PictureSetMember.set_id == id)
+                ).all()
+                for member in members:
+                    pic = session.get(Picture, member.picture_id)
+                    if pic and not pic.deleted:
+                        pic.project_id = project_id
+                        session.add(pic)
 
             session.commit()
             return True
@@ -725,6 +733,10 @@ def create_router(server) -> APIRouter:
             session.add(member)
             session.add(picture_set)
             session.commit()
+            if picture_set.project_id is not None and picture.project_id is None:
+                picture.project_id = picture_set.project_id
+                session.add(picture)
+                session.commit()
             return True
 
         success = server.vault.db.run_task(
