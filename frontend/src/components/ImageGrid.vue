@@ -17,6 +17,7 @@
     :pluginProgress="pluginProgress"
     :pluginProgressPercent="pluginProgressPercent"
     :comfyuiClientId="comfyuiClientId"
+    :comfyuiConfigured="props.comfyuiConfigured"
     @close="closeOverlay"
     @apply-score="applyScore"
     @add-tag="addTagToImage"
@@ -52,6 +53,7 @@
       :selected-image-ids="selectedImageIds"
       :selected-media-support="selectedMediaSupport"
       :comfyui-client-id="comfyuiClientId"
+      :comfyui-configured="props.comfyuiConfigured"
       :available-plugins="availablePlugins"
       :show-remove-from-stack="showRemoveFromStack"
       :visible="showSelectionBar"
@@ -531,7 +533,6 @@ const props = defineProps({
   sidebarVisible: Boolean,
   backendUrl: String,
   selectedCharacter: { type: [String, Number, null], default: null },
-  selectedReferenceCharacter: { type: [String, Number, null], default: null },
   selectedSet: { type: [Number, String, null], default: null },
   searchQuery: String,
   activeCategoryLabel: { type: String, default: "Category" },
@@ -563,10 +564,13 @@ const props = defineProps({
   mediaTypeFilter: { type: String, default: "all" },
   comfyuiModelFilter: { type: Array, default: () => [] },
   comfyuiLoraFilter: { type: Array, default: () => [] },
+  comfyuiConfigured: { type: Boolean, default: false },
   minScoreFilter: { type: Number, default: null },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
+  projectViewMode: { type: String, default: "global" },
+  selectedProjectId: { type: Number, default: null },
 });
 
 // ============================================================
@@ -2092,23 +2096,6 @@ const selectedGroupName = ref("");
 async function updateSelectedGroupName() {
   let name = "";
   if (
-    props.selectedReferenceCharacter &&
-    props.selectedReferenceCharacter !== `${props.allPicturesId}` &&
-    props.selectedReferenceCharacter !== `${props.unassignedPicturesId}` &&
-    props.selectedReferenceCharacter !== `${props.scrapheapPicturesId}`
-  ) {
-    try {
-      const res = await apiClient.get(
-        `${props.backendUrl}/characters/${props.selectedReferenceCharacter}`,
-      );
-      const char = res.data;
-      name = char?.name
-        ? `${char.name} - Reference Pictures`
-        : "Reference Pictures";
-    } catch (e) {
-      console.error("Character fetch failed:", e);
-    }
-  } else if (
     props.selectedCharacter &&
     props.selectedCharacter !== `${props.allPicturesId}` &&
     props.selectedCharacter !== `${props.unassignedPicturesId}` &&
@@ -2138,11 +2125,7 @@ async function updateSelectedGroupName() {
 }
 
 watch(
-  [
-    () => props.selectedCharacter,
-    () => props.selectedReferenceCharacter,
-    () => props.selectedSet,
-  ],
+  [() => props.selectedCharacter, () => props.selectedSet],
   () => {
     updateSelectedGroupName();
   },
@@ -2813,6 +2796,7 @@ function handleGridDrop(e) {
       selectedCharacterId: props.selectedCharacter,
       allPicturesId: "ALL",
       unassignedPicturesId: "UNASSIGNED",
+      projectId: props.selectedProjectId ?? null,
     });
   }
 }
@@ -3008,7 +2992,6 @@ const lastFetchSuccess = ref({ key: "", at: 0 });
 function buildGridFetchKey() {
   return JSON.stringify({
     selectedCharacter: props.selectedCharacter ?? null,
-    selectedReferenceCharacter: props.selectedReferenceCharacter ?? null,
     selectedSet: props.selectedSet ?? null,
     searchQuery: props.searchQuery ?? "",
     selectedSort: props.selectedSort ?? "",
@@ -3035,6 +3018,14 @@ function _appendSelectionParams(params) {
     props.selectedCharacter !== props.allPicturesId
   ) {
     params.append("character_id", props.selectedCharacter);
+  } else if (
+    props.selectedCharacter === props.allPicturesId &&
+    props.projectViewMode === "project"
+  ) {
+    params.append(
+      "project_id",
+      props.selectedProjectId != null ? props.selectedProjectId : "UNASSIGNED",
+    );
   }
 }
 
@@ -4013,45 +4004,7 @@ async function fetchAllGridImages(options = {}) {
     let images = [];
     const requestId = Date.now();
     fetchAllGridImages.lastRequestId = requestId;
-    if (
-      props.selectedReferenceCharacter &&
-      props.selectedReferenceCharacter !== props.allPicturesId &&
-      props.selectedReferenceCharacter !== props.unassignedPicturesId
-    ) {
-      const refRes = await apiClient.get(
-        `${props.backendUrl}/characters/${props.selectedReferenceCharacter}/reference_pictures`,
-      );
-      const refData = await refRes.data;
-      if (fetchAllGridImages.lastRequestId !== requestId) return;
-      const referenceIds = Array.isArray(refData?.reference_picture_ids)
-        ? refData.reference_picture_ids
-        : [];
-
-      if (referenceIds.length) {
-        const params = new URLSearchParams();
-        referenceIds.forEach((id) => params.append("id", String(id)));
-        if (props.mediaTypeFilter === "images") {
-          for (const ext of PIL_IMAGE_EXTENSIONS) {
-            params.append("format", ext.toUpperCase());
-          }
-        } else if (props.mediaTypeFilter === "videos") {
-          for (const ext of VIDEO_EXTENSIONS) {
-            params.append("format", ext.toUpperCase());
-          }
-        }
-        const picsUrl = `${props.backendUrl}/pictures?${params.toString()}`;
-        const picsRes = await apiClient.get(picsUrl);
-        const picsData = await picsRes.data;
-        if (fetchAllGridImages.lastRequestId !== requestId) return;
-        const picList = Array.isArray(picsData) ? picsData : [];
-        const picsById = new Map(
-          picList.map((img) => [getPictureId(img?.id), img]),
-        );
-        images = referenceIds
-          .map((id) => picsById.get(getPictureId(id)))
-          .filter(Boolean);
-      }
-    } else if (props.selectedSort === STACKS_SORT_KEY) {
+    if (props.selectedSort === STACKS_SORT_KEY) {
       const threshold = getStackThreshold(props.stackThreshold);
       const stackParams = buildStackQueryParams();
       const url = `${
@@ -4228,7 +4181,6 @@ function _resetGridState() {
 watch(
   [
     () => props.selectedCharacter,
-    () => props.selectedReferenceCharacter,
     () => props.selectedSet,
     () => props.searchQuery,
     () => props.selectedSort,

@@ -190,6 +190,9 @@ async function startImport(files, options = {}) {
       batch.forEach((file) => {
         formData.append("file", file);
       });
+      if (options.projectId != null) {
+        formData.append("project_id", String(options.projectId));
+      }
 
       let res = null;
       let lastError = null;

@@ -230,17 +230,39 @@ def create_router(server) -> APIRouter:
                 if description is not None and description != character.description:
                     character.description = description
                     updated = True
-                if project_id is not _UNSET and project_id != character.project_id:
+                project_id_changed = (
+                    project_id is not _UNSET and project_id != character.project_id
+                )
+                if project_id_changed:
                     character.project_id = project_id
                     updated = True
                 if updated:
                     session.add(character)
 
-                    pictures = Picture.find(session, character_id=id)
-                    for pic in pictures:
-                        pic.description = None
-                        pic.text_embedding = None
-                        session.add(pic)
+                    if project_id_changed:
+                        picture_ids = list(
+                            {
+                                face.picture_id
+                                for face in session.exec(
+                                    select(Face).where(Face.character_id == id)
+                                ).all()
+                            }
+                        )
+                        for pic in session.exec(
+                            select(Picture).where(Picture.id.in_(picture_ids))
+                        ).all():
+                            pic.project_id = project_id
+                            session.add(pic)
+
+                    # Clear text embeddings for all pictures of this character
+                    for face in session.exec(
+                        select(Face).where(Face.character_id == id)
+                    ).all():
+                        pic = session.get(Picture, face.picture_id)
+                        if pic:
+                            pic.description = None
+                            pic.text_embedding = None
+                            session.add(pic)
 
                     session.commit()
                 return character
@@ -689,6 +711,16 @@ def create_router(server) -> APIRouter:
             session.commit()
             for face in unique_faces:
                 session.refresh(face)
+            character = session.get(Character, character_id)
+            if character and character.project_id is not None:
+                for face in unique_faces:
+                    if face.picture_id:
+                        pic = session.get(Picture, face.picture_id)
+                        if pic and pic.project_id is None:
+                            pic.project_id = character.project_id
+                            session.add(pic)
+                if any(f.picture_id for f in unique_faces):
+                    session.commit()
             faces_payload = [
                 {
                     "id": face.id,

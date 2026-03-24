@@ -32,6 +32,7 @@ from pixlstash.pixl_logging import get_logger
 if TYPE_CHECKING:
     from .character import Character
     from .picture_likeness import PictureLikeness
+    from .project import Project
 
 
 # Configure logging for the module
@@ -214,6 +215,9 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("comfyui_loras", String, default=None, nullable=True),
     )
+    project_id: Optional[int] = Field(
+        default=None, foreign_key="project.id", index=True
+    )
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
@@ -250,6 +254,7 @@ class Picture(SQLModel, table=True):
         back_populates="members", link_model=PictureSetMember
     )
     stack: Optional["PictureStack"] = Relationship(back_populates="pictures")
+    project: Optional["Project"] = Relationship(back_populates="pictures")
 
     likeness_a: List["PictureLikeness"] = Relationship(
         back_populates="picture_a",

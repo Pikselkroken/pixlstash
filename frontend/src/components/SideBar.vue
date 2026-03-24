@@ -28,7 +28,6 @@ const updateAvailable = computed(
 const props = defineProps({
   collapsed: { type: Boolean, default: false },
   selectedCharacter: { type: [String, Number, null], default: null },
-  selectedReferenceCharacter: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
   scrapheapPicturesId: { type: String, required: true },
@@ -45,7 +44,6 @@ const props = defineProps({
 
 const emit = defineEmits([
   "select-character",
-  "select-reference-pictures",
   "update:selected-sort",
   "update:search-query",
   "select-set",
@@ -67,6 +65,8 @@ const emit = defineEmits([
   "update:apply-tag-filter",
   "update:comfyui-configured",
   "open-import-dialog",
+  "update:project-view-mode",
+  "update:selected-project-id",
 ]);
 
 const imageImporterRef = ref(null);
@@ -76,6 +76,10 @@ const labelRefs = new Map();
 const labelObservers = new Map();
 
 const dragOverSet = ref(null);
+const dragOverProjectPictures = ref(false);
+
+const peopleSectionCollapsed = ref(false);
+const setsSectionCollapsed = ref(false);
 
 // --- Sorting State ---
 const sortOptions = ref([]);
@@ -87,6 +91,8 @@ const categoryCounts = ref({
   [props.unassignedPicturesId]: 0,
   [props.scrapheapPicturesId]: 0,
 });
+// Counts keyed by project id (number) or null (unassigned in project mode)
+const projectCounts = ref({});
 
 const flashCountsNextFetch = ref(false);
 const countNewTags = ref({});
@@ -106,6 +112,11 @@ const pictureSets = ref([]);
 const projects = ref([]);
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = 'No project' in project view
+// Tracks the view context when allPicturesId was last selected, so active state
+// correctly distinguishes «All Pictures» (global) from «Project Pictures» (project).
+const allPicturesLastMode = ref("global");
+const allPicturesLastProjectId = ref(null);
+const lastUsedProjectId = ref(null); // remembers last selected project for auto-select
 const projectEditorOpen = ref(false);
 const projectMenuOpen = ref(false);
 const projectMenuRef = ref(null);
@@ -113,6 +124,36 @@ const collapsedProjectBtnRef = ref(null);
 const collapsedProjectMenuRef = ref(null);
 const collapsedProjectMenuPos = ref({ top: 0, left: 0 });
 const projectEditorProject = ref(null);
+
+// --- Move-to-project menus ---
+const characterMoveMenuOpen = ref(false);
+const characterMoveMenuBtnRef = ref(null);
+const characterMenuPos = ref({ top: 0, left: 0 });
+const setMoveMenuOpen = ref(false);
+const setMoveMenuBtnRef = ref(null);
+const setMenuPos = ref({ top: 0, left: 0 });
+
+function openCharacterMoveMenu() {
+  if (characterMoveMenuBtnRef.value) {
+    const rect = characterMoveMenuBtnRef.value.getBoundingClientRect();
+    characterMenuPos.value = {
+      top: rect.bottom + 4,
+      left: rect.left,
+    };
+  }
+  characterMoveMenuOpen.value = !characterMoveMenuOpen.value;
+}
+
+function openSetMoveMenu() {
+  if (setMoveMenuBtnRef.value) {
+    const rect = setMoveMenuBtnRef.value.getBoundingClientRect();
+    setMenuPos.value = {
+      top: rect.bottom + 4,
+      left: rect.left,
+    };
+  }
+  setMoveMenuOpen.value = !setMoveMenuOpen.value;
+}
 
 // --- Character Editor State ---
 const characterEditorOpen = ref(false);
@@ -300,10 +341,31 @@ function closeProjectEditor() {
   projectEditorProject.value = null;
 }
 
-async function projectSaved() {
+async function projectSaved(newProjectId) {
   closeProjectEditor();
   await fetchProjects();
+  if (newProjectId != null) {
+    selectedProjectId.value = newProjectId;
+    projectViewMode.value = "project";
+  }
 }
+
+async function projectDeleted(deletedId) {
+  closeProjectEditor();
+  if (selectedProjectId.value === deletedId) {
+    selectedProjectId.value = null;
+  }
+  projectViewMode.value = "global";
+  await fetchProjects();
+  await fetchCharacters();
+  await fetchCounts();
+}
+
+const sortedProjects = computed(() =>
+  [...projects.value].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+  ),
+);
 
 const sortedCharacters = computed(() => {
   return [...characters.value]
@@ -355,6 +417,48 @@ const visibleCharacters = computed(() => {
   return sortedCharacters.value.filter(
     (c) => c.project_id === selectedProjectId.value,
   );
+});
+
+const projectMenuCharacterGroups = computed(() => {
+  if (projectViewMode.value !== "project" || selectedProjectId.value === null)
+    return [];
+  const all = sortedCharacters.value;
+  const globalItems = all.filter((c) => c.project_id === null);
+  const projectsSorted = [...projects.value].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  const groups = [];
+  if (globalItems.length > 0) {
+    groups.push({ label: "Global", projectId: null, items: globalItems });
+  }
+  for (const proj of projectsSorted) {
+    const items = all.filter((c) => c.project_id === proj.id);
+    if (items.length > 0) {
+      groups.push({ label: proj.name, projectId: proj.id, items });
+    }
+  }
+  return groups;
+});
+
+const projectMenuSetGroups = computed(() => {
+  if (projectViewMode.value !== "project" || selectedProjectId.value === null)
+    return [];
+  const all = nonReferenceSets.value;
+  const globalItems = all.filter((s) => s.project_id === null);
+  const projectsSorted = [...projects.value].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  const groups = [];
+  if (globalItems.length > 0) {
+    groups.push({ label: "Global", projectId: null, items: globalItems });
+  }
+  for (const proj of projectsSorted) {
+    const items = all.filter((s) => s.project_id === proj.id);
+    if (items.length > 0) {
+      groups.push({ label: proj.name, projectId: proj.id, items });
+    }
+  }
+  return groups;
 });
 
 const visibleSets = computed(() => {
@@ -485,26 +589,12 @@ function openSettingsDialog() {
 
 function selectCharacter(id, label = null) {
   clearCountNew(id);
+  if (id === props.allPicturesId) {
+    allPicturesLastMode.value = projectViewMode.value;
+    allPicturesLastProjectId.value = selectedProjectId.value;
+  }
   emit("select-set", null);
   emit("select-character", { id, label });
-}
-
-function selectReferencePictures(
-  characterId,
-  characterLabel = null,
-  referenceLabel = null,
-) {
-  clearCountNew(characterId);
-  emit("select-set", null);
-  if (props.selectedReferenceCharacter === characterId) {
-    emit("select-reference-pictures", null);
-    emit("select-character", { id: characterId, label: characterLabel });
-    return;
-  }
-  emit("select-reference-pictures", {
-    id: characterId,
-    label: referenceLabel || characterLabel,
-  });
 }
 
 function selectSet(setId, label = null) {
@@ -615,10 +705,11 @@ function openImportDialog() {
   emit("open-import-dialog");
 }
 
-function startLocalImport(files) {
+function startLocalImport(files, projectId = null) {
   const list = Array.isArray(files) ? files : [];
   if (!list.length) return;
-  imageImporterRef.value?.startImport(list);
+  const options = projectId != null ? { projectId } : {};
+  imageImporterRef.value?.startImport(list, options);
 }
 
 function setLoading(isLoading) {
@@ -677,6 +768,16 @@ function isCountSelected(id) {
   if (!id) return false;
   return props.selectedCharacter === id;
 }
+
+const isAllPicturesRowActive = computed(() => {
+  if (props.selectedCharacter !== props.allPicturesId) return false;
+  if (projectViewMode.value === "global")
+    return allPicturesLastMode.value === "global";
+  return (
+    allPicturesLastMode.value === "project" &&
+    allPicturesLastProjectId.value === selectedProjectId.value
+  );
+});
 
 function isCountNew(id) {
   return Boolean(id && countNewTags.value[id]);
@@ -750,6 +851,26 @@ async function fetchSidebarData() {
       } catch {}
     }),
   );
+  // Fetch counts for each project and the unassigned bucket
+  try {
+    const countRequests = [
+      apiClient
+        .get(`${props.backendUrl}/projects/UNASSIGNED/summary`)
+        .then((r) => {
+          projectCounts.value[null] = r.data.image_count;
+        }),
+      ...projects.value.map((p) =>
+        apiClient
+          .get(`${props.backendUrl}/projects/${p.id}/summary`)
+          .then((r) => {
+            projectCounts.value[p.id] = r.data.image_count;
+          }),
+      ),
+    ];
+    await Promise.all(countRequests);
+  } catch (e) {
+    console.warn("Error fetching project counts:", e);
+  }
   flashCountsNextFetch.value = false;
 }
 
@@ -929,7 +1050,10 @@ async function handleDropOnSet(setId, event) {
   ) {
     const files = Array.from(event.dataTransfer.files);
     pendingImportTarget.value = { type: "set", id: setId };
-    imageImporterRef.value?.startImport(files);
+    const targetSet = pictureSets.value.find((s) => s.id === setId);
+    const options =
+      targetSet?.project_id != null ? { projectId: targetSet.project_id } : {};
+    imageImporterRef.value?.startImport(files, options);
     return;
   }
   // Get the dragged image IDs from the drag event
@@ -997,7 +1121,11 @@ async function onCharacterDrop(characterId, event) {
   ) {
     const files = Array.from(event.dataTransfer.files);
     pendingImportTarget.value = { type: "character", id: characterId };
-    imageImporterRef.value?.startImport(files);
+    const options =
+      selectedProjectId.value != null
+        ? { projectId: selectedProjectId.value }
+        : {};
+    imageImporterRef.value?.startImport(files, options);
     return;
   }
   // Accept faceIds or imageIds from drag event
@@ -1136,6 +1264,24 @@ onMounted(() => {
       return;
     }
     projectMenuOpen.value = false;
+    const inCharMenu = e.target.closest(".sidebar-move-menu");
+    if (
+      !(
+        characterMoveMenuBtnRef.value &&
+        characterMoveMenuBtnRef.value.contains(e.target)
+      ) &&
+      !inCharMenu
+    ) {
+      characterMoveMenuOpen.value = false;
+    }
+    if (
+      !(
+        setMoveMenuBtnRef.value && setMoveMenuBtnRef.value.contains(e.target)
+      ) &&
+      !inCharMenu
+    ) {
+      setMoveMenuOpen.value = false;
+    }
   };
   document.addEventListener("mousedown", handleProjectMenuOutsideClick);
   const _origCleanup = sidebarNoticeCleanup;
@@ -1219,7 +1365,107 @@ watch(
   },
 );
 
-defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
+watch(projectViewMode, (v) => emit("update:project-view-mode", v));
+watch(selectedProjectId, (v) => {
+  emit("update:selected-project-id", v);
+  if (v !== null) lastUsedProjectId.value = v;
+});
+
+function switchToProjectView() {
+  projectViewMode.value = "project";
+  if (selectedProjectId.value === null && sortedProjects.value.length > 0) {
+    const restore =
+      lastUsedProjectId.value &&
+      sortedProjects.value.find((p) => p.id === lastUsedProjectId.value);
+    selectedProjectId.value = restore
+      ? lastUsedProjectId.value
+      : sortedProjects.value[0].id;
+  }
+}
+
+async function toggleCharacterProjectMembership(charId) {
+  const char = characters.value.find((c) => c.id === charId);
+  const newProjectId =
+    char?.project_id === selectedProjectId.value
+      ? null
+      : selectedProjectId.value;
+  try {
+    await apiClient.patch(`${props.backendUrl}/characters/${charId}`, {
+      project_id: newProjectId,
+    });
+    const idx = characters.value.findIndex((c) => c.id === charId);
+    if (idx !== -1) {
+      characters.value[idx] = {
+        ...characters.value[idx],
+        project_id: newProjectId,
+      };
+    }
+  } catch (e) {
+    console.error("Failed to update character project membership:", e);
+  }
+}
+
+async function toggleSetProjectMembership(setId) {
+  const set = pictureSets.value.find((s) => s.id === setId);
+  const newProjectId =
+    set?.project_id === selectedProjectId.value
+      ? null
+      : selectedProjectId.value;
+  try {
+    await apiClient.patch(`${props.backendUrl}/picture_sets/${setId}`, {
+      project_id: newProjectId,
+    });
+    const idx = pictureSets.value.findIndex((s) => s.id === setId);
+    if (idx !== -1) {
+      pictureSets.value[idx] = {
+        ...pictureSets.value[idx],
+        project_id: newProjectId,
+      };
+    }
+  } catch (e) {
+    console.error("Failed to update set project membership:", e);
+  }
+}
+
+async function handleDropOnProjectPictures(event) {
+  if (projectViewMode.value !== "project" || selectedProjectId.value === null) {
+    return;
+  }
+  let draggedIds = [];
+  try {
+    const data = JSON.parse(event.dataTransfer.getData("application/json"));
+    if (data.imageIds && Array.isArray(data.imageIds)) {
+      draggedIds = data.imageIds;
+    }
+  } catch (e) {
+    console.error("Could not parse drag data:", e);
+    return;
+  }
+  if (draggedIds.length === 0) return;
+  try {
+    await Promise.all(
+      draggedIds.map((picId) =>
+        apiClient.patch(`${props.backendUrl}/pictures/${picId}`, {
+          project_id: selectedProjectId.value,
+        }),
+      ),
+    );
+    emit("images-moved", { imageIds: draggedIds });
+  } catch (e) {
+    console.error("Failed to assign pictures to project:", e);
+  }
+}
+
+const currentProjectId = computed(() =>
+  projectViewMode.value === "project" ? selectedProjectId.value : null,
+);
+
+defineExpose({
+  refreshSidebar,
+  openSettingsDialog,
+  startLocalImport,
+  currentProjectId,
+});
 </script>
 
 <template>
@@ -1253,6 +1499,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
     :backend-url="props.backendUrl"
     @close="closeProjectEditor"
     @saved="projectSaved"
+    @deleted="projectDeleted"
   />
   <UserSettingsDialog
     v-model:open="settingsDialogOpen"
@@ -1276,170 +1523,157 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
     :class="{ 'sidebar-collapsed': props.collapsed }"
     :style="sidebarThumbStyle"
   >
-    <div class="sidebar-scroll">
-      <div class="sidebar-brand">
-        <div class="sidebar-brand-left">
-          <a
-            v-if="!props.collapsed"
-            href="https://pikselkroken.github.io/pixlstash/"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="sidebar-brand-logo-link"
-          >
-            <img
-              src="/Logo.png"
-              alt="PixlStash logo"
-              class="sidebar-brand-logo"
-            />
-          </a>
-          <div v-if="!props.collapsed" class="sidebar-brand-text">
-            <span class="sidebar-brand-title">PixlStash</span>
-            <div class="sidebar-brand-subtitle-row">
-              <span class="sidebar-brand-version">v{{ appVersion }}</span>
-              <a
-                v-if="updateAvailable"
-                :href="latestVersionUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="sidebar-update-available"
-                >&#x2191; v{{ latestVersion }} available</a
-              >
-            </div>
+    <div class="sidebar-brand">
+      <div class="sidebar-brand-left">
+        <a
+          v-if="!props.collapsed"
+          href="https://pikselkroken.github.io/pixlstash/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="sidebar-brand-logo-link"
+        >
+          <img
+            src="/Logo.png"
+            alt="PixlStash logo"
+            class="sidebar-brand-logo"
+          />
+        </a>
+        <div v-if="!props.collapsed" class="sidebar-brand-text">
+          <span class="sidebar-brand-title">PixlStash</span>
+          <div class="sidebar-brand-subtitle-row">
+            <span class="sidebar-brand-version">v{{ appVersion }}</span>
+            <a
+              v-if="updateAvailable"
+              :href="latestVersionUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="sidebar-update-available"
+              >&#x2191; v{{ latestVersion }} available</a
+            >
           </div>
         </div>
-        <v-btn
-          icon
-          class="sidebar-brand-toggle"
-          :title="props.collapsed ? 'Show sidebar' : 'Hide sidebar'"
-          @click.stop="emit('toggle-sidebar')"
-        >
-          <v-icon>mdi-dock-left</v-icon>
-        </v-btn>
       </div>
+      <v-btn
+        icon
+        class="sidebar-brand-toggle"
+        :title="props.collapsed ? 'Show sidebar' : 'Hide sidebar'"
+        @click.stop="emit('toggle-sidebar')"
+      >
+        <v-icon>mdi-dock-left</v-icon>
+      </v-btn>
+    </div>
+    <div
+      v-if="props.collapsed"
+      class="sidebar-collapsed-project-wrap"
+      ref="projectMenuRef"
+    >
       <div
-        v-if="props.collapsed"
-        class="sidebar-collapsed-item"
+        :class="[
+          'sidebar-collapsed-item',
+          {
+            active: projectViewMode === 'project' && selectedProjectId !== null,
+          },
+        ]"
         style="margin: 0 auto"
-        title="Task Manager"
-        @click.stop="taskManagerOpen = true"
+        :title="
+          projectViewMode === 'global'
+            ? 'Global (all projects)'
+            : selectedProjectId === null
+              ? 'No project'
+              : (selectedProjectObj?.name ?? 'Project')
+        "
+        ref="collapsedProjectBtnRef"
+        @click.stop="toggleProjectMenu"
       >
-        <v-icon>mdi-timeline-clock-outline</v-icon>
+        <v-icon size="20">{{
+          projectViewMode === "global" ? "mdi-earth" : "mdi-folder-outline"
+        }}</v-icon>
       </div>
-      <div v-if="props.collapsed" class="sidebar-collapsed-divider"></div>
-      <div
-        v-if="props.collapsed"
-        class="sidebar-collapsed-project-wrap"
-        ref="projectMenuRef"
-      >
+      <Teleport to="body">
         <div
-          :class="[
-            'sidebar-collapsed-item',
-            {
-              active:
-                projectViewMode === 'project' && selectedProjectId !== null,
-            },
-          ]"
-          style="margin: 0 auto"
-          :title="
-            projectViewMode === 'global'
-              ? 'Global (all projects)'
-              : selectedProjectId === null
-                ? 'No project'
-                : (selectedProjectObj?.name ?? 'Project')
-          "
-          ref="collapsedProjectBtnRef"
-          @click.stop="toggleProjectMenu"
+          v-if="projectMenuOpen && props.collapsed"
+          ref="collapsedProjectMenuRef"
+          class="sidebar-collapsed-project-menu"
+          :style="{
+            top: collapsedProjectMenuPos.top + 'px',
+            left: collapsedProjectMenuPos.left + 'px',
+          }"
         >
-          <v-icon size="20">{{
-            projectViewMode === "global" ? "mdi-earth" : "mdi-folder-outline"
-          }}</v-icon>
-        </div>
-        <Teleport to="body">
           <div
-            v-if="projectMenuOpen && props.collapsed"
-            ref="collapsedProjectMenuRef"
-            class="sidebar-collapsed-project-menu"
-            :style="{
-              top: collapsedProjectMenuPos.top + 'px',
-              left: collapsedProjectMenuPos.left + 'px',
-            }"
+            class="sidebar-project-menu-item"
+            :class="{ active: projectViewMode === 'global' }"
+            @click="
+              projectViewMode = 'global';
+              projectMenuOpen = false;
+            "
           >
-            <div
-              class="sidebar-project-menu-item"
-              :class="{ active: projectViewMode === 'global' }"
-              @click="
-                projectViewMode = 'global';
-                projectMenuOpen = false;
-              "
-            >
-              <v-icon size="14">mdi-earth</v-icon>
-              <span class="sidebar-project-menu-item-label">Global</span>
-            </div>
-            <div
-              class="sidebar-project-menu-item"
-              :class="{
-                active:
-                  projectViewMode === 'project' && selectedProjectId === null,
-              }"
-              @click="
-                projectViewMode = 'project';
-                selectProject(null);
-              "
-            >
-              <v-icon size="14">mdi-folder-outline</v-icon>
-              <span class="sidebar-project-menu-item-label">No project</span>
-            </div>
-            <div
-              v-for="p in projects"
-              :key="p.id"
-              class="sidebar-project-menu-item"
-              :class="{
-                active:
-                  projectViewMode === 'project' && selectedProjectId === p.id,
-              }"
-              @click="
-                projectViewMode = 'project';
-                selectProject(p.id);
-              "
-            >
-              <v-icon size="14">mdi-folder</v-icon>
-              <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
-            </div>
-            <div
-              class="sidebar-project-menu-add"
-              @click="
-                createProject;
-                projectMenuOpen = false;
-              "
-            >
-              <v-icon size="14">mdi-plus</v-icon>
-              Add new project
-            </div>
+            <v-icon size="14">mdi-earth</v-icon>
+            <span class="sidebar-project-menu-item-label">Global</span>
           </div>
-        </Teleport>
+          <div
+            v-for="p in sortedProjects"
+            :key="p.id"
+            class="sidebar-project-menu-item"
+            :class="{
+              active:
+                projectViewMode === 'project' && selectedProjectId === p.id,
+            }"
+            @click="
+              projectViewMode = 'project';
+              selectProject(p.id);
+            "
+          >
+            <v-icon size="14">mdi-folder</v-icon>
+            <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
+          </div>
+          <div
+            class="sidebar-project-menu-add"
+            @click="
+              createProject;
+              projectMenuOpen = false;
+            "
+          >
+            <v-icon size="14">mdi-plus</v-icon>
+            Add new project
+          </div>
+        </div>
+      </Teleport>
+    </div>
+    <div v-else class="sidebar-view-tabs-row">
+      <span class="sidebar-view-tabs-label">Library</span>
+      <div class="sidebar-view-tabs">
+        <button
+          class="sidebar-view-tab"
+          :class="{ active: projectViewMode === 'global' }"
+          @click="projectViewMode = 'global'"
+        >
+          <v-icon size="14">mdi-earth</v-icon>
+          Global
+        </button>
+        <button
+          class="sidebar-view-tab"
+          :class="{ active: projectViewMode === 'project' }"
+          @click="switchToProjectView"
+        >
+          <v-icon size="14">mdi-folder-outline</v-icon>
+          Projects
+        </button>
       </div>
-      <div class="sidebar-collapsed-divider"></div>
+    </div>
+    <div class="sidebar-scroll">
       <template v-if="props.collapsed">
         <div class="sidebar-collapsed-list">
           <div
             :class="[
               'sidebar-collapsed-item',
-              { active: props.selectedCharacter === props.allPicturesId },
+              {
+                active: isAllPicturesRowActive,
+              },
             ]"
             title="All Pictures"
             @click="selectCharacter(props.allPicturesId, 'All Pictures')"
           >
             <v-icon>mdi-image-multiple</v-icon>
-          </div>
-          <div
-            :class="[
-              'sidebar-collapsed-item',
-              { active: props.selectedCharacter === props.scrapheapPicturesId },
-            ]"
-            title="Scrapheap"
-            @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
-          >
-            <v-icon>mdi-trash-can-outline</v-icon>
           </div>
           <div class="sidebar-collapsed-divider"></div>
           <button
@@ -1503,357 +1737,514 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         </div>
       </template>
       <template v-else>
-        <div class="sidebar-all-pictures-row">
-          <div
-            :class="[
-              'sidebar-list-item',
-              { active: props.selectedCharacter === props.allPicturesId },
-            ]"
-            @click="selectCharacter(props.allPicturesId, 'Pictures')"
-          >
-            <span class="sidebar-list-icon">
-              <v-icon size="44">mdi-image-multiple</v-icon>
-            </span>
-            <span class="sidebar-list-label">All Pictures</span>
-          </div>
-        </div>
-        <div class="sidebar-header">Collections</div>
-        <div class="sidebar-view-tabs-row">
-          <div class="sidebar-view-tabs">
-            <button
-              class="sidebar-view-tab"
-              :class="{ active: projectViewMode === 'global' }"
-              @click="projectViewMode = 'global'"
-            >
-              <v-icon size="14">mdi-earth</v-icon>
-              Global
-            </button>
-            <button
-              class="sidebar-view-tab"
-              :class="{ active: projectViewMode === 'project' }"
-              @click="projectViewMode = 'project'"
-            >
-              <v-icon size="14">mdi-folder-outline</v-icon>
-              By Project
-            </button>
-          </div>
-        </div>
         <div class="sidebar-tab-panel">
           <div
-            v-if="projectViewMode === 'project'"
-            class="sidebar-project-menu-wrap"
-            ref="projectMenuRef"
+            v-if="projectViewMode === 'project' && projects.length === 0"
+            class="sidebar-no-projects-empty"
           >
-            <button
-              class="sidebar-project-trigger"
-              @click.stop="toggleProjectMenu"
+            <v-icon size="52" class="sidebar-no-projects-icon"
+              >mdi-folder-plus-outline</v-icon
             >
-              <v-icon size="14">mdi-folder-multiple-outline</v-icon>
-              <span class="sidebar-project-trigger-label">
-                {{
-                  selectedProjectId === null
-                    ? "No project"
-                    : (selectedProjectObj?.name ?? "—")
-                }}
-              </span>
-              <v-icon size="14" class="sidebar-project-trigger-chevron">
-                {{ projectMenuOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}
-              </v-icon>
-            </button>
-            <div v-if="projectMenuOpen" class="sidebar-project-menu">
-              <div
-                class="sidebar-project-menu-item"
-                :class="{ active: selectedProjectId === null }"
-                @click="selectProject(null)"
-              >
-                <span class="sidebar-project-menu-item-label">No project</span>
-              </div>
-              <div
-                v-for="p in projects"
-                :key="p.id"
-                class="sidebar-project-menu-item"
-                :class="{ active: selectedProjectId === p.id }"
-                @click="selectProject(p.id)"
-              >
-                <span class="sidebar-project-menu-item-label">{{
-                  p.name
-                }}</span>
-                <v-icon
-                  size="14"
-                  class="sidebar-project-menu-item-action"
-                  @click.stop="exportProject(p)"
-                  title="Export project as ZIP"
-                  >mdi-download-outline</v-icon
-                >
-                <v-icon
-                  size="14"
-                  class="sidebar-project-menu-item-action"
-                  @click.stop="openProjectEditor(p)"
-                  title="Edit project"
-                  >mdi-pencil</v-icon
-                >
-              </div>
-              <div class="sidebar-project-menu-add" @click="createProject">
-                <v-icon size="14">mdi-plus</v-icon>
-                Add new project
-              </div>
-            </div>
+            <p class="sidebar-no-projects-text">
+              Create a project to organise your library into separate
+              collections.
+            </p>
+            <v-btn
+              color="primary"
+              size="small"
+              prepend-icon="mdi-plus"
+              rounded="lg"
+              class="sidebar-no-projects-btn"
+              @click="createProject"
+            >
+              Create new project
+            </v-btn>
           </div>
-
-          <div class="sidebar-section-header">
-            People
-            <span class="sidebar-header-spacer"></span>
-            <div class="sidebar-header-actions">
-              <v-icon
-                v-if="selectedCharacterObj"
-                class="edit-character-inline"
-                @click.stop="openCharacterEditor(selectedCharacterObj)"
-                title="Edit selected character"
-              >
-                mdi-pencil
-              </v-icon>
-              <v-icon
-                v-if="
-                  props.selectedCharacter &&
-                  props.selectedCharacter !== props.allPicturesId &&
-                  props.selectedCharacter !== props.unassignedPicturesId &&
-                  props.selectedCharacter !== props.scrapheapPicturesId
-                "
-                class="delete-character-inline"
-                color="white"
-                @click.stop="deleteCharacter"
-                title="Delete selected character"
-              >
-                mdi-trash-can-outline
-              </v-icon>
-              <v-icon
-                class="add-character-inline"
-                @click.stop="createCharacter"
-                title="Add character"
-              >
-                mdi-plus
-              </v-icon>
-            </div>
-          </div>
-          <div
-            v-if="sidebarError"
-            class="sidebar-error-bubble"
-            :style="
-              sidebarErrorPosition
-                ? {
-                    top: `${sidebarErrorPosition.top}px`,
-                    left: `${sidebarErrorPosition.left}px`,
-                  }
-                : { top: '72px', left: '20px' }
-            "
-          >
-            {{ sidebarError }}
-          </div>
-          <div
-            v-if="visibleCharacters.length === 0"
-            class="sidebar-collections-help-row"
-          >
-            <span class="sidebar-collections-help">
-              Click the + button to add one.
-            </span>
-          </div>
-          <div
-            v-if="visibleCharacters.length > 0"
-            v-for="char in visibleCharacters"
-            :key="char.id"
-            class="sidebar-character-group"
-          >
+          <template v-if="projectViewMode !== 'project' || projects.length > 0">
             <div
-              :class="[
-                'sidebar-list-item',
-                {
-                  active: selectedCharacter === char.id,
-                  'reference-active':
-                    props.selectedReferenceCharacter === char.id,
-                  droppable: dragOverCharacter === char.id,
-                },
-              ]"
-              :ref="(el) => registerCharacterRef(char.id, el)"
-              @click="selectCharacter(char.id, char.name || 'Character')"
-              @dragover.prevent="handleDragOverCharacter(char.id)"
-              @dragleave="handleDragLeaveCharacter"
+              v-if="projectViewMode === 'project'"
+              class="sidebar-project-menu-wrap"
+              ref="projectMenuRef"
+            >
+              <button
+                class="sidebar-project-trigger"
+                @click.stop="toggleProjectMenu"
+              >
+                <v-icon size="14">mdi-folder-multiple-outline</v-icon>
+                <span class="sidebar-project-trigger-label">
+                  {{ selectedProjectObj?.name ?? "—" }}
+                </span>
+                <v-icon size="14" class="sidebar-project-trigger-chevron">
+                  {{ projectMenuOpen ? "mdi-chevron-up" : "mdi-chevron-down" }}
+                </v-icon>
+              </button>
+              <div v-if="projectMenuOpen" class="sidebar-project-menu">
+                <div
+                  v-for="p in sortedProjects"
+                  :key="p.id"
+                  class="sidebar-project-menu-item"
+                  :class="{ active: selectedProjectId === p.id }"
+                  @click="selectProject(p.id)"
+                >
+                  <span class="sidebar-project-menu-item-label">{{
+                    p.name
+                  }}</span>
+                  <v-icon
+                    size="14"
+                    class="sidebar-project-menu-item-action"
+                    @click.stop="exportProject(p)"
+                    title="Export project as ZIP"
+                    >mdi-download-outline</v-icon
+                  >
+                  <v-icon
+                    size="14"
+                    class="sidebar-project-menu-item-action"
+                    @click.stop="openProjectEditor(p)"
+                    title="Edit project"
+                    >mdi-pencil</v-icon
+                  >
+                </div>
+                <div class="sidebar-project-menu-add" @click="createProject">
+                  <v-icon size="14">mdi-plus</v-icon>
+                  Add new project
+                </div>
+              </div>
+            </div>
+            <div
+              v-if="projectViewMode === 'global'"
+              class="sidebar-section-divider"
+            ></div>
+            <div
+              class="sidebar-all-pictures-row"
+              :class="{
+                'drag-over-project':
+                  projectViewMode === 'project' &&
+                  selectedProjectId !== null &&
+                  dragOverProjectPictures,
+              }"
+              @dragover.prevent="
+                projectViewMode === 'project' && selectedProjectId !== null
+                  ? (dragOverProjectPictures = true)
+                  : null
+              "
+              @dragleave="dragOverProjectPictures = false"
               @drop.prevent="
-                handleDropOnCharacter({ characterId: char.id, event: $event })
+                projectViewMode === 'project' && selectedProjectId !== null
+                  ? (dragOverProjectPictures = false) ||
+                    handleDropOnProjectPictures($event)
+                  : null
               "
             >
-              <span class="sidebar-list-icon">
-                <img
-                  :src="
-                    characterThumbnails[char.id]
-                      ? characterThumbnails[char.id]
-                      : unknownPerson
-                  "
-                  alt=""
-                  :width="sidebarThumbnailSizeModel"
-                  :height="sidebarThumbnailSizeModel"
-                  class="sidebar-character-thumb"
-                />
-              </span>
-              <span class="sidebar-list-label">
-                <v-tooltip
-                  location="top"
-                  :disabled="!labelNeedsTooltip(`char-${char.id}`)"
-                >
-                  <template #activator="{ props }">
-                    <span
-                      v-bind="props"
-                      :ref="mergeTooltipRef(props, `char-${char.id}`)"
-                      class="sidebar-list-label-text"
-                    >
-                      {{
-                        char.name.charAt(0).toUpperCase() + char.name.slice(1)
-                      }}
-                    </span>
-                  </template>
-                  <span>{{ char.name }}</span>
-                </v-tooltip>
-              </span>
-              <span class="sidebar-character-actions">
-                <v-icon
-                  :class="[
-                    'sidebar-character-reference',
-                    { active: props.selectedReferenceCharacter === char.id },
-                  ]"
-                  size="20"
-                  :title="'Reference pictures'"
-                  @click.stop="
-                    selectReferencePictures(
-                      char.id,
-                      char.name || 'Character',
-                      `Reference: ${char.name || 'Character'}`,
-                    )
-                  "
-                >
-                  mdi-image-multiple
-                </v-icon>
-                <span class="sidebar-list-count">
-                  <span v-if="isCountNew(char.id)" class="sidebar-new-tag">
-                    new
-                  </span>
-                  <span
-                    v-if="props.selectedReferenceCharacter === char.id"
-                    class="sidebar-reference-label"
-                  >
-                    Ref
-                  </span>
-                  <span v-else>
-                    {{ categoryCounts[char.id] ?? "" }}
-                  </span>
+              <div
+                :class="[
+                  'sidebar-list-item',
+                  { active: isAllPicturesRowActive },
+                ]"
+                @click="selectCharacter(props.allPicturesId, 'Pictures')"
+              >
+                <span class="sidebar-list-icon">
+                  <v-icon size="44">mdi-image-multiple</v-icon>
                 </span>
-              </span>
+                <span class="sidebar-list-label">{{
+                  projectViewMode === "global"
+                    ? "All Pictures"
+                    : selectedProjectId === null
+                      ? "Unassigned Pictures"
+                      : "Project Pictures"
+                }}</span>
+                <span class="sidebar-list-count">{{
+                  projectViewMode === "global"
+                    ? (categoryCounts[props.allPicturesId] ?? "")
+                    : (projectCounts[selectedProjectId] ?? "")
+                }}</span>
+              </div>
             </div>
-          </div>
 
-          <div class="sidebar-section-header">
-            Picture Sets
-            <span class="sidebar-header-spacer"></span>
-            <div class="sidebar-header-actions">
-              <v-icon
-                v-if="selectedSetObj"
-                class="edit-set-inline"
-                @click.stop="openSetEditor(selectedSetObj)"
-                title="Edit selected set"
-              >
-                mdi-pencil
-              </v-icon>
-              <v-icon
-                v-if="selectedSet"
-                class="delete-character-inline"
-                color="white"
-                @click.stop="handleDeleteSet"
-                title="Delete selected set"
-              >
-                mdi-trash-can-outline
-              </v-icon>
-              <v-icon
-                class="add-character-inline"
-                @click.stop="createSet"
-                title="Create new set"
-              >
-                mdi-plus
-              </v-icon>
-            </div>
-          </div>
-          <div
-            v-if="visibleSets.length === 0"
-            class="sidebar-collections-help-row"
-          >
-            <span class="sidebar-collections-help">
-              Click the + button to add one.
-            </span>
-          </div>
-          <template v-for="(pset, idx) in visibleSets" :key="pset.id">
             <div
-              :class="[
-                'sidebar-list-item',
-                'sidebar-set-item',
-                {
-                  active: selectedSet === pset.id,
-                  droppable: dragOverSet === pset.id,
-                },
-              ]"
-              :ref="(el) => registerSetRef(pset.id, el)"
-              @click="selectSet(pset.id, pset.name || 'Picture Set')"
-              @dragover.prevent="dragOverSetItem(pset.id)"
-              @dragleave="dragLeaveSetItem"
-              @drop.prevent="handleDropOnSet(pset.id, $event)"
+              class="sidebar-section-header sidebar-section-header--collapsible"
+              @click.stop="peopleSectionCollapsed = !peopleSectionCollapsed"
             >
-              <span class="sidebar-list-icon">
-                <img
-                  v-if="hasSetThumbnail(pset)"
-                  :src="getSetThumbnail(pset.id)"
-                  alt=""
-                  class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
-                  :width="sidebarThumbnailSizeLarge"
-                  :height="sidebarThumbnailSizeLarge"
-                  @error="handleSetThumbnailError(pset.id)"
-                />
-                <v-icon v-else size="44">mdi-image-album</v-icon>
-              </span>
-              <span class="sidebar-list-label">
-                <v-tooltip
-                  location="top"
-                  :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
+              <v-icon class="sidebar-section-chevron" size="16">{{
+                peopleSectionCollapsed
+                  ? "mdi-chevron-right"
+                  : "mdi-chevron-down"
+              }}</v-icon>
+              People
+              <span class="sidebar-header-spacer"></span>
+              <div class="sidebar-header-actions" @click.stop>
+                <v-icon
+                  v-if="selectedCharacterObj"
+                  class="edit-character-inline"
+                  @click.stop="openCharacterEditor(selectedCharacterObj)"
+                  title="Edit selected character"
                 >
-                  <template #activator="{ props }">
-                    <span
-                      v-bind="props"
-                      :ref="mergeTooltipRef(props, `set-${pset.id}`)"
-                      class="sidebar-list-label-text"
+                  mdi-pencil
+                </v-icon>
+                <v-icon
+                  v-if="
+                    props.selectedCharacter &&
+                    props.selectedCharacter !== props.allPicturesId &&
+                    props.selectedCharacter !== props.unassignedPicturesId &&
+                    props.selectedCharacter !== props.scrapheapPicturesId
+                  "
+                  class="delete-character-inline"
+                  color="white"
+                  @click.stop="deleteCharacter"
+                  title="Delete selected character"
+                >
+                  mdi-trash-can-outline
+                </v-icon>
+                <span
+                  v-if="
+                    projectViewMode === 'project' && selectedProjectId !== null
+                  "
+                  ref="characterMoveMenuBtnRef"
+                  class="sidebar-move-to-project-wrap"
+                  @click.stop
+                >
+                  <v-icon
+                    class="add-character-inline"
+                    @click.stop="openCharacterMoveMenu()"
+                    title="Add or remove people from this project"
+                  >
+                    mdi-plus
+                  </v-icon>
+                  <Teleport to="body">
+                    <div
+                      v-if="characterMoveMenuOpen"
+                      class="sidebar-move-menu"
+                      :style="{
+                        top: characterMenuPos.top + 'px',
+                        left: characterMenuPos.left + 'px',
+                      }"
                     >
-                      {{ pset.name }}
-                    </span>
-                  </template>
-                  <span>{{ pset.name }}</span>
-                </v-tooltip>
-              </span>
-              <span class="sidebar-list-count">
-                {{ pset.picture_count ?? 0 }}
-              </span>
+                      <div
+                        class="sidebar-move-menu-item sidebar-move-menu-item--create"
+                        @click.stop="
+                          createCharacter();
+                          characterMoveMenuOpen = false;
+                        "
+                      >
+                        <v-icon size="16" class="sidebar-move-menu-check"
+                          >mdi-plus-circle-outline</v-icon
+                        >
+                        Create new
+                      </div>
+                      <template
+                        v-for="group in projectMenuCharacterGroups"
+                        :key="group.label"
+                      >
+                        <div
+                          class="sidebar-move-menu-group-header"
+                          :class="{
+                            'sidebar-move-menu-group-header--current':
+                              group.projectId === selectedProjectId,
+                          }"
+                        >
+                          {{ group.label }}
+                        </div>
+                        <div
+                          v-for="char in group.items"
+                          :key="char.id"
+                          class="sidebar-move-menu-item"
+                          :class="{
+                            'sidebar-move-menu-item--checked':
+                              char.project_id === selectedProjectId,
+                          }"
+                          @click.stop="
+                            toggleCharacterProjectMembership(char.id)
+                          "
+                        >
+                          <v-icon size="16" class="sidebar-move-menu-check">{{
+                            char.project_id === selectedProjectId
+                              ? "mdi-checkbox-marked"
+                              : "mdi-checkbox-blank-outline"
+                          }}</v-icon>
+                          {{ char.name }}
+                        </div>
+                      </template>
+                    </div>
+                  </Teleport>
+                </span>
+                <v-icon
+                  v-if="projectViewMode !== 'project'"
+                  class="add-character-inline"
+                  @click.stop="createCharacter"
+                  title="Add character"
+                >
+                  mdi-plus
+                </v-icon>
+              </div>
             </div>
+            <template v-if="!peopleSectionCollapsed">
+              <div
+                v-if="sidebarError"
+                class="sidebar-error-bubble"
+                :style="
+                  sidebarErrorPosition
+                    ? {
+                        top: `${sidebarErrorPosition.top}px`,
+                        left: `${sidebarErrorPosition.left}px`,
+                      }
+                    : { top: '72px', left: '20px' }
+                "
+              >
+                {{ sidebarError }}
+              </div>
+              <div
+                v-if="visibleCharacters.length === 0"
+                class="sidebar-collections-help-row"
+              >
+                <span class="sidebar-collections-help">
+                  Click the + button to add one.
+                </span>
+              </div>
+              <div
+                v-if="visibleCharacters.length > 0"
+                v-for="char in visibleCharacters"
+                :key="char.id"
+                class="sidebar-character-group"
+              >
+                <div
+                  :class="[
+                    'sidebar-list-item',
+                    {
+                      active: selectedCharacter === char.id,
+                      droppable: dragOverCharacter === char.id,
+                    },
+                  ]"
+                  :ref="(el) => registerCharacterRef(char.id, el)"
+                  @click="selectCharacter(char.id, char.name || 'Character')"
+                  @dragover.prevent="handleDragOverCharacter(char.id)"
+                  @dragleave="handleDragLeaveCharacter"
+                  @drop.prevent="
+                    handleDropOnCharacter({
+                      characterId: char.id,
+                      event: $event,
+                    })
+                  "
+                >
+                  <span class="sidebar-list-icon">
+                    <img
+                      :src="
+                        characterThumbnails[char.id]
+                          ? characterThumbnails[char.id]
+                          : unknownPerson
+                      "
+                      alt=""
+                      :width="sidebarThumbnailSizeModel"
+                      :height="sidebarThumbnailSizeModel"
+                      class="sidebar-character-thumb"
+                    />
+                  </span>
+                  <span class="sidebar-list-label">
+                    <v-tooltip
+                      location="top"
+                      :disabled="!labelNeedsTooltip(`char-${char.id}`)"
+                    >
+                      <template #activator="{ props }">
+                        <span
+                          v-bind="props"
+                          :ref="mergeTooltipRef(props, `char-${char.id}`)"
+                          class="sidebar-list-label-text"
+                        >
+                          {{
+                            char.name.charAt(0).toUpperCase() +
+                            char.name.slice(1)
+                          }}
+                        </span>
+                      </template>
+                      <span>{{ char.name }}</span>
+                    </v-tooltip>
+                  </span>
+                  <span class="sidebar-character-actions">
+                    <span class="sidebar-list-count">
+                      <span v-if="isCountNew(char.id)" class="sidebar-new-tag">
+                        new
+                      </span>
+                      <span>
+                        {{ categoryCounts[char.id] ?? "" }}
+                      </span>
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </template>
+
+            <div
+              class="sidebar-section-header sidebar-section-header--collapsible"
+              @click.stop="setsSectionCollapsed = !setsSectionCollapsed"
+            >
+              <v-icon class="sidebar-section-chevron" size="16">{{
+                setsSectionCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+              }}</v-icon>
+              Picture Sets
+              <span class="sidebar-header-spacer"></span>
+              <div class="sidebar-header-actions">
+                <v-icon
+                  v-if="selectedSetObj"
+                  class="edit-set-inline"
+                  @click.stop="openSetEditor(selectedSetObj)"
+                  title="Edit selected set"
+                >
+                  mdi-pencil
+                </v-icon>
+                <v-icon
+                  v-if="selectedSet"
+                  class="delete-character-inline"
+                  color="white"
+                  @click.stop="handleDeleteSet"
+                  title="Delete selected set"
+                >
+                  mdi-trash-can-outline
+                </v-icon>
+                <span
+                  v-if="
+                    projectViewMode === 'project' && selectedProjectId !== null
+                  "
+                  ref="setMoveMenuBtnRef"
+                  class="sidebar-move-to-project-wrap"
+                  @click.stop
+                >
+                  <v-icon
+                    class="add-character-inline"
+                    @click.stop="openSetMoveMenu()"
+                    title="Add or remove sets from this project"
+                  >
+                    mdi-plus
+                  </v-icon>
+                  <Teleport to="body">
+                    <div
+                      v-if="setMoveMenuOpen"
+                      class="sidebar-move-menu"
+                      :style="{
+                        top: setMenuPos.top + 'px',
+                        left: setMenuPos.left + 'px',
+                      }"
+                    >
+                      <div
+                        class="sidebar-move-menu-item sidebar-move-menu-item--create"
+                        @click.stop="
+                          createSet();
+                          setMoveMenuOpen = false;
+                        "
+                      >
+                        <v-icon size="16" class="sidebar-move-menu-check"
+                          >mdi-plus-circle-outline</v-icon
+                        >
+                        Create new
+                      </div>
+                      <template
+                        v-for="group in projectMenuSetGroups"
+                        :key="group.label"
+                      >
+                        <div
+                          class="sidebar-move-menu-group-header"
+                          :class="{
+                            'sidebar-move-menu-group-header--current':
+                              group.projectId === selectedProjectId,
+                          }"
+                        >
+                          {{ group.label }}
+                        </div>
+                        <div
+                          v-for="pset in group.items"
+                          :key="pset.id"
+                          class="sidebar-move-menu-item"
+                          :class="{
+                            'sidebar-move-menu-item--checked':
+                              pset.project_id === selectedProjectId,
+                          }"
+                          @click.stop="toggleSetProjectMembership(pset.id)"
+                        >
+                          <v-icon size="16" class="sidebar-move-menu-check">{{
+                            pset.project_id === selectedProjectId
+                              ? "mdi-checkbox-marked"
+                              : "mdi-checkbox-blank-outline"
+                          }}</v-icon>
+                          {{ pset.name }}
+                        </div>
+                      </template>
+                    </div>
+                  </Teleport>
+                </span>
+                <v-icon
+                  v-if="projectViewMode !== 'project'"
+                  class="add-character-inline"
+                  @click.stop="createSet"
+                  title="Create new set"
+                >
+                  mdi-plus
+                </v-icon>
+              </div>
+            </div>
+            <template v-if="!setsSectionCollapsed">
+              <div
+                v-if="visibleSets.length === 0"
+                class="sidebar-collections-help-row"
+              >
+                <span class="sidebar-collections-help">
+                  Click the + button to add one.
+                </span>
+              </div>
+              <template v-for="(pset, idx) in visibleSets" :key="pset.id">
+                <div
+                  :class="[
+                    'sidebar-list-item',
+                    'sidebar-set-item',
+                    {
+                      active: selectedSet === pset.id,
+                      droppable: dragOverSet === pset.id,
+                    },
+                  ]"
+                  :ref="(el) => registerSetRef(pset.id, el)"
+                  @click="selectSet(pset.id, pset.name || 'Picture Set')"
+                  @dragover.prevent="dragOverSetItem(pset.id)"
+                  @dragleave="dragLeaveSetItem"
+                  @drop.prevent="handleDropOnSet(pset.id, $event)"
+                >
+                  <span class="sidebar-list-icon">
+                    <img
+                      v-if="hasSetThumbnail(pset)"
+                      :src="getSetThumbnail(pset.id)"
+                      alt=""
+                      class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
+                      :width="sidebarThumbnailSizeLarge"
+                      :height="sidebarThumbnailSizeLarge"
+                      @error="handleSetThumbnailError(pset.id)"
+                    />
+                    <v-icon v-else size="44">mdi-image-album</v-icon>
+                  </span>
+                  <span class="sidebar-list-label">
+                    <v-tooltip
+                      location="top"
+                      :disabled="!labelNeedsTooltip(`set-${pset.id}`)"
+                    >
+                      <template #activator="{ props }">
+                        <span
+                          v-bind="props"
+                          :ref="mergeTooltipRef(props, `set-${pset.id}`)"
+                          class="sidebar-list-label-text"
+                        >
+                          {{ pset.name }}
+                        </span>
+                      </template>
+                      <span>{{ pset.name }}</span>
+                    </v-tooltip>
+                  </span>
+                  <span class="sidebar-list-count">
+                    {{ pset.picture_count ?? 0 }}
+                  </span>
+                </div>
+              </template>
+            </template>
+            <ProjectFiles
+              v-if="projectViewMode === 'project' && selectedProjectId !== null"
+              :projectId="selectedProjectId"
+              :backendUrl="props.backendUrl"
+            />
           </template>
-
-          <ProjectFiles
-            v-if="projectViewMode === 'project' && selectedProjectId !== null"
-            :projectId="selectedProjectId"
-            :backendUrl="props.backendUrl"
-          />
         </div>
-
-        <div
-          class="sidebar-searchbar-wrapper"
-          style="
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            align-items: stretch;
-          "
-        ></div>
       </template>
     </div>
     <!-- end sidebar-scroll -->
@@ -1867,6 +2258,14 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
         <span class="sidebar-footer-btn-label">Import</span>
       </div>
       <div
+        class="sidebar-footer-btn sidebar-footer-btn--tasks"
+        title="Task Manager"
+        @click.stop="taskManagerOpen = true"
+      >
+        <v-icon size="20">mdi-timeline-clock-outline</v-icon>
+        <span class="sidebar-footer-btn-label">Tasks</span>
+      </div>
+      <div
         :class="[
           'sidebar-footer-btn',
           'sidebar-footer-btn--scrapheap',
@@ -1877,14 +2276,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
       >
         <v-icon size="20">mdi-trash-can-outline</v-icon>
         <span class="sidebar-footer-btn-label">Scrapheap</span>
-      </div>
-      <div
-        class="sidebar-footer-btn sidebar-footer-btn--tasks"
-        title="Task Manager"
-        @click.stop="taskManagerOpen = true"
-      >
-        <v-icon size="20">mdi-timeline-clock-outline</v-icon>
-        <span class="sidebar-footer-btn-label">Tasks</span>
       </div>
     </div>
   </aside>
@@ -1909,7 +2300,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-section-divider {
   height: 1px;
-  margin: 2px 0;
   background: rgba(var(--v-theme-border), 0.35);
 }
 
@@ -1929,18 +2319,33 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-view-tabs-row {
   display: flex;
-  justify-content: center;
-  padding: 4px 8px 0;
+  align-items: flex-end;
+  padding: 0 4px 0 8px;
+  position: relative;
+  z-index: 1;
+  margin-top: 6px;
+  margin-bottom: 0;
+  gap: 8px;
+}
+
+.sidebar-view-tabs-label {
+  font-size: 1rem;
+  font-weight: bold;
+  color: color-mix(
+    in srgb,
+    rgb(var(--v-theme-sidebar-text)) 90%,
+    rgb(var(--v-theme-accent))
+  );
+
+  white-space: nowrap;
+  padding-bottom: 5px;
+  flex-shrink: 0;
+  flex: 1;
 }
 
 .sidebar-view-tabs {
   display: flex;
-  width: 95%;
   gap: 0;
-  background: rgba(var(--v-theme-surface), 0.3);
-  border-radius: 8px;
-  padding: 0;
-  overflow: hidden;
 }
 
 .sidebar-view-tab {
@@ -1948,43 +2353,73 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   align-items: center;
   justify-content: center;
   gap: 5px;
-  flex: 1;
-  padding: 5px 12px;
+  padding: 4px 8px;
   border-radius: 0;
   border: none;
-  font-size: 0.9rem;
+  border-bottom: none;
+  font-size: 0.87rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
-  background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  background: rgba(var(--v-theme-surface), 0.1);
+  color: rgba(var(--v-theme-sidebar-text), 0.7);
   transition:
     background 0.15s,
     color 0.15s;
   white-space: nowrap;
-}
-
-.sidebar-view-tab:first-child {
-  border-radius: 10px 0 0 10px;
+  margin-right: -1px;
+  position: relative;
 }
 
 .sidebar-view-tab:last-child {
-  border-radius: 0 10px 10px 0;
+  margin-right: 0;
 }
 
 .sidebar-view-tab.active {
-  background: rgb(var(--v-theme-tertiary));
-  color: rgb(var(--v-theme-on-primary));
+  background: rgba(var(--v-theme-tertiary), 0.48);
+  color: rgb(var(--v-theme-sidebar-text));
+  border-color: none;
+  border-bottom: none;
+  z-index: 2;
 }
 
 .sidebar-view-tab:hover:not(.active) {
-  background: rgba(var(--v-theme-surface), 0.4);
-  color: rgb(var(--v-theme-sidebar-text));
+  background: rgba(var(--v-theme-surface), 0.5);
+  color: rgba(var(--v-theme-sidebar-text), 0.85);
 }
 
 .sidebar-tab-panel {
-  margin-top: 4px;
-  padding: 6px 0 0;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  background: rgba(var(--v-theme-tertiary), 0.16);
+}
+
+.sidebar-no-projects-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.sidebar-no-projects-icon {
+  opacity: 0.35;
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-no-projects-text {
+  font-size: 0.9rem;
+  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.sidebar-no-projects-btn :deep(.v-btn__content) {
+  font-size: 0.82rem;
+  padding: 0 12px;
 }
 
 .sidebar-collapsed-project-wrap {
@@ -1999,9 +2434,9 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   position: fixed;
   z-index: 300;
   background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-border), 0.7);
+  border: 1px solid rgba(var(--v-theme-border), 0.4);
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.35);
+  box-shadow: none;
   overflow: hidden;
   min-width: 180px;
   white-space: nowrap;
@@ -2015,32 +2450,32 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 .sidebar-project-menu-wrap {
   position: relative;
   padding: 0;
-  border-bottom: 2px solid rgba(var(--v-theme-tertiary), 0.65);
+  border-bottom: none;
 }
 
 .sidebar-project-trigger {
   width: 100%;
-  margin: 0 auto;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 6px;
-  padding: 7px 12px;
+  padding: 6px 10px;
   border-radius: 0;
   border: none;
-  background: rgba(var(--v-theme-tertiary), 0.32);
-  color: rgba(var(--v-theme-sidebar-text), 0.5);
-  font-size: 0.9rem;
-  font-weight: 600;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.7);
+  background: rgba(var(--v-theme-tertiary), 0.38);
+  color: rgba(var(--v-theme-sidebar-text), 0.75);
+  font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
   transition:
     background 0.15s,
     color 0.15s;
-  text-align: center;
+  text-align: left;
 }
 
 .sidebar-project-trigger:hover {
-  background: rgba(var(--v-theme-tertiary), 0.4);
+  background: rgba(var(--v-theme-surface), 0.4);
   color: rgb(var(--v-theme-sidebar-text));
 }
 
@@ -2049,7 +2484,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: center;
+  text-align: left;
 }
 
 .sidebar-project-trigger-chevron {
@@ -2059,14 +2494,19 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-project-menu {
   position: absolute;
-  top: calc(100% - 4px);
-  left: 8px;
-  right: 8px;
+  top: 100%;
+  left: 0;
+  right: 0;
   z-index: 200;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-border), 0.7);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.35);
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-tertiary)) 38%,
+    rgb(var(--v-theme-sidebar))
+  );
+  border: none;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.5);
+  border-radius: 0;
+  box-shadow: 0 4px 8px rgba(var(--v-theme-shadow), 0.15);
   overflow: hidden;
 }
 
@@ -2075,19 +2515,19 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   align-items: center;
   padding: 7px 10px;
   cursor: pointer;
-  font-size: 0.9rem;
-  color: rgb(var(--v-theme-on-surface));
+  font-size: 0.85rem;
+  color: rgb(var(--v-theme-on-tertiary));
   transition: background 0.12s;
   gap: 6px;
 }
 
 .sidebar-project-menu-item:hover {
-  background: rgba(var(--v-theme-accent), 0.1);
+  background: rgba(var(--v-theme-tertiary), 0.2);
 }
 
 .sidebar-project-menu-item.active {
-  background: rgba(var(--v-theme-accent), 0.18);
-  color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-tertiary), 0.3);
+  color: rgb(var(--v-theme-on-tertiary));
   font-weight: 600;
 }
 
@@ -2101,7 +2541,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 .sidebar-project-menu-item-action {
   flex-shrink: 0;
   opacity: 0;
-  color: rgb(var(--v-theme-on-surface)) !important;
+  color: rgb(var(--v-theme-on-tertiary));
   transition: opacity 0.12s;
 }
 
@@ -2118,12 +2558,19 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   align-items: center;
   gap: 6px;
   padding: 7px 10px;
-  font-size: 0.88rem;
+  font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
-  color: rgb(var(--v-theme-accent));
-  border-top: 1px solid rgba(var(--v-theme-border), 0.4);
-  transition: background 0.12s;
+  color: rgba(var(--v-theme-on-tertiary), 0.7);
+  border-top: 1px solid rgba(var(--v-theme-border), 0.3);
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+
+.sidebar-project-menu-add:hover {
+  background: rgba(var(--v-theme-tertiary), 0.2);
+  color: rgb(var(--v-theme-on-tertiary));
 }
 
 .sidebar-project-menu-add:hover {
@@ -2182,7 +2629,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 }
 /* Sidebar right edge for counts */
 .sidebar {
-  width: 280px;
+  width: 240px;
   --sidebar-right-edge: 14px;
   --sidebar-header-action-right-edge: 0px;
   --sidebar-thumb-size: 36px;
@@ -2225,7 +2672,8 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   align-items: center;
   justify-content: space-between;
   padding: 2px 4px 2px 2px;
-  margin-bottom: 0;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.35);
 }
 
 .sidebar-brand-left {
@@ -2469,7 +2917,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 @media (max-width: 900px) {
   .sidebar {
-    width: 280px !important;
+    width: 250px !important;
     height: 100dvh;
     max-height: 100dvh;
   }
@@ -2477,18 +2925,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   .sidebar.sidebar-collapsed {
     display: none;
   }
-}
-
-.sidebar-header {
-  position: relative;
-  font-size: 1.2rem;
-  font-weight: bold;
-  min-height: 20px;
-  padding: 4px 4px;
-  padding-right: var(--sidebar-header-action-right-edge) !important;
-  display: flex;
-  align-items: center;
-  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-section-header {
@@ -2501,6 +2937,22 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   display: flex;
   align-items: center;
   color: rgba(var(--v-theme-sidebar-text), 0.6);
+}
+
+.sidebar-section-header--collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sidebar-section-header--collapsible:hover {
+  color: rgba(var(--v-theme-sidebar-text), 0.85);
+}
+
+.sidebar-section-chevron {
+  margin-right: 4px;
+  flex-shrink: 0;
+  color: rgba(var(--v-theme-sidebar-text), 0.5);
+  transition: transform 0.15s;
 }
 
 .fade-enter-active,
@@ -2541,7 +2993,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   min-height: 0;
   overflow-x: visible;
   overflow-y: auto;
-  padding: 4px 0 8px;
+  padding: 0px 0 0;
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
   display: flex;
   flex-direction: column;
@@ -2588,20 +3040,33 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 
 .sidebar-footer-btn:hover {
   color: rgb(var(--v-theme-sidebar-text));
-  background: rgba(var(--v-theme-accent), 0.3);
+  background: rgba(var(--v-theme-sidebar-text), 0.08);
 }
 
 .sidebar-footer-btn--upload:hover {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-footer-btn--scrapheap:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-footer-btn--scrapheap.active {
   color: rgb(var(--v-theme-error));
   opacity: 1;
+}
+
+.sidebar-collapsed .sidebar-sticky-footer {
+  flex-direction: column;
+}
+
+.sidebar-collapsed .sidebar-footer-btn {
+  flex: 0 0 auto;
+  padding: 8px 4px;
+}
+
+.sidebar-collapsed .sidebar-footer-btn-label {
+  display: none;
 }
 
 .sidebar-footer {
@@ -2619,15 +3084,8 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   position: relative;
 }
 
-.sidebar-list-item.active .sidebar-list-count,
-.sidebar-list-item.reference-active .sidebar-list-count {
+.sidebar-list-item.active .sidebar-list-count {
   color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-list-item.reference-active {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-primary), 0.35);
 }
 
 .sidebar-list-item:hover {
@@ -2660,6 +3118,82 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   justify-content: center;
   text-align: center;
   color: rgb(var(--v-theme-sidebar-text));
+}
+
+.sidebar-move-to-project-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.sidebar-move-menu {
+  position: fixed;
+  z-index: 9999;
+  background: color-mix(
+    in srgb,
+    rgb(var(--v-theme-tertiary)) 38%,
+    rgb(var(--v-theme-sidebar))
+  );
+  border: 1px solid rgba(var(--v-theme-border), 0.4);
+  border-radius: 6px;
+  min-width: 180px;
+  max-width: 300px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 4px 0;
+  box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.3);
+  white-space: nowrap;
+}
+
+.sidebar-move-menu-group-header {
+  padding: 6px 10px 3px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-tertiary), 0.45);
+  margin-top: 4px;
+}
+
+.sidebar-move-menu-group-header:first-child {
+  margin-top: 0;
+}
+
+.sidebar-move-menu-group-header--current {
+  color: rgba(var(--v-theme-primary), 0.8);
+}
+
+.sidebar-move-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: rgb(var(--v-theme-on-tertiary));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.12s;
+}
+
+.sidebar-move-menu-check {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.sidebar-move-menu-item--create {
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
+  margin-bottom: 2px;
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.sidebar-move-menu-item--checked .sidebar-move-menu-check {
+  opacity: 1;
+}
+
+.sidebar-move-menu-item:hover {
+  background: rgba(var(--v-theme-tertiary), 0.25);
 }
 
 .sidebar-list-icon {
@@ -2858,23 +3392,23 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   color: rgb(var(--v-theme-on-primary)) !important;
 }
 
-.sidebar-quick-row {
-  display: flex;
-  align-items: stretch;
-  width: 100%;
-}
-
 .sidebar-all-pictures-row {
   display: flex;
   align-items: stretch;
   width: 100%;
+  transition: outline 0.15s;
+}
+
+.sidebar-all-pictures-row.drag-over-project {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: -2px;
+  background: rgba(var(--v-theme-primary), 0.15);
 }
 
 .sidebar-all-pictures-row .sidebar-list-item {
   flex: 1 1 0;
   width: 0;
   min-width: 0;
-  padding-right: 4px !important;
   overflow: hidden;
 }
 
@@ -2999,47 +3533,6 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
 .sidebar-set-item {
   position: relative;
   overflow: visible;
-}
-
-.sidebar-character-reference {
-  margin-right: 2px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: transparent;
-  opacity: 0.65;
-  transition:
-    opacity 0.2s ease,
-    color 0.2s ease;
-}
-
-.sidebar-character-reference:hover {
-  opacity: 1;
-  background: rgba(var(--v-theme-error), 0.16);
-}
-
-.sidebar-character-reference.active {
-  opacity: 1;
-  color: rgb(var(--v-theme-on-error));
-  background: rgba(var(--v-theme-error), 0.22);
-}
-
-.sidebar-reference-label {
-  display: inline-flex;
-  align-items: right;
-  justify-content: flex-end;
-  padding: 2px 4px;
-  margin-right: 0px;
-  border-radius: 999px;
-  color: rgb(var(--v-theme-on-error));
-  background: rgb(var(--v-theme-error));
-  font-weight: 700;
-  font-size: 0.7em;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .sidebar-inline-notice {
