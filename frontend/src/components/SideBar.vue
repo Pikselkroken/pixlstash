@@ -352,8 +352,7 @@ const selectedProjectObj = computed(() =>
 
 const collectionsContextLabel = computed(() => {
   if (projectViewMode.value === "global") return "Showing all collections";
-  if (selectedProjectId.value === null) return "Showing unassigned collections";
-  return `Showing ${selectedProjectObj.value?.name ?? ""} collections`;
+  return "";
 });
 
 const visibleCharacters = computed(() => {
@@ -1983,6 +1982,7 @@ defineExpose({ refreshSidebar, openSettingsDialog, startLocalImport });
   background: rgba(var(--v-theme-shadow), 0.25);
   border-radius: 6px;
   overflow: hidden;
+  width: 100%;
 }
 
 .sidebar-view-tab {

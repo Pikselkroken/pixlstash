@@ -1537,7 +1537,7 @@ defineExpose({ blurSearchInput });
 
 .toolbar-sort-search-note {
   font-size: 0.85em;
-  color: rgba(var(--v-theme-on-background), 0.7);
+  color: rgba(var(--v-theme-on-background), 0.6);
   padding: 6px 8px;
   border-radius: 6px;
   background: rgba(var(--v-theme-surface), 0.2);
@@ -1599,7 +1599,7 @@ defineExpose({ blurSearchInput });
 
 .toolbar-search-field :deep(.v-field) {
   border-radius: 8px;
-  background: rgba(var(--v-theme-surface), 0.2);
+  background: rgba(var(--v-theme-surface), 0.7);
   min-height: var(--toolbar-control-height);
   height: var(--toolbar-control-height);
   align-items: center;
@@ -1669,7 +1669,7 @@ defineExpose({ blurSearchInput });
   align-items: center;
   border-radius: 8px;
   overflow: hidden;
-  background: rgba(var(--v-theme-surface), 0.2) !important;
+  background: rgba(var(--v-theme-surface), 0.5) !important;
   box-shadow: 2px 2px 2px rgba(0, 0, 0, 0.4) !important;
   height: var(--toolbar-control-height);
 }
