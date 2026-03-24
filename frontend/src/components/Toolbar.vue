@@ -719,6 +719,7 @@
         </v-menu>
 
         <v-menu
+          v-if="props.comfyuiConfigured"
           v-model="comfyuiMenuOpen"
           :close-on-content-click="false"
           location="top end"
@@ -872,6 +873,7 @@ const props = defineProps({
   exportTypeOptions: { type: Array, default: () => [] },
   exportResolutionOptions: { type: Array, default: () => [] },
   mediaTypeFilter: { type: String, default: "all" },
+  comfyuiConfigured: { type: Boolean, default: false },
   comfyuiModelFilter: { type: Array, default: () => [] },
   comfyuiLoraFilter: { type: Array, default: () => [] },
   minScoreFilter: { type: Number, default: null },

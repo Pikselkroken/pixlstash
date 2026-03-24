@@ -16,6 +16,7 @@ const emit = defineEmits([
   "update:theme-mode",
   "update:hidden-tags",
   "update:apply-tag-filter",
+  "update:comfyui-configured",
 ]);
 
 const dialogOpen = computed({
@@ -112,12 +113,14 @@ const maxVramGbSuccess = ref("");
 const maxVramGbSavedValue = ref(null);
 const maxVramGbHydrating = ref(false);
 let maxVramGbSaveTimer = null;
-const comfyuiHost = ref("127.0.0.1");
-const comfyuiPort = ref("8188");
+const comfyuiHost = ref("");
+const comfyuiPort = ref("");
+const comfyuiEditHost = ref("");
+const comfyuiEditPort = ref("");
+const comfyuiConfigDialogOpen = ref(false);
 const comfyuiUrlLoading = ref(false);
 const comfyuiUrlError = ref("");
 const comfyuiUrlSuccess = ref("");
-let comfyuiSaveTimer = null;
 const workflowImportInputRef = ref(null);
 const workflowImportDialogOpen = ref(false);
 const workflowImportError = ref("");
@@ -181,6 +184,7 @@ function resetSettingsForm() {
   maxVramGbSavedValue.value = null;
   comfyuiUrlError.value = "";
   comfyuiUrlSuccess.value = "";
+  comfyuiConfigDialogOpen.value = false;
   workflowImportError.value = "";
   workflowImportName.value = "";
   workflowImportPayload.value = null;
@@ -191,10 +195,6 @@ function resetSettingsForm() {
   workflowImportOutputTargets.value = [];
   workflowImportSaving.value = false;
   workflowListError.value = "";
-  if (comfyuiSaveTimer) {
-    clearTimeout(comfyuiSaveTimer);
-    comfyuiSaveTimer = null;
-  }
   if (maxVramGbSaveTimer) {
     clearTimeout(maxVramGbSaveTimer);
     maxVramGbSaveTimer = null;
@@ -384,7 +384,13 @@ async function fetchSmartScoreSettings() {
       if (parsed) {
         comfyuiHost.value = parsed.host;
         comfyuiPort.value = parsed.port;
+      } else {
+        comfyuiHost.value = "";
+        comfyuiPort.value = "";
       }
+    } else {
+      comfyuiHost.value = "";
+      comfyuiPort.value = "";
     }
     smartScorePenalisedTags.value = SmartScoreTags(
       res.data?.smart_score_penalised_tags,
@@ -450,15 +456,34 @@ function parseComfyuiUrl(value) {
   }
 }
 
+function openComfyuiConfigDialog() {
+  comfyuiEditHost.value = comfyuiHost.value;
+  comfyuiEditPort.value = comfyuiPort.value;
+  comfyuiUrlError.value = "";
+  comfyuiUrlSuccess.value = "";
+  comfyuiConfigDialogOpen.value = true;
+}
+
 async function saveComfyuiUrl() {
   comfyuiUrlLoading.value = true;
   comfyuiUrlError.value = "";
   comfyuiUrlSuccess.value = "";
-  const host = String(comfyuiHost.value || "").trim();
-  const port = String(comfyuiPort.value || "").trim();
+  const host = String(comfyuiEditHost.value || "").trim();
+  const port = String(comfyuiEditPort.value || "").trim();
+  // Empty host is treated as "not configured" — save null.
   if (!host) {
-    comfyuiUrlError.value = "Host is required.";
-    comfyuiUrlLoading.value = false;
+    try {
+      await apiClient.patch("/users/me/config", { comfyui_url: null });
+      comfyuiHost.value = "";
+      comfyuiPort.value = "";
+      emit("update:comfyui-configured", false);
+      comfyuiConfigDialogOpen.value = false;
+    } catch (e) {
+      comfyuiUrlError.value =
+        e?.response?.data?.detail || e?.message || "Failed to update ComfyUI URL.";
+    } finally {
+      comfyuiUrlLoading.value = false;
+    }
     return;
   }
   const portNumber = Number(port);
@@ -469,10 +494,17 @@ async function saveComfyuiUrl() {
   }
   const nextUrl = `http://${host}:${portNumber}/`;
   try {
-    await apiClient.patch("/users/me/config", {
-      comfyui_url: nextUrl,
-    });
+    await apiClient.patch("/users/me/config", { comfyui_url: nextUrl });
+    comfyuiHost.value = host;
+    comfyuiPort.value = String(portNumber);
+    emit("update:comfyui-configured", true);
     comfyuiUrlSuccess.value = "Saved.";
+    setTimeout(() => {
+      if (comfyuiUrlSuccess.value === "Saved.") {
+        comfyuiUrlSuccess.value = "";
+        comfyuiConfigDialogOpen.value = false;
+      }
+    }, 1200);
   } catch (e) {
     comfyuiUrlError.value =
       e?.response?.data?.detail ||
@@ -480,23 +512,27 @@ async function saveComfyuiUrl() {
       "Failed to update ComfyUI URL.";
   } finally {
     comfyuiUrlLoading.value = false;
-    if (comfyuiUrlSuccess.value) {
-      setTimeout(() => {
-        comfyuiUrlSuccess.value = "";
-      }, 2000);
-    }
   }
 }
 
-function scheduleComfyuiSave() {
-  if (comfyuiUrlLoading.value) return;
-  if (comfyuiSaveTimer) {
-    clearTimeout(comfyuiSaveTimer);
+async function clearComfyuiUrl() {
+  comfyuiUrlLoading.value = true;
+  comfyuiUrlError.value = "";
+  comfyuiUrlSuccess.value = "";
+  try {
+    await apiClient.patch("/users/me/config", { comfyui_url: null });
+    comfyuiHost.value = "";
+    comfyuiPort.value = "";
+    comfyuiEditHost.value = "";
+    comfyuiEditPort.value = "";
+    emit("update:comfyui-configured", false);
+    comfyuiConfigDialogOpen.value = false;
+  } catch (e) {
+    comfyuiUrlError.value =
+      e?.response?.data?.detail || e?.message || "Failed to clear ComfyUI URL.";
+  } finally {
+    comfyuiUrlLoading.value = false;
   }
-  comfyuiSaveTimer = setTimeout(() => {
-    comfyuiSaveTimer = null;
-    saveComfyuiUrl();
-  }, 600);
 }
 
 async function fetchWorkflowList() {
@@ -1205,10 +1241,6 @@ watch(
   },
 );
 
-watch([comfyuiHost, comfyuiPort], () => {
-  scheduleComfyuiSave();
-});
-
 watch(maxVramGbValue, () => {
   scheduleMaxVramGbSave();
 });
@@ -1568,34 +1600,29 @@ const workflowImportCaptionPreview = computed(() => {
                 <div class="settings-section-desc">
                   Configure the local ComfyUI server used for workflows.
                 </div>
-                <div class="settings-form">
-                  <div class="settings-add-tag-row">
-                    <v-text-field
-                      v-model="comfyuiHost"
-                      label="Host"
-                      density="comfortable"
-                      variant="filled"
-                      class="settings-add-tag-input"
-                      :disabled="comfyuiUrlLoading"
-                    />
-                    <v-text-field
-                      v-model="comfyuiPort"
-                      label="Port"
-                      density="comfortable"
-                      variant="filled"
-                      class="settings-add-tag-input"
-                      :disabled="comfyuiUrlLoading"
-                    />
+                <div class="settings-comfyui-display">
+                  <div class="settings-comfyui-row">
+                    <span class="settings-comfyui-label">Host</span>
+                    <span class="settings-comfyui-value">{{
+                      comfyuiHost || "Not configured"
+                    }}</span>
                   </div>
-                  <div v-if="comfyuiUrlError" class="settings-error">
-                    {{ comfyuiUrlError }}
+                  <div class="settings-comfyui-row">
+                    <span class="settings-comfyui-label">Port</span>
+                    <span class="settings-comfyui-value">{{
+                      comfyuiPort || "—"
+                    }}</span>
                   </div>
-                  <div v-else-if="comfyuiUrlSuccess" class="settings-success">
-                    {{ comfyuiUrlSuccess }}
-                  </div>
-                  <div v-else class="settings-success">
-                    {{ "\u00a0" }}
-                  </div>
+                  <v-btn
+                    variant="outlined"
+                    color="primary"
+                    size="small"
+                    class="settings-action-btn"
+                    style="margin-top: 8px"
+                    @click="openComfyuiConfigDialog"
+                  >
+                    Configure
+                  </v-btn>
                 </div>
               </div>
               <v-divider class="settings-section-divider" />
@@ -1964,6 +1991,65 @@ const workflowImportCaptionPreview = computed(() => {
       </v-card-actions>
     </v-card>
   </v-dialog>
+
+  <v-dialog v-model="comfyuiConfigDialogOpen" max-width="420">
+    <v-card class="settings-token-dialog">
+      <v-card-title class="settings-dialog-title">Configure ComfyUI</v-card-title>
+      <v-card-text class="settings-dialog-body">
+        <v-text-field
+          v-model="comfyuiEditHost"
+          label="Host"
+          density="comfortable"
+          variant="filled"
+          :disabled="comfyuiUrlLoading"
+          placeholder="e.g. 127.0.0.1"
+        />
+        <v-text-field
+          v-model="comfyuiEditPort"
+          label="Port"
+          density="comfortable"
+          variant="filled"
+          :disabled="comfyuiUrlLoading"
+          placeholder="e.g. 8188"
+          @keydown.enter.prevent="saveComfyuiUrl"
+        />
+        <div v-if="comfyuiUrlError" class="settings-error">
+          {{ comfyuiUrlError }}
+        </div>
+        <div v-else-if="comfyuiUrlSuccess" class="settings-success">
+          {{ comfyuiUrlSuccess }}
+        </div>
+      </v-card-text>
+      <v-card-actions class="settings-dialog-actions">
+        <v-btn
+          variant="outlined"
+          color="error"
+          :loading="comfyuiUrlLoading"
+          :disabled="comfyuiUrlLoading"
+          @click="clearComfyuiUrl"
+        >
+          Clear
+        </v-btn>
+        <v-spacer />
+        <v-btn
+          variant="text"
+          :disabled="comfyuiUrlLoading"
+          @click="comfyuiConfigDialogOpen = false"
+        >
+          Cancel
+        </v-btn>
+        <v-btn
+          variant="outlined"
+          color="primary"
+          :loading="comfyuiUrlLoading"
+          :disabled="comfyuiUrlLoading"
+          @click="saveComfyuiUrl"
+        >
+          Save
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <style scoped>
@@ -2086,6 +2172,31 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-section-desc {
   font-size: 0.92em;
   color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.settings-comfyui-display {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.settings-comfyui-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.93em;
+}
+
+.settings-comfyui-label {
+  font-weight: 500;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  min-width: 36px;
+}
+
+.settings-comfyui-value {
+  color: rgb(var(--v-theme-on-surface));
+  font-family: monospace;
 }
 
 .settings-slider-row {
