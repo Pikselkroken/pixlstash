@@ -1540,17 +1540,14 @@ defineExpose({
         </a>
         <div v-if="!props.collapsed" class="sidebar-brand-text">
           <span class="sidebar-brand-title">PixlStash</span>
-          <div class="sidebar-brand-subtitle-row">
-            <span class="sidebar-brand-version">v{{ appVersion }}</span>
-            <a
-              v-if="updateAvailable"
-              :href="latestVersionUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="sidebar-update-available"
-              >&#x2191; v{{ latestVersion }} available</a
-            >
-          </div>
+          <a
+            v-if="updateAvailable"
+            :href="latestVersionUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="sidebar-update-available"
+            >&#x2191; v{{ latestVersion }} available</a
+          >
         </div>
       </div>
       <v-btn
@@ -2250,6 +2247,14 @@ defineExpose({
     <!-- end sidebar-scroll -->
     <div class="sidebar-sticky-footer">
       <div
+        class="sidebar-footer-btn sidebar-footer-btn--settings"
+        title="Settings"
+        @click.stop="openSettingsDialog"
+      >
+        <v-icon size="20">mdi-cog-outline</v-icon>
+        <span class="sidebar-footer-btn-label">Settings</span>
+      </div>
+      <div
         class="sidebar-footer-btn sidebar-footer-btn--upload"
         title="Import photos"
         @click.stop="openImportDialog"
@@ -2712,26 +2717,18 @@ defineExpose({
 .sidebar-brand-title {
   font-family: "PressStart2P", monospace;
   font-size: 0.95em;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-brand-version {
-  font-size: 0.8rem;
-  opacity: 0.6;
-  color: rgb(var(--v-theme-sidebar-text));
+  color: color-mix(
+    in srgb,
+    rgb(var(--v-theme-sidebar-text)) 90%,
+    rgb(var(--v-theme-accent))
+  );
 }
 
 .sidebar-brand-text {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 0;
-}
-
-.sidebar-brand-subtitle-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+  gap: 2px;
 }
 
 .sidebar-update-available {

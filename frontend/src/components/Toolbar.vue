@@ -299,7 +299,7 @@
               vertical
               density="compact"
               style="
-                height: 40px;
+                height: var(--toolbar-control-height);
                 width: 100%;
                 margin-bottom: 0;
                 color: rgb(var(--v-theme-on-background));
@@ -821,16 +821,6 @@
             </div>
           </div>
         </v-menu>
-        <v-btn
-          icon
-          v-bind="props"
-          :color="props['aria-expanded'] === 'true' ? 'primary' : 'surface'"
-          title="Filter media type"
-          class="toolbar-action-btn"
-          @click="emit('open-settings')"
-        >
-          <v-icon :color="'on-background'">mdi-cog</v-icon>
-        </v-btn>
       </div>
     </div>
   </div>
@@ -1312,13 +1302,13 @@ defineExpose({ blurSearchInput });
 .top-toolbar {
   background-color: rgb(var(--v-theme-toolbar)) !important;
   width: 100%;
-  min-height: 38px;
+  min-height: 32px;
   display: flex;
   vertical-align: top;
-  padding: 4px 4px 4px 4px;
+  padding: 2px 2px 2px 2px;
   z-index: 5;
   position: relative;
-  --toolbar-control-height: 44px;
+  --toolbar-control-height: 32px;
 }
 
 .toolbar-actions {
@@ -1434,7 +1424,7 @@ defineExpose({ blurSearchInput });
 .toolbar-sort-grid {
   display: grid !important;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: minmax(42px, auto);
+  grid-auto-rows: minmax(38px, auto);
   gap: 6px;
   align-content: start;
   width: 100%;

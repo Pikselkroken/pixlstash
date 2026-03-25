@@ -2,6 +2,8 @@
 import { computed, ref, watch } from "vue";
 import { apiClient } from "../utils/apiClient";
 
+const appVersion = __APP_VERSION__;
+
 const props = defineProps({
   open: { type: Boolean, default: false },
   sidebarThumbnailSize: { type: Number, default: 48 },
@@ -480,7 +482,9 @@ async function saveComfyuiUrl() {
       comfyuiConfigDialogOpen.value = false;
     } catch (e) {
       comfyuiUrlError.value =
-        e?.response?.data?.detail || e?.message || "Failed to update ComfyUI URL.";
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Failed to update ComfyUI URL.";
     } finally {
       comfyuiUrlLoading.value = false;
     }
@@ -1296,7 +1300,10 @@ const workflowImportCaptionPreview = computed(() => {
         <v-icon size="24px">mdi-close</v-icon>
       </v-btn>
       <v-card class="settings-dialog-card">
-        <v-card-title class="settings-dialog-title">Settings</v-card-title>
+        <v-card-title class="settings-dialog-title">
+          Settings
+          <span class="settings-dialog-version">v{{ appVersion }}</span>
+        </v-card-title>
         <v-tabs
           v-model="settingsTab"
           density="comfortable"
@@ -1994,7 +2001,9 @@ const workflowImportCaptionPreview = computed(() => {
 
   <v-dialog v-model="comfyuiConfigDialogOpen" max-width="420">
     <v-card class="settings-token-dialog">
-      <v-card-title class="settings-dialog-title">Configure ComfyUI</v-card-title>
+      <v-card-title class="settings-dialog-title"
+        >Configure ComfyUI</v-card-title
+      >
       <v-card-text class="settings-dialog-body">
         <v-text-field
           v-model="comfyuiEditHost"
@@ -2094,6 +2103,15 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-dialog-title {
   font-weight: 700;
   font-size: 1.2rem;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.settings-dialog-version {
+  font-size: 0.75rem;
+  font-weight: 400;
+  opacity: 0.5;
 }
 
 .settings-tabs {
