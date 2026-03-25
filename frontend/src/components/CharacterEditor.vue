@@ -97,7 +97,7 @@
       <img
         :src="`${props.backendUrl}/pictures/thumbnails/${previewPic.id}.webp`"
         class="ref-preview-img"
-        @click.stop
+        @click="previewPic = null"
       />
     </div>
   </Teleport>
@@ -250,6 +250,10 @@ function save() {
 // Keyboard shortcuts
 function handleKeydown(event) {
   if (event.key === "Escape") {
+    if (previewPic.value) {
+      previewPic.value = null;
+      return;
+    }
     emit("close");
   } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     // Ctrl+Enter or Cmd+Enter to save (avoid interfering with textarea)
