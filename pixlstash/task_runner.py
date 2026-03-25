@@ -83,9 +83,13 @@ class TaskRunner:
         if requested_mb <= 0:
             self._max_vram_usage_mb = None
             return
+        # Store the user's requested budget exactly — never reduce it based on
+        # detected VRAM. Total VRAM is used as a cap only so we don't schedule
+        # more than the GPU physically has, but we never silently reduce a value
+        # the user explicitly set.
         total_mb = self._get_total_vram_mb()
-        if total_mb > 0:
-            self._max_vram_usage_mb = max(1, min(requested_mb, total_mb))
+        if total_mb > 0 and requested_mb > total_mb:
+            self._max_vram_usage_mb = total_mb
         else:
             self._max_vram_usage_mb = requested_mb
 
