@@ -719,12 +719,11 @@ def find_pictures_by_smart_score(
                 cand_list, good_list, bad_list
             )
 
-            # Quantize to 2 decimal places so that images whose scores differ
-            # only in lower-significance bits are treated as equal. Within each
-            # quantized bucket, sort by picture ID (ascending) to guarantee a
-            # fully deterministic, stable order that doesn't shift when an
-            # unrelated image's score changes by a tiny amount.
-            quantized = np.round(scores, 2)
+            # Primary sort key: quantize to 1 decimal place so all images in
+            # the same 0.1-wide bucket sort together (avoids 4.9 / 5.0 zigzag
+            # when raw scores straddle a boundary). Within each bucket, sort by
+            # picture ID (ascending) for a fully deterministic, stable order.
+            quantized = np.round(scores, 1)
             ids_array = np.array(cand_ids, dtype=np.int64)
             if descending:
                 # lexsort key order: last key is primary.

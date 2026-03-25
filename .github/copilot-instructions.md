@@ -9,7 +9,7 @@
   - You must always check a patch for illogical and abrupt changes that don't fit the surrounding code.
   - An example of an illogical change is a class method being placed outside of its class definition or code being placed above the top import statements.
   - An illogical change is placing a class method above the class docstring or above the __init__ method, rather than after the docstring and any class-level variables. All methods must be defined within the class block, following the established order and indentation.
-  - All schema upgrade steps in upgrade_if_necessary must be placed in strictly increasing version order, directly after the previous version’s block. Never insert a new version check out of sequence. This ensures upgrades are applied in the correct order and the code remains maintainable and logical.
+  - All schema upgrade steps in Alembic migrations must be placed in strictly increasing version order. Never insert a new migration out of sequence. This ensures upgrades are applied in the correct order and the code remains maintainable and logical.
   - Always ensure correct indentation and placement within the class block. Read surrounding code to confirm the proper structure.
   - Always ensure a blank line between top-level functions and class definitions
   - For any class the code order must be:
@@ -51,8 +51,8 @@
 
 ## Alembic migrations
 - Always create a new migration file for each schema change, with a descriptive name.
-- Always ensure that variables or parameters that are unused in the function but are necessary for alembic gets marked to be excluded from linting errors (e.g., `# noqa: F841`).
-
+- The Alembic revision identifier variables (`revision`, `down_revision`, `branch_labels`, `depends_on`) are read by Alembic at runtime via module import, not by explicit code references. Declare them as exported by including `__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]` after the `depends_on` line. This prevents false "unused variable" warnings from static analysers (including CodeQL) without needing `# noqa` comments. The script template (`migrations/script.py.mako`) already includes this line, so new migrations will have it automatically.
+- When a code change requires existing data to be regenerated (e.g. tags, embeddings, quality scores), trigger reprocessing by resetting the relevant column(s) to `NULL` in the Alembic migration script. The `Missing*Finder` classes in `pixlstash/tasks/` query for pictures with `NULL` values and will automatically pick up those rows for reprocessing when the server next runs. Alembic migrations should only contain schema changes and this kind of targeted `NULL`-reset; no application logic should be placed in migrations.
 ## Developer Workflows
 
 - **Install dependencies:** `pip install -e .`

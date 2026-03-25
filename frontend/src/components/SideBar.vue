@@ -91,7 +91,8 @@ const categoryCounts = ref({
   [props.unassignedPicturesId]: 0,
   [props.scrapheapPicturesId]: 0,
 });
-// Counts keyed by project id (number) or null (unassigned in project mode)
+// Counts keyed by project id (number) or UNASSIGNED_PROJECT_KEY (unassigned in project mode)
+const UNASSIGNED_PROJECT_KEY = "UNASSIGNED";
 const projectCounts = ref({});
 
 const flashCountsNextFetch = ref(false);
@@ -857,7 +858,7 @@ async function fetchSidebarData() {
       apiClient
         .get(`${props.backendUrl}/projects/UNASSIGNED/summary`)
         .then((r) => {
-          projectCounts.value[null] = r.data.image_count;
+          projectCounts.value[UNASSIGNED_PROJECT_KEY] = r.data.image_count;
         }),
       ...projects.value.map((p) =>
         apiClient
@@ -1852,7 +1853,9 @@ defineExpose({
                 <span class="sidebar-list-count">{{
                   projectViewMode === "global"
                     ? (categoryCounts[props.allPicturesId] ?? "")
-                    : (projectCounts[selectedProjectId] ?? "")
+                    : (projectCounts[
+                        selectedProjectId ?? UNASSIGNED_PROJECT_KEY
+                      ] ?? "")
                 }}</span>
               </div>
             </div>
