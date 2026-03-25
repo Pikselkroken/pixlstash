@@ -130,87 +130,6 @@ body {
   text-align: center;
 }
 
-.top-toolbar {
-  background-color: rgb(var(--v-theme-toolbar)) !important;
-  width: 100%;
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  padding: 4px 4px 4px 4px;
-  z-index: 5;
-  position: relative;
-}
-
-.toolbar-icon {
-  color: rgb(var(--v-theme-on-primary)) !important;
-  font-size: 16px;
-}
-
-.toolbar-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-  margin-left: 0;
-  margin-right: 0;
-  padding-right: 2px;
-  gap: 8px;
-}
-
-.toolbar-search-slot {
-  flex: 1 1 0;
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.search-history-list {
-  max-height: 200px;
-  overflow-y: auto;
-  background-color: rgba(var(--v-theme-background), 0.9);
-}
-
-.toolbar-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-}
-
-.toolbar-search-field {
-  flex: 1 1 auto;
-  min-width: 220px;
-  max-width: none;
-  width: 100%;
-  margin-left: 4px;
-  margin-right: 4px;
-}
-
-.toolbar-search-field :deep(.v-input__control) {
-  width: 100%;
-}
-
-.toolbar-search-field :deep(.v-field) {
-  border-radius: 8px;
-  background: rgba(var(--v-theme-surface), 0.2);
-}
-
-.toolbar-search-field :deep(.v-field__input) {
-  color: rgb(var(--v-theme-on-background));
-}
-
-.toolbar-search-field :deep(.v-label) {
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-.toolbar-search-field :deep(.v-icon) {
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-.toolbar-search-field :deep(.v-field__clearable) {
-  color: rgba(var(--v-theme-on-background), 0.6);
-}
-
 .app-btn-base {
   border-radius: 8px;
   text-transform: none;
@@ -228,17 +147,6 @@ body {
   background-color: transparent !important;
 }
 
-.toolbar-btn {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 0;
-  border: none;
-}
-
-.toolbar-btn.v-btn--active {
-  border-color: rgba(var(--v-theme-surface), 0.2);
-}
-
 @media (max-width: 900px) {
   body {
     min-height: 100vh;
@@ -252,18 +160,6 @@ body {
   .file-manager {
     flex-direction: column;
     height: 100dvh;
-  }
-
-  .toolbar-download-btn {
-    display: none !important;
-  }
-
-  .toolbar-actions {
-    width: auto;
-    flex-wrap: nowrap;
-    gap: 2px;
-    margin-left: 0;
-    justify-content: flex-start;
   }
 
   .main-area {
@@ -309,25 +205,12 @@ body {
   .main-area.sidebar-hidden {
     border-left: 4px solid rgb(var(--v-theme-sidebar));
   }
-
-  :deep(.top-toolbar .v-btn) {
-    min-width: 28px;
-    min-height: 28px;
-  }
 }
 @font-face {
   font-family: "PressStart2P";
   src: url("/src/assets/fonts/PressStart2P-Regular.ttf") format("truetype");
   font-weight: normal;
   font-style: normal;
-}
-
-.toolbar-title {
-  font-family: "PressStart2P", monospace;
-  font-size: 1em;
-  letter-spacing: 0px;
-  position: relative;
-  color: rgb(var(--v-theme-on-primary)) !important;
 }
 
 /* Darker overlay for dialogs/overlays */
