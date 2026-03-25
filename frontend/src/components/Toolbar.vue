@@ -271,6 +271,7 @@
               padding: 8px 8px;
               min-width: 200px;
               background: rgba(var(--v-theme-background), 0.9);
+              color: rgb(var(--v-theme-on-background));
               border-radius: 8px;
               box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
               display: flex;
@@ -335,18 +336,38 @@
                 </v-btn>
               </div>
             </div>
-            <div
-              style="
-                font-size: 1.02em;
-                font-weight: 500;
-                letter-spacing: 0.02em;
-                margin-top: 8px;
-                margin-bottom: 4px;
-                color: rgb(var(--v-theme-on-background));
-              "
+            <v-switch
+              v-model="compactModeModel"
+              label="Compact mode"
+              color="primary"
+              density="compact"
+              hide-details
+            />
+          </div>
+        </v-menu>
+        <v-menu
+          v-model="filterMenuOpen"
+          :close-on-content-click="false"
+          location="top end"
+          origin="bottom end"
+          transition="scale-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              icon
+              v-bind="props"
+              :color="isFilterActive ? 'primary' : 'undefined'"
+              title="Filters"
+              class="toolbar-action-btn"
             >
-              Media Filter
-            </div>
+              <v-icon :color="isFilterActive ? 'on-primary' : 'on-background'"
+                >mdi-filter</v-icon
+              >
+            </v-btn>
+          </template>
+          <div class="toolbar-filter-panel">
+            <div class="toolbar-filter-panel-title">Filters</div>
+            <div class="toolbar-filter-section-label">Media</div>
             <v-btn-toggle
               v-model="mediaTypeFilterModel"
               mandatory
@@ -363,17 +384,8 @@
                 <v-icon>mdi-video</v-icon>
               </v-btn>
             </v-btn-toggle>
-            <div
-              style="
-                font-size: 1.02em;
-                font-weight: 500;
-                letter-spacing: 0.02em;
-                margin-top: 10px;
-                margin-bottom: 4px;
-                color: rgb(var(--v-theme-on-background));
-              "
-            >
-              Score Filter
+            <div class="toolbar-filter-section-label" style="margin-top: 10px">
+              Min Score
             </div>
             <div style="display: flex; align-items: center; gap: 2px">
               <v-btn
@@ -413,16 +425,10 @@
               v-if="comfyuiModelOptions.length || comfyuiLoraOptions.length"
             >
               <div
-                style="
-                  font-size: 1.02em;
-                  font-weight: 500;
-                  letter-spacing: 0.02em;
-                  margin-top: 10px;
-                  margin-bottom: 6px;
-                  color: rgb(var(--v-theme-on-background));
-                "
+                class="toolbar-filter-section-label"
+                style="margin-top: 10px"
               >
-                ComfyUI Filter
+                ComfyUI
               </div>
               <template v-if="comfyuiModelOptions.length">
                 <div
@@ -437,10 +443,7 @@
                   <span
                     style="
                       font-size: 0.85em;
-                      font-weight: 600;
                       color: rgb(var(--v-theme-on-background));
-                      text-transform: uppercase;
-                      letter-spacing: 0.06em;
                     "
                     >Models</span
                   >
@@ -498,10 +501,7 @@
                   <span
                     style="
                       font-size: 0.85em;
-                      font-weight: 600;
                       color: rgb(var(--v-theme-on-background));
-                      text-transform: uppercase;
-                      letter-spacing: 0.06em;
                     "
                     >LoRAs</span
                   >
@@ -850,6 +850,7 @@ const props = defineProps({
   showResolution: { type: Boolean, default: true },
   showProblemIcon: { type: Boolean, default: true },
   showStacks: { type: Boolean, default: true },
+  compactMode: { type: Boolean, default: false },
   stackExpandedCount: { type: Number, default: 0 },
   stackTotalCount: { type: Number, default: 0 },
   exportCount: { type: Number, default: 0 },
@@ -889,6 +890,7 @@ const emit = defineEmits([
   "update:showResolution",
   "update:showProblemIcon",
   "update:showStacks",
+  "update:compactMode",
   "expand-all-stacks",
   "collapse-all-stacks",
   "update:exportType",
@@ -948,6 +950,17 @@ const columnsModel = computed({
 });
 
 const pendingColumns = ref(props.columns);
+const filterMenuOpen = ref(false);
+
+const isFilterActive = computed(
+  () =>
+    props.mediaTypeFilter !== "all" ||
+    props.minScoreFilter != null ||
+    (Array.isArray(props.comfyuiModelFilter) &&
+      props.comfyuiModelFilter.length > 0) ||
+    (Array.isArray(props.comfyuiLoraFilter) &&
+      props.comfyuiLoraFilter.length > 0),
+);
 
 watch(
   () => props.columns,
@@ -960,26 +973,31 @@ watch(
 
 watch(
   () => columnsMenuOpenModel.value,
-  async (isOpen) => {
+  (isOpen) => {
     if (isOpen) {
       pendingColumns.value = props.columns;
-      if (
-        props.backendUrl &&
-        !comfyuiModelOptions.value.length &&
-        !comfyuiLoraOptions.value.length
-      ) {
-        try {
-          const [mRes, lRes] = await Promise.all([
-            apiClient.get(`${props.backendUrl}/pictures/comfyui_models`),
-            apiClient.get(`${props.backendUrl}/pictures/comfyui_loras`),
-          ]);
-          comfyuiModelOptions.value = Array.isArray(mRes.data) ? mRes.data : [];
-          comfyuiLoraOptions.value = Array.isArray(lRes.data) ? lRes.data : [];
-        } catch {}
-      }
     }
   },
 );
+
+watch(filterMenuOpen, async (isOpen) => {
+  if (isOpen) {
+    if (
+      props.backendUrl &&
+      !comfyuiModelOptions.value.length &&
+      !comfyuiLoraOptions.value.length
+    ) {
+      try {
+        const [mRes, lRes] = await Promise.all([
+          apiClient.get(`${props.backendUrl}/pictures/comfyui_models`),
+          apiClient.get(`${props.backendUrl}/pictures/comfyui_loras`),
+        ]);
+        comfyuiModelOptions.value = Array.isArray(mRes.data) ? mRes.data : [];
+        comfyuiLoraOptions.value = Array.isArray(lRes.data) ? lRes.data : [];
+      } catch {}
+    }
+  }
+});
 
 const showStarsModel = computed({
   get: () => props.showStars,
@@ -1004,6 +1022,11 @@ const showResolutionModel = computed({
 const showProblemIconModel = computed({
   get: () => props.showProblemIcon,
   set: (value) => emit("update:showProblemIcon", value),
+});
+
+const compactModeModel = computed({
+  get: () => props.compactMode,
+  set: (value) => emit("update:compactMode", value),
 });
 
 const expandAllStacksDisabled = computed(() => {
@@ -1305,7 +1328,7 @@ defineExpose({ blurSearchInput });
   min-height: 32px;
   display: flex;
   vertical-align: top;
-  padding: 2px 2px 2px 2px;
+  padding: 2px 2px 0px 2px;
   z-index: 5;
   position: relative;
   --toolbar-control-height: 32px;
@@ -1727,6 +1750,8 @@ defineExpose({ blurSearchInput });
   border-radius: 8px;
   margin-left: 4px;
   display: inline-flex;
+  background-color: rgb(var(--v-theme-primary)) !important;
+  color: rgb(var(--v-theme-on-primary)) !important;
 }
 
 .media-type-toggle .v-btn {
@@ -1737,9 +1762,14 @@ defineExpose({ blurSearchInput });
   align-items: center;
 }
 
-.media-type-toggle {
-  background-color: rgb(var(--v-theme-primary)) !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
+.toolbar-filter-panel .media-type-toggle {
+  margin-left: 0;
+  width: 100%;
+  display: flex;
+}
+
+.toolbar-filter-panel .media-type-toggle .v-btn {
+  flex: 1 1 0;
 }
 
 @media (max-width: 900px) {
@@ -1759,6 +1789,45 @@ defineExpose({ blurSearchInput });
     flex: 1;
     margin-left: 0;
   }
+}
+
+.toolbar-filter-panel {
+  padding: 10px 12px;
+  min-width: 220px;
+  max-width: 280px;
+  width: 280px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: rgba(var(--v-theme-background), 0.92);
+  color: rgb(var(--v-theme-on-background));
+  border-radius: 10px;
+  box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.toolbar-filter-panel-title {
+  font-size: 1em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.toolbar-filter-section-label {
+  font-size: 0.85em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(var(--v-theme-on-background), 0.6);
+  margin-bottom: 2px;
+}
+
+.toolbar-filter-panel :deep(.v-label) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .toolbar-comfyui-panel {

@@ -28,6 +28,7 @@ class User(SQLModel, table=True):
     show_resolution: Optional[bool] = Field(default=True)
     show_problem_icon: Optional[bool] = Field(default=True)
     show_stacks: Optional[bool] = Field(default=True)
+    compact_mode: Optional[bool] = Field(default=True)
     date_format: Optional[str] = Field(default="locale")
     theme_mode: Optional[str] = Field(default="light")
     comfyui_url: Optional[str] = Field(default=None)

@@ -130,7 +130,13 @@
       @drop.capture.prevent="handleGridDrop"
       :style="scrollWrapperStyle"
     >
-      <!-- Drag overlay (visible viewport of grid) -->
+      <!-- Compact mode sticky current-group label -->
+      <div
+        v-if="props.compactMode && compactStickyLabel"
+        class="compact-sticky-label"
+      >
+        {{ compactStickyLabel }}
+      </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
       </div>
@@ -161,7 +167,7 @@
         </div>
       </div>
       <div
-        class="image-grid"
+        :class="['image-grid', { 'compact-mode': props.compactMode }]"
         :style="{
           gridTemplateColumns: `repeat(${props.columns}, minmax(0, ${MAX_THUMBNAIL_SIZE}px))`,
           position: 'relative',
@@ -407,10 +413,19 @@
                 @set-score="setScore(img, $event)"
               />
             </div>
+            <!-- Compact mode group pill, straddling top edge of this row -->
+            <div
+              v-if="
+                props.compactMode && getCompactGroupLabel(img, idx) !== null
+              "
+              class="compact-group-label"
+            >
+              {{ getCompactGroupLabel(img, idx) }}
+            </div>
           </div>
           <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
           <!-- Info row absolutely positioned below thumbnail -->
-          <div class="thumbnail-info-row">
+          <div v-if="!props.compactMode" class="thumbnail-info-row">
             <div
               v-for="info in getThumbnailInfoItems(img)"
               :key="`${info.key}-${img.id}`"
@@ -547,6 +562,7 @@ const props = defineProps({
   showResolution: Boolean,
   showProblemIcon: Boolean,
   showStacks: { type: Boolean, default: true },
+  compactMode: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
   allPicturesId: String,
   unassignedPicturesId: String,
@@ -1436,6 +1452,153 @@ function getThumbnailInfoItems(img) {
   }
   return items;
 }
+
+function formatCompactDate(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const fmt =
+    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+  const y = d.getFullYear();
+  const day = d.getDate();
+  const MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const mon = MONTHS[d.getMonth()];
+  switch (fmt) {
+    case "eu":
+    case "british":
+    case "iso":
+      return sameYear ? `${day} ${mon}` : `${day} ${mon} ${y}`;
+    case "us":
+      return sameYear ? `${mon} ${day}` : `${mon} ${day}, ${y}`;
+    case "ymd-slash":
+    case "ymd-dot":
+      return sameYear ? `${mon} ${day}` : `${y} ${mon} ${day}`;
+    case "ymd-jp":
+      return sameYear
+        ? `${d.getMonth() + 1}月${day}日`
+        : `${y}年${d.getMonth() + 1}月${day}日`;
+    case "locale":
+    default:
+      return d.toLocaleDateString(
+        undefined,
+        sameYear
+          ? { month: "short", day: "numeric" }
+          : { year: "numeric", month: "short", day: "numeric" },
+      );
+  }
+}
+
+function getCompactGroupLabel(img, visualIdx) {
+  if (!props.compactMode || !img) return null;
+  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
+
+  function getGroupKey(item) {
+    if (!item) return null;
+    if (sort === "IMPORTED_AT" && item.imported_at)
+      return item.imported_at.slice(0, 10);
+    if (sort.includes("DATE") && item.created_at)
+      return item.created_at.slice(0, 10);
+    if (sort.includes("SMART_SCORE") && typeof item.smartScore === "number")
+      return Math.round(item.smartScore * 10);
+    if (
+      sort.includes("CHARACTER_LIKENESS") &&
+      typeof item.character_likeness === "number"
+    )
+      return Math.round(item.character_likeness * 100);
+    if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
+      return Math.round(item.text_score * 10);
+    return null;
+  }
+
+  const currentKey = getGroupKey(img);
+  if (currentKey === null) return null;
+
+  const prevImg =
+    visualIdx > 0 ? gridImagesToRender.value[visualIdx - 1] : null;
+  if (visualIdx > 0 && getGroupKey(prevImg) === currentKey) return null;
+
+  if (sort === "IMPORTED_AT" && img.imported_at)
+    return formatCompactDate(img.imported_at);
+  if (sort.includes("DATE") && img.created_at)
+    return formatCompactDate(img.created_at);
+  if (sort.includes("SMART_SCORE") && typeof img.smartScore === "number")
+    return `★ ${(Math.round(img.smartScore * 10) / 10).toFixed(1)}`;
+  if (
+    sort.includes("CHARACTER_LIKENESS") &&
+    typeof img.character_likeness === "number"
+  )
+    return `~ ${(Math.floor(img.character_likeness * 100) / 100).toFixed(2)}`;
+  if (sort === "TEXT_CONTENT" && typeof img.text_score === "number")
+    return `${(img.text_score * 100).toFixed(0)}%`;
+  return null;
+}
+
+const compactStickyLabel = computed(() => {
+  if (!props.compactMode) return null;
+  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
+
+  function getGroupKey(item) {
+    if (!item) return null;
+    if (sort === "IMPORTED_AT" && item.imported_at)
+      return item.imported_at.slice(0, 10);
+    if (sort.includes("DATE") && item.created_at)
+      return item.created_at.slice(0, 10);
+    if (sort.includes("SMART_SCORE") && typeof item.smartScore === "number")
+      return Math.round(item.smartScore * 10);
+    if (
+      sort.includes("CHARACTER_LIKENESS") &&
+      typeof item.character_likeness === "number"
+    )
+      return Math.round(item.character_likeness * 100);
+    if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
+      return Math.round(item.text_score * 10);
+    return null;
+  }
+
+  const firstVisibleVisualIdx = visibleStart.value - renderStart.value;
+  const firstImg = gridImagesToRender.value?.[firstVisibleVisualIdx];
+  if (!firstImg) return null;
+
+  // Suppress if this item already has a between-row pill (it's a group boundary)
+  const prevImg =
+    firstVisibleVisualIdx > 0
+      ? gridImagesToRender.value[firstVisibleVisualIdx - 1]
+      : null;
+  const isGroupBoundary =
+    firstVisibleVisualIdx === 0 ||
+    getGroupKey(prevImg) !== getGroupKey(firstImg);
+  if (isGroupBoundary) return null;
+
+  if (sort === "IMPORTED_AT" && firstImg.imported_at)
+    return formatCompactDate(firstImg.imported_at);
+  if (sort.includes("DATE") && firstImg.created_at)
+    return formatCompactDate(firstImg.created_at);
+  if (sort.includes("SMART_SCORE") && typeof firstImg.smartScore === "number")
+    return `★ ${(Math.round(firstImg.smartScore * 10) / 10).toFixed(1)}`;
+  if (
+    sort.includes("CHARACTER_LIKENESS") &&
+    typeof firstImg.character_likeness === "number"
+  )
+    return `~ ${(Math.floor(firstImg.character_likeness * 100) / 100).toFixed(2)}`;
+  if (sort === "TEXT_CONTENT" && typeof firstImg.text_score === "number")
+    return `${(firstImg.text_score * 100).toFixed(0)}%`;
+  return null;
+});
 
 function prefetchFullImage(img) {
   if (!img || !img.id) return;
@@ -4204,7 +4367,7 @@ watch(
     _resetGridState();
     visibleStart.value = 0;
     visibleEnd.value = 0;
-    fetchAllGridImages().then(() => {
+    fetchAllGridImages({ force: true }).then(() => {
       updateVisibleThumbnails();
     });
   },
@@ -4233,6 +4396,14 @@ watch(
     requestAnimationFrame(() => {
       triggerFaceOverlayRedraw();
     });
+  },
+);
+
+watch(
+  () => props.compactMode,
+  () => {
+    updateRowHeightFromGrid();
+    updateVisibleThumbnails();
   },
 );
 
@@ -4314,7 +4485,7 @@ const rowHeight = ref(
     Math.min(
       MAX_THUMBNAIL_SIZE,
       Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
-    ) + THUMBNAIL_INFO_ROW_HEIGHT,
+    ) + (props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT),
   ),
 );
 
@@ -4338,7 +4509,8 @@ function getGridColumnWidth() {
 
 function updateRowHeightFromGrid() {
   const columnWidth = getGridColumnWidth();
-  rowHeight.value = Math.round(columnWidth + THUMBNAIL_INFO_ROW_HEIGHT);
+  const infoHeight = props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT;
+  rowHeight.value = Math.round(columnWidth + infoHeight);
   refreshAllThumbnailInfoDisplays();
 }
 
@@ -5337,6 +5509,9 @@ function handleEmptyStateReset() {
   align-content: start;
   justify-content: start;
 }
+.compact-mode.image-grid {
+  padding-top: 10px !important;
+}
 .grid-scroll-wrapper::-webkit-scrollbar {
   width: 8px;
 }
@@ -5457,6 +5632,76 @@ function handleEmptyStateReset() {
   min-width: none;
   position: relative;
   padding: 8px;
+}
+
+/* Compact mode: no info row gap, no rounded corners, no shadow */
+.compact-mode .thumbnail-card {
+  padding: 0px 0px 0px 0px;
+}
+/* Accent border overlay on group-boundary cards (top + left, inset, no layout shift) */
+.compact-mode .thumbnail-card:has(.compact-group-label)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+        to right,
+        rgba(var(--v-theme-accent), 0.95),
+        rgba(var(--v-theme-accent), 0) 65%
+      )
+      top / 100% 3px no-repeat,
+    linear-gradient(
+        to bottom,
+        rgba(var(--v-theme-accent), 0.95),
+        rgba(var(--v-theme-accent), 0) 65%
+      )
+      left / 3px 100% no-repeat;
+  pointer-events: none;
+  z-index: 999;
+  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1);
+}
+.compact-mode .thumbnail-card:has(.compact-group-label):hover::before {
+  transform: scale(1.03);
+}
+.compact-mode .thumbnail-img {
+  border-radius: 0;
+  box-shadow: none;
+}
+.compact-mode .thumbnail-img:hover {
+  box-shadow: none;
+}
+.compact-sticky-label,
+.compact-group-label {
+  transform: translateX(-50%) translateY(-50%);
+  background: rgba(var(--v-theme-surface), 0.82);
+  color: rgb(var(--v-theme-accent));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.18);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 1000;
+  box-shadow: 0 1px 4px rgba(var(--v-theme-shadow), 0.25);
+  backdrop-filter: blur(4px);
+}
+.compact-sticky-label {
+  position: sticky;
+  top: 0;
+  left: 50%;
+  width: fit-content;
+  transform: translateX(-50%) translateY(2px);
+  margin-bottom: -24px;
+}
+.compact-group-label {
+  position: absolute;
+  top: 0;
+  left: 30%;
 }
 
 .thumbnail-card-new {

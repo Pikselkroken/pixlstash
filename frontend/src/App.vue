@@ -61,6 +61,7 @@ const showFormat = ref(true);
 const showResolution = ref(true);
 const showProblemIcon = ref(true);
 const showStacks = ref(true);
+const compactMode = ref(false);
 const expandedStackCount = ref(0);
 const totalStackCount = ref(0);
 const dateFormat = ref("locale");
@@ -635,6 +636,9 @@ async function fetchConfig() {
     } else if (typeof res.data.show_stacks === "boolean") {
       showStacks.value = res.data.show_stacks;
     }
+    if (typeof res.data.compact_mode === "boolean") {
+      compactMode.value = res.data.compact_mode;
+    }
     if (typeof res.data.date_format === "string" && res.data.date_format) {
       dateFormat.value = res.data.date_format;
     }
@@ -686,6 +690,10 @@ async function fetchConfig() {
         : typeof res.data.show_stacks === "boolean"
           ? res.data.show_stacks
           : showStacks.value;
+    config.compact_mode =
+      typeof res.data.compact_mode === "boolean"
+        ? res.data.compact_mode
+        : compactMode.value;
     config.date_format = dateFormat.value;
     config.theme_mode = themeMode.value;
     config.stack_strictness =
@@ -715,6 +723,7 @@ async function fetchConfig() {
       show_resolution: showResolution.value,
       show_problem_icon: showProblemIcon.value,
       expand_all_stacks: showStacks.value,
+      compact_mode: compactMode.value,
       date_format: dateFormat.value,
       theme_mode: themeMode.value,
       similarity_character: selectedSimilarityCharacter.value,
@@ -761,6 +770,9 @@ async function patchConfigUIOptions() {
   }
   if (typeof showStacks.value === "boolean") {
     patch.expand_all_stacks = showStacks.value;
+  }
+  if (typeof compactMode.value === "boolean") {
+    patch.compact_mode = compactMode.value;
   }
   if (typeof dateFormat.value === "string" && dateFormat.value) {
     patch.date_format = dateFormat.value;
@@ -1000,7 +1012,14 @@ watch(showStars, () => {
 });
 
 watch(
-  [showFaceBboxes, showFormat, showResolution, showProblemIcon, showStacks],
+  [
+    showFaceBboxes,
+    showFormat,
+    showResolution,
+    showProblemIcon,
+    showStacks,
+    compactMode,
+  ],
   () => {
     patchConfigUIOptions();
   },
@@ -1197,6 +1216,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:showResolution="showResolution"
             v-model:showProblemIcon="showProblemIcon"
             v-model:showStacks="showStacks"
+            v-model:compactMode="compactMode"
             v-model:exportType="exportType"
             v-model:exportCaptionMode="exportCaptionMode"
             v-model:exportResolution="exportResolution"
@@ -1255,6 +1275,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :showResolution="showResolution"
               :showProblemIcon="showProblemIcon"
               :showStacks="showStacks"
+              :compactMode="compactMode"
               :dateFormat="dateFormat"
               :hiddenTags="hiddenTags"
               :applyTagFilter="applyTagFilter"
