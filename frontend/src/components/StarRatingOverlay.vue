@@ -9,6 +9,7 @@
           ? 'rgba(var(--v-theme-accent))'
           : 'rgba(var(--v-theme-on-background), 0.2)'
       "
+      :title="`Set rating ${n} (${n})`"
       style="cursor: pointer"
       @click.stop="handleClick(n)"
       >mdi-star</v-icon

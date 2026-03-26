@@ -238,6 +238,7 @@
                 ref="tagBtnRef"
                 class="stack-btn"
                 type="button"
+                title="Tag selected (T)"
                 :disabled="isScrapheapView"
               >
                 <v-icon size="16">mdi-tag-plus</v-icon>

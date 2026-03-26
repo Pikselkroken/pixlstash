@@ -29,6 +29,7 @@
               prepend-inner-icon="mdi-magnify"
               class="toolbar-search-field"
               autocomplete="off"
+              placeholder="Search… (F)"
               @keydown.enter="handleSearchEnter"
               @click:prepend-inner="emit('commit-search')"
               @click:clear="emit('clear-search')"

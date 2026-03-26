@@ -242,6 +242,7 @@
                 v-bind="menuProps"
                 class="overlay-icon-btn overlay-star-mobile-btn"
                 type="button"
+                title="Set rating (1–5)"
                 aria-label="Set rating"
                 :class="{ hidden: chromeHidden }"
               >
@@ -763,7 +764,7 @@
                   v-if="image"
                   class="section-meta-btn"
                   type="button"
-                  title="Add tag"
+                  title="Add tag (T)"
                   @click.stop="beginAddTag"
                 >
                   <v-icon size="16">mdi-plus</v-icon>
