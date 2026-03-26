@@ -3105,8 +3105,8 @@ defineExpose({
 .sidebar-header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 64px;
+  gap: 2px;
+  min-width: 48px;
   justify-content: flex-end;
   margin-left: auto;
   padding-right: var(--sidebar-header-action-right-edge) !important;

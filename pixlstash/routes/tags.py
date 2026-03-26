@@ -288,4 +288,43 @@ def create_router(server) -> APIRouter:
             logger.error("Failed to list all tags: %s", exc)
             raise HTTPException(status_code=500, detail="Failed to list tags")
 
+    @router.post(
+        "/pictures/tags/bulk_fetch",
+        summary="Fetch tags for multiple pictures",
+        description="Returns tags for each requested picture id. At most 200 ids accepted per call.",
+    )
+    def bulk_fetch_tags(payload: dict = Body(...)):
+        try:
+            raw_ids = payload.get("picture_ids", [])
+            if not isinstance(raw_ids, list):
+                raise HTTPException(status_code=400, detail="picture_ids must be a list")
+            try:
+                ids = [int(i) for i in raw_ids[:200]]
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="All picture ids must be integers")
+            if not ids:
+                return []
+
+            def fetch(session: Session, ids: list):
+                rows = session.exec(
+                    select(Tag.picture_id, Tag.id, Tag.tag)
+                    .where(
+                        Tag.picture_id.in_(ids),
+                        Tag.tag.is_not(None),
+                        Tag.tag != TAG_EMPTY_SENTINEL,
+                    )
+                ).all()
+                by_pic: dict = {i: [] for i in ids}
+                for pic_id, tag_id, tag_val in rows:
+                    if tag_val and pic_id in by_pic:
+                        by_pic[pic_id].append({"id": tag_id, "tag": tag_val})
+                return [{"id": pic_id, "tags": by_pic[pic_id]} for pic_id in ids]
+
+            return server.vault.db.run_task(fetch, ids)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Failed to bulk fetch tags: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to bulk fetch tags")
+
     return router
