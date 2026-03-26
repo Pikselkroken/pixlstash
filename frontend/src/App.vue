@@ -816,6 +816,17 @@ function handleGlobalKeydown(e) {
       grid.onGlobalKeyPress(e.key, e);
     }
   }
+  if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const tag = document.activeElement?.tagName?.toLowerCase();
+    const isEditable =
+      tag === "input" ||
+      tag === "textarea" ||
+      document.activeElement?.isContentEditable;
+    if (!isEditable) {
+      e.preventDefault();
+      toolbarRef.value?.focusSearchInput?.();
+    }
+  }
 }
 
 function resolveThemeName(mode) {

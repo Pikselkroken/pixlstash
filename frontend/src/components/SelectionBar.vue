@@ -251,6 +251,70 @@
                 }}
               </div>
               <div class="plugin-menu-body">
+                <div v-if="tagDataLoading" class="tag-data-loading">
+                  Loading tags...
+                </div>
+                <div
+                  v-else-if="tagsOnAll.length || tagsOnSome.length"
+                  class="tag-current-section"
+                >
+                  <div class="tag-current-label">
+                    Current tags
+                    <span v-if="tagDataCapped" class="tag-data-capped">
+                      (first {{ MAX_TAG_FETCH }})
+                    </span>
+                  </div>
+                  <div class="tag-chips-row">
+                    <button
+                      v-for="t in tagsOnAll"
+                      :key="'all-' + t.name"
+                      class="tag-chip tag-chip--all"
+                      type="button"
+                      :disabled="tagActionLoading.includes(t.name)"
+                      :title="`On all ${totalWithTagData} selected — click to remove`"
+                      @click="removeTagFromAll(t)"
+                    >
+                      <span class="tag-chip-label">{{ t.name }}</span>
+                      <v-icon size="11" class="tag-chip-close"
+                        >mdi-close</v-icon
+                      >
+                    </button>
+                    <button
+                      v-for="t in tagsOnSome"
+                      :key="'some-' + t.name"
+                      class="tag-chip tag-chip--some"
+                      type="button"
+                      :disabled="tagActionLoading.includes(t.name)"
+                      :title="`On ${t.count} of ${totalWithTagData} — click to add to all`"
+                      @click="addTagToRemaining(t)"
+                    >
+                      <span class="tag-chip-label">{{ t.name }}</span>
+                      <span class="tag-chip-count"
+                        >{{ t.count }}/{{ totalWithTagData }}</span
+                      >
+                    </button>
+                  </div>
+                  <div class="tag-coverage-filter">
+                    <label class="tag-coverage-label">
+                      Min coverage:
+                      <input
+                        v-model.number="tagMinCoverage"
+                        type="range"
+                        min="1"
+                        :max="Math.max(1, totalWithTagData - 1)"
+                        class="tag-coverage-slider"
+                      />
+                      {{ tagMinCoverage }}/{{ totalWithTagData }}
+                    </label>
+                    <span
+                      v-if="tagsOnSomeHiddenCount"
+                      class="tag-coverage-hidden"
+                    >
+                      {{ tagsOnSomeHiddenCount }} hidden
+                    </span>
+                  </div>
+                </div>
+                <div class="tag-new-label">New tag</div>
                 <input
                   ref="tagInputRef"
                   v-model="tagInput"
@@ -340,6 +404,8 @@ const props = defineProps({
   showRemoveFromStack: { type: Boolean, default: false },
   availablePlugins: { type: Array, default: () => [] },
 });
+
+const MAX_TAG_FETCH = 100;
 
 const emit = defineEmits([
   "clear-selection",
@@ -588,6 +654,158 @@ const allTagsSB = ref([]);
 let allTagsFetchedAt = 0;
 const tagSuggestionIndex = ref(-1);
 const tagInputRect = ref(null);
+const tagActionLoading = ref([]);
+const fetchedTagData = ref([]);
+const tagDataLoading = ref(false);
+const tagDataCapped = ref(false);
+
+async function fetchSelectedImageTags() {
+  const ids = (
+    Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
+  )
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  tagDataCapped.value = ids.length > MAX_TAG_FETCH;
+  const toFetch = ids.slice(0, MAX_TAG_FETCH);
+  if (!toFetch.length) {
+    fetchedTagData.value = [];
+    return;
+  }
+  tagDataLoading.value = true;
+  try {
+    const res = await apiClient.post(
+      `${props.backendUrl}/pictures/tags/bulk_fetch`,
+      {
+        picture_ids: toFetch,
+      },
+    );
+    fetchedTagData.value = Array.isArray(res.data) ? res.data : [];
+  } catch {
+    fetchedTagData.value = [];
+  } finally {
+    tagDataLoading.value = false;
+  }
+}
+
+// How many images we actually have tag data for.
+const totalWithTagData = computed(() => fetchedTagData.value.length);
+
+// Map of tagName → { count, tagsByImageId: Map<imageId, tagId> }
+const tagFrequency = computed(() => {
+  const freq = new Map();
+  for (const img of fetchedTagData.value) {
+    for (const t of img.tags || []) {
+      const name = typeof t === "string" ? t : t.tag;
+      const tagId = typeof t === "string" ? null : t.id;
+      if (!name) continue;
+      if (!freq.has(name))
+        freq.set(name, { count: 0, tagsByImageId: new Map() });
+      const entry = freq.get(name);
+      entry.count++;
+      entry.tagsByImageId.set(Number(img.id), tagId);
+    }
+  }
+  return freq;
+});
+
+const tagsOnAll = computed(() => {
+  if (!totalWithTagData.value) return [];
+  return [...tagFrequency.value.entries()]
+    .filter(([, v]) => v.count === totalWithTagData.value)
+    .map(([name, v]) => ({
+      name,
+      count: v.count,
+      tagsByImageId: v.tagsByImageId,
+    }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+});
+
+const tagMinCoverage = ref(1); // minimum count to show in the partial list
+
+const tagsOnSome = computed(() => {
+  if (!totalWithTagData.value) return [];
+  return [...tagFrequency.value.entries()]
+    .filter(
+      ([, v]) =>
+        v.count > 0 &&
+        v.count < totalWithTagData.value &&
+        v.count >= tagMinCoverage.value,
+    )
+    .map(([name, v]) => ({
+      name,
+      count: v.count,
+      tagsByImageId: v.tagsByImageId,
+    }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+});
+
+const tagsOnSomeHiddenCount = computed(() => {
+  if (!totalWithTagData.value || tagMinCoverage.value <= 1) return 0;
+  return [...tagFrequency.value.entries()].filter(
+    ([, v]) =>
+      v.count > 0 &&
+      v.count < totalWithTagData.value &&
+      v.count < tagMinCoverage.value,
+  ).length;
+});
+
+async function removeTagFromAll(tagEntry) {
+  if (tagActionLoading.value.includes(tagEntry.name)) return;
+  tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
+  tagError.value = "";
+  try {
+    await Promise.all(
+      [...tagEntry.tagsByImageId.entries()]
+        .filter(([, tagId]) => tagId != null)
+        .map(([imgId, tagId]) =>
+          apiClient.delete(
+            `${props.backendUrl}/pictures/${imgId}/tags/${tagId}`,
+          ),
+        ),
+    );
+    emit("tags-applied", {
+      tag: tagEntry.name,
+      pictureIds: [...tagEntry.tagsByImageId.keys()],
+      action: "remove",
+    });
+  } catch (err) {
+    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+  } finally {
+    tagActionLoading.value = tagActionLoading.value.filter(
+      (n) => n !== tagEntry.name,
+    );
+  }
+}
+
+async function addTagToRemaining(tagEntry) {
+  if (tagActionLoading.value.includes(tagEntry.name)) return;
+  tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
+  tagError.value = "";
+  const missingIds = fetchedTagData.value
+    .filter((img) => !tagEntry.tagsByImageId.has(Number(img.id)))
+    .map((img) => Number(img.id));
+  try {
+    await Promise.all(
+      missingIds.map((id) =>
+        apiClient.post(`${props.backendUrl}/pictures/${id}/tags`, {
+          tag: tagEntry.name,
+        }),
+      ),
+    );
+    emit("tags-applied", {
+      tag: tagEntry.name,
+      pictureIds: missingIds,
+      action: "add",
+    });
+    await fetchSelectedImageTags();
+  } catch (err) {
+    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+  } finally {
+    tagActionLoading.value = tagActionLoading.value.filter(
+      (n) => n !== tagEntry.name,
+    );
+  }
+}
 
 const tagSuggestions = computed(() => {
   const query = tagInput.value.trim().toLowerCase();
@@ -622,9 +840,12 @@ watch(tagMenuOpen, async (isOpen) => {
     tagError.value = "";
     tagSuccess.value = "";
     tagSuggestionIndex.value = -1;
+    fetchedTagData.value = [];
+    tagDataCapped.value = false;
+    tagMinCoverage.value = 1;
     return;
   }
-  await fetchTagsSB();
+  await Promise.all([fetchTagsSB(), fetchSelectedImageTags()]);
   nextTick(() => tagInputRef.value?.focus());
 });
 
@@ -707,6 +928,7 @@ async function applyTag() {
     // Invalidate the tag cache so new tags appear in suggestions
     allTagsFetchedAt = 0;
     emit("tags-applied", { tag, pictureIds: ids });
+    await fetchSelectedImageTags();
   } catch (err) {
     tagError.value = err?.response?.data?.detail || err?.message || String(err);
   } finally {
@@ -715,7 +937,11 @@ async function applyTag() {
 }
 
 function openTagInput() {
-  tagMenuOpen.value = true;
+  if (tagMenuOpen.value) return;
+  // Use a real click so Vuetify's location-strategy="connected" records the
+  // activator element for positioning. Directly setting tagMenuOpen skips
+  // that step and causes the menu to appear at (0, 0) on first open.
+  tagBtnRef.value?.click();
 }
 
 defineExpose({ openTagInput });
@@ -729,9 +955,9 @@ defineExpose({ openTagInput });
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
-  padding: 2px 8px 8px 8px !important;
+  padding: 2px 8px;
   margin: 0;
-  height: 48px;
+  height: 36px;
   box-sizing: border-box;
 }
 .selection-bar-content {
@@ -926,6 +1152,139 @@ defineExpose({ openTagInput });
 
 .tag-menu-input:focus {
   border-color: rgba(var(--v-theme-primary), 0.8);
+}
+
+.tag-data-loading {
+  font-size: 0.78rem;
+  opacity: 0.6;
+  margin-bottom: 10px;
+}
+
+.tag-data-capped {
+  font-size: 0.68rem;
+  opacity: 0.7;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ── Tag coverage chips ──────────────────────────────────────── */
+.tag-current-section {
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.tag-current-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+  margin-bottom: 5px;
+  flex-shrink: 0;
+}
+
+.tag-new-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+  margin-top: 10px;
+  margin-bottom: 5px;
+}
+
+.tag-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  height: 200px;
+  overflow-y: auto;
+  padding-right: 2px;
+  align-content: flex-start;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 12px;
+  padding: 2px 7px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.tag-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tag-chip--all {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border: 1px solid rgba(var(--v-theme-primary), 0.5);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tag-chip--all:hover:not(:disabled) {
+  background: rgba(var(--v-theme-error), 0.18);
+  border-color: rgba(var(--v-theme-error), 0.55);
+}
+
+.tag-chip--some {
+  background: transparent;
+  border: 1px dashed rgba(var(--v-theme-on-surface), 0.35);
+  color: rgb(var(--v-theme-on-surface));
+  opacity: 0.7;
+}
+
+.tag-chip--some:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(var(--v-theme-primary), 0.12);
+  border-style: solid;
+  border-color: rgba(var(--v-theme-primary), 0.45);
+}
+
+.tag-chip-count {
+  font-size: 0.68rem;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+
+.tag-chip-close {
+  opacity: 0.6;
+}
+
+.tag-coverage-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  gap: 8px;
+}
+
+.tag-coverage-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+
+.tag-coverage-slider {
+  width: 80px;
+  accent-color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+}
+
+.tag-coverage-hidden {
+  font-size: 0.7rem;
+  opacity: 0.5;
+  white-space: nowrap;
 }
 
 .selection-count-explanation {

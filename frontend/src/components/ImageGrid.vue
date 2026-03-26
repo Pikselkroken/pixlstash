@@ -2053,7 +2053,7 @@ const isSelectionEmpty = computed(() => {
 const showScrapheapBar = computed(() => {
   return isScrapheapView.value && isSelectionEmpty.value;
 });
-const SCRAPHEAP_BAR_HEIGHT_PX = 48;
+const SCRAPHEAP_BAR_HEIGHT_PX = 36;
 const wrapperStyle = { position: "relative" };
 const scrollWrapperStyle = computed(() => {
   const offset =

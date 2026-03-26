@@ -39,9 +39,9 @@ const props = defineProps({
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
-  padding: 2px 8px 8px 8px !important;
+  padding: 2px 8px;
   margin: 0;
-  height: 48px;
+  height: 36px;
   box-sizing: border-box;
 }
 .selection-bar-content {

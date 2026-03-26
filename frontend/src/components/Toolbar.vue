@@ -1245,6 +1245,14 @@ function blurSearchInput() {
   }
 }
 
+function focusSearchInput() {
+  const field = searchInputField.value;
+  if (field && field.$el) {
+    const input = field.$el.querySelector("input");
+    if (input) input.focus();
+  }
+}
+
 // ============================================================
 // COMFYUI
 // ============================================================
@@ -1318,7 +1326,7 @@ function runComfyuiOnGrid() {
   comfyuiMenuOpen.value = false;
 }
 
-defineExpose({ blurSearchInput });
+defineExpose({ blurSearchInput, focusSearchInput });
 </script>
 
 <style scoped>
