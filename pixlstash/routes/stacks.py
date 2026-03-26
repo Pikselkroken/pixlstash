@@ -311,7 +311,11 @@ def create_router(server) -> APIRouter:
                     if pic and pic.stack_id and pic.stack_id not in seen:
                         ordered_stack_ids.append(pic.stack_id)
                         seen.add(pic.stack_id)
-                keeper_id = ordered_stack_ids[0] if ordered_stack_ids else min(existing_stack_ids)
+                keeper_id = (
+                    ordered_stack_ids[0]
+                    if ordered_stack_ids
+                    else min(existing_stack_ids)
+                )
                 stack = session.get(PictureStack, keeper_id)
                 if stack is None:
                     raise HTTPException(status_code=404, detail="Stack not found")

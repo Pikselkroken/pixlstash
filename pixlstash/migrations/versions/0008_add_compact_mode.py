@@ -26,9 +26,7 @@ def upgrade() -> None:
     existing_columns = {col["name"] for col in inspector.get_columns("user")}
     if "compact_mode" not in existing_columns:
         with op.batch_alter_table("user") as batch_op:
-            batch_op.add_column(
-                sa.Column("compact_mode", sa.Boolean(), nullable=True)
-            )
+            batch_op.add_column(sa.Column("compact_mode", sa.Boolean(), nullable=True))
 
 
 def downgrade() -> None:

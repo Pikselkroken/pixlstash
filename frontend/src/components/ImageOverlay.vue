@@ -6,14 +6,19 @@
       @mousemove="handleMouseActivity"
       @mousedown="handleMouseActivity"
       @click="handleOverlayClick"
-      @wheel.passive="handleUserActivity"
+      @wheel.passive="handleWheelActivity"
     >
       <header
         ref="topbarRef"
         class="overlay-topbar"
         :class="{ hidden: chromeHidden }"
       >
-        <button class="overlay-close" @click="emit('close')" aria-label="Close">
+        <button
+          class="overlay-close"
+          @click="emit('close')"
+          aria-label="Close (ESC)"
+          title="Close (ESC)"
+        >
           <v-icon size="18">mdi-close</v-icon>
           <span>Close</span>
         </button>
@@ -315,8 +320,8 @@
           <button
             class="overlay-icon-btn zoom-btn"
             type="button"
-            title="Toggle zoom"
-            aria-label="Toggle zoom"
+            title="Toggle zoom (Z)"
+            aria-label="Toggle zoom (Z)"
             @click="toggleZoom"
           >
             <v-icon>mdi-magnify</v-icon>
@@ -324,8 +329,8 @@
           <button
             class="overlay-icon-btn overlay-topbar-sidebar-toggle"
             type="button"
-            title="Toggle sidebar"
-            aria-label="Toggle sidebar"
+            title="Toggle sidebar (S)"
+            aria-label="Toggle sidebar (S)"
             @click="toggleSidebar"
           >
             <v-icon>{{
@@ -493,7 +498,8 @@
             class="overlay-nav overlay-nav-left"
             :class="{ hidden: chromeHidden }"
             @click.stop="showPrevImage"
-            aria-label="Previous"
+            aria-label="Previous (←)"
+            title="Previous (←)"
           >
             <v-icon>mdi-chevron-left</v-icon>
           </button>
@@ -501,7 +507,8 @@
             class="overlay-nav overlay-nav-right"
             :class="{ hidden: chromeHidden }"
             @click.stop="showNextImage"
-            aria-label="Next"
+            aria-label="Next (→)"
+            title="Next (→)"
           >
             <v-icon>mdi-chevron-right</v-icon>
           </button>
@@ -516,6 +523,9 @@
           <div v-if="swipeHintVisible" class="overlay-swipe-hint">
             <v-icon size="18">mdi-swap-horizontal</v-icon>
             <span>Swipe to navigate</span>
+          </div>
+          <div v-if="chromeHidden" class="overlay-chrome-hint">
+            <span>Click or <kbd>Space</kbd> to show controls</span>
           </div>
         </div>
 
@@ -927,7 +937,9 @@
         class="tag-autocomplete-item"
         :class="{ 'tag-autocomplete-item--active': idx === tagSuggestionIndex }"
         @mousedown.prevent="selectTagSuggestion(item)"
-      >{{ item.tag }}</button>
+      >
+        {{ item.tag }}
+      </button>
     </div>
   </Teleport>
 </template>
@@ -2237,6 +2249,41 @@ function showNextImage() {
 function handleKeydown(e) {
   if (!open.value) return;
 
+  // When chrome is hidden, only Space and Escape reveal it — other keys still
+  // navigate/act but don't bring the chrome back.
+  if (chromeHidden.value) {
+    if (e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      handleUserActivity();
+      return;
+    }
+    // Let navigation keys work silently without revealing chrome
+    if (
+      [
+        "ArrowLeft",
+        "Left",
+        "ArrowRight",
+        "Right",
+        "ArrowUp",
+        "Up",
+        "ArrowDown",
+        "Down",
+      ].includes(e.key)
+    ) {
+      if (["ArrowLeft", "Left", "ArrowUp", "Up"].includes(e.key))
+        showPrevImage();
+      else showNextImage();
+      return;
+    }
+    // Escape reveals chrome (and closes draw mode if active)
+    if (e.key === "Escape") {
+      handleUserActivity();
+      return;
+    }
+    // All other keys: ignore while chrome is hidden
+    return;
+  }
+
   handleUserActivity();
 
   if (comfyuiCaptionFocused.value) {
@@ -2315,7 +2362,12 @@ function handleKeydown(e) {
     showNextImage();
   } else if (e.key === "z" || e.key === "Z") {
     toggleZoom();
-  } else if (e.key === "i" || e.key === "I") {
+  } else if (e.key === " " || e.key === "Spacebar") {
+    e.preventDefault();
+    if (!chromeHidden.value) {
+      chromeHidden.value = true;
+    }
+  } else if (e.key === "s" || e.key === "S") {
     toggleSidebar();
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
     e.preventDefault();
@@ -2417,7 +2469,13 @@ function handleUserActivity() {
 }
 
 function handleMouseActivity() {
+  if (chromeHidden.value) return; // mouse movement never reveals chrome
   if (Date.now() - lastTouchEndTime < 600) return;
+  handleUserActivity();
+}
+
+function handleWheelActivity() {
+  // Scroll always reveals chrome (deliberate interaction)
   handleUserActivity();
 }
 
@@ -4838,6 +4896,27 @@ function downloadComfyWorkflow(workflow) {
   border-radius: 999px;
   font-size: 0.85rem;
   z-index: 4;
+}
+.overlay-chrome-hint {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  pointer-events: none;
+  z-index: 4;
+  white-space: nowrap;
+}
+.overlay-chrome-hint kbd {
+  font-family: inherit;
+  font-size: inherit;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 0 4px;
 }
 
 .overlay-rail {
