@@ -28,6 +28,7 @@ const gridContainer = ref(null);
 const selectedImageIds = ref([]);
 let lastSelectedIndex = null;
 const sidebarRef = ref(null);
+const shortcutsDialogOpen = ref(false);
 const toolbarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
@@ -816,16 +817,20 @@ function handleGlobalKeydown(e) {
       grid.onGlobalKeyPress(e.key, e);
     }
   }
+  const tag = document.activeElement?.tagName?.toLowerCase();
+  const isEditable =
+    tag === "input" ||
+    tag === "textarea" ||
+    document.activeElement?.isContentEditable;
   if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    const tag = document.activeElement?.tagName?.toLowerCase();
-    const isEditable =
-      tag === "input" ||
-      tag === "textarea" ||
-      document.activeElement?.isContentEditable;
     if (!isEditable) {
       e.preventDefault();
       toolbarRef.value?.focusSearchInput?.();
     }
+  }
+  if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditable) {
+    e.preventDefault();
+    shortcutsDialogOpen.value = !shortcutsDialogOpen.value;
   }
 }
 
@@ -1313,6 +1318,44 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
         @close="closeSearchOverlay"
       />
     </div>
+    <button
+      class="shortcuts-fab"
+      type="button"
+      title="Keyboard shortcuts (?)"
+      @click="shortcutsDialogOpen = true"
+    >
+      <v-icon size="20">mdi-keyboard</v-icon>
+    </button>
+    <v-dialog v-model="shortcutsDialogOpen" max-width="480">
+      <v-card class="shortcuts-dialog">
+        <v-card-title class="shortcuts-dialog-title">Keyboard shortcuts</v-card-title>
+        <v-card-text class="shortcuts-dialog-body">
+          <table class="shortcuts-table">
+            <tbody>
+              <tr><td colspan="2" class="shortcuts-section">Grid view</td></tr>
+              <tr><td><kbd>F</kbd></td><td>Focus search</td></tr>
+              <tr><td><kbd>1</kbd> – <kbd>5</kbd></td><td>Set star rating on hovered / selected image(s)</td></tr>
+              <tr><td><kbd>T</kbd></td><td>Tag selected images</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>Select all images</td></tr>
+              <tr><td><kbd>Delete</kbd></td><td>Delete selected images</td></tr>
+              <tr><td><kbd>Esc</kbd></td><td>Clear selection</td></tr>
+              <tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>Jump to first / last image</td></tr>
+              <tr><td><kbd>Page Up</kbd> / <kbd>Page Down</kbd></td><td>Scroll image grid</td></tr>
+              <tr><td colspan="2" class="shortcuts-section">Image overlay</td></tr>
+              <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next image</td></tr>
+              <tr><td><kbd>1</kbd> – <kbd>5</kbd></td><td>Set star rating</td></tr>
+              <tr><td><kbd>T</kbd></td><td>Add tag</td></tr>
+              <tr><td><kbd>Z</kbd></td><td>Toggle zoom</td></tr>
+              <tr><td><kbd>I</kbd></td><td>Toggle info panel</td></tr>
+              <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Copy image</td></tr>
+              <tr><td><kbd>Esc</kbd></td><td>Close overlay</td></tr>
+              <tr><td colspan="2" class="shortcuts-section">General</td></tr>
+              <tr><td><kbd>?</kbd></td><td>Show / hide this dialog</td></tr>
+            </tbody>
+          </table>
+        </v-card-text>
+      </v-card>
+    </v-dialog>
   </v-app>
 </template>
 <style scoped src="./App.css"></style>
