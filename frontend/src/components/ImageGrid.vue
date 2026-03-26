@@ -1540,10 +1540,13 @@ function formatCompactDate(dateStr) {
 
 function getCompactGroupLabel(img, visualIdx) {
   if (!props.compactMode || !img) return null;
+  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
   const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
 
   function getGroupKey(item) {
     if (!item) return null;
+    if (isSearchMode && typeof item.likeness_score === "number")
+      return Math.round(item.likeness_score * 20);
     if (sort === "IMPORTED_AT" && item.imported_at)
       return item.imported_at.slice(0, 10);
     if (sort.includes("DATE") && item.created_at)
@@ -1567,6 +1570,8 @@ function getCompactGroupLabel(img, visualIdx) {
     visualIdx > 0 ? gridImagesToRender.value[visualIdx - 1] : null;
   if (visualIdx > 0 && getGroupKey(prevImg) === currentKey) return null;
 
+  if (isSearchMode && typeof img.likeness_score === "number")
+    return `≈ ${img.likeness_score.toFixed(2)}`;
   if (sort === "IMPORTED_AT" && img.imported_at)
     return formatCompactDate(img.imported_at);
   if (sort.includes("DATE") && img.created_at)
@@ -1577,7 +1582,7 @@ function getCompactGroupLabel(img, visualIdx) {
     sort.includes("CHARACTER_LIKENESS") &&
     typeof img.character_likeness === "number"
   )
-    return `~ ${(Math.floor(img.character_likeness * 100) / 100).toFixed(2)}`;
+    return `≈ ${(Math.floor(img.character_likeness * 100) / 100).toFixed(2)}`;
   if (sort === "TEXT_CONTENT" && typeof img.text_score === "number")
     return `${(img.text_score * 100).toFixed(0)}%`;
   return null;
@@ -1585,10 +1590,13 @@ function getCompactGroupLabel(img, visualIdx) {
 
 const compactStickyLabel = computed(() => {
   if (!props.compactMode) return null;
+  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
   const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
 
   function getGroupKey(item) {
     if (!item) return null;
+    if (isSearchMode && typeof item.likeness_score === "number")
+      return Math.round(item.likeness_score * 20);
     if (sort === "IMPORTED_AT" && item.imported_at)
       return item.imported_at.slice(0, 10);
     if (sort.includes("DATE") && item.created_at)
@@ -1619,6 +1627,8 @@ const compactStickyLabel = computed(() => {
     getGroupKey(prevImg) !== getGroupKey(firstImg);
   if (isGroupBoundary) return null;
 
+  if (isSearchMode && typeof firstImg.likeness_score === "number")
+    return `≈ ${firstImg.likeness_score.toFixed(2)}`;
   if (sort === "IMPORTED_AT" && firstImg.imported_at)
     return formatCompactDate(firstImg.imported_at);
   if (sort.includes("DATE") && firstImg.created_at)
@@ -1629,7 +1639,7 @@ const compactStickyLabel = computed(() => {
     sort.includes("CHARACTER_LIKENESS") &&
     typeof firstImg.character_likeness === "number"
   )
-    return `~ ${(Math.floor(firstImg.character_likeness * 100) / 100).toFixed(2)}`;
+    return `≈ ${(Math.floor(firstImg.character_likeness * 100) / 100).toFixed(2)}`;
   if (sort === "TEXT_CONTENT" && typeof firstImg.text_score === "number")
     return `${(firstImg.text_score * 100).toFixed(0)}%`;
   return null;
