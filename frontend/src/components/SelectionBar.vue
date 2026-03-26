@@ -174,36 +174,37 @@
           </v-menu>
         </div>
         <AddToSetControl
-          v-if="selectedCount > 0 && !isScrapheapView"
+          v-if="!isScrapheapView"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           @added="$emit('added-to-set', $event)"
         />
         <AddToCharacterControl
-          v-if="selectedCount > 0 && !isScrapheapView"
+          v-if="!isScrapheapView"
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           @added="$emit('add-to-character', $event)"
         />
         <button
-          v-if="showRemoveStackButton"
-          class="stack-btn"
+          v-if="!isScrapheapView"
+          class="stack-btn stack-toggle-btn"
           type="button"
-          title="Remove selected images from their stack"
-          @click="$emit('remove-from-stack')"
+          :disabled="showRemoveStackButton ? false : selectedCount <= 1"
+          :title="
+            showRemoveStackButton
+              ? 'Remove selected images from their stack'
+              : 'Create a stack from the selected images'
+          "
+          @click="
+            showRemoveStackButton
+              ? $emit('remove-from-stack')
+              : $emit('create-stack')
+          "
         >
-          <v-icon size="16">mdi-layers-minus</v-icon>
-          <span>Remove From Stack</span>
-        </button>
-        <button
-          v-else-if="selectedCount > 1 && !isScrapheapView"
-          class="stack-btn"
-          type="button"
-          title="Create a stack from the selected images"
-          @click="$emit('create-stack')"
-        >
-          <v-icon size="16">mdi-layers</v-icon>
-          <span>Stack</span>
+          <v-icon size="16">{{
+            showRemoveStackButton ? "mdi-layers-off" : "mdi-layers"
+          }}</v-icon>
+          <span>{{ showRemoveStackButton ? "Unstack" : "Stack" }}</span>
         </button>
         <button
           v-if="showGroupStackButton"
@@ -222,10 +223,7 @@
         >
           {{ removeButtonLabel }}
         </button>
-        <div
-          v-if="selectedCount > 0 && !isScrapheapView"
-          class="plugin-run-controls"
-        >
+        <div class="plugin-run-controls">
           <v-menu
             v-model="tagMenuOpen"
             :close-on-content-click="false"
@@ -240,6 +238,7 @@
                 ref="tagBtnRef"
                 class="stack-btn"
                 type="button"
+                :disabled="isScrapheapView"
               >
                 <v-icon size="16">mdi-tag-plus</v-icon>
                 <span>Tag</span>
@@ -281,11 +280,7 @@
             </div>
           </v-menu>
         </div>
-        <button
-          v-if="selectedCount > 0"
-          class="delete-btn"
-          @click="$emit('delete-selected')"
-        >
+        <button class="delete-btn" @click="$emit('delete-selected')">
           {{ deleteButtonLabel }}
         </button>
       </div>
@@ -772,7 +767,7 @@ defineExpose({ openTagInput });
 .selection-bar-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
 }
@@ -780,9 +775,10 @@ defineExpose({ openTagInput });
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   border: none;
-  padding: 6px 14px;
+  padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
+  font-size: 0.85rem;
 }
 .clear-btn:hover {
   filter: brightness(1.3);
@@ -791,9 +787,10 @@ defineExpose({ openTagInput });
   background: rgb(var(--v-theme-warning));
   color: rgb(var(--v-theme-on-warning));
   border: none;
-  padding: 6px 14px;
+  padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
+  font-size: 0.85rem;
 }
 .remove-btn:hover {
   filter: brightness(1.3);
@@ -802,9 +799,10 @@ defineExpose({ openTagInput });
   background: rgb(var(--v-theme-error));
   color: #fff;
   border: none;
-  padding: 6px 18px;
+  padding: 4px 12px;
   border-radius: 4px;
   cursor: pointer;
+  font-size: 0.85rem;
 }
 .delete-btn:hover {
   filter: brightness(1.3);
@@ -812,16 +810,25 @@ defineExpose({ openTagInput });
 .stack-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   background: rgba(var(--v-theme-primary), 0.15);
   color: rgb(var(--v-theme-on-background));
   border: 1px solid rgba(var(--v-theme-primary), 0.4);
-  padding: 6px 12px;
+  padding: 4px 8px;
   border-radius: 4px;
   cursor: pointer;
+  font-size: 0.85rem;
 }
-.stack-btn:hover {
+.stack-btn:hover:not(:disabled) {
   filter: brightness(1.2);
+}
+.stack-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.stack-toggle-btn {
+  min-width: 5.5rem;
+  justify-content: center;
 }
 
 .plugin-run-controls {
