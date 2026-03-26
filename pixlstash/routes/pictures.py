@@ -534,7 +534,8 @@ def _select_pictures_for_listing(
                 try:
                     query_params["project_id"] = int(project_id_raw)
                 except (TypeError, ValueError):
-                    pass
+                    # If project_id_raw is not a valid integer, skip applying a project filter.
+                    logger.warning("Invalid project_id_raw value %r; skipping project filter", project_id_raw)
 
         pics = server.vault.db.run_task(
             Picture.find,
