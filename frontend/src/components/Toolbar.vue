@@ -29,7 +29,7 @@
               prepend-inner-icon="mdi-magnify"
               class="toolbar-search-field"
               autocomplete="off"
-              placeholder="Search… (F)"
+              placeholder="Search (F)"
               @keydown.enter="handleSearchEnter"
               @click:prepend-inner="emit('commit-search')"
               @click:clear="emit('clear-search')"
@@ -1334,10 +1334,9 @@ defineExpose({ blurSearchInput, focusSearchInput });
 .top-toolbar {
   background-color: rgb(var(--v-theme-toolbar)) !important;
   width: 100%;
-  min-height: 32px;
   display: flex;
   vertical-align: top;
-  padding: 2px 2px 0px 2px;
+  padding: 2px 2px 2px 2px;
   z-index: 5;
   position: relative;
   --toolbar-control-height: 32px;

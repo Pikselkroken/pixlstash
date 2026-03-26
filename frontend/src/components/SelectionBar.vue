@@ -769,6 +769,7 @@ async function removeTagFromAll(tagEntry) {
       pictureIds: [...tagEntry.tagsByImageId.keys()],
       action: "remove",
     });
+    await fetchSelectedImageTags();
   } catch (err) {
     tagError.value = err?.response?.data?.detail || err?.message || String(err);
   } finally {
@@ -956,9 +957,9 @@ defineExpose({ openTagInput });
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
-  padding: 2px 8px;
+  padding: 4px 8px;
   margin: 0;
-  height: 36px;
+  height: 38px;
   box-sizing: border-box;
 }
 .selection-bar-content {

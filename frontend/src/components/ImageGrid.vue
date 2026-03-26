@@ -2054,7 +2054,7 @@ const showScrapheapBar = computed(() => {
   return isScrapheapView.value && isSelectionEmpty.value;
 });
 const SCRAPHEAP_BAR_HEIGHT_PX = 36;
-const wrapperStyle = { position: "relative" };
+const wrapperStyle = { position: "relative", height: "100%" };
 const scrollWrapperStyle = computed(() => {
   const offset =
     showSelectionBar.value || showScrapheapBar.value
@@ -2063,7 +2063,6 @@ const scrollWrapperStyle = computed(() => {
   return {
     position: "relative",
     paddingTop: `${offset}px`,
-    height: "calc(100vh - 60px)",
   };
 });
 const scrapheapEmptyDisabled = computed(() => {
@@ -2912,16 +2911,13 @@ async function applyScore(img, newScore) {
     if (isCharacterLikenessSortActive()) {
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
-      emit("refresh-sidebar");
       return;
     }
     if (isSmartScoreSortActive()) {
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
-      emit("refresh-sidebar");
       return;
     }
-    emit("refresh-sidebar");
   } catch (e) {
     alert(e.message);
   }
@@ -5526,8 +5522,9 @@ function handleEmptyStateReset() {
   z-index: 30;
 }
 .grid-scroll-wrapper {
-  height: calc(100vh - 60px);
+  height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   width: 100%;
   padding-right: 0px;
   scrollbar-color: rgb(var(--v-theme-accent)) rgb(var(--v-theme-on-accent));
@@ -5734,7 +5731,7 @@ function handleEmptyStateReset() {
       )
       left / 3px 100% no-repeat;
   pointer-events: none;
-  z-index: 999;
+  z-index: 200;
   transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1);
 }
 .compact-mode .thumbnail-card:has(.compact-group-label):hover::before {
@@ -5749,7 +5746,7 @@ function handleEmptyStateReset() {
 }
 .compact-sticky-label,
 .compact-group-label {
-  transform: translateX(-50%) translateY(-50%);
+  transform: translateX(-50%) translateY(-38%);
   background: rgba(var(--v-theme-surface), 0.82);
   color: rgb(var(--v-theme-accent));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.18);
@@ -5763,7 +5760,7 @@ function handleEmptyStateReset() {
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
-  z-index: 1000;
+  z-index: 400;
   box-shadow: 0 1px 4px rgba(var(--v-theme-shadow), 0.25);
   backdrop-filter: blur(4px);
 }
@@ -5772,7 +5769,7 @@ function handleEmptyStateReset() {
   top: 0;
   left: 50%;
   width: fit-content;
-  transform: translateX(-50%) translateY(2px);
+  transform: translateX(-50%) translateY(4px);
   margin-bottom: -24px;
 }
 .compact-group-label {

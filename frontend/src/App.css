@@ -54,15 +54,16 @@ body {
   transition: width 0.2s;
 }
 .main-content {
-  flex: 1 1 0%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
   padding: 0;
   transition: border-color 0.2s;
-  height: calc(100vh - 60px);
-  /* No overflow property here; only .image-grid should scroll */
+  overflow: hidden;
+  /* Height is determined by flex — toolbar takes natural height, this fills the rest */
 }
 
 .export-dialog-card {
@@ -377,12 +378,12 @@ button:focus:not(:focus-visible) {
 /* Keyboard shortcuts FAB */
 .shortcuts-fab {
   position: fixed;
-  bottom: 16px;
-  right: 16px;
+  bottom: 8px;
+  right: 8px;
   z-index: 2000;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 10;
   background: rgb(var(--v-theme-panel));
   color: rgb(var(--v-theme-on-panel));
   border: 1px solid rgba(var(--v-theme-on-background), 0.15);

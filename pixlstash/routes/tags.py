@@ -297,18 +297,21 @@ def create_router(server) -> APIRouter:
         try:
             raw_ids = payload.get("picture_ids", [])
             if not isinstance(raw_ids, list):
-                raise HTTPException(status_code=400, detail="picture_ids must be a list")
+                raise HTTPException(
+                    status_code=400, detail="picture_ids must be a list"
+                )
             try:
                 ids = [int(i) for i in raw_ids[:200]]
             except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail="All picture ids must be integers")
+                raise HTTPException(
+                    status_code=400, detail="All picture ids must be integers"
+                )
             if not ids:
                 return []
 
             def fetch(session: Session, ids: list):
                 rows = session.exec(
-                    select(Tag.picture_id, Tag.id, Tag.tag)
-                    .where(
+                    select(Tag.picture_id, Tag.id, Tag.tag).where(
                         Tag.picture_id.in_(ids),
                         Tag.tag.is_not(None),
                         Tag.tag != TAG_EMPTY_SENTINEL,
