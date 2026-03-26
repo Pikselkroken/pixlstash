@@ -31,6 +31,7 @@
               autocomplete="off"
               placeholder="Search (F)"
               @keydown.enter="handleSearchEnter"
+              @keydown.esc="blurSearchInput"
               @click:prepend-inner="emit('commit-search')"
               @click:clear="emit('clear-search')"
             />
