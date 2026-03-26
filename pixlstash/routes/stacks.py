@@ -302,12 +302,32 @@ def create_router(server) -> APIRouter:
 
             existing_stack_ids = {pic.stack_id for pic in pictures if pic.stack_id}
             if len(existing_stack_ids) > 1:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Pictures already belong to multiple stacks",
-                )
-
-            if existing_stack_ids:
+                # Merge: keep the stack whose leader appears first in the incoming
+                # picture_ids order (frontend sends them sorted by grid position).
+                ordered_stack_ids = []
+                seen = set()
+                for pid in picture_ids:
+                    pic = next((p for p in pictures if p.id == pid), None)
+                    if pic and pic.stack_id and pic.stack_id not in seen:
+                        ordered_stack_ids.append(pic.stack_id)
+                        seen.add(pic.stack_id)
+                keeper_id = ordered_stack_ids[0] if ordered_stack_ids else min(existing_stack_ids)
+                stack = session.get(PictureStack, keeper_id)
+                if stack is None:
+                    raise HTTPException(status_code=404, detail="Stack not found")
+                orphan_ids = existing_stack_ids - {keeper_id}
+                for orphan_stack_id in orphan_ids:
+                    orphan_members = session.exec(
+                        select(Picture).where(Picture.stack_id == orphan_stack_id)
+                    ).all()
+                    for member in orphan_members:
+                        member.stack_id = keeper_id
+                        session.add(member)
+                    orphan_stack = session.get(PictureStack, orphan_stack_id)
+                    if orphan_stack is not None:
+                        session.delete(orphan_stack)
+                session.commit()
+            elif existing_stack_ids:
                 stack_id = existing_stack_ids.pop()
                 stack = session.get(PictureStack, stack_id)
                 if stack is None:

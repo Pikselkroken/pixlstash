@@ -559,10 +559,10 @@
               icon
               v-bind="props"
               :color="props['aria-expanded'] === 'true' ? 'primary' : 'surface'"
-              title="Overlay options"
+              title="Image Information Overlays"
               class="toolbar-action-btn"
             >
-              <v-icon :color="'on-background'">mdi-layers-outline</v-icon>
+              <v-icon :color="'on-background'">mdi-face-recognition</v-icon>
             </v-btn>
           </template>
           <div

@@ -201,6 +201,9 @@
                 img,
                 'right',
               ),
+              'stack-hover-active':
+                hoveredStackId !== null &&
+                getPictureStackId(img) === hoveredStackId,
             },
           ]"
           @click="handleImageCardClick(img, img.idx, $event)"
@@ -243,7 +246,7 @@
                 @mouseenter.stop="prefetchStackMembers(img)"
               >
                 <v-icon size="18" :style="getStackBadgeIconStyle(img)"
-                  >mdi-layers</v-icon
+                  >mdi-layers-outline</v-icon
                 >
               </div>
               <div
@@ -402,6 +405,12 @@
                   >
                 </div>
               </template>
+              <!-- Stack band overlay (top+bottom color stripe for compact mode) -->
+              <div
+                v-if="getStackBandStyle(img)"
+                class="stack-band-overlay"
+                :style="getStackBandStyle(img)"
+              ></div>
               <!-- Score overlay -->
               <StarRatingOverlay
                 v-if="
@@ -594,7 +603,6 @@ const props = defineProps({
 // CONSTANTS
 // ============================================================
 const STACKS_SORT_KEY = "PICTURE_STACKS";
-const STACK_COLOR_STEP = 47;
 const MIN_THUMBNAIL_SIZE = 128;
 const MAX_THUMBNAIL_SIZE = 384;
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
@@ -640,6 +648,27 @@ const selectionBarRef = ref(null);
 // ============================================================
 const allGridImages = ref([]);
 const lastFetchedGridImages = ref([]);
+// Maps stack_id → { index, row, col } where:
+//   index = sequential appearance order of the stack in the grid (drives hue)
+//   row   = grid row of the stack's first image (drives lightness)
+//   col   = grid column of the stack's first image (drives saturation slightly)
+const stackVisualOrderMap = computed(() => {
+  const images = allGridImages.value;
+  const cols = Math.max(1, props.columns || 1);
+
+  const result = new Map();
+  let stackAppearanceIndex = 0;
+  for (let i = 0; i < images.length; i++) {
+    const sid = getPictureStackId(images[i]);
+    if (sid != null && !result.has(sid)) {
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      result.set(sid, { index: stackAppearanceIndex, row, col });
+      stackAppearanceIndex++;
+    }
+  }
+  return result;
+});
 const expandedStackIds = ref(new Set());
 const expandedStackMembers = ref(new Map());
 const expandedStackLoading = ref(new Set());
@@ -1376,12 +1405,17 @@ function getFaceBboxOverlays(img) {
 // HOVER STATE + THUMBNAIL INFO DISPLAY ITEMS
 // ============================================================
 const hoveredImageIdx = ref(null);
+const hoveredStackId = ref(null);
 
 function handleImageMouseEnter(img) {
   hoveredImageIdx.value = img.idx;
+  hoveredStackId.value = getPictureStackId(img) ?? null;
 }
 function handleImageMouseLeave(img) {
   if (hoveredImageIdx.value === img.idx) hoveredImageIdx.value = null;
+  if (hoveredStackId.value && getPictureStackId(img) === hoveredStackId.value) {
+    hoveredStackId.value = null;
+  }
 }
 
 // Number of images before/after viewport to load thumbnails for
@@ -2446,9 +2480,21 @@ async function createStackFromSelection() {
     ? selectedImageIds.value
     : [];
   if (!ids.length) return;
+  // Sort by grid display order so the backend keeps the first-in-grid stack.
+  const gridImages = Array.isArray(allGridImages.value)
+    ? allGridImages.value
+    : [];
+  const gridIndexById = new Map(
+    gridImages.map((img, i) => [String(img?.id), i]),
+  );
+  const sortedIds = ids.slice().sort((a, b) => {
+    const ia = gridIndexById.get(String(a)) ?? Infinity;
+    const ib = gridIndexById.get(String(b)) ?? Infinity;
+    return ia - ib;
+  });
   try {
     await apiClient.post(`${props.backendUrl}/stacks`, {
-      picture_ids: ids,
+      picture_ids: sortedIds,
     });
     clearSelection();
     preserveScrollOnNextFetch.value = true;
@@ -3411,12 +3457,18 @@ function getStackCardColor(img) {
         ? img.stack_index
         : null;
   if (typeof stackIndex === "number") {
-    return getStackColor(stackIndex, STACK_COLOR_STEP);
+    return getStackColor(stackIndex);
   }
   const stackId = getPictureStackId(img);
+  if (stackId == null) return null;
+  // Use visual order entry: index drives hue, row drives lightness, col drives saturation.
+  const visualEntry = stackVisualOrderMap.value.get(stackId);
+  if (visualEntry != null) {
+    return getStackColor(visualEntry.index, visualEntry.row, visualEntry.col);
+  }
   const index = getStackColorIndexFromId(stackId);
   if (index === null) return null;
-  return getStackColor(index, STACK_COLOR_STEP);
+  return getStackColor(index);
 }
 
 function getStackBadgeIconStyle(img) {
@@ -3424,6 +3476,16 @@ function getStackBadgeIconStyle(img) {
   if (!color) return {};
   return {
     color,
+  };
+}
+
+function getStackBandStyle(img) {
+  if (!img || !getPictureStackId(img)) return null;
+  if (!isStackExpandedForImage(img)) return null;
+  const color = getStackCardColor(img);
+  if (!color) return null;
+  return {
+    borderBottom: `8px solid ${color}`,
   };
 }
 
@@ -4202,9 +4264,7 @@ async function fetchAllGridImages(options = {}) {
           ...img,
           stackIndex,
           stackColor:
-            typeof stackIndex === "number"
-              ? getStackColor(stackIndex, STACK_COLOR_STEP)
-              : null,
+            typeof stackIndex === "number" ? getStackColor(stackIndex) : null,
         };
       });
     } else if (props.searchQuery && props.searchQuery.trim()) {
@@ -5638,6 +5698,11 @@ function handleEmptyStateReset() {
   transform: scale(1.03);
   z-index: 2;
 }
+.stack-hover-active .thumbnail-img {
+  box-shadow: 1px 1px 2px 2px rgba(var(--v-theme-shadow), 0.3);
+  transform: scale(1.03);
+  z-index: 2;
+}
 .thumbnail-card {
   width: 100%;
   max-width: none;
@@ -5766,6 +5831,14 @@ function handleEmptyStateReset() {
 
 .stack-indicator {
   cursor: pointer;
+}
+
+.stack-band-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  border-radius: inherit;
 }
 
 .thumbnail-badge--top-left-stack {

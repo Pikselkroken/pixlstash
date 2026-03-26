@@ -71,9 +71,16 @@ export function getStackThreshold(value) {
   return Math.max(0.5, Math.min(0.99999, parsed));
 }
 
-export function getStackColor(stackIndex, step = 47) {
-  const hue = (stackIndex * step) % 360;
-  return `hsl(${hue} 70% 55%)`;
+export function getStackColor(stackIndex, row = 0, col = 0) {
+  // 8 hues evenly spread across the 60°–360° usable range (avoiding the
+  // 0°–60° orange accent band), ordered for maximum step-to-step contrast.
+  const HUES = [220, 145, 295, 70, 183, 333, 108, 258];
+  const hue = HUES[((stackIndex % 8) + 8) % 8];
+  const LIGHTNESS_STEPS = [48, 70];
+  const SATURATION_STEPS = [60, 80];
+  const lightness = LIGHTNESS_STEPS[row % 2];
+  const saturation = SATURATION_STEPS[col % 2];
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
 }
 
 // Add this helper below your script setup imports
