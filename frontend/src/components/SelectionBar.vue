@@ -8,6 +8,19 @@
         <span v-if="selectedCount > 0" class="selection-count"
           >{{ selectedCount }} Images selected</span
         >
+        <span
+          v-if="props.selectedExpandedCount > selectedCount"
+          class="selection-expanded-count"
+          title="including images in stacks"
+        >
+          ({{ props.selectedExpandedCount }}
+          <v-icon
+            size="14"
+            style="vertical-align: middle"
+            class="selection-count-explanation"
+            >mdi-information-outline</v-icon
+          >)
+        </span>
         <span v-if="selectedFaceCount > 0" class="selection-face-count">
           {{ selectedFaceCount }} Faces selected
         </span>
@@ -311,6 +324,7 @@ import AddToCharacterControl from "./AddToCharacterControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";
 const props = defineProps({
   selectedCount: Number,
+  selectedExpandedCount: { type: Number, default: 0 },
   selectedFaceCount: { type: Number, default: 0 },
   selectedCharacter: String,
   selectedSet: String,
@@ -749,6 +763,12 @@ defineExpose({ openTagInput });
   text-overflow: ellipsis;
   min-width: 0;
 }
+.selection-expanded-count {
+  font-size: 0.85em;
+  opacity: 0.75;
+  white-space: nowrap;
+  cursor: default;
+}
 .selection-bar-actions {
   display: flex;
   align-items: center;
@@ -899,6 +919,13 @@ defineExpose({ openTagInput });
 
 .tag-menu-input:focus {
   border-color: rgba(var(--v-theme-primary), 0.8);
+}
+
+.selection-count-explanation {
+  opacity: 0.75;
+  color: red;
+
+  cursor: default;
 }
 
 .sb-tag-autocomplete-dropdown {

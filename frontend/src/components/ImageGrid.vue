@@ -41,6 +41,7 @@
       ref="selectionBarRef"
       v-if="showSelectionBar"
       :selectedCount="selectedImageIds.length"
+      :selectedExpandedCount="selectedExpandedCount"
       :selectedFaceCount="selectedFaceIds.length"
       :selectedCharacter="String(props.selectedCharacter)"
       :selectedSet="String(props.selectedSet)"
@@ -2000,6 +2001,17 @@ const selectedMediaSupport = computed(() => {
 const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
+});
+const selectedExpandedCount = computed(() => {
+  const selectedSet = new Set(selectedImageIds.value.map((id) => Number(id)));
+  let total = 0;
+  for (const img of allGridImages.value) {
+    if (!img || !img.id) continue;
+    if (!selectedSet.has(Number(img.id))) continue;
+    const stackCount = Number(img.stack_count ?? img.stackCount ?? 0);
+    total += stackCount > 1 ? stackCount : 1;
+  }
+  return total;
 });
 const isSelectionEmpty = computed(() => {
   return !showSelectionBar.value;
