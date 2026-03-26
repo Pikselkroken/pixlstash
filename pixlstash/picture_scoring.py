@@ -446,7 +446,7 @@ def find_pictures_by_character_likeness(
         if not pic:
             continue
         pic_dict = safe_model_dict(pic)
-        pic_dict["character_likeness"] = picture_likeness_map.get(pic_id, 0.0)
+        pic_dict["character_likeness"] = max(0.0, picture_likeness_map.get(pic_id, 0.0))
         results.append(pic_dict)
 
     return results

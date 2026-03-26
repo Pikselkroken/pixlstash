@@ -525,7 +525,7 @@ class Picture(SQLModel, table=True):
     def serialize_with_likeness(picture_and_score):
         pic, score = picture_and_score
         d = pic.to_serializable_dict()
-        d["likeness_score"] = score
+        d["likeness_score"] = max(0.0, score)
         return d
 
     @classmethod
