@@ -77,6 +77,12 @@ jobs:
         run: |
           ruff check pixlstash
 
+      - name: Test Frontend Utilities
+        run: |
+          cd frontend
+          npm ci
+          npm test
+
       # Individual test steps for each test file
       - name: Test Florence-2 Captioning
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_florence.py
