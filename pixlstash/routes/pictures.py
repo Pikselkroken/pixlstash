@@ -2,6 +2,7 @@ import ast
 import asyncio
 import concurrent.futures
 import base64
+import csv
 import os
 import re
 import shutil
@@ -63,8 +64,13 @@ from pixlstash.utils.service.caption_utils import (
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
 from pixlstash.tasks import TaskType
+from pixlstash.tag_naturaliser import TagNaturaliser
+from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 
 logger = get_logger(__name__)
+
+_KNOWN_TAGS_CACHE: set[str] | None = None
+_MIN_RECOGNISED_SIDECAR_TAGS = 2
 
 MEDIA_TYPE_BY_FORMAT = {
     "jpg": "image/jpeg",
@@ -173,6 +179,84 @@ def _create_picture_imports(
         new_pictures = []
 
     return shas, existing_map, new_pictures
+
+
+def _normalise_sidecar_stem(filename: str) -> str:
+    return os.path.splitext(os.path.basename(filename or ""))[0].strip().lower()
+
+
+def _normalise_vocab_token(value: str) -> str:
+    if not value:
+        return ""
+    return " ".join(str(value).replace("_", " ").strip().lower().split())
+
+
+def _get_known_tags_vocabulary() -> set[str]:
+    global _KNOWN_TAGS_CACHE
+    if _KNOWN_TAGS_CACHE is not None:
+        return _KNOWN_TAGS_CACHE
+
+    vocab: set[str] = set()
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "..", "..", "cpu", "selected_tags.csv"),
+        os.path.join(
+            os.path.dirname(__file__), "..", "..", "cuda", "selected_tags.csv"
+        ),
+    ]
+    for csv_path in candidates:
+        resolved = os.path.abspath(csv_path)
+        if not os.path.isfile(resolved):
+            continue
+        try:
+            with open(resolved, "r", encoding="utf-8") as handle:
+                reader = csv.reader(handle)
+                rows = list(reader)
+        except Exception:
+            continue
+        if not rows:
+            continue
+        for row in rows[1:]:
+            if len(row) < 2:
+                continue
+            tag_name = str(row[1]).strip()
+            if not tag_name:
+                continue
+            vocab.add(_normalise_vocab_token(tag_name))
+            natural = TagNaturaliser.get_natural_tag(tag_name)
+            vocab.add(_normalise_vocab_token(natural))
+    _KNOWN_TAGS_CACHE = {v for v in vocab if v}
+    return _KNOWN_TAGS_CACHE
+
+
+def _parse_sidecar_tags(raw_text: str, known_tags: set[str]) -> list[str]:
+    text = (raw_text or "").strip()
+    if not text or "," not in text:
+        return []
+
+    tags_raw = [part.strip() for part in text.replace("\n", ",").split(",")]
+    tags_raw = [tag for tag in tags_raw if tag]
+    if len(tags_raw) < 2:
+        return []
+
+    seen = set()
+    parsed = []
+    recognised = 0
+    for raw_tag in tags_raw:
+        # Preserve sidecar tag semantics (e.g. "1girl") while still
+        # normalising separators/spacing for storage.
+        candidate = _normalise_vocab_token(raw_tag)
+        if not candidate:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        parsed.append(candidate)
+        if candidate in known_tags:
+            recognised += 1
+
+    if recognised < _MIN_RECOGNISED_SIDECAR_TAGS:
+        return []
+    return parsed
 
 
 def _enrich_stack_counts(server, pics: list[dict]) -> list[dict]:
@@ -1869,7 +1953,10 @@ def create_router(server) -> APIRouter:
         logger.debug("Importing pictures to folder: " + str(dest_folder))
         os.makedirs(dest_folder, exist_ok=True)
         uploaded_files = []
-        allowed_exts = {
+        uploaded_file_stems: list[str] = []
+        sidecar_text_by_stem: dict[str, str] = {}
+        known_tag_vocab = _get_known_tags_vocabulary()
+        allowed_media_exts = {
             ".jpg",
             ".jpeg",
             ".png",
@@ -1886,6 +1973,7 @@ def create_router(server) -> APIRouter:
             ".avi",
             ".mkv",
         }
+        allowed_caption_exts = {".txt"}
         if file is not None:
             for upload in file:
                 if not upload.filename:
@@ -1917,15 +2005,25 @@ def create_router(server) -> APIRouter:
                             added = 0
                             for info in entries:
                                 inner_ext = os.path.splitext(info.filename)[1].lower()
-                                if inner_ext not in allowed_exts:
+                                if (
+                                    inner_ext not in allowed_media_exts
+                                    and inner_ext not in allowed_caption_exts
+                                ):
                                     continue
                                 with zip_file.open(info) as handle:
                                     data = handle.read()
                                 if not data:
                                     continue
-                                uploaded_files.append(
-                                    (data, inner_ext, os.path.basename(info.filename))
-                                )
+                                base_name = os.path.basename(info.filename)
+                                stem = _normalise_sidecar_stem(base_name)
+                                if inner_ext in allowed_caption_exts:
+                                    sidecar_text_by_stem.setdefault(
+                                        stem,
+                                        data.decode("utf-8", errors="ignore"),
+                                    )
+                                    continue
+                                uploaded_files.append((data, inner_ext, base_name))
+                                uploaded_file_stems.append(stem)
                                 added += 1
                             if added == 0:
                                 logger.warning(
@@ -1939,12 +2037,20 @@ def create_router(server) -> APIRouter:
                             detail="Invalid zip file",
                         ) from exc
                 else:
-                    if ext not in allowed_exts:
+                    if ext in allowed_caption_exts:
+                        stem = _normalise_sidecar_stem(upload.filename)
+                        sidecar_text_by_stem.setdefault(
+                            stem,
+                            contents.decode("utf-8", errors="ignore"),
+                        )
+                        continue
+                    if ext not in allowed_media_exts:
                         logger.error("Invalid file extension: %s", ext)
                         raise HTTPException(
                             status_code=400, detail="Invalid file extension"
                         )
                     uploaded_files.append((contents, ext, upload.filename))
+                    uploaded_file_stems.append(_normalise_sidecar_stem(upload.filename))
         else:
             logger.error("No files provided for import")
             raise HTTPException(status_code=400, detail="No image provided")
@@ -1955,6 +2061,17 @@ def create_router(server) -> APIRouter:
                 status_code=400,
                 detail="No valid media files found for import",
             )
+
+        sidecar_tags_by_stem: dict[str, list[str]] = {}
+        if sidecar_text_by_stem:
+            media_stem_set = set(uploaded_file_stems)
+            for stem, raw_text in sidecar_text_by_stem.items():
+                # Only consume caption sidecars that have a corresponding media file.
+                if stem not in media_stem_set:
+                    continue
+                parsed_tags = _parse_sidecar_tags(raw_text, known_tag_vocab)
+                if parsed_tags:
+                    sidecar_tags_by_stem[stem] = parsed_tags
 
         total_import_bytes = sum(len(data) for data, *_ in uploaded_files)
         free_bytes = shutil.disk_usage(dest_folder).free
@@ -2026,7 +2143,8 @@ def create_router(server) -> APIRouter:
                 results = []
                 duplicate_count = 0
                 index = 0
-                for _, sha in zip(uploaded_files, shas):
+                picture_id_sidecar_tags: dict[int, set[str]] = defaultdict(set)
+                for stem, _, sha in zip(uploaded_file_stems, uploaded_files, shas):
                     if sha in existing_map:
                         pic = existing_map[sha]
                         results.append(
@@ -2048,6 +2166,15 @@ def create_router(server) -> APIRouter:
                         )
                         index += 1
 
+                    if (
+                        pic.id is not None
+                        and stem in sidecar_tags_by_stem
+                        and sidecar_tags_by_stem[stem]
+                    ):
+                        picture_id_sidecar_tags[pic.id].update(
+                            sidecar_tags_by_stem[stem]
+                        )
+
                 if duplicate_count:
                     logger.warning(
                         "Import completed with %d duplicate(s) out of %d file(s).",
@@ -2056,16 +2183,69 @@ def create_router(server) -> APIRouter:
                     )
                 server.import_tasks[task_id]["results"] = results
                 server.import_tasks[task_id]["processed"] = len(uploaded_files)
-                if new_pictures:
-                    new_ids = [pic.id for pic in new_pictures if pic.id is not None]
+                imported_picture_ids = [
+                    pic.id for pic in new_pictures if pic.id is not None
+                ]
+                duplicate_picture_ids = [
+                    pic.id for pic in existing_map.values() if pic.id is not None
+                ]
+                all_imported_ids = list(
+                    dict.fromkeys(imported_picture_ids + duplicate_picture_ids)
+                )
 
+                if picture_id_sidecar_tags:
+
+                    def apply_sidecar_tags(session, mapping: dict[int, set[str]]):
+                        if not mapping:
+                            return []
+                        pics = session.exec(
+                            select(Picture)
+                            .where(Picture.id.in_(list(mapping.keys())))
+                            .where(Picture.deleted.is_(False))
+                        ).all()
+                        changed_ids = []
+                        for pic in pics:
+                            tag_values = mapping.get(pic.id) or set()
+                            if not tag_values:
+                                continue
+                            existing = {
+                                (t.tag or "").strip().lower(): t
+                                for t in (pic.tags or [])
+                            }
+                            changed = False
+                            if TAG_EMPTY_SENTINEL in existing:
+                                session.delete(existing[TAG_EMPTY_SENTINEL])
+                                changed = True
+                            for tag_value in tag_values:
+                                if tag_value in existing:
+                                    continue
+                                pic.tags.append(Tag(tag=tag_value, picture_id=pic.id))
+                                changed = True
+                            if changed:
+                                session.add(pic)
+                                changed_ids.append(pic.id)
+                        session.commit()
+                        return changed_ids
+
+                    tagged_ids = server.vault.db.run_task(
+                        apply_sidecar_tags,
+                        picture_id_sidecar_tags,
+                    )
+                    if tagged_ids:
+                        server.vault.notify(EventType.CHANGED_TAGS)
+
+                if all_imported_ids:
                     # Queue face extraction asynchronously — do not block on it.
                     for pic in new_pictures:
                         server.vault.get_worker_future(
                             TaskType.FACE_EXTRACTION, Picture, pic.id, "faces"
                         )
 
-                    def mark_imported(session, ids: list[int]):
+                    def apply_import_context(
+                        session,
+                        ids: list[int],
+                        project_id_value: int | None,
+                    ):
                         if not ids:
                             return []
                         now = datetime.utcnow()
@@ -2076,12 +2256,18 @@ def create_router(server) -> APIRouter:
                         for pic in pics:
                             if pic.imported_at is None:
                                 pic.imported_at = now
-                                session.add(pic)
-                                updated.append(pic.id)
+                            if project_id_value is not None:
+                                pic.project_id = project_id_value
+                            session.add(pic)
+                            updated.append(pic.id)
                         session.commit()
                         return updated
 
-                    imported_ids = server.vault.db.run_task(mark_imported, new_ids)
+                    imported_ids = server.vault.db.run_task(
+                        apply_import_context,
+                        all_imported_ids,
+                        project_id,
+                    )
                     server.import_tasks[task_id]["status"] = "completed"
                     server.vault.notify(EventType.CHANGED_PICTURES)
                     if imported_ids:

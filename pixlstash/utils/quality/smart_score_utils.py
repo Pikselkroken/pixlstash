@@ -309,7 +309,9 @@ class SmartScoreUtils:
         scores += focus_presence_component
 
         # Detail richness (objective): combine edge density and luminance entropy.
-        edge_vals = np.array([c.get("edge_density") for c in candidates], dtype=np.float32)
+        edge_vals = np.array(
+            [c.get("edge_density") for c in candidates], dtype=np.float32
+        )
         edge_vals = np.where(np.isfinite(edge_vals), edge_vals, np.nan)
         ent_vals = np.array(
             [c.get("luminance_entropy") for c in candidates], dtype=np.float32
@@ -335,7 +337,9 @@ class SmartScoreUtils:
         scores += detail_component
 
         # Text clutter penalty (objective): apply only above knee, then grow smoothly.
-        text_vals = np.array([c.get("text_score") for c in candidates], dtype=np.float32)
+        text_vals = np.array(
+            [c.get("text_score") for c in candidates], dtype=np.float32
+        )
         text_vals = np.where(np.isfinite(text_vals), text_vals, np.nan)
         text_vals = np.where(np.isnan(text_vals), 0.0, text_vals)
         text_vals = np.clip(text_vals, 0.0, 1.0)

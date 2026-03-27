@@ -7,6 +7,7 @@ import random
 import tempfile
 import time
 import tomllib
+import zipfile
 
 import gc
 import psutil
@@ -344,6 +345,164 @@ def test_upload_existing_picture():
 
     gc.collect()
     log_resources("END test_upload_existing_picture")
+
+
+def test_duplicate_import_updates_project_context():
+    """Duplicate imports should still apply project association context."""
+
+    log_resources("START test_duplicate_import_updates_project_context")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            img_bytes = random_images[0]
+            files = [("file", ("duplicate-project.png", img_bytes, "image/png"))]
+
+            first_import = upload_pictures_and_wait(client, files)
+            assert first_import["status"] == "completed"
+            assert first_import["results"][0]["status"] == "success"
+            picture_id = first_import["results"][0]["picture_id"]
+
+            project_resp = client.post(
+                "/projects",
+                json={"name": "Import Context Project"},
+            )
+            assert project_resp.status_code == 200
+            project_id = project_resp.json()["id"]
+
+            duplicate_import = upload_pictures_and_wait(
+                client,
+                files,
+                form_data={"project_id": str(project_id)},
+            )
+            assert duplicate_import["status"] == "completed"
+            assert duplicate_import["results"][0]["status"] == "duplicate"
+            assert duplicate_import["results"][0]["picture_id"] == picture_id
+
+            metadata_resp = client.get(f"/pictures/{picture_id}/metadata")
+            assert metadata_resp.status_code == 200
+            assert metadata_resp.json().get("project_id") == project_id
+
+    gc.collect()
+    log_resources("END test_duplicate_import_updates_project_context")
+
+
+def test_import_sidecar_txt_tags_for_matching_image():
+    """Import should apply matching sidecar .txt tags and ignore orphan .txt files."""
+
+    log_resources("START test_import_sidecar_txt_tags_for_matching_image")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            image_name = "sidecar_sample.png"
+            files = [
+                ("file", (image_name, random_images[0], "image/png")),
+                (
+                    "file",
+                    (
+                        "sidecar_sample.txt",
+                        b"1girl, blue_eyes, smiling",
+                        "text/plain",
+                    ),
+                ),
+                (
+                    "file",
+                    (
+                        "orphan_only.txt",
+                        b"1girl, blue_eyes, smiling",
+                        "text/plain",
+                    ),
+                ),
+            ]
+
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            assert import_status["results"][0]["status"] == "success"
+            picture_id = import_status["results"][0]["picture_id"]
+
+            metadata_resp = client.get(f"/pictures/{picture_id}/metadata")
+            assert metadata_resp.status_code == 200
+            tags = {
+                (entry.get("tag") or "").strip().lower()
+                for entry in (metadata_resp.json().get("tags") or [])
+                if isinstance(entry, dict)
+            }
+            assert "1girl" in tags
+            assert "blue eyes" in tags
+            assert "smiling" in tags
+
+    gc.collect()
+    log_resources("END test_import_sidecar_txt_tags_for_matching_image")
+
+
+def test_import_zip_sidecar_txt_tags_for_matching_image():
+    """Zip import should apply matching sidecar .txt tags and ignore orphan .txt files."""
+
+    log_resources("START test_import_zip_sidecar_txt_tags_for_matching_image")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w") as zip_file:
+                zip_file.writestr("dataset/zip_sidecar.png", random_images[1])
+                zip_file.writestr(
+                    "dataset/zip_sidecar.txt",
+                    "1girl, blue_eyes, smiling",
+                )
+                zip_file.writestr(
+                    "dataset/orphan_sidecar.txt",
+                    "1girl, blue_eyes, smiling",
+                )
+
+            files = [
+                (
+                    "file",
+                    (
+                        "dataset.zip",
+                        zip_buffer.getvalue(),
+                        "application/zip",
+                    ),
+                )
+            ]
+
+            import_status = upload_pictures_and_wait(client, files)
+            assert import_status["status"] == "completed"
+            assert import_status["results"][0]["status"] == "success"
+            picture_id = import_status["results"][0]["picture_id"]
+
+            metadata_resp = client.get(f"/pictures/{picture_id}/metadata")
+            assert metadata_resp.status_code == 200
+            tags = {
+                (entry.get("tag") or "").strip().lower()
+                for entry in (metadata_resp.json().get("tags") or [])
+                if isinstance(entry, dict)
+            }
+            assert "1girl" in tags
+            assert "blue eyes" in tags
+            assert "smiling" in tags
+
+    gc.collect()
+    log_resources("END test_import_zip_sidecar_txt_tags_for_matching_image")
 
 
 def test_favicon():
