@@ -114,6 +114,7 @@ const maxVramGbError = ref("");
 const maxVramGbSuccess = ref("");
 const maxVramGbSavedValue = ref(null);
 const maxVramGbHydrating = ref(false);
+const maxVramGbAutoSaveReady = ref(false);
 let maxVramGbSaveTimer = null;
 const comfyuiHost = ref("");
 const comfyuiPort = ref("");
@@ -184,6 +185,7 @@ function resetSettingsForm() {
   maxVramGbValue.value = VRAM_BUDGET_MIN_GB;
   maxVramGbMax.value = VRAM_BUDGET_MIN_GB;
   maxVramGbSavedValue.value = null;
+  maxVramGbAutoSaveReady.value = false;
   comfyuiUrlError.value = "";
   comfyuiUrlSuccess.value = "";
   comfyuiConfigDialogOpen.value = false;
@@ -248,7 +250,13 @@ async function fetchVramSliderBounds() {
 }
 
 function scheduleMaxVramGbSave() {
-  if (!dialogOpen.value || maxVramGbHydrating.value) return;
+  if (
+    !dialogOpen.value ||
+    maxVramGbHydrating.value ||
+    !maxVramGbAutoSaveReady.value
+  ) {
+    return;
+  }
   maxVramGbSuccess.value = "";
   if (maxVramGbSaveTimer) {
     clearTimeout(maxVramGbSaveTimer);
@@ -433,10 +441,12 @@ async function fetchSmartScoreSettings() {
     );
     maxVramGbValue.value = snappedValue;
     maxVramGbSavedValue.value = snappedValue;
+    maxVramGbAutoSaveReady.value = true;
     maxVramGbError.value = "";
     maxVramGbSuccess.value = "";
     maxVramGbHydrating.value = false;
   } catch (e) {
+    maxVramGbAutoSaveReady.value = false;
     smartScoreTagsError.value = "Failed to load smart score settings.";
     hiddenTagsError.value = "Failed to load hidden tag settings.";
   } finally {

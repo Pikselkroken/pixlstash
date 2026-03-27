@@ -538,6 +538,11 @@ def fetch_smart_score_data(
                     "width": pic.width,
                     "height": pic.height,
                     "sharpness": quality.sharpness if quality else None,
+                    "edge_density": quality.edge_density if quality else None,
+                    "luminance_entropy": (
+                        quality.luminance_entropy if quality else None
+                    ),
+                    "text_score": quality.text_score if quality else None,
                 }
             )
             candidate_id_list.append(pic.id)
@@ -670,6 +675,9 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
                     "width": get_attr(p, "width"),
                     "height": get_attr(p, "height"),
                     "sharpness": get_attr(p, "sharpness"),
+                    "edge_density": get_attr(p, "edge_density"),
+                    "luminance_entropy": get_attr(p, "luminance_entropy"),
+                    "text_score": get_attr(p, "text_score"),
                 }
             )
 
@@ -719,19 +727,17 @@ def find_pictures_by_smart_score(
                 cand_list, good_list, bad_list
             )
 
-            # Primary sort key: quantize to 1 decimal place so all images in
-            # the same 0.1-wide bucket sort together (avoids 4.9 / 5.0 zigzag
-            # when raw scores straddle a boundary). Within each bucket, sort by
-            # picture ID (ascending) for a fully deterministic, stable order.
-            quantized = np.round(scores, 1)
+            # Primary sort key is raw smart score so UI labels and ordering
+            # always align. Picture ID is a deterministic tiebreaker.
+            scores_array = np.asarray(scores, dtype=np.float32)
             ids_array = np.array(cand_ids, dtype=np.int64)
             if descending:
                 # lexsort key order: last key is primary.
-                # Primary: -quantized (highest score first)
+                # Primary: -score (highest score first)
                 # Secondary: id (lowest id first within tied bucket)
-                sorted_indices = np.lexsort((ids_array, -quantized))
+                sorted_indices = np.lexsort((ids_array, -scores_array))
             else:
-                sorted_indices = np.lexsort((ids_array, quantized))
+                sorted_indices = np.lexsort((ids_array, scores_array))
 
             scored_ids = [cand_ids[i] for i in sorted_indices]
             score_map = {cand_ids[i]: float(scores[i]) for i in range(len(scores))}

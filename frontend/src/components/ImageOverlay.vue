@@ -3224,8 +3224,18 @@ async function fetchOverlayMetadata(imageId) {
     const data = res.data;
     if (!data || Array.isArray(data)) return;
     const merged = { ...data, ...image.value };
+    const existingSmartScore =
+      typeof image.value?.smartScore === "number"
+        ? image.value.smartScore
+        : typeof image.value?.smart_score === "number"
+          ? image.value.smart_score
+          : null;
     if (Object.prototype.hasOwnProperty.call(data, "smartScore")) {
-      merged.smartScore = data.smartScore;
+      // Keep Smart Score consistent with the grid/list payload when already
+      // present there; metadata endpoint currently computes a different
+      // single-candidate value for some images.
+      merged.smartScore =
+        existingSmartScore !== null ? existingSmartScore : data.smartScore;
     }
     const dataTags = getTagList(data.tags);
     if (data.tags !== undefined) {

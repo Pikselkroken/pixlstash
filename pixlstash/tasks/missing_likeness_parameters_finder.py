@@ -7,6 +7,9 @@ from pixlstash.utils.likeness.likeness_parameter_utils import (
 from .base_task_finder import BaseTaskFinder
 from .likeness_parameters_task import LikenessParametersTask
 from .quality_task import QualityTask
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class MissingLikenessParametersFinder(BaseTaskFinder):
@@ -38,6 +41,20 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
         missing = int(
             self._db.run_immediate_read_task(self._count_pending_parameters) or 0
         )
+        logger.debug(
+            "MissingLikenessParametersFinder: pending_params=%d pending_quality=%d (threshold=%d)",
+            missing,
+            pending_quality,
+            self.MIN_PENDING_WHILE_QUALITY if pending_quality > 0 else 1,
+        )
+        if pending_quality == 0 and 0 < missing <= 20:
+            stuck = self._db.run_immediate_read_task(
+                LikenessParameterUtils.fetch_stuck_pictures
+            )
+            logger.debug(
+                "MissingLikenessParametersFinder: stuck pictures (sample): %s",
+                stuck,
+            )
         if pending_quality > 0:
             # Quality is still running and constantly resetting likeness_parameters.
             # Only schedule once a full batch has accumulated to avoid churn.

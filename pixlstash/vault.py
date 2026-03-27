@@ -32,6 +32,7 @@ from .tasks.face_extraction_task import FaceExtractionTask
 from .tasks.image_embedding_task import ImageEmbeddingTask
 from .tasks.likeness_task import LikenessTask
 from .tasks.quality_task import QualityTask
+from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
 from .task_runner import TaskRunner
 from .work_planner import WorkPlanner
@@ -94,6 +95,10 @@ class Vault:
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
+        self._changed_tags_notify_lock = threading.Lock()
+        self._changed_tags_pending_ids: set[int] = set()
+        self._changed_tags_flush_timer: threading.Timer | None = None
+        self._changed_tags_flush_delay_s = 2.0
         self._event_listeners = []
         self._event_listeners_lock = threading.Lock()
         self._task_runner = TaskRunner(name="vault-task-runner", num_workers=4)
@@ -168,6 +173,12 @@ class Vault:
         if self._closed:
             return
         self._closed = True
+        with self._changed_tags_notify_lock:
+            timer = self._changed_tags_flush_timer
+            self._changed_tags_flush_timer = None
+            self._changed_tags_pending_ids.clear()
+        if timer is not None:
+            timer.cancel()
         self._work_planner.stop()
         self._task_runner.stop()
         FaceExtractionTask.release_detection_models()
@@ -287,7 +298,7 @@ class Vault:
             self._notify_worker_ids_processed(TaskType.TAGGER, changed)
             picture_ids = [pic_id for _, pic_id, _, _ in changed]
             if picture_ids:
-                self.notify(EventType.CHANGED_TAGS, picture_ids)
+                self._queue_changed_tags_notification(picture_ids)
             return
 
         if task.type == "QualityTask":
@@ -335,6 +346,28 @@ class Vault:
 
     def _notify_worker_ids_processed(self, worker_type: TaskType, changed):
         self._notify_planner_ids_processed(worker_type, changed)
+
+    def _queue_changed_tags_notification(self, picture_ids: list[int]) -> None:
+        with self._changed_tags_notify_lock:
+            self._changed_tags_pending_ids.update(
+                int(pid) for pid in picture_ids if pid is not None
+            )
+            if self._changed_tags_flush_timer is not None:
+                return
+            self._changed_tags_flush_timer = threading.Timer(
+                self._changed_tags_flush_delay_s,
+                self._flush_changed_tags_notification,
+            )
+            self._changed_tags_flush_timer.daemon = True
+            self._changed_tags_flush_timer.start()
+
+    def _flush_changed_tags_notification(self) -> None:
+        with self._changed_tags_notify_lock:
+            pending_ids = list(self._changed_tags_pending_ids)
+            self._changed_tags_pending_ids.clear()
+            self._changed_tags_flush_timer = None
+        if pending_ids:
+            self.notify(EventType.CHANGED_TAGS, pending_ids)
 
     def _planner_attr_current_value(self, cls: type, object_id: int, attr: str):
         def fetch(session: Session):
@@ -609,17 +642,7 @@ class Vault:
 
     @staticmethod
     def _count_pending_likeness_parameters(session: Session) -> int:
-        result = session.exec(
-            select(func.count())
-            .select_from(Picture)
-            .where(
-                (Picture.likeness_parameters.is_(None))
-                | (Picture.size_bin_index.is_(None))
-            )
-        ).one()
-        if isinstance(result, (tuple, list)):
-            return result[0]
-        return result or 0
+        return LikenessParameterUtils.count_pending_parameters(session)
 
     @staticmethod
     def _count_pending_likeness_queue(session: Session) -> int:
