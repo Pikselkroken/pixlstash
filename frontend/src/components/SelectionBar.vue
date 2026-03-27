@@ -2,7 +2,11 @@
   <div v-if="visible" class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
-        <button class="clear-btn" @click="$emit('clear-selection')">
+        <button
+          class="clear-btn"
+          @click="$emit('clear-selection')"
+          title="Clear selection (ESC)"
+        >
           Clear
         </button>
         <span v-if="selectedCount > 0" class="selection-count"
@@ -345,7 +349,11 @@
             </div>
           </v-menu>
         </div>
-        <button class="delete-btn" @click="$emit('delete-selected')">
+        <button
+          class="delete-btn"
+          @click="$emit('delete-selected')"
+          title="Delete selected items (DEL)"
+        >
           {{ deleteButtonLabel }}
         </button>
       </div>
