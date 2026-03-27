@@ -16,6 +16,7 @@ import TaskManager from "./TaskManager.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import { apiClient } from "../utils/apiClient";
+import { extractSupportedImportFilesFromDataTransfer } from "../utils/media.js";
 
 const appVersion = __APP_VERSION__;
 
@@ -653,10 +654,23 @@ function getImportedPictureIds(payload) {
   );
 }
 
+function getRequestErrorDetail(errorLike) {
+  return (
+    errorLike?.response?.data?.detail ||
+    errorLike?.message ||
+    String(errorLike || "")
+  );
+}
+
+function isAlreadyInSetError(errorLike) {
+  const detail = String(getRequestErrorDetail(errorLike)).toLowerCase();
+  return detail.includes("already in set") || detail.includes("already");
+}
+
 async function associateImportedPictures(pictureIds, target) {
   if (!target || !pictureIds.length) return;
   if (target.type === "set") {
-    await Promise.all(
+    const outcomes = await Promise.allSettled(
       pictureIds.map((id) =>
         apiClient.post(
           `${props.backendUrl}/picture_sets/${target.id}/members/${id}`,
@@ -664,6 +678,13 @@ async function associateImportedPictures(pictureIds, target) {
       ),
     );
     await fetchPictureSets();
+    const hardFailures = outcomes.filter(
+      (result) =>
+        result.status === "rejected" && !isAlreadyInSetError(result.reason),
+    );
+    if (hardFailures.length) {
+      throw new Error(getRequestErrorDetail(hardFailures[0].reason));
+    }
     return;
   }
   if (target.type === "character") {
@@ -1049,7 +1070,10 @@ async function handleDropOnSet(setId, event) {
     event?.dataTransfer?.files &&
     event.dataTransfer.files.length > 0
   ) {
-    const files = Array.from(event.dataTransfer.files);
+    const files = await extractSupportedImportFilesFromDataTransfer(
+      event.dataTransfer,
+    );
+    if (!files.length) return;
     pendingImportTarget.value = { type: "set", id: setId };
     const targetSet = pictureSets.value.find((s) => s.id === setId);
     const options =
@@ -1120,7 +1144,10 @@ async function onCharacterDrop(characterId, event) {
     event?.dataTransfer?.files &&
     event.dataTransfer.files.length > 0
   ) {
-    const files = Array.from(event.dataTransfer.files);
+    const files = await extractSupportedImportFilesFromDataTransfer(
+      event.dataTransfer,
+    );
+    if (!files.length) return;
     pendingImportTarget.value = { type: "character", id: characterId };
     const options =
       selectedProjectId.value != null

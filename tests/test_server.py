@@ -505,6 +505,68 @@ def test_import_zip_sidecar_txt_tags_for_matching_image():
     log_resources("END test_import_zip_sidecar_txt_tags_for_matching_image")
 
 
+def test_duplicate_import_with_sidecar_replaces_existing_tags():
+    """Duplicate import with sidecar captions should replace existing tags atomically."""
+
+    log_resources("START test_duplicate_import_with_sidecar_replaces_existing_tags")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            # First import creates a picture.
+            first_files = [
+                ("file", ("replace_tags.png", random_images[2], "image/png"))
+            ]
+            first_import = upload_pictures_and_wait(client, first_files)
+            assert first_import["status"] == "completed"
+            assert first_import["results"][0]["status"] == "success"
+            picture_id = first_import["results"][0]["picture_id"]
+
+            # Seed a pre-existing manual tag that should be removed on duplicate+sidecar import.
+            add_resp = client.post(
+                f"/pictures/{picture_id}/tags",
+                json={"tag": "legacy tag"},
+            )
+            assert add_resp.status_code == 200
+
+            dup_files = [
+                ("file", ("replace_tags.png", random_images[2], "image/png")),
+                (
+                    "file",
+                    (
+                        "replace_tags.txt",
+                        b"1girl, blue_eyes, smiling",
+                        "text/plain",
+                    ),
+                ),
+            ]
+            dup_import = upload_pictures_and_wait(client, dup_files)
+            assert dup_import["status"] == "completed"
+            assert dup_import["results"][0]["status"] == "duplicate"
+            assert dup_import["results"][0]["picture_id"] == picture_id
+
+            metadata_resp = client.get(f"/pictures/{picture_id}/metadata")
+            assert metadata_resp.status_code == 200
+            tags = {
+                (entry.get("tag") or "").strip().lower()
+                for entry in (metadata_resp.json().get("tags") or [])
+                if isinstance(entry, dict)
+            }
+            assert "legacy tag" not in tags
+            assert "1girl" in tags
+            assert "blue eyes" in tags
+            assert "smiling" in tags
+
+    gc.collect()
+    log_resources("END test_duplicate_import_with_sidecar_replaces_existing_tags")
+
+
 def test_favicon():
     """Test /favicon.ico endpoint returns 200 and PNG content."""
     log_resources("START test_favicon")

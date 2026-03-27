@@ -486,8 +486,8 @@ import {
   onUnmounted,
 } from "vue";
 import {
+  extractSupportedImportFilesFromDataTransfer,
   isFileDrag,
-  isSupportedImportFile,
   isSupportedImageFile,
   isSupportedVideoFile,
   isVideo,
@@ -3036,7 +3036,7 @@ function clearGridDragOverlay() {
   dragOverlayVisible.value = false;
 }
 
-function handleGridDrop(e) {
+async function handleGridDrop(e) {
   clearGridDragOverlay();
 
   // Ignore drag-and-drop if the source is the grid itself
@@ -3048,8 +3048,10 @@ function handleGridDrop(e) {
     return;
   }
 
-  if (!e.dataTransfer || !e.dataTransfer.files) return;
-  const files = Array.from(e.dataTransfer.files).filter(isSupportedImportFile);
+  if (!e.dataTransfer) return;
+  const files = await extractSupportedImportFilesFromDataTransfer(
+    e.dataTransfer,
+  );
   if (!files.length) {
     alert("No supported files found.");
     return;

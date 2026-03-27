@@ -2144,6 +2144,7 @@ def create_router(server) -> APIRouter:
                 duplicate_count = 0
                 index = 0
                 picture_id_sidecar_tags: dict[int, set[str]] = defaultdict(set)
+                duplicate_picture_id_set: set[int] = set()
                 for stem, _, sha in zip(uploaded_file_stems, uploaded_files, shas):
                     if sha in existing_map:
                         pic = existing_map[sha]
@@ -2155,6 +2156,8 @@ def create_router(server) -> APIRouter:
                             }
                         )
                         duplicate_count += 1
+                        if pic.id is not None:
+                            duplicate_picture_id_set.add(pic.id)
                     else:
                         pic = new_pictures[index]
                         results.append(
@@ -2195,7 +2198,11 @@ def create_router(server) -> APIRouter:
 
                 if picture_id_sidecar_tags:
 
-                    def apply_sidecar_tags(session, mapping: dict[int, set[str]]):
+                    def apply_sidecar_tags(
+                        session,
+                        mapping: dict[int, set[str]],
+                        replace_ids: set[int],
+                    ):
                         if not mapping:
                             return []
                         pics = session.exec(
@@ -2208,21 +2215,39 @@ def create_router(server) -> APIRouter:
                             tag_values = mapping.get(pic.id) or set()
                             if not tag_values:
                                 continue
-                            existing = {
-                                (t.tag or "").strip().lower(): t
-                                for t in (pic.tags or [])
+                            existing_values = {
+                                (row[0] if isinstance(row, tuple) else row or "")
+                                .strip()
+                                .lower()
+                                for row in session.exec(
+                                    select(Tag.tag).where(Tag.picture_id == pic.id)
+                                ).all()
                             }
                             changed = False
-                            if TAG_EMPTY_SENTINEL in existing:
-                                session.delete(existing[TAG_EMPTY_SENTINEL])
+                            if pic.id in replace_ids:
+                                # For duplicate imports with sidecar captions,
+                                # replace old tags with sidecar-provided tags.
+                                session.exec(
+                                    delete(Tag).where(Tag.picture_id == pic.id)
+                                )
+                                for tag_value in sorted(tag_values):
+                                    session.add(Tag(tag=tag_value, picture_id=pic.id))
                                 changed = True
-                            for tag_value in tag_values:
-                                if tag_value in existing:
-                                    continue
-                                pic.tags.append(Tag(tag=tag_value, picture_id=pic.id))
-                                changed = True
+                            else:
+                                if TAG_EMPTY_SENTINEL in existing_values:
+                                    session.exec(
+                                        delete(Tag).where(
+                                            Tag.picture_id == pic.id,
+                                            Tag.tag == TAG_EMPTY_SENTINEL,
+                                        )
+                                    )
+                                    changed = True
+                                for tag_value in sorted(tag_values):
+                                    if tag_value in existing_values:
+                                        continue
+                                    session.add(Tag(tag=tag_value, picture_id=pic.id))
+                                    changed = True
                             if changed:
-                                session.add(pic)
                                 changed_ids.append(pic.id)
                         session.commit()
                         return changed_ids
@@ -2230,6 +2255,7 @@ def create_router(server) -> APIRouter:
                     tagged_ids = server.vault.db.run_task(
                         apply_sidecar_tags,
                         picture_id_sidecar_tags,
+                        duplicate_picture_id_set,
                     )
                     if tagged_ids:
                         server.vault.notify(EventType.CHANGED_TAGS)

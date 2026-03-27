@@ -26,6 +26,12 @@ const cancelImport = ref(false);
 const currentImportController = ref(null);
 
 let hideTimerId = null;
+const TERMINAL_IMPORT_PHASES = new Set([
+  "done",
+  "duplicates",
+  "cancelled",
+  "error",
+]);
 
 const importPhaseMessage = computed(() => {
   switch (importPhase.value) {
@@ -124,9 +130,13 @@ async function pollImportStatus(taskId, importProgressAccum, importTotalAccum) {
 
     importPhase.value = "processing";
     if (serverTotal > 0) {
-      importTotal.value = importTotalAccum + serverTotal;
+      importTotal.value = Math.max(
+        importTotal.value,
+        importTotalAccum + serverTotal,
+      );
     }
     importProgress.value = importProgressAccum + processed;
+    importTotal.value = Math.max(importTotal.value, importProgress.value);
 
     if (status === "completed") {
       return statusRes.data;
@@ -144,15 +154,23 @@ async function pollImportStatus(taskId, importProgressAccum, importTotalAccum) {
 async function startImport(files, options = {}) {
   if (!files || !files.length) return;
   if (importInProgress.value) {
-    window.alert("An import is already in progress.");
-    return;
+    // Recover from stale terminal state where the modal has not hidden yet.
+    if (TERMINAL_IMPORT_PHASES.has(importPhase.value)) {
+      clearHideTimer();
+      importInProgress.value = false;
+    } else {
+      console.info(
+        "Import request ignored because another import is in progress.",
+      );
+      return;
+    }
   }
 
   clearHideTimer();
   cancelImport.value = false;
   importInProgress.value = true;
   importProgress.value = 0;
-  importTotal.value = 0;
+  importTotal.value = files.length;
   uploadBytesUploaded.value = 0;
   uploadBytesTotal.value = files.reduce((sum, f) => sum + (f.size || 0), 0);
   importError.value = null;
@@ -182,6 +200,11 @@ async function startImport(files, options = {}) {
       }
 
       const batch = files.slice(i, i + BATCH_SIZE);
+      importPhase.value = "uploading";
+      importTotal.value = Math.max(
+        importTotal.value,
+        importTotalAccum + batch.length,
+      );
       const batchBytes = batch.reduce((sum, f) => sum + (f.size || 0), 0);
       const batchTimeoutMs =
         overrideTimeout ??
@@ -309,7 +332,7 @@ async function startImport(files, options = {}) {
       importTotalAccum += batchTotal;
       importProgressAccum += batchTotal;
       importProgress.value = importProgressAccum;
-      importTotal.value = importTotalAccum;
+      importTotal.value = Math.max(importTotal.value, importTotalAccum);
       await nextTick();
     }
 
@@ -323,6 +346,7 @@ async function startImport(files, options = {}) {
       }.`;
     }
 
+    importTotal.value = Math.max(importTotal.value, importTotalAccum);
     importProgress.value = importTotal.value;
     uploadBytesUploaded.value = uploadBytesTotal.value;
     currentImportController.value = null;

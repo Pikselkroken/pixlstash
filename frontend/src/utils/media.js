@@ -39,6 +39,137 @@ export function isSupportedImportFile(file) {
   return isSupportedMediaFile(file) || isSupportedArchiveFile(file);
 }
 
+function _fileDedupKey(file) {
+  const name = file?.name || '';
+  const size = Number.isFinite(file?.size) ? file.size : 0;
+  const lastModified = Number.isFinite(file?.lastModified)
+    ? file.lastModified
+    : 0;
+  return `${name}::${size}::${lastModified}`;
+}
+
+function _addIfSupportedFile(file, uniqueMap) {
+  if (!file || !isSupportedImportFile(file)) return;
+  const key = _fileDedupKey(file);
+  if (!uniqueMap.has(key)) {
+    uniqueMap.set(key, file);
+  }
+}
+
+async function _collectFromFileSystemHandle(handle, uniqueMap) {
+  if (!handle) return;
+  if (handle.kind === 'file') {
+    try {
+      const file = await handle.getFile();
+      _addIfSupportedFile(file, uniqueMap);
+    } catch {
+      // Ignore inaccessible file handles.
+    }
+    return;
+  }
+  if (handle.kind !== 'directory') return;
+  try {
+    for await (const entry of handle.values()) {
+      await _collectFromFileSystemHandle(entry, uniqueMap);
+    }
+  } catch {
+    // Ignore directory traversal errors and continue with other items.
+  }
+}
+
+function _readAllWebkitDirectoryEntries(reader) {
+  return new Promise((resolve) => {
+    const entries = [];
+    const readBatch = () => {
+      reader.readEntries((batch) => {
+        if (!batch || batch.length === 0) {
+          resolve(entries);
+          return;
+        }
+        entries.push(...batch);
+        readBatch();
+      });
+    };
+    readBatch();
+  });
+}
+
+async function _collectFromWebkitEntry(entry, uniqueMap) {
+  if (!entry) return;
+  if (entry.isFile) {
+    await new Promise((resolve) => {
+      entry.file(
+        (file) => {
+          _addIfSupportedFile(file, uniqueMap);
+          resolve();
+        },
+        () => resolve(),
+      );
+    });
+    return;
+  }
+  if (!entry.isDirectory) return;
+  try {
+    const reader = entry.createReader();
+    const entries = await _readAllWebkitDirectoryEntries(reader);
+    for (const child of entries) {
+      await _collectFromWebkitEntry(child, uniqueMap);
+    }
+  } catch {
+    // Ignore directory traversal errors and continue with other items.
+  }
+}
+
+export async function extractSupportedImportFilesFromDataTransfer(dataTransfer) {
+  if (!dataTransfer) return [];
+
+  const unique = new Map();
+  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+
+  for (const item of items) {
+    if (!item || item.kind !== 'file') continue;
+
+    // Chromium: File System Access API
+    if (typeof item.getAsFileSystemHandle === 'function') {
+      try {
+        const handle = await item.getAsFileSystemHandle();
+        if (handle) {
+          await _collectFromFileSystemHandle(handle, unique);
+          continue;
+        }
+      } catch {
+        // Fallback to other extraction paths.
+      }
+    }
+
+    // Chromium/Safari legacy directory API
+    if (typeof item.webkitGetAsEntry === 'function') {
+      try {
+        const entry = item.webkitGetAsEntry();
+        if (entry) {
+          await _collectFromWebkitEntry(entry, unique);
+          continue;
+        }
+      } catch {
+        // Fallback to direct file extraction.
+      }
+    }
+
+    // Firefox and generic fallback for file items.
+    if (typeof item.getAsFile === 'function') {
+      _addIfSupportedFile(item.getAsFile(), unique);
+    }
+  }
+
+  // Final fallback path for browsers that only expose dataTransfer.files.
+  const directFiles = Array.from(dataTransfer.files || []);
+  for (const file of directFiles) {
+    _addIfSupportedFile(file, unique);
+  }
+
+  return Array.from(unique.values());
+}
+
 export function dataTransferHasSupportedMedia(dataTransfer) {
   if (!dataTransfer) return false;
   const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
