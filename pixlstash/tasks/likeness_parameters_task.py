@@ -49,7 +49,9 @@ class LikenessParametersTask(BaseTask):
             self.SCAN_LIMIT,
         )
         if not work:
-            logger.debug("LikenessParametersTask: find_next_work returned None — no pending work")
+            logger.debug(
+                "LikenessParametersTask: find_next_work returned None — no pending work"
+            )
             return {"changed_count": 0, "changed": []}
 
         param, _size_bin, payload = work

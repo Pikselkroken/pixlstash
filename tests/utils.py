@@ -14,8 +14,17 @@ def wait_for_import_task(client, task_id, timeout_s=10, poll_interval=0.1):
     raise AssertionError(f"Import task did not complete in {timeout_s}s")
 
 
-def upload_pictures_and_wait(client, files, timeout_s=10, poll_interval=0.1):
-    resp = client.post("/pictures/import", files=files)
+def upload_pictures_and_wait(
+    client,
+    files,
+    timeout_s=10,
+    poll_interval=0.1,
+    form_data=None,
+):
+    kwargs = {"files": files}
+    if form_data:
+        kwargs["data"] = form_data
+    resp = client.post("/pictures/import", **kwargs)
     assert resp.status_code == 200, f"Error: {resp.text}"
     task_id = resp.json().get("task_id")
     assert task_id, "Missing task_id in import response"

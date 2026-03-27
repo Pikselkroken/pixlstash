@@ -686,7 +686,11 @@ class Picture(SQLModel, table=True):
                     query = query.order_by(Quality.text_score.asc(), cls.id.asc())
             else:
                 field_name = sort_mech.field
-                field = getattr(cls, field_name, None) if isinstance(field_name, str) else None
+                field = (
+                    getattr(cls, field_name, None)
+                    if isinstance(field_name, str)
+                    else None
+                )
                 if field is not None:
                     if sort_mech.descending:
                         query = query.order_by(field.desc(), cls.id.desc())
