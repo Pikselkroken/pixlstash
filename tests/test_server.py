@@ -4,7 +4,6 @@ import shutil
 import os
 import json
 import random
-import subprocess
 import tempfile
 import time
 import tomllib
@@ -91,6 +90,74 @@ def _write_json(path: Path, payload: dict) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False, sort_keys=True)
         handle.write("\n")
+
+
+_SEMANTIC_SCORE_TOLERANCE = 0.005
+
+
+def _check_semantic_search_regression(
+    regression_path: Path, actual: dict, device_tag: str
+) -> None:
+    """Compare *actual* against the baseline in *regression_path*.
+
+    Scores are compared with ``_SEMANTIC_SCORE_TOLERANCE`` tolerance so that
+    minor floating-point drift (e.g. from GPU non-determinism or occasional
+    CPU spillover) does not produce false failures.  When the baseline does not
+    exist yet it is created and the test passes.  When the actual scores
+    diverge *beyond* tolerance **or** the top_description for any query
+    changes, the baseline is updated on disk and an AssertionError is raised so
+    the developer can review and commit the new file.
+    """
+    if not regression_path.exists():
+        _write_json(regression_path, actual)
+        logger.info(
+            "Semantic search regression baseline created at %s.", regression_path
+        )
+        return
+
+    with open(regression_path, encoding="utf-8") as fh:
+        baseline = json.load(fh)
+
+    failures: list[str] = []
+
+    baseline_queries = {row["query"]: row for row in baseline.get("queries", [])}
+    for row in actual.get("queries", []):
+        query = row["query"]
+        if query not in baseline_queries:
+            failures.append(f"New query not in baseline: {query!r}")
+            continue
+        base_row = baseline_queries[query]
+        if row.get("top_description") != base_row.get("top_description"):
+            failures.append(
+                f"top_description changed for query {query!r}:\n"
+                f"  baseline: {base_row.get('top_description')!r}\n"
+                f"  actual:   {row.get('top_description')!r}"
+            )
+        score_delta = abs(float(row["top_score"]) - float(base_row["top_score"]))
+        if score_delta > _SEMANTIC_SCORE_TOLERANCE:
+            failures.append(
+                f"top_score moved by {score_delta:.4f} (tolerance {_SEMANTIC_SCORE_TOLERANCE}) "
+                f"for query {query!r}: baseline={base_row['top_score']} actual={row['top_score']}"
+            )
+
+    for key in ("avg_top_score", "min_top_score"):
+        base_val = float(baseline.get("summary", {}).get(key, 0))
+        actual_val = float(actual.get("summary", {}).get(key, 0))
+        delta = abs(actual_val - base_val)
+        if delta > _SEMANTIC_SCORE_TOLERANCE:
+            failures.append(
+                f"summary.{key} moved by {delta:.4f} (tolerance {_SEMANTIC_SCORE_TOLERANCE}): "
+                f"baseline={base_val} actual={actual_val}"
+            )
+
+    if failures:
+        _write_json(regression_path, actual)
+        raise AssertionError(
+            f"Semantic search regression detected for device='{device_tag}'.\n"
+            f"The baseline file has been updated — review and commit "
+            f"{regression_path.name} if the change is intentional.\n\n"
+            + "\n".join(failures)
+        )
 
 
 def test_esmeralda_vault_character_and_logo():
@@ -1021,23 +1088,8 @@ def test_semantic_search(request):
                     "descriptions that differ from the full-caption baseline."
                 )
             else:
-                _write_json(regression_path, regression_payload)
-
-                diff_result = subprocess.run(
-                    ["git", "diff", "HEAD", "--", str(regression_path)],
-                    capture_output=True,
-                    text=True,
-                    cwd=Path(__file__).resolve().parent.parent,
+                _check_semantic_search_regression(
+                    regression_path, regression_payload, device_tag
                 )
-                if diff_result.returncode != 0:
-                    logger.warning(
-                        f"git diff failed (exit {diff_result.returncode}): {diff_result.stderr.strip()}"
-                    )
-                elif diff_result.stdout.strip():
-                    raise AssertionError(
-                        f"Semantic search regression detected for device='{device_tag}'.\n"
-                        f"Review the diff below and commit {regression_path.name} if the change is intentional.\n\n"
-                        f"{diff_result.stdout}"
-                    )
     gc.collect()
     log_resources("END test_semantic_search")

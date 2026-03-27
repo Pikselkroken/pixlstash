@@ -118,7 +118,7 @@ EXPECTED_CONCURRENT_TAG_TASKS = _env_int("PIXLSTASH_EXPECTED_TAG_TASKS", 2)
 
 # Approximate VRAM footprints for non-tagging GPU pipelines
 INSIGHTFACE_VRAM_MB = 400  # RetinaFace + ArcFace models via CUDA provider
-FLORENCE_BASE_VRAM_MB = 500  # Florence-2-base model footprint (fp16 on GPU)
+FLORENCE_BASE_VRAM_MB = 900  # Florence-2-base model footprint (fp16 on GPU)
 FLORENCE_PER_IMAGE_VRAM_MB = 40  # Activation scratch per image in a GPU mini-batch
 
 # Tags that require close-up face crops to detect reliably at full-image resolution.
@@ -191,7 +191,7 @@ class PictureTagger:
                     "Fix with: pip uninstall -y onnxruntime && pip install onnxruntime-gpu"
                 )
 
-        if self._device == "cpu" and not PictureTagger.FORCE_CPU:
+        if self._device == "cpu" and not PictureTagger.FORCE_CPU and not self._silent:
             if torch.cuda.is_available():
                 logger.warning(
                     "PictureTagger initialising with CPU inference despite CUDA being available "
@@ -255,6 +255,7 @@ class PictureTagger:
         self._florence_processor = None
 
         self._florence_device = None
+        self._florence_dtype = None
         self._florence_model_name = "florence-community/Florence-2-base"
         self._last_florence_fallback_reason = None
         self._last_florence_fallback_at = None
@@ -896,20 +897,8 @@ class PictureTagger:
 
         model.eval()
         self._florence_model = model
-
-        # Try to compile the model for better performance (PyTorch 2.0+)
-        try:
-            if hasattr(torch, "compile") and device.type == "cuda":
-                logger.debug("Compiling Florence-2 model for better performance...")
-                self._florence_model = torch.compile(
-                    self._florence_model,
-                    mode="reduce-overhead",  # Balance compilation time and performance
-                )
-                logger.debug("Model compilation successful")
-        except Exception as compile_error:
-            logger.warning(f"Model compilation failed (not critical): {compile_error}")
-
         self._florence_device = device
+        self._florence_dtype = dtype
 
     def _record_florence_fallback(self, phase: str, error: Exception):
         reason = f"{phase}: {type(error).__name__}: {error}"
@@ -993,25 +982,15 @@ class PictureTagger:
                         return_tensors="pt",
                     )
                     florence_device = getattr(self, "_florence_device", self._device)
-                    target_dtype = (
-                        self._florence_model.dtype
-                        if hasattr(self._florence_model, "dtype")
-                        else None
-                    )
-                    if target_dtype and target_dtype == torch.float16:
-                        inputs = {
-                            k: v.to(florence_device).half()
-                            if torch.is_tensor(v) and v.dtype == torch.float32
-                            else v.to(florence_device)
-                            if torch.is_tensor(v)
-                            else v
-                            for k, v in inputs.items()
-                        }
-                    else:
-                        inputs = {
-                            k: v.to(florence_device) if torch.is_tensor(v) else v
-                            for k, v in inputs.items()
-                        }
+                    target_dtype = self._florence_dtype
+                    inputs = {
+                        k: v.to(device=florence_device, dtype=target_dtype)
+                        if torch.is_tensor(v) and v.is_floating_point()
+                        else v.to(florence_device)
+                        if torch.is_tensor(v)
+                        else v
+                        for k, v in inputs.items()
+                    }
                     logger.debug(f"Inputs moved to {florence_device}")
                     with torch.inference_mode():
                         generated_ids = self._florence_model.generate(
@@ -1058,11 +1037,7 @@ class PictureTagger:
                     text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
                 )
                 florence_device = getattr(self, "_florence_device", self._device)
-                target_dtype = (
-                    self._florence_model.dtype
-                    if hasattr(self._florence_model, "dtype")
-                    else None
-                )
+                target_dtype = self._florence_dtype
                 inputs = {
                     k: v.to(device=florence_device, dtype=target_dtype)
                     if torch.is_tensor(v) and v.is_floating_point()
@@ -1172,11 +1147,7 @@ class PictureTagger:
                 padding=True,
             )
             florence_device = getattr(self, "_florence_device", self._device)
-            target_dtype = (
-                self._florence_model.dtype
-                if hasattr(self._florence_model, "dtype")
-                else None
-            )
+            target_dtype = self._florence_dtype
             inputs = {
                 k: v.to(device=florence_device, dtype=target_dtype)
                 if torch.is_tensor(v) and v.is_floating_point()
@@ -1268,9 +1239,21 @@ class PictureTagger:
                 self.ort_sess = ort.InferenceSession(
                     onnx_path,
                     providers=(
-                        ["CUDAExecutionProvider"]
+                        [
+                            (
+                                "CUDAExecutionProvider",
+                                {
+                                    # Use same-as-requested arena growth so ORT does
+                                    # not round up allocations to the next power of two.
+                                    # This prevents the default "double on each growth"
+                                    # behaviour without imposing a hard memory cap that
+                                    # would OOM inference for larger models like WD14.
+                                    "arena_extend_strategy": "kSameAsRequested",
+                                },
+                            )
+                        ]
                         if "CUDAExecutionProvider" in ort.get_available_providers()
-                        else ["ROCMExecutionProvider"]
+                        else [("ROCMExecutionProvider", {})]
                         if "ROCMExecutionProvider" in ort.get_available_providers()
                         else ["CPUExecutionProvider"]
                     ),

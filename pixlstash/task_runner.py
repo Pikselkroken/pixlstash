@@ -5,6 +5,7 @@ import traceback
 import subprocess
 import os
 import time
+import torch
 
 from typing import Any, Callable, Optional
 
@@ -493,6 +494,24 @@ class TaskRunner:
                         self._vram_reserved_mb = max(
                             0, self._vram_reserved_mb - vram_reserved_mb
                         )
+                    # Flush PyTorch's CUDA allocator cache so that the next
+                    # nvidia-smi reading in _get_process_vram_mb() reflects
+                    # actual live tensor usage rather than freed-but-held blocks.
+                    try:
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            # Invalidate the VRAM cache so the next gate check
+                            # reads fresh data rather than the pre-flush reading.
+                            with TaskRunner._vram_cache_lock:
+                                TaskRunner._vram_cache_ts = 0.0
+                    except Exception:
+                        logger.warning(
+                            "Failed to flush CUDA cache after task %s (%s): %s",
+                            task.id,
+                            task.type,
+                            traceback.format_exc(),
+                        )
+                        pass
                 elapsed_s = time.perf_counter() - task_start
                 logger.debug(
                     "TaskRunner %s: finished task id=%s type=%s status=%s elapsed=%.3fs.",

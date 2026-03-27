@@ -186,6 +186,15 @@ class WorkPlanner:
             if inflight_count >= max_inflight:
                 continue
 
+            blocking_finders = finder.depends_on()
+            if blocking_finders:
+                with self._lock:
+                    if any(
+                        self._inflight_by_finder.get(name, 0) > 0
+                        for name in blocking_finders
+                    ):
+                        continue
+
             task = finder.find_task()
             if task is None:
                 continue
