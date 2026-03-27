@@ -560,6 +560,7 @@
                     :src="getFilmstripThumbSrc(item)"
                     :alt="item.description || 'Thumbnail'"
                     loading="lazy"
+                    draggable="false"
                   />
                   <div
                     v-else
