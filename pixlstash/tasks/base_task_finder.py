@@ -63,6 +63,15 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
     def max_inflight_tasks(self) -> int:
         return 1
 
+    def depends_on(self) -> list[str]:
+        """Return names of finders whose inflight tasks must reach zero before this finder runs.
+
+        When any listed finder has in-flight tasks the WorkPlanner skips this
+        finder for that planning cycle, so heavyweight upstream work is never
+        interleaved with this finder's tasks.
+        """
+        return []
+
     def on_task_complete(self, task, error) -> None:
         """Release any picture IDs that were claimed by *task*."""
         picture_ids = (getattr(task, "params", None) or {}).get("picture_ids") or []

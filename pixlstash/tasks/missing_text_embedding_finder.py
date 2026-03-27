@@ -26,6 +26,12 @@ class MissingTextEmbeddingFinder(BaseTaskFinder):
     def finder_name(self) -> str:
         return "MissingTextEmbeddingFinder"
 
+    def depends_on(self) -> list[str]:
+        # Defer text embeddings until both tagging and description generation
+        # have drained — both tags and description feed into the embedded text,
+        # so running before they complete would produce incomplete embeddings.
+        return ["MissingTagFinder", "MissingDescriptionFinder"]
+
     def find_task(self):
         picture_tagger = self._picture_tagger_getter()
         if picture_tagger is None:

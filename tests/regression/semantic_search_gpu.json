@@ -23,7 +23,7 @@
     {
       "query": "Esmeralda spent hours in her garden tending to her grass and bushes wearing her dungarees. The greenery made her smile. Especially when the sky was blue",
       "top_description": "The image shows a young woman standing in a garden. She is wearing a pair of olive green overalls with brown straps and a brown belt. She has blonde hair styled in loose waves and is smiling at the camera. The woman is holding a basket of greens in her right hand. In the background, there are various plants and flowers, including yellow flowers and green shrubs. The garden appears to be well-maintained and well-manicured.",
-      "top_score": 0.5507
+      "top_score": 0.5488
     },
     {
       "query": "Do I look like a man? Esmeralda asked, raising an eyebrow as she posed with her grey business suit, complete with shirt, jacket and tie.",
@@ -37,7 +37,7 @@
     }
   ],
   "summary": {
-    "avg_top_score": 0.5764,
+    "avg_top_score": 0.5761,
     "min_top_score": 0.5355,
     "total_queries": 6
   }
