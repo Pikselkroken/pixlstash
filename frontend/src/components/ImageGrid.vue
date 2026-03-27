@@ -5170,10 +5170,21 @@ function handleKeyDown(event) {
   }
   if (overlayOpen.value) return; // Ignore if overlay is open
   if (event.key === "Escape") {
-    selectedImageIds.value = [];
-    lastSelectedImageId = null;
-    cursorIdx.value = null;
-    clearFaceSelection();
+    if (showSelectionBar.value) {
+      // First ESC clears selection only
+      selectedImageIds.value = [];
+      lastSelectedImageId = null;
+      cursorIdx.value = null;
+      clearFaceSelection();
+    } else if (props.searchQuery && props.searchQuery.trim()) {
+      // No selection active — ESC also clears search
+      clearSearchQuery();
+    } else {
+      selectedImageIds.value = [];
+      lastSelectedImageId = null;
+      cursorIdx.value = null;
+      clearFaceSelection();
+    }
   } else if (
     ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
   ) {
@@ -5223,6 +5234,42 @@ function handleKeyDown(event) {
       }
       // Ctrl+Arrow: move cursor without changing selection
     }
+    scrollCursorIntoView(newIdx);
+  } else if (
+    (event.key === "PageDown" || event.key === "PageUp") &&
+    event.shiftKey &&
+    cursorIdx.value !== null
+  ) {
+    // Shift+PageDown/Up: extend selection by a viewport's worth of rows
+    event.preventDefault();
+    const total = allGridImages.value.length;
+    if (total === 0) return;
+    const cols = Math.max(1, props.columns || 1);
+    const rowsPerPage = scrollWrapper.value
+      ? Math.max(
+          1,
+          Math.floor(scrollWrapper.value.clientHeight / rowHeight.value),
+        )
+      : 5;
+    const delta = rowsPerPage * cols;
+    const newIdx =
+      event.key === "PageDown"
+        ? Math.min(total - 1, cursorIdx.value + delta)
+        : Math.max(0, cursorIdx.value - delta);
+    cursorIdx.value = newIdx;
+    const anchorIndex =
+      lastSelectedImageId != null
+        ? allGridImages.value.findIndex(
+            (item) =>
+              getPictureId(item?.id) === getPictureId(lastSelectedImageId),
+          )
+        : newIdx;
+    const start = Math.min(anchorIndex, newIdx);
+    const end = Math.max(anchorIndex, newIdx);
+    selectedImageIds.value = allGridImages.value
+      .slice(start, end + 1)
+      .map((i) => i.id)
+      .filter(Boolean);
     scrollCursorIntoView(newIdx);
   } else if (event.key === " ") {
     // Space: toggle selection at cursor

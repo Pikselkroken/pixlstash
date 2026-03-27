@@ -500,7 +500,7 @@ const sidebarThumbnailSizeModel = computed({
   set: (value) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return;
-    const clamped = Math.min(64, Math.max(32, parsed));
+    const clamped = Math.min(64, Math.max(24, parsed));
     const snapped = Math.round(clamped / 8) * 8;
     emit("update:sidebar-thumbnail-size", snapped);
   },
@@ -2969,7 +2969,7 @@ defineExpose({
 .sidebar-list-item.active {
   display: flex;
   align-items: center;
-  min-height: max(52px, calc(var(--sidebar-thumb-size) + 8px));
+  min-height: max(30px, calc(var(--sidebar-thumb-size) + 6px));
   padding: 2px 6px;
   padding-right: var(--sidebar-right-edge) !important;
   cursor: pointer;
