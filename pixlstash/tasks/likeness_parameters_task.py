@@ -10,6 +10,9 @@ from pixlstash.utils.likeness.likeness_parameter_utils import (
     QUALITY_PARAM_FIELDS,
 )
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class LikenessParametersTask(BaseTask):
@@ -46,10 +49,13 @@ class LikenessParametersTask(BaseTask):
             self.SCAN_LIMIT,
         )
         if not work:
+            logger.debug("LikenessParametersTask: find_next_work returned None — no pending work")
             return {"changed_count": 0, "changed": []}
 
         param, _size_bin, payload = work
         changed = []
+
+        logger.debug("LikenessParametersTask: executing param=%s", param.name)
 
         if param == LikenessParameter.SIZE_BIN:
             width, height, ids = payload
@@ -97,6 +103,15 @@ class LikenessParametersTask(BaseTask):
                 )
             changed = [(Picture, pid, "likeness_parameters", None) for pid in ids]
 
+        pending_after = self._db.run_immediate_read_task(
+            LikenessParameterUtils.count_pending_parameters
+        )
+        logger.debug(
+            "LikenessParametersTask: param=%s updated %d pictures; pending_parameters_remaining=%s",
+            param.name,
+            len(changed),
+            pending_after,
+        )
         return {
             "changed_count": len(changed),
             "changed": changed,

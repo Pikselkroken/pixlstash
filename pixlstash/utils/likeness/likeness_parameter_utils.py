@@ -64,6 +64,12 @@ class LikenessParameterUtils:
                 )
                 if size_bin:
                     width, height, ids = size_bin
+                    logger.debug(
+                        "LikenessParams: find_next_work -> SIZE_BIN (%dx%d, %d pictures)",
+                        width,
+                        height,
+                        len(ids),
+                    )
                     return param, None, (width, height, ids)
                 continue
 
@@ -72,13 +78,26 @@ class LikenessParameterUtils:
             )
             if param_batch:
                 size_bin_index, ids, remaining_in_bin = param_batch
+                logger.debug(
+                    "LikenessParams: find_next_work -> %s (size_bin=%s, %d pictures, %d remaining in bin), ids=%s",
+                    param.name,
+                    size_bin_index,
+                    len(ids),
+                    remaining_in_bin,
+                    ids[:10],
+                )
                 return param, size_bin_index, (ids, remaining_in_bin)
 
         return None
 
     @staticmethod
     def count_pending_parameters(session: Session) -> int:
-        """Return the count of pictures missing at least one likeness parameter."""
+        """Return the count of pictures missing at least one likeness parameter.
+
+        Pictures without width/height are excluded: ``_find_size_bin_batch``
+        requires both dimensions to be non-null, so those pictures can never
+        receive a ``size_bin_index`` and must not be counted as pending.
+        """
         result = session.exec(
             select(func.count())
             .select_from(Picture)
@@ -86,10 +105,42 @@ class LikenessParameterUtils:
                 (Picture.likeness_parameters.is_(None))
                 | (Picture.size_bin_index.is_(None))
             )
+            .where(Picture.width.is_not(None))
+            .where(Picture.height.is_not(None))
         ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
         return result or 0
+
+    @staticmethod
+    def fetch_stuck_pictures(session: Session, limit: int = 20) -> list:
+        """Return diagnostic rows for pictures counted-as-pending but not being resolved."""
+        rows = session.exec(
+            select(
+                Picture.id,
+                Picture.width,
+                Picture.height,
+                Picture.size_bin_index,
+                Picture.likeness_parameters,
+            )
+            .where(
+                (Picture.likeness_parameters.is_(None))
+                | (Picture.size_bin_index.is_(None))
+            )
+            .where(Picture.width.is_not(None))
+            .where(Picture.height.is_not(None))
+            .limit(limit)
+        ).all()
+        return [
+            {
+                "id": int(r[0]),
+                "width": r[1],
+                "height": r[2],
+                "size_bin_index": r[3],
+                "likeness_parameters_null": r[4] is None,
+            }
+            for r in rows
+        ]
 
     @staticmethod
     def _find_size_bin_batch(
@@ -157,34 +208,23 @@ class LikenessParameterUtils:
                     }
 
             missing_by_bin: Dict[int, List[int]] = {}
-            quality_param_indices = {
-                int(param_key) for param_key in QUALITY_PARAM_FIELDS.keys()
-            }
-            picture_param_indices = {
-                int(param_key) for param_key in PICTURE_PARAM_FIELDS.keys()
-            }
-
             for pic_id, size_bin_index, param_blob in rows:
                 size_bin = int(size_bin_index)
-                vec = LikenessParameterUtils.decode_parameters(
-                    param_blob, len(LikenessParameter)
-                )
                 if param in QUALITY_PARAM_FIELDS:
-                    missing_quality = any(
-                        vec[idx] == LIKENESS_PARAMETER_SENTINEL
-                        for idx in quality_param_indices
-                    )
-                    if missing_quality and int(pic_id) in quality_ids:
+                    # Sentinel values mean "attempted but unavailable". Only
+                    # NULL vectors are truly pending for quality-derived params.
+                    if param_blob is None and int(pic_id) in quality_ids:
                         missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
                     continue
                 if param in PICTURE_PARAM_FIELDS:
-                    missing_picture = any(
-                        vec[idx] == LIKENESS_PARAMETER_SENTINEL
-                        for idx in picture_param_indices
-                    )
-                    if missing_picture:
+                    # Same semantics as quality params: only NULL vectors are
+                    # pending; sentinel values are terminal "cannot compute".
+                    if param_blob is None:
                         missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
                     continue
+                vec = LikenessParameterUtils.decode_parameters(
+                    param_blob, len(LikenessParameter)
+                )
                 if vec[int(param)] == LIKENESS_PARAMETER_SENTINEL:
                     missing_by_bin.setdefault(size_bin, []).append(int(pic_id))
 
@@ -205,6 +245,12 @@ class LikenessParameterUtils:
         vector_length: int,
     ) -> None:
         """Assign a size-bin index to a batch of pictures."""
+        logger.debug(
+            "LikenessParams: assigning size_bin_index=%d to %d pictures (ids=%s)",
+            size_bin_index,
+            len(ids),
+            ids[:10],
+        )
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         for pic in pics:
             vec = LikenessParameterUtils.decode_parameters(
@@ -227,6 +273,11 @@ class LikenessParameterUtils:
         """Update a single parameter dimension for a batch of pictures."""
         if not ids:
             return
+        logger.debug(
+            "LikenessParams: updating param_index=%d (sentinel fill) for %d pictures",
+            param_index,
+            len(ids),
+        )
         pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
         values_by_id = dict(zip(ids, values))
         for pic in pics:
@@ -487,6 +538,11 @@ class LikenessParameterUtils:
         vector_length: int,
     ) -> None:
         """Update quality-derived parameter dimensions for a batch of pictures."""
+        logger.debug(
+            "LikenessParams: updating quality params for %d pictures (quality data for %d)",
+            len(ids),
+            len(quality_by_id),
+        )
         LikenessParameterUtils._update_values_for_parameters(
             session=session,
             ids=ids,
@@ -504,6 +560,11 @@ class LikenessParameterUtils:
         vector_length: int,
     ) -> None:
         """Update picture-derived parameter dimensions for a batch of pictures."""
+        logger.debug(
+            "LikenessParams: updating picture params for %d pictures (data for %d)",
+            len(ids),
+            len(picture_by_id),
+        )
         LikenessParameterUtils._update_values_for_parameters(
             session=session,
             ids=ids,
@@ -542,11 +603,18 @@ class LikenessParameterUtils:
         if not ids:
             return
         unique_ids = sorted({int(pid) for pid in ids})
-        session.exec(
+        # Count pairs being deleted so we can observe churn
+        deleted = session.exec(
             delete(PictureLikeness).where(
                 (PictureLikeness.picture_id_a.in_(unique_ids))
                 | (PictureLikeness.picture_id_b.in_(unique_ids))
             )
+        )
+        deleted_count = deleted.rowcount if hasattr(deleted, "rowcount") else "?"
+        logger.debug(
+            "LikenessParams: reset_likeness_for_pictures: deleted %s pairs, re-queuing %d pictures",
+            deleted_count,
+            len(unique_ids),
         )
         PictureLikenessQueue.enqueue(session, unique_ids)
         session.commit()

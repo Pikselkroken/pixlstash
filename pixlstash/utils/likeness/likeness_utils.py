@@ -310,6 +310,12 @@ class LikenessUtils:
         top_k: int,
     ) -> None:
         """Persist likeness results and prune below top-k."""
+        logger.debug(
+            "LikenessTask: writing %d candidate pairs (top_k=%d, unique_a=%d)",
+            len(likeness_results),
+            top_k,
+            len({pl.picture_id_a for pl in likeness_results}),
+        )
         PictureLikeness.bulk_insert_ignore(session, likeness_results)
         processed_as = {pl.picture_id_a for pl in likeness_results}
         for a_id in processed_as:
@@ -333,6 +339,7 @@ class LikenessUtils:
         ids = [
             int(row[0]) if isinstance(row, (tuple, list)) else int(row) for row in rows
         ]
+        logger.debug("LikenessTask: seeding queue with %d pictures", len(ids))
         PictureLikenessQueue.enqueue(session, ids)
         session.commit()
 

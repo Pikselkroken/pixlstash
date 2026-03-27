@@ -101,6 +101,9 @@ class SmartScoreUtils:
             "w_aest": 0.35,
             "w_sharpness": 0.35,
             "w_resolution": 0.10,
+            "w_detail": 0.16,
+            "w_focus_presence": 0.16,
+            "w_text_clutter": 0.30,
             "w_penalised_tag": 0.40,
             "penalised_tag_cap": 3.5,
             "topk": 3,
@@ -113,7 +116,21 @@ class SmartScoreUtils:
             "res_min_mpx": 0.2,
             "res_max_mpx": 4.0,
             "res_use_log": True,
-            "batch_normalize": True,
+            # Reward compositionally rich images using two objective cues:
+            # 1) edge density and 2) luminance entropy.
+            "edge_density_min": 0.015,
+            "edge_density_max": 0.18,
+            "entropy_min": 0.35,
+            "entropy_max": 0.90,
+            "focus_knee": 0.33,
+            "focus_power": 1.4,
+            # Penalise heavy text overlays while ignoring tiny/occasional text.
+            "text_knee": 0.22,
+            "text_power": 1.6,
+            # Keep scores deterministic from per-image parameters alone.
+            # Batch normalization can shift a picture's score based on what
+            # other candidates are present in the same request.
+            "batch_normalize": False,
             "batch_normalize_lo_pct": 5.0,
             "batch_normalize_hi_pct": 95.0,
         }
@@ -275,6 +292,63 @@ class SmartScoreUtils:
         sharpness_component = cfg["w_sharpness"] * sharpness_vals
         scores += sharpness_component
 
+        # Explicit in-focus presence: reward candidates with at least one clearly
+        # sharp region using a thresholded smooth ramp on subject sharpness.
+        focus_knee = float(cfg.get("focus_knee", 0.33))
+        focus_knee = max(0.0, min(0.95, focus_knee))
+        focus_power = max(0.1, float(cfg.get("focus_power", 1.4)))
+        focus_signal = (
+            np.clip(
+                (sharpness_vals - focus_knee) / max(1e-6, 1.0 - focus_knee),
+                0.0,
+                1.0,
+            )
+            ** focus_power
+        )
+        focus_presence_component = cfg["w_focus_presence"] * focus_signal
+        scores += focus_presence_component
+
+        # Detail richness (objective): combine edge density and luminance entropy.
+        edge_vals = np.array([c.get("edge_density") for c in candidates], dtype=np.float32)
+        edge_vals = np.where(np.isfinite(edge_vals), edge_vals, np.nan)
+        ent_vals = np.array(
+            [c.get("luminance_entropy") for c in candidates], dtype=np.float32
+        )
+        ent_vals = np.where(np.isfinite(ent_vals), ent_vals, np.nan)
+
+        edge_min = float(cfg.get("edge_density_min", 0.015))
+        edge_max = float(cfg.get("edge_density_max", 0.18))
+        edge_max = max(edge_min + 1e-6, edge_max)
+        edge_mid = edge_min + 0.5 * (edge_max - edge_min)
+        edge_vals = np.where(np.isnan(edge_vals), edge_mid, edge_vals)
+        edge_norm = np.clip((edge_vals - edge_min) / (edge_max - edge_min), 0.0, 1.0)
+
+        ent_min = float(cfg.get("entropy_min", 0.35))
+        ent_max = float(cfg.get("entropy_max", 0.90))
+        ent_max = max(ent_min + 1e-6, ent_max)
+        ent_mid = ent_min + 0.5 * (ent_max - ent_min)
+        ent_vals = np.where(np.isnan(ent_vals), ent_mid, ent_vals)
+        ent_norm = np.clip((ent_vals - ent_min) / (ent_max - ent_min), 0.0, 1.0)
+
+        detail_signal = np.sqrt(edge_norm * ent_norm)
+        detail_component = cfg["w_detail"] * detail_signal
+        scores += detail_component
+
+        # Text clutter penalty (objective): apply only above knee, then grow smoothly.
+        text_vals = np.array([c.get("text_score") for c in candidates], dtype=np.float32)
+        text_vals = np.where(np.isfinite(text_vals), text_vals, np.nan)
+        text_vals = np.where(np.isnan(text_vals), 0.0, text_vals)
+        text_vals = np.clip(text_vals, 0.0, 1.0)
+        text_knee = float(cfg.get("text_knee", 0.22))
+        text_knee = max(0.0, min(0.95, text_knee))
+        text_power = max(0.1, float(cfg.get("text_power", 1.6)))
+        text_excess = (
+            np.clip((text_vals - text_knee) / max(1e-6, 1.0 - text_knee), 0.0, 1.0)
+            ** text_power
+        )
+        text_component = cfg["w_text_clutter"] * text_excess
+        scores -= text_component
+
         # Penalised tags
         penalised_counts = np.array(
             [float(c.get("penalised_tag_count") or 0) for c in candidates]
@@ -287,7 +361,7 @@ class SmartScoreUtils:
 
         # Soft batch normalization: stretch scores so the distribution fills [0,1]
         # using robust percentiles so individual outliers don't dominate.
-        if cfg.get("batch_normalize", True) and len(scores) >= 4:
+        if cfg.get("batch_normalize", False) and len(scores) >= 4:
             lo_pct = float(cfg.get("batch_normalize_lo_pct", 5.0))
             hi_pct = float(cfg.get("batch_normalize_hi_pct", 95.0))
             p_lo = np.percentile(scores, lo_pct)
@@ -307,8 +381,9 @@ class SmartScoreUtils:
                 if penalised_count <= 0 and final_score <= 1.5:
                     logger.debug(
                         "[SMART SCORE][MIN] id=%s raw=%.4f clipped=%.4f final=%.4f "
-                        "good=%.4f bad=%.4f aest=%.4f sharpness=%.4f res=%.4f "
-                        "penalised=%.4f mpx=%.4f w=%s h=%s",
+                        "good=%.4f bad=%.4f aest=%.4f sharpness=%.4f focus=%.4f "
+                        "res=%.4f detail=%.4f text=%.4f penalised=%.4f mpx=%.4f "
+                        "w=%s h=%s",
                         candidate.get("id"),
                         float(scores[idx]),
                         float(clipped[idx]),
@@ -317,7 +392,10 @@ class SmartScoreUtils:
                         float(bad_component[idx]),
                         float(aest_component[idx]),
                         float(sharpness_component[idx]),
+                        float(focus_presence_component[idx]),
                         float(res_component[idx]),
+                        float(detail_component[idx]),
+                        float(text_component[idx]),
                         float(penalised_component[idx]),
                         float(mpx[idx]),
                         candidate.get("width"),

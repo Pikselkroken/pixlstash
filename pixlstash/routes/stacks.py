@@ -193,7 +193,10 @@ def create_router(server) -> APIRouter:
         if sort:
             try:
                 candidate = SortMechanism.from_string(sort, descending=descending)
-                if candidate.key != SortMechanism.Keys.PICTURE_STACKS:
+                if candidate.key not in (
+                    SortMechanism.Keys.PICTURE_STACKS,
+                    SortMechanism.Keys.SMART_SCORE,
+                ):
                     sort_mech = candidate
             except ValueError:
                 pass

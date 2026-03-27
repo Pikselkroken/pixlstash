@@ -2,6 +2,9 @@ from sqlmodel import Session
 
 from .base_task_finder import BaseTaskFinder
 from .likeness_task import LikenessTask
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class MissingLikenessFinder(BaseTaskFinder):
@@ -17,6 +20,12 @@ class MissingLikenessFinder(BaseTaskFinder):
     def find_task(self):
         queue_count, candidate_count, pair_count = self._db.run_immediate_read_task(
             self._likeness_state
+        )
+        logger.debug(
+            "MissingLikenessFinder: queue=%d candidates=%d pairs=%d",
+            int(queue_count or 0),
+            int(candidate_count or 0),
+            int(pair_count or 0),
         )
         if int(queue_count or 0) > 0:
             return LikenessTask(database=self._db)

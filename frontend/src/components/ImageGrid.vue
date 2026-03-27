@@ -1058,6 +1058,10 @@ onUnmounted(() => {
     clearTimeout(pluginProgressHideTimer);
     pluginProgressHideTimer = null;
   }
+  if (wsTagFullRefreshTimer) {
+    clearTimeout(wsTagFullRefreshTimer);
+    wsTagFullRefreshTimer = null;
+  }
 });
 
 watch(
@@ -1087,20 +1091,10 @@ watch(
     const pictureIds = Array.isArray(payload.pictureIds)
       ? payload.pictureIds
       : [];
-    const dPayloadIds = pictureIds
-      .map((id) => getPictureId(id))
-      .filter((id) => id != null);
-    if (isSmartScoreSortActive()) {
-      // Tag changes affect penalised-tag penalties, so a full sorted refetch
-      // is needed. Preserve scroll so the user stays at their current position
-      // and thumbnails load for the correct viewport range.
-      preserveScrollOnNextFetch.value = true;
-      debouncedFetchAllGridImages({ force: true });
-      return;
-    }
-    for (const id of dPayloadIds) {
-      refreshGridImage(id);
-    }
+    if (!pictureIds.length) return;
+    // Coalesce all task-driven tag updates into an infrequent full refresh to
+    // avoid starving the tagger when a large grid is open.
+    scheduleWsTagFullRefresh();
   },
 );
 
@@ -1437,13 +1431,11 @@ function getThumbnailInfoItems(img) {
     });
   }
 
-  if (
-    selectedSort.includes("SMART_SCORE") &&
-    typeof img.smartScore === "number"
-  ) {
+  const smartScore = getGridSmartScoreValue(img);
+  if (selectedSort.includes("SMART_SCORE") && smartScore !== null) {
     items.push({
       key: "smart_score",
-      text: `Smart Score: ${img.smartScore.toFixed(2)}`,
+      text: `Smart Score: ${smartScore.toFixed(2)}`,
     });
   }
 
@@ -1552,8 +1544,9 @@ function getCompactGroupLabel(img, visualIdx) {
       return item.imported_at.slice(0, 10);
     if (sort.includes("DATE") && item.created_at)
       return item.created_at.slice(0, 10);
-    if (sort.includes("SMART_SCORE") && typeof item.smartScore === "number")
-      return Math.round(item.smartScore * 10);
+    const smartScore = getGridSmartScoreValue(item);
+    if (sort.includes("SMART_SCORE") && smartScore !== null)
+      return Math.round(smartScore * 10);
     if (
       sort.includes("CHARACTER_LIKENESS") &&
       typeof item.character_likeness === "number"
@@ -1577,8 +1570,9 @@ function getCompactGroupLabel(img, visualIdx) {
     return formatCompactDate(img.imported_at);
   if (sort.includes("DATE") && img.created_at)
     return formatCompactDate(img.created_at);
-  if (sort.includes("SMART_SCORE") && typeof img.smartScore === "number")
-    return `★ ${(Math.round(img.smartScore * 10) / 10).toFixed(1)}`;
+  const smartScore = getGridSmartScoreValue(img);
+  if (sort.includes("SMART_SCORE") && smartScore !== null)
+    return `★ ${(Math.round(smartScore * 10) / 10).toFixed(1)}`;
   if (
     sort.includes("CHARACTER_LIKENESS") &&
     typeof img.character_likeness === "number"
@@ -1602,8 +1596,9 @@ const compactStickyLabel = computed(() => {
       return item.imported_at.slice(0, 10);
     if (sort.includes("DATE") && item.created_at)
       return item.created_at.slice(0, 10);
-    if (sort.includes("SMART_SCORE") && typeof item.smartScore === "number")
-      return Math.round(item.smartScore * 10);
+    const smartScore = getGridSmartScoreValue(item);
+    if (sort.includes("SMART_SCORE") && smartScore !== null)
+      return Math.round(smartScore * 10);
     if (
       sort.includes("CHARACTER_LIKENESS") &&
       typeof item.character_likeness === "number"
@@ -1634,8 +1629,9 @@ const compactStickyLabel = computed(() => {
     return formatCompactDate(firstImg.imported_at);
   if (sort.includes("DATE") && firstImg.created_at)
     return formatCompactDate(firstImg.created_at);
-  if (sort.includes("SMART_SCORE") && typeof firstImg.smartScore === "number")
-    return `★ ${(Math.round(firstImg.smartScore * 10) / 10).toFixed(1)}`;
+  const smartScore = getGridSmartScoreValue(firstImg);
+  if (sort.includes("SMART_SCORE") && smartScore !== null)
+    return `★ ${(Math.round(smartScore * 10) / 10).toFixed(1)}`;
   if (
     sort.includes("CHARACTER_LIKENESS") &&
     typeof firstImg.character_likeness === "number"
@@ -2196,6 +2192,33 @@ async function handleImagesUploaded(payload) {
 
 const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
 const lastGridVersionRefreshAt = ref(0);
+const WS_TAG_FULL_REFRESH_MIN_INTERVAL_MS = 6000;
+const lastWsTagFullRefreshAt = ref(0);
+let wsTagFullRefreshTimer = null;
+
+function scheduleWsTagFullRefresh() {
+  const now = Date.now();
+  const elapsed = now - lastWsTagFullRefreshAt.value;
+  if (elapsed >= WS_TAG_FULL_REFRESH_MIN_INTERVAL_MS) {
+    lastWsTagFullRefreshAt.value = now;
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages({ force: true });
+    return;
+  }
+  if (wsTagFullRefreshTimer) {
+    return;
+  }
+  const waitMs = WS_TAG_FULL_REFRESH_MIN_INTERVAL_MS - elapsed + 25;
+  wsTagFullRefreshTimer = setTimeout(
+    () => {
+      wsTagFullRefreshTimer = null;
+      lastWsTagFullRefreshAt.value = Date.now();
+      preserveScrollOnNextFetch.value = true;
+      debouncedFetchAllGridImages({ force: true });
+    },
+    Math.max(25, waitMs),
+  );
+}
 
 watch(
   () => props.gridVersion,
@@ -2400,8 +2423,7 @@ async function refreshGridImage(imageId, options = {}) {
   );
   if (idx === -1) return;
   const latestInfo = await fetchImageInfo(imageId, {
-    smartScore:
-      isSmartScoreSortActive() || props.selectedSort === STACKS_SORT_KEY,
+    smartScore: options?.smartScore === true || isSmartScoreSortActive(),
     force: options?.force === true,
   });
   if (latestInfo && !Array.isArray(latestInfo)) {
@@ -2716,6 +2738,22 @@ function isSmartScoreSortActive() {
   return typeof props.selectedSort === "string"
     ? props.selectedSort.toUpperCase().includes("SMART_SCORE")
     : false;
+}
+
+function getGridSmartScoreValue(img) {
+  if (!img) return null;
+  const raw =
+    typeof img.smartScore === "number"
+      ? img.smartScore
+      : typeof img.smart_score === "number"
+        ? img.smart_score
+        : null;
+  return Number.isFinite(raw) ? raw : null;
+}
+
+function formatGridSmartScoreValue(img) {
+  const value = getGridSmartScoreValue(img);
+  return value === null ? "" : value.toFixed(2);
 }
 
 function invalidateVisibleThumbnailRanges() {
@@ -3620,12 +3658,16 @@ function getLocalStackMembers(stackId) {
     : [];
   if (!source.length) return [];
   const members = source.filter((img) => getPictureStackId(img) === stackId);
-  return sortStackMembers(members);
+  const activeSort = String(props.selectedSort || "").toUpperCase();
+  const useBackendOrder = !!activeSort && activeSort !== STACKS_SORT_KEY;
+  return useBackendOrder ? members : sortStackMembers(members);
 }
 
 function cacheExpandedStackMembers(stackId, members) {
   if (!stackId || !Array.isArray(members) || members.length === 0) return false;
-  const sorted = sortStackMembers(members);
+  const activeSort = String(props.selectedSort || "").toUpperCase();
+  const useBackendOrder = !!activeSort && activeSort !== STACKS_SORT_KEY;
+  const sorted = useBackendOrder ? members.slice() : sortStackMembers(members);
   const ordered = sorted
     .filter((img) => img && img.id != null)
     .map((img) =>
@@ -3657,7 +3699,13 @@ function buildExpandedStackImages(stackId, fallbackImg, stackCount) {
   const entry = expandedStackMembers.value.get(stackId);
   const ids = Array.isArray(entry?.ids) ? entry.ids : [];
   const images = Array.isArray(entry?.images) ? entry.images : [];
-  const sourceImages = ids.length ? images : sortStackMembers(images);
+  const activeSort = String(props.selectedSort || "").toUpperCase();
+  const useBackendOrder = !!activeSort && activeSort !== STACKS_SORT_KEY;
+  const sourceImages = ids.length
+    ? images
+    : useBackendOrder
+      ? images.slice()
+      : sortStackMembers(images);
   const imageById = new Map(
     sourceImages
       .filter((img) => img && img.id != null)
@@ -3867,13 +3915,14 @@ function emitStackStats() {
 function syncExpandAllStacksFromFetchedImages() {
   if (!props.showStacks) return;
   const autoIds = collectExpandableStackIds(lastFetchedGridImages.value);
-  if (!autoIds.length) return;
-  const nextIds = new Set(expandedStackIds.value);
+  const autoIdSet = new Set(autoIds);
+  const currentIds = Array.from(expandedStackIds.value || []);
+  const nextIds = new Set(currentIds.filter((id) => autoIdSet.has(id)));
   let changed = false;
-  for (const stackId of autoIds) {
+  for (const stackId of currentIds) {
     if (!nextIds.has(stackId)) {
-      nextIds.add(stackId);
       changed = true;
+      break;
     }
   }
   if (changed) {
@@ -5073,7 +5122,14 @@ async function _afterTagMutation(imageId) {
     return;
   }
   if (isSmartScoreSortActive()) {
-    await refreshSmartScoreForImage(imageId);
+    // Smart score values shown in the grid must match the list endpoint's
+    // global ranking context. Recompute by refetching the sorted list instead
+    // of patching a single card from metadata.
+    preserveScrollOnNextFetch.value = true;
+    lastFetchSuccess.value = { key: "", at: 0 };
+    lastFetchError.value = { key: "", at: 0 };
+    await fetchAllGridImages({ force: true });
+    updateVisibleThumbnails();
   } else {
     refreshGridImage(imageId);
   }

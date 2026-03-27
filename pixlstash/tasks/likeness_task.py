@@ -6,6 +6,9 @@ from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class LikenessTask(BaseTask):
@@ -47,11 +50,21 @@ class LikenessTask(BaseTask):
 
         queued_ids = [int(item[0]) for item in work_items]
         bulk_rows = submit_low(LikenessUtils.fetch_bulk_candidate_data)
+        logger.debug(
+            "LikenessTask: processing %d queued pictures against %d candidates",
+            len(queued_ids),
+            len(bulk_rows),
+        )
         likeness_results = helper.compute_bulk_likeness(
             queued_ids,
             bulk_rows,
             param_thresholds,
             date_span_seconds,
+        )
+        logger.debug(
+            "LikenessTask: computed %d likeness pairs from %d queued pictures",
+            len(likeness_results),
+            len(queued_ids),
         )
 
         if likeness_results:
