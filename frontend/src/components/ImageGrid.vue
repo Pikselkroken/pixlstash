@@ -204,6 +204,7 @@
               'stack-hover-active':
                 hoveredStackId !== null &&
                 getPictureStackId(img) === hoveredStackId,
+              'image-card-cursor': img.idx === cursorIdx,
             },
           ]"
           @click="handleImageCardClick(img, img.idx, $event)"
@@ -2356,6 +2357,7 @@ watch(
 // Local selection state (mirrors parent prop)
 const selectedImageIds = ref([]);
 let lastSelectedImageId = null;
+const cursorIdx = ref(null);
 const isImageSelected = (id) =>
   selectedImageIds.value && selectedImageIds.value.includes(id);
 
@@ -4970,8 +4972,24 @@ function onGridScroll(e) {
 // ============================================================
 // CLICK HANDLERS
 // ============================================================
+function scrollCursorIntoView(idx) {
+  if (!scrollWrapper.value) return;
+  const cols = Math.max(1, props.columns || 1);
+  const row = Math.floor(idx / cols);
+  const itemTop = row * rowHeight.value;
+  const itemBottom = itemTop + rowHeight.value;
+  const scrollTop = scrollWrapper.value.scrollTop;
+  const clientHeight = scrollWrapper.value.clientHeight;
+  if (itemTop < scrollTop) {
+    scrollWrapper.value.scrollTop = itemTop;
+  } else if (itemBottom > scrollTop + clientHeight) {
+    scrollWrapper.value.scrollTop = itemBottom - clientHeight;
+  }
+}
+
 function handleImageCardClick(img, idx, event) {
   if (!img.id) return;
+  cursorIdx.value = idx;
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
   let newSelection = [];
@@ -5028,6 +5046,7 @@ function handleGridBackgroundClick(e) {
   if (!e.target.closest(".image-card")) {
     selectedImageIds.value = [];
     lastSelectedImageId = null;
+    cursorIdx.value = null;
   }
 }
 
@@ -5153,7 +5172,95 @@ function handleKeyDown(event) {
   if (event.key === "Escape") {
     selectedImageIds.value = [];
     lastSelectedImageId = null;
+    cursorIdx.value = null;
     clearFaceSelection();
+  } else if (
+    ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
+  ) {
+    event.preventDefault();
+    const total = allGridImages.value.length;
+    if (total === 0) return;
+    const cols = Math.max(1, props.columns || 1);
+    let newIdx = cursorIdx.value;
+    if (newIdx === null) {
+      if (selectedImageIds.value.length > 0) {
+        const firstSel = allGridImages.value.findIndex(
+          (img) => img && selectedImageIds.value.includes(img.id),
+        );
+        newIdx = firstSel >= 0 ? firstSel : 0;
+      } else {
+        newIdx = 0;
+      }
+    } else {
+      if (event.key === "ArrowLeft") newIdx = Math.max(0, newIdx - 1);
+      else if (event.key === "ArrowRight")
+        newIdx = Math.min(total - 1, newIdx + 1);
+      else if (event.key === "ArrowUp") newIdx = Math.max(0, newIdx - cols);
+      else if (event.key === "ArrowDown")
+        newIdx = Math.min(total - 1, newIdx + cols);
+    }
+    cursorIdx.value = newIdx;
+    const cursorImg = allGridImages.value[newIdx];
+    if (cursorImg && cursorImg.id) {
+      if (event.shiftKey) {
+        const anchorIndex =
+          lastSelectedImageId != null
+            ? allGridImages.value.findIndex(
+                (item) =>
+                  getPictureId(item?.id) === getPictureId(lastSelectedImageId),
+              )
+            : newIdx;
+        const start = Math.min(anchorIndex, newIdx);
+        const end = Math.max(anchorIndex, newIdx);
+        selectedImageIds.value = allGridImages.value
+          .slice(start, end + 1)
+          .map((i) => i.id)
+          .filter(Boolean);
+      } else if (!event.ctrlKey && !event.metaKey) {
+        // Plain arrow: move cursor and select only this image
+        selectedImageIds.value = [cursorImg.id];
+        lastSelectedImageId = cursorImg.id;
+      }
+      // Ctrl+Arrow: move cursor without changing selection
+    }
+    scrollCursorIntoView(newIdx);
+  } else if (event.key === " ") {
+    // Space: toggle selection at cursor
+    if (cursorIdx.value !== null) {
+      event.preventDefault();
+      const cursorImg = allGridImages.value[cursorIdx.value];
+      if (cursorImg && cursorImg.id) {
+        const newSelection = [...selectedImageIds.value];
+        if (newSelection.includes(cursorImg.id)) {
+          selectedImageIds.value = newSelection.filter(
+            (id) => id !== cursorImg.id,
+          );
+        } else {
+          newSelection.push(cursorImg.id);
+          selectedImageIds.value = newSelection;
+          lastSelectedImageId = cursorImg.id;
+        }
+      }
+    }
+  } else if (event.key === "Enter") {
+    // Enter: open overlay for cursor image
+    if (cursorIdx.value !== null) {
+      event.preventDefault();
+      const cursorImg = allGridImages.value[cursorIdx.value];
+      if (cursorImg && cursorImg.id) {
+        openOverlay(cursorImg);
+      }
+    }
+  } else if (event.key === "g" || event.key === "G") {
+    // Focus the first visible image in the grid
+    event.preventDefault();
+    const idx = visibleStart.value;
+    const img = allGridImages.value[idx];
+    if (img && img.id) {
+      cursorIdx.value = idx;
+      selectedImageIds.value = [img.id];
+      lastSelectedImageId = img.id;
+    }
   } else if (event.key === "Delete" || event.key === "Backspace") {
     if (selectedImageIds.value.length > 0) {
       deleteSelected();
@@ -5601,6 +5708,25 @@ function handleEmptyStateReset() {
 .grid-scroll-wrapper::-webkit-scrollbar-track {
   background: rgba(var(--v-theme-shadow), 0.15);
 }
+.image-card-cursor > .thumbnail-card {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.9);
+  outline-offset: -2px;
+}
+
+/* Compact mode: outline is invisible on edge-to-edge images, use inset ::after border instead */
+.compact-mode .image-card-cursor > .thumbnail-card {
+  outline: none;
+}
+.compact-mode .image-card-cursor > .thumbnail-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid rgba(var(--v-theme-primary), 1);
+  box-shadow: inset 0 0 6px rgba(var(--v-theme-primary), 0.45);
+  pointer-events: none;
+  z-index: 202;
+}
+
 .image-card {
   min-width: 0;
   display: flex;
