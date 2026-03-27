@@ -1,6 +1,9 @@
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { isSupportedImportFile } from "../utils/media.js";
+import {
+  extractSupportedImportFilesFromDataTransfer,
+  isSupportedImportFile,
+} from "../utils/media.js";
 import { apiClient } from "../utils/apiClient.js";
 import ProjectEditor from "./ProjectEditor.vue";
 
@@ -87,25 +90,9 @@ function getSupportedFiles(fileList) {
   return Array.from(fileList || []).filter(isSupportedImportFile);
 }
 
-function getSupportedFilesFromDataTransfer(dataTransfer) {
+async function getSupportedFilesFromDataTransfer(dataTransfer) {
   if (!dataTransfer) return [];
-
-  const directFiles = getSupportedFiles(dataTransfer.files);
-  const fromItems = Array.from(dataTransfer.items || [])
-    .filter((item) => item?.kind === "file")
-    .map((item) => item.getAsFile?.())
-    .filter(Boolean)
-    .filter(isSupportedImportFile);
-
-  const unique = new Map();
-  for (const file of [...directFiles, ...fromItems]) {
-    const key = `${file.name}::${file.size}::${file.lastModified}`;
-    if (!unique.has(key)) {
-      unique.set(key, file);
-    }
-  }
-
-  return Array.from(unique.values());
+  return extractSupportedImportFilesFromDataTransfer(dataTransfer);
 }
 
 function openLocalPicker() {
@@ -160,11 +147,11 @@ function handleLocalDragLeave(event) {
   }
 }
 
-function handleLocalDrop(event) {
+async function handleLocalDrop(event) {
   event?.preventDefault?.();
   event?.stopPropagation?.();
   dragActive.value = false;
-  const files = getSupportedFilesFromDataTransfer(event?.dataTransfer);
+  const files = await getSupportedFilesFromDataTransfer(event?.dataTransfer);
   if (!files.length) return;
   triggerLocalImport(files);
 }
