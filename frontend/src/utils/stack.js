@@ -81,21 +81,14 @@ export function selectNewestStackMember(members) {
 }
 
 export function buildStackLeaderMap(images) {
-  const byStack = new Map();
+  const leaders = new Map();
   for (const img of images) {
     const stackId = getPictureStackId(img);
     if (!stackId || img?.id == null) continue;
-    if (!byStack.has(stackId)) {
-      byStack.set(stackId, []);
-    }
-    byStack.get(stackId).push(img);
-  }
-  const leaders = new Map();
-  for (const [stackId, members] of byStack.entries()) {
-    const ordered = sortStackMembers(members);
-    const leader = ordered[0];
-    if (leader?.id != null) {
-      leaders.set(stackId, String(leader.id));
+    // Preserve backend ordering by taking the first stack member encountered
+    // in the incoming list as the collapsed leader.
+    if (!leaders.has(stackId)) {
+      leaders.set(stackId, String(img.id));
     }
   }
   return leaders;
