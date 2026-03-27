@@ -108,7 +108,7 @@ CUSTOM_TAGGER_FILENAME = "pixlstash-anomaly-tagger.safetensors"
 CUSTOM_TAGGER_META_FILENAME = "pixlstash-anomaly-tagger_meta.json"
 CUSTOM_TAGGER_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.safetensors")
 CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta.json")
-CUSTOM_TAGGER_THRESHOLD_FULL = 0.75
+CUSTOM_TAGGER_THRESHOLD_FULL = 0.95
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
 CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
 CUSTOM_TAGGER_BATCH = _env_int("PIXLSTASH_CUSTOM_TAGGER_BATCH", 16)
@@ -353,11 +353,14 @@ class PictureTagger:
         if requested_mb <= 0:
             self._max_vram_usage_mb = None
             return
+        self._max_vram_usage_mb = requested_mb
         total_mb = self._query_total_vram_mb()
-        if total_mb > 0:
-            self._max_vram_usage_mb = max(1, min(requested_mb, total_mb))
-        else:
-            self._max_vram_usage_mb = requested_mb
+        if total_mb > 0 and requested_mb > total_mb:
+            logger.warning(
+                "Configured tagger VRAM budget %.2f GB exceeds detected GPU total %.2f GB; keeping configured budget as requested.",
+                requested_mb / 1024.0,
+                total_mb / 1024.0,
+            )
         try:
             free_bytes, _ = torch.cuda.mem_get_info()
             free_gb = free_bytes / 1024**3
