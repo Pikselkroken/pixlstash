@@ -49,7 +49,7 @@ const pixlStashLight = {
     warning: '#db7900',
     scrim: '#000000',
     shadow: '#000000',
-    panel: '#ffffff',
+    panel: '#c0c3c5',
     onPanel: '#2f343b',
   },
 };
@@ -92,7 +92,7 @@ const pixlStashDark = {
     warning: '#db7900',
     scrim: '#000000',
     shadow: '#2a2f36',
-    panel: '#111317',
+    panel: '#313337',
     onPanel: '#f2e5da',
   },
 };

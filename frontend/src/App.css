@@ -381,7 +381,7 @@ button:focus:not(:focus-visible) {
   bottom: 8px;
   right: 8px;
   z-index: 2000;
-  width: 24px;
+  width: 48px;
   height: 24px;
   border-radius: 10;
   background: rgb(var(--v-theme-panel));
@@ -391,9 +391,11 @@ button:focus:not(:focus-visible) {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0.7;
   transition: opacity 0.15s;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  gap: 4px;
+  font-size: 0.7em;
 }
 .shortcuts-fab:hover {
   opacity: 1;

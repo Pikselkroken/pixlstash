@@ -70,7 +70,7 @@ def serialize_user_config(user) -> dict:
         else getattr(default_user, "show_stacks")
     )
 
-    allowed_sidebar_sizes = tuple(range(32, 65, 8))
+    allowed_sidebar_sizes = tuple(range(24, 65, 8))
     sidebar_size = _thumbnail_size(config.get("sidebar_thumbnail_size"))
     if sidebar_size is None:
         sidebar_size = default_user.sidebar_thumbnail_size

@@ -9,12 +9,12 @@
           color="primary"
           class="search-result-spinner"
         ></v-progress-circular>
-        <span>Searching…</span>
+        <span>Searching...</span>
       </template>
       <template v-else>
         <span>Search result found {{ count }} items</span>
         <span v-if="showScopeNote" class="search-result-scope">
-          • Searched {{ categoryLabel }} only
+          Searched {{ categoryLabel }} only
         </span>
       </template>
     </span>
@@ -59,7 +59,7 @@ const showSearchAll = computed(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
+  padding: 8px 72px 8px 16px;
   box-shadow: 0 -2px 4px rgba(var(--v-theme-shadow), 0.1);
 }
 

@@ -1327,10 +1327,10 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
     <button
       class="shortcuts-fab"
       type="button"
-      title="Keyboard shortcuts (?)"
+      title="Keyboard shortcuts (F1)"
       @click="shortcutsDialogOpen = true"
     >
-      <v-icon size="20">mdi-keyboard</v-icon>
+      <v-icon size="20">mdi-keyboard</v-icon><span>F1</span>
     </button>
     <v-dialog v-model="shortcutsDialogOpen" max-width="480">
       <v-card class="shortcuts-dialog">
@@ -1358,6 +1358,30 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               <tr>
                 <td><kbd>Ctrl</kbd>+<kbd>A</kbd></td>
                 <td>Select all images</td>
+              </tr>
+              <tr>
+                <td><kbd>G</kbd></td>
+                <td>Focus first visible image (start keyboard navigation)</td>
+              </tr>
+              <tr>
+                <td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td>
+                <td>Move cursor and select image</td>
+              </tr>
+              <tr>
+                <td><kbd>Shift</kbd>+<kbd>Arrow</kbd></td>
+                <td>Extend selection</td>
+              </tr>
+              <tr>
+                <td><kbd>Ctrl</kbd>+<kbd>Arrow</kbd></td>
+                <td>Move cursor without changing selection</td>
+              </tr>
+              <tr>
+                <td><kbd>Space</kbd></td>
+                <td>Toggle selection of cursor image</td>
+              </tr>
+              <tr>
+                <td><kbd>Enter</kbd></td>
+                <td>Open cursor image</td>
               </tr>
               <tr>
                 <td><kbd>Delete</kbd></td>

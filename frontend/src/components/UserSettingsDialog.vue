@@ -31,7 +31,7 @@ const sidebarThumbnailSizeModel = computed({
   set: (value) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return;
-    const clamped = Math.min(64, Math.max(32, parsed));
+    const clamped = Math.min(64, Math.max(24, parsed));
     const snapped = Math.round(clamped / 8) * 8;
     if (snapped === (props.sidebarThumbnailSize ?? 48)) return;
     emit("update:sidebar-thumbnail-size", snapped);
@@ -1330,7 +1330,7 @@ const workflowImportCaptionPreview = computed(() => {
                   </span>
                   <v-slider
                     v-model="sidebarThumbnailSizeModel"
-                    :min="32"
+                    :min="24"
                     :max="64"
                     :step="8"
                     hide-details
