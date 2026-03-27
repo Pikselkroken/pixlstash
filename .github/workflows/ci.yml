@@ -100,3 +100,5 @@ jobs:
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_facial_features_worker.py
       - name: Test Many-to-Many Face Data
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_many_to_many_face_data.py
+      - name: Test ComfyUI Workflow Extraction
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_comfyui_workflow_extraction.py
