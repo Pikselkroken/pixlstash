@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Body, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import delete, exists, func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -59,6 +60,55 @@ def create_router(server) -> APIRouter:
         )
         return int(mb * 1024 * 1024)
 
+    def _normalise_project_name(name: Optional[str]) -> str:
+        value = "" if name is None else str(name)
+        return re.sub(r"\s+", " ", value).strip()
+
+    def _validate_project_name(name: Optional[str]) -> str:
+        normalized = _normalise_project_name(name)
+        if not normalized:
+            raise HTTPException(status_code=422, detail="Project name is required")
+        if normalized.upper() == "UNASSIGNED":
+            raise HTTPException(
+                status_code=422,
+                detail="Project name 'UNASSIGNED' is reserved",
+            )
+        if normalized.isdigit():
+            raise HTTPException(
+                status_code=422,
+                detail="Project name cannot be numeric-only",
+            )
+        return normalized
+
+    def _ensure_unique_project_name(
+        session: Session,
+        name: str,
+        *,
+        exclude_id: Optional[int] = None,
+    ) -> None:
+        query = select(Project).where(func.lower(Project.name) == name.lower())
+        if exclude_id is not None:
+            query = query.where(Project.id != exclude_id)
+        if session.exec(query).first() is not None:
+            raise HTTPException(status_code=409, detail="Project name already exists")
+
+    def _resolve_project_id(session: Session, project_identifier: str) -> int:
+        identifier = (project_identifier or "").strip()
+        if not identifier:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        if identifier.isdigit():
+            project = session.get(Project, int(identifier))
+            if project is not None:
+                return int(project.id)
+
+        project = session.exec(
+            select(Project).where(func.lower(Project.name) == identifier.lower())
+        ).first()
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return int(project.id)
+
     # -------------------------------------------------------------------------
     # Projects CRUD
     # -------------------------------------------------------------------------
@@ -93,16 +143,26 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.require_user_id(request)
 
+        normalized_name = _validate_project_name(name)
+
         def insert(session: Session):
+            _ensure_unique_project_name(session, normalized_name)
             project = Project(
-                name=name,
+                name=normalized_name,
                 description=description,
                 cover_image_path=cover_image_path,
                 extra_metadata=extra_metadata,
                 created_at=datetime.utcnow(),
             )
             session.add(project)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Project name already exists",
+                )
             session.refresh(project)
             return project
 
@@ -113,8 +173,8 @@ def create_router(server) -> APIRouter:
             "created_at": project.created_at,
         }
 
-    @router.get("/projects/{project_id}", summary="Get a project by ID")
-    def get_project(request: Request, project_id: int):
+    @router.get("/projects/{project_id}", summary="Get a project by ID or name")
+    def get_project(request: Request, project_id: str):
         server.auth.require_user_id(request)
 
         def fetch(session: Session, pid: int):
@@ -123,8 +183,14 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Project not found")
             return project
 
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
+
         project = server.vault.db.run_task(
-            fetch, project_id, priority=DBPriority.IMMEDIATE
+            fetch, resolved_project_id, priority=DBPriority.IMMEDIATE
         )
         return {
             "id": project.id,
@@ -138,7 +204,7 @@ def create_router(server) -> APIRouter:
     @router.put("/projects/{project_id}", summary="Update a project")
     def update_project(
         request: Request,
-        project_id: int,
+        project_id: str,
         name: Optional[str] = Body(default=None),
         description: Optional[str] = Body(default=None),
         cover_image_path: Optional[str] = Body(default=None),
@@ -146,12 +212,25 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.require_user_id(request)
 
+        normalized_name = _validate_project_name(name) if name is not None else None
+
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
+
         def update(session: Session, pid: int):
             project = session.get(Project, pid)
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
-            if name is not None:
-                project.name = name
+            if normalized_name is not None:
+                _ensure_unique_project_name(
+                    session,
+                    normalized_name,
+                    exclude_id=pid,
+                )
+                project.name = normalized_name
             if description is not None:
                 project.description = description
             if cover_image_path is not None:
@@ -159,12 +238,19 @@ def create_router(server) -> APIRouter:
             if extra_metadata is not None:
                 project.extra_metadata = extra_metadata
             session.add(project)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Project name already exists",
+                )
             session.refresh(project)
             return project
 
         project = server.vault.db.run_task(
-            update, project_id, priority=DBPriority.IMMEDIATE
+            update, resolved_project_id, priority=DBPriority.IMMEDIATE
         )
         return {
             "id": project.id,
@@ -176,7 +262,7 @@ def create_router(server) -> APIRouter:
         }
 
     @router.delete("/projects/{project_id}", summary="Delete a project")
-    def delete_project(request: Request, project_id: int):
+    def delete_project(request: Request, project_id: str):
         """Delete a project.
 
         Characters and picture sets belonging to the project have their
@@ -184,6 +270,12 @@ def create_router(server) -> APIRouter:
         files are permanently removed.
         """
         server.auth.require_user_id(request)
+
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
 
         def do_delete(session: Session, pid: int):
             project = session.get(Project, pid)
@@ -223,7 +315,7 @@ def create_router(server) -> APIRouter:
             return attachment_paths
 
         attachment_paths = server.vault.db.run_task(
-            do_delete, project_id, priority=DBPriority.IMMEDIATE
+            do_delete, resolved_project_id, priority=DBPriority.IMMEDIATE
         )
 
         # Remove attachment files from disk after the transaction commits.
@@ -238,7 +330,11 @@ def create_router(server) -> APIRouter:
                 )
 
         # Remove the project attachments directory if it is now empty.
-        project_dir = os.path.join(server.vault.image_root, "projects", str(project_id))
+        project_dir = os.path.join(
+            server.vault.image_root,
+            "projects",
+            str(resolved_project_id),
+        )
         try:
             if os.path.isdir(project_dir):
                 shutil.rmtree(project_dir, ignore_errors=True)
@@ -247,7 +343,7 @@ def create_router(server) -> APIRouter:
                 "Could not remove project directory %s: %s", project_dir, exc
             )
 
-        return {"status": "deleted", "id": project_id}
+        return {"status": "deleted", "id": resolved_project_id}
 
     @router.get(
         "/projects/{project_id}/summary",
@@ -287,10 +383,11 @@ def create_router(server) -> APIRouter:
                 ),
             ]
         else:
-            try:
-                pid = int(project_id)
-            except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail="Invalid project_id")
+            pid = server.vault.db.run_task(
+                _resolve_project_id,
+                project_id,
+                priority=DBPriority.IMMEDIATE,
+            )
             conditions = [
                 Picture.deleted.is_(False),
                 exists(
@@ -321,10 +418,16 @@ def create_router(server) -> APIRouter:
     )
     def export_project(
         request: Request,
-        project_id: int,
+        project_id: str,
         include_pictures: bool = Query(default=True),
     ):
         server.auth.require_user_id(request)
+
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
 
         def _safe(name: str) -> str:
             """Slugify a name for use as a directory component."""
@@ -431,7 +534,7 @@ def create_router(server) -> APIRouter:
             attachments_data,
             char_pictures,
             set_pictures,
-        ) = server.vault.db.run_immediate_read_task(gather, project_id)
+        ) = server.vault.db.run_immediate_read_task(gather, resolved_project_id)
 
         root = _safe(project_data["name"])
         buf = io.BytesIO()
@@ -522,8 +625,14 @@ def create_router(server) -> APIRouter:
         "/projects/{project_id}/attachments",
         summary="List attachments for a project",
     )
-    def list_attachments(request: Request, project_id: int):
+    def list_attachments(request: Request, project_id: str):
         server.auth.require_user_id(request)
+
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
 
         def fetch(session: Session, pid: int):
             if session.get(Project, pid) is None:
@@ -535,7 +644,7 @@ def create_router(server) -> APIRouter:
             ).all()
 
         attachments = server.vault.db.run_task(
-            fetch, project_id, priority=DBPriority.IMMEDIATE
+            fetch, resolved_project_id, priority=DBPriority.IMMEDIATE
         )
         return [
             {
@@ -553,8 +662,14 @@ def create_router(server) -> APIRouter:
         "/projects/{project_id}/attachments",
         summary="Upload an attachment to a project",
     )
-    async def upload_attachment(request: Request, project_id: int, file: UploadFile):
+    async def upload_attachment(request: Request, project_id: str, file: UploadFile):
         server.auth.require_user_id(request)
+
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
 
         max_bytes = _max_attachment_bytes()
         contents = await file.read()
@@ -572,10 +687,10 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Project not found")
 
         server.vault.db.run_task(
-            check_project, project_id, priority=DBPriority.IMMEDIATE
+            check_project, resolved_project_id, priority=DBPriority.IMMEDIATE
         )
 
-        att_dir = _attachments_dir(project_id)
+        att_dir = _attachments_dir(resolved_project_id)
         safe_stem = uuid.uuid4().hex
         original_filename = file.filename or "attachment"
         ext = os.path.splitext(original_filename)[1]
@@ -587,12 +702,12 @@ def create_router(server) -> APIRouter:
 
         mime_type = file.content_type or mimetypes.guess_type(original_filename)[0]
         rel_path = os.path.join(
-            "projects", str(project_id), "attachments", stored_filename
+            "projects", str(resolved_project_id), "attachments", stored_filename
         )
 
         def insert_record(session: Session):
             attachment = ProjectAttachment(
-                project_id=project_id,
+                project_id=resolved_project_id,
                 original_filename=original_filename,
                 stored_path=rel_path,
                 mime_type=mime_type,
@@ -620,18 +735,24 @@ def create_router(server) -> APIRouter:
         "/projects/{project_id}/attachments/url",
         summary="Add a URL bookmark to a project",
     )
-    def add_url_attachment(request: Request, project_id: int, body: dict):
+    def add_url_attachment(request: Request, project_id: str, body: dict):
         server.auth.require_user_id(request)
         url = (body.get("url") or "").strip()
         title = (body.get("title") or "").strip() or url
         if not url:
             raise HTTPException(status_code=422, detail="url is required")
 
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
+
         def check_and_insert(session: Session):
-            if session.get(Project, project_id) is None:
+            if session.get(Project, resolved_project_id) is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             attachment = ProjectAttachment(
-                project_id=project_id,
+                project_id=resolved_project_id,
                 original_filename=title,
                 stored_path="",
                 mime_type=None,
@@ -660,8 +781,14 @@ def create_router(server) -> APIRouter:
         "/projects/{project_id}/attachments/{attachment_id}",
         summary="Download a project attachment",
     )
-    def download_attachment(request: Request, project_id: int, attachment_id: int):
+    def download_attachment(request: Request, project_id: str, attachment_id: int):
         server.auth.require_user_id(request)
+
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
 
         def fetch(session: Session, pid: int, aid: int):
             attachment = session.get(ProjectAttachment, aid)
@@ -670,7 +797,7 @@ def create_router(server) -> APIRouter:
             return attachment
 
         attachment = server.vault.db.run_task(
-            fetch, project_id, attachment_id, priority=DBPriority.IMMEDIATE
+            fetch, resolved_project_id, attachment_id, priority=DBPriority.IMMEDIATE
         )
         full_path = os.path.join(server.vault.image_root, attachment.stored_path)
         if not os.path.isfile(full_path):
@@ -687,8 +814,14 @@ def create_router(server) -> APIRouter:
         "/projects/{project_id}/attachments/{attachment_id}",
         summary="Delete a project attachment",
     )
-    def delete_attachment(request: Request, project_id: int, attachment_id: int):
+    def delete_attachment(request: Request, project_id: str, attachment_id: int):
         server.auth.require_user_id(request)
+
+        resolved_project_id = server.vault.db.run_task(
+            _resolve_project_id,
+            project_id,
+            priority=DBPriority.IMMEDIATE,
+        )
 
         def remove(session: Session, pid: int, aid: int):
             attachment = session.get(ProjectAttachment, aid)
@@ -700,7 +833,7 @@ def create_router(server) -> APIRouter:
             return stored_path
 
         stored_path = server.vault.db.run_task(
-            remove, project_id, attachment_id, priority=DBPriority.IMMEDIATE
+            remove, resolved_project_id, attachment_id, priority=DBPriority.IMMEDIATE
         )
         if stored_path:
             full_path = os.path.join(server.vault.image_root, stored_path)

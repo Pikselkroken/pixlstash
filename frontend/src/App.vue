@@ -1301,7 +1301,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
           />
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
-            style="margin-top: 0; padding-top: 0"
+            style="margin-top: 0"
           >
             <ImageGrid
               ref="gridContainer"
@@ -1334,6 +1334,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :showProblemIcon="showProblemIcon"
               :showStacks="showStacks"
               :compactMode="compactMode"
+              :themeMode="themeMode"
               :dateFormat="dateFormat"
               :hiddenTags="hiddenTags"
               :applyTagFilter="applyTagFilter"

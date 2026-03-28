@@ -11,6 +11,7 @@
     <div class="progress-overlay__bar">
       <div
         class="progress-overlay__fill"
+        :class="{ 'progress-overlay__fill--indeterminate': indeterminate }"
         :style="{ width: `${percent}%` }"
       ></div>
     </div>
@@ -43,6 +44,7 @@
  *   total      - Total item count (optional).
  *   abortLabel - Label for the abort button. No button rendered if falsy.
  *   anchor     - 'top' | 'bottom'. Controls vertical position.
+ *   indeterminate - When true, show animated indeterminate progress.
  *
  * Emits:
  *   abort - When the abort button is clicked.
@@ -58,6 +60,7 @@ const props = defineProps({
   total: { type: Number, default: null },
   abortLabel: { type: String, default: null },
   anchor: { type: String, default: "bottom" },
+  indeterminate: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["abort"]);
@@ -111,6 +114,24 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
   background: rgb(var(--v-theme-accent));
   width: 0;
   transition: width 0.25s ease;
+}
+
+.progress-overlay__fill--indeterminate {
+  width: 38% !important;
+  animation: progress-overlay-indeterminate 1.2s ease-in-out infinite;
+  transition: none;
+}
+
+@keyframes progress-overlay-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  50% {
+    transform: translateX(90%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
 }
 
 .progress-overlay__meta {

@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlmodel import Column, Field, ForeignKey, Integer, Relationship, SQLModel
+from sqlmodel import Column, Field, ForeignKey, Integer, SQLModel
 
 
 class PictureProjectMember(SQLModel, table=True):

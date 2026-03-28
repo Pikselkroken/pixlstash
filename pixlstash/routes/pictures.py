@@ -635,16 +635,56 @@ def _select_pictures_for_listing(
         if candidate_ids is not None and not candidate_ids:
             return []
         penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
-        pics = find_pictures_by_smart_score(
-            server,
-            format,
-            offset,
-            limit,
-            descending,
-            candidate_ids=candidate_ids,
-            penalised_tags=penalised_tags,
-            only_deleted=only_deleted,
-        )
+        smart_score_run_id = str(uuid.uuid4())
+
+        def emit_smart_score_progress(progress_payload: dict):
+            if not isinstance(progress_payload, dict):
+                return
+            server.vault.notify(
+                EventType.PLUGIN_PROGRESS,
+                {
+                    "plugin": "smart_score",
+                    "run_id": smart_score_run_id,
+                    **progress_payload,
+                },
+            )
+
+        try:
+            emit_smart_score_progress(
+                {
+                    "status": "running",
+                    "progress": 0.0,
+                    "current": 0,
+                    "total": 0,
+                    "message": "Calculating smart scores",
+                }
+            )
+            pics = find_pictures_by_smart_score(
+                server,
+                format,
+                offset,
+                limit,
+                descending,
+                candidate_ids=candidate_ids,
+                penalised_tags=penalised_tags,
+                only_deleted=only_deleted,
+                progress_reporter=emit_smart_score_progress,
+            )
+            emit_smart_score_progress(
+                {
+                    "status": "completed",
+                    "progress": 100.0,
+                    "message": "Calculated smart scores",
+                }
+            )
+        except Exception as exc:
+            emit_smart_score_progress(
+                {
+                    "status": "failed",
+                    "message": f"Smart score calculation failed: {exc}",
+                }
+            )
+            raise
         if pics:
             hidden_ids = _fetch_hidden_picture_ids(
                 server,

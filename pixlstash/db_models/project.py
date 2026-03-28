@@ -27,7 +27,7 @@ class Project(SQLModel, table=True):
     """
 
     id: int = Field(default=None, primary_key=True)
-    name: str = Field(index=True, nullable=False)
+    name: str = Field(index=True, nullable=False, unique=True)
     description: Optional[str] = Field(default=None)
     cover_image_path: Optional[str] = Field(default=None)
     extra_metadata: Optional[str] = Field(default=None)

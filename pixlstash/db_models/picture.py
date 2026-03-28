@@ -70,14 +70,6 @@ class SortMechanism:
             "field": None,
             "description": "Smart Score",
         },
-        Keys.CHARACTER_LIKENESS: {
-            "field": "character_likeness",
-            "description": "Similarity to",
-        },
-        Keys.PICTURE_STACKS: {
-            "field": "id",
-            "description": "Likeness Groups",
-        },
         Keys.IMAGE_SIZE: {
             "field": None,  # Special case, not a direct field
             "description": "Image Size",
@@ -85,6 +77,14 @@ class SortMechanism:
         Keys.TEXT_CONTENT: {
             "field": None,  # Special case, requires Quality join
             "description": "Text Content",
+        },
+        Keys.CHARACTER_LIKENESS: {
+            "field": "character_likeness",
+            "description": "Similarity to ...",
+        },
+        Keys.PICTURE_STACKS: {
+            "field": "id",
+            "description": "Likeness Groups ...",
         },
     }
 
