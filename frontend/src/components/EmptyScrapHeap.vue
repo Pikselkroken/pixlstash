@@ -39,9 +39,9 @@ const props = defineProps({
   width: 100%;
   z-index: 100;
   background: rgba(var(--v-theme-background), 0.95);
-  padding: 2px 8px;
+  padding: 4px 8px;
   margin: 0;
-  height: 36px;
+  height: 38px;
   box-sizing: border-box;
 }
 .selection-bar-content {
@@ -59,7 +59,7 @@ const props = defineProps({
 .selection-bar-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 6px;
   margin-left: auto;
   flex-wrap: nowrap;
 }
@@ -67,10 +67,11 @@ const props = defineProps({
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   border: none;
-  padding: 6px 18px;
+  padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
-  font-weight: 600;
+  font-size: 0.85rem;
+  font-weight: 500;
   white-space: nowrap;
 }
 .restore-btn:hover {
@@ -84,10 +85,11 @@ const props = defineProps({
   background: rgb(var(--v-theme-error));
   color: #fff;
   border: none;
-  padding: 6px 18px;
+  padding: 4px 12px;
   border-radius: 4px;
   cursor: pointer;
-  font-weight: 600;
+  font-size: 0.85rem;
+  font-weight: 500;
   white-space: nowrap;
 }
 .delete-btn:hover {

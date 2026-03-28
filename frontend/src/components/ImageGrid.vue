@@ -25,6 +25,7 @@
     @update-description="updateDescriptionForImage"
     @overlay-change="handleOverlayChange"
     @added-to-set="handleOverlayAddedToSet"
+    @set-project="handleSetProjectForSelected"
     @comfyui-run="handleComfyuiRun"
     @run-plugin="handlePluginRunRequest"
   />
@@ -82,6 +83,17 @@
       @empty-scrapheap="confirmEmptyScrapheap"
       @restore-scrapheap="confirmRestoreScrapheap"
     />
+    <div v-if="isSetOverlapView" class="set-overlap-status-bar">
+      <div class="set-overlap-status-bar__main">
+        <v-icon size="20" class="set-overlap-status-bar__icon"
+          >mdi-set-center</v-icon
+        >
+        <span class="set-overlap-status-bar__text">
+          Overlap mode: {{ normalizedSelectedSetIds.length }} sets selected.
+          Overlap can be cleared with the Set menu once you've selected images.
+        </span>
+      </div>
+    </div>
     <ProgressOverlay
       :visible="exportProgress.visible"
       :status="exportProgress.status"
@@ -564,6 +576,7 @@ const props = defineProps({
   backendUrl: String,
   selectedCharacter: { type: [String, Number, null], default: null },
   selectedSet: { type: [Number, String, null], default: null },
+  selectedSetIds: { type: Array, default: () => [] },
   searchQuery: String,
   activeCategoryLabel: { type: String, default: "Category" },
   isAllPicturesActive: { type: Boolean, default: false },
@@ -611,6 +624,35 @@ const STACKS_SORT_KEY = "PICTURE_STACKS";
 const MIN_THUMBNAIL_SIZE = 128;
 const MAX_THUMBNAIL_SIZE = 384;
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
+
+const normalizedSelectedSetIds = computed(() => {
+  const idsFromProp = Array.isArray(props.selectedSetIds)
+    ? props.selectedSetIds
+    : [];
+  const normalized = idsFromProp
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (normalized.length > 0) {
+    return Array.from(new Set(normalized));
+  }
+  const single = Number(props.selectedSet);
+  if (Number.isFinite(single) && single > 0) {
+    return [single];
+  }
+  return [];
+});
+
+const hasSetSelection = computed(
+  () => normalizedSelectedSetIds.value.length > 0,
+);
+const isSetOverlapView = computed(
+  () => normalizedSelectedSetIds.value.length > 1,
+);
+const primarySelectedSetId = computed(() =>
+  normalizedSelectedSetIds.value.length
+    ? normalizedSelectedSetIds.value[0]
+    : null,
+);
 
 // ============================================================
 // THUMBNAIL SYSTEM STATE
@@ -1914,9 +1956,37 @@ function handleOverlayAddedToSet(payload) {
     ? payload.pictureIds
     : [];
   if (!pictureIds.length) return;
+  const changedSetId = Number(payload?.setId);
+  const action = String(payload?.action || "added");
+
+  if (
+    isSetOverlapView.value &&
+    Number.isFinite(changedSetId) &&
+    normalizedSelectedSetIds.value.includes(changedSetId)
+  ) {
+    // In overlap view, removing membership from one selected set means the
+    // picture no longer belongs to the intersection and should disappear.
+    if (action === "removed") {
+      removeImagesById(pictureIds);
+      selectedImageIds.value = selectedImageIds.value.filter(
+        (id) => !pictureIds.includes(id),
+      );
+      clearFaceSelection();
+      lastSelectedImageId = null;
+    }
+  } else if (
+    hasSetSelection.value &&
+    !isSetOverlapView.value &&
+    action === "removed" &&
+    Number.isFinite(changedSetId) &&
+    changedSetId === primarySelectedSetId.value
+  ) {
+    removeImagesById(pictureIds);
+  }
+
   if (
     props.selectedCharacter === props.unassignedPicturesId &&
-    !props.selectedSet
+    !hasSetSelection.value
   ) {
     removeImagesById(pictureIds);
   }
@@ -1930,7 +2000,7 @@ function handleAddToCharacter(payload) {
   if (!pictureIds.length) return;
   if (
     props.selectedCharacter === props.unassignedPicturesId &&
-    !props.selectedSet
+    !hasSetSelection.value
   ) {
     removeImagesById(pictureIds);
     selectedImageIds.value = [];
@@ -1984,11 +2054,17 @@ async function deleteSelected() {
 }
 
 async function handleSetProjectForSelected(payload) {
-  const pictureIds = (
-    Array.isArray(selectedImageIds.value) ? selectedImageIds.value : []
-  )
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const explicitPictureIds = Array.isArray(payload?.pictureIds)
+    ? payload.pictureIds
+    : [];
+  const basePictureIds = explicitPictureIds.length
+    ? explicitPictureIds
+    : selectedImageIds.value;
+  const expandStacks = payload?.expandStacks !== false;
+  const pictureIds = await resolveProjectSelectionPictureIds(
+    basePictureIds,
+    expandStacks,
+  );
   if (!pictureIds.length) {
     return;
   }
@@ -2003,13 +2079,31 @@ async function handleSetProjectForSelected(payload) {
     return;
   }
 
-  try {
-    await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-      picture_ids: pictureIds,
-      project_id: nextProjectId,
-    });
+  const action = String(payload?.action || "set").toLowerCase();
 
-    clearSelection();
+  try {
+    if (action === "removed") {
+      if (nextProjectId === null) {
+        return;
+      }
+      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
+        picture_ids: pictureIds,
+        project_id: nextProjectId,
+        mode: "remove",
+      });
+    } else if (action === "added") {
+      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
+        picture_ids: pictureIds,
+        project_id: nextProjectId,
+        mode: "add",
+      });
+    } else {
+      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
+        picture_ids: pictureIds,
+        project_id: nextProjectId,
+      });
+    }
+
     preserveScrollOnNextFetch.value = true;
     await fetchAllGridImages({ force: true });
     updateVisibleThumbnails();
@@ -2018,6 +2112,64 @@ async function handleSetProjectForSelected(payload) {
     const message = err?.response?.data?.detail || err?.message || String(err);
     window.alert(`Failed to update project association: ${message}`);
   }
+}
+
+async function resolveProjectSelectionPictureIds(
+  pictureIdsInput,
+  expandStacks = true,
+) {
+  const selectedIds = (Array.isArray(pictureIdsInput) ? pictureIdsInput : [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!selectedIds.length) {
+    return [];
+  }
+
+  const resolved = new Set(selectedIds);
+  const fetchedById = new Map(
+    (Array.isArray(lastFetchedGridImages.value)
+      ? lastFetchedGridImages.value
+      : []
+    )
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+
+  const stacksToExpand = new Map();
+  if (!expandStacks) {
+    return Array.from(resolved).sort((a, b) => a - b);
+  }
+
+  for (const pictureId of selectedIds) {
+    const fetchedImg = fetchedById.get(String(pictureId));
+    if (!fetchedImg) {
+      continue;
+    }
+    const stackId = getPictureStackId(fetchedImg);
+    const stackCount = getStackBadgeCount(fetchedImg);
+    if (!stackId || !Number.isFinite(stackCount) || stackCount <= 1) {
+      continue;
+    }
+    if (!stacksToExpand.has(stackId)) {
+      stacksToExpand.set(stackId, stackCount);
+    }
+  }
+
+  for (const [stackId, stackCount] of stacksToExpand.entries()) {
+    await ensureStackMembersLoaded(stackId, stackCount);
+    const loaded = expandedStackMembers.value.get(stackId);
+    const loadedImages = Array.isArray(loaded?.images) ? loaded.images : [];
+    const fallbackImages = getLocalStackMembers(stackId);
+    const source = loadedImages.length ? loadedImages : fallbackImages;
+    for (const img of source) {
+      const id = Number(img?.id);
+      if (Number.isFinite(id) && id > 0) {
+        resolved.add(id);
+      }
+    }
+  }
+
+  return Array.from(resolved).sort((a, b) => a - b);
 }
 
 // ============================================================
@@ -2115,8 +2267,15 @@ const selectedExpandedCount = computed(() => {
     String(props.unassignedPicturesId),
   ].includes(String(props.selectedCharacter ?? ""));
 
+  const isSetCategorySelection =
+    props.selectedSet !== null &&
+    props.selectedSet !== undefined &&
+    String(props.selectedSet) !== "";
+
+  const supportsAuthoritativeCategoryCount =
+    isTopCategorySelection || isSetCategorySelection;
+
   const hasNoAdditionalFilters =
-    !props.selectedSet &&
     !(props.searchQuery || "").trim() &&
     props.mediaTypeFilter === "all" &&
     (props.comfyuiModelFilter || []).length === 0 &&
@@ -2126,7 +2285,7 @@ const selectedExpandedCount = computed(() => {
   // Keep the info count aligned with sidebar summary for full category selections.
   if (
     isFullVisibleSelection &&
-    isTopCategorySelection &&
+    supportsAuthoritativeCategoryCount &&
     hasNoAdditionalFilters &&
     totalCurrentCategoryCount.value > 0
   ) {
@@ -2479,10 +2638,14 @@ async function updateSelectedGroupName() {
     } catch (e) {
       console.error("Character fetch failed:", e);
     }
-  } else if (props.selectedSet) {
+  } else if (hasSetSelection.value) {
+    if (isSetOverlapView.value) {
+      selectedGroupName.value = `Set Overlap (${normalizedSelectedSetIds.value.length})`;
+      return;
+    }
     try {
       const res = await apiClient.get(
-        `${props.backendUrl}/picture_sets/${props.selectedSet}`,
+        `${props.backendUrl}/picture_sets/${primarySelectedSetId.value}`,
       );
       const set = res.data;
       name = set.set.name || "";
@@ -2494,7 +2657,11 @@ async function updateSelectedGroupName() {
 }
 
 watch(
-  [() => props.selectedCharacter, () => props.selectedSet],
+  [
+    () => props.selectedCharacter,
+    () => props.selectedSet,
+    () => props.selectedSetIds,
+  ],
   () => {
     updateSelectedGroupName();
   },
@@ -3387,9 +3554,17 @@ const lastFetchSuccess = ref({ key: "", at: 0 });
 // GRID FETCH FUNCTIONS
 // ============================================================
 function buildGridFetchKey() {
+  const selectedSetIds = Array.isArray(props.selectedSetIds)
+    ? props.selectedSetIds
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .sort((a, b) => a - b)
+    : [];
   return JSON.stringify({
     selectedCharacter: props.selectedCharacter ?? null,
     selectedSet: props.selectedSet ?? null,
+    selectedSetIds,
+    isSetOverlapView: selectedSetIds.length > 1,
     projectViewMode: props.projectViewMode ?? "global",
     selectedProjectId: props.selectedProjectId ?? null,
     searchQuery: props.searchQuery ?? "",
@@ -3404,12 +3579,23 @@ function buildGridFetchKey() {
 }
 
 function _appendSelectionParams(params) {
-  if (
-    props.selectedSet &&
-    props.selectedSet !== props.allPicturesId &&
-    props.selectedSet !== props.unassignedPicturesId
-  ) {
-    params.append("set_id", props.selectedSet);
+  if (hasSetSelection.value) {
+    if (isSetOverlapView.value) {
+      for (const setId of normalizedSelectedSetIds.value) {
+        params.append("set_ids", String(setId));
+      }
+      params.append("set_mode", "intersection");
+    } else if (primarySelectedSetId.value != null) {
+      params.append("set_id", String(primarySelectedSetId.value));
+    }
+    if (props.projectViewMode === "project") {
+      params.append(
+        "project_id",
+        props.selectedProjectId != null
+          ? props.selectedProjectId
+          : "UNASSIGNED",
+      );
+    }
   } else if (
     props.selectedCharacter !== undefined &&
     props.selectedCharacter !== null &&
@@ -4490,13 +4676,9 @@ async function fetchAllGridImages(options = {}) {
       const res = await apiClient.get(url);
       const data = await res.data;
       images = data;
-    } else if (
-      props.selectedSet &&
-      props.selectedSet !== props.allPicturesId &&
-      props.selectedSet !== props.unassignedPicturesId
-    ) {
+    } else if (hasSetSelection.value && !isSetOverlapView.value) {
       const params = buildPictureIdsQueryParams();
-      const url = `${props.backendUrl}/picture_sets/${props.selectedSet}${
+      const url = `${props.backendUrl}/picture_sets/${primarySelectedSetId.value}${
         params ? `?${params}` : ""
       }`;
       const res = await apiClient.get(url);
@@ -4511,6 +4693,9 @@ async function fetchAllGridImages(options = {}) {
       const res = await apiClient.get(url);
       const data = await res.data;
       images = data;
+    }
+    if (fetchAllGridImages.lastRequestId !== requestId) {
+      return;
     }
     lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
     syncExpandAllStacksFromFetchedImages();
@@ -4539,6 +4724,9 @@ async function fetchAllGridImages(options = {}) {
     const newImages = mapGridImages(images);
     resetThumbnailState();
     allGridImages.value = newImages;
+    if (isSetOverlapView.value) {
+      totalCurrentCategoryCount.value = newImages.length;
+    }
     const cols = props.columns || 1;
     const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
     if (!fetchStartedWithPreserveScroll) {
@@ -4569,6 +4757,9 @@ async function fetchAllGridImages(options = {}) {
     });
     lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
   } catch (e) {
+    if (fetchAllGridImages.lastRequestId !== requestId) {
+      return;
+    }
     imagesError.value = e.message;
     // Don't wipe the grid on a transient error while the overlay is open —
     // the user would see the grid flash empty behind the overlay.
@@ -4613,6 +4804,31 @@ async function fetchAllPicturesCount() {
   try {
     let url = `${props.backendUrl}/characters/${props.allPicturesId}/summary`;
     const selectedCharacter = String(props.selectedCharacter ?? "");
+    if (isSetOverlapView.value) {
+      totalCurrentCategoryCount.value = Number(allGridImages.value.length) || 0;
+      return;
+    }
+    const selectedSetId = primarySelectedSetId.value;
+    if (
+      selectedSetId !== null &&
+      selectedSetId !== undefined &&
+      String(selectedSetId) !== ""
+    ) {
+      const setRes = await apiClient.get(`${props.backendUrl}/picture_sets`);
+      const setList = await setRes.data;
+      const selectedSetNumericId = Number(selectedSetId);
+      const selectedSet = Array.isArray(setList)
+        ? setList.find((item) => {
+            const itemId = Number(item?.id);
+            if (Number.isFinite(selectedSetNumericId)) {
+              return Number.isFinite(itemId) && itemId === selectedSetNumericId;
+            }
+            return String(item?.id) === String(selectedSetId);
+          })
+        : null;
+      totalCurrentCategoryCount.value = Number(selectedSet?.picture_count) || 0;
+      return;
+    }
     if (selectedCharacter === String(props.allPicturesId)) {
       if (props.projectViewMode === "project") {
         const pid =
@@ -4635,7 +4851,7 @@ async function fetchAllPicturesCount() {
       url = `${props.backendUrl}/characters/${props.scrapheapPicturesId}/summary`;
     } else if (
       selectedCharacter &&
-      !props.selectedSet &&
+      !hasSetSelection.value &&
       selectedCharacter !== String(props.allPicturesId)
     ) {
       url = `${props.backendUrl}/characters/${selectedCharacter}/summary`;
@@ -4668,6 +4884,7 @@ watch(
   [
     () => props.selectedCharacter,
     () => props.selectedSet,
+    () => props.selectedSetIds,
     () => props.projectViewMode,
     () => props.selectedProjectId,
     () => props.searchQuery,
@@ -4678,7 +4895,8 @@ watch(
     _resetGridState();
     updateSelectedGroupName();
     fetchAllPicturesCount();
-    debouncedFetchAllGridImages();
+    debouncedFetchAllGridImages.cancel();
+    fetchAllGridImages({ force: true });
   },
 );
 
@@ -6307,6 +6525,62 @@ function handleEmptyStateReset() {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+.set-overlap-status-bar {
+  position: absolute;
+  left: 12px;
+  /* Keep clear of global F1 shortcuts FAB in bottom-right corner. */
+  right: 72px;
+  bottom: 10px;
+  z-index: 6;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(var(--v-theme-on-accent), 0.28);
+  background: linear-gradient(
+    135deg,
+    rgba(var(--v-theme-accent), 0.96),
+    rgba(var(--v-theme-accent), 0.86)
+  );
+  color: rgb(var(--v-theme-on-accent));
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+  backdrop-filter: blur(3px);
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.28),
+    0 0 0 1px rgba(var(--v-theme-on-accent), 0.08) inset;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.set-overlap-status-bar__main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.set-overlap-status-bar__icon {
+  opacity: 0.95;
+  flex: 0 0 auto;
+}
+
+.set-overlap-status-bar__text {
+  line-height: 1.35;
+}
+
+@media (max-width: 900px) {
+  .set-overlap-status-bar {
+    right: 72px;
+    font-size: 13px;
+    padding: 9px 12px;
+    gap: 8px;
   }
 }
 </style>

@@ -36,13 +36,25 @@
         :key="set.id"
         :class="[
           'add-to-set-item',
-          { 'add-to-set-item--disabled': isSetDisabled(set) },
+          {
+            'add-to-set-item--disabled': isSetDisabled(set),
+            'add-to-set-item--checked': getSetState(set) === 'checked',
+          },
         ]"
         type="button"
         role="menuitem"
         :disabled="isSetDisabled(set)"
-        @click.stop="addToSet(set)"
+        @click.stop="toggleSetMembership(set)"
       >
+        <v-icon size="16" class="add-to-set-item-check">
+          {{
+            getSetState(set) === "checked"
+              ? "mdi-checkbox-marked"
+              : getSetState(set) === "partial"
+                ? "mdi-minus-box-outline"
+                : "mdi-checkbox-blank-outline"
+          }}
+        </v-icon>
         <span class="add-to-set-item-name">{{ set.name }}</span>
         <span v-if="set.picture_count != null" class="add-to-set-item-count">
           {{ set.picture_count }}
@@ -111,8 +123,17 @@ function isSetDisabled(set) {
   const ids = normalisedPictureIds.value;
   if (!ids.length) return true;
   const members = setMembersById.value?.[set.id];
-  if (!members || members.size === 0) return false;
-  return ids.every((id) => members.has(String(id)));
+  return !members;
+}
+
+function getSetState(set) {
+  const ids = normalisedPictureIds.value;
+  const members = setMembersById.value?.[set.id];
+  if (!ids.length || !members || members.size === 0) return "unchecked";
+  const matched = ids.filter((id) => members.has(String(id))).length;
+  if (matched === 0) return "unchecked";
+  if (matched === ids.length) return "checked";
+  return "partial";
 }
 
 function toggleMenu() {
@@ -202,36 +223,65 @@ async function fetchSetMembers(list) {
   setMembersById.value = next;
 }
 
-async function addToSet(set) {
+async function toggleSetMembership(set) {
   if (!set?.id) return;
   if (isSetDisabled(set)) return;
   const ids = normalisedPictureIds.value;
   if (!ids.length) return;
   const members = setMembersById.value?.[set.id];
+  const setState = getSetState(set);
+  const shouldRemove = setState === "checked";
   const idsToAdd = members ? ids.filter((id) => !members.has(String(id))) : ids;
-  if (!idsToAdd.length) {
+  const idsToRemove = members
+    ? ids.filter((id) => members.has(String(id)))
+    : [];
+  if (!shouldRemove && !idsToAdd.length) {
     statusMessage.value = "Already in set";
     return;
   }
-  statusMessage.value = "Adding...";
+  if (shouldRemove && !idsToRemove.length) {
+    statusMessage.value = "Not in set";
+    return;
+  }
+  statusMessage.value = shouldRemove ? "Removing..." : "Adding...";
   try {
-    await Promise.all(
-      idsToAdd.map((id) =>
-        apiClient.post(resolveUrl(`/picture_sets/${set.id}/members/${id}`)),
-      ),
-    );
-    statusMessage.value = `Added to ${set.name}`;
-    emit("added", { setId: set.id, pictureIds: ids });
-    if (members) {
-      idsToAdd.forEach((id) => members.add(String(id)));
+    if (shouldRemove) {
+      await Promise.all(
+        idsToRemove.map((id) =>
+          apiClient.delete(resolveUrl(`/picture_sets/${set.id}/members/${id}`)),
+        ),
+      );
+      statusMessage.value = `Removed from ${set.name}`;
+      emit("added", {
+        setId: set.id,
+        pictureIds: idsToRemove,
+        action: "removed",
+      });
+      if (members) {
+        idsToRemove.forEach((id) => members.delete(String(id)));
+      }
+    } else {
+      await Promise.all(
+        idsToAdd.map((id) =>
+          apiClient.post(resolveUrl(`/picture_sets/${set.id}/members/${id}`)),
+        ),
+      );
+      statusMessage.value = `Added to ${set.name}`;
+      emit("added", {
+        setId: set.id,
+        pictureIds: idsToAdd,
+        action: "added",
+      });
+      if (members) {
+        idsToAdd.forEach((id) => members.add(String(id)));
+      }
     }
-    closeMenu();
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || String(e);
     if (String(detail).includes("already in set")) {
       statusMessage.value = "Already in set";
     } else {
-      statusMessage.value = "Failed to add";
+      statusMessage.value = shouldRemove ? "Failed to remove" : "Failed to add";
     }
   }
   if (statusTimer) clearTimeout(statusTimer);
@@ -299,6 +349,14 @@ watch(
   border-radius: 10px;
   background-color: rgba(var(--v-theme-dark-surface), 0.9);
   color: rgba(var(--v-theme-on-dark-surface), 1);
+
+  .add-to-set-item-check {
+    color: rgba(var(--v-theme-on-surface), 0.7);
+  }
+
+  .add-to-set-item--checked .add-to-set-item-check {
+    color: rgb(var(--v-theme-primary));
+  }
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
   opacity: 0;
   transform: translateY(-6px);

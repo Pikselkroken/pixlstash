@@ -33,6 +33,7 @@ const toolbarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedSet = ref(null);
+const selectedSetIds = ref([]);
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = unassigned in project mode
 const selectedSort = ref("");
@@ -70,6 +71,9 @@ const themeMode = ref("light");
 const theme = useTheme();
 
 const activeCategoryLabel = computed(() => {
+  if (selectedSetIds.value.length > 1) {
+    return `Set Overlap (${selectedSetIds.value.length})`;
+  }
   if (selectedSet.value) {
     return lastSelectedSetLabel.value || "Picture Set";
   }
@@ -84,7 +88,8 @@ const activeCategoryLabel = computed(() => {
 });
 
 const isAllPicturesActive = computed(
-  () => !selectedSet.value && selectedCharacter.value === ALL_PICTURES_ID,
+  () =>
+    !selectedSetIds.value.length && selectedCharacter.value === ALL_PICTURES_ID,
 );
 
 const thumbnailSize = ref(256);
@@ -140,7 +145,7 @@ function buildUpdatesSocketUrl() {
 }
 
 function shouldRefreshForPictureChange() {
-  if (selectedSet.value) return false;
+  if (selectedSetIds.value.length) return false;
   const selectedChar = selectedCharacter.value;
   if (
     selectedChar &&
@@ -162,6 +167,7 @@ function sendUpdatesFilters() {
       type: "set_filters",
       selected_character: selectedCharacter.value,
       selected_set: selectedSet.value,
+      selected_sets: selectedSetIds.value,
       search_query: searchQuery.value,
     }),
   );
@@ -439,12 +445,18 @@ function closeSidebarIfMobile() {
 
 function SelectionPayload(payload) {
   if (payload && typeof payload === "object") {
+    const ids = Array.isArray(payload.ids)
+      ? payload.ids
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      : [];
     return {
       id: payload.id ?? payload.value ?? null,
       label: payload.label ?? payload.name ?? null,
+      ids,
     };
   }
-  return { id: payload ?? null, label: null };
+  return { id: payload ?? null, label: null, ids: [] };
 }
 
 function clearSearchForCategoryChange() {
@@ -475,22 +487,38 @@ async function handleSelectCharacter(payload) {
     refreshGridVersion();
   }
   selectedSet.value = null; // Clear set selection
+  selectedSetIds.value = [];
   await nextTick(); // Ensure reactivity propagates the change
   closeSidebarIfMobile();
 }
 
 async function handleSelectSet(payload) {
-  const { id: setId, label } = SelectionPayload(payload);
+  const { id: setId, label, ids } = SelectionPayload(payload);
   clearSearchForCategoryChange();
-  if (setId == null) {
+  const nextIds = ids.length
+    ? ids
+    : setId != null
+      ? [Number(setId)].filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+
+  if (!nextIds.length) {
+    const fallbackLabel =
+      projectViewMode.value === "project" ? "Project Pictures" : "All Pictures";
+    selectedCharacter.value = ALL_PICTURES_ID;
+    lastSelectedCharacterLabel.value = fallbackLabel;
     selectedSet.value = null;
+    selectedSetIds.value = [];
     await nextTick();
+    closeSidebarIfMobile();
     return;
   }
-  if (label) {
+  if (label && nextIds.length === 1) {
     lastSelectedSetLabel.value = label;
+  } else if (nextIds.length > 1) {
+    lastSelectedSetLabel.value = `Set Overlap (${nextIds.length})`;
   }
-  selectedSet.value = setId;
+  selectedSetIds.value = nextIds;
+  selectedSet.value = nextIds[0];
   selectedCharacter.value = null; // Clear character selection
   closeSidebarIfMobile();
 }
@@ -498,6 +526,7 @@ async function handleSelectSet(payload) {
 function handleSearchAllPictures() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
+  selectedSetIds.value = [];
   lastSelectedCharacterLabel.value = "All Pictures";
 }
 
@@ -971,6 +1000,7 @@ function commitSearch() {
 function handleResetToAll() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
+  selectedSetIds.value = [];
   lastSelectedCharacterLabel.value = "All Pictures";
   selectedSort.value = "DATE";
   selectedDescending.value = true;
@@ -1024,7 +1054,7 @@ watch(applyTagFilter, () => {
   refreshSidebarDebounced();
 });
 
-watch([selectedCharacter, selectedSet, searchQuery], () => {
+watch([selectedCharacter, selectedSet, selectedSetIds, searchQuery], () => {
   sendUpdatesFilters();
 });
 
@@ -1154,6 +1184,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
             :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
             :selectedSet="selectedSet"
+            :selectedSetIds="selectedSetIds"
             :searchQuery="searchQuery"
             :selectedSort="selectedSort"
             :selectedDescending="selectedDescending"
@@ -1279,6 +1310,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :backendUrl="BACKEND_URL"
               :selectedCharacter="selectedCharacter"
               :selectedSet="selectedSet"
+              :selectedSetIds="selectedSetIds"
               :searchQuery="searchQuery"
               :activeCategoryLabel="activeCategoryLabel"
               :isAllPicturesActive="isAllPicturesActive"
