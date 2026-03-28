@@ -4,8 +4,45 @@ Pytest configuration and fixtures for test suite.
 
 import socket
 
+from fastapi.testclient import TestClient
 from pixlstash.picture_tagger import PictureTagger
 from pixlstash.server import Server
+
+_API_V1_PREFIX = "/api/v1"
+_NON_API_ROOT_PATHS = {
+    "/",
+    "/version",
+    "/version/latest",
+    "/favicon.ico",
+}
+
+
+def _normalize_test_path(path: str):
+    if not isinstance(path, str):
+        return path
+    if not path.startswith("/"):
+        return path
+    if path.startswith(_API_V1_PREFIX):
+        return path
+    if path in _NON_API_ROOT_PATHS:
+        return path
+    return f"{_API_V1_PREFIX}{path}"
+
+
+def _patch_test_client_api_prefix() -> None:
+    for method_name in ("get", "post", "put", "patch", "delete", "websocket_connect"):
+        original = getattr(TestClient, method_name)
+
+        def _make_wrapper(original_method):
+            def _wrapped(self, url, *args, **kwargs):
+                return original_method(self, _normalize_test_path(url), *args, **kwargs)
+
+            return _wrapped
+
+        setattr(TestClient, method_name, _make_wrapper(original))
+
+
+_patch_test_client_api_prefix()
 
 
 def _find_free_port() -> int:

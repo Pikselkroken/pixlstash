@@ -20,12 +20,12 @@ def _make_app() -> FastAPI:
     app.add_middleware(rl_module.RateLimitMiddleware)
 
     # One public (unauthenticated) endpoint that is in AUTH_EXCLUDED_PATHS.
-    @app.get("/login")
+    @app.get("/api/v1/login")
     def fake_login():
         return {"ok": True}
 
     # One authenticated endpoint that is NOT in AUTH_EXCLUDED_PATHS.
-    @app.get("/protected")
+    @app.get("/api/v1/protected")
     def fake_protected():
         return {"ok": True}
 
