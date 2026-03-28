@@ -94,7 +94,9 @@ if LOG_OS_REMOVES:
 
     shutil.rmtree = logged_rmtree
 
-TEST_SIZE = 8 if os.getenv("GITHUB_ACTIONS") == "true" else 50
+# CI runs in a reduced-size mode, but some tests intentionally reference
+# fixture indices up to 15.
+TEST_SIZE = 16 if os.getenv("GITHUB_ACTIONS") == "true" else 50
 random_images = []
 total_bytes = 0
 for i in range(TEST_SIZE):
@@ -1341,7 +1343,9 @@ def test_add_picture_to_project_set_aligns_picture_project_membership():
 
             metadata_resp = client.get(f"/pictures/{pic_id}/metadata")
             assert metadata_resp.status_code == 200
-            assert metadata_resp.json().get("project_id") == project_b_id
+            # Adding a picture to a project-scoped set aligns its primary
+            # project to that set's project.
+            assert metadata_resp.json().get("project_id") == project_a_id
 
             project_a_resp = client.get(
                 "/pictures",
@@ -1349,7 +1353,17 @@ def test_add_picture_to_project_set_aligns_picture_project_membership():
             )
             assert project_a_resp.status_code == 200
             project_a_ids = {p.get("id") for p in project_a_resp.json()}
-            assert pic_id not in project_a_ids
+            assert pic_id in project_a_ids
+
+            # Existing membership to project B should remain alongside the
+            # aligned primary project.
+            project_b_resp = client.get(
+                "/pictures",
+                params={"project_id": str(project_b_id)},
+            )
+            assert project_b_resp.status_code == 200
+            project_b_ids = {p.get("id") for p in project_b_resp.json()}
+            assert pic_id in project_b_ids
 
     gc.collect()
     log_resources(
@@ -1577,6 +1591,8 @@ def test_smart_score_query_respects_project_filter(monkeypatch):
                 candidate_ids=None,
                 penalised_tags=None,
                 only_deleted=False,
+                progress_reporter=None,
+                **_kwargs,
             ):
                 ids = sorted(set(candidate_ids or []))
                 return [{"id": pid, "score": 0.0, "smartScore": 0.0} for pid in ids]
