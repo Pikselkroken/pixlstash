@@ -7,7 +7,7 @@ from datetime import datetime
 
 from enum import Enum, auto, IntEnum
 from sqlalchemy import String, and_, desc, func, or_, text
-from sqlalchemy.orm import load_only, selectinload
+from sqlalchemy.orm import aliased, load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
     Column,
@@ -791,24 +791,22 @@ class Picture(SQLModel, table=True):
         metadata_fields: list[str] | None = None,
         stack_leaders_only: bool = False,
         min_score: Optional[int] = None,
+        project_id: Optional[int] = None,
+        only_unassigned_project: bool = False,
     ):
         query = select(Picture)
-        unassigned_condition = ~exists(
-            select(Face.id).where(
-                Face.picture_id == Picture.id,
-                Face.character_id.is_not(None),
-            )
-        )
-        not_in_set_condition = ~exists(
-            select(PictureSetMember.picture_id).where(
-                PictureSetMember.picture_id == Picture.id
-            )
+        unassigned_conditions = cls.build_unassigned_conditions(
+            enforce_stack_assignment=True
         )
         query = query.where(
-            unassigned_condition,
-            not_in_set_condition,
+            *unassigned_conditions,
             Picture.deleted.is_(False),
         )
+
+        if only_unassigned_project:
+            query = query.where(Picture.project_id.is_(None))
+        elif project_id is not None:
+            query = query.where(Picture.project_id == project_id)
 
         if format:
             query = query.where(Picture.format.in_(format))
@@ -869,6 +867,58 @@ class Picture(SQLModel, table=True):
             query = query.offset(offset).limit(limit)
 
         return session.exec(query).all()
+
+    @classmethod
+    def build_unassigned_conditions(
+        cls,
+        *,
+        enforce_stack_assignment: bool = False,
+    ) -> list:
+        """Build SQL predicates for pictures that should count as unassigned.
+
+        When enforce_stack_assignment is enabled, any stack with at least one
+        assigned member (character face or set membership) is treated as assigned,
+        so all pictures in that stack are excluded from unassigned queries.
+        """
+        unassigned_condition = ~exists(
+            select(Face.id).where(
+                Face.picture_id == cls.id,
+                Face.character_id.is_not(None),
+            )
+        )
+        not_in_set_condition = ~exists(
+            select(PictureSetMember.picture_id).where(
+                PictureSetMember.picture_id == cls.id
+            )
+        )
+        conditions = [unassigned_condition, not_in_set_condition]
+
+        if not enforce_stack_assignment:
+            return conditions
+
+        stack_picture = aliased(cls)
+        stack_has_assigned_face = exists(
+            select(Face.id)
+            .join(stack_picture, stack_picture.id == Face.picture_id)
+            .where(
+                stack_picture.stack_id.is_not(None),
+                stack_picture.stack_id == cls.stack_id,
+                Face.character_id.is_not(None),
+            )
+        )
+        stack_has_set_member = exists(
+            select(PictureSetMember.picture_id)
+            .join(
+                stack_picture,
+                stack_picture.id == PictureSetMember.picture_id,
+            )
+            .where(
+                stack_picture.stack_id.is_not(None),
+                stack_picture.stack_id == cls.stack_id,
+            )
+        )
+        conditions.extend([~stack_has_assigned_face, ~stack_has_set_member])
+        return conditions
 
     @staticmethod
     def fetch_features(session, picture_ids):

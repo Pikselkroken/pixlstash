@@ -52,7 +52,11 @@ def create_router(server) -> APIRouter:
         summary="Get character category summary",
         description="Returns summary counts and thumbnail reference for ALL, UNASSIGNED, SCRAPHEAP, or a specific character id.",
     )
-    def get_characters_summary(request: Request, id: str = None):
+    def get_characters_summary(
+        request: Request,
+        id: str = None,
+        project_id: str | None = Query(default=None),
+    ):
         """
         Return summary statistics for a single category:
         - If character_id is ALL: all pictures
@@ -103,18 +107,28 @@ def create_router(server) -> APIRouter:
             logger.debug("SCRAPHEAP pics count: {}".format(image_count))
             char_id = None
         elif id == "UNASSIGNED":
+            unassigned_project_id: int | None = None
+            unassigned_project_only = False
+            if project_id == "UNASSIGNED":
+                unassigned_project_only = True
+            elif project_id is not None:
+                try:
+                    unassigned_project_id = int(project_id)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="Invalid project_id")
 
             def count_unassigned(session: Session) -> int:
-                face_exists = exists().where(
-                    Face.picture_id == Picture.id,
-                    Face.character_id.is_not(None),
+                unassigned_conditions = Picture.build_unassigned_conditions(
+                    enforce_stack_assignment=True
                 )
-                set_exists = exists().where(PictureSetMember.picture_id == Picture.id)
                 conditions = [
                     Picture.deleted.is_(False),
-                    ~face_exists,
-                    ~set_exists,
+                    *unassigned_conditions,
                 ]
+                if unassigned_project_only:
+                    conditions.append(Picture.project_id.is_(None))
+                elif unassigned_project_id is not None:
+                    conditions.append(Picture.project_id == unassigned_project_id)
                 if hidden_tag_filter is not None:
                     conditions.append(hidden_tag_filter)
                 return session.exec(
