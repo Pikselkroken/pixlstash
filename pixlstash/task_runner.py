@@ -511,7 +511,6 @@ class TaskRunner:
                             task.type,
                             traceback.format_exc(),
                         )
-                        pass
                 elapsed_s = time.perf_counter() - task_start
                 logger.debug(
                     "TaskRunner %s: finished task id=%s type=%s status=%s elapsed=%.3fs.",
