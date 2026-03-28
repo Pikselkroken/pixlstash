@@ -2101,8 +2101,15 @@ const selectedExpandedCount = computed(() => {
   for (const img of allGridImages.value) {
     if (!img || !img.id) continue;
     if (!selectedSet.has(Number(img.id))) continue;
+    const stackId = getPictureStackId(img);
     const stackCount = Number(img.stack_count ?? img.stackCount ?? 0);
-    total += stackCount > 1 ? stackCount : 1;
+    if (stackId != null && stackCount > 1) {
+      if (seenStacks.has(stackId)) continue;
+      seenStacks.add(stackId);
+      total += stackCount;
+      continue;
+    }
+    total += 1;
   }
   return total;
 });
@@ -3332,6 +3339,7 @@ function onGlobalKeyPress(key, event) {
 const imagesLoading = ref(false);
 const imagesError = ref(null);
 const totalAllPicturesCount = ref(0);
+const totalCurrentCategoryCount = ref(0);
 const gridReady = ref(false);
 const gridLoadEpoch = ref(0);
 const lastFetchKey = ref("");
@@ -3345,6 +3353,8 @@ function buildGridFetchKey() {
   return JSON.stringify({
     selectedCharacter: props.selectedCharacter ?? null,
     selectedSet: props.selectedSet ?? null,
+    projectViewMode: props.projectViewMode ?? "global",
+    selectedProjectId: props.selectedProjectId ?? null,
     searchQuery: props.searchQuery ?? "",
     selectedSort: props.selectedSort ?? "",
     selectedDescending: props.selectedDescending ?? null,
@@ -3370,6 +3380,17 @@ function _appendSelectionParams(params) {
     props.selectedCharacter !== props.allPicturesId
   ) {
     params.append("character_id", props.selectedCharacter);
+    if (
+      props.selectedCharacter === props.unassignedPicturesId &&
+      props.projectViewMode === "project"
+    ) {
+      params.append(
+        "project_id",
+        props.selectedProjectId != null
+          ? props.selectedProjectId
+          : "UNASSIGNED",
+      );
+    }
   } else if (
     props.selectedCharacter === props.allPicturesId &&
     props.projectViewMode === "project"
@@ -4551,6 +4572,45 @@ async function fetchAllPicturesCount() {
   } catch (e) {
     console.warn("[ImageGrid.vue] Failed to fetch all pictures count:", e);
   }
+
+  try {
+    let url = `${props.backendUrl}/characters/${props.allPicturesId}/summary`;
+    const selectedCharacter = String(props.selectedCharacter ?? "");
+    if (selectedCharacter === String(props.allPicturesId)) {
+      if (props.projectViewMode === "project") {
+        const pid =
+          props.selectedProjectId != null
+            ? props.selectedProjectId
+            : "UNASSIGNED";
+        url = `${props.backendUrl}/projects/${pid}/summary`;
+      }
+    } else if (selectedCharacter === String(props.unassignedPicturesId)) {
+      if (props.projectViewMode === "project") {
+        const pid =
+          props.selectedProjectId != null
+            ? props.selectedProjectId
+            : "UNASSIGNED";
+        url = `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary?project_id=${pid}`;
+      } else {
+        url = `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`;
+      }
+    } else if (selectedCharacter === String(props.scrapheapPicturesId)) {
+      url = `${props.backendUrl}/characters/${props.scrapheapPicturesId}/summary`;
+    } else if (
+      selectedCharacter &&
+      !props.selectedSet &&
+      selectedCharacter !== String(props.allPicturesId)
+    ) {
+      url = `${props.backendUrl}/characters/${selectedCharacter}/summary`;
+    }
+
+    const scopedRes = await apiClient.get(url);
+    const scopedData = await scopedRes.data;
+    totalCurrentCategoryCount.value = Number(scopedData.image_count) || 0;
+  } catch (e) {
+    console.warn("[ImageGrid.vue] Failed to fetch scoped category count:", e);
+    totalCurrentCategoryCount.value = 0;
+  }
 }
 
 function _resetGridState() {
@@ -4571,6 +4631,8 @@ watch(
   [
     () => props.selectedCharacter,
     () => props.selectedSet,
+    () => props.projectViewMode,
+    () => props.selectedProjectId,
     () => props.searchQuery,
     () => props.selectedSort,
     () => props.stackThreshold,
@@ -4578,6 +4640,7 @@ watch(
   () => {
     _resetGridState();
     updateSelectedGroupName();
+    fetchAllPicturesCount();
     debouncedFetchAllGridImages();
   },
 );

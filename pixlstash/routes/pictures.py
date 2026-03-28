@@ -389,30 +389,26 @@ def _select_pictures_for_listing(
         character_id_value,
         deleted_only: bool,
         formats: list[str] | None,
+        project_id_value: str | None,
     ):
         if deleted_only:
             query = select(Picture.id).where(
                 Picture.deleted.is_(True),
             )
         elif character_id_value == "UNASSIGNED":
-            unassigned_condition = ~exists(
-                select(Face.id).where(
-                    Face.picture_id == Picture.id,
-                    Face.character_id.is_not(None),
-                )
-            )
-            not_in_set_condition = ~exists(
-                select(PictureSetMember.picture_id).where(
-                    PictureSetMember.picture_id == Picture.id
-                )
+            unassigned_conditions = Picture.build_unassigned_conditions(
+                enforce_stack_assignment=True
             )
             query = select(Picture.id).where(
-                unassigned_condition,
-                not_in_set_condition,
+                *unassigned_conditions,
                 Picture.deleted.is_(False),
             )
         elif character_id_value is None or character_id_value == "":
-            return None
+            if project_id_value is None and not formats:
+                return None
+            query = select(Picture.id).where(
+                Picture.deleted.is_(False),
+            )
         elif isinstance(character_id_value, int):
             query = (
                 select(Picture.id)
@@ -424,6 +420,17 @@ def _select_pictures_for_listing(
             )
         else:
             return None
+
+        if project_id_value == "UNASSIGNED":
+            query = query.where(Picture.project_id.is_(None))
+        elif project_id_value is not None:
+            try:
+                query = query.where(Picture.project_id == int(project_id_value))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid project_id_raw value %r for SMART_SCORE candidate filtering; skipping project filter",
+                    project_id_value,
+                )
 
         if formats:
             query = query.where(Picture.format.in_(formats))
@@ -437,16 +444,15 @@ def _select_pictures_for_listing(
                 status_code=400,
                 detail="reference_character_id is required for CHARACTER_LIKENESS sort",
             )
-        candidate_ids = None
-        if only_deleted:
-            candidate_ids = server.vault.db.run_task(
-                fetch_smart_score_candidate_ids,
-                character_id,
-                only_deleted,
-                format,
-            )
-            if candidate_ids is not None and not candidate_ids:
-                return []
+        candidate_ids = server.vault.db.run_task(
+            fetch_smart_score_candidate_ids,
+            character_id,
+            only_deleted,
+            format,
+            project_id_raw,
+        )
+        if candidate_ids is not None and not candidate_ids:
+            return []
         pics = find_pictures_by_character_likeness(
             server,
             character_id,
@@ -480,6 +486,7 @@ def _select_pictures_for_listing(
             character_id,
             only_deleted,
             format,
+            project_id_raw,
         )
         if candidate_ids is not None and not candidate_ids:
             return []
@@ -513,6 +520,18 @@ def _select_pictures_for_listing(
             pics = _enrich_stack_counts(server, pics)
         return pics
     elif character_id == "UNASSIGNED":
+        unassigned_project_id = None
+        unassigned_project_only = False
+        if project_id_raw == "UNASSIGNED":
+            unassigned_project_only = True
+        elif project_id_raw is not None:
+            try:
+                unassigned_project_id = int(project_id_raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid project_id_raw value %r for UNASSIGNED query; skipping project filter",
+                    project_id_raw,
+                )
         pics = server.vault.db.run_task(
             Picture.find_unassigned,
             sort_mech=sort_mech,
@@ -522,6 +541,8 @@ def _select_pictures_for_listing(
             metadata_fields=metadata_fields,
             stack_leaders_only=stack_leaders_only,
             min_score=min_score,
+            project_id=unassigned_project_id,
+            only_unassigned_project=unassigned_project_only,
         )
     elif only_deleted:
         pics = server.vault.db.run_task(
@@ -885,6 +906,7 @@ def create_router(server) -> APIRouter:
         min_group_size: int = 2,
         set_id: int = Query(None),
         character_id: str = Query(None),
+        project_id: str = Query(None),
         format: list[str] = Query(None),
     ):
         candidate_ids = None
@@ -918,20 +940,11 @@ def create_router(server) -> APIRouter:
 
                 def fetch_unassigned_ids(session):
                     query = select(Picture.id)
-                    unassigned_condition = ~exists(
-                        select(Face.id).where(
-                            Face.picture_id == Picture.id,
-                            Face.character_id.is_not(None),
-                        )
-                    )
-                    not_in_set_condition = ~exists(
-                        select(PictureSetMember.picture_id).where(
-                            PictureSetMember.picture_id == Picture.id
-                        )
+                    unassigned_conditions = Picture.build_unassigned_conditions(
+                        enforce_stack_assignment=True
                     )
                     query = query.where(
-                        unassigned_condition,
-                        not_in_set_condition,
+                        *unassigned_conditions,
                         Picture.deleted.is_(False),
                     )
                     return list(session.exec(query).all())
@@ -976,6 +989,43 @@ def create_router(server) -> APIRouter:
                         fetch_character_ids, int(character_id)
                     )
                 )
+
+        if project_id is not None:
+
+            def fetch_project_ids(
+                session,
+                project_id_value: str,
+                deleted_only: bool,
+            ):
+                query = select(Picture.id)
+                if project_id_value == "UNASSIGNED":
+                    query = query.where(Picture.project_id.is_(None))
+                else:
+                    try:
+                        parsed_project_id = int(project_id_value)
+                    except (TypeError, ValueError):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid project_id",
+                        )
+                    query = query.where(Picture.project_id == parsed_project_id)
+                if deleted_only:
+                    query = query.where(Picture.deleted.is_(True))
+                else:
+                    query = query.where(Picture.deleted.is_(False))
+                rows = session.exec(query).all()
+                return list(rows)
+
+            project_ids = set(
+                server.vault.db.run_immediate_read_task(
+                    fetch_project_ids,
+                    project_id,
+                    only_deleted,
+                )
+            )
+            candidate_ids = (
+                project_ids if candidate_ids is None else candidate_ids & project_ids
+            )
 
         if format:
 
@@ -1677,6 +1727,7 @@ def create_router(server) -> APIRouter:
         format = None
         character_id = None
         set_id = None
+        project_id = None
         sort = None
         descending = True
         if request.query_params:
@@ -1686,6 +1737,7 @@ def create_router(server) -> APIRouter:
             limit = int(query_params.pop("limit", limit))
             character_id = query_params.pop("character_id", None)
             set_id = query_params.pop("set_id", None)
+            project_id = query_params.pop("project_id", None)
             sort = query_params.pop("sort", None)
             desc_val = query_params.pop("descending", descending)
             descending = (
@@ -1736,20 +1788,11 @@ def create_router(server) -> APIRouter:
             if character_id == "UNASSIGNED":
 
                 def fetch_unassigned_ids(session):
-                    unassigned_condition = ~exists(
-                        select(Face.id).where(
-                            Face.picture_id == Picture.id,
-                            Face.character_id.is_not(None),
-                        )
-                    )
-                    not_in_set_condition = ~exists(
-                        select(PictureSetMember.picture_id).where(
-                            PictureSetMember.picture_id == Picture.id
-                        )
+                    unassigned_conditions = Picture.build_unassigned_conditions(
+                        enforce_stack_assignment=True
                     )
                     query_stmt = select(Picture.id).where(
-                        unassigned_condition,
-                        not_in_set_condition,
+                        *unassigned_conditions,
                         Picture.deleted.is_(False),
                     )
                     return list(session.exec(query_stmt).all())
@@ -1783,6 +1826,46 @@ def create_router(server) -> APIRouter:
                         fetch_character_ids, int(character_id)
                     )
                 )
+
+        if project_id is not None:
+
+            def fetch_project_ids(
+                session,
+                project_id_value: str,
+                deleted_only: bool,
+            ):
+                query_stmt = select(Picture.id)
+                if project_id_value == "UNASSIGNED":
+                    query_stmt = query_stmt.where(Picture.project_id.is_(None))
+                else:
+                    try:
+                        parsed_project_id = int(project_id_value)
+                    except (TypeError, ValueError):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid project_id",
+                        )
+                    query_stmt = query_stmt.where(
+                        Picture.project_id == parsed_project_id
+                    )
+                if deleted_only:
+                    query_stmt = query_stmt.where(Picture.deleted.is_(True))
+                else:
+                    query_stmt = query_stmt.where(Picture.deleted.is_(False))
+                return list(session.exec(query_stmt).all())
+
+            project_candidate_ids = set(
+                server.vault.db.run_immediate_read_task(
+                    fetch_project_ids,
+                    project_id,
+                    only_deleted,
+                )
+            )
+            candidate_ids = (
+                project_candidate_ids
+                if candidate_ids is None
+                else candidate_ids & project_candidate_ids
+            )
 
         if candidate_ids is not None and not candidate_ids:
             return []

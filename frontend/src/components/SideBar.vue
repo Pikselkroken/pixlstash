@@ -801,6 +801,15 @@ const isAllPicturesRowActive = computed(() => {
   );
 });
 
+const isUnassignedPicturesRowActive = computed(
+  () => props.selectedCharacter === props.unassignedPicturesId,
+);
+
+const allPicturesRowLabel = computed(() => {
+  if (projectViewMode.value === "global") return "All Pictures";
+  return "Project Pictures";
+});
+
 function isCountNew(id) {
   return Boolean(id && countNewTags.value[id]);
 }
