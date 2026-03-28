@@ -2,7 +2,6 @@ import ast
 import asyncio
 import concurrent.futures
 import base64
-import csv
 import os
 import re
 import shutil
@@ -64,13 +63,14 @@ from pixlstash.utils.service.caption_utils import (
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
 from pixlstash.tasks import TaskType
-from pixlstash.tag_naturaliser import TagNaturaliser
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 
 logger = get_logger(__name__)
 
-_KNOWN_TAGS_CACHE: set[str] | None = None
-_MIN_RECOGNISED_SIDECAR_TAGS = 2
+_SIDECAR_TAG_PATTERN = re.compile(
+    r"^[a-z0-9]+(?:[ _-][a-z0-9]+){0,2}$",
+    re.IGNORECASE,
+)
 
 MEDIA_TYPE_BY_FORMAT = {
     "jpg": "image/jpeg",
@@ -191,44 +191,7 @@ def _normalise_vocab_token(value: str) -> str:
     return " ".join(str(value).replace("_", " ").strip().lower().split())
 
 
-def _get_known_tags_vocabulary() -> set[str]:
-    global _KNOWN_TAGS_CACHE
-    if _KNOWN_TAGS_CACHE is not None:
-        return _KNOWN_TAGS_CACHE
-
-    vocab: set[str] = set()
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "..", "..", "cpu", "selected_tags.csv"),
-        os.path.join(
-            os.path.dirname(__file__), "..", "..", "cuda", "selected_tags.csv"
-        ),
-    ]
-    for csv_path in candidates:
-        resolved = os.path.abspath(csv_path)
-        if not os.path.isfile(resolved):
-            continue
-        try:
-            with open(resolved, "r", encoding="utf-8") as handle:
-                reader = csv.reader(handle)
-                rows = list(reader)
-        except Exception:
-            continue
-        if not rows:
-            continue
-        for row in rows[1:]:
-            if len(row) < 2:
-                continue
-            tag_name = str(row[1]).strip()
-            if not tag_name:
-                continue
-            vocab.add(_normalise_vocab_token(tag_name))
-            natural = TagNaturaliser.get_natural_tag(tag_name)
-            vocab.add(_normalise_vocab_token(natural))
-    _KNOWN_TAGS_CACHE = {v for v in vocab if v}
-    return _KNOWN_TAGS_CACHE
-
-
-def _parse_sidecar_tags(raw_text: str, known_tags: set[str]) -> list[str]:
+def _parse_sidecar_tags(raw_text: str) -> list[str]:
     text = (raw_text or "").strip()
     if not text or "," not in text:
         return []
@@ -240,22 +203,20 @@ def _parse_sidecar_tags(raw_text: str, known_tags: set[str]) -> list[str]:
 
     seen = set()
     parsed = []
-    recognised = 0
     for raw_tag in tags_raw:
+        # Lenient sanity check: 1-3 words per tag using space/dash/underscore.
+        compact_raw = " ".join(raw_tag.strip().split())
+        if not _SIDECAR_TAG_PATTERN.fullmatch(compact_raw):
+            continue
         # Preserve sidecar tag semantics (e.g. "1girl") while still
         # normalising separators/spacing for storage.
-        candidate = _normalise_vocab_token(raw_tag)
+        candidate = _normalise_vocab_token(compact_raw)
         if not candidate:
             continue
         if candidate in seen:
             continue
         seen.add(candidate)
         parsed.append(candidate)
-        if candidate in known_tags:
-            recognised += 1
-
-    if recognised < _MIN_RECOGNISED_SIDECAR_TAGS:
-        return []
     return parsed
 
 
@@ -1955,7 +1916,6 @@ def create_router(server) -> APIRouter:
         uploaded_files = []
         uploaded_file_stems: list[str] = []
         sidecar_text_by_stem: dict[str, str] = {}
-        known_tag_vocab = _get_known_tags_vocabulary()
         allowed_media_exts = {
             ".jpg",
             ".jpeg",
@@ -2069,7 +2029,7 @@ def create_router(server) -> APIRouter:
                 # Only consume caption sidecars that have a corresponding media file.
                 if stem not in media_stem_set:
                     continue
-                parsed_tags = _parse_sidecar_tags(raw_text, known_tag_vocab)
+                parsed_tags = _parse_sidecar_tags(raw_text)
                 if parsed_tags:
                     sidecar_tags_by_stem[stem] = parsed_tags
 

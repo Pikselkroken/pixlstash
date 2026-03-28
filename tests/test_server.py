@@ -93,6 +93,16 @@ def _write_json(path: Path, payload: dict) -> None:
         handle.write("\n")
 
 
+def _write_semantic_regression_temp_artifact(actual: dict, device_tag: str) -> Path:
+    temp_root = Path(tempfile.gettempdir()) / "pixlstash" / "semantic-regression"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    artifact_path = temp_root / (
+        f"semantic_search_{device_tag}_actual_{int(time.time() * 1000)}.json"
+    )
+    _write_json(artifact_path, actual)
+    return artifact_path
+
+
 _SEMANTIC_SCORE_TOLERANCE = 0.005
 
 
@@ -103,18 +113,18 @@ def _check_semantic_search_regression(
 
     Scores are compared with ``_SEMANTIC_SCORE_TOLERANCE`` tolerance so that
     minor floating-point drift (e.g. from GPU non-determinism or occasional
-    CPU spillover) does not produce false failures.  When the baseline does not
-    exist yet it is created and the test passes.  When the actual scores
-    diverge *beyond* tolerance **or** the top_description for any query
-    changes, the baseline is updated on disk and an AssertionError is raised so
-    the developer can review and commit the new file.
+    CPU spillover) does not produce false failures.  Baselines are treated as
+    read-only by tests: when the baseline is missing or results diverge,
+    the current payload is written to a temporary artifact and an AssertionError
+    is raised so the developer can review and update the baseline intentionally.
     """
     if not regression_path.exists():
-        _write_json(regression_path, actual)
-        logger.info(
-            "Semantic search regression baseline created at %s.", regression_path
+        artifact_path = _write_semantic_regression_temp_artifact(actual, device_tag)
+        raise AssertionError(
+            f"Semantic search baseline is missing for device='{device_tag}'.\n"
+            f"Expected baseline: {regression_path}\n"
+            f"Captured actual payload: {artifact_path}"
         )
-        return
 
     with open(regression_path, encoding="utf-8") as fh:
         baseline = json.load(fh)
@@ -152,12 +162,11 @@ def _check_semantic_search_regression(
             )
 
     if failures:
-        _write_json(regression_path, actual)
+        artifact_path = _write_semantic_regression_temp_artifact(actual, device_tag)
         raise AssertionError(
             f"Semantic search regression detected for device='{device_tag}'.\n"
-            f"The baseline file has been updated — review and commit "
-            f"{regression_path.name} if the change is intentional.\n\n"
-            + "\n".join(failures)
+            f"Baseline file was not modified: {regression_path.name}.\n"
+            f"Captured actual payload: {artifact_path}\n\n" + "\n".join(failures)
         )
 
 
