@@ -1,3 +1,14 @@
+# [1.0.0rc1] - 2026-03-28
+- **Project System:** Big change to allow the creation of projects and association of pictures, sets and characters with projects.
+- **Fast Multi-Tagging:** Add tags and toggle existing tags on multiple selected images in one go. With auto-complete and keyboard shortcuts.
+- **More keyboard shortcuts and shortcut overview:** A friendly dialog with a list of available keyboard shortcuts.
+- **Search and filtering on ComfyUI metadata:** model names, loras, prompt text.
+- **Better ComfyUI workflow validation:** recognise input nodes better.
+- **Much improved import:** Automatically assign to current project.
+- **Improved VRAM-handling**
+- **Cleaned up API with online documentation**
+- **Fixed Florence-2 loading issues**
+- **Loads of other bugfixes**
 # [1.0.0b4] - 2026-03-22
 # [1.0.0b3] - 2026-03-21
 
