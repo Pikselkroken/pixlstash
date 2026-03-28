@@ -189,6 +189,12 @@
           :picture-ids="selectedImageIds"
           @added="$emit('add-to-character', $event)"
         />
+        <AddToProjectControl
+          v-if="!isScrapheapView"
+          :backend-url="backendUrl"
+          :disabled="selectedCount <= 0"
+          @selected="$emit('set-project', $event)"
+        />
         <button
           v-if="!isScrapheapView"
           class="stack-btn stack-toggle-btn"
@@ -389,6 +395,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { apiClient } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToCharacterControl from "./AddToCharacterControl.vue";
+import AddToProjectControl from "./AddToProjectControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";
 const props = defineProps({
   selectedCount: Number,
@@ -420,6 +427,7 @@ const emit = defineEmits([
   "clear-selection",
   "added-to-set",
   "add-to-character",
+  "set-project",
   "remove-from-stack",
   "create-stack",
   "create-stacks-from-groups",
