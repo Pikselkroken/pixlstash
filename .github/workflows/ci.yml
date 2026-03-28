@@ -108,3 +108,19 @@ jobs:
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_many_to_many_face_data.py
       - name: Test ComfyUI Workflow Extraction
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_comfyui_workflow_extraction.py
+      - name: Test Authentication
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_authentication.py
+      - name: Test Rate Limiter
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_rate_limiter.py
+      - name: Test Picture Plugins
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_plugins.py
+      - name: Test Watch Folder Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_watch_folder_worker.py
+      - name: Test Work Planner
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_work_planner.py
+      - name: Test Image Embedding Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_image_embedding_worker.py
+      - name: Test Smart Score Consistency
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_smart_score_consistency.py
+      - name: Test VRAM Batch Budget
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_vram_batch_budget.py

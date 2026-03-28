@@ -13,6 +13,8 @@ from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.server import Server
 
+API_PREFIX = "/api/v1"
+
 
 def _make_png_bytes(color: tuple[int, int, int]) -> bytes:
     img = Image.new("RGB", (24, 24), color=color)
@@ -27,7 +29,8 @@ def test_picture_plugins_list_and_run_colour_filter():
         with Server(server_config_path=server_config_path) as server:
             client = TestClient(server.api)
             login_resp = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                f"{API_PREFIX}/login",
+                json={"username": "testuser", "password": "testpassword"},
             )
             assert login_resp.status_code == 200
 
@@ -69,13 +72,13 @@ def test_picture_plugins_list_and_run_colour_filter():
             created_set_id = inserted[2]
             assert len(inserted_ids) == 2
 
-            pictures_resp = client.get("/pictures?fields=grid")
+            pictures_resp = client.get(f"{API_PREFIX}/pictures?fields=grid")
             assert pictures_resp.status_code == 200
             pictures = pictures_resp.json()
             assert pictures and len(pictures) >= 2
             selected_ids = sorted(inserted_ids)
 
-            plugins_resp = client.get("/pictures/plugins")
+            plugins_resp = client.get(f"{API_PREFIX}/pictures/plugins")
             assert plugins_resp.status_code == 200
             plugins_payload = plugins_resp.json()
             plugins = plugins_payload.get("plugins") or []
@@ -111,7 +114,7 @@ def test_picture_plugins_list_and_run_colour_filter():
             assert blur_sharpen_schema.get("supports_videos") is True
 
             run_resp = client.post(
-                "/pictures/plugins/colour_filter",
+                f"{API_PREFIX}/pictures/plugins/colour_filter",
                 json={
                     "picture_ids": selected_ids,
                     "parameters": {"mode": "sepia"},
@@ -137,10 +140,10 @@ def test_picture_plugins_list_and_run_colour_filter():
             # (fields=grid hides non-leader stack members, which includes the
             # original source pictures after the plugin pushes them to position 1).
             for source_id, created_id in zip(selected_ids, created_ids):
-                source_resp = client.get(f"/pictures/{source_id}/metadata")
+                source_resp = client.get(f"{API_PREFIX}/pictures/{source_id}/metadata")
                 assert source_resp.status_code == 200, source_resp.text
                 source = source_resp.json()
-                created_resp = client.get(f"/pictures/{created_id}/metadata")
+                created_resp = client.get(f"{API_PREFIX}/pictures/{created_id}/metadata")
                 assert created_resp.status_code == 200, created_resp.text
                 created = created_resp.json()
                 assert source.get("stack_id") is not None
@@ -148,7 +151,7 @@ def test_picture_plugins_list_and_run_colour_filter():
                 assert int(created.get("stack_position")) == 0
 
             scale_resp = client.post(
-                "/pictures/plugins/scaling",
+                f"{API_PREFIX}/pictures/plugins/scaling",
                 json={
                     "picture_ids": selected_ids,
                     "parameters": {
@@ -164,17 +167,17 @@ def test_picture_plugins_list_and_run_colour_filter():
             assert len(scaled_ids) == 2
 
             for source_id, scaled_id in zip(selected_ids, scaled_ids):
-                source_resp = client.get(f"/pictures/{source_id}/metadata")
+                source_resp = client.get(f"{API_PREFIX}/pictures/{source_id}/metadata")
                 assert source_resp.status_code == 200, source_resp.text
                 source = source_resp.json()
-                scaled_resp = client.get(f"/pictures/{scaled_id}/metadata")
+                scaled_resp = client.get(f"{API_PREFIX}/pictures/{scaled_id}/metadata")
                 assert scaled_resp.status_code == 200, scaled_resp.text
                 scaled = scaled_resp.json()
                 assert int(scaled.get("width")) == int(source.get("width")) * 2
                 assert int(scaled.get("height")) == int(source.get("height")) * 2
 
             brightness_resp = client.post(
-                "/pictures/plugins/brightness_contrast",
+                f"{API_PREFIX}/pictures/plugins/brightness_contrast",
                 json={
                     "picture_ids": selected_ids,
                     "parameters": {
@@ -190,7 +193,7 @@ def test_picture_plugins_list_and_run_colour_filter():
             assert len(brightness_ids) == 2
 
             blur_resp = client.post(
-                "/pictures/plugins/blur_sharpen",
+                f"{API_PREFIX}/pictures/plugins/blur_sharpen",
                 json={
                     "picture_ids": selected_ids,
                     "parameters": {
