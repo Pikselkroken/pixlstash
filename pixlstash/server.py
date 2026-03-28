@@ -104,6 +104,8 @@ API_OPENAPI_TAGS = [
     },
 ]
 
+API_V1_PREFIX = "/api/v1"
+
 
 class Server:
     """
@@ -872,7 +874,7 @@ class Server:
             )
             return FileResponse(favicon_path)
 
-        @self.api.websocket("/ws/updates")
+        @self.api.websocket(f"{API_V1_PREFIX}/ws/updates")
         async def websocket_updates(websocket: WebSocket):
             await websocket.accept()
             # Always refresh _ws_loop so it tracks the currently-running event loop.
@@ -905,14 +907,46 @@ class Server:
                     if client in self._ws_clients:
                         self._ws_clients.remove(client)
 
-        self.api.include_router(create_config_router(self), tags=["config"])
-        self.api.include_router(create_characters_router(self), tags=["characters"])
-        self.api.include_router(create_picture_sets_router(self), tags=["picture_sets"])
-        self.api.include_router(create_projects_router(self), tags=["projects"])
-        self.api.include_router(create_tags_router(self), tags=["tags"])
-        self.api.include_router(create_stacks_router(self), tags=["stacks"])
-        self.api.include_router(create_pictures_router(self), tags=["pictures"])
-        self.api.include_router(create_comfyui_router(self), tags=["comfyui"])
+        self.api.include_router(
+            create_config_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["config"],
+        )
+        self.api.include_router(
+            create_characters_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["characters"],
+        )
+        self.api.include_router(
+            create_picture_sets_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["picture_sets"],
+        )
+        self.api.include_router(
+            create_projects_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["projects"],
+        )
+        self.api.include_router(
+            create_tags_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["tags"],
+        )
+        self.api.include_router(
+            create_stacks_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["stacks"],
+        )
+        self.api.include_router(
+            create_pictures_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["pictures"],
+        )
+        self.api.include_router(
+            create_comfyui_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["comfyui"],
+        )
 
         ###############################
         # Config endpoints            #
@@ -929,25 +963,25 @@ class Server:
                 self.allow_origin_regex,
             )
 
-        @self.api.get("/check-session")
+        @self.api.get(f"{API_V1_PREFIX}/check-session")
         async def check_session(request: Request):
             return self.auth.check_session(request)
 
-        @self.api.post("/login")
+        @self.api.post(f"{API_V1_PREFIX}/login")
         def login(request: LoginRequest):
             response = self.auth.login(request)
             self._user = self.auth.user
             return response
 
-        @self.api.get("/login")
+        @self.api.get(f"{API_V1_PREFIX}/login")
         def check_registration():
             return self.auth.check_registration()
 
-        @self.api.post("/logout")
+        @self.api.post(f"{API_V1_PREFIX}/logout")
         def logout(response: Response, request: Request):
             return self.auth.logout(response, request)
 
-        @self.api.get("/protected")
+        @self.api.get(f"{API_V1_PREFIX}/protected")
         async def protected():
             return {"message": "You are authenticated!"}
 

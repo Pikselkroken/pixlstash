@@ -6,6 +6,7 @@ const isAuthenticated = ref(false);
 
 const DEFAULT_BACKEND_PORT = 9537;
 const environmentBaseUrl = import.meta?.env?.VITE_BACKEND_URL;
+const API_PREFIX = '/api/v1';
 
 function deriveBackendUrl() {
   if (environmentBaseUrl) return environmentBaseUrl;
@@ -35,6 +36,7 @@ function deriveBackendUrl() {
 }
 
 const resolvedBaseUrl = deriveBackendUrl();
+const apiBaseUrl = `${resolvedBaseUrl}${API_PREFIX}`;
 
 // Axios instance
 const apiClient = axios.create({
@@ -44,6 +46,28 @@ const apiClient = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true,  // Ensure cookies are included in requests
+});
+
+apiClient.interceptors.request.use((config) => {
+  const rawUrl = config?.url;
+  if (!rawUrl || typeof rawUrl !== 'string') {
+    return config;
+  }
+
+  // Leave fully-qualified URLs untouched. Components that use API_BASE_URL
+  // already include the /api/v1 path.
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return config;
+  }
+
+  if (rawUrl.startsWith(API_PREFIX)) {
+    return config;
+  }
+
+  config.url = rawUrl.startsWith('/')
+      ? `${API_PREFIX}${rawUrl}`
+      : `${API_PREFIX}/${rawUrl}`;
+  return config;
 });
 
 // Login function
@@ -127,5 +151,5 @@ export {
   isAuthenticated,
   login,
   logout,
-  resolvedBaseUrl as API_BASE_URL,
+  apiBaseUrl as API_BASE_URL,
 };
