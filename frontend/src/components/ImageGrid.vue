@@ -1983,6 +1983,43 @@ async function deleteSelected() {
   }
 }
 
+async function handleSetProjectForSelected(payload) {
+  const pictureIds = (
+    Array.isArray(selectedImageIds.value) ? selectedImageIds.value : []
+  )
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (!pictureIds.length) {
+    return;
+  }
+
+  const nextProjectIdRaw = payload?.projectId ?? null;
+  const nextProjectId =
+    nextProjectIdRaw === null || nextProjectIdRaw === undefined
+      ? null
+      : Number(nextProjectIdRaw);
+  if (nextProjectId !== null && !Number.isFinite(nextProjectId)) {
+    window.alert("Invalid project selected.");
+    return;
+  }
+
+  try {
+    await apiClient.patch(`${props.backendUrl}/pictures/project`, {
+      picture_ids: pictureIds,
+      project_id: nextProjectId,
+    });
+
+    clearSelection();
+    preserveScrollOnNextFetch.value = true;
+    await fetchAllGridImages({ force: true });
+    updateVisibleThumbnails();
+    emit("refresh-sidebar");
+  } catch (err) {
+    const message = err?.response?.data?.detail || err?.message || String(err);
+    window.alert(`Failed to update project association: ${message}`);
+  }
+}
+
 // ============================================================
 // SELECTION BAR + SCRAPHEAP
 // ============================================================

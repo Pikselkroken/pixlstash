@@ -854,9 +854,11 @@ async function fetchSidebarData() {
   }
   try {
     // Unassigned images summary
-    const resUnassigned = await apiClient.get(
-      `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`,
-    );
+    const unassignedSummaryUrl =
+      projectViewMode.value === "project"
+        ? `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary?project_id=${selectedProjectId.value != null ? selectedProjectId.value : "UNASSIGNED"}`
+        : `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`;
+    const resUnassigned = await apiClient.get(unassignedSummaryUrl);
     const data = await resUnassigned.data;
     setCategoryCount(props.unassignedPicturesId, data.image_count, shouldFlash);
   } catch (e) {
@@ -1402,10 +1404,16 @@ watch(
   },
 );
 
-watch(projectViewMode, (v) => emit("update:project-view-mode", v));
+watch(projectViewMode, (v) => {
+  emit("update:project-view-mode", v);
+  // Recompute scoped counts (notably Unassigned) when switching global/project mode.
+  void fetchSidebarData();
+});
 watch(selectedProjectId, (v) => {
   emit("update:selected-project-id", v);
   if (v !== null) lastUsedProjectId.value = v;
+  // Recompute scoped counts when selecting a different project.
+  void fetchSidebarData();
 });
 
 function switchToProjectView() {
@@ -1709,6 +1717,20 @@ defineExpose({
           >
             <v-icon>mdi-image-multiple</v-icon>
           </div>
+          <div
+            :class="[
+              'sidebar-collapsed-item',
+              {
+                active: isUnassignedPicturesRowActive,
+              },
+            ]"
+            title="Unassigned Pictures"
+            @click="
+              selectCharacter(props.unassignedPicturesId, 'Unassigned Pictures')
+            "
+          >
+            <v-icon>mdi-account-question</v-icon>
+          </div>
           <div class="sidebar-collapsed-divider"></div>
           <button
             v-for="char in visibleCharacters"
@@ -1874,17 +1896,15 @@ defineExpose({
                   'sidebar-list-item',
                   { active: isAllPicturesRowActive },
                 ]"
-                @click="selectCharacter(props.allPicturesId, 'Pictures')"
+                @click="
+                  selectCharacter(props.allPicturesId, allPicturesRowLabel)
+                "
               >
                 <span class="sidebar-list-icon">
                   <v-icon size="44">mdi-image-multiple</v-icon>
                 </span>
                 <span class="sidebar-list-label">{{
-                  projectViewMode === "global"
-                    ? "All Pictures"
-                    : selectedProjectId === null
-                      ? "Unassigned Pictures"
-                      : "Project Pictures"
+                  allPicturesRowLabel
                 }}</span>
                 <span class="sidebar-list-count">{{
                   projectViewMode === "global"
@@ -1892,6 +1912,29 @@ defineExpose({
                     : (projectCounts[
                         selectedProjectId ?? UNASSIGNED_PROJECT_KEY
                       ] ?? "")
+                }}</span>
+              </div>
+            </div>
+
+            <div>
+              <div
+                :class="[
+                  'sidebar-list-item',
+                  { active: isUnassignedPicturesRowActive },
+                ]"
+                @click="
+                  selectCharacter(
+                    props.unassignedPicturesId,
+                    'Unassigned Pictures',
+                  )
+                "
+              >
+                <span class="sidebar-list-icon">
+                  <v-icon size="44">mdi-account-question</v-icon>
+                </span>
+                <span class="sidebar-list-label">Unassigned Pictures</span>
+                <span class="sidebar-list-count">{{
+                  categoryCounts[props.unassignedPicturesId] ?? ""
                 }}</span>
               </div>
             </div>
