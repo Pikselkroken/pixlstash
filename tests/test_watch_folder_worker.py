@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from pixlstash.server import Server
 from pixlstash.db_models.picture import Picture
 
+API_PREFIX = "/api/v1"
+
 
 def test_watch_folder():
     """Test watching a folder for changes."""
@@ -31,7 +33,8 @@ def test_watch_folder():
 
             # First login to set the password
             response = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                f"{API_PREFIX}/login",
+                json={"username": "testuser", "password": "testpassword"},
             )
             assert response.status_code == 200
             assert (
@@ -95,7 +98,8 @@ def test_watch_folder_delete_after_import():
             client = TestClient(server.api)
 
             response = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                f"{API_PREFIX}/login",
+                json={"username": "testuser", "password": "testpassword"},
             )
             assert response.status_code == 200
 

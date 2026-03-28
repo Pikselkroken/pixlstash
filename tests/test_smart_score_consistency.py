@@ -12,6 +12,8 @@ from pixlstash.server import Server
 from pixlstash.db_models import Picture, Face, Character
 from pixlstash.database import DBPriority
 
+API_PREFIX = "/api/v1"
+
 
 def setup_server():
     temp_dir = tempfile.TemporaryDirectory()
@@ -24,7 +26,10 @@ def setup_server():
     client = TestClient(server.api)
 
     # Login
-    client.post("/login", json={"username": "testuser", "password": "testpassword"})
+    client.post(
+        f"{API_PREFIX}/login",
+        json={"username": "testuser", "password": "testpassword"},
+    )
     return temp_dir, client, server
 
 
@@ -99,7 +104,9 @@ def test_smart_score_consistency():
             return None
 
         # 1. Query ALL
-        resp_all = client.get("/pictures?sort=SMART_SCORE&descending=true")
+        resp_all = client.get(
+            f"{API_PREFIX}/pictures?sort=SMART_SCORE&descending=true"
+        )
         assert resp_all.status_code == 200
         score_all_p1 = get_score(resp_all.json(), p1_id)
 
@@ -124,7 +131,7 @@ def test_smart_score_consistency():
         server.vault.db.run_task(assign_face, priority=DBPriority.IMMEDIATE)
 
         resp_char = client.get(
-            f"/pictures?character_id={c_id}&sort=SMART_SCORE&descending=true"
+            f"{API_PREFIX}/pictures?character_id={c_id}&sort=SMART_SCORE&descending=true"
         )
         assert resp_char.status_code == 200
         score_char_p1 = get_score(resp_char.json(), p1_id)

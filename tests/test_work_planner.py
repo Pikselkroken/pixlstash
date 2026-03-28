@@ -16,6 +16,9 @@ class _OneShotFinder:
     def max_inflight_tasks(self) -> int:
         return 1
 
+    def depends_on(self) -> list[str]:
+        return []
+
     def find_task(self):
         if self._returned:
             return None

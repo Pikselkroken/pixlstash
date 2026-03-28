@@ -49,6 +49,7 @@ logger = get_logger(__name__)
 _PICTURES_DIR = os.path.join(os.path.dirname(__file__), "../pictures")
 _SCORES_FILE = os.path.join(_PICTURES_DIR, "scores.txt")
 _TASK_TIMEOUT_S = 180
+_API_PREFIX = "/api/v1"
 
 
 def _poll_until_zero(server, count_fn, label, timeout_s=_TASK_TIMEOUT_S, interval=0.5):
@@ -176,7 +177,8 @@ def test_full_pipeline_on_real_pictures():
             client = TestClient(server.api)
 
             resp = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                f"{_API_PREFIX}/login",
+                json={"username": "testuser", "password": "testpassword"},
             )
             assert resp.status_code == 200
 

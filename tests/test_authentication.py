@@ -2,6 +2,8 @@ import tempfile
 from fastapi.testclient import TestClient
 from pixlstash.server import Server
 
+API_PREFIX = "/api/v1"
+
 
 def test_authentication_without_login():
     """Test accessing a protected endpoint without logging in."""
@@ -12,7 +14,7 @@ def test_authentication_without_login():
             client = TestClient(server.api)
 
             # Access without a session cookie
-            response = client.get("/protected")
+            response = client.get(f"{API_PREFIX}/protected")
             assert response.status_code == 401
             assert response.json()["detail"] == "Not authenticated"
 
@@ -27,7 +29,8 @@ def test_authentication_with_password_setup():
 
             # First login to set the password
             response = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                f"{API_PREFIX}/login",
+                json={"username": "testuser", "password": "testpassword"},
             )
             assert response.status_code == 200
             assert (
@@ -44,7 +47,8 @@ def test_authentication_with_valid_password():
             with TestClient(server.api) as client1:
                 # First login to set the password
                 response = client1.post(
-                    "/login", json={"username": "testuser", "password": "testpassword"}
+                    f"{API_PREFIX}/login",
+                    json={"username": "testuser", "password": "testpassword"},
                 )
                 assert response.status_code == 200
                 assert (
@@ -55,13 +59,14 @@ def test_authentication_with_valid_password():
             with TestClient(server.api) as client2:
                 # Login with the correct password
                 response = client2.post(
-                    "/login", json={"username": "testuser", "password": "testpassword"}
+                    f"{API_PREFIX}/login",
+                    json={"username": "testuser", "password": "testpassword"},
                 )
                 assert response.status_code == 200
                 assert response.json()["message"] == "Login successful."
 
                 # Access a protected endpoint
-                response = client2.get("/protected")
+                response = client2.get(f"{API_PREFIX}/protected")
                 assert response.status_code == 200
                 assert response.json()["message"] == "You are authenticated!"
 
@@ -75,7 +80,8 @@ def test_authentication_with_invalid_password():
             with TestClient(server.api) as client1:
                 # First login to set the password
                 response = client1.post(
-                    "/login", json={"username": "testuser", "password": "testpassword"}
+                    f"{API_PREFIX}/login",
+                    json={"username": "testuser", "password": "testpassword"},
                 )
                 assert response.status_code == 200
                 assert (
@@ -86,13 +92,14 @@ def test_authentication_with_invalid_password():
             with TestClient(server.api) as client2:
                 # Attempt login with an incorrect password
                 response = client2.post(
-                    "/login", json={"username": "testuser", "password": "wrongpassword"}
+                    f"{API_PREFIX}/login",
+                    json={"username": "testuser", "password": "wrongpassword"},
                 )
                 assert response.status_code == 401
                 assert response.json()["detail"] == "Invalid password"
 
                 # Access a protected endpoint
-                response = client2.get("/protected")
+                response = client2.get(f"{API_PREFIX}/protected")
                 assert response.status_code == 401
                 assert response.json()["detail"] == "Not authenticated"
 
@@ -106,7 +113,8 @@ def test_authentication_with_token_login():
             with TestClient(server.api) as client1:
                 # First login to set the password
                 response = client1.post(
-                    "/login", json={"username": "testuser", "password": "testpassword"}
+                    f"{API_PREFIX}/login",
+                    json={"username": "testuser", "password": "testpassword"},
                 )
                 assert response.status_code == 200
                 assert (
@@ -116,7 +124,7 @@ def test_authentication_with_token_login():
 
                 # Create a token
                 response = client1.post(
-                    "/users/me/token", json={"description": "Test token"}
+                    f"{API_PREFIX}/users/me/token", json={"description": "Test token"}
                 )
                 assert response.status_code == 200
                 token = response.json().get("token")
@@ -124,17 +132,17 @@ def test_authentication_with_token_login():
 
             with TestClient(server.api) as client2:
                 # Login with token
-                response = client2.post("/login", json={"token": token})
+                response = client2.post(f"{API_PREFIX}/login", json={"token": token})
                 assert response.status_code == 200
                 assert response.json()["message"] == "Login successful."
 
                 # Access a protected endpoint
-                response = client2.get("/protected")
+                response = client2.get(f"{API_PREFIX}/protected")
                 assert response.status_code == 200
                 assert response.json()["message"] == "You are authenticated!"
 
             with TestClient(server.api) as client3:
                 # Login with wrong token
-                response = client3.post("/login", json={"token": "bad-token"})
+                response = client3.post(f"{API_PREFIX}/login", json={"token": "bad-token"})
                 assert response.status_code == 401
                 assert response.json()["detail"] == "Invalid token"
