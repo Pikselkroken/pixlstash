@@ -447,7 +447,7 @@ def test_smart_score_correlates_with_reference_scores():
             client = TestClient(server.api)
 
             login = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                f"{_API_PREFIX}/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert login.status_code == 200
 
@@ -476,6 +476,13 @@ def test_smart_score_correlates_with_reference_scores():
             }
             for future in emb_futures.values():
                 future.result(timeout=_TASK_TIMEOUT_S)
+
+            # Quality metrics (sharpness, edge_density, luminance_entropy,
+            # text_score) are used by the smart-score formula.  Wait until
+            # every imported picture has a quality row before querying.
+            _poll_until_zero(
+                server, QualityTask.count_missing_quality, "picture quality"
+            )
 
             def fetch_imported_picture_shas(session):
                 pics = session.exec(
@@ -515,11 +522,11 @@ def test_smart_score_correlates_with_reference_scores():
             )
 
             for pic_id, score in expected_score_by_picture_id.items():
-                patch_resp = client.patch(f"/pictures/{pic_id}", json={"score": score})
+                patch_resp = client.patch(f"{_API_PREFIX}/pictures/{pic_id}", json={"score": score})
                 assert patch_resp.status_code == 200, patch_resp.text
 
             smart_resp = client.get(
-                "/pictures",
+                f"{_API_PREFIX}/pictures",
                 params={
                     "sort": "SMART_SCORE",
                     "descending": "true",
