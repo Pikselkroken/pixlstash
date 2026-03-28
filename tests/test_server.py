@@ -35,42 +35,6 @@ from tests.utils import upload_pictures_and_wait, wait_for_faces
 
 logger = get_logger(__name__)
 
-API_PREFIX = "/api/v1"
-_NON_API_ROOT_PATHS = {
-    "/",
-    "/version",
-    "/version/latest",
-    "/favicon.ico",
-}
-
-
-def _normalize_test_path(path: str):
-    if not isinstance(path, str):
-        return path
-    if not path.startswith("/"):
-        return path
-    if path.startswith(API_PREFIX):
-        return path
-    if path in _NON_API_ROOT_PATHS:
-        return path
-    return f"{API_PREFIX}{path}"
-
-
-def _patch_test_client_api_prefix() -> None:
-    for method_name in ("get", "post", "put", "patch", "delete"):
-        original = getattr(TestClient, method_name)
-
-        def _make_wrapper(original_method):
-            def _wrapped(self, url, *args, **kwargs):
-                return original_method(self, _normalize_test_path(url), *args, **kwargs)
-
-            return _wrapped
-
-        setattr(TestClient, method_name, _make_wrapper(original))
-
-
-_patch_test_client_api_prefix()
-
 _REGRESSION_DIR = Path(__file__).resolve().parent / "regression"
 
 # Monkey-patch os.remove and shutil.rmtree to log deletions

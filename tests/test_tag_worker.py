@@ -14,8 +14,6 @@ from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
 
-_API_PREFIX = "/api/v1"
-
 
 def make_image(color=(0, 0, 0)):
     img = Image.new("RGB", (64, 64), color)
@@ -34,7 +32,7 @@ def test_tag_worker_picture_tags():
             client = TestClient(server.api)
 
             resp = client.post(
-                f"{_API_PREFIX}/login", json={"username": "testuser", "password": "testpassword"}
+                "/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert resp.status_code == 200
 
@@ -87,7 +85,7 @@ def test_tag_worker_end_to_end():
             client = TestClient(server.api)
 
             resp = client.post(
-                f"{_API_PREFIX}/login", json={"username": "testuser", "password": "testpassword"}
+                "/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert resp.status_code == 200
 
@@ -143,7 +141,7 @@ def test_tagger_worker_adds_tags():
             client = TestClient(server.api)
 
             resp = client.post(
-                f"{_API_PREFIX}/login", json={"username": "testuser", "password": "testpassword"}
+                "/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert resp.status_code == 200
 
@@ -162,7 +160,7 @@ def test_tagger_worker_adds_tags():
             )
             assert future.result(timeout=60), "Tagger worker did not finish in time"
 
-            get_pic_resp = client.get(f"{_API_PREFIX}/pictures/{picture_id}/metadata")
+            get_pic_resp = client.get(f"/pictures/{picture_id}/metadata")
             assert get_pic_resp.status_code == 200, (
                 f"Failed to get picture metadata {picture_id} with error {get_pic_resp.text}"
             )
@@ -172,7 +170,7 @@ def test_tagger_worker_adds_tags():
             )
 
             # Wait for tag worker to process
-            get_resp = client.get(f"{_API_PREFIX}/pictures/{picture_id}/tags")
+            get_resp = client.get(f"/pictures/{picture_id}/tags")
             assert get_resp.status_code == 200, (
                 f"Failed to get tags for picture {picture_id} with error {get_resp.text}"
             )

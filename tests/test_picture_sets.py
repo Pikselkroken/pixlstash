@@ -15,8 +15,6 @@ from tests.utils import upload_pictures_and_wait
 
 logger = get_logger(__name__)
 
-_API_PREFIX = "/api/v1"
-
 
 def log_resources(label):
     process = psutil.Process()
@@ -43,7 +41,7 @@ def setup_server_with_temp_db():
     client = TestClient(server.api)
 
     resp = client.post(
-        f"{_API_PREFIX}/login", json={"username": "testuser", "password": "testpassword"}
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
     assert resp.status_code == 200
     return temp_dir, client, server
@@ -54,13 +52,13 @@ def test_create_and_list_picture_set():
     try:
         # Create a new picture set
         resp = client.post(
-            f"{_API_PREFIX}/picture_sets", json={"name": "TestSet", "description": "A test set"}
+            "/picture_sets", json={"name": "TestSet", "description": "A test set"}
         )
         assert resp.status_code == 200
         data = resp.json()
         set_id = data["picture_set"]["id"]
         # List all picture sets
-        resp = client.get(f"{_API_PREFIX}/picture_sets")
+        resp = client.get("/picture_sets")
         assert resp.status_code == 200
         sets = resp.json()
         assert any(s["id"] == set_id for s in sets)
@@ -74,15 +72,15 @@ def test_get_picture_set_metadata_and_members():
     temp_dir, client, server = setup_server_with_temp_db()
     try:
         # Create a new set
-        resp = client.post(f"{_API_PREFIX}/picture_sets", json={"name": "MetaSet"})
+        resp = client.post("/picture_sets", json={"name": "MetaSet"})
         set_id = resp.json()["picture_set"]["id"]
         # Get metadata
-        resp = client.get(f"{_API_PREFIX}/picture_sets/{set_id}?info=true")
+        resp = client.get(f"/picture_sets/{set_id}?info=true")
         assert resp.status_code == 200
         meta = resp.json()
         assert meta["id"] == set_id
         # Get members (should be empty)
-        resp = client.get(f"{_API_PREFIX}/picture_sets/{set_id}/members")
+        resp = client.get(f"/picture_sets/{set_id}/members")
         assert resp.status_code == 200
         assert resp.json()["picture_ids"] == []
     finally:
@@ -95,7 +93,7 @@ def test_add_and_remove_picture_from_set():
     temp_dir, client, server = setup_server_with_temp_db()
     try:
         # Create set
-        resp = client.post(f"{_API_PREFIX}/picture_sets", json={"name": "AddRemSet"})
+        resp = client.post("/picture_sets", json={"name": "AddRemSet"})
         set_id = resp.json()["picture_set"]["id"]
         # Add a real picture from the pictures/ directory
         import glob
@@ -106,7 +104,7 @@ def test_add_and_remove_picture_from_set():
         )
         assert png_files, "No PNG files found in pictures/ directory for test."
         img_path = png_files[0]
-        with client.websocket_connect(f"{_API_PREFIX}/ws/updates") as ws:
+        with client.websocket_connect("/ws/updates") as ws:
             import threading
             import queue
 
@@ -130,7 +128,7 @@ def test_add_and_remove_picture_from_set():
             # Get picture id
             pic_id = import_status["results"][0]["picture_id"]
             # Add to set
-            resp = client.post(f"{_API_PREFIX}/picture_sets/{set_id}/members/{pic_id}")
+            resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
             assert resp.status_code == 200
             # PICTURE_IMPORTED was fired during the blocking import call above;
             # the message is already queued.  Reset the deadline so we have a
@@ -150,12 +148,12 @@ def test_add_and_remove_picture_from_set():
                     break
             assert imported, "Timed out waiting for PICTURE_IMPORTED websocket event"
         # Check members
-        resp = client.get(f"{_API_PREFIX}/picture_sets/{set_id}/members")
+        resp = client.get(f"/picture_sets/{set_id}/members")
         assert pic_id in resp.json()["picture_ids"]
         # Remove from set
-        resp = client.delete(f"{_API_PREFIX}/picture_sets/{set_id}/members/{pic_id}")
+        resp = client.delete(f"/picture_sets/{set_id}/members/{pic_id}")
         assert resp.status_code == 200
-        resp = client.get(f"{_API_PREFIX}/picture_sets/{set_id}/members")
+        resp = client.get(f"/picture_sets/{set_id}/members")
         assert pic_id not in resp.json()["picture_ids"]
     finally:
         server.vault.close()
@@ -167,21 +165,21 @@ def test_update_and_delete_picture_set():
     temp_dir, client, server = setup_server_with_temp_db()
     try:
         # Create set
-        resp = client.post(f"{_API_PREFIX}/picture_sets", json={"name": "UpdDelSet"})
+        resp = client.post("/picture_sets", json={"name": "UpdDelSet"})
         set_id = resp.json()["picture_set"]["id"]
         # Update name/description
         resp = client.patch(
-            f"{_API_PREFIX}/picture_sets/{set_id}", json={"name": "Updated", "description": "Desc"}
+            f"/picture_sets/{set_id}", json={"name": "Updated", "description": "Desc"}
         )
         assert resp.status_code == 200
-        resp = client.get(f"{_API_PREFIX}/picture_sets/{set_id}?info=true")
+        resp = client.get(f"/picture_sets/{set_id}?info=true")
         meta = resp.json()
         assert meta["name"] == "Updated"
         assert meta["description"] == "Desc"
         # Delete set
-        resp = client.delete(f"{_API_PREFIX}/picture_sets/{set_id}")
+        resp = client.delete(f"/picture_sets/{set_id}")
         assert resp.status_code == 200
-        resp = client.get(f"{_API_PREFIX}/picture_sets/{set_id}?info=true")
+        resp = client.get(f"/picture_sets/{set_id}?info=true")
         assert resp.status_code == 404
     finally:
         server.vault.close()
@@ -192,7 +190,7 @@ def test_update_and_delete_picture_set():
 def test_reassigning_set_project_reconciles_member_picture_memberships():
     temp_dir, client, server = setup_server_with_temp_db()
     try:
-        project_resp = client.post(f"{_API_PREFIX}/projects", json={"name": "Set Reconcile Project"})
+        project_resp = client.post("/projects", json={"name": "Set Reconcile Project"})
         assert project_resp.status_code == 200
         project_id = project_resp.json()["id"]
 
@@ -224,17 +222,17 @@ def test_reassigning_set_project_reconciles_member_picture_memberships():
         pic_id = import_resp["results"][0]["picture_id"]
 
         set_resp = client.post(
-            f"{_API_PREFIX}/picture_sets",
+            "/picture_sets",
             json={"name": "Set Reconcile", "project_id": project_id},
         )
         assert set_resp.status_code == 200
         set_id = set_resp.json()["picture_set"]["id"]
 
-        add_resp = client.post(f"{_API_PREFIX}/picture_sets/{set_id}/members/{pic_id}")
+        add_resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
         assert add_resp.status_code == 200
 
         remove_resp = client.patch(
-            f"{_API_PREFIX}/pictures/project",
+            "/pictures/project",
             json={
                 "picture_ids": [pic_id],
                 "project_id": project_id,
@@ -243,23 +241,23 @@ def test_reassigning_set_project_reconciles_member_picture_memberships():
         )
         assert remove_resp.status_code == 200
 
-        before_resp = client.get(f"{_API_PREFIX}/pictures", params={"project_id": str(project_id)})
+        before_resp = client.get("/pictures", params={"project_id": str(project_id)})
         assert before_resp.status_code == 200
         before_ids = {row.get("id") for row in before_resp.json()}
         assert pic_id not in before_ids
 
         reconcile_resp = client.patch(
-            f"{_API_PREFIX}/picture_sets/{set_id}",
+            f"/picture_sets/{set_id}",
             json={"project_id": project_id},
         )
         assert reconcile_resp.status_code == 200
 
-        after_resp = client.get(f"{_API_PREFIX}/pictures", params={"project_id": str(project_id)})
+        after_resp = client.get("/pictures", params={"project_id": str(project_id)})
         assert after_resp.status_code == 200
         after_ids = {row.get("id") for row in after_resp.json()}
         assert pic_id in after_ids
 
-        metadata_resp = client.get(f"{_API_PREFIX}/pictures/{pic_id}/metadata")
+        metadata_resp = client.get(f"/pictures/{pic_id}/metadata")
         assert metadata_resp.status_code == 200
         assert metadata_resp.json().get("project_id") == project_id
     finally:
@@ -273,12 +271,12 @@ def test_reference_picture_set_created_with_character():
     try:
         # Create a character
         char_name = "RefSetChar"
-        resp = client.post(f"{_API_PREFIX}/characters", json={"name": char_name})
+        resp = client.post("/characters", json={"name": char_name})
         assert resp.status_code == 200
         char = resp.json()["character"]
         assert char is not None
         # List all picture sets
-        resp = client.get(f"{_API_PREFIX}/picture_sets")
+        resp = client.get("/picture_sets")
         assert resp.status_code == 200
         sets = resp.json()
         # There should be a reference set with name 'reference_pictures' and description == char_name
@@ -300,11 +298,11 @@ def test_reference_picture_set_unique_per_character():
     temp_dir, client, server = setup_server_with_temp_db()
     try:
         # Create two characters
-        resp1 = client.post(f"{_API_PREFIX}/characters", json={"name": "CharA"})
-        resp2 = client.post(f"{_API_PREFIX}/characters", json={"name": "CharB"})
+        resp1 = client.post("/characters", json={"name": "CharA"})
+        resp2 = client.post("/characters", json={"name": "CharB"})
         assert resp1.status_code == 200 and resp2.status_code == 200
         # List all picture sets
-        resp = client.get(f"{_API_PREFIX}/picture_sets")
+        resp = client.get("/picture_sets")
         sets = resp.json()
         ref_a = [
             s
@@ -329,10 +327,10 @@ def test_no_duplicate_reference_picture_sets():
     try:
         # Create a character
         char_name = "NoDupChar"
-        resp = client.post(f"{_API_PREFIX}/characters", json={"name": char_name})
+        resp = client.post("/characters", json={"name": char_name})
         assert resp.status_code == 200
         # List all picture sets
-        resp = client.get(f"{_API_PREFIX}/picture_sets")
+        resp = client.get("/picture_sets")
         sets = resp.json()
         ref_sets = [
             s
@@ -341,9 +339,9 @@ def test_no_duplicate_reference_picture_sets():
         ]
         assert len(ref_sets) == 1
         # Try to create the same character name again (should create a new character and a new reference set with the same description)
-        client.post(f"{_API_PREFIX}/characters", json={"name": char_name})
+        client.post("/characters", json={"name": char_name})
         # Accept either error or success, and allow multiple reference sets with the same description
-        resp = client.get(f"{_API_PREFIX}/picture_sets")
+        resp = client.get("/picture_sets")
         sets = resp.json()
         ref_sets = [
             s
