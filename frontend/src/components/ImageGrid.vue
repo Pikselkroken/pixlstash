@@ -2058,7 +2058,45 @@ const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
 });
 const selectedExpandedCount = computed(() => {
-  const selectedSet = new Set(selectedImageIds.value.map((id) => Number(id)));
+  const selectedSet = new Set(
+    selectedImageIds.value
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0),
+  );
+  const visibleIds = new Set(
+    allGridImages.value
+      .map((img) => Number(img?.id))
+      .filter((id) => Number.isFinite(id) && id > 0),
+  );
+  const isFullVisibleSelection =
+    visibleIds.size > 0 &&
+    selectedSet.size === visibleIds.size &&
+    [...visibleIds].every((id) => selectedSet.has(id));
+
+  const isTopCategorySelection = [
+    String(props.allPicturesId),
+    String(props.unassignedPicturesId),
+  ].includes(String(props.selectedCharacter ?? ""));
+
+  const hasNoAdditionalFilters =
+    !props.selectedSet &&
+    !(props.searchQuery || "").trim() &&
+    props.mediaTypeFilter === "all" &&
+    (props.comfyuiModelFilter || []).length === 0 &&
+    (props.comfyuiLoraFilter || []).length === 0 &&
+    props.minScoreFilter == null;
+
+  // Keep the info count aligned with sidebar summary for full category selections.
+  if (
+    isFullVisibleSelection &&
+    isTopCategorySelection &&
+    hasNoAdditionalFilters &&
+    totalCurrentCategoryCount.value > 0
+  ) {
+    return totalCurrentCategoryCount.value;
+  }
+
+  const seenStacks = new Set();
   let total = 0;
   for (const img of allGridImages.value) {
     if (!img || !img.id) continue;
@@ -3960,7 +3998,6 @@ function emitStackStats() {
 }
 
 function syncExpandAllStacksFromFetchedImages() {
-  if (!props.showStacks) return;
   const autoIds = collectExpandableStackIds(lastFetchedGridImages.value);
   const autoIdSet = new Set(autoIds);
   const currentIds = Array.from(expandedStackIds.value || []);
@@ -3975,6 +4012,19 @@ function syncExpandAllStacksFromFetchedImages() {
   if (changed) {
     expandedStackIds.value = nextIds;
   }
+}
+
+async function expandAllStacks() {
+  const autoIds = collectExpandableStackIds(lastFetchedGridImages.value);
+  expandedStackIds.value = new Set(autoIds);
+  rebuildGridImagesFromLastFetch();
+  await refreshExpandedStacksAfterFetch();
+}
+
+async function collapseAllStacks() {
+  expandedStackIds.value = new Set();
+  rebuildGridImagesFromLastFetch();
+  await refreshExpandedStacksAfterFetch();
 }
 
 async function ensureStackMembersLoaded(stackId, expectedCount = null) {
@@ -5485,6 +5535,8 @@ defineExpose({
   gridEl: scrollWrapper,
   onGlobalKeyPress,
   updateVisibleThumbnails,
+  expandAllStacks,
+  collapseAllStacks,
   exportCurrentViewToZip,
   getExportCount,
   removeImagesById,
