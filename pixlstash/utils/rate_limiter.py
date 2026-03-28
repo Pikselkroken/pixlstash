@@ -1,7 +1,7 @@
 """Simple global rate limiter for unauthenticated routes.
 
 Applied only to paths that don't require a session — the same set defined in
-``pixlstash.auth.AUTH_EXCLUDED_PATHS`` / ``AUTH_EXCLUDED_PREFIXES``.
+``pixlstash.auth.is_auth_excluded_path``.
 Uses a sliding window — no per-IP tracking, no external dependencies.
 """
 
@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.types import ASGIApp
 
-from pixlstash.auth import AUTH_EXCLUDED_PATHS, AUTH_EXCLUDED_PREFIXES
+from pixlstash.auth import is_auth_excluded_path
 
 _LIMIT = 120  # max requests
 _WINDOW = 60  # per this many seconds
@@ -36,9 +36,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable):
         path = request.url.path
 
-        is_public = path in AUTH_EXCLUDED_PATHS or any(
-            path.startswith(p) for p in AUTH_EXCLUDED_PREFIXES
-        )
+        is_public = is_auth_excluded_path(path)
         if not is_public:
             return await call_next(request)
 

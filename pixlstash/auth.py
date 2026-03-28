@@ -56,6 +56,32 @@ AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/docs/",
     "/redoc/",
 )
+AUTH_API_PREFIXES: tuple[str, ...] = (
+    "/api/v1",
+)
+
+
+def is_auth_excluded_path(path: str) -> bool:
+    """Return True when *path* should bypass auth checks.
+
+    Supports both legacy unversioned public paths and versioned API paths
+    (e.g. ``/api/v1/login``).
+    """
+    if path in AUTH_EXCLUDED_PATHS or any(
+        path.startswith(prefix) for prefix in AUTH_EXCLUDED_PREFIXES
+    ):
+        return True
+
+    for api_prefix in AUTH_API_PREFIXES:
+        if not path.startswith(api_prefix):
+            continue
+        stripped = path[len(api_prefix) :] or "/"
+        if stripped in AUTH_EXCLUDED_PATHS or any(
+            stripped.startswith(prefix) for prefix in AUTH_EXCLUDED_PREFIXES
+        ):
+            return True
+
+    return False
 
 
 class AuthService:
@@ -496,9 +522,7 @@ class AuthService:
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        if request.url.path not in AUTH_EXCLUDED_PATHS and not any(
-            request.url.path.startswith(prefix) for prefix in AUTH_EXCLUDED_PREFIXES
-        ):
+        if not is_auth_excluded_path(request.url.path):
             session_id = request.cookies.get("session_id")
             if session_id not in self.active_session_ids:
                 self._logger.error(
