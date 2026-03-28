@@ -378,6 +378,14 @@ def test_duplicate_import_updates_project_context():
             assert first_import["results"][0]["status"] == "success"
             picture_id = first_import["results"][0]["picture_id"]
 
+            unrelated_import = upload_pictures_and_wait(
+                client,
+                [("file", ("unrelated.png", random_images[1], "image/png"))],
+            )
+            assert unrelated_import["status"] == "completed"
+            assert unrelated_import["results"][0]["status"] == "success"
+            unrelated_picture_id = unrelated_import["results"][0]["picture_id"]
+
             project_resp = client.post(
                 "/projects",
                 json={"name": "Import Context Project"},
@@ -397,6 +405,12 @@ def test_duplicate_import_updates_project_context():
             metadata_resp = client.get(f"/pictures/{picture_id}/metadata")
             assert metadata_resp.status_code == 200
             assert metadata_resp.json().get("project_id") == project_id
+
+            unrelated_metadata_resp = client.get(
+                f"/pictures/{unrelated_picture_id}/metadata"
+            )
+            assert unrelated_metadata_resp.status_code == 200
+            assert unrelated_metadata_resp.json().get("project_id") is None
 
     gc.collect()
     log_resources("END test_duplicate_import_updates_project_context")

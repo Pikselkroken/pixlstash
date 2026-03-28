@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import uuid
 import zipfile
 from io import BytesIO
@@ -37,6 +38,7 @@ from pixlstash.db_models import (
     Picture,
     PictureLikeness,
     PictureSetMember,
+    Project,
     Quality,
     SortMechanism,
     Tag,
@@ -2022,6 +2024,14 @@ def create_router(server) -> APIRouter:
                 detail="No valid media files found for import",
             )
 
+        logger.info(
+            "Import request received: files=%d, sidecar_txt=%d, project_id=%s, total_bytes=%d",
+            len(uploaded_files),
+            len(sidecar_text_by_stem),
+            project_id,
+            sum(len(data) for data, *_ in uploaded_files),
+        )
+
         sidecar_tags_by_stem: dict[str, list[str]] = {}
         if sidecar_text_by_stem:
             media_stem_set = set(uploaded_file_stems)
@@ -2049,20 +2059,47 @@ def create_router(server) -> APIRouter:
             )
 
         task_id = str(uuid.uuid4())
+        now_ms = int(time.time() * 1000)
         server.import_tasks[task_id] = {
             "status": "in_progress",
+            "stage": "queued",
             "total": len(uploaded_files),
             "processed": 0,
             "results": None,
             "error": None,
+            "created_epoch_ms": now_ms,
+            "last_update_epoch_ms": now_ms,
+            "last_poll_log_epoch_ms": 0,
         }
+
+        logger.info(
+            "Import task queued: task_id=%s total=%d project_id=%s",
+            task_id,
+            len(uploaded_files),
+            project_id,
+        )
 
         def run_import_task(server):
             try:
                 task = server.import_tasks[task_id]
 
+                def _mark_stage(stage: str, **extra):
+                    task["stage"] = stage
+                    task["last_update_epoch_ms"] = int(time.time() * 1000)
+                    task.update(extra)
+                    logger.info(
+                        "Import task stage: task_id=%s stage=%s processed=%d/%d",
+                        task_id,
+                        stage,
+                        int(task.get("processed") or 0),
+                        int(task.get("total") or 0),
+                    )
+
+                _mark_stage("hash_and_write")
+
                 def _on_picture_written():
                     task["processed"] = task.get("processed", 0) + 1
+                    task["last_update_epoch_ms"] = int(time.time() * 1000)
 
                 shas, existing_map, new_pictures = _create_picture_imports(
                     server,
@@ -2075,12 +2112,20 @@ def create_router(server) -> APIRouter:
                 # the progress bar stays accurate even when most files are dupes.
                 duplicate_count_initial = sum(1 for sha in shas if sha in existing_map)
                 task["processed"] = len(new_pictures) + duplicate_count_initial
+                task["last_update_epoch_ms"] = int(time.time() * 1000)
+
+                _mark_stage(
+                    "deduplicated",
+                    duplicate_count_initial=duplicate_count_initial,
+                    new_count=len(new_pictures),
+                )
 
                 logger.debug(
                     f"Importing {len(new_pictures)} new pictures out of {len(uploaded_files)} uploaded."
                 )
 
                 if new_pictures:
+                    _mark_stage("persisting_new_pictures")
                     if project_id is not None:
                         for pic in new_pictures:
                             pic.project_id = project_id
@@ -2100,6 +2145,7 @@ def create_router(server) -> APIRouter:
                     logger.warning("No new pictures to import; all are duplicates.")
                     new_pictures = []
 
+                _mark_stage("building_results")
                 results = []
                 duplicate_count = 0
                 index = 0
@@ -2146,17 +2192,21 @@ def create_router(server) -> APIRouter:
                     )
                 server.import_tasks[task_id]["results"] = results
                 server.import_tasks[task_id]["processed"] = len(uploaded_files)
-                imported_picture_ids = [
-                    pic.id for pic in new_pictures if pic.id is not None
-                ]
-                duplicate_picture_ids = [
-                    pic.id for pic in existing_map.values() if pic.id is not None
-                ]
+                server.import_tasks[task_id]["last_update_epoch_ms"] = int(
+                    time.time() * 1000
+                )
+                # Only apply import context to pictures that were actually
+                # touched by this request (one results row per uploaded file).
                 all_imported_ids = list(
-                    dict.fromkeys(imported_picture_ids + duplicate_picture_ids)
+                    dict.fromkeys(
+                        entry.get("picture_id")
+                        for entry in results
+                        if entry.get("picture_id") is not None
+                    )
                 )
 
                 if picture_id_sidecar_tags:
+                    _mark_stage("applying_sidecar_tags")
 
                     def apply_sidecar_tags(
                         session,
@@ -2221,6 +2271,7 @@ def create_router(server) -> APIRouter:
                         server.vault.notify(EventType.CHANGED_TAGS)
 
                 if all_imported_ids:
+                    _mark_stage("finalizing_import_context")
                     # Queue face extraction asynchronously — do not block on it.
                     for pic in new_pictures:
                         server.vault.get_worker_future(
@@ -2255,6 +2306,10 @@ def create_router(server) -> APIRouter:
                         project_id,
                     )
                     server.import_tasks[task_id]["status"] = "completed"
+                    server.import_tasks[task_id]["stage"] = "completed"
+                    server.import_tasks[task_id]["last_update_epoch_ms"] = int(
+                        time.time() * 1000
+                    )
                     server.vault.notify(EventType.CHANGED_PICTURES)
                     if imported_ids:
                         server.vault.notify(
@@ -2263,10 +2318,19 @@ def create_router(server) -> APIRouter:
                         )
                 else:
                     server.import_tasks[task_id]["status"] = "completed"
+                    server.import_tasks[task_id]["stage"] = "completed"
+                    server.import_tasks[task_id]["last_update_epoch_ms"] = int(
+                        time.time() * 1000
+                    )
                     server.vault.notify(EventType.CHANGED_PICTURES)
+                logger.info("Import task completed: task_id=%s", task_id)
             except Exception as exc:
                 server.import_tasks[task_id]["status"] = "failed"
+                server.import_tasks[task_id]["stage"] = "failed"
                 server.import_tasks[task_id]["error"] = str(exc)
+                server.import_tasks[task_id]["last_update_epoch_ms"] = int(
+                    time.time() * 1000
+                )
                 logger.error(f"Import task {task_id} failed: {exc}")
 
         background_tasks.add_task(run_import_task, server)
@@ -2282,12 +2346,31 @@ def create_router(server) -> APIRouter:
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
 
+        now_ms = int(time.time() * 1000)
+        last_poll_log_epoch_ms = int(task.get("last_poll_log_epoch_ms") or 0)
+        if (
+            task.get("status") == "in_progress"
+            and now_ms - last_poll_log_epoch_ms >= 10_000
+        ):
+            task["last_poll_log_epoch_ms"] = now_ms
+            created_ms = int(task.get("created_epoch_ms") or now_ms)
+            elapsed_s = max(0.0, (now_ms - created_ms) / 1000.0)
+            logger.info(
+                "Import task heartbeat: task_id=%s stage=%s processed=%d/%d elapsed=%.1fs",
+                task_id,
+                task.get("stage", "unknown"),
+                int(task.get("processed") or 0),
+                int(task.get("total") or 0),
+                elapsed_s,
+            )
+
         total = task.get("total") or 0
         processed = task.get("processed") or 0
         progress = (processed / total * 100.0) if total else 0.0
 
         payload = {
             "status": task["status"],
+            "stage": task.get("stage", "unknown"),
             "total": total,
             "processed": processed,
             "progress": progress,
@@ -2297,6 +2380,97 @@ def create_router(server) -> APIRouter:
         if task["status"] == "failed":
             payload["error"] = task.get("error")
         return payload
+
+    @router.patch(
+        "/pictures/project",
+        summary="Set project for pictures",
+        description="Assigns or clears project association for a batch of pictures.",
+    )
+    def set_project_for_pictures(payload: dict = Body(...)):
+        picture_ids_raw = payload.get("picture_ids")
+        if not isinstance(picture_ids_raw, list):
+            raise HTTPException(status_code=400, detail="picture_ids must be a list")
+
+        try:
+            picture_ids = sorted(
+                {
+                    int(pid)
+                    for pid in picture_ids_raw
+                    if pid is not None and int(pid) > 0
+                }
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="picture_ids must contain valid positive integers",
+            ) from exc
+
+        if not picture_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one valid picture id is required",
+            )
+
+        project_id_raw = payload.get("project_id", None)
+        if project_id_raw is None:
+            project_id_value = None
+        else:
+            try:
+                project_id_value = int(project_id_raw)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="project_id must be an integer or null",
+                ) from exc
+
+        def update_picture_projects(
+            session: Session,
+            ids: list[int],
+            project_id_target: int | None,
+        ):
+            if project_id_target is not None:
+                project = session.get(Project, project_id_target)
+                if project is None:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+            pics = session.exec(
+                select(Picture)
+                .where(Picture.id.in_(ids))
+                .where(Picture.deleted.is_(False))
+            ).all()
+            updated_ids: list[int] = []
+            found_ids: set[int] = set()
+            for pic in pics:
+                if pic.id is None:
+                    continue
+                found_ids.add(int(pic.id))
+                if pic.project_id == project_id_target:
+                    continue
+                pic.project_id = project_id_target
+                session.add(pic)
+                updated_ids.append(int(pic.id))
+            if updated_ids:
+                session.commit()
+            missing_ids = [pid for pid in ids if pid not in found_ids]
+            return updated_ids, missing_ids
+
+        updated_ids, missing_ids = server.vault.db.run_task(
+            update_picture_projects,
+            picture_ids,
+            project_id_value,
+            priority=DBPriority.IMMEDIATE,
+        )
+
+        if updated_ids:
+            server.vault.notify(EventType.CHANGED_PICTURES)
+
+        return {
+            "status": "success",
+            "project_id": project_id_value,
+            "updated_ids": updated_ids,
+            "updated_count": len(updated_ids),
+            "missing_ids": missing_ids,
+        }
 
     @router.get(
         "/pictures/{id}.{ext}",
