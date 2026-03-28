@@ -6,13 +6,15 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
-from sqlalchemy import desc, func, nullslast
+from sqlalchemy import desc, exists, func, nullslast
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
     Picture,
+    PictureProjectMember,
+    Project,
     PictureSet,
     PictureSetMember,
     SortMechanism,
@@ -37,6 +39,21 @@ _UNSET = object()
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
+
+    def _project_membership_exists(project_id_value: int):
+        return exists(
+            select(PictureProjectMember.picture_id).where(
+                PictureProjectMember.picture_id == Picture.id,
+                PictureProjectMember.project_id == project_id_value,
+            )
+        )
+
+    def _project_membership_unassigned():
+        return ~exists(
+            select(PictureProjectMember.picture_id).where(
+                PictureProjectMember.picture_id == Picture.id
+            )
+        )
 
     def _enrich_with_stack_counts(pictures: list[dict]) -> list[dict]:
         if not pictures:
@@ -164,8 +181,18 @@ def create_router(server) -> APIRouter:
         summary="List picture sets",
         description="Returns picture sets with visible member counts, top pictures, and thumbnail URLs.",
     )
-    def get_picture_sets(request: Request):
+    def get_picture_sets(request: Request, project_id: str | None = Query(None)):
         hidden_tags = _get_hidden_tags_from_request(request)
+
+        project_filter = None
+        if project_id is not None:
+            if project_id == "UNASSIGNED":
+                project_filter = _project_membership_unassigned()
+            else:
+                try:
+                    project_filter = _project_membership_exists(int(project_id))
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="Invalid project_id")
 
         def fetch_sets(session):
             sets = session.exec(
@@ -173,14 +200,17 @@ def create_router(server) -> APIRouter:
             ).all()
             result = []
             for s in sets:
-                members = session.exec(
+                members_query = (
                     select(PictureSetMember.picture_id)
                     .join(Picture, Picture.id == PictureSetMember.picture_id)
                     .where(
                         PictureSetMember.set_id == s.id,
                         Picture.deleted.is_(False),
                     )
-                ).all()
+                )
+                if project_filter is not None:
+                    members_query = members_query.where(project_filter)
+                members = session.exec(members_query).all()
                 filtered_ids = _filter_hidden_picture_ids(
                     session,
                     [m for m in members if m is not None],
@@ -474,6 +504,7 @@ def create_router(server) -> APIRouter:
         format: list[str] = Query(None),
         character_id: str | None = Query(None),
         reference_character_id: str | None = Query(None),
+        project_id: str | None = Query(None),
         fields: str = Query(None),
     ):
         sort_mech = None
@@ -484,18 +515,31 @@ def create_router(server) -> APIRouter:
                 logger.error("Invalid sort mechanism: %s - %s", sort, ve)
                 raise HTTPException(status_code=400, detail=str(ve))
 
+        project_filter = None
+        if project_id is not None:
+            if project_id == "UNASSIGNED":
+                project_filter = _project_membership_unassigned()
+            else:
+                try:
+                    project_filter = _project_membership_exists(int(project_id))
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="Invalid project_id")
+
         def fetch_set(session, id):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return None, None
-            members = session.exec(
+            members_query = (
                 select(PictureSetMember.picture_id)
                 .join(Picture, Picture.id == PictureSetMember.picture_id)
                 .where(
                     PictureSetMember.set_id == id,
                     Picture.deleted.is_(False),
                 )
-            ).all()
+            )
+            if project_filter is not None:
+                members_query = members_query.where(project_filter)
+            members = session.exec(members_query).all()
             seen = set()
             picture_ids = []
             for pic_id in members:
@@ -526,21 +570,23 @@ def create_router(server) -> APIRouter:
         def expand_with_stack_members(session, ids):
             if not ids:
                 return ids
-            rows = session.exec(
-                select(Picture.id, Picture.stack_id).where(
-                    Picture.id.in_(ids),
-                    Picture.deleted.is_(False),
-                )
-            ).all()
+            base_query = select(Picture.id, Picture.stack_id).where(
+                Picture.id.in_(ids),
+                Picture.deleted.is_(False),
+            )
+            if project_filter is not None:
+                base_query = base_query.where(project_filter)
+            rows = session.exec(base_query).all()
             stack_ids = [int(stack_id) for _, stack_id in rows if stack_id is not None]
             if not stack_ids:
                 return ids
-            extra = session.exec(
-                select(Picture.id).where(
-                    Picture.stack_id.in_(stack_ids),
-                    Picture.deleted.is_(False),
-                )
-            ).all()
+            extra_query = select(Picture.id).where(
+                Picture.stack_id.in_(stack_ids),
+                Picture.deleted.is_(False),
+            )
+            if project_filter is not None:
+                extra_query = extra_query.where(project_filter)
+            extra = session.exec(extra_query).all()
             return list(set(ids) | set(extra))
 
         picture_ids = server.vault.db.run_immediate_read_task(
@@ -624,35 +670,94 @@ def create_router(server) -> APIRouter:
     def update_picture_set(id: int, payload: dict = Body(...)):
         name = payload.get("name")
         description = payload.get("description")
-        project_id = payload.get("project_id", _UNSET)
+        raw_project_id = payload.get("project_id", _UNSET)
+        project_id = raw_project_id
+        if raw_project_id is not _UNSET:
+            if raw_project_id is None:
+                project_id = None
+            else:
+                try:
+                    project_id = int(raw_project_id)
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(
+                        status_code=400, detail="Invalid project_id"
+                    ) from exc
 
         def update_set(session, id, name, description, project_id):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
+
+            project_id_payload_provided = project_id is not _UNSET
+            project_assignment_requested = (
+                project_id_payload_provided and project_id is not None
+            )
+            project_id_changed = (
+                project_id_payload_provided and project_id != picture_set.project_id
+            )
+            pictures_changed = False
             if name is not None:
                 picture_set.name = name
             if description is not None:
                 picture_set.description = description
-            if project_id is not _UNSET and project_id != picture_set.project_id:
+            if project_id_payload_provided and project_id is not None:
+                project = session.get(Project, project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+            if project_id_changed:
                 picture_set.project_id = project_id
-                members = session.exec(
-                    select(PictureSetMember).where(PictureSetMember.set_id == id)
-                ).all()
-                for member in members:
-                    pic = session.get(Picture, member.picture_id)
-                    if pic and not pic.deleted:
-                        pic.project_id = project_id
-                        session.add(pic)
+
+            # Always reconcile member picture memberships when an explicit
+            # non-null project assignment is requested. This keeps set
+            # assignment idempotent and repairs historical drift where the set
+            # is assigned but some members are missing project membership rows.
+            if project_assignment_requested:
+                member_ids = [
+                    pic_id
+                    for pic_id in session.exec(
+                        select(PictureSetMember.picture_id).where(
+                            PictureSetMember.set_id == id
+                        )
+                    ).all()
+                    if pic_id is not None
+                ]
+                if member_ids:
+                    pictures = session.exec(
+                        select(Picture).where(Picture.id.in_(member_ids))
+                    ).all()
+                    for pic in pictures:
+                        if pic.id is None:
+                            continue
+                        membership = session.exec(
+                            select(PictureProjectMember).where(
+                                PictureProjectMember.picture_id == int(pic.id),
+                                PictureProjectMember.project_id == project_id,
+                            )
+                        ).first()
+                        if membership is None:
+                            session.add(
+                                PictureProjectMember(
+                                    picture_id=int(pic.id),
+                                    project_id=project_id,
+                                )
+                            )
+                            pictures_changed = True
+                        if pic.project_id != project_id:
+                            pic.project_id = project_id
+                            session.add(pic)
+                            pictures_changed = True
 
             session.commit()
-            return True
+            return True, project_id_changed or pictures_changed
 
-        success = server.vault.db.run_task(
+        success, project_changed = server.vault.db.run_task(
             update_set, id, name, description, project_id, priority=DBPriority.IMMEDIATE
         )
         if not success:
             raise HTTPException(status_code=404, detail="Picture set not found")
+        if project_changed:
+            server.vault.notify(EventType.CHANGED_PICTURES)
         return {"status": "success"}
 
     @router.delete(
@@ -731,12 +836,24 @@ def create_router(server) -> APIRouter:
                 return False
             member = PictureSetMember(set_id=id, picture_id=picture_id)
             session.add(member)
-            session.add(picture_set)
-            session.commit()
-            if picture_set.project_id is not None and picture.project_id is None:
+            if picture_set.project_id is not None:
+                membership = session.exec(
+                    select(PictureProjectMember).where(
+                        PictureProjectMember.picture_id == picture.id,
+                        PictureProjectMember.project_id == picture_set.project_id,
+                    )
+                ).first()
+                if membership is None:
+                    session.add(
+                        PictureProjectMember(
+                            picture_id=picture.id,
+                            project_id=picture_set.project_id,
+                        )
+                    )
                 picture.project_id = picture_set.project_id
                 session.add(picture)
-                session.commit()
+            session.add(picture_set)
+            session.commit()
             return True
 
         success = server.vault.db.run_task(
@@ -747,6 +864,7 @@ def create_router(server) -> APIRouter:
             priority=DBPriority.IMMEDIATE,
         )
         if success:
+            server.vault.notify(EventType.CHANGED_PICTURES)
             if reference_character_id is not None:
                 server.vault.notify(EventType.CHANGED_CHARACTERS)
         else:

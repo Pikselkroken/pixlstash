@@ -187,6 +187,85 @@ def test_update_and_delete_picture_set():
         gc.collect()
 
 
+def test_reassigning_set_project_reconciles_member_picture_memberships():
+    temp_dir, client, server = setup_server_with_temp_db()
+    try:
+        project_resp = client.post("/projects", json={"name": "Set Reconcile Project"})
+        assert project_resp.status_code == 200
+        project_id = project_resp.json()["id"]
+
+        import glob
+
+        image_candidates = glob.glob(
+            os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png")
+        ) + glob.glob(
+            os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg")
+        )
+        assert image_candidates, "No test images found in pictures/ directory"
+        image_path = image_candidates[0]
+        mime_type = "image/png" if image_path.lower().endswith(".png") else "image/jpeg"
+
+        with open(image_path, "rb") as image_file:
+            import_resp = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            os.path.basename(image_path),
+                            image_file,
+                            mime_type,
+                        ),
+                    )
+                ],
+            )
+        pic_id = import_resp["results"][0]["picture_id"]
+
+        set_resp = client.post(
+            "/picture_sets",
+            json={"name": "Set Reconcile", "project_id": project_id},
+        )
+        assert set_resp.status_code == 200
+        set_id = set_resp.json()["picture_set"]["id"]
+
+        add_resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
+        assert add_resp.status_code == 200
+
+        remove_resp = client.patch(
+            "/pictures/project",
+            json={
+                "picture_ids": [pic_id],
+                "project_id": project_id,
+                "mode": "remove",
+            },
+        )
+        assert remove_resp.status_code == 200
+
+        before_resp = client.get("/pictures", params={"project_id": str(project_id)})
+        assert before_resp.status_code == 200
+        before_ids = {row.get("id") for row in before_resp.json()}
+        assert pic_id not in before_ids
+
+        reconcile_resp = client.patch(
+            f"/picture_sets/{set_id}",
+            json={"project_id": project_id},
+        )
+        assert reconcile_resp.status_code == 200
+
+        after_resp = client.get("/pictures", params={"project_id": str(project_id)})
+        assert after_resp.status_code == 200
+        after_ids = {row.get("id") for row in after_resp.json()}
+        assert pic_id in after_ids
+
+        metadata_resp = client.get(f"/pictures/{pic_id}/metadata")
+        assert metadata_resp.status_code == 200
+        assert metadata_resp.json().get("project_id") == project_id
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_reference_picture_set_created_with_character():
     temp_dir, client, server = setup_server_with_temp_db()
     try:

@@ -192,6 +192,7 @@
         <AddToProjectControl
           v-if="!isScrapheapView"
           :backend-url="backendUrl"
+          :picture-ids="selectedImageIds"
           :disabled="selectedCount <= 0"
           @selected="$emit('set-project', $event)"
         />
@@ -233,7 +234,7 @@
         >
           {{ removeButtonLabel }}
         </button>
-        <div class="plugin-run-controls">
+        <div v-if="!isScrapheapView" class="plugin-run-controls">
           <v-menu
             v-model="tagMenuOpen"
             :close-on-content-click="false"
@@ -448,13 +449,29 @@ const isScrapheapView = computed(() => {
   return selected === scrapheapId;
 });
 
+const normalizedSelectedCharacter = computed(() => {
+  const raw = String(props.selectedCharacter ?? "")
+    .trim()
+    .toUpperCase();
+  if (!raw || raw === "NULL" || raw === "UNDEFINED") return "";
+  return raw;
+});
+
+const hasSetSelectionContext = computed(() => {
+  const setId = Number(props.selectedSet);
+  return Number.isFinite(setId) && setId > 0;
+});
+
 const showRemoveButton = computed(() => {
   if (props.selectedCount <= 0) return false;
   if (isScrapheapView.value) return true;
+  if (hasSetSelectionContext.value) return false;
   return (
-    props.selectedCharacter &&
-    props.selectedCharacter !== props.allPicturesId &&
-    props.selectedCharacter !== props.unassignedPicturesId
+    !!normalizedSelectedCharacter.value &&
+    normalizedSelectedCharacter.value !==
+      String(props.allPicturesId).toUpperCase() &&
+    normalizedSelectedCharacter.value !==
+      String(props.unassignedPicturesId).toUpperCase()
   );
 });
 

@@ -37,6 +37,7 @@ from pixlstash.db_models import (
     Face,
     Picture,
     PictureLikeness,
+    PictureProjectMember,
     PictureSetMember,
     Project,
     Quality,
@@ -123,6 +124,96 @@ def _fetch_hidden_picture_ids(server, request: Request, picture_ids: list[int]):
     return server.vault.db.run_immediate_read_task(
         fetch_hidden, list(picture_ids), hidden_tag_set
     )
+
+
+def _project_membership_exists_clause(project_id: int, picture_model=Picture):
+    return exists(
+        select(PictureProjectMember.picture_id).where(
+            PictureProjectMember.picture_id == picture_model.id,
+            PictureProjectMember.project_id == project_id,
+        )
+    )
+
+
+def _project_unassigned_clause(picture_model=Picture):
+    return ~exists(
+        select(PictureProjectMember.picture_id).where(
+            PictureProjectMember.picture_id == picture_model.id
+        )
+    )
+
+
+def _normalize_set_mode(value: str | None) -> str:
+    mode = (value or "union").strip().lower()
+    if mode not in {"union", "intersection"}:
+        raise HTTPException(status_code=400, detail="Invalid set_mode")
+    return mode
+
+
+def _collect_set_filter_ids(
+    *,
+    set_id_value: int | str | None,
+    set_ids_values: list[int | str] | None,
+) -> list[int]:
+    raw_values: list[int | str] = []
+    if set_id_value is not None and str(set_id_value).strip() != "":
+        raw_values.append(set_id_value)
+    if set_ids_values:
+        raw_values.extend(set_ids_values)
+
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for raw in raw_values:
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if parsed <= 0 or parsed in seen:
+            continue
+        seen.add(parsed)
+        normalized.append(parsed)
+    return normalized
+
+
+def _fetch_set_candidate_ids(
+    session: Session,
+    *,
+    set_ids: list[int],
+    set_mode: str,
+    deleted_only: bool,
+) -> set[int]:
+    if not set_ids:
+        return set()
+
+    rows = session.exec(
+        select(PictureSetMember.set_id, PictureSetMember.picture_id)
+        .join(Picture, Picture.id == PictureSetMember.picture_id)
+        .where(PictureSetMember.set_id.in_(set_ids))
+        .where(
+            Picture.deleted.is_(True) if deleted_only else Picture.deleted.is_(False)
+        )
+    ).all()
+
+    members_by_set: dict[int, set[int]] = {sid: set() for sid in set_ids}
+    for set_id_row, picture_id_row in rows:
+        if picture_id_row is None:
+            continue
+        members_by_set.setdefault(int(set_id_row), set()).add(int(picture_id_row))
+
+    if set_mode == "intersection":
+        intersection: set[int] | None = None
+        for sid in set_ids:
+            current = members_by_set.get(sid, set())
+            if intersection is None:
+                intersection = set(current)
+            else:
+                intersection &= current
+        return intersection or set()
+
+    union_ids: set[int] = set()
+    for sid in set_ids:
+        union_ids |= members_by_set.get(sid, set())
+    return union_ids
 
 
 def _create_picture_imports(
@@ -347,6 +438,9 @@ def _select_pictures_for_listing(
             if comfyui_loras:
                 query_params["comfyui_loras_filter"] = comfyui_loras
             query_params.pop("comfyui_lora", None)
+            set_ids = request.query_params.getlist("set_ids")
+            if set_ids:
+                query_params["set_ids"] = set_ids
         return format, query_params
 
     def _character_id(value):
@@ -365,11 +459,27 @@ def _select_pictures_for_listing(
     offset = int(query_params.pop("offset", offset))
     limit = int(query_params.pop("limit", limit))
     character_id = _character_id(query_params.pop("character_id", None))
+    set_id_raw = query_params.pop("set_id", None)
+    set_ids_raw = query_params.pop("set_ids", None)
+    set_mode_raw = query_params.pop("set_mode", "union")
     reference_character_id = query_params.pop("reference_character_id", None)
     min_score_raw = query_params.pop("min_score", None)
     min_score = int(min_score_raw) if min_score_raw is not None else None
     project_id_raw = query_params.pop("project_id", None)
     only_deleted = False
+    set_mode = _normalize_set_mode(set_mode_raw)
+    set_filter_ids = _collect_set_filter_ids(
+        set_id_value=set_id_raw,
+        set_ids_values=set_ids_raw if isinstance(set_ids_raw, list) else None,
+    )
+
+    def fetch_set_candidate_ids(session: Session):
+        return _fetch_set_candidate_ids(
+            session,
+            set_ids=set_filter_ids,
+            set_mode=set_mode,
+            deleted_only=only_deleted,
+        )
 
     try:
         sort_mech = (
@@ -396,8 +506,22 @@ def _select_pictures_for_listing(
                 Picture.deleted.is_(True),
             )
         elif character_id_value == "UNASSIGNED":
+            assignment_project_id = None
+            assignment_unassigned_project = False
+            if project_id_value == "UNASSIGNED":
+                assignment_unassigned_project = True
+            elif project_id_value is not None:
+                try:
+                    assignment_project_id = int(project_id_value)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Invalid project_id_raw value %r for UNASSIGNED assignment scope; treating as global scope",
+                        project_id_value,
+                    )
             unassigned_conditions = Picture.build_unassigned_conditions(
-                enforce_stack_assignment=True
+                enforce_stack_assignment=True,
+                assignment_project_id=assignment_project_id,
+                assignment_unassigned_project=assignment_unassigned_project,
             )
             query = select(Picture.id).where(
                 *unassigned_conditions,
@@ -422,10 +546,12 @@ def _select_pictures_for_listing(
             return None
 
         if project_id_value == "UNASSIGNED":
-            query = query.where(Picture.project_id.is_(None))
+            query = query.where(_project_unassigned_clause(Picture))
         elif project_id_value is not None:
             try:
-                query = query.where(Picture.project_id == int(project_id_value))
+                query = query.where(
+                    _project_membership_exists_clause(int(project_id_value), Picture)
+                )
             except (TypeError, ValueError):
                 logger.warning(
                     "Invalid project_id_raw value %r for SMART_SCORE candidate filtering; skipping project filter",
@@ -451,6 +577,15 @@ def _select_pictures_for_listing(
             format,
             project_id_raw,
         )
+        if set_filter_ids:
+            set_candidate_ids = server.vault.db.run_immediate_read_task(
+                fetch_set_candidate_ids
+            )
+            candidate_ids = (
+                set_candidate_ids
+                if candidate_ids is None
+                else set(candidate_ids) & set_candidate_ids
+            )
         if candidate_ids is not None and not candidate_ids:
             return []
         pics = find_pictures_by_character_likeness(
@@ -488,6 +623,15 @@ def _select_pictures_for_listing(
             format,
             project_id_raw,
         )
+        if set_filter_ids:
+            set_candidate_ids = server.vault.db.run_immediate_read_task(
+                fetch_set_candidate_ids
+            )
+            candidate_ids = (
+                set_candidate_ids
+                if candidate_ids is None
+                else set(candidate_ids) & set_candidate_ids
+            )
         if candidate_ids is not None and not candidate_ids:
             return []
         penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
@@ -559,6 +703,18 @@ def _select_pictures_for_listing(
             **query_params,
         )
     else:
+        if set_filter_ids:
+            set_candidate_ids = server.vault.db.run_immediate_read_task(
+                fetch_set_candidate_ids
+            )
+            if not set_candidate_ids:
+                return []
+            existing_ids = query_params.get("id")
+            if existing_ids:
+                query_params["id"] = list(set(existing_ids) & set_candidate_ids)
+            else:
+                query_params["id"] = list(set_candidate_ids)
+
         if character_id is not None and character_id != "":
 
             def get_picture_ids_for_character(session, character_id):
@@ -584,7 +740,7 @@ def _select_pictures_for_listing(
 
                     rows = session.exec(
                         select(Pic.id).where(
-                            Pic.project_id.is_(None),
+                            _project_unassigned_clause(Pic),
                             Pic.deleted.is_(False),
                         )
                     ).all()
@@ -905,43 +1061,48 @@ def create_router(server) -> APIRouter:
         threshold: float = 0.0,
         min_group_size: int = 2,
         set_id: int = Query(None),
+        set_ids: list[int] = Query(None),
+        set_mode: str = Query("union"),
         character_id: str = Query(None),
         project_id: str = Query(None),
         format: list[str] = Query(None),
     ):
         candidate_ids = None
         only_deleted = character_id == "SCRAPHEAP"
+        set_filter_ids = _collect_set_filter_ids(
+            set_id_value=set_id,
+            set_ids_values=set_ids,
+        )
+        normalized_set_mode = _normalize_set_mode(set_mode)
 
-        if set_id is not None:
-
-            def fetch_set_ids(session, set_id):
-                members = session.exec(
-                    select(PictureSetMember.picture_id)
-                    .join(Picture, Picture.id == PictureSetMember.picture_id)
-                    .where(
-                        PictureSetMember.set_id == set_id,
-                        Picture.deleted.is_(False),
-                    )
-                ).all()
-                normalized = []
-                for row in members:
-                    if isinstance(row, (list, tuple)):
-                        if row:
-                            normalized.append(row[0])
-                        continue
-                    normalized.append(row)
-                return normalized
-
-            candidate_ids = set(
-                server.vault.db.run_immediate_read_task(fetch_set_ids, set_id)
+        if set_filter_ids:
+            candidate_ids = server.vault.db.run_immediate_read_task(
+                _fetch_set_candidate_ids,
+                set_ids=set_filter_ids,
+                set_mode=normalized_set_mode,
+                deleted_only=only_deleted,
             )
         elif character_id is not None:
             if character_id == "UNASSIGNED":
 
                 def fetch_unassigned_ids(session):
                     query = select(Picture.id)
+                    assignment_project_id = None
+                    assignment_unassigned_project = False
+                    if project_id == "UNASSIGNED":
+                        assignment_unassigned_project = True
+                    elif project_id is not None:
+                        try:
+                            assignment_project_id = int(project_id)
+                        except (TypeError, ValueError):
+                            logger.warning(
+                                "Invalid project_id %r for UNASSIGNED stack assignment scope; treating as global scope",
+                                project_id,
+                            )
                     unassigned_conditions = Picture.build_unassigned_conditions(
-                        enforce_stack_assignment=True
+                        enforce_stack_assignment=True,
+                        assignment_project_id=assignment_project_id,
+                        assignment_unassigned_project=assignment_unassigned_project,
                     )
                     query = query.where(
                         *unassigned_conditions,
@@ -999,7 +1160,7 @@ def create_router(server) -> APIRouter:
             ):
                 query = select(Picture.id)
                 if project_id_value == "UNASSIGNED":
-                    query = query.where(Picture.project_id.is_(None))
+                    query = query.where(_project_unassigned_clause(Picture))
                 else:
                     try:
                         parsed_project_id = int(project_id_value)
@@ -1008,7 +1169,9 @@ def create_router(server) -> APIRouter:
                             status_code=400,
                             detail="Invalid project_id",
                         )
-                    query = query.where(Picture.project_id == parsed_project_id)
+                    query = query.where(
+                        _project_membership_exists_clause(parsed_project_id, Picture)
+                    )
                 if deleted_only:
                     query = query.where(Picture.deleted.is_(True))
                 else:
@@ -1727,6 +1890,8 @@ def create_router(server) -> APIRouter:
         format = None
         character_id = None
         set_id = None
+        set_ids = None
+        set_mode = "union"
         project_id = None
         sort = None
         descending = True
@@ -1737,6 +1902,8 @@ def create_router(server) -> APIRouter:
             limit = int(query_params.pop("limit", limit))
             character_id = query_params.pop("character_id", None)
             set_id = query_params.pop("set_id", None)
+            set_ids = request.query_params.getlist("set_ids")
+            set_mode = query_params.pop("set_mode", "union")
             project_id = query_params.pop("project_id", None)
             sort = query_params.pop("sort", None)
             desc_val = query_params.pop("descending", descending)
@@ -1754,6 +1921,11 @@ def create_router(server) -> APIRouter:
         only_deleted = character_id == "SCRAPHEAP"
         candidate_ids = None
         sort_mech = None
+        normalized_set_mode = _normalize_set_mode(set_mode)
+        set_filter_ids = _collect_set_filter_ids(
+            set_id_value=set_id,
+            set_ids_values=set_ids,
+        )
 
         if sort:
             try:
@@ -1762,34 +1934,33 @@ def create_router(server) -> APIRouter:
                 logger.error("Invalid sort mechanism for search: %s", ve)
                 raise HTTPException(status_code=400, detail=str(ve))
 
-        if set_id is not None:
-            try:
-                set_id = int(set_id)
-            except (TypeError, ValueError):
-                set_id = None
-
-        if set_id is not None:
-
-            def fetch_set_ids(session, set_id_value):
-                members = session.exec(
-                    select(PictureSetMember.picture_id)
-                    .join(Picture, Picture.id == PictureSetMember.picture_id)
-                    .where(
-                        PictureSetMember.set_id == set_id_value,
-                        Picture.deleted.is_(False),
-                    )
-                ).all()
-                return [row for row in members]
-
-            candidate_ids = set(
-                server.vault.db.run_immediate_read_task(fetch_set_ids, set_id)
+        if set_filter_ids:
+            candidate_ids = server.vault.db.run_immediate_read_task(
+                _fetch_set_candidate_ids,
+                set_ids=set_filter_ids,
+                set_mode=normalized_set_mode,
+                deleted_only=only_deleted,
             )
         elif character_id is not None:
             if character_id == "UNASSIGNED":
 
                 def fetch_unassigned_ids(session):
+                    assignment_project_id = None
+                    assignment_unassigned_project = False
+                    if project_id == "UNASSIGNED":
+                        assignment_unassigned_project = True
+                    elif project_id is not None:
+                        try:
+                            assignment_project_id = int(project_id)
+                        except (TypeError, ValueError):
+                            logger.warning(
+                                "Invalid project_id %r for UNASSIGNED search assignment scope; treating as global scope",
+                                project_id,
+                            )
                     unassigned_conditions = Picture.build_unassigned_conditions(
-                        enforce_stack_assignment=True
+                        enforce_stack_assignment=True,
+                        assignment_project_id=assignment_project_id,
+                        assignment_unassigned_project=assignment_unassigned_project,
                     )
                     query_stmt = select(Picture.id).where(
                         *unassigned_conditions,
@@ -1836,7 +2007,7 @@ def create_router(server) -> APIRouter:
             ):
                 query_stmt = select(Picture.id)
                 if project_id_value == "UNASSIGNED":
-                    query_stmt = query_stmt.where(Picture.project_id.is_(None))
+                    query_stmt = query_stmt.where(_project_unassigned_clause(Picture))
                 else:
                     try:
                         parsed_project_id = int(project_id_value)
@@ -1846,7 +2017,7 @@ def create_router(server) -> APIRouter:
                             detail="Invalid project_id",
                         )
                     query_stmt = query_stmt.where(
-                        Picture.project_id == parsed_project_id
+                        _project_membership_exists_clause(parsed_project_id, Picture)
                     )
                 if deleted_only:
                     query_stmt = query_stmt.where(Picture.deleted.is_(True))
@@ -2209,9 +2380,6 @@ def create_router(server) -> APIRouter:
 
                 if new_pictures:
                     _mark_stage("persisting_new_pictures")
-                    if project_id is not None:
-                        for pic in new_pictures:
-                            pic.project_id = project_id
 
                     def import_task(session):
                         session.add_all(new_pictures)
@@ -2377,6 +2545,20 @@ def create_router(server) -> APIRouter:
                             if pic.imported_at is None:
                                 pic.imported_at = now
                             if project_id_value is not None:
+                                member = session.exec(
+                                    select(PictureProjectMember).where(
+                                        PictureProjectMember.picture_id == pic.id,
+                                        PictureProjectMember.project_id
+                                        == project_id_value,
+                                    )
+                                ).first()
+                                if member is None:
+                                    session.add(
+                                        PictureProjectMember(
+                                            picture_id=pic.id,
+                                            project_id=project_id_value,
+                                        )
+                                    )
                                 pic.project_id = project_id_value
                             session.add(pic)
                             updated.append(pic.id)
@@ -2467,7 +2649,7 @@ def create_router(server) -> APIRouter:
     @router.patch(
         "/pictures/project",
         summary="Set project for pictures",
-        description="Assigns or clears project association for a batch of pictures.",
+        description="Assigns, removes, or clears project association for a batch of pictures.",
     )
     def set_project_for_pictures(payload: dict = Body(...)):
         picture_ids_raw = payload.get("picture_ids")
@@ -2506,10 +2688,24 @@ def create_router(server) -> APIRouter:
                     detail="project_id must be an integer or null",
                 ) from exc
 
+        mode_raw = payload.get("mode", "set")
+        mode = str(mode_raw).strip().lower()
+        if mode not in {"set", "add", "remove"}:
+            raise HTTPException(
+                status_code=400,
+                detail="mode must be one of: set, add, remove",
+            )
+        if mode in {"add", "remove"} and project_id_value is None:
+            raise HTTPException(
+                status_code=400,
+                detail="project_id is required when mode is add or remove",
+            )
+
         def update_picture_projects(
             session: Session,
             ids: list[int],
             project_id_target: int | None,
+            update_mode: str,
         ):
             if project_id_target is not None:
                 project = session.get(Project, project_id_target)
@@ -2527,11 +2723,70 @@ def create_router(server) -> APIRouter:
                 if pic.id is None:
                     continue
                 found_ids.add(int(pic.id))
-                if pic.project_id == project_id_target:
-                    continue
-                pic.project_id = project_id_target
-                session.add(pic)
-                updated_ids.append(int(pic.id))
+                changed = False
+                if update_mode == "set" and project_id_target is None:
+                    existing_memberships = session.exec(
+                        select(PictureProjectMember).where(
+                            PictureProjectMember.picture_id == int(pic.id)
+                        )
+                    ).all()
+                    if existing_memberships:
+                        for membership in existing_memberships:
+                            session.delete(membership)
+                        changed = True
+                    if pic.project_id is not None:
+                        pic.project_id = None
+                        session.add(pic)
+                        changed = True
+                elif update_mode == "remove" and project_id_target is not None:
+                    existing_memberships = session.exec(
+                        select(PictureProjectMember).where(
+                            PictureProjectMember.picture_id == int(pic.id),
+                            PictureProjectMember.project_id == project_id_target,
+                        )
+                    ).all()
+                    if existing_memberships:
+                        for membership in existing_memberships:
+                            session.delete(membership)
+                        changed = True
+                    if pic.project_id == project_id_target:
+                        fallback_project_id = session.exec(
+                            select(PictureProjectMember.project_id)
+                            .where(
+                                PictureProjectMember.picture_id == int(pic.id),
+                                PictureProjectMember.project_id != project_id_target,
+                            )
+                            .order_by(PictureProjectMember.project_id.asc())
+                        ).first()
+                        pic.project_id = (
+                            int(fallback_project_id)
+                            if fallback_project_id is not None
+                            else None
+                        )
+                        session.add(pic)
+                        changed = True
+                else:
+                    member = session.exec(
+                        select(PictureProjectMember).where(
+                            PictureProjectMember.picture_id == int(pic.id),
+                            PictureProjectMember.project_id == project_id_target,
+                        )
+                    ).first()
+                    if member is None:
+                        session.add(
+                            PictureProjectMember(
+                                picture_id=int(pic.id),
+                                project_id=project_id_target,
+                            )
+                        )
+                        changed = True
+                    if pic.project_id != project_id_target:
+                        pic.project_id = project_id_target
+                        session.add(pic)
+                        changed = True
+
+                if changed:
+                    updated_ids.append(int(pic.id))
             if updated_ids:
                 session.commit()
             missing_ids = [pid for pid in ids if pid not in found_ids]
@@ -2541,6 +2796,7 @@ def create_router(server) -> APIRouter:
             update_picture_projects,
             picture_ids,
             project_id_value,
+            mode,
             priority=DBPriority.IMMEDIATE,
         )
 
@@ -2550,6 +2806,7 @@ def create_router(server) -> APIRouter:
         return {
             "status": "success",
             "project_id": project_id_value,
+            "mode": mode,
             "updated_ids": updated_ids,
             "updated_count": len(updated_ids),
             "missing_ids": missing_ids,

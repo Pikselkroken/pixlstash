@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import exists, func
+from sqlalchemy import delete, exists, func
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -19,6 +19,7 @@ from pixlstash.db_models import (
     Character,
     Face,
     Picture,
+    PictureProjectMember,
     PictureSet,
     PictureSetMember,
     Tag,
@@ -211,6 +212,12 @@ def create_router(server) -> APIRouter:
                 picture.project_id = None
                 session.add(picture)
 
+            session.exec(
+                delete(PictureProjectMember).where(
+                    PictureProjectMember.project_id == pid
+                )
+            )
+
             session.delete(project)  # cascade-deletes ProjectAttachment rows
             session.commit()
             return attachment_paths
@@ -273,7 +280,11 @@ def create_router(server) -> APIRouter:
         if project_id == "UNASSIGNED":
             conditions = [
                 Picture.deleted.is_(False),
-                Picture.project_id.is_(None),
+                ~exists(
+                    select(PictureProjectMember.picture_id).where(
+                        PictureProjectMember.picture_id == Picture.id
+                    )
+                ),
             ]
         else:
             try:
@@ -282,7 +293,12 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=400, detail="Invalid project_id")
             conditions = [
                 Picture.deleted.is_(False),
-                Picture.project_id == pid,
+                exists(
+                    select(PictureProjectMember.picture_id).where(
+                        PictureProjectMember.picture_id == Picture.id,
+                        PictureProjectMember.project_id == pid,
+                    )
+                ),
             ]
 
         if hidden_tag_filter is not None:

@@ -14,6 +14,8 @@ from pixlstash.db_models import (
     Character,
     Face,
     Picture,
+    PictureProjectMember,
+    Project,
     PictureSet,
     PictureSetMember,
     Tag,
@@ -36,6 +38,21 @@ _UNSET = object()
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
+
+    def _project_membership_exists(project_id_value: int):
+        return exists(
+            select(PictureProjectMember.picture_id).where(
+                PictureProjectMember.picture_id == Picture.id,
+                PictureProjectMember.project_id == project_id_value,
+            )
+        )
+
+    def _project_unassigned_membership():
+        return ~exists(
+            select(PictureProjectMember.picture_id).where(
+                PictureProjectMember.picture_id == Picture.id
+            )
+        )
 
     def _get_hidden_tags_from_request(request: Request) -> list[str]:
         try:
@@ -119,16 +136,18 @@ def create_router(server) -> APIRouter:
 
             def count_unassigned(session: Session) -> int:
                 unassigned_conditions = Picture.build_unassigned_conditions(
-                    enforce_stack_assignment=True
+                    enforce_stack_assignment=True,
+                    assignment_project_id=unassigned_project_id,
+                    assignment_unassigned_project=unassigned_project_only,
                 )
                 conditions = [
                     Picture.deleted.is_(False),
                     *unassigned_conditions,
                 ]
                 if unassigned_project_only:
-                    conditions.append(Picture.project_id.is_(None))
+                    conditions.append(_project_unassigned_membership())
                 elif unassigned_project_id is not None:
-                    conditions.append(Picture.project_id == unassigned_project_id)
+                    conditions.append(_project_membership_exists(unassigned_project_id))
                 if hidden_tag_filter is not None:
                     conditions.append(hidden_tag_filter)
                 return session.exec(
@@ -227,8 +246,21 @@ def create_router(server) -> APIRouter:
         data = await request.json()
         name = data.get("name")
         description = data.get("description")
-        project_id = data.get("project_id", _UNSET)
+        raw_project_id = data.get("project_id", _UNSET)
+        project_id = raw_project_id
+        if raw_project_id is not _UNSET:
+            if raw_project_id is None:
+                project_id = None
+            else:
+                try:
+                    project_id = int(raw_project_id)
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid project_id",
+                    ) from exc
         char = None
+        project_membership_updated = False
         try:
 
             def alter_char(
@@ -248,8 +280,16 @@ def create_router(server) -> APIRouter:
                     project_id is not _UNSET and project_id != character.project_id
                 )
                 if project_id_changed:
+                    if project_id is not None:
+                        project = session.get(Project, project_id)
+                        if project is None:
+                            raise HTTPException(
+                                status_code=404,
+                                detail="Project not found",
+                            )
                     character.project_id = project_id
                     updated = True
+                local_project_membership_updated = False
                 if updated:
                     session.add(character)
 
@@ -260,13 +300,29 @@ def create_router(server) -> APIRouter:
                                 for face in session.exec(
                                     select(Face).where(Face.character_id == id)
                                 ).all()
+                                if face.picture_id is not None
                             }
                         )
                         for pic in session.exec(
                             select(Picture).where(Picture.id.in_(picture_ids))
                         ).all():
+                            if project_id is not None:
+                                membership = session.exec(
+                                    select(PictureProjectMember).where(
+                                        PictureProjectMember.picture_id == pic.id,
+                                        PictureProjectMember.project_id == project_id,
+                                    )
+                                ).first()
+                                if membership is None:
+                                    session.add(
+                                        PictureProjectMember(
+                                            picture_id=pic.id,
+                                            project_id=project_id,
+                                        )
+                                    )
                             pic.project_id = project_id
                             session.add(pic)
+                        local_project_membership_updated = bool(picture_ids)
 
                     # Clear text embeddings for all pictures of this character
                     for face in session.exec(
@@ -279,9 +335,9 @@ def create_router(server) -> APIRouter:
                             session.add(pic)
 
                     session.commit()
-                return character
+                return character, local_project_membership_updated
 
-            char = server.vault.db.run_task(
+            char, project_membership_updated = server.vault.db.run_task(
                 alter_char,
                 id,
                 name,
@@ -290,6 +346,8 @@ def create_router(server) -> APIRouter:
                 priority=DBPriority.IMMEDIATE,
             )
             server.vault.notify(EventType.CHANGED_CHARACTERS)
+            if project_membership_updated:
+                server.vault.notify(EventType.CHANGED_PICTURES)
 
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
@@ -730,9 +788,24 @@ def create_router(server) -> APIRouter:
                 for face in unique_faces:
                     if face.picture_id:
                         pic = session.get(Picture, face.picture_id)
-                        if pic and pic.project_id is None:
-                            pic.project_id = character.project_id
-                            session.add(pic)
+                        if pic:
+                            membership = session.exec(
+                                select(PictureProjectMember).where(
+                                    PictureProjectMember.picture_id == pic.id,
+                                    PictureProjectMember.project_id
+                                    == character.project_id,
+                                )
+                            ).first()
+                            if membership is None:
+                                session.add(
+                                    PictureProjectMember(
+                                        picture_id=pic.id,
+                                        project_id=character.project_id,
+                                    )
+                                )
+                            if pic.project_id is None:
+                                pic.project_id = character.project_id
+                                session.add(pic)
                 if any(f.picture_id for f in unique_faces):
                     session.commit()
             faces_payload = [

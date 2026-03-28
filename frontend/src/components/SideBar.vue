@@ -33,6 +33,7 @@ const props = defineProps({
   unassignedPicturesId: { type: String, required: true },
   scrapheapPicturesId: { type: String, required: true },
   selectedSet: { type: [Number, null], default: null },
+  selectedSetIds: { type: Array, default: () => [] },
   searchQuery: { type: String, default: "" },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: false },
@@ -398,11 +399,24 @@ const selectedCharacterObj = computed(() => {
 });
 
 const selectedSetObj = computed(() => {
-  if (!props.selectedSet) return null;
-  return (
-    pictureSets.value.find((pset) => pset.id === props.selectedSet) || null
-  );
+  const primarySetId =
+    Array.isArray(props.selectedSetIds) && props.selectedSetIds.length
+      ? props.selectedSetIds[0]
+      : props.selectedSet;
+  if (!primarySetId) return null;
+  return pictureSets.value.find((pset) => pset.id === primarySetId) || null;
 });
+
+const selectedSetIdSet = computed(
+  () =>
+    new Set(
+      (Array.isArray(props.selectedSetIds) ? props.selectedSetIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+);
+
+const hasSingleSelectedSet = computed(() => selectedSetIdSet.value.size === 1);
 
 const nonReferenceSets = computed(() =>
   pictureSets.value.filter((pset) => !pset.reference_character),
@@ -599,9 +613,41 @@ function selectCharacter(id, label = null) {
   emit("select-character", { id, label });
 }
 
-function selectSet(setId, label = null) {
+function selectSet(setId, label = null, event = null) {
   emit("select-character", null);
-  emit("select-set", { id: setId, label });
+  const numericSetId = Number(setId);
+  if (!Number.isFinite(numericSetId) || numericSetId <= 0) {
+    emit("select-set", null);
+    return;
+  }
+
+  const isMultiToggle = Boolean(event?.ctrlKey || event?.metaKey);
+  if (!isMultiToggle) {
+    emit("select-set", { id: numericSetId, label, ids: [numericSetId] });
+    return;
+  }
+
+  const nextIds = new Set(selectedSetIdSet.value);
+  if (nextIds.has(numericSetId)) {
+    nextIds.delete(numericSetId);
+  } else {
+    nextIds.add(numericSetId);
+  }
+  const ids = Array.from(nextIds).sort((a, b) => a - b);
+  if (!ids.length) {
+    emit("select-set", null);
+    return;
+  }
+  const primarySet = pictureSets.value.find((pset) => pset.id === ids[0]);
+  emit("select-set", {
+    id: ids[0],
+    label: primarySet?.name || label,
+    ids,
+  });
+}
+
+function toggleSetMultiSelect(setId, label = null) {
+  selectSet(setId, label, { ctrlKey: true });
 }
 
 async function deleteCharacter() {
@@ -793,12 +839,8 @@ function isCountSelected(id) {
 
 const isAllPicturesRowActive = computed(() => {
   if (props.selectedCharacter !== props.allPicturesId) return false;
-  if (projectViewMode.value === "global")
-    return allPicturesLastMode.value === "global";
-  return (
-    allPicturesLastMode.value === "project" &&
-    allPicturesLastProjectId.value === selectedProjectId.value
-  );
+  if (selectedSetIdSet.value.size > 0) return false;
+  return true;
 });
 
 const isUnassignedPicturesRowActive = computed(
@@ -997,7 +1039,11 @@ async function fetchProjects() {
 
 async function fetchPictureSets() {
   try {
-    const res = await apiClient.get(`${props.backendUrl}/picture_sets`);
+    const setUrl =
+      projectViewMode.value === "project"
+        ? `${props.backendUrl}/picture_sets?project_id=${selectedProjectId.value != null ? selectedProjectId.value : "UNASSIGNED"}`
+        : `${props.backendUrl}/picture_sets`;
+    const res = await apiClient.get(setUrl);
 
     const sets = await res.data; // Axios responses use `data` for the payload
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
@@ -1046,7 +1092,7 @@ function handleSetThumbnailError(setId) {
 }
 
 async function handleDeleteSet() {
-  if (!props.selectedSet) return;
+  if (!hasSingleSelectedSet.value || !props.selectedSet) return;
 
   const setToDelete = pictureSets.value.find((s) => s.id === props.selectedSet);
   if (!setToDelete) return;
@@ -1769,12 +1815,12 @@ defineExpose({
             :class="[
               'sidebar-collapsed-item',
               {
-                active: props.selectedSet === pset.id,
+                active: selectedSetIdSet.has(pset.id),
                 droppable: dragOverSet === pset.id,
               },
             ]"
-            :title="pset.name || 'Picture Set'"
-            @click="selectSet(pset.id, pset.name || 'Picture Set')"
+            :title="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
+            @click="selectSet(pset.id, pset.name || 'Picture Set', $event)"
             @dragover.prevent="dragOverSetItem(pset.id)"
             @dragleave="dragLeaveSetItem"
             @drop.prevent="handleDropOnSet(pset.id, $event)"
@@ -2161,7 +2207,7 @@ defineExpose({
               <span class="sidebar-header-spacer"></span>
               <div class="sidebar-header-actions">
                 <v-icon
-                  v-if="selectedSetObj"
+                  v-if="selectedSetObj && hasSingleSelectedSet"
                   class="edit-set-inline"
                   @click.stop="openSetEditor(selectedSetObj)"
                   title="Edit selected set"
@@ -2169,7 +2215,7 @@ defineExpose({
                   mdi-pencil
                 </v-icon>
                 <v-icon
-                  v-if="selectedSet"
+                  v-if="selectedSet && hasSingleSelectedSet"
                   class="delete-character-inline"
                   color="white"
                   @click.stop="handleDeleteSet"
@@ -2272,12 +2318,15 @@ defineExpose({
                     'sidebar-list-item',
                     'sidebar-set-item',
                     {
-                      active: selectedSet === pset.id,
+                      active: selectedSetIdSet.has(pset.id),
                       droppable: dragOverSet === pset.id,
                     },
                   ]"
                   :ref="(el) => registerSetRef(pset.id, el)"
-                  @click="selectSet(pset.id, pset.name || 'Picture Set')"
+                  :title="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
+                  @click="
+                    selectSet(pset.id, pset.name || 'Picture Set', $event)
+                  "
                   @dragover.prevent="dragOverSetItem(pset.id)"
                   @dragleave="dragLeaveSetItem"
                   @drop.prevent="handleDropOnSet(pset.id, $event)"
@@ -2310,6 +2359,29 @@ defineExpose({
                       </template>
                       <span>{{ pset.name }}</span>
                     </v-tooltip>
+                  </span>
+                  <span
+                    class="sidebar-set-select-indicator"
+                    :class="{
+                      'sidebar-set-select-indicator--selected':
+                        selectedSetIdSet.has(pset.id),
+                    }"
+                    role="button"
+                    tabindex="0"
+                    :aria-label="`Toggle multi-select for set ${pset.name || pset.id}`"
+                    @click.stop="toggleSetMultiSelect(pset.id, pset.name)"
+                    @keydown.enter.prevent.stop="
+                      toggleSetMultiSelect(pset.id, pset.name)
+                    "
+                    @keydown.space.prevent.stop="
+                      toggleSetMultiSelect(pset.id, pset.name)
+                    "
+                  >
+                    <v-icon size="16">{{
+                      selectedSetIdSet.has(pset.id)
+                        ? "mdi-checkbox-marked"
+                        : "mdi-checkbox-blank-outline"
+                    }}</v-icon>
                   </span>
                   <span class="sidebar-list-count">
                     {{ pset.picture_count ?? 0 }}
@@ -3388,6 +3460,26 @@ defineExpose({
   justify-content: flex-end;
 }
 
+.sidebar-set-select-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  margin-right: 6px;
+  color: rgba(var(--v-theme-sidebar-text), 0.48);
+  opacity: 0.95;
+  flex-shrink: 0;
+}
+
+.sidebar-set-select-indicator--selected,
+.sidebar-list-item.active .sidebar-set-select-indicator {
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.sidebar-list-item:hover .sidebar-set-select-indicator {
+  color: rgba(var(--v-theme-sidebar-text), 0.86);
+}
+
 .sidebar-new-tag {
   display: inline-flex;
   align-items: center;
@@ -3472,6 +3564,7 @@ defineExpose({
 }
 
 .sidebar-all-pictures-row {
+  padding-top: 2px;
   display: flex;
   align-items: stretch;
   width: 100%;

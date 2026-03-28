@@ -43,11 +43,28 @@
       <button
         v-for="project in filteredProjects"
         :key="project.key"
-        class="add-to-project-item"
+        :class="[
+          'add-to-project-item',
+          {
+            'add-to-project-item--disabled': isProjectDisabled(project),
+            'add-to-project-item--checked':
+              getProjectState(project) === 'checked',
+          },
+        ]"
         type="button"
         role="menuitem"
-        @click.stop="selectProject(project)"
+        :disabled="isProjectDisabled(project)"
+        @click.stop="toggleProjectMembership(project)"
       >
+        <v-icon size="16" class="add-to-project-item-check">
+          {{
+            getProjectState(project) === "checked"
+              ? "mdi-checkbox-marked"
+              : getProjectState(project) === "partial"
+                ? "mdi-minus-box-outline"
+                : "mdi-checkbox-blank-outline"
+          }}
+        </v-icon>
         <span class="add-to-project-item-name">{{ project.name }}</span>
       </button>
 
@@ -59,13 +76,16 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
+  pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
   label: { type: String, default: "Project" },
+  includeDeletedMembers: { type: Boolean, default: false },
+  expandStacks: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(["selected"]);
@@ -77,6 +97,8 @@ const searchQuery = ref("");
 const isLoading = ref(false);
 const projects = ref([]);
 const statusMessage = ref("");
+const projectMembersByKey = ref({});
+const lastFetchKey = ref("");
 let statusTimer = null;
 
 const baseUrl = computed(() =>
@@ -85,6 +107,18 @@ const baseUrl = computed(() =>
 
 function resolveUrl(path) {
   return baseUrl.value ? `${baseUrl.value}${path}` : path;
+}
+
+const normalisedPictureIds = computed(() =>
+  (Array.isArray(props.pictureIds) ? props.pictureIds : [])
+    .map((id) => String(id))
+    .filter(Boolean),
+);
+
+const normalisedIdsKey = computed(() => normalisedPictureIds.value.join("|"));
+
+function projectKey(project) {
+  return project?.id == null ? "unassigned" : `project-${project.id}`;
 }
 
 const filteredProjects = computed(() => {
@@ -105,6 +139,23 @@ const filteredProjects = computed(() => {
   );
 });
 
+function isProjectDisabled(project) {
+  const ids = normalisedPictureIds.value;
+  if (!ids.length) return true;
+  const members = projectMembersByKey.value?.[projectKey(project)];
+  return !members;
+}
+
+function getProjectState(project) {
+  const ids = normalisedPictureIds.value;
+  const members = projectMembersByKey.value?.[projectKey(project)];
+  if (!ids.length || !members || members.size === 0) return "unchecked";
+  const matched = ids.filter((id) => members.has(String(id))).length;
+  if (matched === 0) return "unchecked";
+  if (matched === ids.length) return "checked";
+  return "partial";
+}
+
 function toggleMenu() {
   if (props.disabled) return;
   menuOpen.value = !menuOpen.value;
@@ -117,7 +168,7 @@ function toggleMenu() {
 
 function openMenu() {
   menuOpen.value = true;
-  fetchProjects();
+  fetchProjects(true);
   nextTick(() => searchInputRef.value?.focus());
   document.addEventListener("pointerdown", handleOutsideClick, true);
 }
@@ -135,8 +186,13 @@ function handleOutsideClick(event) {
   closeMenu();
 }
 
-async function fetchProjects() {
+async function fetchProjects(force = false) {
   if (!props.backendUrl || isLoading.value) return;
+  const key = normalisedIdsKey.value;
+  if (!force && key === lastFetchKey.value && projects.value.length) {
+    return;
+  }
+  lastFetchKey.value = key;
   isLoading.value = true;
   try {
     const res = await apiClient.get(resolveUrl("/projects"));
@@ -148,33 +204,158 @@ async function fetchProjects() {
       }))
       .filter((row) => Number.isFinite(row.id) && row.id > 0)
       .sort((a, b) => a.name.localeCompare(b.name));
+    await fetchProjectMembers(projects.value);
   } catch (_e) {
     projects.value = [];
+    projectMembersByKey.value = {};
   } finally {
     isLoading.value = false;
   }
 }
 
-function selectProject(project) {
+async function fetchProjectMembers(list) {
+  const ids = normalisedPictureIds.value;
+  if (!props.backendUrl || !ids.length) {
+    projectMembersByKey.value = {};
+    return;
+  }
+  const all = [{ id: null, key: "unassigned", name: "Unassigned" }, ...list];
+  const entries = await Promise.all(
+    all.map(async (project) => {
+      try {
+        const params = new URLSearchParams();
+        ids.forEach((id) => params.append("id", String(id)));
+        params.append(
+          "project_id",
+          project.id == null ? "UNASSIGNED" : String(project.id),
+        );
+        if (props.includeDeletedMembers) {
+          params.append("include_deleted", "true");
+        }
+        const res = await apiClient.get(
+          resolveUrl(`/pictures?${params.toString()}`),
+        );
+        const rows = Array.isArray(res.data) ? res.data : [];
+        const memberIds = rows
+          .map((row) => String(row?.id ?? ""))
+          .filter((id) => id.length > 0);
+        return [projectKey(project), new Set(memberIds)];
+      } catch (_e) {
+        return [projectKey(project), new Set()];
+      }
+    }),
+  );
+  const next = {};
+  entries.forEach(([key, members]) => {
+    next[key] = members;
+  });
+  projectMembersByKey.value = next;
+}
+
+async function toggleProjectMembership(project) {
+  if (isProjectDisabled(project)) return;
+  const ids = normalisedPictureIds.value;
+  if (!ids.length) return;
+
+  const state = getProjectState(project);
+  if (project?.id == null && state === "checked") {
+    statusMessage.value = "Already unassigned";
+    return;
+  }
+
+  const shouldRemove = project?.id != null && state === "checked";
+  const action = shouldRemove ? "removed" : "added";
+  statusMessage.value = shouldRemove ? "Removing..." : "Adding...";
+
   emit("selected", {
     projectId: project?.id ?? null,
     projectName: project?.name,
+    action,
+    pictureIds: ids,
+    expandStacks: props.expandStacks,
   });
+
+  applyOptimisticMembershipUpdate(project, action, ids);
+
   statusMessage.value =
-    project?.id == null
-      ? "Project cleared"
-      : `Project set to ${project?.name || project?.id}`;
+    action === "removed"
+      ? `Removed from ${project?.name || project?.id}`
+      : project?.id == null
+        ? "Set to unassigned"
+        : `Added to ${project?.name || project?.id}`;
+
   if (statusTimer) clearTimeout(statusTimer);
   statusTimer = window.setTimeout(() => {
     statusMessage.value = "";
-  }, 1200);
-  closeMenu();
+  }, 1600);
+}
+
+function applyOptimisticMembershipUpdate(project, action, ids) {
+  const next = { ...projectMembersByKey.value };
+  const allProjects = [{ id: null }, ...projects.value];
+  const unassignedKey = projectKey({ id: null });
+  if (!(next[unassignedKey] instanceof Set)) {
+    next[unassignedKey] = new Set();
+  }
+  for (const proj of allProjects) {
+    const key = projectKey(proj);
+    if (!(next[key] instanceof Set)) {
+      next[key] = new Set();
+    }
+  }
+
+  if (project?.id == null && action === "added") {
+    for (const proj of projects.value) {
+      const key = projectKey(proj);
+      ids.forEach((id) => next[key].delete(String(id)));
+    }
+    ids.forEach((id) => next[unassignedKey].add(String(id)));
+    projectMembersByKey.value = next;
+    return;
+  }
+
+  const selectedKey = projectKey(project);
+  if (!(next[selectedKey] instanceof Set)) {
+    next[selectedKey] = new Set();
+  }
+
+  if (action === "removed") {
+    ids.forEach((id) => next[selectedKey].delete(String(id)));
+    for (const id of ids) {
+      const idStr = String(id);
+      const stillAssigned = projects.value.some((proj) => {
+        const key = projectKey(proj);
+        return next[key] instanceof Set && next[key].has(idStr);
+      });
+      if (!stillAssigned) {
+        next[unassignedKey].add(idStr);
+      }
+    }
+  } else {
+    ids.forEach((id) => {
+      next[selectedKey].add(String(id));
+      next[unassignedKey].delete(String(id));
+    });
+  }
+
+  projectMembersByKey.value = next;
 }
 
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
   document.removeEventListener("pointerdown", handleOutsideClick, true);
 });
+
+watch(
+  () => normalisedIdsKey.value,
+  () => {
+    if (menuOpen.value) {
+      fetchProjects(true);
+    } else {
+      projectMembersByKey.value = {};
+    }
+  },
+);
 </script>
 
 <style scoped>
@@ -268,7 +449,22 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   cursor: pointer;
+}
+
+.add-to-project-item-check {
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.add-to-project-item--checked .add-to-project-item-check {
+  color: rgb(var(--v-theme-primary));
+}
+
+.add-to-project-item--disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
 }
 
 .add-to-project-item:hover {

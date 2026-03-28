@@ -3,6 +3,8 @@ from typing import TYPE_CHECKING, List, Optional
 
 from sqlmodel import Column, Field, ForeignKey, Integer, Relationship, SQLModel
 
+from .picture_project import PictureProjectMember
+
 if TYPE_CHECKING:
     from pixlstash.db_models.character import Character
     from pixlstash.db_models.picture import Picture
@@ -38,7 +40,9 @@ class Project(SQLModel, table=True):
     )
     characters: List["Character"] = Relationship(back_populates="project")
     picture_sets: List["PictureSet"] = Relationship(back_populates="project")
-    pictures: List["Picture"] = Relationship(back_populates="project")
+    pictures: List["Picture"] = Relationship(
+        back_populates="projects", link_model=PictureProjectMember
+    )
 
 
 class ProjectAttachment(SQLModel, table=True):

@@ -21,7 +21,9 @@ from sqlmodel import (
 )
 from typing import ClassVar, Optional, List, TYPE_CHECKING
 
+from .character import Character
 from .face import Face
+from .picture_project import PictureProjectMember
 from .picture_set import PictureSet, PictureSetMember
 from .picture_stack import PictureStack
 from .quality import Quality
@@ -254,7 +256,9 @@ class Picture(SQLModel, table=True):
         back_populates="members", link_model=PictureSetMember
     )
     stack: Optional["PictureStack"] = Relationship(back_populates="pictures")
-    project: Optional["Project"] = Relationship(back_populates="pictures")
+    projects: List["Project"] = Relationship(
+        back_populates="pictures", link_model=PictureProjectMember
+    )
 
     likeness_a: List["PictureLikeness"] = Relationship(
         back_populates="picture_a",
@@ -608,6 +612,29 @@ class Picture(SQLModel, table=True):
             query = query.where(cls.imported_at.is_not(None))
 
         for attr, value in search.items():
+            if attr == "project_id":
+                membership_query = select(PictureProjectMember.picture_id).where(
+                    PictureProjectMember.picture_id == cls.id
+                )
+                if value is None:
+                    query = query.where(~exists(membership_query))
+                elif isinstance(value, list):
+                    query = query.where(
+                        exists(
+                            membership_query.where(
+                                PictureProjectMember.project_id.in_(value)
+                            )
+                        )
+                    )
+                else:
+                    query = query.where(
+                        exists(
+                            membership_query.where(
+                                PictureProjectMember.project_id == value
+                            )
+                        )
+                    )
+                continue
             if hasattr(cls, attr):
                 if isinstance(value, list):
                     query = query.where(getattr(cls, attr).in_(value))
@@ -796,29 +823,34 @@ class Picture(SQLModel, table=True):
     ):
         query = select(Picture)
         unassigned_conditions = cls.build_unassigned_conditions(
-            enforce_stack_assignment=True
+            enforce_stack_assignment=True,
+            assignment_project_id=project_id,
+            assignment_unassigned_project=only_unassigned_project,
         )
         query = query.where(
             *unassigned_conditions,
             Picture.deleted.is_(False),
         )
 
+        project_membership_query = select(PictureProjectMember.picture_id).where(
+            PictureProjectMember.picture_id == Picture.id
+        )
         if only_unassigned_project:
-            query = query.where(Picture.project_id.is_(None))
+            query = query.where(~exists(project_membership_query))
         elif project_id is not None:
-            query = query.where(Picture.project_id == project_id)
+            query = query.where(
+                exists(
+                    project_membership_query.where(
+                        PictureProjectMember.project_id == project_id
+                    )
+                )
+            )
 
         if format:
             query = query.where(Picture.format.in_(format))
 
         if min_score is not None:
             query = query.where(Picture.score >= min_score)
-
-        if stack_leaders_only:
-            leader_ids = Picture._get_stack_leader_ids(session, only_deleted=False)
-            query = query.where(
-                or_(Picture.stack_id.is_(None), Picture.id.in_(leader_ids))
-            )
 
         select_fields = metadata_fields or cls.metadata_fields()
         if select_fields:
@@ -863,41 +895,86 @@ class Picture(SQLModel, table=True):
                         Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                     )
 
-        if offset > 0 or limit != sys.maxsize:
+        if (not stack_leaders_only) and (offset > 0 or limit != sys.maxsize):
             query = query.offset(offset).limit(limit)
 
-        return session.exec(query).all()
+        results = session.exec(query).all()
+
+        if stack_leaders_only:
+            seen_stack_ids = set()
+            deduped = []
+            for pic in results:
+                stack_id = getattr(pic, "stack_id", None)
+                if stack_id is None:
+                    deduped.append(pic)
+                    continue
+                if stack_id in seen_stack_ids:
+                    continue
+                seen_stack_ids.add(stack_id)
+                deduped.append(pic)
+
+            if offset > 0 or limit != sys.maxsize:
+                start = max(0, offset)
+                if limit == sys.maxsize:
+                    deduped = deduped[start:]
+                else:
+                    deduped = deduped[start : start + max(0, limit)]
+            return deduped
+
+        return results
 
     @classmethod
     def build_unassigned_conditions(
         cls,
         *,
         enforce_stack_assignment: bool = False,
+        assignment_project_id: Optional[int] = None,
+        assignment_unassigned_project: bool = False,
     ) -> list:
         """Build SQL predicates for pictures that should count as unassigned.
 
         When enforce_stack_assignment is enabled, any stack with at least one
         assigned member (character face or set membership) is treated as assigned,
         so all pictures in that stack are excluded from unassigned queries.
+
+        When assignment project scope is provided, assignment is evaluated only
+        against characters/sets in that same project scope.
         """
-        unassigned_condition = ~exists(
-            select(Face.id).where(
-                Face.picture_id == cls.id,
-                Face.character_id.is_not(None),
-            )
+        if assignment_unassigned_project:
+            project_scope = Character.project_id.is_(None)
+            set_scope = PictureSet.project_id.is_(None)
+        elif assignment_project_id is not None:
+            project_scope = Character.project_id == assignment_project_id
+            set_scope = PictureSet.project_id == assignment_project_id
+        else:
+            project_scope = None
+            set_scope = None
+
+        assigned_face_query = select(Face.id).where(
+            Face.picture_id == cls.id,
+            Face.character_id.is_not(None),
         )
-        not_in_set_condition = ~exists(
-            select(PictureSetMember.picture_id).where(
-                PictureSetMember.picture_id == cls.id
-            )
+        if project_scope is not None:
+            assigned_face_query = assigned_face_query.join(
+                Character, Character.id == Face.character_id
+            ).where(project_scope)
+
+        assigned_set_query = select(PictureSetMember.picture_id).where(
+            PictureSetMember.picture_id == cls.id
         )
-        conditions = [unassigned_condition, not_in_set_condition]
+        if set_scope is not None:
+            assigned_set_query = assigned_set_query.join(
+                PictureSet,
+                PictureSet.id == PictureSetMember.set_id,
+            ).where(set_scope)
+
+        conditions = [~exists(assigned_face_query), ~exists(assigned_set_query)]
 
         if not enforce_stack_assignment:
             return conditions
 
         stack_picture = aliased(cls)
-        stack_has_assigned_face = exists(
+        stack_assigned_face_query = (
             select(Face.id)
             .join(stack_picture, stack_picture.id == Face.picture_id)
             .where(
@@ -906,7 +983,12 @@ class Picture(SQLModel, table=True):
                 Face.character_id.is_not(None),
             )
         )
-        stack_has_set_member = exists(
+        if project_scope is not None:
+            stack_assigned_face_query = stack_assigned_face_query.join(
+                Character, Character.id == Face.character_id
+            ).where(project_scope)
+
+        stack_assigned_set_query = (
             select(PictureSetMember.picture_id)
             .join(
                 stack_picture,
@@ -917,6 +999,14 @@ class Picture(SQLModel, table=True):
                 stack_picture.stack_id == cls.stack_id,
             )
         )
+        if set_scope is not None:
+            stack_assigned_set_query = stack_assigned_set_query.join(
+                PictureSet,
+                PictureSet.id == PictureSetMember.set_id,
+            ).where(set_scope)
+
+        stack_has_assigned_face = exists(stack_assigned_face_query)
+        stack_has_set_member = exists(stack_assigned_set_query)
         conditions.extend([~stack_has_assigned_face, ~stack_has_set_member])
         return conditions
 

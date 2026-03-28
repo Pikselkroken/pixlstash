@@ -18,10 +18,13 @@ from PIL import Image
 from fastapi.testclient import TestClient
 from io import BytesIO
 from pathlib import Path
+from sqlmodel import select
 from urllib.parse import quote
 
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.picture_likeness import PictureLikeness
+from pixlstash.db_models.face import Face
+from pixlstash.db_models.picture_set import PictureSetMember
 import pixlstash.routes.pictures as pictures_routes
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -480,6 +483,100 @@ def test_set_project_for_existing_pictures_bulk():
     log_resources("END test_set_project_for_existing_pictures_bulk")
 
 
+def test_set_project_reconciles_project_set_membership():
+    """Adding another project membership should not remove existing set memberships."""
+
+    log_resources("START test_set_project_reconciles_project_set_membership")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            imported = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            "project-membership-reconcile.png",
+                            random_images[12],
+                            "image/png",
+                        ),
+                    )
+                ],
+            )
+            pic_id = imported["results"][0]["picture_id"]
+
+            project_a_resp = client.post(
+                "/projects", json={"name": "Membership Project A"}
+            )
+            project_b_resp = client.post(
+                "/projects", json={"name": "Membership Project B"}
+            )
+            assert project_a_resp.status_code == 200
+            assert project_b_resp.status_code == 200
+            project_a_id = project_a_resp.json()["id"]
+            project_b_id = project_b_resp.json()["id"]
+
+            set_resp = client.post(
+                "/picture_sets",
+                json={"name": "Membership Set A", "project_id": project_a_id},
+            )
+            assert set_resp.status_code == 200
+            set_id = (set_resp.json().get("picture_set") or {}).get("id")
+            assert set_id is not None
+
+            add_resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
+            assert add_resp.status_code == 200
+
+            assign_a_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_id], "project_id": project_a_id},
+            )
+            assert assign_a_resp.status_code == 200
+
+            before_members_resp = client.get(f"/picture_sets/{set_id}/members")
+            assert before_members_resp.status_code == 200
+            assert pic_id in set(before_members_resp.json().get("picture_ids") or [])
+
+            move_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_id], "project_id": project_b_id},
+            )
+            assert move_resp.status_code == 200
+
+            after_members_resp = client.get(f"/picture_sets/{set_id}/members")
+            assert after_members_resp.status_code == 200
+            assert pic_id in set(after_members_resp.json().get("picture_ids") or [])
+
+            project_a_pictures_resp = client.get(
+                "/pictures",
+                params={"project_id": str(project_a_id)},
+            )
+            project_b_pictures_resp = client.get(
+                "/pictures",
+                params={"project_id": str(project_b_id)},
+            )
+            assert project_a_pictures_resp.status_code == 200
+            assert project_b_pictures_resp.status_code == 200
+            project_a_ids = {p.get("id") for p in project_a_pictures_resp.json()}
+            project_b_ids = {p.get("id") for p in project_b_pictures_resp.json()}
+            assert pic_id in project_a_ids
+            assert pic_id in project_b_ids
+
+            metadata_resp = client.get(f"/pictures/{pic_id}/metadata")
+            assert metadata_resp.status_code == 200
+            assert metadata_resp.json().get("project_id") == project_b_id
+
+    gc.collect()
+    log_resources("END test_set_project_reconciles_project_set_membership")
+
+
 def test_unassigned_picture_query_respects_project_filter():
     """UNASSIGNED picture queries should honor project scope filters."""
 
@@ -621,6 +718,607 @@ def test_unassigned_excludes_stack_when_any_member_is_in_set():
 
     gc.collect()
     log_resources("END test_unassigned_excludes_stack_when_any_member_is_in_set")
+
+
+def test_unassigned_project_grid_includes_stack_when_leader_is_out_of_scope():
+    """Project-scoped UNASSIGNED grid should not drop stacks only because global leader is out of scope."""
+
+    log_resources(
+        "START test_unassigned_project_grid_includes_stack_when_leader_is_out_of_scope"
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            import_a = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            "unassigned-project-stack-a.png",
+                            random_images[0],
+                            "image/png",
+                        ),
+                    )
+                ],
+            )
+            import_b = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            "unassigned-project-stack-b.png",
+                            random_images[1],
+                            "image/png",
+                        ),
+                    )
+                ],
+            )
+
+            pic_a = import_a["results"][0]["picture_id"]
+            pic_b = import_b["results"][0]["picture_id"]
+
+            project_a_resp = client.post("/projects", json={"name": "Project A"})
+            project_b_resp = client.post("/projects", json={"name": "Project B"})
+            assert project_a_resp.status_code == 200
+            assert project_b_resp.status_code == 200
+            project_a_id = project_a_resp.json()["id"]
+            project_b_id = project_b_resp.json()["id"]
+
+            assign_resp = client.patch(
+                "/pictures/project",
+                json={
+                    "picture_ids": [pic_a, pic_b],
+                    "project_id": project_a_id,
+                },
+            )
+            assert assign_resp.status_code == 200
+
+            clear_b_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_b], "project_id": None},
+            )
+            assert clear_b_resp.status_code == 200
+
+            assign_b_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_b], "project_id": project_b_id},
+            )
+            assert assign_b_resp.status_code == 200
+
+            stack_resp = client.post("/stacks", json={"picture_ids": [pic_a, pic_b]})
+            assert stack_resp.status_code == 200
+            stack_id = stack_resp.json().get("id")
+            assert stack_id is not None
+
+            # Force pic_b to be stack leader while querying project A scope.
+            reorder_resp = client.patch(
+                f"/stacks/{stack_id}/order",
+                json={"picture_ids": [pic_b, pic_a]},
+            )
+            assert reorder_resp.status_code == 200
+
+            summary_resp = client.get(
+                "/characters/UNASSIGNED/summary",
+                params={"project_id": str(project_a_id)},
+            )
+            assert summary_resp.status_code == 200
+            assert summary_resp.json().get("image_count") == 1
+
+            grid_resp = client.get(
+                "/pictures",
+                params={
+                    "character_id": "UNASSIGNED",
+                    "project_id": str(project_a_id),
+                    "fields": "grid",
+                },
+            )
+            assert grid_resp.status_code == 200
+            grid_ids = {item.get("id") for item in grid_resp.json()}
+            assert pic_a in grid_ids
+
+    gc.collect()
+    log_resources(
+        "END test_unassigned_project_grid_includes_stack_when_leader_is_out_of_scope"
+    )
+
+
+def test_unassigned_project_scope_uses_project_character_and_set_membership_only():
+    """Project-scoped UNASSIGNED should ignore assignments from other projects."""
+
+    log_resources(
+        "START test_unassigned_project_scope_uses_project_character_and_set_membership_only"
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            imported = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            "project-scope-assignment.png",
+                            random_images[2],
+                            "image/png",
+                        ),
+                    )
+                ],
+            )
+            pic_id = imported["results"][0]["picture_id"]
+
+            project_a_resp = client.post("/projects", json={"name": "Project Scope A"})
+            project_b_resp = client.post("/projects", json={"name": "Project Scope B"})
+            assert project_a_resp.status_code == 200
+            assert project_b_resp.status_code == 200
+            project_a_id = project_a_resp.json()["id"]
+            project_b_id = project_b_resp.json()["id"]
+
+            assign_project_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_id], "project_id": project_a_id},
+            )
+            assert assign_project_resp.status_code == 200
+
+            character_resp = client.post(
+                "/characters",
+                json={"name": "Other Project Character", "project_id": project_b_id},
+            )
+            assert character_resp.status_code == 200
+            character_id = (character_resp.json().get("character") or {}).get("id")
+            assert character_id is not None
+
+            def create_face(session, picture_id, target_character_id):
+                face = Face(
+                    picture_id=picture_id,
+                    frame_index=0,
+                    face_index=0,
+                    character_id=target_character_id,
+                    bbox=[0, 0, 16, 16],
+                )
+                session.add(face)
+                session.commit()
+                return face.id
+
+            created_face_id = server.vault.db.run_task(
+                create_face, pic_id, character_id
+            )
+            assert created_face_id is not None
+
+            set_resp = client.post(
+                "/picture_sets",
+                json={
+                    "name": "Other Project Set",
+                    "project_id": project_b_id,
+                },
+            )
+            assert set_resp.status_code == 200
+            other_project_set_id = (set_resp.json().get("picture_set") or {}).get("id")
+            assert other_project_set_id is not None
+
+            def force_set_member(session, target_set_id: int, target_picture_id: int):
+                exists = session.exec(
+                    select(PictureSetMember).where(
+                        PictureSetMember.set_id == target_set_id,
+                        PictureSetMember.picture_id == target_picture_id,
+                    )
+                ).first()
+                if not exists:
+                    session.add(
+                        PictureSetMember(
+                            set_id=target_set_id,
+                            picture_id=target_picture_id,
+                        )
+                    )
+                    session.commit()
+
+            server.vault.db.run_task(force_set_member, other_project_set_id, pic_id)
+
+            # Global unassigned should exclude this picture (it is globally assigned).
+            global_unassigned_resp = client.get(
+                "/pictures",
+                params={"character_id": "UNASSIGNED"},
+            )
+            assert global_unassigned_resp.status_code == 200
+            global_unassigned_ids = {
+                item.get("id") for item in global_unassigned_resp.json()
+            }
+            assert pic_id not in global_unassigned_ids
+
+            # Project-A-scoped unassigned should include it because assignments are
+            # only to project-B character/set.
+            project_unassigned_resp = client.get(
+                "/pictures",
+                params={"character_id": "UNASSIGNED", "project_id": str(project_a_id)},
+            )
+            assert project_unassigned_resp.status_code == 200
+            project_unassigned_ids = {
+                item.get("id") for item in project_unassigned_resp.json()
+            }
+            assert pic_id in project_unassigned_ids
+
+            summary_resp = client.get(
+                "/characters/UNASSIGNED/summary",
+                params={"project_id": str(project_a_id)},
+            )
+            assert summary_resp.status_code == 200
+            assert summary_resp.json().get("image_count") == 1
+
+    gc.collect()
+    log_resources(
+        "END test_unassigned_project_scope_uses_project_character_and_set_membership_only"
+    )
+
+
+def test_unassigned_project_scope_ignores_global_character_and_set_assignments():
+    """Project-scoped UNASSIGNED should include pictures assigned only to global groups."""
+
+    log_resources(
+        "START test_unassigned_project_scope_ignores_global_character_and_set_assignments"
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            response = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert response.status_code == 200
+
+            imported = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            "project-scope-global-assignment.png",
+                            random_images[9],
+                            "image/png",
+                        ),
+                    )
+                ],
+            )
+            pic_id = imported["results"][0]["picture_id"]
+
+            project_resp = client.post(
+                "/projects", json={"name": "Project Scope Global Test"}
+            )
+            assert project_resp.status_code == 200
+            project_id = project_resp.json()["id"]
+
+            assign_project_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_id], "project_id": project_id},
+            )
+            assert assign_project_resp.status_code == 200
+
+            global_character_resp = client.post(
+                "/characters",
+                json={"name": "Global Character", "project_id": None},
+            )
+            assert global_character_resp.status_code == 200
+            global_character_id = (
+                global_character_resp.json().get("character") or {}
+            ).get("id")
+            assert global_character_id is not None
+
+            def create_face(session, picture_id, target_character_id):
+                face = Face(
+                    picture_id=picture_id,
+                    frame_index=0,
+                    face_index=0,
+                    character_id=target_character_id,
+                    bbox=[0, 0, 16, 16],
+                )
+                session.add(face)
+                session.commit()
+                return face.id
+
+            created_face_id = server.vault.db.run_task(
+                create_face, pic_id, global_character_id
+            )
+            assert created_face_id is not None
+
+            global_set_resp = client.post(
+                "/picture_sets",
+                json={"name": "Global Set", "project_id": None},
+            )
+            assert global_set_resp.status_code == 200
+            global_set_id = (global_set_resp.json().get("picture_set") or {}).get("id")
+            assert global_set_id is not None
+
+            add_member_resp = client.post(
+                f"/picture_sets/{global_set_id}/members/{pic_id}"
+            )
+            assert add_member_resp.status_code == 200
+
+            project_unassigned_resp = client.get(
+                "/pictures",
+                params={"character_id": "UNASSIGNED", "project_id": str(project_id)},
+            )
+            assert project_unassigned_resp.status_code == 200
+            project_unassigned_ids = {
+                item.get("id") for item in project_unassigned_resp.json()
+            }
+            assert pic_id in project_unassigned_ids
+
+            summary_resp = client.get(
+                "/characters/UNASSIGNED/summary",
+                params={"project_id": str(project_id)},
+            )
+            assert summary_resp.status_code == 200
+            assert summary_resp.json().get("image_count") == 1
+
+    gc.collect()
+    log_resources(
+        "END test_unassigned_project_scope_ignores_global_character_and_set_assignments"
+    )
+
+
+def test_project_scoped_picture_set_counts_only_include_project_pictures():
+    """Project-scoped set counts should include only members in that project."""
+
+    log_resources(
+        "START test_project_scoped_picture_set_counts_only_include_project_pictures"
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            login_resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert login_resp.status_code == 200
+
+            imported_a = upload_pictures_and_wait(
+                client,
+                [("file", ("set-project-a.png", random_images[3], "image/png"))],
+            )
+            imported_b = upload_pictures_and_wait(
+                client,
+                [("file", ("set-project-b.png", random_images[4], "image/png"))],
+            )
+            pic_a = imported_a["results"][0]["picture_id"]
+            pic_b = imported_b["results"][0]["picture_id"]
+
+            project_a_resp = client.post(
+                "/projects", json={"name": "Set Count Project A"}
+            )
+            project_b_resp = client.post(
+                "/projects", json={"name": "Set Count Project B"}
+            )
+            assert project_a_resp.status_code == 200
+            assert project_b_resp.status_code == 200
+            project_a_id = project_a_resp.json()["id"]
+            project_b_id = project_b_resp.json()["id"]
+
+            assign_project_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_a], "project_id": project_a_id},
+            )
+            assign_other_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_b], "project_id": project_b_id},
+            )
+            assert assign_project_resp.status_code == 200
+            assert assign_other_resp.status_code == 200
+
+            set_resp = client.post(
+                "/picture_sets",
+                json={"name": "Project Scoped Set", "project_id": project_a_id},
+            )
+            assert set_resp.status_code == 200
+            set_id = (set_resp.json().get("picture_set") or {}).get("id")
+            assert set_id is not None
+
+            def force_members(session, target_set_id: int, picture_ids: list[int]):
+                for pid in picture_ids:
+                    exists = session.exec(
+                        select(PictureSetMember).where(
+                            PictureSetMember.set_id == target_set_id,
+                            PictureSetMember.picture_id == pid,
+                        )
+                    ).first()
+                    if exists:
+                        continue
+                    session.add(PictureSetMember(set_id=target_set_id, picture_id=pid))
+                session.commit()
+
+            server.vault.db.run_task(force_members, set_id, [pic_a, pic_b])
+
+            all_sets_resp = client.get("/picture_sets")
+            assert all_sets_resp.status_code == 200
+            all_set = next(s for s in all_sets_resp.json() if s.get("id") == set_id)
+            assert all_set.get("picture_count") == 2
+
+            scoped_sets_resp = client.get(
+                "/picture_sets",
+                params={"project_id": str(project_a_id)},
+            )
+            assert scoped_sets_resp.status_code == 200
+            scoped_set = next(
+                s for s in scoped_sets_resp.json() if s.get("id") == set_id
+            )
+            assert scoped_set.get("picture_count") == 1
+
+            scoped_set_view_resp = client.get(
+                f"/picture_sets/{set_id}",
+                params={"project_id": str(project_a_id)},
+            )
+            assert scoped_set_view_resp.status_code == 200
+            scoped_ids = {
+                p.get("id") for p in (scoped_set_view_resp.json().get("pictures") or [])
+            }
+            assert pic_a in scoped_ids
+            assert pic_b not in scoped_ids
+
+    gc.collect()
+    log_resources(
+        "END test_project_scoped_picture_set_counts_only_include_project_pictures"
+    )
+
+
+def test_pictures_endpoint_supports_set_intersection_filter():
+    """/pictures should support set_ids + set_mode=intersection filters."""
+
+    log_resources("START test_pictures_endpoint_supports_set_intersection_filter")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            login_resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert login_resp.status_code == 200
+
+            imported_a = upload_pictures_and_wait(
+                client,
+                [("file", ("set-intersection-a.png", random_images[8], "image/png"))],
+            )
+            imported_b = upload_pictures_and_wait(
+                client,
+                [("file", ("set-intersection-b.png", random_images[9], "image/png"))],
+            )
+            pic_a = imported_a["results"][0]["picture_id"]
+            pic_b = imported_b["results"][0]["picture_id"]
+
+            set_a_resp = client.post("/picture_sets", json={"name": "Set A"})
+            set_b_resp = client.post("/picture_sets", json={"name": "Set B"})
+            assert set_a_resp.status_code == 200
+            assert set_b_resp.status_code == 200
+            set_a_id = (set_a_resp.json().get("picture_set") or {}).get("id")
+            set_b_id = (set_b_resp.json().get("picture_set") or {}).get("id")
+            assert set_a_id is not None
+            assert set_b_id is not None
+
+            assert (
+                client.post(f"/picture_sets/{set_a_id}/members/{pic_a}").status_code
+                == 200
+            )
+            assert (
+                client.post(f"/picture_sets/{set_a_id}/members/{pic_b}").status_code
+                == 200
+            )
+            assert (
+                client.post(f"/picture_sets/{set_b_id}/members/{pic_b}").status_code
+                == 200
+            )
+
+            union_resp = client.get(
+                "/pictures",
+                params=[("set_ids", str(set_a_id)), ("set_ids", str(set_b_id))],
+            )
+            assert union_resp.status_code == 200
+            union_ids = {item.get("id") for item in union_resp.json()}
+            assert pic_a in union_ids
+            assert pic_b in union_ids
+
+            intersection_resp = client.get(
+                "/pictures",
+                params=[
+                    ("set_ids", str(set_a_id)),
+                    ("set_ids", str(set_b_id)),
+                    ("set_mode", "intersection"),
+                ],
+            )
+            assert intersection_resp.status_code == 200
+            intersection_ids = {item.get("id") for item in intersection_resp.json()}
+            assert pic_b in intersection_ids
+            assert pic_a not in intersection_ids
+
+    gc.collect()
+    log_resources("END test_pictures_endpoint_supports_set_intersection_filter")
+
+
+def test_add_picture_to_project_set_aligns_picture_project_membership():
+    """Adding to a project set should not overwrite existing project memberships."""
+
+    log_resources(
+        "START test_add_picture_to_project_set_aligns_picture_project_membership"
+    )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            login_resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert login_resp.status_code == 200
+
+            imported = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        ("set-align-project.png", random_images[5], "image/png"),
+                    )
+                ],
+            )
+            pic_id = imported["results"][0]["picture_id"]
+
+            project_a_resp = client.post(
+                "/projects", json={"name": "Set Align Project A"}
+            )
+            project_b_resp = client.post(
+                "/projects", json={"name": "Set Align Project B"}
+            )
+            assert project_a_resp.status_code == 200
+            assert project_b_resp.status_code == 200
+            project_a_id = project_a_resp.json()["id"]
+            project_b_id = project_b_resp.json()["id"]
+
+            assign_other_resp = client.patch(
+                "/pictures/project",
+                json={"picture_ids": [pic_id], "project_id": project_b_id},
+            )
+            assert assign_other_resp.status_code == 200
+
+            set_resp = client.post(
+                "/picture_sets",
+                json={"name": "Set Align Project", "project_id": project_a_id},
+            )
+            assert set_resp.status_code == 200
+            set_id = (set_resp.json().get("picture_set") or {}).get("id")
+            assert set_id is not None
+
+            add_resp = client.post(f"/picture_sets/{set_id}/members/{pic_id}")
+            assert add_resp.status_code == 200
+
+            metadata_resp = client.get(f"/pictures/{pic_id}/metadata")
+            assert metadata_resp.status_code == 200
+            assert metadata_resp.json().get("project_id") == project_b_id
+
+            project_a_resp = client.get(
+                "/pictures",
+                params={"project_id": str(project_a_id)},
+            )
+            assert project_a_resp.status_code == 200
+            project_a_ids = {p.get("id") for p in project_a_resp.json()}
+            assert pic_id not in project_a_ids
+
+    gc.collect()
+    log_resources(
+        "END test_add_picture_to_project_set_aligns_picture_project_membership"
+    )
 
 
 def test_all_picture_query_respects_project_filter():
@@ -1281,6 +1979,142 @@ def test_pictures_stacks():
             assert isinstance(data, list)
     gc.collect()
     log_resources("END test_pictures_stacks")
+
+
+def test_pictures_stacks_supports_set_intersection_filter():
+    """/pictures/stacks should support repeated set_ids with intersection mode."""
+
+    log_resources("START test_pictures_stacks_supports_set_intersection_filter")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+
+            login_resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert login_resp.status_code == 200
+
+            imported_a = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            "set-intersection-stack-a.png",
+                            random_images[10],
+                            "image/png",
+                        ),
+                    )
+                ],
+            )
+            imported_b = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            "set-intersection-stack-b.png",
+                            random_images[11],
+                            "image/png",
+                        ),
+                    )
+                ],
+            )
+            imported_c = upload_pictures_and_wait(
+                client,
+                [
+                    (
+                        "file",
+                        (
+                            "set-intersection-stack-c.png",
+                            random_images[12],
+                            "image/png",
+                        ),
+                    )
+                ],
+            )
+
+            pic_a = imported_a["results"][0]["picture_id"]
+            pic_b = imported_b["results"][0]["picture_id"]
+            pic_c = imported_c["results"][0]["picture_id"]
+
+            set_a_resp = client.post("/picture_sets", json={"name": "Stack Set A"})
+            set_b_resp = client.post("/picture_sets", json={"name": "Stack Set B"})
+            assert set_a_resp.status_code == 200
+            assert set_b_resp.status_code == 200
+            set_a_id = (set_a_resp.json().get("picture_set") or {}).get("id")
+            set_b_id = (set_b_resp.json().get("picture_set") or {}).get("id")
+            assert set_a_id is not None
+            assert set_b_id is not None
+
+            # /pictures/stacks groups are built from likeness edges, so seed a chain.
+            def seed_likeness_edges(session, a: int, b: int, c: int):
+                ab_a, ab_b = sorted((a, b))
+                bc_a, bc_b = sorted((b, c))
+                session.add(
+                    PictureLikeness(
+                        picture_id_a=ab_a,
+                        picture_id_b=ab_b,
+                        likeness=0.95,
+                        metric="clip",
+                    )
+                )
+                session.add(
+                    PictureLikeness(
+                        picture_id_a=bc_a,
+                        picture_id_b=bc_b,
+                        likeness=0.95,
+                        metric="clip",
+                    )
+                )
+                session.commit()
+
+            server.vault.db.run_task(seed_likeness_edges, pic_a, pic_b, pic_c)
+
+            assert (
+                client.post(f"/picture_sets/{set_a_id}/members/{pic_b}").status_code
+                == 200
+            )
+            assert (
+                client.post(f"/picture_sets/{set_a_id}/members/{pic_c}").status_code
+                == 200
+            )
+            assert (
+                client.post(f"/picture_sets/{set_b_id}/members/{pic_b}").status_code
+                == 200
+            )
+            assert (
+                client.post(f"/picture_sets/{set_b_id}/members/{pic_c}").status_code
+                == 200
+            )
+
+            union_resp = client.get(
+                "/pictures/stacks",
+                params=[("set_ids", str(set_a_id)), ("set_ids", str(set_b_id))],
+            )
+            assert union_resp.status_code == 200
+            union_ids = {item.get("id") for item in union_resp.json()}
+            assert pic_b in union_ids
+            assert pic_c in union_ids
+
+            intersection_resp = client.get(
+                "/pictures/stacks",
+                params=[
+                    ("set_ids", str(set_a_id)),
+                    ("set_ids", str(set_b_id)),
+                    ("set_mode", "intersection"),
+                    ("min_group_size", 1),
+                ],
+            )
+            assert intersection_resp.status_code == 200
+            intersection_ids = {item.get("id") for item in intersection_resp.json()}
+            assert pic_b in intersection_ids
+            assert pic_c in intersection_ids
+            assert pic_a not in intersection_ids
+
+    gc.collect()
+    log_resources("END test_pictures_stacks_supports_set_intersection_filter")
 
 
 def test_pictures_thumbnails():

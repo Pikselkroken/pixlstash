@@ -229,6 +229,15 @@
             :class="{ hidden: chromeHidden }"
             @added="(payload) => emit('added-to-set', payload)"
           />
+          <AddToProjectControl
+            v-if="image"
+            :backend-url="backendUrl"
+            :picture-ids="[image.id]"
+            :include-deleted-members="true"
+            :expand-stacks="false"
+            :class="{ hidden: chromeHidden }"
+            @selected="(payload) => emit('set-project', payload)"
+          />
           <StarRatingOverlay
             v-if="image && !isMobile"
             :class="{ hidden: chromeHidden }"
@@ -962,6 +971,7 @@ import {
 } from "../utils/media.js";
 import { apiClient } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
+import AddToProjectControl from "./AddToProjectControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import {
@@ -1115,6 +1125,7 @@ const emit = defineEmits([
   "update-description",
   "overlay-change",
   "added-to-set",
+  "set-project",
   "comfyui-run",
   "run-plugin",
 ]);
