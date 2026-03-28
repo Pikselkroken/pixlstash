@@ -1045,6 +1045,44 @@ const overlayExpandedStackLoading = ref(new Set());
 const overlayStackSignatures = ref(new Map());
 const overlayStackReloadToken = ref(0);
 
+const allImageById = computed(() => {
+  const map = new Map();
+  const list = Array.isArray(allImages.value) ? allImages.value : [];
+  for (const item of list) {
+    if (!item || item.id == null) continue;
+    map.set(String(item.id), item);
+  }
+  return map;
+});
+
+const allImagesByStackId = computed(() => {
+  const map = new Map();
+  const list = Array.isArray(allImages.value) ? allImages.value : [];
+  for (const item of list) {
+    const stackId = getOverlayStackId(item);
+    if (!stackId || item?.id == null) continue;
+    if (!map.has(stackId)) {
+      map.set(stackId, []);
+    }
+    map.get(stackId).push(item);
+  }
+  for (const [stackId, members] of map.entries()) {
+    map.set(stackId, sortOverlayStackMembers(members));
+  }
+  return map;
+});
+
+const allImageLeaderByStackId = computed(() => {
+  const leaders = new Map();
+  for (const [stackId, members] of allImagesByStackId.value.entries()) {
+    const leader = members[0];
+    if (leader?.id != null) {
+      leaders.set(stackId, String(leader.id));
+    }
+  }
+  return leaders;
+});
+
 function resetOverlayStackState() {
   overlayExpandedStackIds.value = new Set();
   overlayExpandedStackMembers.value = new Map();
@@ -1070,18 +1108,16 @@ function setOverlayImageById(nextId) {
     image.value = null;
     return;
   }
+  const nextIdKey = String(nextId);
   const currentId = image.value?.id;
   const isSameImage =
     currentId !== null &&
     currentId !== undefined &&
-    String(currentId) === String(nextId);
-  const allList = Array.isArray(allImages.value) ? allImages.value : [];
-  const targetFromAll = allList.find(
-    (item) => String(item?.id) === String(nextId),
-  );
+    String(currentId) === nextIdKey;
+  const targetFromAll = allImageById.value.get(nextIdKey);
   const target = targetFromAll
     ? targetFromAll
-    : getOverlayImageList().find((item) => String(item?.id) === String(nextId));
+    : filmstripImageById.value.get(nextIdKey);
   if (target) {
     const existingTags = getTagList(image.value?.tags);
     const targetTags = getTagList(target.tags);
@@ -1508,6 +1544,27 @@ function getOverlayImageList() {
   return Array.isArray(allImages.value) ? allImages.value : [];
 }
 
+const filmstripImageById = computed(() => {
+  const map = new Map();
+  const list = getOverlayImageList();
+  for (const item of list) {
+    if (!item || item.id == null) continue;
+    map.set(String(item.id), item);
+  }
+  return map;
+});
+
+const filmstripIndexById = computed(() => {
+  const map = new Map();
+  const list = filmstripImages.value;
+  for (let idx = 0; idx < list.length; idx += 1) {
+    const item = list[idx];
+    if (!item || item.id == null) continue;
+    map.set(String(item.id), idx);
+  }
+  return map;
+});
+
 function isImageInFilmstrip(targetId) {
   if (!targetId) return false;
   const list = filmstripImages.value;
@@ -1610,10 +1667,8 @@ function buildOverlayStackLeaderMap(images) {
 
 function getOverlayLocalStackMembers(stackId) {
   if (!stackId) return [];
-  const list = Array.isArray(allImages.value) ? allImages.value : [];
-  if (!list.length) return [];
-  const members = list.filter((img) => getOverlayStackId(img) === stackId);
-  return sortOverlayStackMembers(members);
+  const members = allImagesByStackId.value.get(stackId);
+  return Array.isArray(members) ? members : [];
 }
 
 function getOverlayStackSignature(stackId) {
@@ -1630,17 +1685,11 @@ function getOverlayStackSignature(stackId) {
 
 function normalizeOverlayStackMembersForStack(stackId, members) {
   if (!stackId || !Array.isArray(members) || !members.length) return [];
-  const allList = Array.isArray(allImages.value) ? allImages.value : [];
-  const latestById = new Map(
-    allList
-      .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img]),
-  );
   const normalized = [];
   for (const member of members) {
     if (!member || member.id == null) continue;
     const id = String(member.id);
-    const latest = latestById.get(id) || member;
+    const latest = allImageById.value.get(id) || member;
     if (getOverlayStackId(latest) !== stackId) continue;
     normalized.push(latest);
   }
@@ -1837,7 +1886,7 @@ function collapseOverlayStackImages(images) {
     counts.set(stackId, (counts.get(stackId) || 0) + 1);
   }
   if (!counts.size) return images;
-  const leaders = buildOverlayStackLeaderMap(images);
+  const leaders = allImageLeaderByStackId.value;
   const seen = new Set();
   const collapsed = [];
   for (const img of images) {
@@ -2229,7 +2278,7 @@ function navigateOverlayImage(direction, options = {}) {
   const sorted = filmstripImages.value;
   const allowWrap = options?.wrap !== false;
   if (!image.value || !sorted.length) return;
-  const idx = sorted.findIndex((i) => i.id === image.value.id);
+  const idx = filmstripIndexById.value.get(String(image.value.id)) ?? -1;
   if (idx === -1) return;
   let nextIdx = idx + direction;
   if (allowWrap) {
@@ -2706,8 +2755,10 @@ const filmstripCanvasData = computed(() => {
   if (!images.length || !image.value) {
     return { items: [], topBufferSlots: 0 };
   }
-  const currentIndex = images.findIndex((img) => img.id === image.value.id);
-  if (currentIndex === -1) {
+  const currentIndex = filmstripIndexById.value.get(String(image.value.id));
+  const safeCurrentIndex =
+    Number.isFinite(currentIndex) && currentIndex >= 0 ? currentIndex : -1;
+  if (safeCurrentIndex === -1) {
     return { items: [], topBufferSlots: 0 };
   }
 
@@ -2715,7 +2766,7 @@ const filmstripCanvasData = computed(() => {
     isMobile.value ? 5 : FILMSTRIP_VISIBLE_COUNT,
     images.length,
   );
-  let visibleStart = currentIndex - Math.floor(visibleCount / 2);
+  let visibleStart = safeCurrentIndex - Math.floor(visibleCount / 2);
   let visibleEnd = visibleStart + visibleCount - 1;
   if (visibleStart < 0) {
     visibleEnd += Math.abs(visibleStart);
@@ -2759,7 +2810,7 @@ const filmstripCanvasData = computed(() => {
     return {
       ...item,
       index: idx,
-      isActive: idx === currentIndex,
+      isActive: idx === safeCurrentIndex,
       isStackJoined,
     };
   });
@@ -3519,7 +3570,7 @@ let _preloadImages = [];
 function preloadAdjacentImages() {
   const images = filmstripImages.value;
   if (!images.length || !image.value) return;
-  const idx = images.findIndex((i) => i.id === image.value.id);
+  const idx = filmstripIndexById.value.get(String(image.value.id)) ?? -1;
   if (idx === -1) return;
   const candidates = [];
   if (idx + 1 < images.length) candidates.push(images[idx + 1]);

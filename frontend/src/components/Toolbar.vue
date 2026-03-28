@@ -150,7 +150,8 @@
               Search relevance (fixed)
             </div>
             <v-btn-toggle
-              v-model="sortModel"
+              :model-value="sortMenuModel"
+              @update:model-value="handleSortModelUpdate"
               mandatory
               class="toolbar-sort-grid"
               :disabled="isSearchActive"
@@ -165,24 +166,28 @@
                 <v-icon size="18">{{ getSortIcon(opt.value) }}</v-icon>
                 <span class="toolbar-sort-grid-label">{{ opt.label }}</span>
                 <v-icon
-                  v-if="sortModel === opt.value"
+                  v-if="sortMenuModel === opt.value"
                   size="16"
                   class="toolbar-sort-grid-selected"
                 >
-                  mdi-check-circle
+                  mdi-circle-medium
                 </v-icon>
               </v-btn>
             </v-btn-toggle>
 
             <div
-              v-if="sortModel === SIMILARITY_SORT_KEY"
+              v-if="sortMenuModel === SIMILARITY_SORT_KEY"
               class="toolbar-sort-similarity-row"
             >
-              <span>Similarity to</span>
+              <span>Similarity to ...</span>
               <div class="toolbar-similarity-scroll">
                 <v-btn-toggle
                   v-model="similarityCharacterModel"
                   class="toolbar-sort-grid"
+                  :class="{
+                    'toolbar-sort-grid--pending-parameter':
+                      isPendingSimilarityParameter,
+                  }"
                   :disabled="!hasSimilarityOptions"
                   mandatory
                 >
@@ -192,6 +197,7 @@
                     :value="opt.value"
                     class="toolbar-sort-grid-btn"
                     variant="text"
+                    @click="handleSimilarityOptionClick(opt.value)"
                   >
                     <img
                       v-if="opt.thumbnail"
@@ -208,15 +214,19 @@
                       v-if="similarityCharacterModel === opt.value"
                       size="16"
                       class="toolbar-sort-grid-selected"
+                      :class="{
+                        'toolbar-sort-grid-selected--pending':
+                          isPendingSimilarityParameter,
+                      }"
                     >
-                      mdi-check-circle
+                      mdi-circle-medium
                     </v-icon>
                   </v-btn>
                 </v-btn-toggle>
               </div>
             </div>
             <div
-              v-if="sortModel === STACKS_SORT_KEY"
+              v-if="sortMenuModel === STACKS_SORT_KEY"
               class="toolbar-sort-similarity-row"
             >
               <span>Group strictness</span>
@@ -224,6 +234,10 @@
                 <v-btn-toggle
                   v-model="stackThresholdModel"
                   class="toolbar-sort-grid"
+                  :class="{
+                    'toolbar-sort-grid--pending-parameter':
+                      isPendingStackParameter,
+                  }"
                   mandatory
                 >
                   <v-btn
@@ -232,14 +246,19 @@
                     :value="opt.value"
                     class="toolbar-sort-grid-btn"
                     variant="text"
+                    @click="handleStackThresholdOptionClick(opt.value)"
                   >
                     <span class="toolbar-sort-grid-label">{{ opt.label }}</span>
                     <v-icon
                       v-if="stackThresholdModel === opt.value"
                       size="16"
                       class="toolbar-sort-grid-selected"
+                      :class="{
+                        'toolbar-sort-grid-selected--pending':
+                          isPendingStackParameter,
+                      }"
                     >
-                      mdi-check-circle
+                      mdi-circle-medium
                     </v-icon>
                   </v-btn>
                 </v-btn-toggle>
@@ -370,22 +389,27 @@
           <div class="toolbar-filter-panel">
             <div class="toolbar-filter-panel-title">Filters</div>
             <div class="toolbar-filter-section-label">Media</div>
-            <v-btn-toggle
-              v-model="mediaTypeFilterModel"
-              mandatory
+            <div
               class="media-type-toggle"
-              dense
+              role="group"
+              aria-label="Media type filter"
             >
-              <v-btn value="all" title="Show all media">
-                <v-icon>mdi-multimedia</v-icon>
+              <v-btn
+                v-for="opt in mediaTypeOptions"
+                :key="opt.value"
+                class="media-type-button"
+                :class="{
+                  'media-type-button--active':
+                    mediaTypeFilterModel === opt.value,
+                }"
+                variant="text"
+                :title="opt.title"
+                :aria-pressed="mediaTypeFilterModel === opt.value"
+                @click="setMediaTypeFilter(opt.value)"
+              >
+                <v-icon size="20">{{ opt.icon }}</v-icon>
               </v-btn>
-              <v-btn value="images" title="Show images only">
-                <v-icon>mdi-image</v-icon>
-              </v-btn>
-              <v-btn value="videos" title="Show videos only">
-                <v-icon>mdi-video</v-icon>
-              </v-btn>
-            </v-btn-toggle>
+            </div>
             <div class="toolbar-filter-section-label" style="margin-top: 10px">
               Min Score
             </div>
@@ -1071,6 +1095,16 @@ const mediaTypeFilterModel = computed({
   set: (value) => emit("update:mediaTypeFilter", value),
 });
 
+const mediaTypeOptions = [
+  { value: "all", icon: "mdi-multimedia", title: "Show all media" },
+  { value: "images", icon: "mdi-image", title: "Show images only" },
+  { value: "videos", icon: "mdi-video", title: "Show videos only" },
+];
+
+function setMediaTypeFilter(value) {
+  mediaTypeFilterModel.value = value;
+}
+
 const comfyuiModelFilterModel = computed({
   get: () => props.comfyuiModelFilter,
   set: (value) => emit("update:comfyuiModelFilter", value ?? []),
@@ -1089,6 +1123,7 @@ const comfyuiLoraOptions = ref([]);
 
 const sortMenuOpen = ref(false);
 const sortButtonRef = ref(null);
+const pendingSortSelection = ref(null);
 
 const sortModel = computed({
   get: () => props.selectedSort,
@@ -1101,6 +1136,47 @@ const sortModel = computed({
 
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS";
 const STACKS_SORT_KEY = "PICTURE_STACKS";
+
+const sortMenuModel = computed(() => {
+  return pendingSortSelection.value ?? sortModel.value;
+});
+
+const pendingSortKey = computed(() => {
+  return String(sortMenuModel.value || "").toUpperCase();
+});
+
+const committedSortKey = computed(() => {
+  return String(sortModel.value || "").toUpperCase();
+});
+
+const isPendingParameterSortCommit = computed(() => {
+  return (
+    sortRequiresParameter(pendingSortKey.value) &&
+    pendingSortKey.value !== committedSortKey.value
+  );
+});
+
+const isPendingSimilarityParameter = computed(() => {
+  return (
+    isPendingParameterSortCommit.value &&
+    pendingSortKey.value === SIMILARITY_SORT_KEY
+  );
+});
+
+const isPendingStackParameter = computed(() => {
+  return (
+    isPendingParameterSortCommit.value &&
+    pendingSortKey.value === STACKS_SORT_KEY
+  );
+});
+
+watch(sortMenuOpen, (isOpen) => {
+  if (isOpen) {
+    pendingSortSelection.value = sortModel.value;
+  } else {
+    pendingSortSelection.value = null;
+  }
+});
 
 const hasSimilarityOptions = computed(() => {
   return (
@@ -1183,14 +1259,14 @@ const sortTypeIcon = computed(() => {
 const SORT_ICON_MAP = {
   DATE: "mdi-calendar",
   IMPORTED_AT: "mdi-calendar-import",
-  CHARACTER_LIKENESS: "mdi-account-search",
   SMART_SCORE: "mdi-brain",
   SCORE: "mdi-star",
-  PICTURE_STACKS: "mdi-layers",
   NAME: "mdi-sort-alphabetical",
   IMAGE_SIZE: "mdi-image-size-select-large",
   RANDOM: "mdi-shuffle",
   TEXT_CONTENT: "mdi-text-recognition",
+  CHARACTER_LIKENESS: "mdi-account-search",
+  PICTURE_STACKS: "mdi-layers",
 };
 
 function getSortIcon(value) {
@@ -1210,6 +1286,40 @@ const descendingModel = computed({
 
 function toggleSortDirection() {
   descendingModel.value = !descendingModel.value;
+}
+
+function sortRequiresParameter(sortValue) {
+  const key = String(sortValue || "").toUpperCase();
+  return key === SIMILARITY_SORT_KEY || key === STACKS_SORT_KEY;
+}
+
+function commitSortSelection(sortValue) {
+  sortModel.value = sortValue != null ? String(sortValue) : "";
+}
+
+function handleSortModelUpdate(sortValue) {
+  if (props.isSearchActive) return;
+
+  pendingSortSelection.value = sortValue != null ? String(sortValue) : "";
+
+  if (!sortRequiresParameter(pendingSortSelection.value)) {
+    commitSortSelection(pendingSortSelection.value);
+    sortMenuOpen.value = false;
+  }
+}
+
+function handleSimilarityOptionClick(_value) {
+  if (String(sortMenuModel.value || "").toUpperCase() === SIMILARITY_SORT_KEY) {
+    commitSortSelection(SIMILARITY_SORT_KEY);
+    sortMenuOpen.value = false;
+  }
+}
+
+function handleStackThresholdOptionClick(_value) {
+  if (String(sortMenuModel.value || "").toUpperCase() === STACKS_SORT_KEY) {
+    commitSortSelection(STACKS_SORT_KEY);
+    sortMenuOpen.value = false;
+  }
 }
 
 function commitColumns() {
@@ -1336,8 +1446,9 @@ defineExpose({ blurSearchInput, focusSearchInput });
   background-color: rgb(var(--v-theme-toolbar)) !important;
   width: 100%;
   display: flex;
+  align-items: center;
   vertical-align: top;
-  padding: 2px 2px 2px 2px;
+  padding: 3px 4px;
   z-index: 5;
   position: relative;
   --toolbar-control-height: 32px;
@@ -1503,10 +1614,30 @@ defineExpose({ blurSearchInput, focusSearchInput });
   font-weight: 600;
 }
 
+.toolbar-sort-grid--pending-parameter
+  :deep(.toolbar-sort-grid-btn.v-btn--active) {
+  background: rgba(var(--v-theme-primary), 0.22) !important;
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-primary), 0.12);
+}
+
+.toolbar-sort-grid--pending-parameter
+  :deep(.toolbar-sort-grid-btn.v-btn--active .toolbar-sort-grid-label) {
+  font-weight: 500;
+  opacity: 0.88;
+}
+
 .toolbar-sort-grid-selected {
   position: absolute;
-  right: 2px;
-  color: rgb(var(--v-theme-accent));
+  right: 4px;
+  color: rgba(var(--v-theme-on-background), 0.56);
+}
+
+.toolbar-sort-grid-btn.v-btn--active .toolbar-sort-grid-selected {
+  color: rgba(var(--v-theme-accent), 0.95);
+}
+
+.toolbar-sort-grid-selected--pending {
+  opacity: 0.6;
 }
 
 .toolbar-sort-grid-label {
@@ -1624,10 +1755,26 @@ defineExpose({ blurSearchInput, focusSearchInput });
 .toolbar-search-field :deep(.v-field) {
   border-radius: 8px;
   background: rgba(var(--v-theme-surface), 0.7);
+  border: 1px solid rgba(var(--v-theme-border), 0.42);
   min-height: var(--toolbar-control-height);
   height: var(--toolbar-control-height);
   align-items: center;
-  box-shadow: 2px 2px 2px rgba(0, 0, 0, 0.4) !important;
+  box-shadow: 0 1px 3px rgba(var(--v-theme-shadow), 0.2) !important;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background-color 0.18s ease;
+}
+
+.toolbar-search-field:hover :deep(.v-field) {
+  border-color: rgba(var(--v-theme-accent), 0.48);
+  background: rgba(var(--v-theme-surface), 0.76);
+}
+
+.toolbar-search-field:focus-within :deep(.v-field) {
+  border-color: rgba(var(--v-theme-accent), 0.78);
+  box-shadow: 0 0 0 2px rgba(var(--v-theme-accent), 0.18) !important;
+  background: rgba(var(--v-theme-surface), 0.82);
 }
 
 .toolbar-search-field :deep(.v-field__input) {
@@ -1665,16 +1812,34 @@ defineExpose({ blurSearchInput, focusSearchInput });
   font-weight: 500;
   box-shadow: none;
   background-color: transparent !important;
-  color: rgb(var(--v-theme-on-background)) !important;
+  color: rgba(var(--v-theme-on-background), 0.76) !important;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition:
+    color 0.16s ease,
+    opacity 0.16s ease,
+    background-color 0.16s ease;
 }
 
 .toolbar-action-btn:hover,
 .toolbar-action-btn:focus-visible {
   box-shadow: none !important;
-  background-color: transparent !important;
+  background-color: rgba(var(--v-theme-accent), 0.14) !important;
+  color: rgba(var(--v-theme-on-background), 0.95) !important;
+}
+
+.toolbar-action-btn :deep(.v-icon) {
+  color: inherit;
+  opacity: 0.86;
+  transition:
+    color 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.toolbar-action-btn:hover :deep(.v-icon),
+.toolbar-action-btn:focus-visible :deep(.v-icon) {
+  opacity: 1;
 }
 
 .toolbar-action-btn:focus,
@@ -1756,29 +1921,47 @@ defineExpose({ blurSearchInput, focusSearchInput });
 }
 
 .media-type-toggle {
-  border-radius: 8px;
-  margin-left: 4px;
-  display: inline-flex;
-  background-color: rgb(var(--v-theme-primary)) !important;
-  color: rgb(var(--v-theme-on-primary)) !important;
-}
-
-.media-type-toggle .v-btn {
-  color: rgb(var(--v-theme-on-primary)) !important;
-  height: var(--toolbar-control-height);
-  width: var(--toolbar-control-height);
-  background-color: rgba(var(--v-theme-surface), 0.3) !important;
-  align-items: center;
-}
-
-.toolbar-filter-panel .media-type-toggle {
   margin-left: 0;
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  min-height: 50px;
+  border-radius: 10px;
+  padding: 0;
+  overflow: hidden;
+  background: rgba(var(--v-theme-on-background), 0.09);
 }
 
-.toolbar-filter-panel .media-type-toggle .v-btn {
-  flex: 1 1 0;
+.media-type-toggle :deep(.media-type-button) {
+  min-height: 50px !important;
+  height: 50px !important;
+  width: 100%;
+  min-width: 0;
+  border-radius: 0 !important;
+  color: rgb(var(--v-theme-on-background)) !important;
+  background: rgba(var(--v-theme-surface), 0.34) !important;
+}
+
+.media-type-toggle :deep(.media-type-button:not(:first-child)) {
+  border-left: 1px solid rgba(var(--v-theme-on-background), 0.14);
+}
+
+.media-type-toggle :deep(.media-type-button:hover),
+.media-type-toggle :deep(.media-type-button:focus-visible) {
+  background: rgba(var(--v-theme-surface), 0.52) !important;
+}
+
+.media-type-toggle :deep(.media-type-button--active) {
+  color: rgb(var(--v-theme-on-primary)) !important;
+  background: rgba(var(--v-theme-primary), 0.9) !important;
+}
+
+.media-type-toggle :deep(.media-type-button .v-btn__content) {
+  min-height: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 @media (max-width: 900px) {

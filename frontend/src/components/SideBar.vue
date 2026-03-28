@@ -2720,7 +2720,8 @@ defineExpose({
 }
 
 .sidebar-project-trigger:hover {
-  background: rgba(var(--v-theme-surface), 0.4);
+  background: rgba(var(--v-theme-accent), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-accent), 0.2);
   color: rgb(var(--v-theme-sidebar-text));
 }
 
@@ -2762,12 +2763,17 @@ defineExpose({
   cursor: pointer;
   font-size: 0.85rem;
   color: rgb(var(--v-theme-on-tertiary));
-  transition: background 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    box-shadow 0.12s;
   gap: 6px;
 }
 
 .sidebar-project-menu-item:hover {
-  background: rgba(var(--v-theme-tertiary), 0.2);
+  background: rgba(var(--v-theme-accent), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-accent), 0.2);
+  color: rgb(var(--v-theme-on-tertiary));
 }
 
 .sidebar-project-menu-item.active {
@@ -2810,16 +2816,14 @@ defineExpose({
   border-top: 1px solid rgba(var(--v-theme-border), 0.3);
   transition:
     background 0.12s,
-    color 0.12s;
+    color 0.12s,
+    box-shadow 0.12s;
 }
 
 .sidebar-project-menu-add:hover {
-  background: rgba(var(--v-theme-tertiary), 0.2);
+  background: rgba(var(--v-theme-accent), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-accent), 0.2);
   color: rgb(var(--v-theme-on-tertiary));
-}
-
-.sidebar-project-menu-add:hover {
-  background: rgba(var(--v-theme-accent), 0.1);
 }
 
 .sidebar-project-select {
@@ -2875,10 +2879,12 @@ defineExpose({
 /* Sidebar right edge for counts */
 .sidebar {
   width: 240px;
-  --sidebar-right-edge: 14px;
+  --sidebar-right-edge: 6px;
   --sidebar-header-action-right-edge: 0px;
   --sidebar-thumb-size: 36px;
   --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 8px);
+  --sidebar-space-y: 6px;
+  --sidebar-item-radius: 8px;
   color: rgb(var(--v-theme-sidebar-text));
   background: rgb(var(--v-theme-sidebar));
   padding: 0;
@@ -3022,7 +3028,7 @@ defineExpose({
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--sidebar-space-y);
   padding: 4px 0 8px;
   overflow-y: auto;
   flex: 1 1 auto;
@@ -3040,9 +3046,13 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--sidebar-item-radius);
   cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
+  color: rgba(var(--v-theme-sidebar-text), 0.84);
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
 }
 
 .sidebar-collapsed-item.active {
@@ -3058,14 +3068,16 @@ defineExpose({
 }
 
 .sidebar-collapsed-item:hover {
-  filter: brightness(1.1);
-  background-color: rgba(var(--v-theme-accent), 0.4);
+  filter: brightness(1.03);
+  background-color: rgba(var(--v-theme-accent), 0.18);
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-accent), 0.22);
+  transform: translateY(-1px);
 }
 
 .sidebar-collapsed-thumb {
   width: var(--sidebar-thumb-size);
   height: var(--sidebar-thumb-size);
-  border-radius: 8px;
+  border-radius: var(--sidebar-item-radius);
   border: none;
   padding: 0;
   background: transparent;
@@ -3082,7 +3094,7 @@ defineExpose({
   width: var(--sidebar-thumb-size);
   height: var(--sidebar-thumb-size);
   object-fit: contain;
-  border-radius: 8px;
+  border-radius: var(--sidebar-item-radius);
   display: block;
   position: relative;
   z-index: 1;
@@ -3126,8 +3138,9 @@ defineExpose({
 }
 
 .sidebar-collapsed-thumb:hover {
-  filter: brightness(1.1);
-  background-color: rgba(var(--v-theme-accent), 0.4);
+  filter: brightness(1.03);
+  background-color: rgba(var(--v-theme-accent), 0.18);
+  transform: translateY(-1px) scale(1.02);
 }
 
 .sidebar-collapsed-thumb:hover::after {
@@ -3154,7 +3167,7 @@ defineExpose({
 
 @media (max-width: 900px) {
   .sidebar {
-    width: 250px !important;
+    width: 240px !important;
     height: 100dvh;
     max-height: 100dvh;
   }
@@ -3167,13 +3180,13 @@ defineExpose({
 .sidebar-section-header {
   position: relative;
   font-size: 1rem;
-  font-weight: bold;
-  min-height: 42px;
-  padding: 4px 12px;
+  font-weight: 550;
+  min-height: 38px;
+  padding: 2px 12px;
   padding-right: var(--sidebar-header-action-right-edge) !important;
   display: flex;
   align-items: center;
-  color: rgba(var(--v-theme-sidebar-text), 0.6);
+  color: rgba(var(--v-theme-sidebar-text), 0.58);
 }
 
 .sidebar-section-header--collapsible {
@@ -3207,18 +3220,19 @@ defineExpose({
   display: flex;
   align-items: center;
   min-height: max(30px, calc(var(--sidebar-thumb-size) + 6px));
-  padding: 2px 6px;
+  padding: 3px 10px;
   padding-right: var(--sidebar-right-edge) !important;
   cursor: pointer;
   border-radius: 0;
   margin-bottom: 0;
-  font-size: 0.9em;
+  font-size: 0.84em;
   font-weight: 500;
   background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
+  color: rgba(var(--v-theme-sidebar-text), 0.76);
   transition:
     background 0.18s,
-    color 0.18s;
+    color 0.18s,
+    box-shadow 0.18s;
 }
 
 .sidebar-footer-spacer {
@@ -3317,8 +3331,8 @@ defineExpose({
 .sidebar-list-item.active {
   background: rgba(var(--v-theme-primary), 0.6);
   color: rgb(var(--v-theme-on-primary));
-  border-right: 0;
   position: relative;
+  border-radius: 0;
 }
 
 .sidebar-list-item.active .sidebar-list-count {
@@ -3326,7 +3340,8 @@ defineExpose({
 }
 
 .sidebar-list-item:hover {
-  background: rgba(var(--v-theme-accent), 0.6);
+  background: rgba(var(--v-theme-accent), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-accent), 0.2);
 }
 
 .sidebar-list-item.droppable {
@@ -3436,7 +3451,7 @@ defineExpose({
 .sidebar-list-icon {
   display: flex;
   align-items: center;
-  margin-right: 6px;
+  margin-right: 8px;
   justify-content: center;
   width: var(--sidebar-thumb-size);
   height: var(--sidebar-thumb-size);
@@ -3454,7 +3469,7 @@ defineExpose({
   flex: 1;
   min-width: 0;
   text-align: left;
-  padding-left: 4px;
+  padding-left: 0;
 }
 
 .sidebar-list-label-text {
@@ -3469,22 +3484,30 @@ defineExpose({
   width: var(--sidebar-thumb-size);
   height: var(--sidebar-thumb-size);
   object-fit: contain;
-  border-radius: 6px;
+  border-radius: var(--sidebar-item-radius);
   background: transparent;
+  border: 1px solid rgba(var(--v-theme-border), 0.45);
   display: inline-block;
   filter: drop-shadow(0 2px 6px rgba(var(--v-theme-shadow), 0.35));
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
 }
 
 .sidebar-set-thumb-image {
   width: var(--sidebar-thumb-size);
   height: var(--sidebar-thumb-size);
-  border-radius: 6px;
+  border-radius: var(--sidebar-item-radius);
   object-fit: cover;
   background: transparent;
   border: none;
   box-shadow: none;
   display: block;
   box-sizing: border-box;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
 .sidebar-set-thumb-image--collapsed {
@@ -3498,7 +3521,17 @@ defineExpose({
 .sidebar-set-thumb-image--large {
   width: var(--sidebar-thumb-size-large);
   height: var(--sidebar-thumb-size-large);
-  border-radius: 8px;
+  border-radius: var(--sidebar-item-radius);
+}
+
+.sidebar-list-item:hover .sidebar-character-thumb,
+.sidebar-list-item:hover .sidebar-set-thumb-image {
+  transform: scale(1.02);
+  box-shadow: 0 3px 9px rgba(var(--v-theme-shadow), 0.2);
+}
+
+.sidebar-list-item:hover .sidebar-character-thumb {
+  border-color: rgba(var(--v-theme-accent), 0.45);
 }
 
 .sidebar-collapsed-item,
@@ -3533,8 +3566,8 @@ defineExpose({
 }
 
 .sidebar-list-count {
-  font-size: 0.9em;
-  color: rgb(var(--v-theme-sidebar-text));
+  font-size: 0.8em;
+  color: rgba(var(--v-theme-sidebar-text), 0.62);
   min-width: 2.6em;
   text-align: right;
   margin: 0;
@@ -3551,8 +3584,8 @@ defineExpose({
   align-items: center;
   justify-content: center;
   margin-left: auto;
-  margin-right: 6px;
-  color: rgba(var(--v-theme-sidebar-text), 0.48);
+  margin-right: 8px;
+  color: rgba(var(--v-theme-sidebar-text), 0.4);
   opacity: 0.95;
   flex-shrink: 0;
 }

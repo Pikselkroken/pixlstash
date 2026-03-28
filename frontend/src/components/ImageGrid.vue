@@ -137,6 +137,15 @@
       anchor="bottom"
     />
 
+    <ProgressOverlay
+      :visible="smartScoreLoadingVisible"
+      status="running"
+      :message="smartScoreProgressMessage"
+      :percent="smartScoreProgressPercent"
+      :indeterminate="false"
+      anchor="top"
+    />
+
     <div
       class="grid-scroll-wrapper"
       ref="scrollWrapper"
@@ -163,6 +172,7 @@
             <img
               :src="emptyStateImage"
               :alt="emptyStateAlt"
+              :style="emptyStateImageStyle"
               style="width: 90%"
             />
           </div>
@@ -591,6 +601,7 @@ const props = defineProps({
   showProblemIcon: Boolean,
   showStacks: { type: Boolean, default: true },
   compactMode: { type: Boolean, default: false },
+  themeMode: { type: String, default: "light" },
   dateFormat: { type: String, default: "locale" },
   allPicturesId: String,
   unassignedPicturesId: String,
@@ -745,6 +756,25 @@ const pluginProgress = reactive({
 });
 let pluginProgressHideTimer = null;
 
+const smartScoreProgress = reactive({
+  visible: false,
+  percent: 0,
+  message: "Calculating smart scores",
+});
+const SORT_PROGRESS_ESTIMATE_DEFAULT_MS = 2500;
+const SORT_PROGRESS_ESTIMATE_SMART_SCORE_MS = 9000;
+const SORT_PROGRESS_ESTIMATE_MIN_MS = 900;
+const SORT_PROGRESS_ESTIMATE_MAX_MS = 45000;
+const SORT_PROGRESS_EWMA_ALPHA = 0.25;
+const SORT_PROGRESS_MAX_BEFORE_DONE = 97;
+const SORT_PROGRESS_COMPLETION_HOLD_MS = 220;
+const SORT_PROGRESS_WARM_RESTART_WINDOW_MS = 1200;
+const sortEstimatedDurationMsByKey = reactive({});
+let smartScoreProgressTimer = null;
+let smartScoreProgressLoadId = 0;
+let smartScoreProgressStartedAt = 0;
+const smartScoreProgressSortKey = ref("");
+
 const availablePlugins = ref([]);
 
 async function fetchAvailablePlugins() {
@@ -835,6 +865,37 @@ const pluginProgressPercent = computed(() => {
   return Math.min(100, Math.max(0, Math.round(percent)));
 });
 
+const smartScoreProgressPercent = computed(() => {
+  const percent = Number(smartScoreProgress.percent) || 0;
+  return Math.min(100, Math.max(0, Math.round(percent)));
+});
+
+const smartScoreProgressMessage = computed(
+  () => smartScoreProgress.message || "Calculating smart scores",
+);
+
+function getActiveSortKey() {
+  if (typeof props.selectedSort !== "string") return "";
+  return props.selectedSort.trim().toUpperCase();
+}
+
+function getSortProgressLabel(sortKey) {
+  const key = String(sortKey || "").toUpperCase();
+  if (!key) return "results";
+  if (key.includes("SMART_SCORE")) return "smart score";
+  if (key.includes("CHARACTER_LIKENESS")) return "character likeness";
+  if (key === "TEXT_CONTENT") return "text content";
+  if (key === "SCORE") return "score";
+  if (key === STACKS_SORT_KEY) return "stacks";
+  return key.replace(/_/g, " ").toLowerCase();
+}
+
+function getSortEstimateDefaultMs(sortKey) {
+  const key = String(sortKey || "").toUpperCase();
+  if (key.includes("SMART_SCORE")) return SORT_PROGRESS_ESTIMATE_SMART_SCORE_MS;
+  return SORT_PROGRESS_ESTIMATE_DEFAULT_MS;
+}
+
 const exportProgressPercent = computed(() => {
   if (!exportProgress.total) return 0;
   const percent = (exportProgress.processed / exportProgress.total) * 100;
@@ -923,6 +984,132 @@ async function runComfyuiOnGridImages({
 function onComfyuiRefreshGrid({ preserveScroll } = {}) {
   if (preserveScroll) preserveScrollOnNextFetch.value = true;
   debouncedFetchAllGridImages();
+}
+
+function getNowMs() {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function clampSmartScoreEstimate(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return SORT_PROGRESS_ESTIMATE_DEFAULT_MS;
+  return Math.max(
+    SORT_PROGRESS_ESTIMATE_MIN_MS,
+    Math.min(SORT_PROGRESS_ESTIMATE_MAX_MS, value),
+  );
+}
+
+function easeEstimatedProgress(ratio) {
+  const x = Math.max(0, Math.min(1, ratio));
+  return 1 - Math.pow(1 - x, 1.35);
+}
+
+function stopSmartScoreProgressTimer() {
+  if (smartScoreProgressTimer) {
+    clearInterval(smartScoreProgressTimer);
+    smartScoreProgressTimer = null;
+  }
+}
+
+function setSmartScoreProgressPercent(
+  nextPercent,
+  { allowReset = false } = {},
+) {
+  const parsed = Number(nextPercent);
+  const clamped = Number.isFinite(parsed)
+    ? Math.max(0, Math.min(100, parsed))
+    : 0;
+  if (allowReset) {
+    smartScoreProgress.percent = clamped;
+    return;
+  }
+  // Monotonic guard: progress must never move backwards within a run.
+  smartScoreProgress.percent = Math.max(smartScoreProgress.percent, clamped);
+}
+
+function startSmartScoreProgress(loadId, sortKey) {
+  stopSmartScoreProgressTimer();
+  const now = getNowMs();
+  const incomingSortKey = String(sortKey || "").toUpperCase();
+  const sameSortAsCurrent =
+    smartScoreProgress.visible &&
+    incomingSortKey &&
+    incomingSortKey === smartScoreProgressSortKey.value;
+  const rapidRestart =
+    sameSortAsCurrent &&
+    now - smartScoreProgressStartedAt <= SORT_PROGRESS_WARM_RESTART_WINDOW_MS;
+
+  smartScoreProgressLoadId = Number(loadId) || 0;
+  smartScoreProgressSortKey.value = incomingSortKey;
+  smartScoreProgress.visible = true;
+
+  const estimateMs = clampSmartScoreEstimate(
+    sortEstimatedDurationMsByKey[smartScoreProgressSortKey.value] ??
+      getSortEstimateDefaultMs(smartScoreProgressSortKey.value),
+  );
+
+  if (rapidRestart) {
+    // Keep current progress on quick follow-up fetches so the bar does not
+    // visually bounce backwards at startup when multiple refreshes compete.
+    const currentRatio = Math.max(
+      0,
+      Math.min(1, smartScoreProgress.percent / SORT_PROGRESS_MAX_BEFORE_DONE),
+    );
+    smartScoreProgressStartedAt = now - estimateMs * currentRatio;
+  } else {
+    smartScoreProgressStartedAt = now;
+    setSmartScoreProgressPercent(0, { allowReset: true });
+  }
+
+  smartScoreProgress.message = `Sorting by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
+  smartScoreProgressTimer = setInterval(() => {
+    if (!smartScoreProgress.visible) {
+      stopSmartScoreProgressTimer();
+      return;
+    }
+    const elapsed = Math.max(0, getNowMs() - smartScoreProgressStartedAt);
+    const ratio = elapsed / Math.max(1, estimateMs);
+    const smooth = easeEstimatedProgress(ratio);
+    const next = Math.min(SORT_PROGRESS_MAX_BEFORE_DONE, smooth * 100);
+    setSmartScoreProgressPercent(next);
+  }, 120);
+}
+
+function completeSmartScoreProgress(loadId, measuredDurationMs, wasSuccessful) {
+  if (Number(loadId) !== smartScoreProgressLoadId) return;
+  stopSmartScoreProgressTimer();
+  if (wasSuccessful) {
+    const measured = Number(measuredDurationMs);
+    if (Number.isFinite(measured) && measured > 0) {
+      const sortKey = String(smartScoreProgressSortKey.value || "");
+      const previous = clampSmartScoreEstimate(
+        sortEstimatedDurationMsByKey[sortKey] ??
+          getSortEstimateDefaultMs(sortKey),
+      );
+      const nextEstimate =
+        (1 - SORT_PROGRESS_EWMA_ALPHA) * previous +
+        SORT_PROGRESS_EWMA_ALPHA * clampSmartScoreEstimate(measured);
+      sortEstimatedDurationMsByKey[sortKey] =
+        clampSmartScoreEstimate(nextEstimate);
+      console.debug(
+        `[SortProgress] sort=${sortKey || "(none)"} total=${Math.round(measured)}ms estimate=${Math.round(sortEstimatedDurationMsByKey[sortKey] || previous)}ms`,
+      );
+    }
+    setSmartScoreProgressPercent(100);
+    smartScoreProgress.message = `Sorted by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
+    setTimeout(() => {
+      if (Number(loadId) !== smartScoreProgressLoadId) return;
+      smartScoreProgress.visible = false;
+      setSmartScoreProgressPercent(0, { allowReset: true });
+      smartScoreProgress.message = "Calculating smart scores";
+      smartScoreProgressSortKey.value = "";
+    }, SORT_PROGRESS_COMPLETION_HOLD_MS);
+    return;
+  }
+  smartScoreProgress.visible = false;
+  setSmartScoreProgressPercent(0, { allowReset: true });
+  smartScoreProgress.message = "Calculating smart scores";
+  smartScoreProgressSortKey.value = "";
 }
 
 async function maybeRefreshOverlayForComfyui() {
@@ -1106,6 +1293,7 @@ onUnmounted(() => {
     clearTimeout(pluginProgressHideTimer);
     pluginProgressHideTimer = null;
   }
+  stopSmartScoreProgressTimer();
   if (wsTagFullRefreshTimer) {
     clearTimeout(wsTagFullRefreshTimer);
     wsTagFullRefreshTimer = null;
@@ -1166,6 +1354,13 @@ watch(
       pluginProgressHideTimer = null;
     }
 
+    const pluginName = String(payload.plugin || "plugin").toLowerCase();
+    if (pluginName === "smart_score") {
+      // Smart score overlay is driven by local fetch instrumentation,
+      // not websocket events, to avoid jitter/out-of-order updates.
+      return;
+    }
+
     pluginProgress.runId = String(payload.run_id || pluginProgress.runId || "");
     pluginProgress.status = String(payload.status || "running");
     pluginProgress.current = Math.max(0, Number(payload.current || 0));
@@ -1180,10 +1375,10 @@ watch(
       pluginProgress.percent =
         (pluginProgress.current / pluginProgress.total) * 100;
     }
-    const pluginName = String(payload.plugin || "plugin");
+    const pluginNameForMessage = String(payload.plugin || "plugin");
     pluginProgress.message = normalizePluginProgressMessage(
       payload.message,
-      `${pluginName}: ${pluginProgress.status}`,
+      `${pluginNameForMessage}: ${pluginProgress.status}`,
     );
     pluginProgress.visible = true;
 
@@ -3549,6 +3744,12 @@ const gridLoadEpoch = ref(0);
 const lastFetchKey = ref("");
 const lastFetchError = ref({ key: "", at: 0 });
 const lastFetchSuccess = ref({ key: "", at: 0 });
+const smartScoreLoadingVisible = computed(
+  () =>
+    !!getActiveSortKey() &&
+    smartScoreProgress.visible &&
+    !exportProgress.visible,
+);
 
 // ============================================================
 // GRID FETCH FUNCTIONS
@@ -4594,6 +4795,9 @@ function handleStackReorderDrop(img, event) {
 // ============================================================
 async function fetchAllGridImages(options = {}) {
   const force = options?.force === true;
+  const activeSortKey = getActiveSortKey();
+  const isSortedFetch = !!activeSortKey;
+  let sortedFetchStartedAt = 0;
   // Capture scroll-preservation intent *synchronously* before any await so
   // that it is not affected by the gridVersion watcher clearing it later.
   const fetchStartedWithPreserveScroll = preserveScrollOnNextFetch.value;
@@ -4635,6 +4839,10 @@ async function fetchAllGridImages(options = {}) {
   gridReady.value = false;
   imagesLoading.value = true;
   imagesError.value = null;
+  if (isSortedFetch) {
+    sortedFetchStartedAt = getNowMs();
+    startSmartScoreProgress(loadId, activeSortKey);
+  }
   try {
     let images = [];
     const requestId = Date.now();
@@ -4756,6 +4964,10 @@ async function fetchAllGridImages(options = {}) {
       }
     });
     lastFetchSuccess.value = { key: fetchKey, at: Date.now() };
+    if (isSortedFetch) {
+      const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
+      completeSmartScoreProgress(loadId, elapsedMs, true);
+    }
   } catch (e) {
     if (fetchAllGridImages.lastRequestId !== requestId) {
       return;
@@ -4767,6 +4979,10 @@ async function fetchAllGridImages(options = {}) {
       allGridImages.value = [];
     }
     lastFetchError.value = { key: fetchKey, at: Date.now() };
+    if (isSortedFetch) {
+      const elapsedMs = Math.max(0, getNowMs() - sortedFetchStartedAt);
+      completeSmartScoreProgress(loadId, elapsedMs, false);
+    }
   } finally {
     if (loadId === gridLoadEpoch.value) {
       imagesLoading.value = false;
@@ -5159,6 +5375,9 @@ const canShowAllPicturesButton = computed(() => {
 });
 
 const emptyStateTitle = computed(() => {
+  if (isSetOverlapView.value) {
+    return "No overlap";
+  }
   if (isScrapheapView.value) {
     return "No pictures in the scrap heap";
   }
@@ -5168,6 +5387,9 @@ const emptyStateTitle = computed(() => {
 });
 
 const emptyStateSubtitle = computed(() => {
+  if (isSetOverlapView.value) {
+    return "The picture sets have no overlap.";
+  }
   if (isScrapheapView.value) {
     return "Are all your pictures that good?";
   }
@@ -5182,6 +5404,27 @@ const emptyStateImage = computed(() => {
 
 const emptyStateAlt = computed(() => {
   return isScrapheapView.value ? "Empty scrap heap" : "No images";
+});
+
+const isDarkThemeActive = computed(() => {
+  const mode = String(props.themeMode || "light").toLowerCase();
+  if (mode === "dark") return true;
+  if (mode === "light") return false;
+  if (mode === "system") {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+    );
+  }
+  return false;
+});
+
+const emptyStateImageStyle = computed(() => {
+  if (!isDarkThemeActive.value) return {};
+  return {
+    filter: "invert(1) brightness(1.08) contrast(0.92)",
+  };
 });
 
 watch([imagesLoading, filteredGridCount], ([loading, count]) => {
@@ -6207,11 +6450,11 @@ function handleEmptyStateReset() {
 .image-grid {
   height: 100%;
   display: grid;
-  gap: 0;
+  gap: 4px;
   width: 100%;
   box-sizing: border-box;
   flex: 1 1 0%;
-  padding: 0px 2px 2px 2px !important;
+  padding: 2px 4px 2px 4px !important;
   align-content: start;
   justify-content: start;
 }
@@ -6295,7 +6538,7 @@ function handleEmptyStateReset() {
   z-index: 2;
 }
 .thumbnail-info-row {
-  margin-top: 0;
+  margin-top: 2px;
   text-align: center;
   height: 24px;
   min-height: 24px;
@@ -6305,8 +6548,8 @@ function handleEmptyStateReset() {
   width: 100%;
 }
 .thumbnail-info {
-  font-size: 0.95em;
-  color: rgb(var(--v-theme-on-background));
+  font-size: 0.88em;
+  color: rgba(var(--v-theme-on-background), 0.78);
   text-align: center;
   line-height: 24px;
   display: block;
@@ -6315,7 +6558,7 @@ function handleEmptyStateReset() {
   padding: 0 8px;
   white-space: nowrap;
   overflow: hidden;
-  text-shadow: 1px 1px 1px rgba(var(--v-theme-shadow), 0.2);
+  text-shadow: 0 1px 1px rgba(var(--v-theme-shadow), 0.12);
 }
 .thumbnail-container {
   width: 100%;

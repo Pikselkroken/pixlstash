@@ -694,7 +694,28 @@ def find_pictures_by_smart_score(
     penalised_tags=None,
     include_deleted: bool = False,
     only_deleted: bool = False,
+    progress_reporter=None,
 ):
+    def report_progress(status: str, current: int, total: int, message: str):
+        if not callable(progress_reporter):
+            return
+        safe_total = max(0, int(total or 0))
+        safe_current = max(0, min(int(current or 0), safe_total))
+        progress = (safe_current / safe_total * 100.0) if safe_total else 0.0
+        try:
+            progress_reporter(
+                {
+                    "status": status,
+                    "current": safe_current,
+                    "total": safe_total,
+                    "progress": progress,
+                    "message": message,
+                }
+            )
+        except Exception:
+            # Progress reporting should never break sorting.
+            pass
+
     # 1. Fetch data
     good_anchors, bad_anchors, candidates = fetch_smart_score_data(
         server,
@@ -723,8 +744,38 @@ def find_pictures_by_smart_score(
         )
 
         if cand_list:
-            scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
-                cand_list, good_list, bad_list
+            total_candidates = len(cand_list)
+            report_progress(
+                "running",
+                0,
+                total_candidates,
+                f"Calculating smart scores (0/{total_candidates})",
+            )
+
+            chunk_size = 1024
+            score_chunks = []
+            processed = 0
+            for start in range(0, total_candidates, chunk_size):
+                end = min(start + chunk_size, total_candidates)
+                batch = cand_list[start:end]
+                batch_scores = SmartScoreUtils.calculate_smart_score_batch_numpy(
+                    batch,
+                    good_list,
+                    bad_list,
+                )
+                score_chunks.append(np.asarray(batch_scores, dtype=np.float32))
+                processed = end
+                report_progress(
+                    "running",
+                    processed,
+                    total_candidates,
+                    f"Calculating smart scores ({processed}/{total_candidates})",
+                )
+
+            scores = (
+                np.concatenate(score_chunks)
+                if len(score_chunks) > 1
+                else (score_chunks[0] if score_chunks else np.array([]))
             )
 
             # Primary sort key is raw smart score so UI labels and ordering
@@ -741,6 +792,12 @@ def find_pictures_by_smart_score(
 
             scored_ids = [cand_ids[i] for i in sorted_indices]
             score_map = {cand_ids[i]: float(scores[i]) for i in range(len(scores))}
+            report_progress(
+                "completed",
+                total_candidates,
+                total_candidates,
+                f"Calculated smart scores ({total_candidates}/{total_candidates})",
+            )
 
     combined_ids = scored_ids + unscored_ids
     if not combined_ids:

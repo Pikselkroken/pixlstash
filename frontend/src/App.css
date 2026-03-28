@@ -60,7 +60,7 @@ body {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
-  padding: 0;
+  padding: 4px 0 0;
   transition: border-color 0.2s;
   overflow: hidden;
   /* Height is determined by flex — toolbar takes natural height, this fills the rest */
