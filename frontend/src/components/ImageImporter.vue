@@ -10,6 +10,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
+  "import-started",
   "import-finished",
   "import-cancelled",
   "import-error",
@@ -22,6 +23,7 @@ const uploadBytesUploaded = ref(0);
 const uploadBytesTotal = ref(0);
 const importError = ref(null);
 const importPhase = ref("");
+const importServerStage = ref("");
 const cancelImport = ref(false);
 const currentImportController = ref(null);
 
@@ -52,6 +54,13 @@ const importPhaseMessage = computed(() => {
   }
 });
 
+const importServerStageMessage = computed(() => {
+  if (!importServerStage.value) return "";
+  return importServerStage.value
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+});
+
 function formatBytes(bytes) {
   if (!bytes) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
@@ -77,6 +86,7 @@ function clearHideTimer() {
 function finalizeCancelled() {
   clearHideTimer();
   importPhase.value = "cancelled";
+  importServerStage.value = "cancelled";
   importInProgress.value = false;
   importError.value = null;
   cancelImport.value = false;
@@ -87,6 +97,7 @@ function finalizeCancelled() {
 function finalizeError(message) {
   clearHideTimer();
   importPhase.value = "error";
+  importServerStage.value = "failed";
   importInProgress.value = false;
   importError.value = message;
   cancelImport.value = false;
@@ -110,9 +121,20 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function logImportTrace(message, details = null) {
+  if (details !== null && details !== undefined) {
+    console.info(`[IMPORT TRACE] ${message}`, details);
+    return;
+  }
+  console.info(`[IMPORT TRACE] ${message}`);
+}
+
 async function pollImportStatus(taskId, importProgressAccum, importTotalAccum) {
   const maxAttempts = 600;
   const intervalMs = 1000;
+  let lastLoggedStatus = null;
+  let lastLoggedStage = null;
+  let lastLoggedProcessed = -1;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (cancelImport.value) {
@@ -125,10 +147,31 @@ async function pollImportStatus(taskId, importProgressAccum, importTotalAccum) {
       { params: { task_id: taskId } },
     );
     const status = statusRes?.data?.status || "in_progress";
+    const stage = statusRes?.data?.stage || "unknown";
     const processed = statusRes?.data?.processed ?? 0;
     const serverTotal = statusRes?.data?.total ?? 0;
 
+    if (
+      status !== lastLoggedStatus ||
+      stage !== lastLoggedStage ||
+      processed !== lastLoggedProcessed ||
+      attempt % 10 === 0
+    ) {
+      logImportTrace("Import status poll", {
+        taskId,
+        attempt: attempt + 1,
+        status,
+        stage,
+        processed,
+        total: serverTotal,
+      });
+      lastLoggedStatus = status;
+      lastLoggedStage = stage;
+      lastLoggedProcessed = processed;
+    }
+
     importPhase.value = "processing";
+    importServerStage.value = stage;
     if (serverTotal > 0) {
       importTotal.value = Math.max(
         importTotal.value,
@@ -175,7 +218,18 @@ async function startImport(files, options = {}) {
   uploadBytesTotal.value = files.reduce((sum, f) => sum + (f.size || 0), 0);
   importError.value = null;
   importPhase.value = "uploading";
+  importServerStage.value = "uploading";
   currentImportController.value = null;
+  emit("import-started", {
+    fileCount: files.length,
+    projectId: options.projectId ?? null,
+  });
+
+  logImportTrace("Import started", {
+    fileCount: files.length,
+    totalUploadBytes: uploadBytesTotal.value,
+    projectId: options.projectId ?? null,
+  });
 
   const BATCH_SIZE = 100;
   const MAX_RETRIES = 3;
@@ -209,6 +263,12 @@ async function startImport(files, options = {}) {
       const batchTimeoutMs =
         overrideTimeout ??
         Math.max(MIN_TIMEOUT_MS, batch.length * TIMEOUT_PER_FILE_MS);
+      logImportTrace("Uploading batch", {
+        batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+        batchSize: batch.length,
+        batchBytes,
+        timeoutMs: batchTimeoutMs,
+      });
       const formData = new FormData();
       batch.forEach((file) => {
         formData.append("file", file);
@@ -310,6 +370,11 @@ async function startImport(files, options = {}) {
         return;
       }
 
+      logImportTrace("Upload accepted by backend", {
+        taskId,
+        batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+      });
+
       importPhase.value = "processing";
       const statusPayload = await pollImportStatus(
         taskId,
@@ -319,6 +384,14 @@ async function startImport(files, options = {}) {
       if (!statusPayload) {
         return;
       }
+
+      logImportTrace("Batch import finished", {
+        taskId,
+        status: statusPayload.status,
+        results: Array.isArray(statusPayload.results)
+          ? statusPayload.results.length
+          : 0,
+      });
 
       const batchResults = Array.isArray(statusPayload.results)
         ? statusPayload.results
@@ -338,9 +411,11 @@ async function startImport(files, options = {}) {
 
     if (importedCount === 0) {
       importPhase.value = "duplicates";
+      importServerStage.value = "completed";
       importError.value = "All files are duplicates.";
     } else {
       importPhase.value = "done";
+      importServerStage.value = "completed";
       importError.value = `Imported ${importedCount} image${
         importedCount !== 1 ? "s" : ""
       }.`;
@@ -362,9 +437,15 @@ async function startImport(files, options = {}) {
       phase: importPhase.value,
       results: allResults,
     });
+    logImportTrace("Import finished", {
+      importedCount,
+      totalResults: allResults.length,
+      phase: importPhase.value,
+    });
   } catch (error) {
     const message = error?.message || String(error);
     finalizeError(message);
+    logImportTrace("Import failed", { message });
     window.alert("All uploads failed: " + message);
   }
 }
@@ -430,6 +511,9 @@ defineExpose({ startImport });
         <span v-if="importError" class="import-progress-error">
           {{ importError }}
         </span>
+      </div>
+      <div v-if="importServerStageMessage" class="import-progress-stage">
+        Backend stage: {{ importServerStageMessage }}
       </div>
       <button
         v-if="showCancelButton"
@@ -521,6 +605,12 @@ defineExpose({ startImport });
 .import-progress-label {
   font-size: 1.1rem;
   margin-top: 8px;
+}
+
+.import-progress-stage {
+  margin-top: 6px;
+  font-size: 0.9rem;
+  color: rgba(var(--v-theme-on-dark-surface), 0.72);
 }
 
 .import-progress-error {

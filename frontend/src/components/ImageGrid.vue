@@ -34,7 +34,10 @@
     :selectedCharacterId="props.selectedCharacter"
     :allPicturesId="props.allPicturesId"
     :unassignedPicturesId="props.unassignedPicturesId"
+    @import-started="handleImportStarted"
     @import-finished="handleImagesUploaded"
+    @import-cancelled="handleImportCancelled"
+    @import-error="handleImportErrored"
   />
   <div :style="wrapperStyle">
     <SelectionBar
@@ -62,6 +65,7 @@
       @added-to-set="handleOverlayAddedToSet"
       @remove-from-group="removeFromGroup"
       @delete-selected="deleteSelected"
+      @set-project="handleSetProjectForSelected"
       @add-to-character="handleAddToCharacter"
       @create-stack="createStackFromSelection"
       @remove-from-stack="removeSelectedFromStack"
@@ -808,6 +812,8 @@ const lastWsTagUpdateKey = ref(0);
 const preserveScrollOnNextFetch = ref(false);
 const pendingScrollTop = ref(null);
 const skipNextWsRefresh = ref(false);
+const pauseGridAutoUpdates = ref(false);
+const pendingGridRefreshAfterImport = ref(false);
 
 // ============================================================
 // FACE BBOX STATE
@@ -1069,6 +1075,10 @@ watch(
   (nextKey) => {
     if (!nextKey || nextKey === lastWsUpdateKey.value) return;
     lastWsUpdateKey.value = nextKey;
+    if (pauseGridAutoUpdates.value) {
+      pendingGridRefreshAfterImport.value = true;
+      return;
+    }
     const scrollTop = scrollWrapper.value?.scrollTop ?? 0;
     const threshold = rowHeight.value * 0.5;
     if (scrollTop > threshold) {
@@ -1092,6 +1102,10 @@ watch(
       ? payload.pictureIds
       : [];
     if (!pictureIds.length) return;
+    if (pauseGridAutoUpdates.value) {
+      pendingGridRefreshAfterImport.value = true;
+      return;
+    }
     // Coalesce all task-driven tag updates into an infrequent full refresh to
     // avoid starving the tagger when a large grid is open.
     scheduleWsTagFullRefresh();
@@ -2144,6 +2158,8 @@ async function confirmRestoreScrapheap() {
 const imageImporterRef = ref(null);
 // Handle images-uploaded event from ImageImporter
 async function handleImagesUploaded(payload) {
+  pauseGridAutoUpdates.value = false;
+  pendingGridRefreshAfterImport.value = false;
   const results = Array.isArray(payload?.results) ? payload.results : [];
   const pictureIds = Array.from(
     new Set(
@@ -2190,6 +2206,31 @@ async function handleImagesUploaded(payload) {
   emit("refresh-sidebar");
 }
 
+function handleImportStarted() {
+  pauseGridAutoUpdates.value = true;
+  pendingGridRefreshAfterImport.value = false;
+}
+
+function runDeferredGridRefreshAfterImport() {
+  if (!pendingGridRefreshAfterImport.value) {
+    return;
+  }
+  pendingGridRefreshAfterImport.value = false;
+  preserveScrollOnNextFetch.value = true;
+  debouncedFetchAllGridImages({ force: true });
+  fetchAllPicturesCount();
+}
+
+function handleImportCancelled() {
+  pauseGridAutoUpdates.value = false;
+  runDeferredGridRefreshAfterImport();
+}
+
+function handleImportErrored() {
+  pauseGridAutoUpdates.value = false;
+  runDeferredGridRefreshAfterImport();
+}
+
 const debouncedFetchAllGridImages = debounce(fetchAllGridImages, 200);
 const lastGridVersionRefreshAt = ref(0);
 const WS_TAG_FULL_REFRESH_MIN_INTERVAL_MS = 6000;
@@ -2223,6 +2264,10 @@ function scheduleWsTagFullRefresh() {
 watch(
   () => props.gridVersion,
   () => {
+    if (pauseGridAutoUpdates.value) {
+      pendingGridRefreshAfterImport.value = true;
+      return;
+    }
     const now = Date.now();
     if (now - lastGridVersionRefreshAt.value < 1200) {
       return;
