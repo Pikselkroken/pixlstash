@@ -540,11 +540,15 @@ function handleStackStatsUpdate(payload) {
 }
 
 function handleExpandAllStacks() {
-  showStacks.value = true;
+  nextTick(() => {
+    gridContainer.value?.expandAllStacks?.();
+  });
 }
 
 function handleCollapseAllStacks() {
-  showStacks.value = false;
+  nextTick(() => {
+    gridContainer.value?.collapseAllStacks?.();
+  });
 }
 
 function handleComfyuiRunGrid(payload) {
