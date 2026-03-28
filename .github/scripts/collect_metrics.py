@@ -62,17 +62,90 @@ def fetch_clones_today():
     token = os.environ.get("METRICS_TOKEN")
     if not token:
         print("WARNING: METRICS_TOKEN not set — skipping clone traffic.")
-        return {"count": None, "uniques": None}
+        return {"count": None, "uniques": None, "source_date": None}
     try:
         data = gh_get(f"/repos/{OWNER}/{REPO}/traffic/clones?per=day", token=token)
     except urllib.error.HTTPError as e:
         print(f"WARNING: Could not fetch clone traffic ({e}) — skipping.")
-        return {"count": None, "uniques": None}
+        return {"count": None, "uniques": None, "source_date": None}
+
+    clones = data.get("clones", [])
+    if not clones:
+        return {"count": None, "uniques": None, "source_date": None}
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00Z")
-    for entry in data.get("clones", []):
+    for entry in clones:
         if entry["timestamp"] == today:
-            return {"count": entry["count"], "uniques": entry["uniques"]}
-    return {"count": 0, "uniques": 0}
+            return {
+                "count": entry["count"],
+                "uniques": entry["uniques"],
+                "source_date": entry["timestamp"][:10],
+            }
+
+    # The traffic endpoint can lag by a day. Use the latest available day
+    # instead of writing an incorrect zero for "today".
+    latest = max(clones, key=lambda entry: entry.get("timestamp", ""))
+    print(
+        "INFO: Today's clone traffic is not yet available; "
+        f"using latest snapshot from {latest.get('timestamp', 'unknown')}."
+    )
+    return {
+        "count": latest.get("count"),
+        "uniques": latest.get("uniques"),
+        "source_date": (latest.get("timestamp") or "")[:10] or None,
+    }
+
+
+def fetch_recent_clones_by_date():
+    """Return recent clone traffic keyed by date (YYYY-MM-DD)."""
+    token = os.environ.get("METRICS_TOKEN")
+    if not token:
+        print("WARNING: METRICS_TOKEN not set — cannot backfill clone traffic.")
+        return {}
+    try:
+        data = gh_get(f"/repos/{OWNER}/{REPO}/traffic/clones?per=day", token=token)
+    except urllib.error.HTTPError as e:
+        print(f"WARNING: Could not fetch clone traffic for backfill ({e}).")
+        return {}
+
+    by_date = {}
+    for entry in data.get("clones", []):
+        source_date = (entry.get("timestamp") or "")[:10]
+        if not source_date:
+            continue
+        by_date[source_date] = {
+            "count": entry.get("count"),
+            "uniques": entry.get("uniques"),
+            "source_date": source_date,
+        }
+    return by_date
+
+
+def backfill_clone_history(history):
+    """Backfill clone metrics for historical entries using traffic API data."""
+    recent_clones = fetch_recent_clones_by_date()
+    if not recent_clones:
+        return 0, 0
+
+    updated = 0
+    matched = 0
+    for entry in history.get("history", []):
+        date_key = entry.get("date")
+        if date_key not in recent_clones:
+            continue
+
+        matched += 1
+        current = entry.get("clones_today") or {}
+        replacement = recent_clones[date_key]
+        if (
+            current.get("count") != replacement.get("count")
+            or current.get("uniques") != replacement.get("uniques")
+            or current.get("source_date") != replacement.get("source_date")
+        ):
+            entry["clones_today"] = replacement
+            updated += 1
+
+    return updated, matched
 
 
 def fetch_release_downloads():
@@ -117,6 +190,19 @@ def save_history(history):
 
 def main():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    history = load_history()
+
+    if os.environ.get("BACKFILL_CLONES") == "1":
+        updated, matched = backfill_clone_history(history)
+        if matched == 0:
+            print("Backfill complete: no history dates matched available traffic window.")
+            return
+        save_history(history)
+        print(
+            "Backfill complete: "
+            f"updated={updated}, matched_dates={matched}, total_entries={len(history['history'])}"
+        )
+        return
 
     stars, forks = fetch_stars_and_forks()
     clones = fetch_clones_today()
@@ -136,7 +222,6 @@ def main():
         "ghcr_pulls": None,
     }
 
-    history = load_history()
     # Replace any existing entry for today (re-runs overwrite rather than duplicate).
     history["history"] = [e for e in history["history"] if e.get("date") != today]
     history["history"].append(entry)
@@ -148,6 +233,11 @@ def main():
         f"release_downloads={releases['total']}, "
         f"pypi_last_month={pypi['last_month']}, "
         f"clones_today={clones['count']}"
+        + (
+            f" (source_date={clones['source_date']})"
+            if clones.get("source_date")
+            else ""
+        )
     )
 
 

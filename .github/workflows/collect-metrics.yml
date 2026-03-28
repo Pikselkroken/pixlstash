@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "0 6 * * *" # daily at 06:00 UTC
   workflow_dispatch: # allow manual runs
+    inputs:
+      backfill_clones:
+        description: "Backfill clone metrics in metrics/history.json from GitHub traffic data"
+        type: boolean
+        required: false
+        default: false
   push:
     branches:
       - metrics
@@ -22,7 +28,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           METRICS_TOKEN: ${{ secrets.METRICS_TOKEN }}
-        run: python .github/scripts/collect_metrics.py
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.backfill_clones }}" = "true" ]; then
+            BACKFILL_CLONES=1 python .github/scripts/collect_metrics.py
+          else
+            python .github/scripts/collect_metrics.py
+          fi
 
       - name: Commit updated history
         run: |
