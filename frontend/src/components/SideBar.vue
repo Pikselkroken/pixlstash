@@ -103,6 +103,9 @@ const knownCountIds = new Set();
 
 const characterThumbnails = ref({});
 const setThumbnails = ref({});
+const setThumbnailRetryCounts = ref({});
+const setThumbnailRetryTimers = new Map();
+const SET_THUMBNAIL_MAX_RETRIES = 2;
 const expandedCharacters = ref({});
 
 const dragOverCharacter = ref(null);
@@ -1056,10 +1059,13 @@ async function fetchPictureSets() {
 
 async function updateSetThumbnails(sets) {
   const nextMap = {};
+  const nextRetryCounts = {};
   for (const set of sets || []) {
     const baseUrl = set?.thumbnail_url || null;
     if (!baseUrl) {
       nextMap[set.id] = null;
+      nextRetryCounts[set.id] = 0;
+      clearSetThumbnailRetryTimer(set.id);
       continue;
     }
     const topIds = Array.isArray(set?.top_picture_ids)
@@ -1071,9 +1077,21 @@ async function updateSetThumbnails(sets) {
     const url = baseUrl.startsWith("http")
       ? baseUrl
       : `${props.backendUrl}${baseUrl}`;
-    nextMap[set.id] = `${url}?v=${encodeURIComponent(versionKey)}`;
+    const nextUrl = `${url}?v=${encodeURIComponent(versionKey)}`;
+    nextMap[set.id] = nextUrl;
+    const previousBaseUrl = stripSetThumbnailRetryParams(
+      setThumbnails.value?.[set.id] || null,
+    );
+    if (previousBaseUrl === nextUrl) {
+      nextRetryCounts[set.id] =
+        Number(setThumbnailRetryCounts.value?.[set.id]) || 0;
+    } else {
+      nextRetryCounts[set.id] = 0;
+      clearSetThumbnailRetryTimer(set.id);
+    }
   }
   setThumbnails.value = nextMap;
+  setThumbnailRetryCounts.value = nextRetryCounts;
 }
 
 function getSetThumbnail(setId) {
@@ -1086,9 +1104,71 @@ function hasSetThumbnail(pset) {
   return Boolean(getSetThumbnail(pset.id));
 }
 
+function stripSetThumbnailRetryParams(url) {
+  if (!url || typeof url !== "string") return null;
+  return url
+    .replace(/[?&]retry=\d+/g, "")
+    .replace(/[?&]retry_ts=\d+/g, "")
+    .replace(/[?&]{2,}/g, "&")
+    .replace(/[?&]$/, "");
+}
+
+function clearSetThumbnailRetryTimer(setId) {
+  const timer = setThumbnailRetryTimers.get(setId);
+  if (!timer) return;
+  clearTimeout(timer);
+  setThumbnailRetryTimers.delete(setId);
+}
+
+function handleSetThumbnailLoad(setId) {
+  if (!setId) return;
+  clearSetThumbnailRetryTimer(setId);
+  if ((setThumbnailRetryCounts.value?.[setId] || 0) === 0) return;
+  setThumbnailRetryCounts.value = {
+    ...setThumbnailRetryCounts.value,
+    [setId]: 0,
+  };
+}
+
 function handleSetThumbnailError(setId) {
   if (!setId) return;
-  setThumbnails.value = { ...setThumbnails.value, [setId]: null };
+  const currentUrl = getSetThumbnail(setId);
+  if (!currentUrl) {
+    setThumbnails.value = { ...setThumbnails.value, [setId]: null };
+    return;
+  }
+
+  const attempts = Number(setThumbnailRetryCounts.value?.[setId]) || 0;
+  if (attempts >= SET_THUMBNAIL_MAX_RETRIES) {
+    clearSetThumbnailRetryTimer(setId);
+    setThumbnails.value = { ...setThumbnails.value, [setId]: null };
+    return;
+  }
+
+  const nextAttempt = attempts + 1;
+  setThumbnailRetryCounts.value = {
+    ...setThumbnailRetryCounts.value,
+    [setId]: nextAttempt,
+  };
+
+  clearSetThumbnailRetryTimer(setId);
+  const retryDelayMs = 120 + nextAttempt * 180;
+  const timer = setTimeout(() => {
+    // Do not override if this set has been refreshed or cleared meanwhile.
+    if (getSetThumbnail(setId) !== currentUrl) {
+      setThumbnailRetryTimers.delete(setId);
+      return;
+    }
+    const base = stripSetThumbnailRetryParams(currentUrl);
+    const joiner = base && base.includes("?") ? "&" : "?";
+    const retriedUrl = `${base}${joiner}retry=${nextAttempt}&retry_ts=${Date.now()}`;
+    setThumbnails.value = {
+      ...setThumbnails.value,
+      [setId]: retriedUrl,
+    };
+    setThumbnailRetryTimers.delete(setId);
+  }, retryDelayMs);
+  setThumbnailRetryTimers.set(setId, timer);
 }
 
 async function handleDeleteSet() {
@@ -1382,6 +1462,10 @@ onBeforeUnmount(() => {
     sidebarNoticeCleanup();
     sidebarNoticeCleanup = null;
   }
+  for (const timer of setThumbnailRetryTimers.values()) {
+    clearTimeout(timer);
+  }
+  setThumbnailRetryTimers.clear();
   for (const observer of labelObservers.values()) {
     observer.disconnect();
   }
@@ -1832,6 +1916,7 @@ defineExpose({
               class="sidebar-set-thumb-image sidebar-set-thumb-image--collapsed"
               :width="sidebarThumbnailSizeModel"
               :height="sidebarThumbnailSizeModel"
+              @load="handleSetThumbnailLoad(pset.id)"
               @error="handleSetThumbnailError(pset.id)"
             />
             <v-icon width="40" size="40" v-else>mdi-image-album</v-icon>
@@ -2339,6 +2424,7 @@ defineExpose({
                       class="sidebar-set-thumb-image sidebar-set-thumb-image--large"
                       :width="sidebarThumbnailSizeLarge"
                       :height="sidebarThumbnailSizeLarge"
+                      @load="handleSetThumbnailLoad(pset.id)"
                       @error="handleSetThumbnailError(pset.id)"
                     />
                     <v-icon v-else size="44">mdi-image-album</v-icon>
