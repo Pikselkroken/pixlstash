@@ -260,7 +260,9 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Project not found")
             return project
 
-        return server.vault.db.run_task(fetch, project_id, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(
+            fetch, project_id, priority=DBPriority.IMMEDIATE
+        )
 
     @router.put(
         "/projects/{project_id}",
@@ -307,7 +309,9 @@ def create_router(server) -> APIRouter:
             session.refresh(project)
             return project
 
-        return server.vault.db.run_task(update, project_id, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(
+            update, project_id, priority=DBPriority.IMMEDIATE
+        )
 
     @router.delete(
         "/projects/{project_id}",
@@ -433,7 +437,9 @@ def create_router(server) -> APIRouter:
             try:
                 pid = int(project_id)
             except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail="Invalid project_id") from exc
+                raise HTTPException(
+                    status_code=400, detail="Invalid project_id"
+                ) from exc
 
             def ensure_project_exists(session: Session, pid_value: int):
                 if session.get(Project, pid_value) is None:

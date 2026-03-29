@@ -104,9 +104,7 @@ def test_smart_score_consistency():
             return None
 
         # 1. Query ALL
-        resp_all = client.get(
-            f"{API_PREFIX}/pictures?sort=SMART_SCORE&descending=true"
-        )
+        resp_all = client.get(f"{API_PREFIX}/pictures?sort=SMART_SCORE&descending=true")
         assert resp_all.status_code == 200
         score_all_p1 = get_score(resp_all.json(), p1_id)
 

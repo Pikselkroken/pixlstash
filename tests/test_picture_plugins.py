@@ -143,7 +143,9 @@ def test_picture_plugins_list_and_run_colour_filter():
                 source_resp = client.get(f"{API_PREFIX}/pictures/{source_id}/metadata")
                 assert source_resp.status_code == 200, source_resp.text
                 source = source_resp.json()
-                created_resp = client.get(f"{API_PREFIX}/pictures/{created_id}/metadata")
+                created_resp = client.get(
+                    f"{API_PREFIX}/pictures/{created_id}/metadata"
+                )
                 assert created_resp.status_code == 200, created_resp.text
                 created = created_resp.json()
                 assert source.get("stack_id") is not None
