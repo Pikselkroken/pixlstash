@@ -124,8 +124,11 @@ const overlaysMenuOpen = ref(false);
 const configLoaded = ref(false);
 const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
+const SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS = 800;
 let columnsMenuCloseTimeout = null;
 let sidebarRefreshDebounceTimeout = null;
+let sidebarRefreshPicturesDebounceTimeout = null;
+let sidebarRefreshPicturesFlash = false;
 const updatesSocket = ref(null);
 let updatesReconnectTimer = null;
 const configLoading = ref(false);
@@ -195,7 +198,7 @@ function connectUpdatesSocket() {
       payload?.type === "pictures_changed" ||
       payload?.type === "picture_imported";
     if (isPictureChange) {
-      refreshSidebar({ flashCounts: true });
+      refreshSidebarPicturesDebounced(true);
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
@@ -326,6 +329,19 @@ function refreshSidebarDebounced() {
     sidebarRefreshDebounceTimeout = null;
     refreshSidebar();
   }, SIDEBAR_REFRESH_DEBOUNCE_MS);
+}
+
+function refreshSidebarPicturesDebounced(flash) {
+  if (flash) sidebarRefreshPicturesFlash = true;
+  if (sidebarRefreshPicturesDebounceTimeout) {
+    clearTimeout(sidebarRefreshPicturesDebounceTimeout);
+  }
+  sidebarRefreshPicturesDebounceTimeout = setTimeout(() => {
+    sidebarRefreshPicturesDebounceTimeout = null;
+    const doFlash = sidebarRefreshPicturesFlash;
+    sidebarRefreshPicturesFlash = false;
+    refreshSidebar(doFlash ? { flashCounts: true } : {});
+  }, SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS);
 }
 
 function openSettingsDialog() {
