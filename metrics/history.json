@@ -583,6 +583,47 @@
         "last_month": 916
       },
       "ghcr_pulls": null
+    },
+    {
+      "date": "2026-03-29",
+      "stars": 11,
+      "forks": 1,
+      "clones_today": {
+        "count": 177,
+        "uniques": 26,
+        "source_date": "2026-03-28"
+      },
+      "release_downloads": {
+        "total": 38,
+        "by_release": {
+          "v1.0.0b4": 2,
+          "v1.0.0b3": 0,
+          "v1.0.0b2": 11,
+          "v0.9.8": 2,
+          "v0.9.7": 1,
+          "v0.9.6": 2,
+          "v0.9.5": 1,
+          "v0.9.4": 1,
+          "v0.9.3": 1,
+          "v0.9.2": 1,
+          "v0.9.2.dev0": 1,
+          "v0.9.0": 5,
+          "v0.8.7": 1,
+          "v0.8.6": 2,
+          "v0.8.5": 2,
+          "v0.8.4.2": 1,
+          "v0.8.2": 3,
+          "v0.8.0": 1,
+          "v0.7.2": 0,
+          "v0.7.1": 0
+        }
+      },
+      "pypi_downloads": {
+        "last_day": 6,
+        "last_week": 149,
+        "last_month": 922
+      },
+      "ghcr_pulls": null
     }
   ]
 }
