@@ -56,9 +56,7 @@ AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/docs/",
     "/redoc/",
 )
-AUTH_API_PREFIXES: tuple[str, ...] = (
-    "/api/v1",
-)
+AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
 
 
 def is_auth_excluded_path(path: str) -> bool:

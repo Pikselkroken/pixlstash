@@ -195,7 +195,9 @@ def main():
     if os.environ.get("BACKFILL_CLONES") == "1":
         updated, matched = backfill_clone_history(history)
         if matched == 0:
-            print("Backfill complete: no history dates matched available traffic window.")
+            print(
+                "Backfill complete: no history dates matched available traffic window."
+            )
             return
         save_history(history)
         print(

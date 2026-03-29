@@ -143,6 +143,8 @@ def test_authentication_with_token_login():
 
             with TestClient(server.api) as client3:
                 # Login with wrong token
-                response = client3.post(f"{API_PREFIX}/login", json={"token": "bad-token"})
+                response = client3.post(
+                    f"{API_PREFIX}/login", json={"token": "bad-token"}
+                )
                 assert response.status_code == 401
                 assert response.json()["detail"] == "Invalid token"
