@@ -26,6 +26,7 @@ export default defineConfig({
   build: {
     outDir: '../pixlstash/frontend/dist',
     emptyOutDir: true,
+    chunkSizeWarningLimit: 1024,
   },
   server: {
     host: true, // Listen on all network interfaces
