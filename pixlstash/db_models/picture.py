@@ -54,6 +54,7 @@ class SortMechanism:
         SMART_SCORE = auto()
         TEXT_CONTENT = auto()
         TAG_UNCERTAINTY = auto()
+        ANOMALY_TAG_UNCERTAINTY = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -91,6 +92,10 @@ class SortMechanism:
         Keys.TAG_UNCERTAINTY: {
             "field": "tag_uncertainty",
             "description": "Tag Uncertainty",
+        },
+        Keys.ANOMALY_TAG_UNCERTAINTY: {
+            "field": "anomaly_tag_uncertainty",
+            "description": "Anomaly Tag Uncertainty",
         },
     }
 
@@ -227,6 +232,7 @@ class Picture(SQLModel, table=True):
         default=None, foreign_key="project.id", index=True
     )
     tag_uncertainty: Optional[float] = Field(default=None, index=True)
+    anomaly_tag_uncertainty: Optional[float] = Field(default=None, index=True)
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
@@ -767,6 +773,7 @@ class Picture(SQLModel, table=True):
             "stack_id",
             "stack_position",
             "tag_uncertainty",
+            "anomaly_tag_uncertainty",
         }
 
     @classmethod
