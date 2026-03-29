@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Body, HTTPException
+from pydantic import BaseModel
 from sqlmodel import Session, delete, select
 
 from pixlstash.db_models import (
@@ -288,24 +289,17 @@ def create_router(server) -> APIRouter:
             logger.error("Failed to list all tags: %s", exc)
             raise HTTPException(status_code=500, detail="Failed to list tags")
 
+    class BulkFetchTagsRequest(BaseModel):
+        picture_ids: list[int] = []
+
     @router.post(
         "/pictures/tags/bulk_fetch",
         summary="Fetch tags for multiple pictures",
         description="Returns tags for each requested picture id. At most 200 ids accepted per call.",
     )
-    def bulk_fetch_tags(payload: dict = Body(...)):
+    def bulk_fetch_tags(payload: BulkFetchTagsRequest):
         try:
-            raw_ids = payload.get("picture_ids", [])
-            if not isinstance(raw_ids, list):
-                raise HTTPException(
-                    status_code=400, detail="picture_ids must be a list"
-                )
-            try:
-                ids = [int(i) for i in raw_ids[:200]]
-            except (TypeError, ValueError):
-                raise HTTPException(
-                    status_code=400, detail="All picture ids must be integers"
-                )
+            ids = payload.picture_ids[:200]
             if not ids:
                 return []
 
