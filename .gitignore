@@ -18,3 +18,4 @@ node_modules
 downloaded_models
 .DS_Store
 ssl
+docs/ideas/
