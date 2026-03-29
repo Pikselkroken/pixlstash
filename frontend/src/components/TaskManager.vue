@@ -182,6 +182,7 @@ const labelMap = {
   likeness_parameters: "Likeness params",
   watch_folder_import: "Folder import",
   comfyui_extraction: "ComfyUI backfill",
+  tag_predictions_scored: "Tag Predictions",
 };
 
 function seedSnapshotsIfEmpty() {
@@ -200,6 +201,7 @@ function seedSnapshotsIfEmpty() {
     "LikenessWorker",
     "EmbeddingWorker",
     "FaceQualityWorker",
+    "TagPredictionTask",
     combinedKey,
   ]);
   for (const workerKey of seedKeys) {

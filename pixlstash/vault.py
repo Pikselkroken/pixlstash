@@ -24,6 +24,7 @@ from .db_models import (
     Tag,
     TAG_EMPTY_SENTINEL,
 )
+from .db_models.tag_prediction import TagPrediction
 from .pixl_logging import get_logger
 from .picture_tagger import PictureTagger
 from .utils.image_processing.image_utils import ImageUtils
@@ -534,6 +535,24 @@ class Vault:
                     or 0
                 )
                 label = "comfyui_extraction"
+            elif worker_type == TaskType.TAG_PREDICTION:
+                tagger = self._picture_tagger
+                use_custom = tagger is not None and getattr(
+                    tagger, "_use_custom_tagger", False
+                )
+                if use_custom:
+                    model_version = f"v{tagger.custom_tagger_version()}"
+                    missing = int(
+                        self.db.run_immediate_read_task(
+                            lambda s, mv=model_version: (
+                                self._count_missing_tag_predictions(s, mv)
+                            )
+                        )
+                        or 0
+                    )
+                else:
+                    missing = 0
+                label = "tag_predictions_scored"
             else:
                 missing = 0
                 label = "planner_managed"
@@ -549,6 +568,38 @@ class Vault:
                 "active": worker_active,
             }
         return progress
+
+    @staticmethod
+    def _count_missing_tag_predictions(session: Session, model_version: str) -> int:
+        # Count eligible pictures (total) then subtract those already scored for
+        # this model_version.  Avoids a correlated NOT EXISTS which full-scans
+        # the table; the model_version index makes the scored count O(log n).
+        total_result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(
+                Picture.deleted.is_(False),
+                Picture.file_path.is_not(None),
+            )
+        ).one()
+        total = (
+            total_result[0]
+            if isinstance(total_result, (tuple, list))
+            else (total_result or 0)
+        )
+
+        scored_result = session.exec(
+            select(func.count(func.distinct(TagPrediction.picture_id))).where(
+                TagPrediction.model_version == model_version
+            )
+        ).one()
+        scored = (
+            scored_result[0]
+            if isinstance(scored_result, (tuple, list))
+            else (scored_result or 0)
+        )
+
+        return max(0, int(total) - int(scored))
 
     @staticmethod
     def _count_total_pictures(session: Session) -> int:

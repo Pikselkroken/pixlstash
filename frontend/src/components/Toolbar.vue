@@ -1267,6 +1267,7 @@ const SORT_ICON_MAP = {
   TEXT_CONTENT: "mdi-text-recognition",
   CHARACTER_LIKENESS: "mdi-account-search",
   PICTURE_STACKS: "mdi-layers",
+  TAG_UNCERTAINTY: "mdi-help-rhombus-outline",
 };
 
 function getSortIcon(value) {

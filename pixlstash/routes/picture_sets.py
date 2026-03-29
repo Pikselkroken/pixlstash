@@ -998,7 +998,9 @@ def create_router(server) -> APIRouter:
         try:
             picture_ids = [int(i) for i in raw_ids]
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="All picture ids must be integers")
+            raise HTTPException(
+                status_code=400, detail="All picture ids must be integers"
+            )
         if not picture_ids:
             return {"status": "success", "added": 0}
 
@@ -1042,7 +1044,9 @@ def create_router(server) -> APIRouter:
             session.commit()
             return added
 
-        added = server.vault.db.run_task(bulk_add, id, picture_ids, priority=DBPriority.IMMEDIATE)
+        added = server.vault.db.run_task(
+            bulk_add, id, picture_ids, priority=DBPriority.IMMEDIATE
+        )
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
         if added > 0:
@@ -1061,7 +1065,9 @@ def create_router(server) -> APIRouter:
         try:
             picture_ids = [int(i) for i in raw_ids]
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="All picture ids must be integers")
+            raise HTTPException(
+                status_code=400, detail="All picture ids must be integers"
+            )
 
         def bulk_replace(session, set_id, picture_ids):
             picture_set = session.get(PictureSet, set_id)
@@ -1104,7 +1110,9 @@ def create_router(server) -> APIRouter:
             session.commit()
             return added
 
-        added = server.vault.db.run_task(bulk_replace, id, picture_ids, priority=DBPriority.IMMEDIATE)
+        added = server.vault.db.run_task(
+            bulk_replace, id, picture_ids, priority=DBPriority.IMMEDIATE
+        )
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
         server.vault.notify(EventType.CHANGED_PICTURES)

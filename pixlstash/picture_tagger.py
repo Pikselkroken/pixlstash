@@ -1534,6 +1534,32 @@ class PictureTagger:
     def custom_tagger_threshold_full(self) -> float:
         return float(self._custom_tagger_threshold_full)
 
+    def custom_tagger_version(self) -> int:
+        """Return the version integer from the loaded custom tagger meta.json.
+
+        Reads the ``version`` field of the meta.json file that ships with the
+        custom (anomaly) tagger checkpoint.  Returns ``0`` if the file is
+        absent or lacks a ``version`` field, and logs a warning in that case.
+        """
+        if not os.path.isfile(self._custom_tagger_meta_path):
+            logger.warning(
+                "Custom tagger meta.json not found at %s; using version 0",
+                self._custom_tagger_meta_path,
+            )
+            return 0
+        try:
+            with open(self._custom_tagger_meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            version = meta.get("version")
+            if version is not None:
+                return int(version)
+        except Exception:
+            logger.debug(
+                "Custom tagger meta.json has no 'version' field; using version 0"
+            )
+            pass
+        return 0
+
     def custom_tagger_image_size_full(self) -> int:
         return int(self._custom_tagger_image_size_full)
 
@@ -1679,6 +1705,147 @@ class PictureTagger:
                 results[path] = [tag for tag, _ in all_tags_sorted]
 
         return self._naturalize_tags(results)
+
+    def _score_custom_items(
+        self,
+        items,
+        stop_event=None,
+        image_size=None,
+        min_confidence: float = 0.05,
+    ) -> dict[str, dict[str, float]]:
+        """Run the custom tagger and return raw sigmoid scores for each label.
+
+        Unlike ``_tag_custom_items``, this method applies no threshold and
+        returns all labels whose confidence is >= ``min_confidence`` so that
+        the full probability distribution is available for writing to the
+        ``TagPrediction`` table.
+
+        Args:
+            items: List of ``(path, PIL.Image)`` pairs.
+            stop_event: Optional threading.Event to interrupt inference.
+            image_size: Override image size for the transform.
+            min_confidence: Discard labels below this floor to save storage.
+
+        Returns:
+            Dict mapping path to ``{label: confidence}`` for each kept label.
+        """
+        if not items:
+            return {}
+        if self._custom_model is None or self._custom_labels is None:
+            return {}
+        if image_size is None:
+            image_size = self._custom_tagger_image_size_full
+        transform = self._custom_transform_cache.get(image_size)
+        if transform is None:
+            transform = self._build_custom_transform(image_size)
+            self._custom_transform_cache[image_size] = transform
+
+        batch_size = self._effective_custom_batch_size()
+        results: dict[str, dict[str, float]] = {}
+        for batch_start in range(0, len(items), batch_size):
+            if stop_event is not None and stop_event.is_set():
+                break
+            batch = items[batch_start : batch_start + batch_size]
+            batch_paths = []
+            batch_tensors = []
+            for path, image in batch:
+                try:
+                    batch_tensors.append(transform(image))
+                    batch_paths.append(path)
+                except Exception as exc:
+                    logger.error("Custom scorer failed to preprocess %s: %s", path, exc)
+            if not batch_tensors:
+                continue
+            inputs = torch.stack(batch_tensors)
+            custom_device = getattr(self, "_custom_device", self._device)
+            try:
+                inputs = inputs.to(custom_device).float()
+                with torch.inference_mode():
+                    logits = self._custom_model(inputs)
+                    probs = torch.sigmoid(logits).cpu().numpy()
+            except Exception as exc:
+                is_cuda_oom = isinstance(exc, torch.cuda.OutOfMemoryError) or (
+                    "CUDA out of memory" in str(exc)
+                )
+                if is_cuda_oom and custom_device == "cuda":
+                    logger.warning(
+                        "Custom scorer CUDA OOM; falling back to CPU for this batch."
+                    )
+                    if self._reload_custom_tagger_on_cpu():
+                        inputs = inputs.to("cpu").float()
+                        with torch.inference_mode():
+                            logits = self._custom_model(inputs)
+                            probs = torch.sigmoid(logits).cpu().numpy()
+                    else:
+                        logger.error("Custom scorer CPU fallback failed.")
+                        break
+                else:
+                    logger.error("Custom scorer inference failed: %s", exc)
+                    break
+            for path, prob in zip(batch_paths, probs):
+                scores: dict[str, float] = {}
+                for label, p in zip(self._custom_labels, prob):
+                    p_f = float(p)
+                    if p_f >= min_confidence:
+                        natural = TagNaturaliser.get_natural_tag(label)
+                        if natural:
+                            scores[natural] = p_f
+                results[path] = scores
+        return results
+
+    def score_images_custom(
+        self,
+        image_paths,
+        preloaded_images=None,
+        min_confidence: float = 0.05,
+    ) -> dict[str, dict[str, float]]:
+        """Return raw custom-tagger confidence scores for a list of images.
+
+        Runs the custom (anomaly) tagger without applying the normal
+        threshold, so that all labels with confidence >= ``min_confidence``
+        are returned.  This is used by ``TagPredictionTask`` to populate the
+        ``TagPrediction`` table.
+
+        Args:
+            image_paths: List of image file paths.
+            preloaded_images: Optional dict of path → PIL image (avoids re-reading).
+            min_confidence: Labels below this value are discarded.
+
+        Returns:
+            Dict mapping path to ``{label: confidence}`` for each image.
+        """
+        from PIL import Image
+
+        if not self._use_custom_tagger:
+            return {}
+        self._ensure_tagging_ready()
+
+        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+        preloaded_map = preloaded_images or {}
+        items = []
+        for image_path in image_paths:
+            path = str(image_path)
+            ext = os.path.splitext(path)[1].lower()
+            if ext in video_exts:
+                frames = VideoUtils.extract_representative_video_frames(path, count=1)
+                if not frames:
+                    continue
+                items.append((path, frames[0].convert("RGB")))
+                continue
+            try:
+                img = preloaded_map.get(path)
+                if img is None:
+                    img = Image.open(path).convert("RGB")
+                items.append((path, img))
+            except Exception as exc:
+                logger.error("Could not load %s for scoring: %s", path, exc)
+        if not items:
+            return {}
+        return self._score_custom_items(
+            items,
+            min_confidence=min_confidence,
+            image_size=self._custom_tagger_image_size_full,
+        )
 
     def _tag_images_custom(self, image_paths, stop_event=None, preloaded_images=None):
         from PIL import Image

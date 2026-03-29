@@ -6,7 +6,8 @@ import time
 from PIL import Image as PILImage
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Face, Picture, Tag
+from pixlstash.db_models import Face, Picture, Tag, TAG_EMPTY_SENTINEL
+from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
@@ -186,20 +187,24 @@ class TagTask(BaseTask):
                 continue
             tags = update.get("tags") or []
 
+            # When the tagger found no applicable tags, write the empty sentinel
+            # so that TagPredictionTask can detect that TagTask has already run.
+            effective_tags = set(tags) if tags else {TAG_EMPTY_SENTINEL}
+
             existing_tags = session.exec(
                 select(Tag.tag).where(Tag.picture_id == pic_id)
             ).all()
             existing_tag_set = {
                 row[0] if isinstance(row, tuple) else row
                 for row in existing_tags
-                if row
+                if (row[0] if isinstance(row, tuple) else row) is not None
             }
-            if set(tags) == existing_tag_set:
+            if effective_tags == existing_tag_set:
                 continue
 
             session.exec(delete(Tag).where(Tag.picture_id == pic_id))
 
-            for tag_value in set(tags):
+            for tag_value in effective_tags:
                 session.add(Tag(picture_id=pic_id, tag=tag_value))
 
             updated_ids.append(pic_id)
@@ -214,6 +219,33 @@ class TagTask(BaseTask):
         for face in faces:
             result.setdefault(face.picture_id, []).append(face)
         return result
+
+    @staticmethod
+    def _resolve_pending_predictions(session: Session, picture_ids: list) -> None:
+        """Flip any PENDING tag predictions to CONFIRMED or REJECTED based on
+        the tags that TagTask wrote for these pictures."""
+        if not picture_ids:
+            return
+        for picture_id in picture_ids:
+            applied_tags = {
+                row[0] if isinstance(row, tuple) else row
+                for row in session.exec(
+                    select(Tag.tag).where(
+                        Tag.picture_id == picture_id,
+                        Tag.tag.is_not(None),
+                        Tag.tag != TAG_EMPTY_SENTINEL,
+                    )
+                ).all()
+            }
+            pending_preds = session.exec(
+                select(TagPrediction).where(
+                    TagPrediction.picture_id == picture_id,
+                    TagPrediction.status == "PENDING",
+                )
+            ).all()
+            for pred in pending_preds:
+                pred.status = "CONFIRMED" if pred.tag in applied_tags else "REJECTED"
+        session.commit()
 
     def _tag_pictures_batch(self) -> list:
         assert self._pictures is not None
@@ -393,16 +425,15 @@ class TagTask(BaseTask):
                 update_payloads = []
                 for path, tags in tag_results.items():
                     pic = pic_by_path.get(path)
+                    if not pic:
+                        continue
                     logger.debug(
                         "Processing tags for image at path: %s: %s", path, tags
                     )
-                    if not tags or not pic:
-                        continue
-
                     update_payloads.append(
                         {
                             "pic_id": pic.id,
-                            "tags": tags,
+                            "tags": tags or [],
                         }
                     )
 
@@ -419,6 +450,15 @@ class TagTask(BaseTask):
                             tagged_pictures.append(
                                 (Picture, pic_id, "tags", update.get("tags") or [])
                             )
+
+                    # Flip any PENDING predictions to CONFIRMED/REJECTED now that
+                    # TagTask has made its decision for all processed pictures.
+                    all_pic_ids = [u["pic_id"] for u in update_payloads]
+                    self._db.run_task(
+                        self._resolve_pending_predictions,
+                        all_pic_ids,
+                        priority=DBPriority.LOW,
+                    )
         finally:
             if cpu_spillover_tagger is not None:
                 with self._cpu_spillover_lock:

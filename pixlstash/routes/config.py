@@ -36,6 +36,9 @@ def create_router(server) -> APIRouter:
     process_usage_pid = None
     last_cpu_sample_at = None
     last_cpu_seconds = None
+    _vram_cache_ts: float = 0.0
+    _vram_cache_payload: dict = {}
+    _VRAM_CACHE_TTL_S: float = 5.0
 
     if psutil:
         try:
@@ -203,6 +206,8 @@ def create_router(server) -> APIRouter:
         nonlocal process_usage_pid
         nonlocal last_cpu_sample_at
         nonlocal last_cpu_seconds
+        nonlocal _vram_cache_ts
+        nonlocal _vram_cache_payload
         payload = {
             "cpu_percent": None,
             "cpu_percent_all_cores": None,
@@ -266,7 +271,12 @@ def create_router(server) -> APIRouter:
                 logger.warning("Failed to read CPU/RAM usage: %s", exc)
 
         vram_collected = False
-        if pynvml:
+        now_mono = time.monotonic()
+        if now_mono - _vram_cache_ts < _VRAM_CACHE_TTL_S and _vram_cache_payload:
+            payload.update(_vram_cache_payload)
+            vram_collected = True
+
+        if not vram_collected and pynvml:
             try:
                 pynvml.nvmlInit()
                 pid = os.getpid()
@@ -313,7 +323,13 @@ def create_router(server) -> APIRouter:
             vram_collected = _collect_vram_from_torch(payload)
 
         if not vram_collected:
-            _collect_vram_from_nvidia_smi(payload)
+            vram_collected = _collect_vram_from_nvidia_smi(payload)
+
+        # Cache whichever VRAM keys were populated (even if still N/A, cache
+        # the negative result briefly to avoid re-spawning nvidia-smi every poll).
+        _vram_keys = ("vram_used_gb", "vram_total_gb", "vram_percent")
+        _vram_cache_payload = {k: payload[k] for k in _vram_keys if k in payload}
+        _vram_cache_ts = time.monotonic()
 
         return payload
 

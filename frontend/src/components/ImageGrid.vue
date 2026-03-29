@@ -1704,6 +1704,16 @@ function getThumbnailInfoItems(img) {
   }
 
   if (
+    selectedSort === "TAG_UNCERTAINTY" &&
+    typeof img.tag_uncertainty === "number"
+  ) {
+    items.push({
+      key: "tag_uncertainty",
+      text: `Tag Uncertainty: ${(img.tag_uncertainty * 100).toFixed(1)}%`,
+    });
+  }
+
+  if (
     typeof props.searchQuery === "string" &&
     img.likeness_score !== undefined
   ) {
@@ -1811,6 +1821,8 @@ function getCompactGroupLabel(img, visualIdx) {
       return Math.round(item.character_likeness * 100);
     if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
       return Math.round(item.text_score * 10);
+    if (sort === "TAG_UNCERTAINTY" && typeof item.tag_uncertainty === "number")
+      return Math.round(item.tag_uncertainty * 100);
     return null;
   }
 
@@ -1837,6 +1849,8 @@ function getCompactGroupLabel(img, visualIdx) {
     return `≈ ${(Math.floor(img.character_likeness * 100) / 100).toFixed(2)}`;
   if (sort === "TEXT_CONTENT" && typeof img.text_score === "number")
     return `${(img.text_score * 100).toFixed(0)}%`;
+  if (sort === "TAG_UNCERTAINTY" && typeof img.tag_uncertainty === "number")
+    return `⚠ ${(img.tag_uncertainty * 100).toFixed(0)}%`;
   return null;
 }
 
@@ -1863,6 +1877,8 @@ const compactStickyLabel = computed(() => {
       return Math.round(item.character_likeness * 100);
     if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
       return Math.round(item.text_score * 10);
+    if (sort === "TAG_UNCERTAINTY" && typeof item.tag_uncertainty === "number")
+      return Math.round(item.tag_uncertainty * 100);
     return null;
   }
 
@@ -1896,6 +1912,11 @@ const compactStickyLabel = computed(() => {
     return `≈ ${(Math.floor(firstImg.character_likeness * 100) / 100).toFixed(2)}`;
   if (sort === "TEXT_CONTENT" && typeof firstImg.text_score === "number")
     return `${(firstImg.text_score * 100).toFixed(0)}%`;
+  if (
+    sort === "TAG_UNCERTAINTY" &&
+    typeof firstImg.tag_uncertainty === "number"
+  )
+    return `⚠ ${(firstImg.tag_uncertainty * 100).toFixed(0)}%`;
   return null;
 });
 
@@ -6610,7 +6631,7 @@ function handleEmptyStateReset() {
   max-width: none;
   min-width: none;
   position: relative;
-  padding: 8px;
+  padding: 4px;
 }
 
 /* Compact mode: no info row gap, no rounded corners, no shadow */

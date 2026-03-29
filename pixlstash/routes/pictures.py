@@ -413,7 +413,11 @@ def _select_pictures_for_listing(
     def serialize_metadata(pictures):
         result = []
         for pic in pictures:
-            d = {field: safe_model_dict(pic).get(field) for field in metadata_fields if field != "tags"}
+            d = {
+                field: safe_model_dict(pic).get(field)
+                for field in metadata_fields
+                if field != "tags"
+            }
             if "tags" in metadata_fields:
                 d["tags"] = [t.tag for t in getattr(pic, "tags", [])]
             result.append(d)
