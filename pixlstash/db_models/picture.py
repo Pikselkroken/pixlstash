@@ -28,6 +28,7 @@ from .picture_set import PictureSet, PictureSetMember
 from .picture_stack import PictureStack
 from .quality import Quality
 from .tag import Tag
+from .tag_prediction import TagPrediction
 
 from pixlstash.pixl_logging import get_logger
 
@@ -52,6 +53,7 @@ class SortMechanism:
         IMAGE_SIZE = auto()
         SMART_SCORE = auto()
         TEXT_CONTENT = auto()
+        TAG_UNCERTAINTY = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -85,6 +87,10 @@ class SortMechanism:
         Keys.PICTURE_STACKS: {
             "field": "id",
             "description": "Likeness Groups ...",
+        },
+        Keys.TAG_UNCERTAINTY: {
+            "field": "tag_uncertainty",
+            "description": "Tag Uncertainty",
         },
     }
 
@@ -220,6 +226,7 @@ class Picture(SQLModel, table=True):
     project_id: Optional[int] = Field(
         default=None, foreign_key="project.id", index=True
     )
+    tag_uncertainty: Optional[float] = Field(default=None, index=True)
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
@@ -245,6 +252,14 @@ class Picture(SQLModel, table=True):
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
             "foreign_keys": "[Tag.picture_id]",
+        },
+    )
+    tag_predictions: List["TagPrediction"] = Relationship(
+        back_populates="picture",
+        sa_relationship_kwargs={
+            "cascade": "all, delete-orphan",
+            "passive_deletes": True,
+            "foreign_keys": "[TagPrediction.picture_id]",
         },
     )
     characters: List["Character"] = Relationship(  # Many-to-many via Face
@@ -751,6 +766,7 @@ class Picture(SQLModel, table=True):
             "imported_at",
             "stack_id",
             "stack_position",
+            "tag_uncertainty",
         }
 
     @classmethod

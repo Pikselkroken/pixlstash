@@ -801,7 +801,6 @@
                 />
               </div>
               <div class="tag-section">
-                <div class="tag-section-title">All Image Tags</div>
                 <div
                   class="tag-drop-zone"
                   :class="{
@@ -810,7 +809,7 @@
                   @dragover.prevent="handleDragOver('unassigned', null)"
                   @dragenter.prevent="handleDragOver('unassigned', null)"
                   @dragleave="handleDragLeave('unassigned', null)"
-                  @drop.prevent="clearTagDrag"
+                  @drop.prevent="handleDropOnAllTags"
                 >
                   <span
                     v-for="tag in allImageTags"
@@ -818,7 +817,10 @@
                     :class="[
                       'overlay-tag',
                       { 'overlay-tag--penalised': isPenalisedTag(tag) },
+                      predictionClassForTag(tagLabel(tag)),
                     ]"
+                    :style="predictionStyleForTag(tagLabel(tag))"
+                    :title="predictionTitleForTag(tagLabel(tag))"
                     draggable="true"
                     @dragstart="
                       startTagDrag(tagLabel(tag), 'unassigned', null, $event)
@@ -849,6 +851,70 @@
                   />
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div v-if="nearMissPredictions.length" class="sidebar-section">
+            <div class="section-header">
+              <span class="section-header-title-with-meta">
+                Rejected Tags
+                <span class="rejected-threshold-label"
+                  >(> {{ (predictionAcceptanceThreshold * 100).toFixed(0) }}% to
+                  be auto-applied)</span
+                >
+              </span>
+              <button
+                class="section-meta-btn"
+                type="button"
+                :title="
+                  nearMissesCollapsed
+                    ? 'Expand rejected tags'
+                    : 'Collapse rejected tags'
+                "
+                @click.stop="nearMissesCollapsed = !nearMissesCollapsed"
+              >
+                <v-icon size="14">{{
+                  nearMissesCollapsed ? "mdi-chevron-down" : "mdi-chevron-up"
+                }}</v-icon>
+              </button>
+            </div>
+            <div
+              v-show="!nearMissesCollapsed"
+              class="tag-drop-zone tag-drop-zone--predictions"
+              :class="{
+                'tag-drop-zone--active': isDragOver('rejected', null),
+              }"
+              @dragover.prevent="handleDragOver('rejected', null)"
+              @dragenter.prevent="handleDragOver('rejected', null)"
+              @dragleave="handleDragLeave('rejected', null)"
+              @drop.prevent="handleDropOnRejectedTags"
+            >
+              <span
+                v-for="pred in nearMissPredictions"
+                :key="`pred-${pred.tag}`"
+                :class="[
+                  'overlay-tag',
+                  predictionClassForTag(pred.tag),
+                  'overlay-tag--prediction',
+                ]"
+                :style="{ '--pred-confidence': pred.confidence }"
+                :title="rejectedTagTitle(pred)"
+                draggable="true"
+                @dragstart="startTagDrag(pred.tag, 'rejected', null, $event)"
+                @dragend="clearTagDrag"
+              >
+                {{ pred.tag }}
+                <span class="tag-pred-confidence"
+                  >{{ (pred.confidence * 100).toFixed(0) }}%</span
+                >
+                <button
+                  class="tag-pred-btn tag-pred-btn--confirm"
+                  title="Confirm prediction (add as tag)"
+                  @click.stop="confirmPrediction(pred.tag)"
+                >
+                  <v-icon size="11">mdi-check</v-icon>
+                </button>
+              </span>
             </div>
           </div>
 
@@ -1198,6 +1264,9 @@ const tagInputRef = ref(null);
 const tagListRef = ref(null);
 const penalisedTags = ref(new Set());
 const penalisedTagsLoading = ref(false);
+const tagPredictions = ref([]);
+const predictionAcceptanceThreshold = ref(0.95);
+const nearMissesCollapsed = ref(loadOverlayRejectedTagsCollapsed());
 const lastTagUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
@@ -1270,6 +1339,23 @@ function persistComfyuiPromptToSession() {
   if (!key) return;
   const value = comfyuiCaption.value || "";
   window.sessionStorage?.setItem(key, value);
+}
+
+function loadOverlayRejectedTagsCollapsed() {
+  if (typeof window === "undefined") return false;
+  const raw = window.sessionStorage?.getItem(
+    "pixlstash:imageOverlay:rejectedTagsCollapsed",
+  );
+  if (raw == null) return false;
+  return raw === "1";
+}
+
+function persistOverlayRejectedTagsCollapsed(value) {
+  if (typeof window === "undefined") return;
+  window.sessionStorage?.setItem(
+    "pixlstash:imageOverlay:rejectedTagsCollapsed",
+    value ? "1" : "0",
+  );
 }
 
 const validComfyWorkflows = computed(() =>
@@ -1373,6 +1459,10 @@ watch([comfyuiSelectedWorkflow, selectedComfyUsesCaption], () => {
 
 watch(comfyuiCaption, () => {
   persistComfyuiPromptToSession();
+});
+
+watch(nearMissesCollapsed, (value) => {
+  persistOverlayRejectedTagsCollapsed(Boolean(value));
 });
 
 watch(comfyuiMenuOpen, (value) => {
@@ -2155,6 +2245,7 @@ watch(image, (newImage, oldImage) => {
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
   resetOverlayCopyState();
+  tagPredictions.value = [];
 });
 
 watch(open, (isOpen) => {
@@ -3321,12 +3412,179 @@ async function fetchOverlayMetadata(imageId) {
     image.value = merged;
     syncDescriptionDraft();
     void ensureOverlayFilmstripForImage();
+    void fetchTagPredictions(imageId);
   } catch (e) {
     console.error("Failed to fetch overlay metadata:", e);
   } finally {
     if (metadataRequestId === requestId) {
       isTagsRefreshing.value = false;
     }
+  }
+}
+
+async function fetchTagPredictions(imageId) {
+  if (!imageId || !backendUrl.value) return;
+  try {
+    const res = await apiClient.get(
+      `${backendUrl.value}/pictures/${imageId}/tag_predictions?include_meta=1`,
+    );
+    if (!image.value || image.value.id !== imageId) {
+      return;
+    }
+    const payload = res.data;
+    const predictions = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.tag_predictions)
+        ? payload.tag_predictions
+        : [];
+    const threshold = Number(payload?.meta?.acceptance_threshold);
+    if (Number.isFinite(threshold) && threshold > 0 && threshold <= 1) {
+      predictionAcceptanceThreshold.value = threshold;
+    }
+    tagPredictions.value = predictions;
+  } catch {
+    tagPredictions.value = [];
+  }
+}
+
+const confirmedTagNames = computed(() => {
+  const names = new Set();
+  for (const tag of allImageTags.value) {
+    const label = tagLabel(tag);
+    if (label) names.add(label.trim().toLowerCase());
+  }
+  return names;
+});
+
+const nearMissPredictions = computed(() => {
+  return tagPredictions.value.filter(
+    (p) =>
+      p.status === "REJECTED" &&
+      p.confidence >= 0.3 &&
+      !confirmedTagNames.value.has(p.tag.trim().toLowerCase()),
+  );
+});
+
+const pendingPredictionMap = computed(() => {
+  const map = new Map();
+  for (const p of tagPredictions.value) {
+    map.set(p.tag.trim().toLowerCase(), p);
+  }
+  return map;
+});
+
+function predictionClassForTag(label) {
+  if (!label) return null;
+  const pred = pendingPredictionMap.value.get(label.trim().toLowerCase());
+  if (!pred) return null;
+  // Penalised (anomaly) tags → red spectrum; all others → primary spectrum
+  if (penalisedTags.value.has(label.trim().toLowerCase())) {
+    return "overlay-tag--predicted-anomaly";
+  }
+  return "overlay-tag--predicted-normal";
+}
+
+function predictionStyleForTag(label) {
+  if (!label) return null;
+  const pred = pendingPredictionMap.value.get(label.trim().toLowerCase());
+  if (!pred) return null;
+  return { "--pred-confidence": pred.confidence };
+}
+
+function predictionTitleForTag(label) {
+  if (!label) return null;
+  const pred = pendingPredictionMap.value.get(label.trim().toLowerCase());
+  if (!pred) return null;
+  return `Prediction confidence: ${(pred.confidence * 100).toFixed(1)}% (needs +${(
+    predictionNeededToAccept(pred.confidence) * 100
+  ).toFixed(1)}% to auto-accept)`;
+}
+
+function predictionNeededToAccept(confidence) {
+  const current = Number(confidence) || 0;
+  const threshold = Number(predictionAcceptanceThreshold.value) || 0.95;
+  return Math.max(0, threshold - current);
+}
+
+function rejectedTagTitle(pred) {
+  const threshold = Number(predictionAcceptanceThreshold.value) || 0.95;
+  const needed = predictionNeededToAccept(pred.confidence);
+  return `Confidence: ${(pred.confidence * 100).toFixed(1)}% | Auto-accept threshold: ${(threshold * 100).toFixed(0)}% | Needed: +${(needed * 100).toFixed(1)}%`;
+}
+
+async function confirmPrediction(tag) {
+  if (!image.value?.id || !backendUrl.value) return;
+  const imageId = image.value.id;
+  const prevTags = Array.isArray(image.value?.tags)
+    ? [...image.value.tags]
+    : [];
+  const prevPredictions = Array.isArray(tagPredictions.value)
+    ? [...tagPredictions.value]
+    : [];
+
+  // Optimistic UI first so drag/drop feedback is instant.
+  const key = String(tag || "")
+    .trim()
+    .toLowerCase();
+  if (key) {
+    const current = getTagList(image.value?.tags);
+    const hasTag = current.some(
+      (entry) => tagLabel(entry).trim().toLowerCase() === key,
+    );
+    if (!hasTag && image.value) {
+      image.value.tags = dedupeTagList([
+        ...current,
+        { id: null, tag: String(tag) },
+      ]);
+    }
+    tagPredictions.value = tagPredictions.value.map((p) =>
+      p.tag.trim().toLowerCase() === key ? { ...p, status: "CONFIRMED" } : p,
+    );
+  }
+
+  try {
+    await apiClient.post(
+      `${backendUrl.value}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/confirm`,
+    );
+
+    void fetchTagPredictions(imageId);
+  } catch (e) {
+    // Roll back optimistic state on failure.
+    if (image.value) {
+      image.value.tags = prevTags;
+    }
+    tagPredictions.value = prevPredictions;
+    console.error("Failed to confirm prediction:", e);
+  }
+}
+
+async function rejectPrediction(tag) {
+  if (!image.value?.id || !backendUrl.value) return;
+  const imageId = image.value.id;
+  const key = String(tag).trim().toLowerCase();
+  const hasPrediction = tagPredictions.value.some(
+    (p) => p.tag.trim().toLowerCase() === key,
+  );
+  try {
+    await apiClient.post(
+      `${backendUrl.value}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/reject`,
+    );
+    tagPredictions.value = tagPredictions.value.map((p) =>
+      p.tag.trim().toLowerCase() === key ? { ...p, status: "REJECTED" } : p,
+    );
+  } catch {
+    // Server returns 404 when no prediction exists — that's fine.
+  }
+  // Ensure there's a local REJECTED entry so the tag appears in Rejected Tags.
+  if (
+    !tagPredictions.value.some(
+      (p) => p.tag.trim().toLowerCase() === key && p.status === "REJECTED",
+    )
+  ) {
+    tagPredictions.value = [
+      ...tagPredictions.value,
+      { tag: String(tag), confidence: 1.0, status: "REJECTED" },
+    ];
   }
 }
 
@@ -3768,7 +4026,6 @@ function startTagDrag(tag, sourceType, sourceId, event) {
   dragState.sourceType = sourceType;
   dragState.sourceId = sourceId;
   if (event?.dataTransfer) {
-    event.dataTransfer.setData("text/plain", tag);
     event.dataTransfer.effectAllowed = "move";
   }
 }
@@ -3792,6 +4049,29 @@ function handleDragLeave(type, id) {
 
 function isDragOver(type, id) {
   return dragOverTarget.value?.type === type && dragOverTarget.value?.id === id;
+}
+
+function handleDropOnAllTags() {
+  const draggedTag = dragState.tag;
+  const sourceType = dragState.sourceType;
+  clearTagDrag();
+  if (!draggedTag || sourceType !== "rejected") return;
+
+  confirmPrediction(draggedTag);
+}
+
+async function handleDropOnRejectedTags() {
+  const draggedTag = dragState.tag;
+  const sourceType = dragState.sourceType;
+  clearTagDrag();
+  if (!draggedTag || sourceType !== "unassigned") return;
+
+  const key = String(draggedTag).trim().toLowerCase();
+  const tagObj = allImageTags.value.find(
+    (entry) => tagLabel(entry).trim().toLowerCase() === key,
+  );
+  await removeAllTag(tagObj || { tag: draggedTag });
+  await rejectPrediction(draggedTag);
 }
 
 const sortedCharacters = computed(() => {
@@ -4355,6 +4635,7 @@ async function removeAllTag(tag) {
       imageId: capturedImageId,
       fields: { tags: true, smartScore: true },
     });
+    await rejectPrediction(label);
   }
 }
 
@@ -5148,7 +5429,7 @@ function downloadComfyWorkflow(workflow) {
 
 .overlay-sidebar.open {
   width: 320px;
-  padding: 16px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -5160,7 +5441,7 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .sidebar-section {
-  margin-bottom: 20px;
+  margin-bottom: 10px;
 }
 
 .sidebar-section--tags {
@@ -5175,8 +5456,21 @@ function downloadComfyWorkflow(workflow) {
   align-items: center;
   justify-content: space-between;
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.rejected-threshold-label {
+  margin-left: 6px;
+  font-size: 0.64rem;
+  opacity: 0.5;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+.section-header-title-with-meta {
+  display: inline-flex;
+  align-items: baseline;
 }
 
 .section-meta-group {
@@ -5202,7 +5496,6 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .section-meta {
-  font-size: 0.75rem;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
@@ -5210,6 +5503,7 @@ function downloadComfyWorkflow(workflow) {
   width: 100%;
   min-height: 120px;
   border-radius: 8px;
+  font-size: 0.85rem;
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
   background: rgba(var(--v-theme-shadow), 0.35);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -5226,7 +5520,7 @@ function downloadComfyWorkflow(workflow) {
 .tag-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   padding-right: 4px;
   flex: 1;
   min-height: 0;
@@ -5254,8 +5548,97 @@ function downloadComfyWorkflow(workflow) {
 
 .overlay-tag--penalised {
   color: rgb(var(--v-theme-error));
+  font-size: 0.72rem;
+  line-height: 1.2;
   border: 1px solid rgba(var(--v-theme-error), 0.6);
   background: rgba(var(--v-theme-error), 0.15);
+}
+
+/* Confirmed anomaly (penalised) tags — red spectrum scaled by confidence */
+.overlay-tag--predicted-anomaly {
+  /* Clamp so even low-confidence anomaly tags remain visibly tinted */
+  --ac: clamp(0.35, var(--pred-confidence, 0.6), 1);
+  font-size: 0.72rem;
+  color: color-mix(
+    in srgb,
+    rgb(var(--v-theme-on-dark-surface)) calc((1 - var(--ac)) * 100%),
+    rgb(var(--v-theme-error)) calc(var(--ac) * 100%)
+  );
+  border-color: color-mix(
+    in srgb,
+    rgba(var(--v-theme-on-dark-surface), 0.2) calc((1 - var(--ac)) * 100%),
+    rgba(var(--v-theme-error), 0.7) calc(var(--ac) * 100%)
+  );
+  background: color-mix(
+    in srgb,
+    rgba(var(--v-theme-on-dark-surface), 0.05) calc((1 - var(--ac)) * 100%),
+    rgba(var(--v-theme-error), 0.2) calc(var(--ac) * 100%)
+  );
+}
+
+/* Confirmed non-anomaly tags — primary spectrum scaled by confidence */
+.overlay-tag--predicted-normal {
+  /* Clamp: min 0.25 so low-confidence tags stay readable */
+  --nc: clamp(0.25, var(--pred-confidence, 0.7), 1);
+  /* Mix amount: 0.25→25% through 1.0→80% primary */
+  --nm: calc(25% + var(--nc) * 55%);
+  color: color-mix(
+    in srgb,
+    rgb(var(--v-theme-primary)) var(--nm),
+    rgb(var(--v-theme-on-dark-surface))
+  );
+  border-color: color-mix(
+    in srgb,
+    rgba(var(--v-theme-primary), 0.6) var(--nm),
+    rgba(var(--v-theme-on-dark-surface), 0.15)
+  );
+  background: color-mix(
+    in srgb,
+    rgba(var(--v-theme-primary), 0.18) var(--nm),
+    rgba(var(--v-theme-on-dark-surface), 0.06)
+  );
+}
+
+/* Rejected predictions use the same palette as accepted tags, but dimmer */
+.overlay-tag--prediction {
+  filter: saturate(0.82) brightness(0.9);
+  opacity: 0.88;
+  border-style: dashed;
+  border-width: 1px;
+}
+
+.tag-pred-confidence {
+  font-size: 0.65rem;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+
+.tag-pred-btn {
+  margin: 0 1px;
+  padding: 1px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75em;
+  line-height: 1;
+  vertical-align: middle;
+  opacity: 0.6;
+}
+
+.tag-pred-btn:hover {
+  opacity: 1;
+}
+
+.tag-pred-btn--confirm:hover {
+  color: rgb(var(--v-theme-success));
+}
+
+.tag-pred-btn--reject:hover {
+  color: rgb(var(--v-theme-error));
+}
+
+.tag-drop-zone--predictions {
+  gap: 4px;
 }
 
 .tag-delete-btn {

@@ -46,6 +46,9 @@ from pixlstash.routes.tags import create_router as create_tags_router
 from pixlstash.routes.stacks import create_router as create_stacks_router
 from pixlstash.routes.pictures import create_router as create_pictures_router
 from pixlstash.routes.comfyui import create_router as create_comfyui_router
+from pixlstash.routes.tag_predictions import (
+    create_router as create_tag_predictions_router,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 
@@ -936,6 +939,14 @@ class Server:
             create_stacks_router(self),
             prefix=API_V1_PREFIX,
             tags=["stacks"],
+        )
+        # tag_predictions must be registered before pictures so that the
+        # specific path /pictures/{id}/tag_predictions is not swallowed by
+        # the wildcard /pictures/{id}/{field} route in the pictures router.
+        self.api.include_router(
+            create_tag_predictions_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["tag_predictions"],
         )
         self.api.include_router(
             create_pictures_router(self),

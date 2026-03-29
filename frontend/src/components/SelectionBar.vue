@@ -53,7 +53,10 @@
                 <span>Filters</span>
               </button>
             </template>
-            <div class="plugin-menu-panel">
+            <div
+              class="plugin-menu-panel"
+              @keydown.esc.stop.prevent="tagMenuOpen = false"
+            >
               <div class="plugin-menu-header">Apply Filters</div>
               <div class="plugin-menu-body">
                 <label class="plugin-menu-label">Filters</label>
@@ -280,7 +283,11 @@
                     <button
                       v-for="t in tagsOnAll"
                       :key="'all-' + t.name"
-                      class="tag-chip tag-chip--all"
+                      :class="[
+                        'tag-chip',
+                        'tag-chip--all',
+                        { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
+                      ]"
                       type="button"
                       :disabled="tagActionLoading.includes(t.name)"
                       :title="`On all ${totalWithTagData} selected — click to remove`"
@@ -294,7 +301,11 @@
                     <button
                       v-for="t in tagsOnSome"
                       :key="'some-' + t.name"
-                      class="tag-chip tag-chip--some"
+                      :class="[
+                        'tag-chip',
+                        'tag-chip--some',
+                        { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
+                      ]"
                       type="button"
                       :disabled="tagActionLoading.includes(t.name)"
                       :title="`On ${t.count} of ${totalWithTagData} — click to add to all`"
@@ -324,6 +335,54 @@
                     >
                       {{ tagsOnSomeHiddenCount }} hidden
                     </span>
+                  </div>
+                </div>
+                <div
+                  v-if="aggregatedPredictions.length"
+                  class="tag-current-section"
+                >
+                  <div class="tag-current-label tag-current-label--clickable">
+                    <button
+                      class="tag-current-toggle"
+                      type="button"
+                      @click="
+                        rejectedTagsCollapsedSB = !rejectedTagsCollapsedSB
+                      "
+                    >
+                      Rejected Tags
+                      <span class="rejected-threshold-label"
+                        >(>
+                        {{
+                          (predictionAcceptanceThresholdSB * 100).toFixed(0)
+                        }}% to be auto-applied)</span
+                      >
+                      <v-icon size="12">{{
+                        rejectedTagsCollapsedSB
+                          ? "mdi-chevron-down"
+                          : "mdi-chevron-up"
+                      }}</v-icon>
+                    </button>
+                  </div>
+                  <div v-show="!rejectedTagsCollapsedSB" class="tag-chips-row">
+                    <button
+                      v-for="p in aggregatedPredictions"
+                      :key="'pred-' + p.tag"
+                      :class="[
+                        'tag-chip',
+                        'tag-chip--prediction',
+                        { 'tag-chip--penalised': isPenalisedTagSB(p.tag) },
+                      ]"
+                      type="button"
+                      :disabled="predActionLoading.includes(p.tag)"
+                      :style="{ '--pred-confidence': p.avgConf }"
+                      :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all`"
+                      @click="confirmPredictionOnAll(p)"
+                    >
+                      <span class="tag-chip-label">{{ p.tag }}</span>
+                      <span class="tag-chip-count"
+                        >{{ p.count }}/{{ fetchedPredictionData.length }}</span
+                      >
+                    </button>
                   </div>
                 </div>
                 <div class="tag-new-label">New tag</div>
@@ -692,6 +751,29 @@ const tagActionLoading = ref([]);
 const fetchedTagData = ref([]);
 const tagDataLoading = ref(false);
 const tagDataCapped = ref(false);
+const fetchedPredictionData = ref([]);
+const predictionLoading = ref(false);
+const predictionAcceptanceThresholdSB = ref(0.95);
+const rejectedTagsCollapsedSB = ref(loadRejectedTagsCollapsedSB());
+const penalisedTagsSB = ref(new Set());
+let penalisedTagsFetchedAt = 0;
+
+function loadRejectedTagsCollapsedSB() {
+  if (typeof window === "undefined") return true;
+  const raw = window.sessionStorage?.getItem(
+    "pixlstash:selectionBar:rejectedTagsCollapsed",
+  );
+  if (raw == null) return true;
+  return raw === "1";
+}
+
+function persistRejectedTagsCollapsedSB(value) {
+  if (typeof window === "undefined") return;
+  window.sessionStorage?.setItem(
+    "pixlstash:selectionBar:rejectedTagsCollapsed",
+    value ? "1" : "0",
+  );
+}
 
 async function fetchSelectedImageTags() {
   const ids = (
@@ -718,6 +800,49 @@ async function fetchSelectedImageTags() {
     fetchedTagData.value = [];
   } finally {
     tagDataLoading.value = false;
+  }
+}
+
+async function fetchSelectedImagePredictions() {
+  const ids = (
+    Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []
+  )
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .slice(0, MAX_TAG_FETCH);
+  if (!ids.length) {
+    fetchedPredictionData.value = [];
+    return;
+  }
+  predictionLoading.value = true;
+  try {
+    const results = await Promise.all(
+      ids.map((id) =>
+        apiClient
+          .get(
+            `${props.backendUrl}/pictures/${id}/tag_predictions?status=REJECTED&include_meta=1`,
+          )
+          .then((r) => {
+            const payload = r.data;
+            const predictions = Array.isArray(payload)
+              ? payload
+              : Array.isArray(payload?.tag_predictions)
+                ? payload.tag_predictions
+                : [];
+            const threshold = Number(payload?.meta?.acceptance_threshold);
+            if (Number.isFinite(threshold) && threshold > 0 && threshold <= 1) {
+              predictionAcceptanceThresholdSB.value = threshold;
+            }
+            return { id, predictions };
+          })
+          .catch(() => ({ id, predictions: [] })),
+      ),
+    );
+    fetchedPredictionData.value = results;
+  } catch {
+    fetchedPredictionData.value = [];
+  } finally {
+    predictionLoading.value = false;
   }
 }
 
@@ -772,6 +897,70 @@ const tagsOnSome = computed(() => {
     }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 });
+
+// Prediction tags that appear on >= predMinCoverage images, not already confirmed on all
+const predMinCoverage = ref(1);
+
+const aggregatedPredictions = computed(() => {
+  if (!fetchedPredictionData.value.length) return [];
+  const confirmedAll = new Set(
+    tagsOnAll.value.map((t) => t.name.toLowerCase()),
+  );
+  const freq = new Map();
+  for (const { id, predictions } of fetchedPredictionData.value) {
+    for (const p of predictions) {
+      const key = p.tag.toLowerCase();
+      if (confirmedAll.has(key)) continue;
+      if (!freq.has(key))
+        freq.set(key, { tag: p.tag, count: 0, totalConf: 0, ids: [] });
+      const e = freq.get(key);
+      e.count++;
+      e.totalConf += p.confidence;
+      e.ids.push(id);
+    }
+  }
+  return [...freq.values()]
+    .filter((e) => e.count >= predMinCoverage.value)
+    .map((e) => {
+      const avgConf = e.totalConf / e.count;
+      const threshold = Number(predictionAcceptanceThresholdSB.value) || 0.95;
+      const avgNeeded = Math.max(0, threshold - avgConf);
+      return { ...e, avgConf, avgNeeded };
+    })
+    .sort((a, b) => b.count - a.count || b.avgConf - a.avgConf);
+});
+
+const predActionLoading = ref([]);
+
+async function confirmPredictionOnAll(predEntry) {
+  if (predActionLoading.value.includes(predEntry.tag)) return;
+  predActionLoading.value = [...predActionLoading.value, predEntry.tag];
+  tagError.value = "";
+  try {
+    await Promise.all(
+      predEntry.ids.map((id) =>
+        apiClient.post(
+          `${props.backendUrl}/pictures/${id}/tag_predictions/${encodeURIComponent(predEntry.tag)}/confirm`,
+        ),
+      ),
+    );
+    emit("tags-applied", {
+      tag: predEntry.tag,
+      pictureIds: predEntry.ids,
+      action: "add",
+    });
+    await Promise.all([
+      fetchSelectedImageTags(),
+      fetchSelectedImagePredictions(),
+    ]);
+  } catch (err) {
+    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+  } finally {
+    predActionLoading.value = predActionLoading.value.filter(
+      (n) => n !== predEntry.tag,
+    );
+  }
+}
 
 const tagsOnSomeHiddenCount = computed(() => {
   if (!totalWithTagData.value || tagMinCoverage.value <= 1) return 0;
@@ -876,13 +1065,61 @@ watch(tagMenuOpen, async (isOpen) => {
     tagSuccess.value = "";
     tagSuggestionIndex.value = -1;
     fetchedTagData.value = [];
+    fetchedPredictionData.value = [];
     tagDataCapped.value = false;
     tagMinCoverage.value = 1;
+    predMinCoverage.value = 1;
     return;
   }
-  await Promise.all([fetchTagsSB(), fetchSelectedImageTags()]);
+  await Promise.all([
+    fetchTagsSB(),
+    fetchPenalisedTagsSB(),
+    fetchSelectedImageTags(),
+    fetchSelectedImagePredictions(),
+  ]);
   nextTick(() => tagInputRef.value?.focus());
 });
+
+watch(rejectedTagsCollapsedSB, (value) => {
+  persistRejectedTagsCollapsedSB(Boolean(value));
+});
+
+async function fetchPenalisedTagsSB() {
+  const now = Date.now();
+  if (now - penalisedTagsFetchedAt < 60_000) return;
+  try {
+    const res = await apiClient.get("/users/me/config");
+    let list = [];
+    if (Array.isArray(res.data?.smart_score_penalised_tags)) {
+      list = res.data.smart_score_penalised_tags;
+    } else if (
+      res.data?.smart_score_penalised_tags &&
+      typeof res.data.smart_score_penalised_tags === "object"
+    ) {
+      list = Object.keys(res.data.smart_score_penalised_tags);
+    }
+    penalisedTagsSB.value = new Set(
+      list
+        .map((t) =>
+          String(t || "")
+            .trim()
+            .toLowerCase(),
+        )
+        .filter(Boolean),
+    );
+    penalisedTagsFetchedAt = now;
+  } catch {
+    // non-critical
+  }
+}
+
+function isPenalisedTagSB(name) {
+  return penalisedTagsSB.value.has(
+    String(name || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
 
 async function fetchTagsSB() {
   if (!props.backendUrl) return;
@@ -926,6 +1163,11 @@ function handleTagKey(event) {
       selectTagSuggestion(tagSuggestions.value[idx]);
     }
   } else if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
     tagMenuOpen.value = false;
   }
 }
@@ -1219,6 +1461,33 @@ defineExpose({ openTagInput });
   flex-shrink: 0;
 }
 
+.tag-current-label--clickable {
+  margin-bottom: 4px;
+}
+
+.tag-current-toggle {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  opacity: inherit;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rejected-threshold-label {
+  font-size: 0.7rem;
+  opacity: 0.85;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+
 .tag-new-label {
   font-size: 0.72rem;
   text-transform: uppercase;
@@ -1281,6 +1550,50 @@ defineExpose({ openTagInput });
   background: rgba(var(--v-theme-primary), 0.12);
   border-style: solid;
   border-color: rgba(var(--v-theme-primary), 0.45);
+}
+
+.tag-chip--penalised {
+  color: rgb(var(--v-theme-error)) !important;
+  border-color: rgba(var(--v-theme-error), 0.55) !important;
+  background: rgba(var(--v-theme-error), 0.12) !important;
+}
+
+.tag-chip--penalised:hover:not(:disabled) {
+  background: rgba(var(--v-theme-error), 0.22) !important;
+  border-color: rgba(var(--v-theme-error), 0.75) !important;
+}
+
+.tag-chip--prediction {
+  --pc: clamp(0.25, var(--pred-confidence, 0.6), 1);
+  --pm: calc(22% + var(--pc) * 52%);
+  background: color-mix(
+    in srgb,
+    rgba(var(--v-theme-primary), 0.14) var(--pm),
+    rgba(var(--v-theme-on-surface), 0.05)
+  );
+  border: 1px dashed
+    color-mix(
+      in srgb,
+      rgba(var(--v-theme-primary), 0.55) var(--pm),
+      rgba(var(--v-theme-on-surface), 0.2)
+    );
+  color: color-mix(
+    in srgb,
+    rgba(var(--v-theme-primary), 0.9) var(--pm),
+    rgba(var(--v-theme-on-surface), 0.65)
+  );
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  filter: saturate(0.86) brightness(0.92);
+  border-width: 1px;
+}
+
+.tag-chip--prediction:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(var(--v-theme-primary), 0.14);
+  border-style: solid;
+  border-color: rgba(var(--v-theme-primary), 0.55);
 }
 
 .tag-chip-count {
