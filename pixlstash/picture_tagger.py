@@ -108,6 +108,11 @@ CUSTOM_TAGGER_FILENAME = "pixlstash-anomaly-tagger.safetensors"
 CUSTOM_TAGGER_META_FILENAME = "pixlstash-anomaly-tagger_meta.json"
 CUSTOM_TAGGER_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.safetensors")
 CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta.json")
+# Pin a specific HuggingFace git commit SHA for the custom tagger repo so that the
+# model is re-downloaded whenever this value is updated, even if the local file
+# already exists.  Set to "main" to always use the latest commit on the default branch.
+CUSTOM_TAGGER_REVISION = "1af83d519ace6eb6a971f3669c77456cfee9daae"
+CUSTOM_TAGGER_REV_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.revision")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.95
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
 CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
@@ -234,9 +239,7 @@ class PictureTagger:
         self._custom_label_to_idx = None
         self._custom_transform = None
         self._custom_transform_cache = {}
-        if not os.path.isfile(self._custom_tagger_path) or not os.path.isfile(
-            self._custom_tagger_meta_path
-        ):
+        if self._needs_custom_tagger_download():
             self._download_custom_tagger()
         if not os.path.isfile(self._custom_tagger_path) or not os.path.isfile(
             self._custom_tagger_meta_path
@@ -246,6 +249,12 @@ class PictureTagger:
                 self._custom_tagger_path,
             )
             self._use_custom_tagger = False
+        else:
+            logger.info(
+                "Custom tagger loaded (version %d) from %s",
+                self.custom_tagger_version(),
+                self._custom_tagger_path,
+            )
 
         self._tag_naturaliser = TagNaturaliser()
 
@@ -1376,24 +1385,69 @@ class PictureTagger:
         self._rating_tags = [row[1] for row in rows[0:] if row[2] == "9"]
         self._general_tags = [row[1] for row in rows[0:] if row[2] == "0"]
 
+    def _needs_custom_tagger_download(self) -> bool:
+        """Return True if the custom tagger files need to be (re-)downloaded.
+
+        Re-download is required when:
+        - The model or meta file is missing, OR
+        - The revision sidecar is absent or records a different revision than
+          ``CUSTOM_TAGGER_REVISION``, indicating the pinned version has changed.
+        """
+        if not os.path.isfile(self._custom_tagger_path) or not os.path.isfile(
+            self._custom_tagger_meta_path
+        ):
+            return True
+        # When pinned to a moving ref like "main" we can't compare meaningfully,
+        # so only enforce the sidecar check for explicit commit SHAs.
+        if CUSTOM_TAGGER_REVISION == "main":
+            return False
+        if not os.path.isfile(CUSTOM_TAGGER_REV_PATH):
+            return True
+        try:
+            with open(CUSTOM_TAGGER_REV_PATH, "r", encoding="utf-8") as f:
+                cached_rev = f.read().strip()
+            return cached_rev != CUSTOM_TAGGER_REVISION
+        except OSError:
+            return True
+
     def _download_custom_tagger(self):
-        """Download the custom anomaly tagger weights and metadata from HuggingFace if not present locally."""
+        """Download the custom anomaly tagger weights and metadata from HuggingFace.
+
+        Always passes ``revision=CUSTOM_TAGGER_REVISION`` to pin the download to
+        a specific git commit SHA (or branch/tag).  After a successful download the
+        resolved revision is written to a small sidecar file so that future starts
+        can detect when the pinned revision has changed.
+        """
         try:
             from huggingface_hub import hf_hub_download
 
             dest_dir = os.path.dirname(os.path.abspath(self._custom_tagger_path))
             os.makedirs(dest_dir, exist_ok=True)
-            logger.info("Downloading custom tagger from %s ...", CUSTOM_TAGGER_HF_REPO)
+            logger.info(
+                "Downloading custom tagger (revision=%s) from %s ...",
+                CUSTOM_TAGGER_REVISION,
+                CUSTOM_TAGGER_HF_REPO,
+            )
             hf_hub_download(
                 repo_id=CUSTOM_TAGGER_HF_REPO,
                 filename=CUSTOM_TAGGER_FILENAME,
                 local_dir=dest_dir,
+                revision=CUSTOM_TAGGER_REVISION,
+                force_download=True,
             )
             hf_hub_download(
                 repo_id=CUSTOM_TAGGER_HF_REPO,
                 filename=CUSTOM_TAGGER_META_FILENAME,
                 local_dir=dest_dir,
+                revision=CUSTOM_TAGGER_REVISION,
+                force_download=True,
             )
+            # Record the pinned revision so we can detect future changes.
+            try:
+                with open(CUSTOM_TAGGER_REV_PATH, "w", encoding="utf-8") as f:
+                    f.write(CUSTOM_TAGGER_REVISION)
+            except OSError as rev_err:
+                logger.warning("Could not write revision sidecar: %s", rev_err)
             logger.info("Custom tagger downloaded to %s", self._custom_tagger_path)
         except Exception as e:
             logger.warning("Failed to download custom tagger: %s", e)
@@ -1619,7 +1673,17 @@ class PictureTagger:
             image_size=self._custom_tagger_image_size_quality_crop,
             pass_name="quality_crops",
         )
-        return raw
+        # Filter to only quality-relevant whitelist tags, as documented.
+        # Without this filter, non-quality tags (e.g. "flux chin") that happen
+        # to score above threshold on a zoomed-in face crop would be promoted
+        # to the Tag table via the crop pass, bypassing the full-image threshold
+        # and causing spurious confirmed predictions.
+        filtered = {}
+        for key, tags in raw.items():
+            quality_tags = [t for t in tags if t in QUALITY_CROP_TAG_WHITELIST]
+            if quality_tags:
+                filtered[key] = quality_tags
+        return filtered
 
     def _tag_custom_items(
         self,
