@@ -22,7 +22,17 @@
       <v-btn v-if="showSearchAll" variant="tonal" @click="$emit('search-all')">
         Search All Pictures
       </v-btn>
-      <v-btn color="primary" @click="$emit('clear')">Clear Search</v-btn>
+      <v-tooltip text="Clear search (Esc)" location="top">
+        <template #activator="{ props: tooltipProps }">
+          <v-btn
+            color="primary"
+            class="text-none"
+            v-bind="tooltipProps"
+            @click="$emit('clear')"
+            >Clear search</v-btn
+          >
+        </template>
+      </v-tooltip>
     </div>
   </div>
 </template>
