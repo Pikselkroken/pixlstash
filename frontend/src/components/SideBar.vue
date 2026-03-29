@@ -2879,7 +2879,7 @@ defineExpose({
 /* Sidebar right edge for counts */
 .sidebar {
   width: 240px;
-  --sidebar-right-edge: 6px;
+  --sidebar-right-edge: 8px;
   --sidebar-header-action-right-edge: 0px;
   --sidebar-thumb-size: 36px;
   --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 8px);

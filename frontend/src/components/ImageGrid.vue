@@ -1061,7 +1061,10 @@ function startSmartScoreProgress(loadId, sortKey) {
     setSmartScoreProgressPercent(0, { allowReset: true });
   }
 
-  smartScoreProgress.message = `Sorting by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
+  smartScoreProgress.message =
+    props.searchQuery && props.searchQuery.trim()
+      ? "Searching"
+      : `Sorting by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
   smartScoreProgressTimer = setInterval(() => {
     if (!smartScoreProgress.visible) {
       stopSmartScoreProgressTimer();
@@ -1096,7 +1099,10 @@ function completeSmartScoreProgress(loadId, measuredDurationMs, wasSuccessful) {
       );
     }
     setSmartScoreProgressPercent(100);
-    smartScoreProgress.message = `Sorted by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
+    smartScoreProgress.message =
+      props.searchQuery && props.searchQuery.trim()
+        ? "Search complete"
+        : `Sorted by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
     setTimeout(() => {
       if (Number(loadId) !== smartScoreProgressLoadId) return;
       smartScoreProgress.visible = false;

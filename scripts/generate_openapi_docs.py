@@ -34,39 +34,15 @@ def _build_server_config(config_path: str, image_root: str) -> None:
 
 def _write_redoc_html(target_dir: str) -> None:
     html = """<!doctype html>
-<html lang=\"en\">
+<html>
   <head>
-    <meta charset=\"utf-8\" />
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
     <title>PixlStash API Reference</title>
-    <style>
-      body {
-        margin: 0;
-        font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;
-        background: #0d1117;
-        color: #e6edf3;
-      }
-      header {
-        padding: 12px 18px;
-        background: #161b22;
-        border-bottom: 1px solid #30363d;
-      }
-      header a {
-        color: #58a6ff;
-        text-decoration: none;
-      }
-    </style>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
   </head>
   <body>
-    <header>
-      <strong>PixlStash API Reference</strong>
-      ·
-      <a href=\"openapi.json\">Download OpenAPI JSON</a>
-      ·
-      <a href=\"../index.html#api\">Back to website</a>
-    </header>
-    <redoc spec-url=\"openapi.json\"></redoc>
-    <script src=\"https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js\"></script>
+    <redoc spec-url="openapi.json"></redoc>
+    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
   </body>
 </html>
 """

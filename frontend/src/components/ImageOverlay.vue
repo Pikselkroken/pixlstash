@@ -2308,6 +2308,11 @@ function showNextImage() {
 
 function handleKeydown(e) {
   if (!open.value) return;
+  // Prevent other window keydown listeners (e.g. ImageGrid) from seeing this
+  // event while the overlay is open. ImageOverlay mounts before ImageGrid so
+  // its handler runs first; without this, ImageGrid would process the same
+  // keypress (e.g. Escape) after the overlay has already handled it.
+  e.stopImmediatePropagation();
 
   // When chrome is hidden, only Space and Escape reveal it — other keys still
   // navigate/act but don't bring the chrome back.
