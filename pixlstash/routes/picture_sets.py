@@ -261,6 +261,30 @@ def create_router(server) -> APIRouter:
         logger.debug(f"Fetched picture set {result}")
         return result
 
+    @router.get(
+        "/projects/{project_name}/picture_sets/{picture_set_name}",
+        summary="Get picture set by project name and set name",
+        description="Returns picture set metadata for a named set within a named project.",
+    )
+    def get_picture_set_by_name(project_name: str, picture_set_name: str):
+        def fetch(session):
+            project = session.exec(
+                select(Project).where(func.lower(Project.name) == project_name.lower())
+            ).first()
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+            picture_set = session.exec(
+                select(PictureSet).where(
+                    PictureSet.project_id == project.id,
+                    func.lower(PictureSet.name) == picture_set_name.lower(),
+                )
+            ).first()
+            if picture_set is None:
+                raise HTTPException(status_code=404, detail="Picture set not found")
+            return safe_model_dict(picture_set)
+
+        return server.vault.db.run_immediate_read_task(fetch)
+
     @router.post(
         "/picture_sets",
         summary="Create picture set",

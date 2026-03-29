@@ -452,6 +452,30 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Character not found")
 
     @router.get(
+        "/projects/{project_name}/characters/{character_name}",
+        summary="Get character by project name and character name",
+        description="Returns a character record by name within a named project.",
+    )
+    def get_character_by_project_and_name(project_name: str, character_name: str):
+        def fetch(session):
+            project = session.exec(
+                select(Project).where(func.lower(Project.name) == project_name.lower())
+            ).first()
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+            character = session.exec(
+                select(Character).where(
+                    Character.project_id == project.id,
+                    func.lower(Character.name) == character_name.lower(),
+                )
+            ).first()
+            if character is None:
+                raise HTTPException(status_code=404, detail="Character not found")
+            return safe_model_dict(character)
+
+        return server.vault.db.run_immediate_read_task(fetch)
+
+    @router.get(
         "/characters/{id}/{field}",
         summary="Get character field",
         description="Returns one character field value, including generated thumbnail handling for field=thumbnail.",
