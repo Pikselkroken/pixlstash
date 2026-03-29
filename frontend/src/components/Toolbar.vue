@@ -1268,6 +1268,7 @@ const SORT_ICON_MAP = {
   CHARACTER_LIKENESS: "mdi-account-search",
   PICTURE_STACKS: "mdi-layers",
   TAG_UNCERTAINTY: "mdi-help-rhombus-outline",
+  ANOMALY_TAG_UNCERTAINTY: "mdi-alert-rhombus-outline",
 };
 
 function getSortIcon(value) {

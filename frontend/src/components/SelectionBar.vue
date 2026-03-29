@@ -445,6 +445,11 @@
         @mousedown.prevent="selectTagSuggestion(item)"
       >
         {{ item.tag }}
+        <span
+          v-if="idx === (tagSuggestionIndex >= 0 ? tagSuggestionIndex : 0)"
+          class="sb-tag-autocomplete-tab-hint"
+          >TAB</span
+        >
       </button>
     </div>
   </Teleport>
@@ -1034,8 +1039,25 @@ async function addTagToRemaining(tagEntry) {
 const tagSuggestions = computed(() => {
   const query = tagInput.value.trim().toLowerCase();
   if (!query) return [];
+
+  // Build lookup of average rejected-prediction confidence across selected images
+  const rejectedConf = new Map();
+  for (const p of aggregatedPredictions.value) {
+    if (typeof p.avgConf === "number") {
+      rejectedConf.set(p.tag.trim().toLowerCase(), p.avgConf);
+    }
+  }
+
   return allTagsSB.value
     .filter((item) => item.tag.toLowerCase().startsWith(query))
+    .sort((a, b) => {
+      const aConf = rejectedConf.get(a.tag.toLowerCase()) ?? -1;
+      const bConf = rejectedConf.get(b.tag.toLowerCase()) ?? -1;
+      // Rejected predictions first, sorted by avg confidence desc
+      if (aConf !== bConf) return bConf - aConf;
+      // Then by global usage count desc (original order)
+      return (b.count || 0) - (a.count || 0);
+    })
     .slice(0, 8);
 });
 
@@ -1673,5 +1695,19 @@ defineExpose({ openTagInput });
 .sb-tag-autocomplete-item:hover,
 .sb-tag-autocomplete-item--active {
   background: rgba(var(--v-theme-primary), 0.22);
+}
+
+.sb-tag-autocomplete-tab-hint {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 4px;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  color: rgba(var(--v-theme-on-surface), 0.45);
+  vertical-align: middle;
+  line-height: 1.5;
 }
 </style>

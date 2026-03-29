@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, or_, select
 
 from pixlstash.db_models import Tag
 from pixlstash.db_models.tag_prediction import TagPrediction
@@ -120,11 +120,59 @@ def create_router(server) -> APIRouter:
                 )
             ).first()
             if prediction is None:
-                raise HTTPException(status_code=404, detail="Prediction not found")
-            prediction.status = "REJECTED"
+                # Tag was added manually — create a synthetic REJECTED prediction
+                # so it persists through fetches.
+                session.add(
+                    TagPrediction(
+                        picture_id=pic_id,
+                        tag=tag,
+                        confidence=1.0,
+                        model_version="manual",
+                        status="REJECTED",
+                    )
+                )
+            else:
+                prediction.status = "REJECTED"
             session.commit()
 
         server.vault.db.run_task(_reject)
         return {"status": "rejected", "tag": tag}
+
+    @router.post(
+        "/pictures/{id}/tag_predictions/delete",
+        summary="Delete tag predictions for a picture",
+        description=(
+            "Deletes all TagPrediction rows for the picture except those with "
+            "model_version='manual' (user-rejected tags), so the background tagger "
+            "treats it as never seen and rebuilds predictions from scratch."
+        ),
+    )
+    def delete_tag_predictions(id: int):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        def _delete(session: Session):
+            # Use a direct bulk DELETE statement — avoid loading ORM objects,
+            # which triggers the Picture.tag_predictions cascade="all, delete-orphan"
+            # relationship and can corrupt rows across unrelated pictures.
+            # Explicitly include NULL model_version (SQL != does not match NULLs).
+            stmt = (
+                delete(TagPrediction)
+                .where(TagPrediction.picture_id == pic_id)
+                .where(
+                    or_(
+                        TagPrediction.model_version != "manual",
+                        TagPrediction.model_version.is_(None),
+                    )
+                )
+            )
+            result = session.exec(stmt)
+            session.commit()
+            return result.rowcount
+
+        count = server.vault.db.run_task(_delete)
+        return {"status": "deleted", "count": count}
 
     return router

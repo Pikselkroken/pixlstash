@@ -1014,6 +1014,11 @@
         @mousedown.prevent="selectTagSuggestion(item)"
       >
         {{ item.tag }}
+        <span
+          v-if="idx === (tagSuggestionIndex >= 0 ? tagSuggestionIndex : 0)"
+          class="tag-autocomplete-tab-hint"
+          >TAB</span
+        >
       </button>
     </div>
   </Teleport>
@@ -1667,8 +1672,7 @@ async function ensureOverlayFilmstripForImage() {
   if (!targetId) return;
   const stackId = getOverlayStackId(image.value);
   if (!stackId) return;
-  const shouldExpand =
-    showStacks.value || (!isImageInFilmstrip(targetId) && stackId);
+  const shouldExpand = !isImageInFilmstrip(targetId) && !!stackId;
   if (!shouldExpand) return;
   const stackCount = getOverlayStackCount(image.value);
   if (stackCount <= 1) return;
@@ -1920,7 +1924,7 @@ function applyOverlayStackBackgroundAlpha(color) {
 function isFilmstripStackExpanded(item) {
   const stackId = getOverlayStackId(item);
   if (!stackId) return false;
-  return showStacks.value || overlayExpandedStackIds.value.has(stackId);
+  return overlayExpandedStackIds.value.has(stackId);
 }
 
 function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
@@ -1992,7 +1996,7 @@ function collapseOverlayStackImages(images) {
     if (seen.has(stackId)) continue;
     seen.add(stackId);
     const stackCount = getOverlayStackCount(img) || counts.get(stackId) || 1;
-    if (showStacks.value || overlayExpandedStackIds.value.has(stackId)) {
+    if (overlayExpandedStackIds.value.has(stackId)) {
       const expanded = buildOverlayExpandedStackImages(
         stackId,
         img,
@@ -2111,11 +2115,11 @@ async function toggleFilmstripStackExpand(item) {
   if (!stackId) return;
   if (overlayExpandedStackIds.value.has(stackId)) {
     const currentStackId = getOverlayStackId(image.value);
-    if (
-      currentStackId === stackId &&
-      image.value?.id != null &&
-      !showStacks.value
-    ) {
+    if (currentStackId === stackId && image.value?.id != null) {
+      // Always navigate to the leader when collapsing, regardless of showStacks.
+      // If the current image is a non-leader it will no longer be visible in the
+      // collapsed filmstrip; staying on it would cause ensureOverlayFilmstripForImage
+      // to immediately re-expand the stack on the next allImages poll or metadata fetch.
       const leaderId = getOverlayStackLeaderId(stackId);
       if (leaderId && leaderId !== String(image.value.id)) {
         setOverlayImageById(leaderId);
@@ -2234,7 +2238,12 @@ watch(
 
 watch(showStacks, (value) => {
   if (value) {
+    // Ensure the current image is visible; if it's a non-leader stack member
+    // that isn't in the filmstrip, ensureOverlayFilmstripForImage will expand
+    // just that stack as needed.
     void ensureOverlayFilmstripForImage();
+  } else {
+    overlayExpandedStackIds.value = new Set();
   }
 });
 
@@ -3562,9 +3571,6 @@ async function rejectPrediction(tag) {
   if (!image.value?.id || !backendUrl.value) return;
   const imageId = image.value.id;
   const key = String(tag).trim().toLowerCase();
-  const hasPrediction = tagPredictions.value.some(
-    (p) => p.tag.trim().toLowerCase() === key,
-  );
   try {
     await apiClient.post(
       `${backendUrl.value}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/reject`,
@@ -3573,7 +3579,7 @@ async function rejectPrediction(tag) {
       p.tag.trim().toLowerCase() === key ? { ...p, status: "REJECTED" } : p,
     );
   } catch {
-    // Server returns 404 when no prediction exists — that's fine.
+    // Network error — fall through to ensure local entry below.
   }
   // Ensure there's a local REJECTED entry so the tag appears in Rejected Tags.
   if (
@@ -3918,10 +3924,31 @@ const tagSuggestions = computed(() => {
   const query = newTag.value.trim().toLowerCase();
   if (!query) return [];
   const currentTags = new Set(getTagList(image.value?.tags).map((t) => t.tag));
+
+  // Build lookup of rejected prediction confidences for this image
+  const rejectedConf = new Map();
+  for (const p of tagPredictions.value) {
+    if (p.status === "REJECTED" && typeof p.confidence === "number") {
+      rejectedConf.set(p.tag.trim().toLowerCase(), p.confidence);
+    }
+  }
+
   return allAvailableTags.value
     .filter((item) => {
       const t = typeof item === "string" ? item : item.tag;
       return !currentTags.has(t) && t.toLowerCase().startsWith(query);
+    })
+    .sort((a, b) => {
+      const aTag = (typeof a === "string" ? a : a.tag).toLowerCase();
+      const bTag = (typeof b === "string" ? b : b.tag).toLowerCase();
+      const aConf = rejectedConf.get(aTag) ?? -1;
+      const bConf = rejectedConf.get(bTag) ?? -1;
+      // Rejected predictions first, sorted by confidence desc
+      if (aConf !== bConf) return bConf - aConf;
+      // Then by global usage count desc (already the original order)
+      const aCount = (typeof a === "string" ? 0 : a.count) || 0;
+      const bCount = (typeof b === "string" ? 0 : b.count) || 0;
+      return bCount - aCount;
     })
     .slice(0, 8);
 });
@@ -3967,10 +3994,9 @@ function handleTagInputKey(event) {
       selectTagSuggestion(tagSuggestions.value[idx]);
     }
   } else if (event.key === "Backspace") {
-    if (newTag.value.trim()) return;
-    const tags = getTagList(image.value?.tags);
-    if (!tags.length) return;
-    removeTag(tags[tags.length - 1]);
+    if (newTag.value || event.repeat) return;
+    event.preventDefault();
+    cancelAddTag();
   }
 }
 
@@ -4631,11 +4657,11 @@ async function removeAllTag(tag) {
   }
 
   if (didUpdate && capturedImageId) {
+    await rejectPrediction(label);
     emit("overlay-change", {
       imageId: capturedImageId,
       fields: { tags: true, smartScore: true },
     });
-    await rejectPrediction(label);
   }
 }
 
@@ -4647,6 +4673,14 @@ async function refreshPictureTags() {
 
   isTagsRefreshing.value = true;
   try {
+    // Delete all tagger predictions so the background TagPredictionTask treats
+    // this picture as never seen and rebuilds them from scratch.
+    // Manual REJECTED rows (user preferences) are preserved by the backend.
+    await apiClient.post(
+      `${backendUrl.value}/pictures/${capturedImageId}/tag_predictions/delete`,
+    );
+    tagPredictions.value = [];
+
     await apiClient.delete(
       `${backendUrl.value}/pictures/${capturedImageId}/tags`,
     );
@@ -4660,7 +4694,10 @@ async function refreshPictureTags() {
       fields: { tags: true, smartScore: true },
     });
 
-    await fetchOverlayMetadata(capturedImageId);
+    await Promise.all([
+      fetchOverlayMetadata(capturedImageId),
+      fetchTagPredictions(capturedImageId),
+    ]);
   } catch (err) {
     console.warn("Failed to refresh picture tags:", err);
   } finally {
@@ -5698,6 +5735,20 @@ function downloadComfyWorkflow(workflow) {
 .tag-autocomplete-item--active {
   background: rgba(var(--v-theme-primary), 0.22);
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.tag-autocomplete-tab-hint {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 4px;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.15);
+  color: rgba(var(--v-theme-on-dark-surface), 0.55);
+  vertical-align: middle;
+  line-height: 1.5;
 }
 
 .face-assign-grid {
