@@ -40,6 +40,25 @@ _UNSET = object()
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
+    def _ensure_unique_set_name(session, name: str, project_id, exclude_set_id=None):
+        """Raises 409 if a set with the same name (case-insensitive) already
+        exists in the given project.  Unscoped sets (project_id None) are
+        exempt — they have no uniqueness requirement.
+        """
+        if project_id is None:
+            return
+        stmt = select(PictureSet).where(
+            PictureSet.project_id == project_id,
+            func.lower(PictureSet.name) == name.lower(),
+        )
+        if exclude_set_id is not None:
+            stmt = stmt.where(PictureSet.id != exclude_set_id)
+        if session.exec(stmt).first():
+            raise HTTPException(
+                status_code=409,
+                detail=f"A picture set named '{name}' already exists in this project.",
+            )
+
     def _project_membership_exists(project_id_value: int):
         return exists(
             select(PictureProjectMember.picture_id).where(
@@ -255,6 +274,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="name is required")
 
         def create_set(session, name, description, project_id):
+            _ensure_unique_set_name(session, name, project_id)
             picture_set = PictureSet(
                 name=name, description=description, project_id=project_id
             )
@@ -687,6 +707,21 @@ def create_router(server) -> APIRouter:
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
+
+            # Resolve the final (name, project_id) that would result from this
+            # update and check uniqueness before touching anything.
+            final_name = name if name is not None else picture_set.name
+            final_project_id = (
+                project_id if project_id is not _UNSET else picture_set.project_id
+            )
+            name_changing = name is not None and name != picture_set.name
+            project_changing = (
+                project_id is not _UNSET and project_id != picture_set.project_id
+            )
+            if name_changing or project_changing:
+                _ensure_unique_set_name(
+                    session, final_name, final_project_id, exclude_set_id=id
+                )
 
             project_id_payload_provided = project_id is not _UNSET
             project_assignment_requested = (

@@ -39,6 +39,27 @@ _UNSET = object()
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
+    def _ensure_unique_character_name(
+        session, name: str, project_id, exclude_char_id=None
+    ):
+        """Raises 409 if a character with the same name (case-insensitive)
+        already exists in the given project.  Unscoped characters
+        (project_id None) are exempt.
+        """
+        if project_id is None:
+            return
+        stmt = select(Character).where(
+            Character.project_id == project_id,
+            func.lower(Character.name) == name.lower(),
+        )
+        if exclude_char_id is not None:
+            stmt = stmt.where(Character.id != exclude_char_id)
+        if session.exec(stmt).first():
+            raise HTTPException(
+                status_code=409,
+                detail=f"A character named '{name}' already exists in this project.",
+            )
+
     def _project_membership_exists(project_id_value: int):
         return exists(
             select(PictureProjectMember.picture_id).where(
@@ -269,6 +290,19 @@ def create_router(server) -> APIRouter:
                 character = session.get(Character, id)
                 if character is None:
                     raise KeyError("Character not found")
+                # Check uniqueness before mutating anything.
+                final_name = name if name is not None else character.name
+                final_project_id = (
+                    project_id if project_id is not _UNSET else character.project_id
+                )
+                name_changing = name is not None and name != character.name
+                project_changing = (
+                    project_id is not _UNSET and project_id != character.project_id
+                )
+                if name_changing or project_changing:
+                    _ensure_unique_character_name(
+                        session, final_name, final_project_id, exclude_char_id=id
+                    )
                 updated = False
                 if name is not None and name != character.name:
                     character.name = name
@@ -677,6 +711,10 @@ def create_router(server) -> APIRouter:
         try:
 
             def create_character_and_reference_set(session, payload):
+                char_name = payload.get("name")
+                char_project_id = payload.get("project_id")
+                if char_name:
+                    _ensure_unique_character_name(session, char_name, char_project_id)
                 character = Character(**payload)
                 session.add(character)
                 session.commit()
