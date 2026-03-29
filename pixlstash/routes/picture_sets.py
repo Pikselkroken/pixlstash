@@ -986,4 +986,128 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Picture not in set")
         return {"status": "success"}
 
+    @router.post(
+        "/picture_sets/{id}/members",
+        summary="Bulk add pictures to set",
+        description="Adds a batch of pictures to a set (non-destructive). Skips pictures already in the set.",
+    )
+    def bulk_add_pictures_to_set(id: int, payload: dict = Body(...)):
+        raw_ids = payload.get("picture_ids", [])
+        if not isinstance(raw_ids, list):
+            raise HTTPException(status_code=400, detail="picture_ids must be a list")
+        try:
+            picture_ids = [int(i) for i in raw_ids]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="All picture ids must be integers")
+        if not picture_ids:
+            return {"status": "success", "added": 0}
+
+        def bulk_add(session, set_id, picture_ids):
+            picture_set = session.get(PictureSet, set_id)
+            if not picture_set:
+                return None
+            existing = set(
+                session.exec(
+                    select(PictureSetMember.picture_id).where(
+                        PictureSetMember.set_id == set_id
+                    )
+                ).all()
+            )
+            added = 0
+            for pic_id in picture_ids:
+                if pic_id in existing:
+                    continue
+                pic = session.get(Picture, pic_id)
+                if not pic or pic.deleted:
+                    continue
+                session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
+                if picture_set.project_id is not None:
+                    membership = session.exec(
+                        select(PictureProjectMember).where(
+                            PictureProjectMember.picture_id == pic_id,
+                            PictureProjectMember.project_id == picture_set.project_id,
+                        )
+                    ).first()
+                    if membership is None:
+                        session.add(
+                            PictureProjectMember(
+                                picture_id=pic_id,
+                                project_id=picture_set.project_id,
+                            )
+                        )
+                    pic.project_id = picture_set.project_id
+                    session.add(pic)
+                existing.add(pic_id)
+                added += 1
+            session.commit()
+            return added
+
+        added = server.vault.db.run_task(bulk_add, id, picture_ids, priority=DBPriority.IMMEDIATE)
+        if added is None:
+            raise HTTPException(status_code=404, detail="Picture set not found")
+        if added > 0:
+            server.vault.notify(EventType.CHANGED_PICTURES)
+        return {"status": "success", "added": added}
+
+    @router.put(
+        "/picture_sets/{id}/members",
+        summary="Bulk replace picture set members",
+        description="Atomically replaces the entire member list of a set. All existing members are removed and the provided picture ids become the new members.",
+    )
+    def bulk_replace_pictures_in_set(id: int, payload: dict = Body(...)):
+        raw_ids = payload.get("picture_ids", [])
+        if not isinstance(raw_ids, list):
+            raise HTTPException(status_code=400, detail="picture_ids must be a list")
+        try:
+            picture_ids = [int(i) for i in raw_ids]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="All picture ids must be integers")
+
+        def bulk_replace(session, set_id, picture_ids):
+            picture_set = session.get(PictureSet, set_id)
+            if not picture_set:
+                return None
+            # Remove all existing members
+            existing_members = session.exec(
+                select(PictureSetMember).where(PictureSetMember.set_id == set_id)
+            ).all()
+            for m in existing_members:
+                session.delete(m)
+            # Add new members
+            added = 0
+            seen = set()
+            for pic_id in picture_ids:
+                if pic_id in seen:
+                    continue
+                seen.add(pic_id)
+                pic = session.get(Picture, pic_id)
+                if not pic or pic.deleted:
+                    continue
+                session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
+                if picture_set.project_id is not None:
+                    membership = session.exec(
+                        select(PictureProjectMember).where(
+                            PictureProjectMember.picture_id == pic_id,
+                            PictureProjectMember.project_id == picture_set.project_id,
+                        )
+                    ).first()
+                    if membership is None:
+                        session.add(
+                            PictureProjectMember(
+                                picture_id=pic_id,
+                                project_id=picture_set.project_id,
+                            )
+                        )
+                    pic.project_id = picture_set.project_id
+                    session.add(pic)
+                added += 1
+            session.commit()
+            return added
+
+        added = server.vault.db.run_task(bulk_replace, id, picture_ids, priority=DBPriority.IMMEDIATE)
+        if added is None:
+            raise HTTPException(status_code=404, detail="Picture set not found")
+        server.vault.notify(EventType.CHANGED_PICTURES)
+        return {"status": "success", "members": added}
+
     return router
