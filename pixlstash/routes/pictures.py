@@ -408,12 +408,16 @@ def _select_pictures_for_listing(
     return_ids_only: bool = False,
     exclude_query_params: set[str] | None = None,
     stack_leaders_only: bool = False,
+    project_id: int | None = None,
 ):
     def serialize_metadata(pictures):
-        return [
-            {field: safe_model_dict(pic).get(field) for field in metadata_fields}
-            for pic in pictures
-        ]
+        result = []
+        for pic in pictures:
+            d = {field: safe_model_dict(pic).get(field) for field in metadata_fields if field != "tags"}
+            if "tags" in metadata_fields:
+                d["tags"] = [t.tag for t in getattr(pic, "tags", [])]
+            result.append(d)
+        return result
 
     def parse_request_params():
         query_params = {}
@@ -428,8 +432,6 @@ def _select_pictures_for_listing(
             picture_ids = request.query_params.getlist("id")
             if picture_ids:
                 query_params["id"] = picture_ids
-            else:
-                query_params.pop("id", None)
             comfyui_models = request.query_params.getlist("comfyui_model")
             if comfyui_models:
                 query_params["comfyui_models_filter"] = comfyui_models
@@ -451,6 +453,8 @@ def _select_pictures_for_listing(
         return value
 
     format, query_params = parse_request_params()
+    if project_id is not None:
+        query_params["project_id"] = project_id
     sort = query_params.pop("sort", sort)
     desc_val = query_params.pop("descending", descending)
     descending = (
@@ -3570,9 +3574,12 @@ def create_router(server) -> APIRouter:
         offset: int = Query(0),
         limit: int = Query(sys.maxsize),
         fields: str = Query(None),
+        project_id: int | None = Query(None, description="Filter by project id"),
     ):
         if fields == "grid":
             metadata_fields = list(Picture.grid_fields())
+        elif fields:
+            metadata_fields = [f.strip() for f in fields.split(",") if f.strip()]
         else:
             metadata_fields = Picture.metadata_fields()
         return _select_pictures_for_listing(
@@ -3585,6 +3592,7 @@ def create_router(server) -> APIRouter:
             metadata_fields=metadata_fields,
             return_ids_only=False,
             stack_leaders_only=(fields == "grid"),
+            project_id=project_id,
         )
 
     return router
