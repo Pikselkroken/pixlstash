@@ -7,6 +7,7 @@ Create Date: 2026-03-29 00:00:00.000000
 
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -19,12 +20,16 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 
 def upgrade() -> None:
-    op.create_index(
-        "ix_tag_prediction_model_version_picture_id",
-        "tag_prediction",
-        ["model_version", "picture_id"],
-        unique=False,
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_indexes = {idx["name"] for idx in inspector.get_indexes("tag_prediction")}
+    if "ix_tag_prediction_model_version_picture_id" not in existing_indexes:
+        op.create_index(
+            "ix_tag_prediction_model_version_picture_id",
+            "tag_prediction",
+            ["model_version", "picture_id"],
+            unique=False,
+        )
 
 
 def downgrade() -> None:
