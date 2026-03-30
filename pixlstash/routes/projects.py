@@ -236,6 +236,7 @@ def create_router(server) -> APIRouter:
                 numeric_id = int(pid_or_name)
                 project = session.get(Project, numeric_id)
             except (TypeError, ValueError):
+                # If parsing as an integer fails, treat pid_or_name as a project name instead.
                 pass
             if project is None:
                 project = session.exec(
