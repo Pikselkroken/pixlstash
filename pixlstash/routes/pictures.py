@@ -3591,7 +3591,9 @@ def create_router(server) -> APIRouter:
         offset: int = Query(0),
         limit: int = Query(sys.maxsize),
         fields: str = Query(None),
-        project_id: int | None = Query(None, description="Filter by project id"),
+        project_id: str | None = Query(
+            None, description="Filter by project id or 'UNASSIGNED'"
+        ),
     ):
         if fields == "grid":
             metadata_fields = list(Picture.grid_fields())
