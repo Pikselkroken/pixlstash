@@ -204,19 +204,26 @@ def create_router(server) -> APIRouter:
         hidden_tags = _get_hidden_tags_from_request(request)
 
         project_filter = None
+        set_project_id_filter = None  # filters which sets are returned
         if project_id is not None:
             if project_id == "UNASSIGNED":
                 project_filter = _project_membership_unassigned()
+                set_project_id_filter = PictureSet.project_id.is_(None)
             else:
                 try:
-                    project_filter = _project_membership_exists(int(project_id))
+                    _pid_int = int(project_id)
+                    project_filter = _project_membership_exists(_pid_int)
+                    set_project_id_filter = PictureSet.project_id == _pid_int
                 except (TypeError, ValueError):
                     raise HTTPException(status_code=400, detail="Invalid project_id")
 
         def fetch_sets(session):
-            sets = session.exec(
-                select(PictureSet).options(selectinload(PictureSet.reference_character))
-            ).all()
+            sets_query = select(PictureSet).options(
+                selectinload(PictureSet.reference_character)
+            )
+            if set_project_id_filter is not None:
+                sets_query = sets_query.where(set_project_id_filter)
+            sets = session.exec(sets_query).all()
             result = []
             for s in sets:
                 members_query = (
@@ -551,6 +558,19 @@ def create_router(server) -> APIRouter:
         project_id: str | None = Query(None),
         fields: str = Query(None),
     ):
+        try:
+            id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Picture set names are not globally unique, so '{id}' "
+                    "cannot be used to identify a set unambiguously. "
+                    "Use the numeric set ID instead, or look up the set via "
+                    "/api/v1/projects/{project_id_or_name}/picture_sets/{name}."
+                ),
+            )
+
         sort_mech = None
         if sort:
             try:

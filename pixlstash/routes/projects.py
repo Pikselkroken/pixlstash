@@ -221,38 +221,12 @@ def create_router(server) -> APIRouter:
         return project
 
     @router.get(
-        "/projects/by-name/{project_name}",
-        summary="Get a project by name",
-        response_model=ProjectResponse,
-    )
-    def get_project_by_name(request: Request, project_name: str):
-        server.auth.require_user_id(request)
-
-        resolved_project_id = server.vault.db.run_task(
-            _resolve_project_id_by_name,
-            project_name,
-            priority=DBPriority.IMMEDIATE,
-        )
-
-        def fetch(session: Session, pid: int):
-            project = session.get(Project, pid)
-            if project is None:
-                raise HTTPException(status_code=404, detail="Project not found")
-            return project
-
-        return server.vault.db.run_task(
-            fetch,
-            resolved_project_id,
-            priority=DBPriority.IMMEDIATE,
-        )
-
-    @router.get(
-        "/projects/{project_id}/picture_sets",
+        "/projects/{id_or_name}/picture_sets",
         summary="List picture sets for a project",
         description="Returns all picture sets that belong to the given project. "
-        "``project_id`` may be a numeric ID or a project name (case-insensitive).",
+        "``id_or_name`` may be a numeric ID or a project name (case-insensitive).",
     )
-    def list_project_picture_sets(request: Request, project_id: str):
+    def list_project_picture_sets(request: Request, id_or_name: str):
         server.auth.require_user_id(request)
 
         def fetch(session: Session, pid_or_name: str):
@@ -287,25 +261,34 @@ def create_router(server) -> APIRouter:
             ]
 
         return server.vault.db.run_task(
-            fetch, project_id, priority=DBPriority.IMMEDIATE
+            fetch, id_or_name, priority=DBPriority.IMMEDIATE
         )
 
     @router.get(
-        "/projects/{project_id}",
-        summary="Get a project by ID",
+        "/projects/{id_or_name}",
+        summary="Get a project by ID or name",
+        description="Returns the project matching the given numeric ID or name (case-insensitive).",
         response_model=ProjectResponse,
     )
-    def get_project(request: Request, project_id: int):
+    def get_project(request: Request, id_or_name: str):
         server.auth.require_user_id(request)
 
-        def fetch(session: Session, pid: int):
-            project = session.get(Project, pid)
+        def fetch(session: Session, value: str):
+            project = None
+            try:
+                project = session.get(Project, int(value))
+            except (TypeError, ValueError):
+                pass
+            if project is None:
+                project = session.exec(
+                    select(Project).where(func.lower(Project.name) == value.lower())
+                ).first()
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             return project
 
         return server.vault.db.run_task(
-            fetch, project_id, priority=DBPriority.IMMEDIATE
+            fetch, id_or_name, priority=DBPriority.IMMEDIATE
         )
 
     @router.put(
