@@ -346,6 +346,9 @@ class Picture(SQLModel, table=True):
         only_deleted: bool = False,
         include_unimported: bool = True,
         candidate_ids: Optional[List[int]] = None,
+        min_score: Optional[int] = None,
+        comfyui_models_filter: Optional[List[str]] = None,
+        comfyui_loras_filter: Optional[List[str]] = None,
     ) -> List["Picture"]:
         """
         Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
@@ -480,6 +483,25 @@ class Picture(SQLModel, table=True):
 
         if candidate_ids:
             stmt = stmt.where(cls.id.in_(candidate_ids))
+
+        if min_score is not None:
+            stmt = stmt.where(cls.score >= min_score)
+
+        if comfyui_models_filter:
+            for i, m in enumerate(comfyui_models_filter):
+                stmt = stmt.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :comfyui_model_{i})"
+                    ).bindparams(**{f"comfyui_model_{i}": m})
+                )
+
+        if comfyui_loras_filter:
+            for i, m in enumerate(comfyui_loras_filter):
+                stmt = stmt.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :comfyui_lora_{i})"
+                    ).bindparams(**{f"comfyui_lora_{i}": m})
+                )
 
         results = session.exec(stmt).all()
 

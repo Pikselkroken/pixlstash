@@ -1935,6 +1935,9 @@ def create_router(server) -> APIRouter:
         project_id = None
         sort = None
         descending = True
+        min_score_raw = None
+        comfyui_models = []
+        comfyui_loras = []
         if request.query_params:
             query_params = dict(request.query_params)
             query = query_params.pop("query", query)
@@ -1953,6 +1956,10 @@ def create_router(server) -> APIRouter:
                 else bool(desc_val)
             )
             format = request.query_params.getlist("format")
+            min_score_raw = query_params.pop("min_score", None)
+            comfyui_models = request.query_params.getlist("comfyui_model")
+            comfyui_loras = request.query_params.getlist("comfyui_lora")
+        min_score = int(min_score_raw) if min_score_raw is not None else None
         if not query:
             raise HTTPException(
                 status_code=400, detail="Query parameter is required for search"
@@ -2135,6 +2142,9 @@ def create_router(server) -> APIRouter:
                 select_fields=Picture.metadata_fields(),
                 only_deleted=only_deleted,
                 candidate_ids=list(candidate_ids) if candidate_ids else None,
+                min_score=min_score,
+                comfyui_models_filter=comfyui_models or None,
+                comfyui_loras_filter=comfyui_loras or None,
             )
 
             log_semantic_results("base", results)
@@ -2162,6 +2172,9 @@ def create_router(server) -> APIRouter:
                 format=format,
                 only_deleted=only_deleted,
                 id=list(score_map.keys()),
+                min_score=min_score,
+                comfyui_models_filter=comfyui_models or None,
+                comfyui_loras_filter=comfyui_loras or None,
             )
             sorted_results = [(pic, score_map.get(pic.id, 0.0)) for pic in sorted_pics]
             log_semantic_results(f"sorted_{sort_mech.key.name}", sorted_results)
