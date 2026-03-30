@@ -211,22 +211,58 @@ class AuthService:
                 json.dump(self._server_config, f, indent=2)
         return user
 
+    def _user_id_from_bearer(self, request: Request) -> Optional[int]:
+        """Validate a Bearer token from the Authorization header and return the user id."""
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return None
+        token_value = auth_header[len("Bearer ") :]
+        if not token_value:
+            return None
+        user = self.get_user()
+        if user is None:
+            return None
+
+        def fetch_tokens(session: Session, user_id: int):
+            return session.exec(
+                select(UserToken).where(UserToken.user_id == user_id)
+            ).all()
+
+        tokens = self._db.run_task(fetch_tokens, user.id, priority=DBPriority.IMMEDIATE)
+        for token in tokens:
+            if bcrypt.verify(token_value, token.token_hash):
+
+                def update_last_used(session: Session, token_id: int):
+                    db_token = session.get(UserToken, token_id)
+                    if db_token is not None:
+                        db_token.last_used_at = datetime.utcnow()
+                        session.add(db_token)
+                        session.commit()
+
+                self._db.run_task(
+                    update_last_used, token.id, priority=DBPriority.IMMEDIATE
+                )
+                return user.id
+        return None
+
     def get_user_id(self, request: Request) -> Optional[int]:
         session_id = request.cookies.get("session_id")
-        if not session_id:
-            return None
-        return self.active_session_ids.get(session_id)
+        if session_id:
+            return self.active_session_ids.get(session_id)
+        return self._user_id_from_bearer(request)
 
     def require_user_id(
         self, request: Request, detail: str = "Not authenticated"
     ) -> int:
         session_id = request.cookies.get("session_id")
-        if not session_id:
-            raise HTTPException(status_code=401, detail=detail)
-        user_id = self.active_session_ids.get(session_id)
-        if user_id is None:
-            raise HTTPException(status_code=401, detail=detail)
-        return user_id
+        if session_id:
+            user_id = self.active_session_ids.get(session_id)
+            if user_id is not None:
+                return user_id
+        user_id = self._user_id_from_bearer(request)
+        if user_id is not None:
+            return user_id
+        raise HTTPException(status_code=401, detail=detail)
 
     def get_user_for_request(self, request: Request) -> User:
         user_id = self.require_user_id(request)
