@@ -1611,7 +1611,6 @@ class PictureTagger:
             logger.debug(
                 "Custom tagger meta.json has no 'version' field; using version 0"
             )
-            pass
         return 0
 
     def custom_tagger_image_size_full(self) -> int:
