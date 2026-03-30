@@ -247,6 +247,50 @@ def create_router(server) -> APIRouter:
         )
 
     @router.get(
+        "/projects/{project_id}/picture_sets",
+        summary="List picture sets for a project",
+        description="Returns all picture sets that belong to the given project. "
+        "``project_id`` may be a numeric ID or a project name (case-insensitive).",
+    )
+    def list_project_picture_sets(request: Request, project_id: str):
+        server.auth.require_user_id(request)
+
+        def fetch(session: Session, pid_or_name: str):
+            # Resolve by numeric ID first, then fall back to case-insensitive name.
+            project = None
+            try:
+                numeric_id = int(pid_or_name)
+                project = session.get(Project, numeric_id)
+            except (TypeError, ValueError):
+                pass
+            if project is None:
+                project = session.exec(
+                    select(Project).where(
+                        func.lower(Project.name) == pid_or_name.lower()
+                    )
+                ).first()
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+            sets = session.exec(
+                select(PictureSet)
+                .where(PictureSet.project_id == project.id)
+                .order_by(PictureSet.name)
+            ).all()
+            return [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "description": s.description,
+                    "project_id": s.project_id,
+                }
+                for s in sets
+            ]
+
+        return server.vault.db.run_task(
+            fetch, project_id, priority=DBPriority.IMMEDIATE
+        )
+
+    @router.get(
         "/projects/{project_id}",
         summary="Get a project by ID",
         response_model=ProjectResponse,
