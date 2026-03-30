@@ -279,7 +279,7 @@ def create_router(server) -> APIRouter:
             try:
                 project = session.get(Project, int(value))
             except (TypeError, ValueError):
-                pass
+                # Value is not a valid integer project ID; fall back to lookup by name.
             if project is None:
                 project = session.exec(
                     select(Project).where(func.lower(Project.name) == value.lower())
