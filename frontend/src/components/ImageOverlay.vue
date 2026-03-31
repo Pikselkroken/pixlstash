@@ -2445,6 +2445,14 @@ function handleKeydown(e) {
       handleUserActivity();
       return;
     }
+    // T reveals chrome, opens the sidebar, and starts tag entry
+    if (e.key === "t" || e.key === "T") {
+      e.preventDefault();
+      handleUserActivity();
+      sidebarOpen.value = true;
+      nextTick(() => beginAddTag());
+      return;
+    }
     // All other keys: ignore while chrome is hidden
     return;
   }
