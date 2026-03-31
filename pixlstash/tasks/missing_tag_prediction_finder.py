@@ -1,9 +1,10 @@
 from typing import Callable
 
-from sqlalchemy import not_
+from sqlalchemy import not_, or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture
+from pixlstash.db_models.tag import Tag, TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 
 from .base_task_finder import BaseTaskFinder
@@ -59,17 +60,37 @@ class MissingTagPredictionFinder(BaseTaskFinder):
 
     @staticmethod
     def _fetch_missing(session: Session, model_version: str, limit: int):
-        """Fetch pictures that have no TagPrediction row for the current model version."""
+        """Fetch pictures that have no TagPrediction row for the current model version,
+        or that have a confirmed tag with no corresponding TagPrediction row at all."""
         has_prediction_for_version = select(TagPrediction.picture_id).where(
             TagPrediction.picture_id == Picture.id,
             TagPrediction.model_version == model_version,
+        )
+        # Correlated: does this picture have a Tag row with no matching TagPrediction?
+        has_tag_without_prediction = (
+            select(Tag.id)
+            .outerjoin(
+                TagPrediction,
+                (TagPrediction.picture_id == Tag.picture_id)
+                & (TagPrediction.tag == Tag.tag),
+            )
+            .where(
+                Tag.picture_id == Picture.id,
+                Tag.tag != TAG_EMPTY_SENTINEL,
+                TagPrediction.id.is_(None),
+            )
+            .correlate(Picture)
+            .exists()
         )
         return session.exec(
             select(Picture)
             .where(
                 Picture.deleted.is_(False),
                 Picture.file_path.is_not(None),
-                not_(has_prediction_for_version.exists()),
+                or_(
+                    not_(has_prediction_for_version.exists()),
+                    has_tag_without_prediction,
+                ),
             )
             .order_by(Picture.id)
             .limit(limit)
