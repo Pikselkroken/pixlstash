@@ -53,8 +53,6 @@ class SortMechanism:
         IMAGE_SIZE = auto()
         SMART_SCORE = auto()
         TEXT_CONTENT = auto()
-        TAG_UNCERTAINTY = auto()
-        ANOMALY_TAG_UNCERTAINTY = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -88,14 +86,6 @@ class SortMechanism:
         Keys.PICTURE_STACKS: {
             "field": "id",
             "description": "Likeness Groups ...",
-        },
-        Keys.TAG_UNCERTAINTY: {
-            "field": "tag_uncertainty",
-            "description": "Tag Uncertainty",
-        },
-        Keys.ANOMALY_TAG_UNCERTAINTY: {
-            "field": "anomaly_tag_uncertainty",
-            "description": "Anomaly Tag Uncertainty",
         },
     }
 

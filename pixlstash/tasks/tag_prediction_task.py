@@ -7,20 +7,19 @@ from pixlstash.db_models import Picture
 from pixlstash.db_models.tag import (
     Tag,
     TAG_EMPTY_SENTINEL,
-    DEFAULT_SMART_SCORE_PENALIZED_TAGS,
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.picture_tagger import PictureTagger
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.service.tag_prediction_utils import (
+    recompute_anomaly_tag_uncertainty,
+)
 
 logger = get_logger(__name__)
 
 _PREDICTION_MIN_CONFIDENCE = 0.05
-
-
-_PENALISED_TAG_SET = {t.strip().lower() for t in DEFAULT_SMART_SCORE_PENALIZED_TAGS}
 
 
 class TagPredictionTask(BaseTask):
@@ -85,22 +84,11 @@ class TagPredictionTask(BaseTask):
                 continue
             confs = list(label_scores.values())
             uncertainty = float(max(min(c, 1.0 - c) for c in confs))
-            anomaly_confs = [
-                v
-                for k, v in label_scores.items()
-                if k.strip().lower() in _PENALISED_TAG_SET
-            ]
-            anomaly_uncertainty = (
-                float(max(min(c, 1.0 - c) for c in anomaly_confs))
-                if anomaly_confs
-                else 0.0
-            )
             updates.append(
                 {
                     "picture_id": pic.id,
                     "label_scores": label_scores,
                     "uncertainty": uncertainty,
-                    "anomaly_uncertainty": anomaly_uncertainty,
                 }
             )
 
@@ -127,7 +115,6 @@ class TagPredictionTask(BaseTask):
             picture_id = update["picture_id"]
             label_scores: dict[str, float] = update["label_scores"]
             uncertainty: float = update["uncertainty"]
-            anomaly_uncertainty: float = update.get("anomaly_uncertainty", 0.0)
 
             # Determine whether TagTask has already run for this picture.
             # TagTask always writes at least one row to the tag table (a real
@@ -177,11 +164,42 @@ class TagPredictionTask(BaseTask):
                     existing.predicted_at = now
                     written += 1
 
-            # Update denormalised uncertainty columns on Picture
+            # Ensure every confirmed tag has a prediction row even if the model
+            # scored it below the minimum-confidence threshold (or doesn't know
+            # the tag at all).  These rows get confidence=0.0 so the UI can
+            # still display an informative tooltip for manually-added tags.
+            if tag_task_has_run:
+                label_score_tags = set(label_scores.keys())
+                for tag in applied_tags:
+                    if tag in label_score_tags:
+                        continue  # already handled above
+                    existing = session.exec(
+                        select(TagPrediction).where(
+                            TagPrediction.picture_id == picture_id,
+                            TagPrediction.tag == tag,
+                        )
+                    ).first()
+                    if existing is None:
+                        session.add(
+                            TagPrediction(
+                                picture_id=picture_id,
+                                tag=tag,
+                                confidence=0.0,
+                                model_version=model_version,
+                                status="CONFIRMED",
+                                predicted_at=now,
+                            )
+                        )
+                        written += 1
+
+            # Recompute anomaly_tag_uncertainty purely from the TagPrediction rows
+            # that were just written (status + confidence are now up to date).
+            recompute_anomaly_tag_uncertainty(session, picture_id)
+
+            # Update tag_uncertainty on Picture
             pic = session.get(Picture, picture_id)
             if pic is not None:
                 pic.tag_uncertainty = uncertainty
-                pic.anomaly_tag_uncertainty = anomaly_uncertainty
 
         session.commit()
         return written

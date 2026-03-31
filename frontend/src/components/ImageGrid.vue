@@ -1704,26 +1704,6 @@ function getThumbnailInfoItems(img) {
   }
 
   if (
-    selectedSort === "TAG_UNCERTAINTY" &&
-    typeof img.tag_uncertainty === "number"
-  ) {
-    items.push({
-      key: "tag_uncertainty",
-      text: `Tag Uncertainty: ${(img.tag_uncertainty * 100).toFixed(1)}%`,
-    });
-  }
-
-  if (
-    selectedSort === "ANOMALY_TAG_UNCERTAINTY" &&
-    typeof img.anomaly_tag_uncertainty === "number"
-  ) {
-    items.push({
-      key: "anomaly_tag_uncertainty",
-      text: `Anomaly Uncertainty: ${(img.anomaly_tag_uncertainty * 100).toFixed(1)}%`,
-    });
-  }
-
-  if (
     typeof props.searchQuery === "string" &&
     img.likeness_score !== undefined
   ) {
@@ -1831,13 +1811,6 @@ function getCompactGroupLabel(img, visualIdx) {
       return Math.round(item.character_likeness * 100);
     if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
       return Math.round(item.text_score * 10);
-    if (sort === "TAG_UNCERTAINTY" && typeof item.tag_uncertainty === "number")
-      return Math.round(item.tag_uncertainty * 100);
-    if (
-      sort === "ANOMALY_TAG_UNCERTAINTY" &&
-      typeof item.anomaly_tag_uncertainty === "number"
-    )
-      return Math.round(item.anomaly_tag_uncertainty * 100);
     return null;
   }
 
@@ -1864,13 +1837,6 @@ function getCompactGroupLabel(img, visualIdx) {
     return `≈ ${(Math.floor(img.character_likeness * 100) / 100).toFixed(2)}`;
   if (sort === "TEXT_CONTENT" && typeof img.text_score === "number")
     return `${(img.text_score * 100).toFixed(0)}%`;
-  if (sort === "TAG_UNCERTAINTY" && typeof img.tag_uncertainty === "number")
-    return `⚠ ${(img.tag_uncertainty * 100).toFixed(0)}%`;
-  if (
-    sort === "ANOMALY_TAG_UNCERTAINTY" &&
-    typeof img.anomaly_tag_uncertainty === "number"
-  )
-    return `⚠ ${(img.anomaly_tag_uncertainty * 100).toFixed(0)}%`;
   return null;
 }
 
@@ -1897,13 +1863,6 @@ const compactStickyLabel = computed(() => {
       return Math.round(item.character_likeness * 100);
     if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
       return Math.round(item.text_score * 10);
-    if (sort === "TAG_UNCERTAINTY" && typeof item.tag_uncertainty === "number")
-      return Math.round(item.tag_uncertainty * 100);
-    if (
-      sort === "ANOMALY_TAG_UNCERTAINTY" &&
-      typeof item.anomaly_tag_uncertainty === "number"
-    )
-      return Math.round(item.anomaly_tag_uncertainty * 100);
     return null;
   }
 

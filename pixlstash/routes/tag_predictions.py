@@ -6,6 +6,9 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
 from pixlstash.picture_tagger import CUSTOM_TAGGER_THRESHOLD_FULL
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.tag_prediction_utils import (
+    recompute_anomaly_tag_uncertainty,
+)
 
 logger = get_logger(__name__)
 
@@ -92,6 +95,8 @@ def create_router(server) -> APIRouter:
             if existing_tag is None:
                 session.add(Tag(picture_id=pic_id, tag=tag))
 
+            session.flush()
+            recompute_anomaly_tag_uncertainty(session, pic_id)
             session.commit()
 
         server.vault.db.run_task(_confirm)
@@ -133,9 +138,14 @@ def create_router(server) -> APIRouter:
                 )
             else:
                 prediction.status = "REJECTED"
+            recompute_anomaly_tag_uncertainty(session, pic_id)
             session.commit()
 
         server.vault.db.run_task(_reject)
+        server._handle_vault_event(
+            EventType.CHANGED_PICTURES,
+            {"picture_ids": [pic_id]},
+        )
         return {"status": "rejected", "tag": tag}
 
     @router.post(
@@ -173,6 +183,10 @@ def create_router(server) -> APIRouter:
             return result.rowcount
 
         count = server.vault.db.run_task(_delete)
+        server._handle_vault_event(
+            EventType.CHANGED_PICTURES,
+            {"picture_ids": [pic_id]},
+        )
         return {"status": "deleted", "count": count}
 
     return router

@@ -10,6 +10,9 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import serialize_tag_objects
+from pixlstash.utils.service.tag_prediction_utils import (
+    recompute_anomaly_tag_uncertainty,
+)
 
 logger = get_logger(__name__)
 
@@ -65,12 +68,14 @@ def create_router(server) -> APIRouter:
                     if not any(t.tag == tag for t in pic.tags):
                         pic.tags.append(Tag(tag=tag, picture_id=pic_id))
                     session.add(pic)
+                    session.flush()
+                    recompute_anomaly_tag_uncertainty(session, pic_id)
                     session.commit()
                     session.refresh(pic)
                     return pic
 
                 pic = server.vault.db.run_task(update_picture, pic.id, tag)
-                server.vault.notify(EventType.CHANGED_TAGS)
+                server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
 
             return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
         except HTTPException:
@@ -165,12 +170,13 @@ def create_router(server) -> APIRouter:
                     ).first()
                     if sentinel is None:
                         session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
+                recompute_anomaly_tag_uncertainty(session, pic_id)
                 session.commit()
                 session.refresh(pic)
                 return pic
 
             pic = server.vault.db.run_task(update_picture, pic_id, tag_id_int)
-            server.vault.notify(EventType.CHANGED_TAGS)
+            server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
 
             return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
         except HTTPException:
@@ -226,12 +232,13 @@ def create_router(server) -> APIRouter:
                 ).first()
                 if sentinel is None:
                     session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
+            recompute_anomaly_tag_uncertainty(session, pic_id)
             session.commit()
             session.refresh(pic)
             return pic
 
         pic = server.vault.db.run_task(update_picture, pic_id, tag_value)
-        server.vault.notify(EventType.CHANGED_TAGS)
+        server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
         return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
 
     @router.delete(
@@ -258,12 +265,14 @@ def create_router(server) -> APIRouter:
             pic = pic_list[0]
             session.exec(delete(Tag).where(Tag.picture_id == pic_id))
             session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
+            session.flush()
+            recompute_anomaly_tag_uncertainty(session, pic_id)
             session.commit()
             session.refresh(pic)
             return pic
 
         pic = server.vault.db.run_task(do_clear, pic_id)
-        server.vault.notify(EventType.CHANGED_TAGS)
+        server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
         return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
 
     @router.get(

@@ -218,8 +218,10 @@ def create_router(server) -> APIRouter:
                     raise HTTPException(status_code=400, detail="Invalid project_id")
 
         def fetch_sets(session):
-            sets_query = select(PictureSet).options(
-                selectinload(PictureSet.reference_character)
+            sets_query = (
+                select(PictureSet)
+                .options(selectinload(PictureSet.reference_character))
+                .order_by(func.lower(PictureSet.name))
             )
             if set_project_id_filter is not None:
                 sets_query = sets_query.where(set_project_id_filter)
