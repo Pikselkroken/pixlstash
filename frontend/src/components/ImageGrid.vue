@@ -4885,7 +4885,11 @@ async function fetchAllGridImages(options = {}) {
       }`;
       const res = await apiClient.get(url);
       const data = await res.data;
-      if (fetchAllGridImages.lastRequestId !== requestId) return;
+      if (fetchAllGridImages.lastRequestId !== requestId) {
+        if (isSortedFetch && options?.showProgress === true)
+          completeSmartScoreProgress(loadId, 0, false);
+        return;
+      }
       const stackImages = Array.isArray(data) ? data : [];
       images = stackImages.map((img) => {
         const stackIndex =
@@ -4931,6 +4935,8 @@ async function fetchAllGridImages(options = {}) {
       images = data;
     }
     if (fetchAllGridImages.lastRequestId !== requestId) {
+      if (isSortedFetch && options?.showProgress === true)
+        completeSmartScoreProgress(loadId, 0, false);
       return;
     }
     lastFetchedGridImages.value = Array.isArray(images) ? images.slice() : [];
@@ -4998,6 +5004,8 @@ async function fetchAllGridImages(options = {}) {
     }
   } catch (e) {
     if (fetchAllGridImages.lastRequestId !== requestId) {
+      if (isSortedFetch && options?.showProgress === true)
+        completeSmartScoreProgress(loadId, 0, false);
       return;
     }
     imagesError.value = e.message;
