@@ -77,7 +77,8 @@ RUN pip install --no-cache-dir \
     "bcrypt<4.0.0" \
     psutil \
     piexif \
-    python-dotenv
+    python-dotenv \
+    accelerate
 
 # Remove build tools — not needed at runtime
 RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*

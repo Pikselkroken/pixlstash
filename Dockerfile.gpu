@@ -81,7 +81,8 @@ RUN pip install --no-cache-dir \
     nvidia-ml-py \
     piexif \
     psutil \
-    python-dotenv
+    python-dotenv \
+    accelerate
 
 # Download spaCy English model
 RUN python -m spacy download en_core_web_sm
