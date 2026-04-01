@@ -6499,6 +6499,7 @@ function handleEmptyStateReset() {
 }
 .compact-mode.image-grid {
   padding-top: 10px !important;
+  gap: 0px;
 }
 .grid-scroll-wrapper::-webkit-scrollbar {
   width: 8px;
