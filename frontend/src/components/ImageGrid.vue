@@ -74,7 +74,7 @@
       @create-stacks-from-groups="createStacksFromSelectedGroups"
       @run-plugin="handlePluginRunRequest"
       @comfyui-run="handleComfyuiRun"
-      @tags-applied="fetchAllGridImages({ force: true })"
+      @tags-applied="fetchAllGridImages({ force: true, showProgress: true })"
     />
     <EmptyScrapHeap
       v-if="showScrapheapBar"
@@ -3012,7 +3012,7 @@ function handleOverlayChange(payload) {
   if (!imageId) return;
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
     preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages({ force: true });
+    debouncedFetchAllGridImages({ force: true, showProgress: true });
     return;
   }
   refreshGridImage(imageId);
@@ -4867,7 +4867,7 @@ async function fetchAllGridImages(options = {}) {
   gridReady.value = false;
   imagesLoading.value = true;
   imagesError.value = null;
-  if (isSortedFetch) {
+  if (isSortedFetch && options?.showProgress === true) {
     sortedFetchStartedAt = getNowMs();
     startSmartScoreProgress(loadId, activeSortKey);
   }
@@ -5140,7 +5140,7 @@ watch(
     updateSelectedGroupName();
     fetchAllPicturesCount();
     debouncedFetchAllGridImages.cancel();
-    fetchAllGridImages({ force: true });
+    fetchAllGridImages({ force: true, showProgress: true });
   },
 );
 
@@ -5157,7 +5157,7 @@ watch(
     _resetGridState();
     visibleStart.value = 0;
     visibleEnd.value = 0;
-    fetchAllGridImages({ force: true }).then(() => {
+    fetchAllGridImages({ force: true, showProgress: true }).then(() => {
       updateVisibleThumbnails();
     });
   },
