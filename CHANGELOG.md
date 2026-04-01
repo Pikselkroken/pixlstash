@@ -1,3 +1,5 @@
+# [1.0.0rc2] - 2026-03-28:
+- Very quick update to fix a last minute regression in grid refresh progress bar.
 # [1.0.0rc1] - 2026-03-28
 - **Project System:** Big change to allow the creation of projects and association of pictures, sets and characters with projects.
 - **Fast Multi-Tagging:** Add tags and toggle existing tags on multiple selected images in one go. With auto-complete and keyboard shortcuts.
