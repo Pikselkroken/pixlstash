@@ -360,6 +360,8 @@ class Picture(SQLModel, table=True):
         min_score: Optional[int] = None,
         comfyui_models_filter: Optional[List[str]] = None,
         comfyui_loras_filter: Optional[List[str]] = None,
+        tags_filter: Optional[List[str]] = None,
+        tags_rejected_filter: Optional[List[str]] = None,
     ) -> List["Picture"]:
         """
         Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
@@ -514,6 +516,22 @@ class Picture(SQLModel, table=True):
                     ).bindparams(**{f"comfyui_lora_{i}": m})
                 )
 
+        if tags_filter:
+            for i, tag in enumerate(tags_filter):
+                stmt = stmt.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
+                    ).bindparams(**{f"tag_filter_{i}": tag})
+                )
+
+        if tags_rejected_filter:
+            for i, tag in enumerate(tags_rejected_filter):
+                stmt = stmt.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :rejected_tag_filter_{i} AND tag_prediction.status = 'REJECTED')"
+                    ).bindparams(**{f"rejected_tag_filter_{i}": tag})
+                )
+
         results = session.exec(stmt).all()
 
         if results:
@@ -609,6 +627,8 @@ class Picture(SQLModel, table=True):
         stack_leaders_only: bool = False,
         comfyui_models_filter: Optional[List[str]] = None,
         comfyui_loras_filter: Optional[List[str]] = None,
+        tags_filter: Optional[List[str]] = None,
+        tags_rejected_filter: Optional[List[str]] = None,
         min_score: Optional[int] = None,
         **search,
     ) -> List["Picture"]:
@@ -696,6 +716,22 @@ class Picture(SQLModel, table=True):
                 ).bindparams(**{f"comfyui_lora_{i}": m})
                 for i, m in enumerate(comfyui_loras_filter)
             )
+
+        if tags_filter:
+            for i, tag in enumerate(tags_filter):
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
+                    ).bindparams(**{f"tag_filter_{i}": tag})
+                )
+
+        if tags_rejected_filter:
+            for i, tag in enumerate(tags_rejected_filter):
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :rejected_tag_filter_{i} AND tag_prediction.status = 'REJECTED')"
+                    ).bindparams(**{f"rejected_tag_filter_{i}": tag})
+                )
 
         if stack_leaders_only:
             leader_ids = cls._get_stack_leader_ids(session, only_deleted=only_deleted)

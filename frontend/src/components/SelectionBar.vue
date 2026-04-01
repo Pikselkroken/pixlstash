@@ -259,157 +259,203 @@
                 <span>Tag</span>
               </button>
             </template>
-            <div class="plugin-menu-panel">
+            <div class="plugin-menu-panel tag-panel-wide">
               <div class="plugin-menu-header">
                 Tag {{ selectedCount }} Image{{
                   selectedCount !== 1 ? "s" : ""
                 }}
               </div>
-              <div class="plugin-menu-body">
-                <div v-if="tagDataLoading" class="tag-data-loading">
-                  Loading tags...
-                </div>
+              <div class="tag-panel-columns">
+                <!-- ── Left column: mini-grid preview ── -->
                 <div
-                  v-else-if="tagsOnAll.length || tagsOnSome.length"
-                  class="tag-current-section"
+                  v-if="previewImages.length"
+                  class="tag-preview-column"
+                  :class="[
+                    `tag-preview-column--cols-${previewColumns}`,
+                    previewImages.length === 2
+                      ? 'tag-preview-column--stacked'
+                      : '',
+                  ]"
                 >
-                  <div class="tag-current-label">
-                    Current tags
-                    <span v-if="tagDataCapped" class="tag-data-capped">
-                      (first {{ MAX_TAG_FETCH }})
-                    </span>
-                  </div>
-                  <div class="tag-chips-row">
-                    <button
-                      v-for="t in tagsOnAll"
-                      :key="'all-' + t.name"
-                      :class="[
-                        'tag-chip',
-                        'tag-chip--all',
-                        { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
-                      ]"
-                      type="button"
-                      :disabled="tagActionLoading.includes(t.name)"
-                      :title="`On all ${totalWithTagData} selected — click to remove`"
-                      @click="removeTagFromAll(t)"
-                    >
-                      <span class="tag-chip-label">{{ t.name }}</span>
-                      <v-icon size="11" class="tag-chip-close"
-                        >mdi-close</v-icon
-                      >
-                    </button>
-                    <button
-                      v-for="t in tagsOnSome"
-                      :key="'some-' + t.name"
-                      :class="[
-                        'tag-chip',
-                        'tag-chip--some',
-                        { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
-                      ]"
-                      type="button"
-                      :disabled="tagActionLoading.includes(t.name)"
-                      :title="`On ${t.count} of ${totalWithTagData} — click to add to all`"
-                      @click="addTagToRemaining(t)"
-                    >
-                      <span class="tag-chip-label">{{ t.name }}</span>
-                      <span class="tag-chip-count"
-                        >{{ t.count }}/{{ totalWithTagData }}</span
-                      >
-                    </button>
-                  </div>
-                  <div class="tag-coverage-filter">
-                    <label class="tag-coverage-label">
-                      Min coverage:
-                      <input
-                        v-model.number="tagMinCoverage"
-                        type="range"
-                        min="1"
-                        :max="Math.max(1, totalWithTagData - 1)"
-                        class="tag-coverage-slider"
-                      />
-                      {{ tagMinCoverage }}/{{ totalWithTagData }}
-                    </label>
-                    <span
-                      v-if="tagsOnSomeHiddenCount"
-                      class="tag-coverage-hidden"
-                    >
-                      {{ tagsOnSomeHiddenCount }} hidden
-                    </span>
-                  </div>
-                </div>
-                <div
-                  v-if="aggregatedPredictions.length"
-                  class="tag-current-section"
-                >
-                  <div class="tag-current-label tag-current-label--clickable">
-                    <button
-                      class="tag-current-toggle"
-                      type="button"
-                      @click="
-                        rejectedTagsCollapsedSB = !rejectedTagsCollapsedSB
-                      "
-                    >
-                      Rejected Tags
-                      <span class="rejected-threshold-label"
-                        >(>
-                        {{
-                          (predictionAcceptanceThresholdSB * 100).toFixed(0)
-                        }}% to be auto-applied)</span
-                      >
-                      <v-icon size="12">{{
-                        rejectedTagsCollapsedSB
-                          ? "mdi-chevron-down"
-                          : "mdi-chevron-up"
-                      }}</v-icon>
-                    </button>
-                  </div>
-                  <div v-show="!rejectedTagsCollapsedSB" class="tag-chips-row">
-                    <button
-                      v-for="p in aggregatedPredictions"
-                      :key="'pred-' + p.tag"
-                      :class="[
-                        'tag-chip',
-                        'tag-chip--prediction',
-                        { 'tag-chip--penalised': isPenalisedTagSB(p.tag) },
-                      ]"
-                      type="button"
-                      :disabled="predActionLoading.includes(p.tag)"
-                      :style="{ '--pred-confidence': p.avgConf }"
-                      :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all`"
-                      @click="confirmPredictionOnAll(p)"
-                    >
-                      <span class="tag-chip-label">{{ p.tag }}</span>
-                      <span class="tag-chip-count"
-                        >{{ p.count }}/{{ fetchedPredictionData.length }}</span
-                      >
-                    </button>
-                  </div>
-                </div>
-                <div class="tag-new-label">New tag</div>
-                <input
-                  ref="tagInputRef"
-                  v-model="tagInput"
-                  class="tag-menu-input"
-                  placeholder="Tag name..."
-                  autocomplete="off"
-                  @keydown.enter.prevent="applyTag"
-                  @keydown="handleTagKey"
-                />
-                <div class="plugin-menu-actions">
-                  <button
-                    class="stack-btn"
-                    type="button"
-                    :disabled="!tagInput.trim() || tagLoading"
-                    @click="applyTag"
+                  <div class="tag-preview-header">Selected images</div>
+                  <div
+                    class="tag-preview-grid"
+                    :class="[
+                      `tag-preview-grid--cols-${previewColumns}`,
+                      previewImages.length > 1 ? 'tag-preview-grid--multi' : '',
+                    ]"
                   >
-                    {{ tagLoading ? "Applying..." : "Apply to All" }}
-                  </button>
+                    <div
+                      v-for="img in previewImages"
+                      :key="img.id"
+                      class="tag-preview-tile"
+                    >
+                      <img
+                        v-if="img.fullUrl"
+                        :src="img.fullUrl"
+                        class="tag-preview-img"
+                        :alt="String(img.id)"
+                        draggable="false"
+                      />
+                      <div
+                        v-else
+                        class="tag-preview-img tag-preview-img--placeholder"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div v-if="tagError" class="plugin-menu-error">
-                  {{ tagError }}
-                </div>
-                <div v-if="tagSuccess" class="plugin-menu-success">
-                  {{ tagSuccess }}
+                <!-- ── Right column: tag controls ── -->
+                <div class="plugin-menu-body">
+                  <div v-if="tagDataLoading" class="tag-data-loading">
+                    Loading tags...
+                  </div>
+                  <div
+                    v-else-if="tagsOnAll.length || tagsOnSome.length"
+                    class="tag-current-section"
+                  >
+                    <div class="tag-current-label">
+                      Current tags
+                      <span v-if="tagDataCapped" class="tag-data-capped">
+                        (first {{ MAX_TAG_FETCH }})
+                      </span>
+                    </div>
+                    <div class="tag-chips-row">
+                      <button
+                        v-for="t in tagsOnAll"
+                        :key="'all-' + t.name"
+                        :class="[
+                          'tag-chip',
+                          'tag-chip--all',
+                          { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
+                        ]"
+                        type="button"
+                        :disabled="tagActionLoading.includes(t.name)"
+                        :title="`On all ${totalWithTagData} selected — click to remove`"
+                        @click="removeTagFromAll(t)"
+                      >
+                        <span class="tag-chip-label">{{ t.name }}</span>
+                        <v-icon size="11" class="tag-chip-close"
+                          >mdi-close</v-icon
+                        >
+                      </button>
+                      <button
+                        v-for="t in tagsOnSome"
+                        :key="'some-' + t.name"
+                        :class="[
+                          'tag-chip',
+                          'tag-chip--some',
+                          { 'tag-chip--penalised': isPenalisedTagSB(t.name) },
+                        ]"
+                        type="button"
+                        :disabled="tagActionLoading.includes(t.name)"
+                        :title="`On ${t.count} of ${totalWithTagData} — click to add to all`"
+                        @click="addTagToRemaining(t)"
+                      >
+                        <span class="tag-chip-label">{{ t.name }}</span>
+                        <span class="tag-chip-count"
+                          >{{ t.count }}/{{ totalWithTagData }}</span
+                        >
+                      </button>
+                    </div>
+                    <div class="tag-coverage-filter">
+                      <label class="tag-coverage-label">
+                        Min coverage:
+                        <input
+                          v-model.number="tagMinCoverage"
+                          type="range"
+                          min="1"
+                          :max="Math.max(1, totalWithTagData - 1)"
+                          class="tag-coverage-slider"
+                        />
+                        {{ tagMinCoverage }}/{{ totalWithTagData }}
+                      </label>
+                      <span
+                        v-if="tagsOnSomeHiddenCount"
+                        class="tag-coverage-hidden"
+                      >
+                        {{ tagsOnSomeHiddenCount }} hidden
+                      </span>
+                    </div>
+                  </div>
+                  <div
+                    v-if="aggregatedPredictions.length"
+                    class="tag-current-section"
+                  >
+                    <div class="tag-current-label tag-current-label--clickable">
+                      <button
+                        class="tag-current-toggle"
+                        type="button"
+                        @click="
+                          rejectedTagsCollapsedSB = !rejectedTagsCollapsedSB
+                        "
+                      >
+                        Rejected Tags
+                        <span class="rejected-threshold-label"
+                          >(>
+                          {{
+                            (predictionAcceptanceThresholdSB * 100).toFixed(0)
+                          }}% to be auto-applied)</span
+                        >
+                        <v-icon size="12">{{
+                          rejectedTagsCollapsedSB
+                            ? "mdi-chevron-down"
+                            : "mdi-chevron-up"
+                        }}</v-icon>
+                      </button>
+                    </div>
+                    <div
+                      v-show="!rejectedTagsCollapsedSB"
+                      class="tag-chips-row"
+                    >
+                      <button
+                        v-for="p in aggregatedPredictions"
+                        :key="'pred-' + p.tag"
+                        :class="[
+                          'tag-chip',
+                          'tag-chip--prediction',
+                          { 'tag-chip--penalised': isPenalisedTagSB(p.tag) },
+                        ]"
+                        type="button"
+                        :disabled="predActionLoading.includes(p.tag)"
+                        :style="{ '--pred-confidence': p.avgConf }"
+                        :title="`Rejected on ${p.count} image${p.count !== 1 ? 's' : ''}, avg ${(p.avgConf * 100).toFixed(0)}%, needs +${(p.avgNeeded * 100).toFixed(0)}% to auto-accept — click to confirm all`"
+                        @click="confirmPredictionOnAll(p)"
+                      >
+                        <span class="tag-chip-label">{{ p.tag }}</span>
+                        <span class="tag-chip-count"
+                          >{{ p.count }}/{{
+                            fetchedPredictionData.length
+                          }}</span
+                        >
+                      </button>
+                    </div>
+                  </div>
+                  <div class="tag-new-label">New tag</div>
+                  <input
+                    ref="tagInputRef"
+                    v-model="tagInput"
+                    class="tag-menu-input"
+                    placeholder="Tag name..."
+                    autocomplete="off"
+                    @keydown.enter.prevent="applyTag"
+                    @keydown="handleTagKey"
+                  />
+                  <div class="plugin-menu-actions">
+                    <button
+                      class="stack-btn"
+                      type="button"
+                      :disabled="!tagInput.trim() || tagLoading"
+                      @click="applyTag"
+                    >
+                      {{ tagLoading ? "Applying..." : "Apply to All" }}
+                    </button>
+                  </div>
+                  <div v-if="tagError" class="plugin-menu-error">
+                    {{ tagError }}
+                  </div>
+                  <div v-if="tagSuccess" class="plugin-menu-success">
+                    {{ tagSuccess }}
+                  </div>
                 </div>
               </div>
             </div>
@@ -484,9 +530,11 @@ const props = defineProps({
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   availablePlugins: { type: Array, default: () => [] },
+  allGridImages: { type: Array, default: () => [] },
 });
 
 const MAX_TAG_FETCH = 100;
+const MAX_PREVIEW_IMAGES = 16;
 
 const emit = defineEmits([
   "clear-selection",
@@ -504,6 +552,33 @@ const emit = defineEmits([
 ]);
 
 const STACKS_SORT_KEY = "PICTURE_STACKS";
+
+// ── Tag-panel mini-grid ───────────────────────────────────────────────────────
+const previewImages = computed(() => {
+  const ids = new Set(
+    (Array.isArray(props.selectedImageIds) ? props.selectedImageIds : []).map(
+      (id) => String(id),
+    ),
+  );
+  if (!ids.size) return [];
+  const candidates = (
+    Array.isArray(props.allGridImages) ? props.allGridImages : []
+  )
+    .filter((img) => img && img.id != null && ids.has(String(img.id)))
+    .slice(0, MAX_PREVIEW_IMAGES);
+  const useFullRes = candidates.length <= 2;
+  return candidates.map((img) => {
+    const ext = img.format ? img.format.toLowerCase() : null;
+    const fullUrl =
+      useFullRes && ext && props.backendUrl
+        ? `${props.backendUrl}/pictures/${img.id}.${ext}`
+        : img.thumbnail || null;
+    return { ...img, fullUrl };
+  });
+});
+
+// 1 image → 1 col (full width), 2 images → 1 col (stacked), 3+ → 2 cols
+const previewColumns = computed(() => (previewImages.value.length > 2 ? 2 : 1));
 
 const isScrapheapView = computed(() => {
   const scrapheapId = String(
@@ -1709,5 +1784,113 @@ defineExpose({ openTagInput });
   color: rgba(var(--v-theme-on-surface), 0.45);
   vertical-align: middle;
   line-height: 1.5;
+}
+
+/* ── Tag panel two-column layout ── */
+.tag-panel-wide {
+  width: auto !important;
+  max-width: min(96vw, 1280px) !important;
+}
+
+.tag-panel-columns {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.tag-preview-column {
+  flex-shrink: 0;
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.1);
+  /* No padding — images go edge-to-edge; header floats over or is minimal */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 1 image: wide, fills panel height */
+.tag-preview-column--cols-1 {
+  width: 580px;
+  min-height: min(72vh, 700px);
+  max-height: min(72vh, 700px);
+}
+
+/* 2 images stacked */
+.tag-preview-column--cols-1.tag-preview-column--stacked {
+  width: 540px;
+  max-height: min(72vh, 700px);
+}
+
+/* 3+ images in 2-column grid — wide enough that each cell is >384px */
+.tag-preview-column--cols-2 {
+  width: 820px;
+  max-height: min(72vh, 700px);
+}
+
+.tag-preview-header {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.45;
+  padding: 4px 6px 3px;
+  flex-shrink: 0;
+  background: rgba(var(--v-theme-surface), 0.7);
+}
+
+.tag-preview-grid {
+  display: grid;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.tag-preview-grid--cols-1 {
+  grid-template-columns: 1fr;
+}
+
+/* Single image: the one row stretches to fill all available height */
+.tag-preview-grid--cols-1:not(.tag-preview-grid--multi) {
+  grid-template-rows: 1fr;
+}
+
+/* 2 images stacked: each row is an explicit height so scrolling works correctly */
+.tag-preview-grid--cols-1.tag-preview-grid--multi {
+  grid-auto-rows: 360px;
+  align-content: start;
+}
+
+.tag-preview-grid--cols-2 {
+  grid-template-columns: 1fr 1fr;
+  /* explicit row height = ~3/4 of each cell width (820px col, 2px gap → ~409px/cell) */
+  grid-auto-rows: 307px;
+  align-content: start;
+}
+
+.tag-preview-tile {
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Single-image tile fills all height */
+.tag-preview-grid--cols-1:not(.tag-preview-grid--multi) .tag-preview-tile {
+  height: 100%;
+}
+
+.tag-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+}
+
+.tag-preview-img--placeholder {
+  aspect-ratio: 1;
+  background: rgba(var(--v-theme-on-surface), 0.12);
+}
+
+.tag-panel-wide .plugin-menu-body {
+  flex: 1;
+  min-width: 340px;
 }
 </style>

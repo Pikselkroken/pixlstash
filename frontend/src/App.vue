@@ -114,6 +114,8 @@ const comfyuiModelFilter = ref([]);
 const comfyuiLoraFilter = ref([]);
 const comfyuiConfigured = ref(false);
 const minScoreFilter = ref(null);
+const tagFilter = ref([]);
+const tagRejectedFilter = ref([]);
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
@@ -887,6 +889,13 @@ function handleGlobalKeydown(e) {
     e.preventDefault();
     shortcutsDialogOpen.value = !shortcutsDialogOpen.value;
   }
+  if (e.key === "F2" && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditable) {
+    const gridHasFocus = gridContainer.value?.hasCursorFocus === true;
+    if (!gridHasFocus) {
+      e.preventDefault();
+      sidebarRef.value?.openCurrentSelectionEditor?.();
+    }
+  }
 }
 
 function resolveThemeName(mode) {
@@ -1026,6 +1035,8 @@ function handleResetToAll() {
   comfyuiModelFilter.value = [];
   comfyuiLoraFilter.value = [];
   minScoreFilter.value = null;
+  tagFilter.value = [];
+  tagRejectedFilter.value = [];
   refreshGridVersion();
   closeSidebarIfMobile();
 }
@@ -1299,6 +1310,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:comfyuiModelFilter="comfyuiModelFilter"
             v-model:comfyuiLoraFilter="comfyuiLoraFilter"
             v-model:minScoreFilter="minScoreFilter"
+            v-model:tagFilter="tagFilter"
+            v-model:tagRejectedFilter="tagRejectedFilter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @update:stack-threshold="handleUpdateStackThreshold"
@@ -1344,6 +1357,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :comfyuiLoraFilter="comfyuiLoraFilter"
               :comfyuiConfigured="comfyuiConfigured"
               :minScoreFilter="minScoreFilter"
+              :tagFilter="tagFilter"
+              :tagRejectedFilter="tagRejectedFilter"
               :showFaceBboxes="showFaceBboxes"
               :showFormat="showFormat"
               :showResolution="showResolution"
@@ -1481,6 +1496,10 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               </tr>
               <tr>
                 <td colspan="2" class="shortcuts-section">General</td>
+              </tr>
+              <tr>
+                <td><kbd>F2</kbd></td>
+                <td>Edit selected character or picture set</td>
               </tr>
               <tr>
                 <td><kbd>?</kbd> / <kbd>F1</kbd></td>
