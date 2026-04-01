@@ -447,6 +447,100 @@
                 >{{ minScoreFilterModel }}+ stars</span
               >
             </div>
+            <div class="toolbar-filter-section-label" style="margin-top: 10px">
+              Tags
+            </div>
+            <div class="tag-filter-input-wrap">
+              <input
+                v-model="tagFilterInput"
+                class="tag-filter-input"
+                placeholder="Filter by tag…"
+                autocomplete="off"
+                @keydown.enter.prevent="
+                  tagFilterIndex >= 0 && tagFilterSuggestions.length
+                    ? addTagFilter(tagFilterSuggestions[tagFilterIndex])
+                    : addTagFilter(tagFilterInput.trim())
+                "
+                @keydown.tab.prevent="
+                  tagFilterSuggestions.length
+                    ? addTagFilter(
+                        tagFilterSuggestions[
+                          tagFilterIndex >= 0 ? tagFilterIndex : 0
+                        ],
+                      )
+                    : addTagFilter(tagFilterInput.trim())
+                "
+                @keydown.down.prevent="
+                  tagFilterIndex = Math.min(
+                    tagFilterIndex + 1,
+                    tagFilterSuggestions.length - 1,
+                  )
+                "
+                @keydown.up.prevent="
+                  tagFilterIndex = Math.max(tagFilterIndex - 1, -1)
+                "
+                @keydown.escape.prevent="tagFilterSuggestions = []"
+              />
+              <div
+                v-if="tagFilterSuggestions.length"
+                class="tag-filter-dropdown"
+                :class="{
+                  'tag-filter-dropdown--hover-enabled': tagFilterHoverEnabled,
+                }"
+                @mousemove.once="tagFilterHoverEnabled = true"
+              >
+                <button
+                  v-for="(tag, idx) in tagFilterSuggestions"
+                  :key="tag"
+                  class="tag-filter-suggestion"
+                  :class="{
+                    'tag-filter-suggestion--active': idx === tagFilterIndex,
+                  }"
+                  type="button"
+                  @mousedown.prevent="addTagFilter(tag)"
+                  @mousemove="tagFilterIndex = idx"
+                >
+                  {{ tag }}
+                </button>
+              </div>
+            </div>
+            <div
+              v-if="tagFilterModel.length || tagRejectedFilterModel.length"
+              class="tag-filter-chips"
+            >
+              <button
+                v-for="tag in tagFilterModel"
+                :key="`confirmed-${tag}`"
+                class="tag-chip tag-chip--filter"
+                type="button"
+                :title="`'${tag}' – click to switch to rejected match`"
+                @click.stop="toggleTagRejected(tag)"
+              >
+                <span class="tag-chip-label">{{ tag }}</span>
+                <v-icon
+                  size="11"
+                  class="tag-chip-close"
+                  @click.stop="removeTagFilter(tag)"
+                  >mdi-close</v-icon
+                >
+              </button>
+              <button
+                v-for="tag in tagRejectedFilterModel"
+                :key="`rejected-${tag}`"
+                class="tag-chip tag-chip--filter tag-chip--filter-rejected"
+                type="button"
+                :title="`'${tag}' (rejected) – click to switch to confirmed match`"
+                @click.stop="toggleTagRejected(tag)"
+              >
+                <span class="tag-chip-label">{{ tag }}</span>
+                <v-icon
+                  size="11"
+                  class="tag-chip-close"
+                  @click.stop="removeTagFilter(tag)"
+                  >mdi-close</v-icon
+                >
+              </button>
+            </div>
             <template
               v-if="comfyuiModelOptions.length || comfyuiLoraOptions.length"
             >
@@ -894,6 +988,8 @@ const props = defineProps({
   comfyuiModelFilter: { type: Array, default: () => [] },
   comfyuiLoraFilter: { type: Array, default: () => [] },
   minScoreFilter: { type: Number, default: null },
+  tagFilter: { type: Array, default: () => [] },
+  tagRejectedFilter: { type: Array, default: () => [] },
   sortOptions: { type: Array, default: () => [] },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: true },
@@ -928,6 +1024,8 @@ const emit = defineEmits([
   "update:comfyuiModelFilter",
   "update:comfyuiLoraFilter",
   "update:minScoreFilter",
+  "update:tagFilter",
+  "update:tagRejectedFilter",
   "update:similarity-character",
   "update:stack-threshold",
   "open-search-overlay",
@@ -982,6 +1080,9 @@ const isFilterActive = computed(
   () =>
     props.mediaTypeFilter !== "all" ||
     props.minScoreFilter != null ||
+    (Array.isArray(props.tagFilter) && props.tagFilter.length > 0) ||
+    (Array.isArray(props.tagRejectedFilter) &&
+      props.tagRejectedFilter.length > 0) ||
     (Array.isArray(props.comfyuiModelFilter) &&
       props.comfyuiModelFilter.length > 0) ||
     (Array.isArray(props.comfyuiLoraFilter) &&
@@ -1022,6 +1123,9 @@ watch(filterMenuOpen, async (isOpen) => {
         comfyuiLoraOptions.value = Array.isArray(lRes.data) ? lRes.data : [];
       } catch {}
     }
+  } else {
+    tagFilterInput.value = "";
+    tagFilterSuggestions.value = [];
   }
 });
 
@@ -1118,6 +1222,79 @@ const minScoreFilterModel = computed({
   get: () => props.minScoreFilter,
   set: (value) => emit("update:minScoreFilter", value ?? null),
 });
+const tagFilterModel = computed({
+  get: () => props.tagFilter,
+  set: (value) => emit("update:tagFilter", value ?? []),
+});
+const tagRejectedFilterModel = computed({
+  get: () => props.tagRejectedFilter,
+  set: (value) => emit("update:tagRejectedFilter", value ?? []),
+});
+const tagFilterInput = ref("");
+const tagFilterSuggestions = ref([]);
+const tagFilterHoverEnabled = ref(false);
+const tagFilterIndex = ref(-1);
+
+async function loadTagFilterSuggestions(input) {
+  if (!input || input.length < 1) {
+    tagFilterSuggestions.value = [];
+    return;
+  }
+  try {
+    const res = await apiClient.get(`${props.backendUrl}/tags`);
+    const all = Array.isArray(res.data) ? res.data : [];
+    const q = input.toLowerCase();
+    tagFilterSuggestions.value = all
+      .filter(
+        (t) =>
+          t.tag.toLowerCase().includes(q) &&
+          !tagFilterModel.value.includes(t.tag) &&
+          !tagRejectedFilterModel.value.includes(t.tag),
+      )
+      .slice(0, 8)
+      .map((t) => t.tag);
+  } catch {
+    tagFilterSuggestions.value = [];
+  }
+}
+
+watch(tagFilterInput, (val) => {
+  tagFilterIndex.value = -1;
+  loadTagFilterSuggestions(val);
+});
+
+function addTagFilter(tag) {
+  if (
+    tag &&
+    !tagFilterModel.value.includes(tag) &&
+    !tagRejectedFilterModel.value.includes(tag)
+  ) {
+    tagFilterModel.value = [...tagFilterModel.value, tag];
+  }
+  tagFilterInput.value = "";
+  tagFilterSuggestions.value = [];
+  tagFilterIndex.value = -1;
+}
+
+function removeTagFilter(tag) {
+  tagFilterModel.value = tagFilterModel.value.filter((t) => t !== tag);
+  tagRejectedFilterModel.value = tagRejectedFilterModel.value.filter(
+    (t) => t !== tag,
+  );
+}
+
+function toggleTagRejected(tag) {
+  if (tagFilterModel.value.includes(tag)) {
+    tagFilterModel.value = tagFilterModel.value.filter((t) => t !== tag);
+    tagRejectedFilterModel.value = [...tagRejectedFilterModel.value, tag];
+  } else {
+    tagRejectedFilterModel.value = tagRejectedFilterModel.value.filter(
+      (t) => t !== tag,
+    );
+    tagFilterModel.value = [...tagFilterModel.value, tag];
+  }
+}
+
 const comfyuiModelOptions = ref([]);
 const comfyuiLoraOptions = ref([]);
 
@@ -2156,5 +2333,115 @@ defineExpose({ blurSearchInput, focusSearchInput });
   padding: 4px 8px;
   font-size: 0.88em;
   outline: none;
+}
+
+.tag-filter-input-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.tag-filter-input {
+  width: 100%;
+  background: rgba(var(--v-theme-on-background), 0.06);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 0.82em;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.tag-filter-input:focus {
+  border-color: rgba(var(--v-theme-primary), 0.6);
+}
+
+.tag-filter-dropdown {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  right: 0;
+  z-index: 999;
+  background: color-mix(in srgb, rgb(var(--v-theme-shadow)) 85%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.tag-filter-suggestion {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: none;
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-filter-dropdown--hover-enabled .tag-filter-suggestion:hover,
+.tag-filter-suggestion--active {
+  background: rgba(var(--v-theme-primary), 0.22);
+}
+
+.tag-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 12px;
+  padding: 2px 7px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: none;
+}
+
+.tag-chip--filter {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border: 1px solid rgba(var(--v-theme-primary), 0.5);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tag-chip--filter:hover {
+  background: rgba(var(--v-theme-error), 0.18);
+  border-color: rgba(var(--v-theme-error), 0.55);
+}
+
+.tag-chip--filter-rejected {
+  background: rgba(var(--v-theme-error), 0.14);
+  border: 1px solid rgba(var(--v-theme-error), 0.5);
+  color: rgb(var(--v-theme-error));
+}
+
+.tag-chip--filter-rejected:hover {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border-color: rgba(var(--v-theme-primary), 0.5);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tag-chip-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-chip-close {
+  opacity: 0.6;
 }
 </style>

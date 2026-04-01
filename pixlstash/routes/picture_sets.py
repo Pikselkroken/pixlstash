@@ -559,7 +559,10 @@ def create_router(server) -> APIRouter:
         reference_character_id: str | None = Query(None),
         project_id: str | None = Query(None),
         fields: str = Query(None),
+        min_score: int | None = Query(None),
     ):
+        tags_filter = request.query_params.getlist("tag") or None
+        tags_rejected_filter = request.query_params.getlist("rejected_tag") or None
         try:
             id = int(id)
         except (TypeError, ValueError):
@@ -711,6 +714,9 @@ def create_router(server) -> APIRouter:
                 format=format,
                 include_unimported=True,
                 stack_leaders_only=(fields == "grid"),
+                min_score=min_score,
+                tags_filter=tags_filter,
+                tags_rejected_filter=tags_rejected_filter,
             )
             return [
                 pic.dict(

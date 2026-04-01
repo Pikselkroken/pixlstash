@@ -444,6 +444,14 @@ def _select_pictures_for_listing(
             if comfyui_loras:
                 query_params["comfyui_loras_filter"] = comfyui_loras
             query_params.pop("comfyui_lora", None)
+            tags = request.query_params.getlist("tag")
+            if tags:
+                query_params["tags_filter"] = tags
+            query_params.pop("tag", None)
+            rejected_tags = request.query_params.getlist("rejected_tag")
+            if rejected_tags:
+                query_params["tags_rejected_filter"] = rejected_tags
+            query_params.pop("rejected_tag", None)
             set_ids = request.query_params.getlist("set_ids")
             if set_ids:
                 query_params["set_ids"] = set_ids
@@ -1946,6 +1954,7 @@ def create_router(server) -> APIRouter:
         min_score_raw = None
         comfyui_models = []
         comfyui_loras = []
+        tags_filter = []
         if request.query_params:
             query_params = dict(request.query_params)
             query = query_params.pop("query", query)
@@ -1967,6 +1976,8 @@ def create_router(server) -> APIRouter:
             min_score_raw = query_params.pop("min_score", None)
             comfyui_models = request.query_params.getlist("comfyui_model")
             comfyui_loras = request.query_params.getlist("comfyui_lora")
+            tags_filter = request.query_params.getlist("tag")
+            tags_rejected_filter = request.query_params.getlist("rejected_tag")
         min_score = int(min_score_raw) if min_score_raw is not None else None
         if not query:
             raise HTTPException(
@@ -2153,6 +2164,8 @@ def create_router(server) -> APIRouter:
                 min_score=min_score,
                 comfyui_models_filter=comfyui_models or None,
                 comfyui_loras_filter=comfyui_loras or None,
+                tags_filter=tags_filter or None,
+                tags_rejected_filter=tags_rejected_filter or None,
             )
 
             log_semantic_results("base", results)
@@ -2183,6 +2196,8 @@ def create_router(server) -> APIRouter:
                 min_score=min_score,
                 comfyui_models_filter=comfyui_models or None,
                 comfyui_loras_filter=comfyui_loras or None,
+                tags_filter=tags_filter or None,
+                tags_rejected_filter=tags_rejected_filter or None,
             )
             sorted_results = [(pic, score_map.get(pic.id, 0.0)) for pic in sorted_pics]
             log_semantic_results(f"sorted_{sort_mech.key.name}", sorted_results)

@@ -1000,6 +1000,10 @@
     <div
       v-if="addingTag && tagSuggestions.length && tagInputRect"
       class="tag-autocomplete-dropdown"
+      :class="{
+        'tag-autocomplete-dropdown--hover-enabled': autocompleteHoverEnabled,
+      }"
+      @mousemove.once="autocompleteHoverEnabled = true"
       :style="{
         top: tagInputRect.bottom + 4 + 'px',
         left: tagInputRect.left + 'px',
@@ -1264,6 +1268,7 @@ let copyResetTimer = null;
 const addingTag = ref(false);
 const tagSuggestionIndex = ref(-1);
 const tagInputRect = ref(null);
+const autocompleteHoverEnabled = ref(false);
 const newTag = ref("");
 const tagInputRef = ref(null);
 const tagListRef = ref(null);
@@ -3969,6 +3974,7 @@ watch(
   [addingTag, tagSuggestions],
   () => {
     if (addingTag.value && tagSuggestions.value.length) {
+      autocompleteHoverEnabled.value = false;
       nextTick(() => {
         tagInputRect.value = tagInputRef.value
           ? tagInputRef.value.getBoundingClientRect()
@@ -5739,7 +5745,7 @@ function downloadComfyWorkflow(workflow) {
   text-overflow: ellipsis;
 }
 
-.tag-autocomplete-item:hover,
+.tag-autocomplete-dropdown--hover-enabled .tag-autocomplete-item:hover,
 .tag-autocomplete-item--active {
   background: rgba(var(--v-theme-primary), 0.22);
   color: rgb(var(--v-theme-on-dark-surface));

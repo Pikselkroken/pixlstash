@@ -61,6 +61,7 @@
       :comfyui-configured="props.comfyuiConfigured"
       :available-plugins="availablePlugins"
       :show-remove-from-stack="showRemoveFromStack"
+      :all-grid-images="allGridImages"
       :visible="showSelectionBar"
       @clear-selection="clearSelection"
       @added-to-set="handleOverlayAddedToSet"
@@ -621,6 +622,8 @@ const props = defineProps({
   comfyuiLoraFilter: { type: Array, default: () => [] },
   comfyuiConfigured: { type: Boolean, default: false },
   minScoreFilter: { type: Number, default: null },
+  tagFilter: { type: Array, default: () => [] },
+  tagRejectedFilter: { type: Array, default: () => [] },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
@@ -1337,7 +1340,12 @@ watch(
     const pictureIds = Array.isArray(payload.pictureIds)
       ? payload.pictureIds
       : [];
-    if (!pictureIds.length) return;
+    if (
+      !pictureIds.length &&
+      !(props.tagFilter && props.tagFilter.length) &&
+      !(props.tagRejectedFilter && props.tagRejectedFilter.length)
+    )
+      return;
     if (pauseGridAutoUpdates.value) {
       pendingGridRefreshAfterImport.value = true;
       return;
@@ -3889,6 +3897,10 @@ function buildPictureIdsQueryParams() {
   if (props.minScoreFilter != null) {
     params.append("min_score", props.minScoreFilter);
   }
+  (props.tagFilter || []).forEach((t) => params.append("tag", t));
+  (props.tagRejectedFilter || []).forEach((t) =>
+    params.append("rejected_tag", t),
+  );
   return params.toString();
 }
 
@@ -5138,6 +5150,8 @@ watch(
     () => props.comfyuiModelFilter,
     () => props.comfyuiLoraFilter,
     () => props.minScoreFilter,
+    () => props.tagFilter,
+    () => props.tagRejectedFilter,
   ],
   () => {
     _resetGridState();
@@ -6119,6 +6133,7 @@ defineExpose({
   removeImagesById,
   clearFaceSelection,
   runComfyuiOnGridImages,
+  hasCursorFocus: computed(() => cursorIdx.value !== null),
 });
 
 // Remove images by ID (for event-driven removal)

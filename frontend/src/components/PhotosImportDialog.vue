@@ -275,7 +275,7 @@ watch(dialogOpen, (isOpen) => {
                     class="local-import-input"
                     type="file"
                     multiple
-                    accept="image/*,video/*,.zip,application/zip,application/x-zip-compressed"
+                    accept="image/*,video/*,.zip,application/zip,application/x-zip-compressed,.txt,text/plain"
                     @change="handleLocalChange"
                   />
                   <v-btn variant="outlined" @click="openLocalPicker">

@@ -1536,13 +1536,20 @@ watch(
 
 watch(projectViewMode, (v) => {
   emit("update:project-view-mode", v);
-  // Recompute scoped counts (notably Unassigned) when switching global/project mode.
+  // Re-fetch sets with the correct scope (all sets in global, scoped sets in
+  // project view). Without this, a set removed from a project while in
+  // project view could be absent from the global list because the 800 ms
+  // debounced sidebar refresh fired the set-fetch while still in project mode
+  // (so only project-scoped sets were returned), and the subsequent mode
+  // switch only called fetchSidebarData() which doesn't reload pictureSets.
+  void fetchPictureSets();
   void fetchSidebarData();
 });
 watch(selectedProjectId, (v) => {
   emit("update:selected-project-id", v);
   if (v !== null) lastUsedProjectId.value = v;
-  // Recompute scoped counts when selecting a different project.
+  // Re-fetch sets for the newly selected project.
+  void fetchPictureSets();
   void fetchSidebarData();
 });
 
@@ -1635,11 +1642,20 @@ const currentProjectId = computed(() =>
   projectViewMode.value === "project" ? selectedProjectId.value : null,
 );
 
+function openCurrentSelectionEditor() {
+  if (selectedCharacterObj.value) {
+    openCharacterEditor(selectedCharacterObj.value);
+  } else if (selectedSetObj.value) {
+    openSetEditor(selectedSetObj.value);
+  }
+}
+
 defineExpose({
   refreshSidebar,
   openSettingsDialog,
   startLocalImport,
   currentProjectId,
+  openCurrentSelectionEditor,
 });
 </script>
 

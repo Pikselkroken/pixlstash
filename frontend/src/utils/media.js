@@ -13,6 +13,8 @@ export const VIDEO_EXTENSIONS =
 
 export const ARCHIVE_EXTENSIONS = ['zip'];
 
+export const CAPTION_EXTENSIONS = ['txt'];
+
 export function isSupportedImageFile(file) {
   const ext = (file.name || file).split('.').pop().toLowerCase();
   return PIL_IMAGE_EXTENSIONS.includes(ext);
@@ -35,8 +37,13 @@ export function isSupportedMediaFile(file) {
   return isSupportedImageFile(file) || isSupportedVideoFile(file);
 }
 
+export function isSupportedCaptionFile(file) {
+  const ext = (typeof file === 'string' ? file : file?.name || '').split('.').pop().toLowerCase();
+  return CAPTION_EXTENSIONS.includes(ext);
+}
+
 export function isSupportedImportFile(file) {
-  return isSupportedMediaFile(file) || isSupportedArchiveFile(file);
+  return isSupportedMediaFile(file) || isSupportedArchiveFile(file) || isSupportedCaptionFile(file);
 }
 
 function _fileDedupKey(file) {
