@@ -353,3 +353,62 @@ def test_no_duplicate_reference_picture_sets():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_members_endpoint_expands_stack_siblings():
+    """Members endpoint should include all stack members when any stack member is in the set.
+
+    When a stack is shown in the grid its representative (leader) image may not
+    be the same picture that was explicitly added to the set.  If pic_b belongs
+    to a stack and was added to the set, the /members response must also include
+    pic_a (the stack leader) so AddToSetControl can correctly mark the set as
+    checked when the stack is selected.
+    """
+    temp_dir, client, server = setup_server_with_temp_db()
+    try:
+        import glob
+
+        image_candidates = glob.glob(
+            os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png")
+        ) + glob.glob(
+            os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg")
+        )
+        assert len(image_candidates) >= 2, "Need at least 2 test images"
+
+        def upload_image(path):
+            mime_type = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+            with open(path, "rb") as f:
+                result = upload_pictures_and_wait(
+                    client,
+                    [("file", (os.path.basename(path), f, mime_type))],
+                )
+            return result["results"][0]["picture_id"]
+
+        pic_a = upload_image(image_candidates[0])
+        pic_b = upload_image(image_candidates[1])
+
+        # Stack both images together
+        stack_resp = client.post("/stacks", json={"picture_ids": [pic_a, pic_b]})
+        assert stack_resp.status_code == 200
+
+        # Create a set and add only pic_b (the non-leader stack member)
+        set_resp = client.post("/picture_sets", json={"name": "StackMemberSet"})
+        assert set_resp.status_code == 200
+        set_id = set_resp.json()["picture_set"]["id"]
+
+        add_resp = client.post(f"/picture_sets/{set_id}/members/{pic_b}")
+        assert add_resp.status_code == 200
+
+        # /members must return both pictures so the stack leader is recognised
+        members_resp = client.get(f"/picture_sets/{set_id}/members")
+        assert members_resp.status_code == 200
+        member_ids = set(members_resp.json()["picture_ids"])
+        assert pic_b in member_ids, "pic_b (added member) must appear in members"
+        assert pic_a in member_ids, (
+            "pic_a (stack sibling) must appear in members so the stack leader "
+            "is recognised as belonging to the set in the frontend"
+        )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
