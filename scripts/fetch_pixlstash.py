@@ -39,7 +39,6 @@ import http.cookiejar
 import json
 import os
 import ssl
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -147,9 +146,7 @@ class PixlStashClient:
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
-            raise RuntimeError(
-                f"HTTP {e.code} {e.reason} for {url}: {body}"
-            ) from e
+            raise RuntimeError(f"HTTP {e.code} {e.reason} for {url}: {body}") from e
 
     def get_project_by_name(self, name: str) -> dict:
         return self._request(
@@ -159,7 +156,10 @@ class PixlStashClient:
 
     def get_picture_sets(self, project_name: Optional[str] = None) -> list:
         if project_name is not None:
-            return self._request("GET", f"/api/v1/projects/{urllib.parse.quote(project_name, safe='')}/picture_sets")
+            return self._request(
+                "GET",
+                f"/api/v1/projects/{urllib.parse.quote(project_name, safe='')}/picture_sets",
+            )
         return self._request("GET", "/api/v1/picture_sets")
 
     def get_set_members(self, set_id: int) -> list:
@@ -303,13 +303,10 @@ def download_sets(
     tracked.update({name: pids for name, pids in set_membership.items()})
 
     # A picture is stale only if it has been removed from ALL tracked sets
-    all_tracked_ids = {
-        str(pid)
-        for pids in tracked.values()
-        for pid in pids
-    }
+    all_tracked_ids = {str(pid) for pids in tracked.values() for pid in pids}
     stale_keys = [
-        k for k in list(set_manifest.keys())
+        k
+        for k in list(set_manifest.keys())
         if k != "_sets" and k not in all_tracked_ids
     ]
     if stale_keys:
@@ -322,22 +319,23 @@ def download_sets(
                 removed_from[set_name] = len(gone)
         if removed_from:
             details = ", ".join(f"{n} from '{s}'" for s, n in removed_from.items())
-            print(f"[INFO] Removing {len(stale_keys)} pictures no longer in any tracked set ({details})...")
+            print(
+                f"[INFO] Removing {len(stale_keys)} pictures no longer in any tracked set ({details})..."
+            )
         else:
-            print(f"[INFO] Removing {len(stale_keys)} pictures no longer in any tracked set...")
+            print(
+                f"[INFO] Removing {len(stale_keys)} pictures no longer in any tracked set..."
+            )
         for key in stale_keys:
             ext = set_manifest[key].get("ext", "")
-            for suffix in ([f".{ext}", ".txt"] if ext else [".txt"]):
+            for suffix in [f".{ext}", ".txt"] if ext else [".txt"]:
                 fpath = os.path.join(out_dir, f"{key}{suffix}")
                 if os.path.isfile(fpath):
                     os.remove(fpath)
             del set_manifest[key]
 
     # Determine which pictures need metadata (not yet in manifest or forced)
-    need_meta = [
-        pid for pid in picture_ids
-        if force or str(pid) not in set_manifest
-    ]
+    need_meta = [pid for pid in picture_ids if force or str(pid) not in set_manifest]
     print(
         f"[INFO] Set has {len(picture_ids)} pictures; "
         f"{len(need_meta)} need metadata fetch."
@@ -346,6 +344,7 @@ def download_sets(
     # Fetch metadata in parallel to get file format
     meta_map: Dict[int, dict] = {}
     if need_meta:
+
         def _fetch_meta(pid: int) -> Tuple[int, dict]:
             return pid, client.get_picture_metadata(pid)
 
@@ -375,7 +374,9 @@ def download_sets(
         raw_fmt = meta.get("format", "")
         ext = _normalize_ext(raw_fmt) if raw_fmt else None
         if not ext:
-            print(f"[WARNING] Unrecognised format '{raw_fmt}' for picture {pid}, skipping.")
+            print(
+                f"[WARNING] Unrecognised format '{raw_fmt}' for picture {pid}, skipping."
+            )
             continue
         to_download.append((pid, ext))
 
@@ -385,9 +386,7 @@ def download_sets(
 
     # Tags are already present in the metadata we fetched — no extra API call needed.
     tags_map: Dict[int, list] = {
-        pid: meta_map[pid].get("tags", [])
-        for pid, _ in to_download
-        if pid in meta_map
+        pid: meta_map[pid].get("tags", []) for pid, _ in to_download if pid in meta_map
     }
 
     # Download images + write tag files in parallel
@@ -414,7 +413,9 @@ def download_sets(
                 set_manifest[str(done_pid)] = {"ext": ext}
                 downloaded += 1
                 if downloaded % 20 == 0 or downloaded == len(to_download):
-                    print(f"[INFO]   Downloaded {downloaded}/{len(to_download)}", end="\r")
+                    print(
+                        f"[INFO]   Downloaded {downloaded}/{len(to_download)}", end="\r"
+                    )
             except Exception as exc:
                 errors += 1
                 print(f"\n[ERROR] Failed to download picture {pid}: {exc}")
@@ -498,9 +499,9 @@ def main() -> None:
         default=None,
         metavar="PREFIX",
         help="Auto-include all picture sets whose name starts with PREFIX as extra training "
-             "data. Repeat to add multiple prefixes (e.g. --extra-prefix anomaly --extra-prefix "
-             "uncertainty). Can also be set via pixlstash.json key 'extra_prefixes' (list). "
-             "The legacy key 'uncertainty_prefix' is still supported as a single-prefix fallback.",
+        "data. Repeat to add multiple prefixes (e.g. --extra-prefix anomaly --extra-prefix "
+        "uncertainty). Can also be set via pixlstash.json key 'extra_prefixes' (list). "
+        "The legacy key 'uncertainty_prefix' is still supported as a single-prefix fallback.",
     )
     parser.add_argument(
         "--train-only",
@@ -515,14 +516,26 @@ def main() -> None:
 
     # Build defaults: pixlstash.json > train_config.json (pixlstash_* keys) > env vars
     defaults: dict = {}
-    for key in ("url", "token", "project", "train_set", "eval_set", "cache_dir", "no_verify_ssl"):
+    for key in (
+        "url",
+        "token",
+        "project",
+        "train_set",
+        "eval_set",
+        "cache_dir",
+        "no_verify_ssl",
+    ):
         val = px_cfg.get(key) or tr_cfg.get(f"pixlstash_{key}")
         if val:
             defaults[key] = val
     # extra_prefixes: prefer new key, fall back to legacy uncertainty_prefix
-    cfg_prefixes = px_cfg.get("extra_prefixes") or tr_cfg.get("pixlstash_extra_prefixes")
+    cfg_prefixes = px_cfg.get("extra_prefixes") or tr_cfg.get(
+        "pixlstash_extra_prefixes"
+    )
     if not cfg_prefixes:
-        legacy = px_cfg.get("uncertainty_prefix") or tr_cfg.get("pixlstash_uncertainty_prefix")
+        legacy = px_cfg.get("uncertainty_prefix") or tr_cfg.get(
+            "pixlstash_uncertainty_prefix"
+        )
         if legacy:
             cfg_prefixes = [legacy]
     if cfg_prefixes:
@@ -571,7 +584,7 @@ def main() -> None:
     if not args.eval_only:
         # Fetch the full set list once so we can both discover uncertainty sets
         # and pass it to download_sets without a redundant API call.
-        print(f"[INFO] Fetching picture set list...")
+        print("[INFO] Fetching picture set list...")
         sets_all = client.get_picture_sets(project_name=args.project)
 
         train_sets = [args.train_set]
@@ -580,12 +593,21 @@ def main() -> None:
             extra = _find_sets_by_prefix(sets_all, prefix)
             extra = [s for s in extra if s not in train_sets]
             if extra:
-                print(f"[INFO] Auto-including {len(extra)} set(s) matching prefix '{prefix}': {extra}")
+                print(
+                    f"[INFO] Auto-including {len(extra)} set(s) matching prefix '{prefix}': {extra}"
+                )
             train_sets.extend(extra)
 
         print(f"\n=== Training sets: {train_sets} ===")
         download_sets(
-            client, train_sets, sets_all, project_id, TRAIN_SUBDIR, cache_dir, manifest, args.force
+            client,
+            train_sets,
+            sets_all,
+            project_id,
+            TRAIN_SUBDIR,
+            cache_dir,
+            manifest,
+            args.force,
         )
         _save_manifest(cache_dir, manifest)
     else:
@@ -593,17 +615,24 @@ def main() -> None:
 
     if not args.train_only:
         if sets_all is None:
-            print(f"[INFO] Fetching picture set list...")
+            print("[INFO] Fetching picture set list...")
             sets_all = client.get_picture_sets(project_name=args.project)
         print(f"\n=== Evaluation set: '{args.eval_set}' ===")
         download_set(
-            client, args.eval_set, sets_all, project_id, EVAL_SUBDIR, cache_dir, manifest, args.force
+            client,
+            args.eval_set,
+            sets_all,
+            project_id,
+            EVAL_SUBDIR,
+            cache_dir,
+            manifest,
+            args.force,
         )
         _save_manifest(cache_dir, manifest)
 
     abs_cache = os.path.abspath(cache_dir)
     print(f"\n[INFO] Cache ready at: {abs_cache}")
-    print(f"\nTo train with these sets, pass to finetune.py:")
+    print("\nTo train with these sets, pass to finetune.py:")
     print(
         f"  --data {os.path.join(abs_cache, TRAIN_SUBDIR)} "
         f"--eval-folder {os.path.join(abs_cache, EVAL_SUBDIR)}"

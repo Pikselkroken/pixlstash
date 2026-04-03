@@ -871,7 +871,7 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/picture_sets/{id}/members",
         summary="List picture set members",
-        description="Returns unique picture ids that belong to a set, with optional deleted inclusion.",
+        description="Returns unique picture ids that belong to a set, with optional deleted inclusion. Stack members are expanded so that all pictures in a stack are returned when any member of that stack is in the set.",
     )
     def get_picture_set_pictures(
         id: int,
@@ -891,7 +891,36 @@ def create_router(server) -> APIRouter:
                 .join(Picture, Picture.id == PictureSetMember.picture_id)
                 .where(*filters)
             ).all()
-            return list({m for m in members if m is not None})
+            picture_ids = list({m for m in members if m is not None})
+
+            # Expand stacks: if any member of a stack is in the set, include
+            # all other non-deleted members of that stack so the stack leader
+            # is recognised as a set member in the frontend.
+            if not picture_ids:
+                return picture_ids
+            id_stack_rows = session.exec(
+                select(Picture.id, Picture.stack_id).where(
+                    Picture.id.in_(picture_ids),
+                    Picture.deleted.is_(False),
+                )
+            ).all()
+            stack_ids = [
+                int(stack_id)
+                for _pic_id, stack_id in id_stack_rows
+                if stack_id is not None
+            ]
+            if stack_ids:
+                extra_query = select(Picture.id).where(
+                    Picture.stack_id.in_(stack_ids),
+                )
+                if not include_deleted:
+                    extra_query = extra_query.where(Picture.deleted.is_(False))
+                extra = session.exec(extra_query).all()
+                picture_ids = list(
+                    set(picture_ids) | {e for e in extra if e is not None}
+                )
+
+            return picture_ids
 
         picture_ids = server.vault.db.run_immediate_read_task(
             fetch_members, id, include_deleted
