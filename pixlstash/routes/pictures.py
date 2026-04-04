@@ -784,6 +784,46 @@ def _select_pictures_for_listing(
             )
             if not picture_ids:
                 return []
+
+            # When a project filter is also present, restrict to pictures that
+            # are members of that project so pictures removed from a project no
+            # longer appear in its character grid view.
+            if project_id_raw is not None:
+                if project_id_raw == "UNASSIGNED":
+                    def _get_project_unassigned_ids(session, ids):
+                        rows = session.exec(
+                            select(Picture.id)
+                            .where(
+                                Picture.id.in_(ids),
+                                _project_unassigned_clause(Picture),
+                            )
+                        ).all()
+                        return list(rows)
+
+                    picture_ids = server.vault.db.run_task(
+                        _get_project_unassigned_ids, picture_ids
+                    )
+                else:
+                    try:
+                        proj_id_int = int(project_id_raw)
+                    except (TypeError, ValueError):
+                        proj_id_int = None
+                    if proj_id_int is not None:
+                        def _get_project_member_ids(session, ids, pid):
+                            rows = session.exec(
+                                select(PictureProjectMember.picture_id).where(
+                                    PictureProjectMember.picture_id.in_(ids),
+                                    PictureProjectMember.project_id == pid,
+                                )
+                            ).all()
+                            return list(rows)
+
+                        picture_ids = server.vault.db.run_task(
+                            _get_project_member_ids, picture_ids, proj_id_int
+                        )
+
+            if not picture_ids:
+                return []
             query_params["id"] = picture_ids
         elif project_id_raw is not None:
             # Project filter only applies when not already filtering by character/set.
