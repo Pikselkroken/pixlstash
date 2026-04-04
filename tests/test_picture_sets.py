@@ -417,7 +417,9 @@ def test_members_endpoint_expands_stack_siblings():
         )
         assert members_expanded_resp.status_code == 200
         expanded_ids = set(members_expanded_resp.json()["picture_ids"])
-        assert pic_b in expanded_ids, "pic_b (added member) must appear in expanded members"
+        assert pic_b in expanded_ids, (
+            "pic_b (added member) must appear in expanded members"
+        )
         assert pic_a in expanded_ids, (
             "pic_a (stack sibling) must appear in members with expand_stacks=true so "
             "the stack leader is recognised as belonging to the set in the frontend"

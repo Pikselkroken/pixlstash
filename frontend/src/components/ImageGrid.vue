@@ -61,6 +61,7 @@
       :comfyui-configured="props.comfyuiConfigured"
       :available-plugins="availablePlugins"
       :show-remove-from-stack="showRemoveFromStack"
+      :selected-multiple-stack-ids="selectedMultipleStackIds"
       :all-grid-images="allGridImages"
       :visible="showSelectionBar"
       @clear-selection="clearSelection"
@@ -71,6 +72,7 @@
       @add-to-character="handleAddToCharacter"
       @create-stack="createStackFromSelection"
       @remove-from-stack="removeSelectedFromStack"
+      @dissolve-stacks="dissolveSelectedStacks"
       @create-stacks-from-groups="createStacksFromSelectedGroups"
       @run-plugin="handlePluginRunRequest"
       @comfyui-run="handleComfyuiRun"
@@ -1217,20 +1219,6 @@ function refreshAllThumbnailInfoDisplays() {
 }
 
 let initialFetchTimer = null;
-
-// DEBUG: trace every allGridImages mutation while the overlay is open
-watch(
-  allGridImages,
-  () => {
-    if (overlayOpen.value) {
-      console.warn(
-        "[ImageGrid] allGridImages mutated while overlay is open:",
-        new Error("stack trace").stack,
-      );
-    }
-  },
-  { flush: "sync" },
-);
 
 onMounted(() => {
   window.addEventListener("resize", triggerFaceOverlayRedraw);
@@ -2463,6 +2451,27 @@ const selectedStackId = computed(() => {
 const showRemoveFromStack = computed(() => {
   return selectedStackId.value !== null;
 });
+
+// All unique stack IDs present among selected images (used for multi-stack unstack).
+const selectedMultipleStackIds = computed(() => {
+  const ids = Array.isArray(selectedImageIds.value)
+    ? selectedImageIds.value
+    : [];
+  if (!ids.length) return [];
+  const images = Array.isArray(allGridImages.value) ? allGridImages.value : [];
+  const imageById = new Map(
+    images
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+  const stackIds = new Set();
+  for (const id of ids) {
+    const img = imageById.get(String(id));
+    const stackId = getPictureStackId(img);
+    if (stackId) stackIds.add(stackId);
+  }
+  return [...stackIds];
+});
 const selectedMediaSupport = computed(() => {
   const ids = Array.isArray(selectedImageIds.value)
     ? selectedImageIds.value
@@ -3105,17 +3114,93 @@ async function createStackFromSelection() {
   }
 }
 
+async function dissolveSelectedStacks() {
+  const stackIds = selectedMultipleStackIds.value;
+  if (!stackIds.length) return;
+  try {
+    await Promise.all(
+      stackIds.map(async (stackId) => {
+        let idsToRemove;
+        try {
+          const res = await apiClient.get(
+            `${props.backendUrl}/stacks/${stackId}`,
+          );
+          idsToRemove = res.data?.picture_ids;
+        } catch {
+          idsToRemove = null;
+        }
+        if (!Array.isArray(idsToRemove) || !idsToRemove.length) return;
+        await apiClient.delete(
+          `${props.backendUrl}/stacks/${stackId}/members`,
+          { data: { picture_ids: idsToRemove } },
+        );
+        const removed = new Set(idsToRemove.map((id) => getPictureId(id)));
+        allGridImages.value = allGridImages.value.map((img) => {
+          if (!img || !removed.has(getPictureId(img.id))) return img;
+          return {
+            ...img,
+            stack_id: null,
+            stackId: null,
+            stack_index: null,
+            stackIndex: null,
+            stack_position: null,
+            stackPosition: null,
+            stack_count: null,
+            stackCount: null,
+          };
+        });
+        const nextMembers = new Map(expandedStackMembers.value);
+        nextMembers.delete(stackId);
+        expandedStackMembers.value = nextMembers;
+        const nextExpanded = new Set(expandedStackIds.value);
+        if (nextExpanded.delete(stackId)) expandedStackIds.value = nextExpanded;
+      }),
+    );
+    clearSelection();
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
+  } catch (e) {
+    console.error("Failed to dissolve selected stacks:", e);
+  }
+}
+
 async function removeSelectedFromStack() {
   const stackId = selectedStackId.value;
   const ids = Array.isArray(selectedImageIds.value)
     ? selectedImageIds.value
     : [];
   if (!stackId || !ids.length) return;
+
+  // When the stack is collapsed the user sees (and has selected) only the
+  // leader card.  Removing just the leader leaves the next-best-scoring
+  // member as a new collapsed card — requiring repeated "unstack" clicks to
+  // dissolve the stack.  Instead, dissolve the entire stack in one go by
+  // fetching all member IDs from the server and removing them all.
+  // When the stack IS expanded the user has deliberately opened it and may
+  // want to remove only a specific subset, so respect the selection as-is.
+  let idsToRemove = ids;
+  if (!expandedStackIds.value.has(stackId)) {
+    try {
+      const stackRes = await apiClient.get(
+        `${props.backendUrl}/stacks/${stackId}`,
+      );
+      const allMemberIds = stackRes.data?.picture_ids;
+      if (Array.isArray(allMemberIds) && allMemberIds.length) {
+        idsToRemove = allMemberIds;
+      }
+    } catch (e) {
+      console.error(
+        "Failed to fetch all stack members for dissolve, falling back to selected ids:",
+        e,
+      );
+    }
+  }
+
   try {
     await apiClient.delete(`${props.backendUrl}/stacks/${stackId}/members`, {
-      data: { picture_ids: ids },
+      data: { picture_ids: idsToRemove },
     });
-    const removed = new Set(ids.map((id) => getPictureId(id)));
+    const removed = new Set(idsToRemove.map((id) => getPictureId(id)));
     allGridImages.value = allGridImages.value.map((img) => {
       if (!img || !removed.has(getPictureId(img.id))) {
         return img;
@@ -4205,15 +4290,25 @@ async function refreshExpandedStacksAfterFetch() {
   const expanded = Array.from(expandedStackIds.value || []);
   if (!expanded.length) return;
 
-  // Only eagerly load members for stacks whose leader is within the current
-  // render window. Out-of-viewport stacks stay in expandedStackIds (so the
-  // badge count renders) but their members are fetched lazily on scroll.
-  const fetchStart = Math.max(0, visibleStart.value - renderBuffer.value);
-  const fetchEnd = visibleEnd.value + renderBuffer.value;
+  // Only eagerly load members for stacks whose header is within the strict
+  // visible window. Do NOT use renderBuffer here — the buffer zone is handled
+  // lazily by loadExpandedStacksInView as the user scrolls. Using the full
+  // buffer on "expand all" would fire one API call per stack in the entire
+  // gallery (e.g. all 156 pictures) even though most are off-screen.
+  const fetchStart = visibleStart.value;
+  const fetchEnd = visibleEnd.value;
 
   const nextExpanded = new Set(expandedStackIds.value);
+
+  // Remove all expanded member rows first so header indices are stable for
+  // the in-window check below.
   for (const stackId of expanded) {
     removeExpandedStackMembers(stackId);
+  }
+
+  // Collect only the stacks whose header falls within the visible window.
+  const toLoad = [];
+  for (const stackId of expanded) {
     const headerIndex = allGridImages.value.findIndex(
       (item) => getPictureStackId(item) === stackId,
     );
@@ -4221,13 +4316,30 @@ async function refreshExpandedStacksAfterFetch() {
       nextExpanded.delete(stackId);
       continue;
     }
-    // Skip loading for stacks outside the visible+buffer window.
     if (headerIndex < fetchStart || headerIndex >= fetchEnd) {
+      // Out-of-viewport: leave in expandedStackIds so badge renders and
+      // loadExpandedStacksInView picks it up lazily when scrolled into view.
       continue;
     }
     const header = allGridImages.value[headerIndex];
     const fallbackCount = header?.stackCount ?? header?.stack_count ?? null;
-    const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
+    toLoad.push({ stackId, fallbackCount });
+  }
+
+  // Fetch all visible stacks in parallel — ensureStackMembersLoaded already
+  // deduplicates concurrent requests for the same stack via expandedStackLoadPromises.
+  const fetchResults = await Promise.all(
+    toLoad.map(({ stackId, fallbackCount }) =>
+      ensureStackMembersLoaded(stackId, fallbackCount).then((loaded) => ({
+        stackId,
+        fallbackCount,
+        loaded,
+      })),
+    ),
+  );
+
+  // Apply DOM mutations sequentially so grid indices stay consistent.
+  for (const { stackId, fallbackCount, loaded } of fetchResults) {
     if (loaded !== false) {
       const insertedCount = insertExpandedStackMembers(stackId, fallbackCount);
       if (insertedCount <= 0) {
@@ -4237,6 +4349,7 @@ async function refreshExpandedStacksAfterFetch() {
       nextExpanded.delete(stackId);
     }
   }
+
   if (nextExpanded.size !== expandedStackIds.value.size) {
     expandedStackIds.value = nextExpanded;
   }
@@ -4376,7 +4489,21 @@ function buildExpandedStackImages(stackId, fallbackImg, stackCount) {
     addImage(fallbackImg);
   }
 
-  if (ordered.length) {
+  // Inject stackCount only onto the item whose id matches the fallback (header)
+  // image.  Do NOT blindly set it on ordered[0]: the API orders members by
+  // stack_position+id while the grid leader is chosen by score/date, so
+  // ordered[0] may be a *different* picture than the header.  Putting
+  // stackCount on a non-header member causes it to render a spurious stack
+  // badge inside the expanded stack view.
+  const fallbackIdStr = fallbackImg?.id != null ? String(fallbackImg.id) : null;
+  if (fallbackIdStr) {
+    const headerIdx = ordered.findIndex(
+      (img) => String(img?.id) === fallbackIdStr,
+    );
+    if (headerIdx !== -1) {
+      ordered[headerIdx] = { ...ordered[headerIdx], stackCount };
+    }
+  } else if (ordered.length) {
     ordered[0] = { ...ordered[0], stackCount };
   }
   return ordered;

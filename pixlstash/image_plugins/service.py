@@ -677,10 +677,51 @@ def apply_plugin_to_pictures(
         server, source_picture_ids, ordered_output_ids, plugin=plugin, params=params
     )
 
-    for source_id, out_id in zip(source_picture_ids, ordered_output_ids):
+    # Ensure each source picture has a stack (creating one if needed) and collect
+    # the stack_id for each source.  Deduplicating so get_or_create_stack is only
+    # called once per unique source id — multiple inputs from the same stack are
+    # handled by the grouping below.
+    unique_source_ids = list(dict.fromkeys(source_picture_ids))
+    stack_by_source: dict[int, int | None] = {}
+    for source_id in unique_source_ids:
         stack_id = server.vault.db.run_task(get_or_create_stack_for_picture, source_id)
-        if stack_id:
-            _assign_outputs_to_stack_top(server, stack_id, [out_id])
+        stack_by_source[source_id] = stack_id
+
+    # Read each source's current stack_position so outputs can be placed at the
+    # top in the same relative order as their sources.  Stack positions may have
+    # changed after the get_or_create calls above (e.g., new stack was created),
+    # so we read them fresh here.
+    def _read_source_positions(session: Session, src_ids: list[int]) -> dict[int, int]:
+        pics = session.exec(select(Picture).where(Picture.id.in_(src_ids))).all()
+        return {
+            int(p.id): (
+                int(p.stack_position) if p.stack_position is not None else 999999
+            )
+            for p in pics
+            if p.id is not None
+        }
+
+    pos_by_source: dict[int, int] = server.vault.db.run_immediate_read_task(
+        _read_source_positions, unique_source_ids
+    )
+
+    # Group outputs by stack, preserving source-position order as the primary
+    # sort key and input order as a stable tiebreaker.  This guarantees that
+    # the output derived from the original stack leader ends up at position 0
+    # even when multiple members of the same stack were selected and filtered.
+    outputs_by_stack: dict[int, list[tuple[int, int, int]]] = {}
+    for input_order, (source_id, out_id) in enumerate(
+        zip(source_picture_ids, ordered_output_ids)
+    ):
+        sid = stack_by_source.get(source_id)
+        if not sid:
+            continue
+        src_pos = pos_by_source.get(source_id, input_order)
+        outputs_by_stack.setdefault(sid, []).append((src_pos, input_order, out_id))
+
+    for sid, items in outputs_by_stack.items():
+        items.sort()
+        _assign_outputs_to_stack_top(server, sid, [out_id for _, _, out_id in items])
 
     return {
         "plugin": plugin.name,
