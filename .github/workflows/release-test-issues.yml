@@ -1,0 +1,77 @@
+name: Create release test issues
+
+# Fires automatically on the first release candidate tag, e.g. v1.2.0-rc1
+# Can also be triggered manually for any tag (e.g. a special rc4 re-run)
+on:
+  push:
+    tags:
+      - 'v*-rc1'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to use as the release version label (e.g. v1.0.0-rc4)'
+        required: true
+
+jobs:
+  create-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create one issue per test-plan section
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, re, subprocess
+
+          tag = os.environ["TAG"]
+          plan_path = "docs/release-test-plan.md"
+
+          with open(plan_path) as f:
+              text = f.read()
+
+          # Split on level-2 headings; keep the heading with its content
+          parts = re.split(r'^(## .+)$', text, flags=re.MULTILINE)
+
+          # parts is: [preamble, heading, body, heading, body, ...]
+          sections = []
+          for i in range(1, len(parts) - 1, 2):
+              heading = parts[i].strip()          # e.g. "## 3. Configuration"
+              body    = parts[i + 1].strip()
+
+              # Skip non-test sections
+              title_text = heading.lstrip('#').strip()
+              if title_text.lower().startswith('how to use'):
+                  continue
+              if title_text.lower().startswith('changelog'):
+                  continue
+
+              sections.append((title_text, body))
+
+          for title, body in sections:
+              issue_title = f"[{tag}] Release test: {title}"
+              issue_body  = (
+                  f"Release test checklist for **{tag}**.\n\n"
+                  f"Source: [`docs/release-test-plan.md`](../blob/main/docs/release-test-plan.md)\n\n"
+                  f"---\n\n"
+                  f"{body}"
+              )
+
+              subprocess.run(
+                  [
+                      "gh", "issue", "create",
+                      "--title", issue_title,
+                      "--body",  issue_body,
+                      "--label", "release-testing",
+                  ],
+                  check=True,
+              )
+              print(f"Created issue: {issue_title}")
+
+          print(f"Done — {len(sections)} issues created.")
+          PYEOF
