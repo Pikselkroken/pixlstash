@@ -19,6 +19,7 @@ from .database import DBPriority, VaultDatabase
 from .db_models import (
     MetaData,
     Character,
+    Face,
     Picture,
     PictureSet,
     Tag,
@@ -331,6 +332,7 @@ class Vault:
             picture_ids = result.get("picture_ids") or []
             if picture_ids:
                 self.notify(EventType.CHANGED_FACES, picture_ids)
+                self._process_pending_character_assignments(picture_ids)
             return
 
         if task.type == "DescriptionTask":
@@ -351,6 +353,54 @@ class Vault:
             if picture_ids:
                 self.notify(EventType.CHANGED_PICTURES, picture_ids)
                 self.notify(EventType.PICTURE_IMPORTED, picture_ids)
+
+    def _process_pending_character_assignments(self, picture_ids: list[int]) -> None:
+        """Honour deferred face-to-character assignments after face extraction runs.
+
+        When POST /characters/{id}/faces is called before face extraction has run
+        for a picture, the endpoint stores the target character id in
+        Picture.pending_character_id.  This method is called after
+        FaceExtractionTask completes and assigns the largest detected face for
+        each such picture to the stored character, then clears the field.
+        """
+
+        def _assign_if_pending(session: Session) -> bool:
+            pending = session.exec(
+                select(Picture).where(
+                    Picture.id.in_(picture_ids),
+                    Picture.pending_character_id.is_not(None),
+                )
+            ).all()
+            assigned_any = False
+            for pic in pending:
+                character_id = pic.pending_character_id
+                pic.pending_character_id = None
+                session.add(pic)
+                faces = session.exec(
+                    select(Face).where(
+                        Face.picture_id == pic.id,
+                        Face.face_index != -1,
+                    )
+                ).all()
+                if not faces:
+                    # Extraction ran but found no real faces; discard pending.
+                    continue
+                best_face = max(faces, key=lambda f: (f.width or 0) * (f.height or 0))
+                if best_face.character_id != character_id:
+                    best_face.character_id = character_id
+                    session.add(best_face)
+                    assigned_any = True
+            session.commit()
+            return assigned_any
+
+        try:
+            assigned = self.db.run_task(_assign_if_pending)
+        except Exception:
+            logger.exception("Failed to process pending character assignments")
+            return
+        if assigned:
+            self.notify(EventType.CHANGED_CHARACTERS)
+            self.notify(EventType.CHANGED_FACES)
 
     def _notify_worker_ids_processed(self, worker_type: TaskType, changed):
         self._notify_planner_ids_processed(worker_type, changed)

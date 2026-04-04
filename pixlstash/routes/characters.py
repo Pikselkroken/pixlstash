@@ -803,6 +803,18 @@ def create_router(server) -> APIRouter:
                 for pic_id in picture_ids:
                     faces = Face.find(session, picture_id=pic_id)
                     if not faces:
+                        # Face.find excludes sentinel records (face_index == -1),
+                        # so an empty result means either extraction hasn't run yet
+                        # or ran and found nothing.  Check for any record at all.
+                        any_face_id = session.exec(
+                            select(Face.id).where(Face.picture_id == pic_id).limit(1)
+                        ).first()
+                        if any_face_id is None:
+                            # Extraction not yet run; defer assignment until it does.
+                            pic = session.get(Picture, pic_id)
+                            if pic is not None:
+                                pic.pending_character_id = character_id
+                                session.add(pic)
                         continue
 
                     if reference_faces:

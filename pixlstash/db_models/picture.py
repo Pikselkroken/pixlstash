@@ -223,6 +223,10 @@ class Picture(SQLModel, table=True):
     )
     tag_uncertainty: Optional[float] = Field(default=None, index=True)
     anomaly_tag_uncertainty: Optional[float] = Field(default=None, index=True)
+    # Set by the character-assignment endpoint when picture_ids are provided but
+    # face extraction has not yet run.  Cleared (and the best face assigned) when
+    # FaceExtractionTask completes for the picture.
+    pending_character_id: Optional[int] = Field(default=None, index=True)
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
