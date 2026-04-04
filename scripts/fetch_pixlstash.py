@@ -49,6 +49,7 @@ EVAL_SUBDIR = "eval"
 MANIFEST_FILE = ".cache_manifest.json"
 MAX_WORKERS = 8
 BULK_TAG_BATCH = 200
+BULK_META_BATCH = 500
 
 # Normalise a raw format/MIME string to the extension string used by the API URL.
 # The API requires the extension to match the stored format exactly, so we must
@@ -168,16 +169,35 @@ class PixlStashClient:
     def get_picture_metadata(self, picture_id: int) -> dict:
         return self._request("GET", f"/api/v1/pictures/{picture_id}/metadata")
 
-    def bulk_fetch_tags(self, picture_ids: List[int]) -> Dict[str, list]:
-        """Returns {str(picture_id): [tag_objects_or_strings]}. Batches 200 at a time."""
-        result: Dict[str, list] = {}
+    def get_pictures_bulk(self, picture_ids: List[int]) -> List[dict]:
+        """Fetch metadata for a list of picture IDs in one request per 500 IDs.
+
+        Uses GET /api/v1/pictures?id=...  Tags are not included; call
+        bulk_fetch_tags separately if you need them.
+        """
+        result: List[dict] = []
+        for i in range(0, len(picture_ids), BULK_META_BATCH):
+            batch = picture_ids[i : i + BULK_META_BATCH]
+            data = self._request("GET", "/api/v1/pictures", params={"id": batch})
+            if isinstance(data, list):
+                result.extend(data)
+        return result
+
+    def bulk_fetch_tags(self, picture_ids: List[int]) -> Dict[int, list]:
+        """Returns {picture_id: [tag_objects]}. Batches 200 IDs per request."""
+        result: Dict[int, list] = {}
         for i in range(0, len(picture_ids), BULK_TAG_BATCH):
             batch = picture_ids[i : i + BULK_TAG_BATCH]
             data = self._request(
-                "POST", "/api/v1/pictures/tags/bulk_fetch", payload={"ids": batch}
+                "POST",
+                "/api/v1/pictures/tags/bulk_fetch",
+                payload={"picture_ids": batch},
             )
-            if isinstance(data, dict):
-                result.update(data)
+            if isinstance(data, list):
+                for entry in data:
+                    pid = entry.get("id")
+                    if pid is not None:
+                        result[int(pid)] = entry.get("tags", [])
         return result
 
     def download_picture(self, picture_id: int, ext: str, dest_path: str) -> None:
@@ -341,23 +361,15 @@ def download_sets(
         f"{len(need_meta)} need metadata fetch."
     )
 
-    # Fetch metadata in parallel to get file format
+    # Bulk-fetch metadata (one HTTP request per 500 pictures)
     meta_map: Dict[int, dict] = {}
     if need_meta:
-
-        def _fetch_meta(pid: int) -> Tuple[int, dict]:
-            return pid, client.get_picture_metadata(pid)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-            futs = {pool.submit(_fetch_meta, pid): pid for pid in need_meta}
-            done = 0
-            for fut in concurrent.futures.as_completed(futs):
-                pid, meta = fut.result()
-                meta_map[pid] = meta
-                done += 1
-                if done % 50 == 0 or done == len(need_meta):
-                    print(f"[INFO]   Metadata: {done}/{len(need_meta)}", end="\r")
-        print()
+        print(f"[INFO] Bulk-fetching metadata for {len(need_meta)} pictures...")
+        for m in client.get_pictures_bulk(need_meta):
+            pid = m.get("id")
+            if pid is not None:
+                meta_map[int(pid)] = m
+        print(f"[INFO]   Metadata: {len(meta_map)}/{len(need_meta)} fetched.")
 
     # Build download list: skip pictures already on disk (unless forced)
     to_download: List[Tuple[int, str]] = []
@@ -384,10 +396,10 @@ def download_sets(
     if not to_download:
         return 0
 
-    # Tags are already present in the metadata we fetched — no extra API call needed.
-    tags_map: Dict[int, list] = {
-        pid: meta_map[pid].get("tags", []) for pid, _ in to_download if pid in meta_map
-    }
+    # Bulk-fetch tags (GET /pictures doesn't include tags; use the dedicated endpoint).
+    download_pids = [pid for pid, _ in to_download]
+    print(f"[INFO] Bulk-fetching tags for {len(download_pids)} pictures...")
+    tags_map: Dict[int, list] = client.bulk_fetch_tags(download_pids)
 
     # Download images + write tag files in parallel
     downloaded = 0
