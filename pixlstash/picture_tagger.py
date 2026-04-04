@@ -111,7 +111,7 @@ CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta
 # Pin a specific HuggingFace git commit SHA for the custom tagger repo so that the
 # model is re-downloaded whenever this value is updated, even if the local file
 # already exists.  Set to "main" to always use the latest commit on the default branch.
-CUSTOM_TAGGER_REVISION = "4d47b0ee91e9421a1b790f13f42981307b85a17f"
+CUSTOM_TAGGER_REVISION = "739863b92f210f80e6b8968dade2e2d0a79ee04b"
 CUSTOM_TAGGER_REV_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.revision")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.95
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
