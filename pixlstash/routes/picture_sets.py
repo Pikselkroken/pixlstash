@@ -546,7 +546,12 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/picture_sets/{id}",
         summary="Get picture set",
-        description="Returns set metadata or member pictures with optional sort, format, and character-likeness/smart-score modes.",
+        description=(
+            "Returns set metadata or member pictures with optional sort, format, and "
+            "character-likeness/smart-score modes. By default only the stack leader "
+            "picture is returned for each stack. Pass expand_stacks=true to receive "
+            "every picture in every stack."
+        ),
     )
     def get_picture_set(
         request: Request,
@@ -560,6 +565,7 @@ def create_router(server) -> APIRouter:
         project_id: str | None = Query(None),
         fields: str = Query(None),
         min_score: int | None = Query(None),
+        expand_stacks: bool = Query(False),
     ):
         tags_filter = request.query_params.getlist("tag") or None
         tags_rejected_filter = request.query_params.getlist("rejected_tag") or None
@@ -634,6 +640,11 @@ def create_router(server) -> APIRouter:
             filter_hidden_ids, picture_ids
         )
 
+        # Determine whether to collapse stacks to their leaders.
+        # expand_stacks=true opt-in from the caller overrides the default.
+        # The legacy fields=grid query param also triggers deduplication.
+        deduplicate_stacks = not expand_stacks and fields != "full"
+
         # If any picture in the set belongs to a stack, treat the entire stack
         # as part of the set — mirroring how stacks work in the regular view.
         def expand_with_stack_members(session, ids):
@@ -680,7 +691,7 @@ def create_router(server) -> APIRouter:
                 candidate_ids=picture_ids,
                 penalised_tags=penalised_tags,
             )
-            if fields == "grid":
+            if deduplicate_stacks:
                 pictures = _deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
@@ -700,7 +711,7 @@ def create_router(server) -> APIRouter:
                 descending,
                 candidate_ids=picture_ids,
             )
-            if fields == "grid":
+            if deduplicate_stacks:
                 pictures = _deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
             return {"pictures": pictures, "set": safe_model_dict(picture_set)}
@@ -713,7 +724,7 @@ def create_router(server) -> APIRouter:
                 select_fields=Picture.metadata_fields(),
                 format=format,
                 include_unimported=True,
-                stack_leaders_only=(fields == "grid"),
+                stack_leaders_only=deduplicate_stacks,
                 min_score=min_score,
                 tags_filter=tags_filter,
                 tags_rejected_filter=tags_rejected_filter,
@@ -871,13 +882,19 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/picture_sets/{id}/members",
         summary="List picture set members",
-        description="Returns unique picture ids that belong to a set, with optional deleted inclusion. Stack members are expanded so that all pictures in a stack are returned when any member of that stack is in the set.",
+        description=(
+            "Returns unique picture ids that belong to a set, with optional deleted inclusion. "
+            "By default only explicitly stored members are returned. "
+            "Pass expand_stacks=true to also include all stack siblings of any member, "
+            "which is useful for checking whether a stack is part of the set."
+        ),
     )
     def get_picture_set_pictures(
         id: int,
         include_deleted: bool = Query(False),
+        expand_stacks: bool = Query(False),
     ):
-        def fetch_members(session, id, include_deleted):
+        def fetch_members(session, id, include_deleted, expand_stacks):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return None
@@ -893,11 +910,12 @@ def create_router(server) -> APIRouter:
             ).all()
             picture_ids = list({m for m in members if m is not None})
 
+            if not expand_stacks or not picture_ids:
+                return picture_ids
+
             # Expand stacks: if any member of a stack is in the set, include
             # all other non-deleted members of that stack so the stack leader
             # is recognised as a set member in the frontend.
-            if not picture_ids:
-                return picture_ids
             id_stack_rows = session.exec(
                 select(Picture.id, Picture.stack_id).where(
                     Picture.id.in_(picture_ids),
@@ -923,7 +941,7 @@ def create_router(server) -> APIRouter:
             return picture_ids
 
         picture_ids = server.vault.db.run_immediate_read_task(
-            fetch_members, id, include_deleted
+            fetch_members, id, include_deleted, expand_stacks
         )
         if picture_ids is None:
             raise HTTPException(status_code=404, detail="Picture set not found")

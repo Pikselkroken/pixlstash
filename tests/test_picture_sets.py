@@ -356,13 +356,15 @@ def test_no_duplicate_reference_picture_sets():
 
 
 def test_members_endpoint_expands_stack_siblings():
-    """Members endpoint should include all stack members when any stack member is in the set.
+    """Members endpoint should include all stack members when expand_stacks=true.
 
     When a stack is shown in the grid its representative (leader) image may not
     be the same picture that was explicitly added to the set.  If pic_b belongs
-    to a stack and was added to the set, the /members response must also include
-    pic_a (the stack leader) so AddToSetControl can correctly mark the set as
-    checked when the stack is selected.
+    to a stack and was added to the set, the /members?expand_stacks=true response
+    must also include pic_a (the stack leader) so AddToSetControl can correctly
+    mark the set as checked when the stack is selected.
+
+    Without expand_stacks=true only the explicitly stored member (pic_b) is returned.
     """
     temp_dir, client, server = setup_server_with_temp_db()
     try:
@@ -399,14 +401,26 @@ def test_members_endpoint_expands_stack_siblings():
         add_resp = client.post(f"/picture_sets/{set_id}/members/{pic_b}")
         assert add_resp.status_code == 200
 
-        # /members must return both pictures so the stack leader is recognised
+        # Default (no expand_stacks): only the explicitly stored member is returned
         members_resp = client.get(f"/picture_sets/{set_id}/members")
         assert members_resp.status_code == 200
         member_ids = set(members_resp.json()["picture_ids"])
         assert pic_b in member_ids, "pic_b (added member) must appear in members"
-        assert pic_a in member_ids, (
-            "pic_a (stack sibling) must appear in members so the stack leader "
-            "is recognised as belonging to the set in the frontend"
+        assert pic_a not in member_ids, (
+            "pic_a (stack sibling) must NOT appear without expand_stacks=true"
+        )
+
+        # With expand_stacks=true: both pictures returned so the stack leader
+        # is recognised as belonging to the set in the frontend (AddToSetControl)
+        members_expanded_resp = client.get(
+            f"/picture_sets/{set_id}/members?expand_stacks=true"
+        )
+        assert members_expanded_resp.status_code == 200
+        expanded_ids = set(members_expanded_resp.json()["picture_ids"])
+        assert pic_b in expanded_ids, "pic_b (added member) must appear in expanded members"
+        assert pic_a in expanded_ids, (
+            "pic_a (stack sibling) must appear in members with expand_stacks=true so "
+            "the stack leader is recognised as belonging to the set in the frontend"
         )
     finally:
         server.vault.close()
