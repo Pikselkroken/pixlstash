@@ -559,23 +559,25 @@ class AuthService:
         if not is_auth_excluded_path(request.url.path):
             session_id = request.cookies.get("session_id")
             if session_id not in self.active_session_ids:
-                self._logger.error(
-                    "Invalid session_id. It has expired and the client needs to log in again. When trying to access %s",
-                    request.url.path,
-                )
-                origin = request.headers.get("origin")
-                headers = {
-                    "Access-Control-Allow-Credentials": "true",
-                }
-                if origin and (
-                    origin in allow_origins
-                    or (allow_origin_regex and re.match(allow_origin_regex, origin))
-                ):
-                    headers["Access-Control-Allow-Origin"] = origin
+                # Fall back to Bearer token before rejecting
+                if self._user_id_from_bearer(request) is None:
+                    self._logger.error(
+                        "Invalid session_id. It has expired and the client needs to log in again. When trying to access %s",
+                        request.url.path,
+                    )
+                    origin = request.headers.get("origin")
+                    headers = {
+                        "Access-Control-Allow-Credentials": "true",
+                    }
+                    if origin and (
+                        origin in allow_origins
+                        or (allow_origin_regex and re.match(allow_origin_regex, origin))
+                    ):
+                        headers["Access-Control-Allow-Origin"] = origin
 
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Not authenticated"},
-                    headers=headers,
-                )
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Not authenticated"},
+                        headers=headers,
+                    )
         return await call_next(request)
