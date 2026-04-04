@@ -198,11 +198,12 @@ async function fetchSetMembers(list) {
   const entries = await Promise.all(
     list.map(async (set) => {
       try {
-        const query = props.includeDeletedMembers
-          ? "?include_deleted=true"
-          : "";
+        const params = new URLSearchParams({ expand_stacks: "true" });
+        if (props.includeDeletedMembers) {
+          params.set("include_deleted", "true");
+        }
         const res = await apiClient.get(
-          resolveUrl(`/picture_sets/${set.id}/members${query}`),
+          resolveUrl(`/picture_sets/${set.id}/members?${params}`),
         );
         const data = await res.data;
         const pictureIds = Array.isArray(data?.picture_ids)

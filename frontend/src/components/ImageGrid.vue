@@ -1218,6 +1218,20 @@ function refreshAllThumbnailInfoDisplays() {
 
 let initialFetchTimer = null;
 
+// DEBUG: trace every allGridImages mutation while the overlay is open
+watch(
+  allGridImages,
+  () => {
+    if (overlayOpen.value) {
+      console.warn(
+        "[ImageGrid] allGridImages mutated while overlay is open:",
+        new Error("stack trace").stack,
+      );
+    }
+  },
+  { flush: "sync" },
+);
+
 onMounted(() => {
   window.addEventListener("resize", triggerFaceOverlayRedraw);
   window.addEventListener("drop", clearGridDragOverlay, true);
@@ -2186,12 +2200,18 @@ function handleOverlayAddedToSet(payload) {
     // In overlap view, removing membership from one selected set means the
     // picture no longer belongs to the intersection and should disappear.
     if (action === "removed") {
-      removeImagesById(pictureIds);
-      selectedImageIds.value = selectedImageIds.value.filter(
-        (id) => !pictureIds.includes(id),
-      );
-      clearFaceSelection();
-      lastSelectedImageId = null;
+      if (overlayOpen.value) {
+        // Defer grid removal until the overlay closes so the current picture
+        // doesn't vanish from the filmstrip mid-viewing.
+        pendingOverlayGridRefresh.value = true;
+      } else {
+        removeImagesById(pictureIds);
+        selectedImageIds.value = selectedImageIds.value.filter(
+          (id) => !pictureIds.includes(id),
+        );
+        clearFaceSelection();
+        lastSelectedImageId = null;
+      }
     }
   } else if (
     hasSetSelection.value &&
@@ -2200,14 +2220,22 @@ function handleOverlayAddedToSet(payload) {
     Number.isFinite(changedSetId) &&
     changedSetId === primarySelectedSetId.value
   ) {
-    removeImagesById(pictureIds);
+    if (overlayOpen.value) {
+      pendingOverlayGridRefresh.value = true;
+    } else {
+      removeImagesById(pictureIds);
+    }
   }
 
   if (
     props.selectedCharacter === props.unassignedPicturesId &&
     !hasSetSelection.value
   ) {
-    removeImagesById(pictureIds);
+    if (overlayOpen.value) {
+      pendingOverlayGridRefresh.value = true;
+    } else {
+      removeImagesById(pictureIds);
+    }
   }
   emit("refresh-sidebar");
 }
@@ -2324,8 +2352,14 @@ async function handleSetProjectForSelected(payload) {
     }
 
     preserveScrollOnNextFetch.value = true;
-    await fetchAllGridImages({ force: true });
-    updateVisibleThumbnails();
+    if (overlayOpen.value) {
+      // A project change while the overlay is open would replace allGridImages,
+      // breaking the filmstrip. Defer the refetch until the overlay closes.
+      pendingOverlayGridRefresh.value = true;
+    } else {
+      await fetchAllGridImages({ force: true });
+      updateVisibleThumbnails();
+    }
     emit("refresh-sidebar");
   } catch (err) {
     const message = err?.response?.data?.detail || err?.message || String(err);
@@ -2791,6 +2825,14 @@ const overlayInitialExpandedStackIds = ref([]);
 // Set to true when a tag mutation was deferred (applyTagFilter=true, overlay
 // open). Triggers a filtered grid refetch once the overlay closes.
 const pendingTagFilterRefresh = ref(false);
+// Set to true when a grid-mutating operation (set removal, stack change,
+// smart-score re-rank) was deferred to avoid the filmstrip losing its current
+// picture while the overlay is open. Triggers a full refetch on close.
+const pendingOverlayGridRefresh = ref(false);
+// When fetchAllGridImages completes while the overlay is open, the resulting
+// image list is stored here instead of being written to allGridImages directly.
+// Applied to allGridImages when the overlay closes.
+const pendingGridImages = ref(null);
 
 // ============================================================
 // DRAG & DROP STATE + SOURCE HELPERS
@@ -3005,12 +3047,25 @@ function handleOverlayChange(payload) {
   const imageId = payload.imageId ?? payload.id ?? payload;
   const fields = payload.fields || {};
   if (fields.stack) {
+    if (overlayOpen.value) {
+      // A stack change while overlaying would replace allGridImages, breaking
+      // the filmstrip. Defer the full refetch until the overlay closes.
+      pendingOverlayGridRefresh.value = true;
+      return;
+    }
     preserveScrollOnNextFetch.value = true;
     void fetchAllGridImages();
     return;
   }
   if (!imageId) return;
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
+    if (overlayOpen.value) {
+      // Smart-score re-ranking would reorder allGridImages mid-viewing.
+      // Defer the full refetch; still refresh the single card's metadata.
+      pendingOverlayGridRefresh.value = true;
+      refreshGridImage(imageId);
+      return;
+    }
     preserveScrollOnNextFetch.value = true;
     debouncedFetchAllGridImages({ force: true, showProgress: true });
     return;
@@ -3219,8 +3274,17 @@ function closeOverlay() {
   if (comfyuiRunner.value?.comfyuiPendingOverlayRefresh) {
     comfyuiRunner.value.comfyuiPendingOverlayRefresh.value = false;
   }
-  if (pendingTagFilterRefresh.value) {
+  if (pendingGridImages.value !== null) {
+    // A background fetch completed while the overlay was open. Apply its
+    // result now that we're safe to update the grid.
+    allGridImages.value = pendingGridImages.value;
+    pendingGridImages.value = null;
     pendingTagFilterRefresh.value = false;
+    pendingOverlayGridRefresh.value = false;
+    updateVisibleThumbnails();
+  } else if (pendingTagFilterRefresh.value || pendingOverlayGridRefresh.value) {
+    pendingTagFilterRefresh.value = false;
+    pendingOverlayGridRefresh.value = false;
     lastFetchSuccess.value = { key: "", at: 0 };
     lastFetchError.value = { key: "", at: 0 };
     debouncedFetchAllGridImages();
@@ -3469,14 +3533,28 @@ async function applyScore(img, newScore) {
     });
 
     if (isScoreSortActive()) {
-      repositionImageByScore(imageId, newScore);
+      if (overlayOpen.value) {
+        // Reordering the grid while the overlay is open would break the
+        // filmstrip. Defer the reposition until the overlay closes.
+        pendingOverlayGridRefresh.value = true;
+      } else {
+        repositionImageByScore(imageId, newScore);
+      }
     }
     if (isCharacterLikenessSortActive()) {
+      if (overlayOpen.value) {
+        pendingOverlayGridRefresh.value = true;
+        return;
+      }
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
       return;
     }
     if (isSmartScoreSortActive()) {
+      if (overlayOpen.value) {
+        pendingOverlayGridRefresh.value = true;
+        return;
+      }
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
       return;
@@ -4965,7 +5043,15 @@ async function fetchAllGridImages(options = {}) {
     hasLoadedOnce.value = true;
     const newImages = mapGridImages(images);
     resetThumbnailState();
-    allGridImages.value = newImages;
+    if (overlayOpen.value) {
+      // Don't replace allGridImages while the overlay is open — the filmstrip
+      // and prev/next navigation read from it directly. Store the fetched
+      // result and apply it once the overlay closes.
+      pendingGridImages.value = newImages;
+      pendingOverlayGridRefresh.value = true;
+    } else {
+      allGridImages.value = newImages;
+    }
     if (isSetOverlapView.value) {
       totalCurrentCategoryCount.value = newImages.length;
     }
@@ -5818,6 +5904,13 @@ async function _afterTagMutation(imageId) {
     return;
   }
   if (isSmartScoreSortActive()) {
+    if (overlayOpen.value) {
+      // Smart-score re-ranking would reorder the grid while the overlay is
+      // open. Defer the full refetch until the overlay closes.
+      pendingOverlayGridRefresh.value = true;
+      refreshGridImage(imageId);
+      return;
+    }
     // Smart score values shown in the grid must match the list endpoint's
     // global ranking context. Recompute by refetching the sorted list instead
     // of patching a single card from metadata.
