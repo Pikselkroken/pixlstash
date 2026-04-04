@@ -2048,7 +2048,7 @@ function pauseVideo(id) {
 // ============================================================
 // GROUP / SET MEMBERSHIP
 // ============================================================
-function removeFromGroup() {
+async function removeFromGroup() {
   if (!selectedImageIds.value.length && !selectedFaceIds.value.length) return;
   const backendUrl = props.backendUrl;
   const faceIds = selectedFaceIds.value
@@ -2144,30 +2144,107 @@ function removeFromGroup() {
       clearFaceSelection();
       return;
     }
-    Promise.all(
-      pictureIds.map((id) =>
-        apiClient
-          .delete(
-            `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`,
-          )
 
-          .catch((err) => {
-            alert(`Error removing image ${id} from set: ${err.message}`);
-          }),
-      ),
-    ).then(async () => {
-      // Remove affected images from grid immediately
-      allGridImages.value = allGridImages.value.filter(
-        (img) => !pictureIds.includes(img.id),
+    // Build a fast lookup of id → grid image for stack info.
+    const imageById = new Map(
+      (allGridImages.value || [])
+        .filter((img) => img && img.id != null)
+        .map((img) => [String(img.id), img]),
+    );
+
+    // Classify each selected picture:
+    //   No stack        → remove only that picture from the set.
+    //   Collapsed stack → remove ALL members of that stack from the set;
+    //                     leave the stack structure intact (the whole stack
+    //                     leaves the set as an atomic unit).
+    //   Expanded stack  → remove only that picture from the set AND
+    //                     remove it from the stack (unstack it).
+    const idsToRemoveFromSet = new Set();
+    const stackRemovalsForExpanded = new Map(); // stackId → [pictureId, ...]
+    const collapsedStackIds = new Set();
+
+    for (const id of pictureIds) {
+      const img = imageById.get(String(id));
+      const stackId = getPictureStackId(img);
+      if (!stackId) {
+        idsToRemoveFromSet.add(id);
+      } else if (expandedStackIds.value.has(stackId)) {
+        idsToRemoveFromSet.add(id);
+        const arr = stackRemovalsForExpanded.get(stackId) ?? [];
+        arr.push(id);
+        stackRemovalsForExpanded.set(stackId, arr);
+      } else {
+        collapsedStackIds.add(stackId);
+      }
+    }
+
+    // For each collapsed stack fetch all member IDs so they can all be
+    // removed from the set in one pass.
+    for (const stackId of collapsedStackIds) {
+      const cached = expandedStackMembers.value.get(stackId);
+      let memberIds;
+      if (cached?.ids?.length) {
+        memberIds = cached.ids;
+      } else {
+        try {
+          const res = await apiClient.get(`${backendUrl}/stacks/${stackId}`);
+          memberIds = res.data?.picture_ids ?? [];
+        } catch {
+          // Fallback: only remove the originally-selected picture(s).
+          memberIds = pictureIds.filter((id) => {
+            const img = imageById.get(String(id));
+            return getPictureStackId(img) === stackId;
+          });
+        }
+      }
+      for (const id of memberIds) idsToRemoveFromSet.add(id);
+    }
+
+    try {
+      // Remove from picture set (all affected IDs in parallel).
+      await Promise.all(
+        [...idsToRemoveFromSet].map(
+          (id) =>
+            apiClient
+              .delete(
+                `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`,
+              )
+              .catch(() => {}), // silently ignore if picture not in set
+        ),
       );
-      selectedImageIds.value = [];
-      clearFaceSelection();
-      lastSelectedImageId = null;
-      await fetchAllGridImages();
-      loadedRanges.value = [];
-      updateVisibleThumbnails();
-      emit("refresh-sidebar");
-    });
+
+      // For expanded stacks: also remove the selected picture(s) from the
+      // stack itself so they become standalone images.
+      if (stackRemovalsForExpanded.size) {
+        await Promise.all(
+          [...stackRemovalsForExpanded.entries()].map(([stackId, ids]) =>
+            apiClient
+              .delete(`${backendUrl}/stacks/${stackId}/members`, {
+                data: { picture_ids: ids },
+              })
+              .catch((err) =>
+                console.error("Failed to remove from stack:", err),
+              ),
+          ),
+        );
+      }
+
+      // Optimistic grid update: remove everything that left the set.
+      const removedSet = new Set([...idsToRemoveFromSet].map(String));
+      allGridImages.value = allGridImages.value.filter(
+        (img) => !removedSet.has(String(img?.id)),
+      );
+    } catch (err) {
+      alert(`Error removing images from set: ${err.message}`);
+    }
+
+    selectedImageIds.value = [];
+    clearFaceSelection();
+    lastSelectedImageId = null;
+    await fetchAllGridImages();
+    loadedRanges.value = [];
+    updateVisibleThumbnails();
+    emit("refresh-sidebar");
     return;
   }
 }
@@ -3991,10 +4068,7 @@ function _appendSelectionParams(params) {
     props.selectedCharacter !== props.allPicturesId
   ) {
     params.append("character_id", props.selectedCharacter);
-    if (
-      props.selectedCharacter === props.unassignedPicturesId &&
-      props.projectViewMode === "project"
-    ) {
+    if (props.projectViewMode === "project") {
       params.append(
         "project_id",
         props.selectedProjectId != null
