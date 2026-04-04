@@ -179,12 +179,25 @@ def create_router(server) -> APIRouter:
             logger.debug("UNASSIGNED pics count: {}".format(image_count))
             char_id = None
         else:
+            assigned_project_id: int | None = None
+            assigned_project_unassigned = False
+            if project_id == "UNASSIGNED":
+                assigned_project_unassigned = True
+            elif project_id is not None:
+                try:
+                    assigned_project_id = int(project_id)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="Invalid project_id")
 
             def count_assigned(session: Session, character_id: int) -> int:
                 conditions = [
                     Face.character_id == character_id,
                     Picture.deleted.is_(False),
                 ]
+                if assigned_project_unassigned:
+                    conditions.append(_project_unassigned_membership())
+                elif assigned_project_id is not None:
+                    conditions.append(_project_membership_exists(assigned_project_id))
                 if hidden_tag_filter is not None:
                     conditions.append(hidden_tag_filter)
                 return session.exec(
