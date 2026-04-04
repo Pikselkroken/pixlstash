@@ -95,13 +95,17 @@ class TagPredictionTask(BaseTask):
         if not updates:
             return {"written": 0}
 
+        picture_ids = [u["picture_id"] for u in updates]
         written = self._db.run_task(
             self._upsert_predictions,
             updates,
             self._model_version,
             priority=DBPriority.LOW,
         )
-        return {"written": written}
+        return {
+            "written": written,
+            "picture_ids": picture_ids if written > 0 else [],
+        }
 
     @staticmethod
     def _upsert_predictions(

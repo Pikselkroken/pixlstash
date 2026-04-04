@@ -291,6 +291,13 @@ class Vault:
             return
 
         result = task.result if isinstance(task.result, dict) else {}
+
+        if task.type == "TagPredictionTask":
+            picture_ids = result.get("picture_ids") or []
+            if picture_ids:
+                self._queue_changed_tags_notification(picture_ids)
+            return
+
         changed = result.get("changed") if isinstance(result, dict) else None
         if not changed:
             return
