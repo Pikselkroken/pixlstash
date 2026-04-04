@@ -221,6 +221,16 @@
           <span>{{ showRemoveStackButton ? "Unstack" : "Stack" }}</span>
         </button>
         <button
+          v-if="!isScrapheapView && showUnstackMultipleButton"
+          class="stack-btn"
+          type="button"
+          title="Dissolve all selected stacks"
+          @click="$emit('dissolve-stacks')"
+        >
+          <v-icon size="16">mdi-layers-off</v-icon>
+          <span>Unstack</span>
+        </button>
+        <button
           v-if="showGroupStackButton"
           class="stack-btn"
           type="button"
@@ -529,6 +539,7 @@ const props = defineProps({
   comfyuiClientId: { type: String, default: "" },
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
+  selectedMultipleStackIds: { type: Array, default: () => [] },
   availablePlugins: { type: Array, default: () => [] },
   allGridImages: { type: Array, default: () => [] },
 });
@@ -542,6 +553,7 @@ const emit = defineEmits([
   "add-to-character",
   "set-project",
   "remove-from-stack",
+  "dissolve-stacks",
   "create-stack",
   "create-stacks-from-groups",
   "remove-from-group",
@@ -632,6 +644,14 @@ const showGroupStackButton = computed(() => {
 const showRemoveStackButton = computed(() => {
   if (isScrapheapView.value) return false;
   return props.showRemoveFromStack === true;
+});
+
+// True when selected images span multiple stacks (or one stack mixed with
+// non-stacked images) — the single-stack case is handled by showRemoveStackButton.
+const showUnstackMultipleButton = computed(() => {
+  if (isScrapheapView.value) return false;
+  if (showRemoveStackButton.value) return false;
+  return props.selectedMultipleStackIds.length > 0;
 });
 
 const pluginOptions = computed(() => {

@@ -146,6 +146,29 @@ def create_router(server) -> APIRouter:
 
         return ordered
 
+    def _compact_stack_positions_in_session(session: Session, stack_id: int) -> None:
+        """Re-number all pictures in a stack to contiguous 0..N-1 positions.
+
+        Preserves relative ordering: pictures with an explicit position are
+        ranked first (ascending), pictures with NULL positions follow ordered
+        by id.  The caller is responsible for committing after this call.
+        """
+        pics = session.exec(
+            select(Picture)
+            .where(Picture.stack_id == stack_id)
+            .order_by(
+                case(
+                    (Picture.stack_position.is_(None), 1),
+                    else_=0,
+                ),
+                Picture.stack_position,
+                Picture.id,
+            )
+        ).all()
+        for idx, pic in enumerate(pics):
+            pic.stack_position = idx
+            session.add(pic)
+
     @router.get(
         "/stacks/{stack_id}",
         summary="Get stack details",
@@ -323,13 +346,49 @@ def create_router(server) -> APIRouter:
                 if stack is None:
                     raise HTTPException(status_code=404, detail="Stack not found")
                 orphan_ids = existing_stack_ids - {keeper_id}
+                # Shift orphan positions so they land after the keeper's last
+                # explicitly-positioned member, preserving each stack's internal
+                # order and avoiding duplicate position values.
+                keeper_members = session.exec(
+                    select(Picture).where(Picture.stack_id == keeper_id)
+                ).all()
+                shift_base = (
+                    max(
+                        (
+                            m.stack_position
+                            for m in keeper_members
+                            if m.stack_position is not None
+                        ),
+                        default=-1,
+                    )
+                    + 1
+                )
                 for orphan_stack_id in orphan_ids:
                     orphan_members = session.exec(
                         select(Picture).where(Picture.stack_id == orphan_stack_id)
                     ).all()
-                    for member in orphan_members:
+                    orphan_max = max(
+                        (
+                            m.stack_position
+                            for m in orphan_members
+                            if m.stack_position is not None
+                        ),
+                        default=-1,
+                    )
+                    for i, member in enumerate(
+                        sorted(
+                            orphan_members,
+                            key=lambda m: (
+                                m.stack_position is None,
+                                m.stack_position or 0,
+                                int(m.id or 0),
+                            ),
+                        )
+                    ):
+                        member.stack_position = shift_base + i
                         member.stack_id = keeper_id
                         session.add(member)
+                    shift_base += max(orphan_max + 1, len(orphan_members))
                     orphan_stack = session.get(PictureStack, orphan_stack_id)
                     if orphan_stack is not None:
                         session.delete(orphan_stack)
@@ -362,6 +421,10 @@ def create_router(server) -> APIRouter:
                     pic.stack_position = next_position
                     next_position += 1
                 session.add(pic)
+
+            # Compact to guarantee unique, contiguous positions after any merge
+            # or append that may have left gaps or duplicates.
+            _compact_stack_positions_in_session(session, stack.id)
 
             stack.updated_at = datetime.utcnow()
             session.add(stack)
@@ -539,6 +602,9 @@ def create_router(server) -> APIRouter:
                 session.commit()
                 return None
 
+            # Compact to close gaps left by the removed pictures.
+            _compact_stack_positions_in_session(session, stack_id)
+
             stack.updated_at = datetime.utcnow()
             session.add(stack)
             session.commit()
@@ -551,5 +617,80 @@ def create_router(server) -> APIRouter:
         payload = safe_model_dict(stack)
         payload["picture_ids"] = picture_ids
         return payload
+
+    @router.patch(
+        "/stacks/{stack_id}/members/{picture_id}",
+        summary="Set member position",
+        description=(
+            "Moves a single stack member to the given 0-based position, "
+            "shifting all other members as needed."
+        ),
+    )
+    def set_member_position(
+        stack_id: int,
+        picture_id: int,
+        payload: dict = Body(...),
+        request: Request = None,
+    ):
+        _ensure_secure_when_required(request)
+        server.auth.require_user_id(request)
+
+        position = payload.get("position")
+        if not isinstance(position, int) or position < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="position must be a non-negative integer",
+            )
+
+        def update_member_position(
+            session: Session,
+            stack_id_value: int,
+            picture_id_value: int,
+            target_position: int,
+        ) -> list[int]:
+            stack = session.get(PictureStack, stack_id_value)
+            if stack is None:
+                raise HTTPException(status_code=404, detail="Stack not found")
+
+            pic = session.get(Picture, picture_id_value)
+            if pic is None or pic.stack_id != stack_id_value:
+                raise HTTPException(
+                    status_code=404, detail="Picture not found in stack"
+                )
+
+            # Fetch all members in current stack order.
+            all_pics = session.exec(
+                select(Picture)
+                .where(Picture.stack_id == stack_id_value)
+                .order_by(
+                    case(
+                        (Picture.stack_position.is_(None), 1),
+                        else_=0,
+                    ),
+                    Picture.stack_position,
+                    Picture.id,
+                )
+            ).all()
+
+            # Remove the target picture from its current slot, then insert at
+            # the requested position (clamped to valid range).
+            ordered = [p for p in all_pics if p.id != picture_id_value]
+            insert_at = max(0, min(target_position, len(ordered)))
+            ordered.insert(insert_at, pic)
+
+            # Assign contiguous 0-based positions.
+            for idx, p in enumerate(ordered):
+                p.stack_position = idx
+                session.add(p)
+
+            stack.updated_at = datetime.utcnow()
+            session.add(stack)
+            session.commit()
+            return [p.id for p in ordered]
+
+        ordered_ids = server.vault.db.run_task(
+            update_member_position, stack_id, picture_id, position
+        )
+        return {"stack_id": stack_id, "picture_ids": ordered_ids}
 
     return router
