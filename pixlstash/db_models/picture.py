@@ -902,6 +902,8 @@ class Picture(SQLModel, table=True):
         min_score: Optional[int] = None,
         project_id: Optional[int] = None,
         only_unassigned_project: bool = False,
+        tags_filter: Optional[List[str]] = None,
+        tags_rejected_filter: Optional[List[str]] = None,
     ):
         query = select(Picture)
         unassigned_conditions = cls.build_unassigned_conditions(
@@ -933,6 +935,22 @@ class Picture(SQLModel, table=True):
 
         if min_score is not None:
             query = query.where(Picture.score >= min_score)
+
+        if tags_filter:
+            for i, tag in enumerate(tags_filter):
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
+                    ).bindparams(**{f"tag_filter_{i}": tag})
+                )
+
+        if tags_rejected_filter:
+            for i, tag in enumerate(tags_rejected_filter):
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :rejected_tag_filter_{i} AND tag_prediction.status = 'REJECTED')"
+                    ).bindparams(**{f"rejected_tag_filter_{i}": tag})
+                )
 
         select_fields = metadata_fields or cls.metadata_fields()
         if select_fields:

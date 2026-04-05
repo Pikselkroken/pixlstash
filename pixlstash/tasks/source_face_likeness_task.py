@@ -112,6 +112,7 @@ class SourceFaceLikenessTask(BaseTask):
                 assignments[target_face.id] = best_char
 
         if assignments:
+
             def apply_assignments(session):
                 for face_id, char_id in assignments.items():
                     face = session.get(Face, face_id)

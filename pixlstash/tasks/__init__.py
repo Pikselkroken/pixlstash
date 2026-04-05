@@ -22,7 +22,9 @@ from .text_embedding_task import TextEmbeddingTask
 from .likeness_parameters_task import LikenessParametersTask
 from .likeness_task import LikenessTask
 from .source_face_likeness_task import SourceFaceLikenessTask
-from .missing_source_face_likeness_finder import MissingSourceFaceLikenessCharacterFinder
+from .missing_source_face_likeness_finder import (
+    MissingSourceFaceLikenessCharacterFinder,
+)
 
 __all__ = [
     "TaskType",

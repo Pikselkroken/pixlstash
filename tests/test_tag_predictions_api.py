@@ -24,7 +24,9 @@ def _setup():
         f.write(json.dumps({"port": 8000}))
     server = Server(server_config_path)
     client = TestClient(server.api)
-    resp = client.post("/login", json={"username": "testuser", "password": "testpassword"})
+    resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
     assert resp.status_code == 200
     return temp_dir, client, server
 
@@ -32,7 +34,9 @@ def _setup():
 def _upload_picture(client):
     img_path = os.path.join(PICTURES_DIR, "Bad1.png")
     with open(img_path, "rb") as f:
-        result = upload_pictures_and_wait(client, [("file", ("Bad1.png", f, "image/png"))])
+        result = upload_pictures_and_wait(
+            client, [("file", ("Bad1.png", f, "image/png"))]
+        )
     assert result["status"] == "completed"
     return result["results"][0]["picture_id"]
 
@@ -85,7 +89,9 @@ def test_confirm_prediction_adds_tag():
         resp = client.get(f"/pictures/{pic_id}/tag_predictions?status=CONFIRMED")
         assert resp.status_code == 200
         confirmed = resp.json()
-        assert any(p["tag"] == "sunny" and p["status"] == "CONFIRMED" for p in confirmed)
+        assert any(
+            p["tag"] == "sunny" and p["status"] == "CONFIRMED" for p in confirmed
+        )
     finally:
         server.vault.close()
         temp_dir.cleanup()

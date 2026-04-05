@@ -9,7 +9,13 @@ from typing import Any
 from PIL import Image
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Face, Picture, PictureProjectMember, PictureSetMember, PictureStack
+from pixlstash.db_models import (
+    Face,
+    Picture,
+    PictureProjectMember,
+    PictureSetMember,
+    PictureStack,
+)
 from pixlstash.image_plugins.base import ImagePlugin
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
@@ -774,7 +780,9 @@ def apply_plugin_to_pictures(
     )
 
     _propagate_output_picture_sets(server, source_picture_ids, ordered_output_ids)
-    _propagate_output_project_memberships(server, source_picture_ids, ordered_output_ids)
+    _propagate_output_project_memberships(
+        server, source_picture_ids, ordered_output_ids
+    )
     _set_source_picture_ids_on_new_outputs(
         server, source_picture_ids, ordered_output_ids, new_ids
     )

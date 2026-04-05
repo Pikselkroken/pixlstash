@@ -18,7 +18,14 @@ from sqlmodel import select
 from datetime import datetime
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Face, Picture, PictureProjectMember, PictureSetMember, PictureStack, User
+from pixlstash.db_models import (
+    Face,
+    Picture,
+    PictureProjectMember,
+    PictureSetMember,
+    PictureStack,
+    User,
+)
 from pixlstash.event_types import EventType
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
