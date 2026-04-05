@@ -62,6 +62,7 @@ const showFaceBboxes = ref(false);
 const showFormat = ref(true);
 const showResolution = ref(true);
 const showProblemIcon = ref(true);
+const penalisedTagWeights = ref({});
 const showStacks = ref(true);
 const compactMode = ref(false);
 const expandedStackCount = ref(0);
@@ -760,6 +761,26 @@ async function fetchConfig() {
       ? res.data.hidden_tags
       : [];
     applyTagFilter.value = Boolean(res.data.apply_tag_filter);
+    const rawPt = res.data.smart_score_penalised_tags;
+    if (rawPt && typeof rawPt === "object" && !Array.isArray(rawPt)) {
+      penalisedTagWeights.value = Object.fromEntries(
+        Object.entries(rawPt).map(([k, v]) => [
+          String(k).trim().toLowerCase(),
+          Number(v) || 0,
+        ]),
+      );
+    } else if (Array.isArray(rawPt)) {
+      penalisedTagWeights.value = Object.fromEntries(
+        rawPt.map((t) => [
+          String(t || "")
+            .trim()
+            .toLowerCase(),
+          3,
+        ]),
+      );
+    } else {
+      penalisedTagWeights.value = {};
+    }
     config.selectedSimilarityCharacter = selectedSimilarityCharacter.value;
     configSnapshot.value = {
       sort: selectedSort.value || "",
@@ -1363,6 +1384,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :showFormat="showFormat"
               :showResolution="showResolution"
               :showProblemIcon="showProblemIcon"
+              :penalisedTagWeights="penalisedTagWeights"
               :showStacks="showStacks"
               :compactMode="compactMode"
               :themeMode="themeMode"
