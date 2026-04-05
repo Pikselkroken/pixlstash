@@ -44,6 +44,9 @@ class WorkPlanner:
         from pixlstash.tasks.missing_tag_prediction_finder import (
             MissingTagPredictionFinder,
         )
+        from pixlstash.tasks.missing_source_face_likeness_finder import (
+            MissingSourceFaceLikenessCharacterFinder,
+        )
 
         return {
             TaskType.FACE_EXTRACTION: MissingFaceExtractionFinder(
@@ -89,6 +92,9 @@ class WorkPlanner:
             TaskType.TAG_PREDICTION: MissingTagPredictionFinder(
                 database=database,
                 picture_tagger_getter=picture_tagger_getter,
+            ),
+            TaskType.SOURCE_FACE_LIKENESS: MissingSourceFaceLikenessCharacterFinder(
+                database=database,
             ),
         }
 

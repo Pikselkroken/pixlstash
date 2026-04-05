@@ -9,7 +9,7 @@ from typing import Any
 from PIL import Image
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Face, Picture, PictureSetMember, PictureStack
+from pixlstash.db_models import Face, Picture, PictureProjectMember, PictureSetMember, PictureStack
 from pixlstash.image_plugins.base import ImagePlugin
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.pixl_logging import get_logger
@@ -409,6 +409,107 @@ def _propagate_output_picture_sets(
     server.vault.db.run_task(copy_memberships)
 
 
+def _propagate_output_project_memberships(
+    server,
+    source_picture_ids: list[int],
+    output_picture_ids: list[int],
+) -> None:
+    if not source_picture_ids or not output_picture_ids:
+        return
+
+    source_to_outputs: dict[int, set[int]] = {}
+    for source_id, output_id in zip(source_picture_ids, output_picture_ids):
+        if source_id is None or output_id is None:
+            continue
+        if source_id == output_id:
+            continue
+        source_to_outputs.setdefault(int(source_id), set()).add(int(output_id))
+
+    if not source_to_outputs:
+        return
+
+    source_ids = list(source_to_outputs.keys())
+    output_ids = sorted({oid for ids in source_to_outputs.values() for oid in ids})
+
+    def copy_project_memberships(session: Session):
+        source_memberships = session.exec(
+            select(PictureProjectMember).where(
+                PictureProjectMember.picture_id.in_(source_ids)
+            )
+        ).all()
+
+        source_project_ids: dict[int, set[int]] = {}
+        for member in source_memberships:
+            source_project_ids.setdefault(int(member.picture_id), set()).add(
+                int(member.project_id)
+            )
+
+        desired_pairs: set[tuple[int, int]] = set()
+        for source_id, out_ids in source_to_outputs.items():
+            project_ids = source_project_ids.get(source_id)
+            if not project_ids:
+                continue
+            for out_id in out_ids:
+                for project_id in project_ids:
+                    desired_pairs.add((project_id, out_id))
+
+        if not desired_pairs:
+            return
+
+        desired_project_ids = sorted({pid for pid, _ in desired_pairs})
+        existing = session.exec(
+            select(PictureProjectMember).where(
+                PictureProjectMember.picture_id.in_(output_ids),
+                PictureProjectMember.project_id.in_(desired_project_ids),
+            )
+        ).all()
+        existing_pairs = {
+            (int(member.project_id), int(member.picture_id)) for member in existing
+        }
+
+        inserts = [
+            PictureProjectMember(project_id=project_id, picture_id=picture_id)
+            for project_id, picture_id in sorted(desired_pairs - existing_pairs)
+        ]
+        if inserts:
+            session.add_all(inserts)
+            session.commit()
+
+    server.vault.db.run_task(copy_project_memberships)
+
+
+def _set_source_picture_ids_on_new_outputs(
+    server,
+    source_picture_ids: list[int],
+    ordered_output_ids: list[int],
+    new_ids: list[int],
+) -> None:
+    """Set source_picture_id on newly created output pictures.
+
+    Marks each new output picture with the ID of its source so that
+    SourceFaceLikenessTask can assign characters via embedding similarity
+    once face extraction completes.
+    """
+    new_id_set = set(new_ids)
+    pairs = [
+        (out_id, src_id)
+        for src_id, out_id in zip(source_picture_ids, ordered_output_ids)
+        if out_id in new_id_set and src_id != out_id
+    ]
+    if not pairs:
+        return
+
+    def update(session: Session):
+        for out_id, src_id in pairs:
+            pic = session.get(Picture, out_id)
+            if pic is not None:
+                pic.source_picture_id = src_id
+                session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(update)
+
+
 def _copy_face_associations(
     server,
     source_picture_ids: list[int],
@@ -673,6 +774,10 @@ def apply_plugin_to_pictures(
     )
 
     _propagate_output_picture_sets(server, source_picture_ids, ordered_output_ids)
+    _propagate_output_project_memberships(server, source_picture_ids, ordered_output_ids)
+    _set_source_picture_ids_on_new_outputs(
+        server, source_picture_ids, ordered_output_ids, new_ids
+    )
     _copy_face_associations(
         server, source_picture_ids, ordered_output_ids, plugin=plugin, params=params
     )

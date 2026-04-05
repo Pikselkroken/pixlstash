@@ -974,6 +974,10 @@ async function runComfyuiOnGridImages({
       client_id: comfyuiClientId.value || undefined,
       seed_mode: seedMode,
       seed: seedMode === "fixed" ? seed : undefined,
+      source_picture_id:
+        selectedImageIds.value.length === 1
+          ? selectedImageIds.value[0]
+          : undefined,
     };
     const res = await apiClient.post(
       `${props.backendUrl}/comfyui/run_t2i`,
@@ -3443,7 +3447,15 @@ function closeOverlay() {
     pendingGridImages.value = null;
     pendingTagFilterRefresh.value = false;
     pendingOverlayGridRefresh.value = false;
-    updateVisibleThumbnails();
+    // loadedRanges was repopulated for the OLD images while the overlay was
+    // open (after resetThumbnailState() cleared it during the fetch). Now
+    // that new images occupy the same indices we must invalidate those ranges
+    // so updateVisibleThumbnails() fetches thumbnails for the new images.
+    invalidateVisibleThumbnailRanges();
+    // The pending images are collapsed (no member rows). Rebuild expanded
+    // stacks so any stacks that gained/changed members are correctly
+    // re-inserted instead of staying on infinite placeholder.
+    void refreshExpandedStacksAfterFetch();
   } else if (pendingTagFilterRefresh.value || pendingOverlayGridRefresh.value) {
     pendingTagFilterRefresh.value = false;
     pendingOverlayGridRefresh.value = false;
@@ -4643,18 +4655,36 @@ function insertExpandedStackMembers(stackId, fallbackCount) {
   setGridIndices(result);
   allGridImages.value = result;
   const insertCount = insertItems.length;
-  if (insertCount > 0) {
+  // Track how many existing member rows were displaced by the implicit remove
+  // inside filtered. This happens when insertExpandedStackMembers is called
+  // while members are already present (e.g. loadExpandedStacksInView and
+  // refreshExpandedStacksAfterFetch running concurrently). The net change to
+  // the grid length is insertCount minus the displaced rows, not insertCount
+  // alone. Using the wrong delta over-shifts loadedRanges and visibleEnd,
+  // causing subsequent thumbnail fetches to target the wrong indices.
+  const removedExistingCount = items.length - filtered.length;
+  const netDelta = insertCount - removedExistingCount;
+  // The affected zone spans the displaced old members and the newly inserted
+  // ones. Drop all loadedRanges / pendingRanges that overlap it (those slots
+  // now contain different images) and shift everything that lies beyond it by
+  // netDelta (may be 0, positive, or negative).
+  const affectedEnd = insertIndex + Math.max(insertCount, removedExistingCount);
+  if (netDelta !== 0 || removedExistingCount > 0) {
     loadedRanges.value = shiftRangesForDelta(
       loadedRanges.value,
       insertIndex,
-      insertCount,
+      netDelta,
+      affectedEnd,
     );
     pendingRanges = shiftRangesForDelta(
       pendingRanges,
       insertIndex,
-      insertCount,
+      netDelta,
+      affectedEnd,
     );
-    adjustScrollWindowForDelta(insertIndex, insertCount, result.length);
+    adjustScrollWindowForDelta(insertIndex, netDelta, result.length);
+  }
+  if (insertCount > 0) {
     markVisibleFetchSuppressedForExpand(
       insertIndex,
       insertIndex + insertCount + 1,
@@ -6815,23 +6845,9 @@ function handleEmptyStateReset() {
 .grid-scroll-wrapper::-webkit-scrollbar-track {
   background: rgba(var(--v-theme-shadow), 0.15);
 }
-.image-card-cursor > .thumbnail-card {
+.image-card-cursor .thumbnail-img {
   outline: 2px solid rgba(var(--v-theme-primary), 0.9);
   outline-offset: -2px;
-}
-
-/* Compact mode: outline is invisible on edge-to-edge images, use inset ::after border instead */
-.compact-mode .image-card-cursor > .thumbnail-card {
-  outline: none;
-}
-.compact-mode .image-card-cursor > .thumbnail-card::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border: 2px solid rgba(var(--v-theme-primary), 1);
-  box-shadow: inset 0 0 6px rgba(var(--v-theme-primary), 0.45);
-  pointer-events: none;
-  z-index: 202;
 }
 
 .image-card {

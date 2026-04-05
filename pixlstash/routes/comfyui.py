@@ -18,7 +18,7 @@ from sqlmodel import select
 from datetime import datetime
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Face, Picture, PictureStack, User
+from pixlstash.db_models import Face, Picture, PictureProjectMember, PictureSetMember, PictureStack, User
 from pixlstash.event_types import EventType
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -609,6 +609,103 @@ def _copy_face_assignments(
         )
 
 
+def _copy_set_and_project_assignments(
+    server,
+    source_picture_id: int | None,
+    target_picture_ids: list[int],
+) -> None:
+    if not source_picture_id or not target_picture_ids:
+        return
+
+    def copy_task(session):
+        source_set_ids = [
+            row.set_id
+            for row in session.exec(
+                select(PictureSetMember).where(
+                    PictureSetMember.picture_id == source_picture_id
+                )
+            ).all()
+        ]
+        source_project_ids = [
+            row.project_id
+            for row in session.exec(
+                select(PictureProjectMember).where(
+                    PictureProjectMember.picture_id == source_picture_id
+                )
+            ).all()
+        ]
+        if not source_set_ids and not source_project_ids:
+            return 0
+
+        new_set_members = []
+        new_project_members = []
+        for target_id in target_picture_ids:
+            existing_sets = {
+                row.set_id
+                for row in session.exec(
+                    select(PictureSetMember).where(
+                        PictureSetMember.picture_id == target_id
+                    )
+                ).all()
+            }
+            for set_id in source_set_ids:
+                if set_id not in existing_sets:
+                    new_set_members.append(
+                        PictureSetMember(set_id=set_id, picture_id=target_id)
+                    )
+            existing_projects = {
+                row.project_id
+                for row in session.exec(
+                    select(PictureProjectMember).where(
+                        PictureProjectMember.picture_id == target_id
+                    )
+                ).all()
+            }
+            for project_id in source_project_ids:
+                if project_id not in existing_projects:
+                    new_project_members.append(
+                        PictureProjectMember(
+                            project_id=project_id, picture_id=target_id
+                        )
+                    )
+
+        if new_set_members:
+            session.add_all(new_set_members)
+        if new_project_members:
+            session.add_all(new_project_members)
+        if new_set_members or new_project_members:
+            session.commit()
+        return len(new_set_members) + len(new_project_members)
+
+    total = server.vault.db.run_task(copy_task)
+    if total:
+        logger.info(
+            "Copied set/project assignments (%s entries) to %s picture(s) from %s",
+            total,
+            len(target_picture_ids),
+            source_picture_id,
+        )
+
+
+def _set_source_picture_id_on_pictures(
+    server,
+    source_picture_id: int | None,
+    target_picture_ids: list[int],
+) -> None:
+    if not source_picture_id or not target_picture_ids:
+        return
+
+    def update(session):
+        for pid in target_picture_ids:
+            pic = session.get(Picture, pid)
+            if pic is not None:
+                pic.source_picture_id = source_picture_id
+                session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(update)
+
+
 def _process_comfyui_outputs(
     server,
     base_url: str,
@@ -633,7 +730,13 @@ def _process_comfyui_outputs(
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(server, stack_id, new_ids)
         if new_ids:
-            _copy_face_assignments(server, source_picture_id, new_ids)
+            if stack_id:
+                # I2I: copy face records directly (positions are structurally similar)
+                _copy_face_assignments(server, source_picture_id, new_ids)
+            else:
+                # T2I: let face extraction run and schedule similarity-based assignment
+                _set_source_picture_id_on_pictures(server, source_picture_id, new_ids)
+            _copy_set_and_project_assignments(server, source_picture_id, new_ids)
 
         if new_ids:
             server.vault.notify(EventType.PICTURE_IMPORTED, new_ids)
@@ -967,6 +1070,10 @@ def create_router(server) -> APIRouter:
         client_id = payload.get("client_id") or payload.get("clientId") or None
         if client_id is not None:
             client_id = str(client_id)
+        raw_source_id = payload.get("source_picture_id")
+        source_picture_id: int | None = (
+            int(raw_source_id) if raw_source_id is not None else None
+        )
 
         workflow_path, _ = _resolve_workflow_path(workflow_name)
         if not workflow_path:
@@ -1029,7 +1136,7 @@ def create_router(server) -> APIRouter:
                     str(prompt_id),
                     output_node_ids,
                     None,
-                    None,
+                    source_picture_id,
                 ),
                 daemon=True,
             )
