@@ -22,7 +22,9 @@ def _setup():
         f.write(json.dumps({"port": 8000}))
     server = Server(server_config_path)
     client = TestClient(server.api)
-    resp = client.post("/login", json={"username": "testuser", "password": "testpassword"})
+    resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
     assert resp.status_code == 200
     return temp_dir, client, server
 
@@ -30,7 +32,9 @@ def _setup():
 def _upload_picture(client, filename="Bad1.png"):
     img_path = os.path.join(PICTURES_DIR, filename)
     with open(img_path, "rb") as f:
-        result = upload_pictures_and_wait(client, [("file", (filename, f, "image/png"))])
+        result = upload_pictures_and_wait(
+            client, [("file", (filename, f, "image/png"))]
+        )
     assert result["status"] == "completed"
     results = result.get("results") or []
     assert results, "No pictures imported"

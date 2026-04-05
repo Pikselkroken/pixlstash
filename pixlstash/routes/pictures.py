@@ -743,6 +743,8 @@ def _select_pictures_for_listing(
             min_score=min_score,
             project_id=unassigned_project_id,
             only_unassigned_project=unassigned_project_only,
+            tags_filter=query_params.get("tags_filter") or None,
+            tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
         )
     elif only_deleted:
         pics = server.vault.db.run_task(
@@ -790,10 +792,10 @@ def _select_pictures_for_listing(
             # longer appear in its character grid view.
             if project_id_raw is not None:
                 if project_id_raw == "UNASSIGNED":
+
                     def _get_project_unassigned_ids(session, ids):
                         rows = session.exec(
-                            select(Picture.id)
-                            .where(
+                            select(Picture.id).where(
                                 Picture.id.in_(ids),
                                 _project_unassigned_clause(Picture),
                             )
@@ -809,6 +811,7 @@ def _select_pictures_for_listing(
                     except (TypeError, ValueError):
                         proj_id_int = None
                     if proj_id_int is not None:
+
                         def _get_project_member_ids(session, ids, pid):
                             rows = session.exec(
                                 select(PictureProjectMember.picture_id).where(

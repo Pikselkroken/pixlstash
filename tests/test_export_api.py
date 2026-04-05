@@ -25,7 +25,9 @@ def _setup():
         f.write(json.dumps({"port": 8000}))
     server = Server(server_config_path)
     client = TestClient(server.api)
-    resp = client.post("/login", json={"username": "testuser", "password": "testpassword"})
+    resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
+    )
     assert resp.status_code == 200
     return temp_dir, client, server
 
@@ -33,7 +35,9 @@ def _setup():
 def _upload_picture(client, filename="Bad1.png"):
     img_path = os.path.join(PICTURES_DIR, filename)
     with open(img_path, "rb") as f:
-        result = upload_pictures_and_wait(client, [("file", (filename, f, "image/png"))])
+        result = upload_pictures_and_wait(
+            client, [("file", (filename, f, "image/png"))]
+        )
     assert result["status"] == "completed"
     return result["results"][0]["picture_id"]
 
@@ -44,7 +48,9 @@ def _wait_for_export(client, task_id, timeout_s=30, poll_interval=0.2):
 
     start = time.time()
     while time.time() - start < timeout_s:
-        resp = client.get(f"{API_PREFIX}/pictures/export/status", params={"task_id": task_id})
+        resp = client.get(
+            f"{API_PREFIX}/pictures/export/status", params={"task_id": task_id}
+        )
         assert resp.status_code == 200, resp.text
         status = resp.json().get("status")
         if status == "completed":
