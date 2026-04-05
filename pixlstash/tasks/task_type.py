@@ -16,6 +16,7 @@ class TaskType(str, Enum):
     WATCH_FOLDERS = "WatchFolderImportTask"
     COMFYUI_EXTRACTION = "ComfyUIExtractionTask"
     TAG_PREDICTION = "TagPredictionTask"
+    SOURCE_FACE_LIKENESS = "SourceFaceLikenessTask"
 
     @staticmethod
     def all():

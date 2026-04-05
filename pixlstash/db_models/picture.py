@@ -227,6 +227,13 @@ class Picture(SQLModel, table=True):
     # face extraction has not yet run.  Cleared (and the best face assigned) when
     # FaceExtractionTask completes for the picture.
     pending_character_id: Optional[int] = Field(default=None, index=True)
+    # Set on T2I-generated pictures when the prompt was associated with a source
+    # picture.  SourceFaceLikenessTask compares face embeddings against the source
+    # faces and assigns character IDs where cosine similarity >= 0.7, then clears
+    # this field to mark the picture as processed.
+    source_picture_id: Optional[int] = Field(
+        default=None, foreign_key="picture.id", index=True
+    )
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
