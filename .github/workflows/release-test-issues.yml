@@ -21,6 +21,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ensure release-testing label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "release-testing" \
+            --description "Tracks manual release test checklist issues" \
+            --color "0075ca" \
+            --force
+
       - name: Create one issue per test-plan section
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
