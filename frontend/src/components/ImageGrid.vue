@@ -4138,6 +4138,9 @@ function buildPictureIdsQueryParams() {
   (props.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
   );
+  if (props.applyTagFilter) {
+    params.append("apply_tag_filter", "true");
+  }
   return params.toString();
 }
 
@@ -4145,6 +4148,9 @@ function buildStackQueryParams() {
   const params = new URLSearchParams();
   _appendSelectionParams(params);
   _appendMediaTypeParams(params);
+  if (props.applyTagFilter) {
+    params.append("apply_tag_filter", "true");
+  }
   return params.toString();
 }
 
@@ -5332,7 +5338,7 @@ async function fetchAllGridImages(options = {}) {
 async function fetchAllPicturesCount() {
   try {
     const res = await apiClient.get(
-      `${props.backendUrl}/characters/${props.allPicturesId}/summary`,
+      `${props.backendUrl}/characters/${props.allPicturesId}/summary${props.applyTagFilter ? "?apply_tag_filter=true" : ""}`,
     );
     const data = await res.data;
     totalAllPicturesCount.value = Number(data.image_count) || 0;
@@ -5394,6 +5400,10 @@ async function fetchAllPicturesCount() {
       selectedCharacter !== String(props.allPicturesId)
     ) {
       url = `${props.backendUrl}/characters/${selectedCharacter}/summary`;
+    }
+
+    if (props.applyTagFilter) {
+      url += (url.includes("?") ? "&" : "?") + "apply_tag_filter=true";
     }
 
     const scopedRes = await apiClient.get(url);
