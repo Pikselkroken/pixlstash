@@ -269,13 +269,16 @@
                 :class="[
                   'stack-indicator',
                   'thumbnail-badge',
+                  `thumbnail-badge--${overlaySize}`,
                   'thumbnail-badge--top-left',
                 ]"
                 :title="stackBadgeTitle(img)"
                 @click.stop="toggleStackExpand(img)"
                 @mouseenter.stop="prefetchStackMembers(img)"
               >
-                <v-icon size="18" :style="getStackBadgeIconStyle(img)"
+                <v-icon
+                  :size="badgeIconSizes.stack"
+                  :style="getStackBadgeIconStyle(img)"
                   >mdi-layers-outline</v-icon
                 >
               </div>
@@ -289,14 +292,19 @@
                 :class="[
                   'penalised-tag-indicator',
                   'thumbnail-badge',
+                  `thumbnail-badge--${overlaySize}`,
                   shouldShowStackBadge(img)
                     ? 'thumbnail-badge--top-left-stack'
                     : 'thumbnail-badge--top-left',
                 ]"
                 :title="penalisedTagsTitle(img)"
               >
-                <v-icon size="18" color="error"
-                  >mdi-emoticon-sad-outline</v-icon
+                <v-icon
+                  :size="badgeIconSizes.penalised"
+                  :color="penalisedTagColor(img, props.penalisedTagWeights)"
+                  >{{
+                    penalisedTagIcon(img, props.penalisedTagWeights)
+                  }}</v-icon
                 >
               </div>
               <!-- Resolution overlay -->
@@ -308,7 +316,12 @@
                   isThumbnailReady(img.id) &&
                   img.thumbnail
                 "
-                class="resolution-hover-overlay thumbnail-badge thumbnail-badge--bottom-right"
+                :class="[
+                  'resolution-hover-overlay',
+                  'thumbnail-badge',
+                  `thumbnail-badge--${overlaySize}`,
+                  'thumbnail-badge--bottom-right',
+                ]"
               >
                 {{ img.width }}×{{ img.height }}
               </div>
@@ -423,7 +436,12 @@
                     isThumbnailReady(img.id) &&
                     img.thumbnail
                   "
-                  class="thumbnail-id-overlay thumbnail-badge thumbnail-badge--bottom-left"
+                  :class="[
+                    'thumbnail-id-overlay',
+                    'thumbnail-badge',
+                    `thumbnail-badge--${overlaySize}`,
+                    'thumbnail-badge--bottom-left',
+                  ]"
                 >
                   {{ img.format.toUpperCase() }}
                 </div>
@@ -446,9 +464,13 @@
                 v-if="
                   props.showStars && isThumbnailReady(img.id) && img.thumbnail
                 "
-                class="thumbnail-badge thumbnail-badge--top-right"
+                :class="[
+                  'thumbnail-badge',
+                  `thumbnail-badge--${overlaySize}`,
+                  'thumbnail-badge--top-right',
+                ]"
                 :score="img.score || 0"
-                :icon-size="16"
+                :icon-size="badgeIconSizes.star"
                 :compact="true"
                 @set-score="setScore(img, $event)"
               />
@@ -555,6 +577,8 @@ import {
   getTagId,
   hasPenalisedTags,
   penalisedTagsTitle,
+  penalisedTagIcon,
+  penalisedTagColor,
   getTagList,
   tagMatches,
 } from "../utils/tags.js";
@@ -602,6 +626,7 @@ const props = defineProps({
   showFormat: Boolean,
   showResolution: Boolean,
   showProblemIcon: Boolean,
+  penalisedTagWeights: { type: Object, default: () => ({}) },
   showStacks: { type: Boolean, default: true },
   compactMode: { type: Boolean, default: false },
   themeMode: { type: String, default: "light" },
@@ -709,6 +734,22 @@ const selectionBarRef = ref(null);
 // ============================================================
 // GRID DATA STATE
 // ============================================================
+
+// Badge size tier driven by column count: 'lg' (≤4), 'md' (5-8), 'sm' (≥9).
+const overlaySize = computed(() => {
+  const c = props.columns || 1;
+  if (c >= 9) return "sm";
+  if (c >= 5) return "md";
+  return "lg";
+});
+
+const badgeIconSizes = computed(() => {
+  const s = overlaySize.value;
+  if (s === "sm") return { stack: 12, penalised: 12, star: 10 };
+  if (s === "md") return { stack: 18, penalised: 18, star: 16 };
+  return { stack: 24, penalised: 24, star: 22 };
+});
+
 const allGridImages = ref([]);
 const lastFetchedGridImages = ref([]);
 // Maps stack_id → { index, row, col } where:
@@ -6720,6 +6761,18 @@ function handleEmptyStateReset() {
   white-space: nowrap;
 }
 
+/* md: ~75% of lg */
+.thumbnail-badge--md {
+  font-size: 0.68em;
+  padding: 1px 3px;
+}
+
+/* sm: ~half of lg */
+.thumbnail-badge--sm {
+  font-size: 0.5em;
+  padding: 0 2px;
+}
+
 .thumbnail-badge--top-left,
 .thumbnail-badge--top-right,
 .thumbnail-badge--bottom-left,
@@ -7082,7 +7135,7 @@ function handleEmptyStateReset() {
   justify-content: center;
   z-index: 30;
   pointer-events: auto;
-  padding: 2px;
+  padding: 0;
 }
 
 .stack-indicator {

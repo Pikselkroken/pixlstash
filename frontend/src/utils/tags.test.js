@@ -8,6 +8,8 @@ import {
   tagMatches,
   hasPenalisedTags,
   penalisedTagsTitle,
+  penalisedTagIcon,
+  penalisedTagColor,
 } from './tags.js'
 
 describe('getTagLabel', () => {
@@ -152,5 +154,61 @@ describe('penalisedTagsTitle', () => {
   it('returns empty string when there are no penalised tags', () => {
     expect(penalisedTagsTitle({ penalised_tags: [] })).toBe('')
     expect(penalisedTagsTitle({})).toBe('')
+  })
+})
+
+const W_LOW = { blur: 2, noise: 1 };        // blur→2, blur+noise→3, both mild (<7)
+const W_MED = { blur: 4, noise: 3 };        // blur→4 (mild), blur+noise→7 (moderate)
+const W_HIGH = { blur: 5, noise: 5 };       // blur→5 (mild), blur+noise→10 (moderate), blur+noise+x→15 (severe)
+const W_HEAVY = { blur: 5, noise: 4, grain: 4 }; // blur+noise+grain→13 (severe, >12)
+
+describe('penalisedTagIcon', () => {
+  it('returns neutral icon for low total weight (< 7)', () => {
+    // 1 tag, weight 2 → total 2 → mild
+    expect(penalisedTagIcon({ penalised_tags: ['blur'] }, W_LOW)).toBe('mdi-emoticon-neutral-outline')
+    // 1 tag, weight 4 → total 4 → mild
+    expect(penalisedTagIcon({ penalised_tags: ['blur'] }, W_MED)).toBe('mdi-emoticon-neutral-outline')
+    // 2 tags, weights 2+1=3 → mild
+    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_LOW)).toBe('mdi-emoticon-neutral-outline')
+  })
+
+  it('returns sad icon for moderate total weight (7-12)', () => {
+    // 2 tags, weights 4+3=7 → moderate
+    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_MED)).toBe('mdi-emoticon-sad-outline')
+    // 2 tags, weights 5+5=10 → moderate
+    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_HIGH)).toBe('mdi-emoticon-sad-outline')
+  })
+
+  it('returns angry icon for high total weight (> 12)', () => {
+    // 3 tags, weights 5+4+4=13 → severe
+    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise', 'grain'] }, W_HEAVY)).toBe('mdi-emoticon-angry')
+  })
+
+  it('falls back to count=1-per-tag when no weights map given', () => {
+    // 6 tags, no weights → total 6 → mild
+    expect(penalisedTagIcon({ penalised_tags: ['a', 'b', 'c', 'd', 'e', 'f'] })).toBe('mdi-emoticon-neutral-outline')
+    // 7 tags, no weights → total 7 → moderate
+    expect(penalisedTagIcon({ penalised_tags: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] })).toBe('mdi-emoticon-sad-outline')
+    // 13 tags, no weights → total 13 → severe
+    expect(penalisedTagIcon({ penalised_tags: ['a','b','c','d','e','f','g','h','i','j','k','l','m'] })).toBe('mdi-emoticon-angry')
+  })
+
+  it('falls back to neutral for empty/null', () => {
+    expect(penalisedTagIcon({})).toBe('mdi-emoticon-neutral-outline')
+    expect(penalisedTagIcon(null)).toBe('mdi-emoticon-neutral-outline')
+  })
+})
+
+describe('penalisedTagColor', () => {
+  it('returns yellow for low total weight (< 7)', () => {
+    expect(penalisedTagColor({ penalised_tags: ['blur'] }, W_MED)).toBe('#f9a825')
+  })
+
+  it('returns orange for moderate total weight (7-12)', () => {
+    expect(penalisedTagColor({ penalised_tags: ['blur', 'noise'] }, W_MED)).toBe('#e65100')
+  })
+
+  it('returns deep red for high total weight (> 12)', () => {
+    expect(penalisedTagColor({ penalised_tags: ['blur', 'noise', 'grain'] }, W_HEAVY)).toBe('#c62828')
   })
 })

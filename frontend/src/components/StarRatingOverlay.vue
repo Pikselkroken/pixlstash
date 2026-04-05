@@ -47,7 +47,6 @@ function handleClick(n) {
 .star-overlay--compact {
   z-index: 120;
   font-size: 0.65em;
-  margin: 2px;
 }
 
 .star-overlay--compact:hover {
@@ -55,15 +54,13 @@ function handleClick(n) {
 }
 
 .star-overlay--compact .v-icon {
-  font-size: 16px !important;
-  width: 16px;
-  height: 16px;
+  width: 1em;
+  height: 1em;
 }
 
 .star-overlay--compact .v-icon:hover {
-  font-size: 16px !important;
-  width: 16px;
-  height: 16px;
+  width: 1em;
+  height: 1em;
   color: rgba(var(--v-theme-accent), 0.5);
 }
 </style>
