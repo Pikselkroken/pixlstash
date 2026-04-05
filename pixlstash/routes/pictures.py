@@ -93,13 +93,13 @@ MEDIA_TYPE_BY_FORMAT = {
 
 
 def _get_hidden_tags_from_request(server, request: Request) -> list[str]:
+    if request.query_params.get("apply_tag_filter", "").lower() != "true":
+        return []
     try:
         user = server.auth.get_user_for_request(request)
     except HTTPException:
         user = server.auth.get_user()
     if not user:
-        return []
-    if not getattr(user, "apply_tag_filter", False):
         return []
     normalized = _normalize_hidden_tags(getattr(user, "hidden_tags", None))
     return normalized or []

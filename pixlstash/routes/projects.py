@@ -433,15 +433,16 @@ def create_router(server) -> APIRouter:
     def get_project_summary(request: Request, project_id: str):
         server.auth.require_user_id(request)
 
-        try:
-            user = server.auth.get_user_for_request(request)
-        except HTTPException:
-            user = server.auth.get_user()
         hidden_tags = []
-        if user and getattr(user, "apply_tag_filter", False):
-            hidden_tags = (
-                _normalize_hidden_tags(getattr(user, "hidden_tags", None)) or []
-            )
+        if request.query_params.get("apply_tag_filter", "").lower() == "true":
+            try:
+                user = server.auth.get_user_for_request(request)
+            except HTTPException:
+                user = server.auth.get_user()
+            if user:
+                hidden_tags = (
+                    _normalize_hidden_tags(getattr(user, "hidden_tags", None)) or []
+                )
         hidden_tag_set = {str(t).strip().lower() for t in hidden_tags if t}
         hidden_tag_filter = None
         if hidden_tag_set:
