@@ -62,9 +62,13 @@ class MissingTagPredictionFinder(BaseTaskFinder):
     def _fetch_missing(session: Session, model_version: str, limit: int):
         """Fetch pictures that have no TagPrediction row for the current model version,
         or that have a confirmed tag with no corresponding TagPrediction row at all."""
-        has_prediction_for_version = select(TagPrediction.picture_id).where(
-            TagPrediction.picture_id == Picture.id,
-            TagPrediction.model_version == model_version,
+        has_prediction_for_version = (
+            select(TagPrediction.picture_id)
+            .where(
+                TagPrediction.picture_id == Picture.id,
+                TagPrediction.model_version == model_version,
+            )
+            .correlate(Picture)
         )
         # Correlated: does this picture have a Tag row with no matching TagPrediction?
         has_tag_without_prediction = (
