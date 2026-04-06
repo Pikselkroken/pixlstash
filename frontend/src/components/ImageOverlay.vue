@@ -2528,6 +2528,10 @@ function handleKeydown(e) {
   if (e.key === "Escape") {
     if (drawMode.value) {
       clearDrawMode();
+    } else if (pluginMenuOpen.value) {
+      pluginMenuOpen.value = false;
+    } else if (comfyuiMenuOpen.value) {
+      comfyuiMenuOpen.value = false;
     } else {
       emit("close");
     }
