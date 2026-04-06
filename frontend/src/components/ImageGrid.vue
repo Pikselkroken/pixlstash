@@ -651,6 +651,8 @@ const props = defineProps({
   minScoreFilter: { type: Number, default: null },
   tagFilter: { type: Array, default: () => [] },
   tagRejectedFilter: { type: Array, default: () => [] },
+  tagConfidenceAboveFilter: { type: Array, default: () => [] },
+  tagConfidenceBelowFilter: { type: Array, default: () => [] },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
@@ -1390,7 +1392,11 @@ watch(
     if (
       !pictureIds.length &&
       !(props.tagFilter && props.tagFilter.length) &&
-      !(props.tagRejectedFilter && props.tagRejectedFilter.length)
+      !(props.tagRejectedFilter && props.tagRejectedFilter.length) &&
+      !(
+        props.tagConfidenceAboveFilter && props.tagConfidenceAboveFilter.length
+      ) &&
+      !(props.tagConfidenceBelowFilter && props.tagConfidenceBelowFilter.length)
     )
       return;
     if (pauseGridAutoUpdates.value) {
@@ -4191,6 +4197,12 @@ function buildPictureIdsQueryParams() {
   (props.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
   );
+  (props.tagConfidenceAboveFilter || []).forEach((e) =>
+    params.append("tag_confidence_above", e),
+  );
+  (props.tagConfidenceBelowFilter || []).forEach((e) =>
+    params.append("tag_confidence_below", e),
+  );
   if (props.applyTagFilter) {
     params.append("apply_tag_filter", "true");
   }
@@ -5528,6 +5540,8 @@ watch(
     () => props.minScoreFilter,
     () => props.tagFilter,
     () => props.tagRejectedFilter,
+    () => props.tagConfidenceAboveFilter,
+    () => props.tagConfidenceBelowFilter,
   ],
   () => {
     _resetGridState();

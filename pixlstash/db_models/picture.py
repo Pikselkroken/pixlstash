@@ -640,6 +640,8 @@ class Picture(SQLModel, table=True):
         comfyui_loras_filter: Optional[List[str]] = None,
         tags_filter: Optional[List[str]] = None,
         tags_rejected_filter: Optional[List[str]] = None,
+        tags_confidence_above_filter: Optional[List[str]] = None,
+        tags_confidence_below_filter: Optional[List[str]] = None,
         min_score: Optional[int] = None,
         **search,
     ) -> List["Picture"]:
@@ -742,6 +744,32 @@ class Picture(SQLModel, table=True):
                     text(
                         f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
                     ).bindparams(**{f"rejected_tag_filter_{i}": tag})
+                )
+
+        if tags_confidence_above_filter:
+            for i, entry in enumerate(tags_confidence_above_filter):
+                tag, threshold = entry.rsplit(":", 1)
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                        f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                        f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                    ).bindparams(
+                        **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
+                    )
+                )
+
+        if tags_confidence_below_filter:
+            for i, entry in enumerate(tags_confidence_below_filter):
+                tag, threshold = entry.rsplit(":", 1)
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                        f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
+                        f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
+                    ).bindparams(
+                        **{f"cb_tag_{i}": tag, f"cb_thresh_{i}": float(threshold)}
+                    )
                 )
 
         if stack_leaders_only:
@@ -904,6 +932,8 @@ class Picture(SQLModel, table=True):
         only_unassigned_project: bool = False,
         tags_filter: Optional[List[str]] = None,
         tags_rejected_filter: Optional[List[str]] = None,
+        tags_confidence_above_filter: Optional[List[str]] = None,
+        tags_confidence_below_filter: Optional[List[str]] = None,
     ):
         query = select(Picture)
         unassigned_conditions = cls.build_unassigned_conditions(
@@ -950,6 +980,32 @@ class Picture(SQLModel, table=True):
                     text(
                         f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
                     ).bindparams(**{f"rejected_tag_filter_{i}": tag})
+                )
+
+        if tags_confidence_above_filter:
+            for i, entry in enumerate(tags_confidence_above_filter):
+                tag, threshold = entry.rsplit(":", 1)
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                        f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                        f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                    ).bindparams(
+                        **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
+                    )
+                )
+
+        if tags_confidence_below_filter:
+            for i, entry in enumerate(tags_confidence_below_filter):
+                tag, threshold = entry.rsplit(":", 1)
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                        f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
+                        f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
+                    ).bindparams(
+                        **{f"cb_tag_{i}": tag, f"cb_thresh_{i}": float(threshold)}
+                    )
                 )
 
         select_fields = metadata_fields or cls.metadata_fields()
