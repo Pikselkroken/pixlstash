@@ -156,6 +156,7 @@ function openMenu() {
 function closeMenu() {
   menuOpen.value = false;
   searchQuery.value = "";
+  searchInputRef.value?.blur();
   document.removeEventListener("pointerdown", handleOutsideClick, true);
 }
 
