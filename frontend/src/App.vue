@@ -117,6 +117,8 @@ const comfyuiConfigured = ref(false);
 const minScoreFilter = ref(null);
 const tagFilter = ref([]);
 const tagRejectedFilter = ref([]);
+const tagConfidenceAboveFilter = ref([]);
+const tagConfidenceBelowFilter = ref([]);
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
@@ -1058,6 +1060,8 @@ function handleResetToAll() {
   minScoreFilter.value = null;
   tagFilter.value = [];
   tagRejectedFilter.value = [];
+  tagConfidenceAboveFilter.value = [];
+  tagConfidenceBelowFilter.value = [];
   refreshGridVersion();
   closeSidebarIfMobile();
 }
@@ -1333,6 +1337,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:minScoreFilter="minScoreFilter"
             v-model:tagFilter="tagFilter"
             v-model:tagRejectedFilter="tagRejectedFilter"
+            v-model:tagConfidenceAboveFilter="tagConfidenceAboveFilter"
+            v-model:tagConfidenceBelowFilter="tagConfidenceBelowFilter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @update:stack-threshold="handleUpdateStackThreshold"
@@ -1380,6 +1386,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :minScoreFilter="minScoreFilter"
               :tagFilter="tagFilter"
               :tagRejectedFilter="tagRejectedFilter"
+              :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
+              :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
               :showFaceBboxes="showFaceBboxes"
               :showFormat="showFormat"
               :showResolution="showResolution"

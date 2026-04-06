@@ -4687,17 +4687,15 @@ async function refreshPictureTags() {
 
   isTagsRefreshing.value = true;
   try {
-    // Delete all tagger predictions so the background TagPredictionTask treats
-    // this picture as never seen and rebuilds them from scratch.
-    // Manual REJECTED rows (user preferences) are preserved by the backend.
+    // Single atomic call: clears both tag predictions and confirmed tags in one
+    // transaction and restores the empty sentinel.  This avoids the intermediate
+    // state where predictions are already gone but tags still exist, which would
+    // cause the background MissingTagPredictionFinder to run a wasted inference
+    // pass before tags are also cleared.
     await apiClient.post(
-      `${backendUrl.value}/pictures/${capturedImageId}/tag_predictions/delete`,
+      `${backendUrl.value}/pictures/${capturedImageId}/reset_tags`,
     );
     tagPredictions.value = [];
-
-    await apiClient.delete(
-      `${backendUrl.value}/pictures/${capturedImageId}/tags`,
-    );
 
     if (image.value && Array.isArray(image.value.tags)) {
       image.value.tags = [];

@@ -541,6 +541,91 @@
                 >
               </button>
             </div>
+            <div class="toolbar-filter-section-label" style="margin-top: 10px">
+              Tag confidence
+            </div>
+            <div class="confidence-filter-row">
+              <input
+                v-model="confidenceTagInput"
+                class="tag-filter-input confidence-filter-tag-input"
+                placeholder="Tag…"
+                autocomplete="off"
+                @keydown.enter.prevent="addConfidenceFilter"
+              />
+              <input
+                v-model.number="confidenceThreshold"
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                class="confidence-threshold-input"
+              />
+              <button
+                class="confidence-mode-btn"
+                type="button"
+                :title="
+                  confidenceMode === 'above'
+                    ? 'High confidence, not labelled – click to switch'
+                    : 'Low confidence, labelled – click to switch'
+                "
+                @click="
+                  confidenceMode =
+                    confidenceMode === 'above' ? 'below' : 'above'
+                "
+              >
+                {{ confidenceMode === "above" ? "≥" : "<" }}
+              </button>
+              <button
+                class="confidence-add-btn"
+                type="button"
+                :disabled="!confidenceTagInput.trim()"
+                @click="addConfidenceFilter"
+              >
+                Add
+              </button>
+            </div>
+            <div
+              v-if="
+                tagConfidenceAboveFilterModel.length ||
+                tagConfidenceBelowFilterModel.length
+              "
+              class="tag-filter-chips"
+            >
+              <button
+                v-for="entry in tagConfidenceAboveFilterModel"
+                :key="`ca-${entry}`"
+                class="tag-chip tag-chip--filter tag-chip--confidence-above"
+                type="button"
+                :title="`Prediction ≥${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, not labelled`"
+              >
+                <span class="tag-chip-label"
+                  >≥{{ confidenceEntryLabel(entry) }}</span
+                >
+                <v-icon
+                  size="11"
+                  class="tag-chip-close"
+                  @click.stop="removeConfidenceAboveFilter(entry)"
+                  >mdi-close</v-icon
+                >
+              </button>
+              <button
+                v-for="entry in tagConfidenceBelowFilterModel"
+                :key="`cb-${entry}`"
+                class="tag-chip tag-chip--filter tag-chip--confidence-below"
+                type="button"
+                :title="`Prediction <${Math.round(parseFloat(entry.split(':')[1]) * 100)}%, labelled`"
+              >
+                <span class="tag-chip-label"
+                  >&lt;{{ confidenceEntryLabel(entry) }}</span
+                >
+                <v-icon
+                  size="11"
+                  class="tag-chip-close"
+                  @click.stop="removeConfidenceBelowFilter(entry)"
+                  >mdi-close</v-icon
+                >
+              </button>
+            </div>
             <template
               v-if="comfyuiModelOptions.length || comfyuiLoraOptions.length"
             >
@@ -990,6 +1075,8 @@ const props = defineProps({
   minScoreFilter: { type: Number, default: null },
   tagFilter: { type: Array, default: () => [] },
   tagRejectedFilter: { type: Array, default: () => [] },
+  tagConfidenceAboveFilter: { type: Array, default: () => [] },
+  tagConfidenceBelowFilter: { type: Array, default: () => [] },
   sortOptions: { type: Array, default: () => [] },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: true },
@@ -1026,6 +1113,8 @@ const emit = defineEmits([
   "update:minScoreFilter",
   "update:tagFilter",
   "update:tagRejectedFilter",
+  "update:tagConfidenceAboveFilter",
+  "update:tagConfidenceBelowFilter",
   "update:similarity-character",
   "update:stack-threshold",
   "open-search-overlay",
@@ -1083,6 +1172,10 @@ const isFilterActive = computed(
     (Array.isArray(props.tagFilter) && props.tagFilter.length > 0) ||
     (Array.isArray(props.tagRejectedFilter) &&
       props.tagRejectedFilter.length > 0) ||
+    (Array.isArray(props.tagConfidenceAboveFilter) &&
+      props.tagConfidenceAboveFilter.length > 0) ||
+    (Array.isArray(props.tagConfidenceBelowFilter) &&
+      props.tagConfidenceBelowFilter.length > 0) ||
     (Array.isArray(props.comfyuiModelFilter) &&
       props.comfyuiModelFilter.length > 0) ||
     (Array.isArray(props.comfyuiLoraFilter) &&
@@ -1230,6 +1323,14 @@ const tagRejectedFilterModel = computed({
   get: () => props.tagRejectedFilter,
   set: (value) => emit("update:tagRejectedFilter", value ?? []),
 });
+const tagConfidenceAboveFilterModel = computed({
+  get: () => props.tagConfidenceAboveFilter,
+  set: (value) => emit("update:tagConfidenceAboveFilter", value ?? []),
+});
+const tagConfidenceBelowFilterModel = computed({
+  get: () => props.tagConfidenceBelowFilter,
+  set: (value) => emit("update:tagConfidenceBelowFilter", value ?? []),
+});
 const tagFilterInput = ref("");
 const tagFilterSuggestions = ref([]);
 const tagFilterHoverEnabled = ref(false);
@@ -1293,6 +1394,47 @@ function toggleTagRejected(tag) {
     );
     tagFilterModel.value = [...tagFilterModel.value, tag];
   }
+}
+
+const confidenceTagInput = ref("");
+const confidenceThreshold = ref(0.7);
+const confidenceMode = ref("above");
+
+function addConfidenceFilter() {
+  const tag = confidenceTagInput.value.trim();
+  if (!tag) return;
+  const entry = `${tag}:${confidenceThreshold.value.toFixed(2)}`;
+  if (confidenceMode.value === "above") {
+    if (!tagConfidenceAboveFilterModel.value.includes(entry)) {
+      tagConfidenceAboveFilterModel.value = [
+        ...tagConfidenceAboveFilterModel.value,
+        entry,
+      ];
+    }
+  } else {
+    if (!tagConfidenceBelowFilterModel.value.includes(entry)) {
+      tagConfidenceBelowFilterModel.value = [
+        ...tagConfidenceBelowFilterModel.value,
+        entry,
+      ];
+    }
+  }
+  confidenceTagInput.value = "";
+}
+
+function removeConfidenceAboveFilter(entry) {
+  tagConfidenceAboveFilterModel.value =
+    tagConfidenceAboveFilterModel.value.filter((e) => e !== entry);
+}
+
+function removeConfidenceBelowFilter(entry) {
+  tagConfidenceBelowFilterModel.value =
+    tagConfidenceBelowFilterModel.value.filter((e) => e !== entry);
+}
+
+function confidenceEntryLabel(entry) {
+  const [tag, threshold] = entry.split(":");
+  return `${tag} ${Math.round(parseFloat(threshold) * 100)}%`;
 }
 
 const comfyuiModelOptions = ref([]);
@@ -2433,6 +2575,95 @@ defineExpose({ blurSearchInput, focusSearchInput });
   background: rgba(var(--v-theme-primary), 0.18);
   border-color: rgba(var(--v-theme-primary), 0.5);
   color: rgb(var(--v-theme-on-surface));
+}
+
+.tag-chip--confidence-above {
+  background: rgba(var(--v-theme-success), 0.14);
+  border: 1px solid rgba(var(--v-theme-success), 0.5);
+  color: rgb(var(--v-theme-success));
+}
+
+.tag-chip--confidence-above:hover {
+  background: rgba(var(--v-theme-error), 0.14);
+  border-color: rgba(var(--v-theme-error), 0.5);
+}
+
+.tag-chip--confidence-below {
+  background: rgba(var(--v-theme-warning), 0.14);
+  border: 1px solid rgba(var(--v-theme-warning), 0.5);
+  color: rgb(var(--v-theme-warning));
+}
+
+.tag-chip--confidence-below:hover {
+  background: rgba(var(--v-theme-error), 0.14);
+  border-color: rgba(var(--v-theme-error), 0.5);
+}
+
+.confidence-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.confidence-filter-tag-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.confidence-threshold-input {
+  width: 52px;
+  background: rgba(var(--v-theme-on-background), 0.06);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
+  border-radius: 6px;
+  padding: 5px 6px;
+  font-size: 0.82em;
+  outline: none;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.confidence-threshold-input:focus {
+  border-color: rgba(var(--v-theme-primary), 0.6);
+}
+
+.confidence-mode-btn {
+  background: rgba(var(--v-theme-on-background), 0.08);
+  color: rgb(var(--v-theme-on-background));
+  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.9em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.confidence-mode-btn:hover {
+  background: rgba(var(--v-theme-primary), 0.18);
+  border-color: rgba(var(--v-theme-primary), 0.4);
+}
+
+.confidence-add-btn {
+  background: rgba(var(--v-theme-primary), 0.15);
+  color: rgb(var(--v-theme-primary));
+  border: 1px solid rgba(var(--v-theme-primary), 0.4);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.82em;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.confidence-add-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-primary), 0.3);
+}
+
+.confidence-add-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .tag-chip-label {

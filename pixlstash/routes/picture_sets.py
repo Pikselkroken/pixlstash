@@ -569,6 +569,12 @@ def create_router(server) -> APIRouter:
     ):
         tags_filter = request.query_params.getlist("tag") or None
         tags_rejected_filter = request.query_params.getlist("rejected_tag") or None
+        tags_confidence_above_filter = (
+            request.query_params.getlist("tag_confidence_above") or None
+        )
+        tags_confidence_below_filter = (
+            request.query_params.getlist("tag_confidence_below") or None
+        )
         try:
             id = int(id)
         except (TypeError, ValueError):
@@ -728,6 +734,8 @@ def create_router(server) -> APIRouter:
                 min_score=min_score,
                 tags_filter=tags_filter,
                 tags_rejected_filter=tags_rejected_filter,
+                tags_confidence_above_filter=tags_confidence_above_filter,
+                tags_confidence_below_filter=tags_confidence_below_filter,
             )
             return [
                 pic.dict(

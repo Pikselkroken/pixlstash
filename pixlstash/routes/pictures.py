@@ -452,6 +452,14 @@ def _select_pictures_for_listing(
             if rejected_tags:
                 query_params["tags_rejected_filter"] = rejected_tags
             query_params.pop("rejected_tag", None)
+            confidence_above = request.query_params.getlist("tag_confidence_above")
+            if confidence_above:
+                query_params["tags_confidence_above_filter"] = confidence_above
+            query_params.pop("tag_confidence_above", None)
+            confidence_below = request.query_params.getlist("tag_confidence_below")
+            if confidence_below:
+                query_params["tags_confidence_below_filter"] = confidence_below
+            query_params.pop("tag_confidence_below", None)
             set_ids = request.query_params.getlist("set_ids")
             if set_ids:
                 query_params["set_ids"] = set_ids
@@ -745,6 +753,14 @@ def _select_pictures_for_listing(
             only_unassigned_project=unassigned_project_only,
             tags_filter=query_params.get("tags_filter") or None,
             tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
+            tags_confidence_above_filter=query_params.get(
+                "tags_confidence_above_filter"
+            )
+            or None,
+            tags_confidence_below_filter=query_params.get(
+                "tags_confidence_below_filter"
+            )
+            or None,
         )
     elif only_deleted:
         pics = server.vault.db.run_task(
