@@ -19,6 +19,7 @@ from datetime import datetime
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
+    Character,
     Face,
     Picture,
     PictureProjectMember,
@@ -694,6 +695,73 @@ def _copy_set_and_project_assignments(
         )
 
 
+def _assign_pictures_to_view_context(
+    server,
+    new_ids: list[int],
+    set_id: int | None,
+    project_id: int | None,
+    character_id: int | None,
+) -> None:
+    """Assign newly generated pictures directly to the current view context.
+
+    Called for T2I outputs when the user is browsing a specific set, project,
+    or character.  Unlike _copy_set_and_project_assignments this works without
+    a source picture to copy from.
+    """
+    if not new_ids:
+        return
+    if not any([set_id, project_id, character_id]):
+        return
+
+    def assign(session):
+        # Resolve character → reference set so the picture appears in the
+        # character view as well as the regular set view.
+        effective_set_ids = [s for s in [set_id] if s is not None]
+        if character_id is not None:
+            char = session.get(Character, character_id)
+            if char and char.reference_picture_set_id:
+                ref_sid = char.reference_picture_set_id
+                if ref_sid not in effective_set_ids:
+                    effective_set_ids.append(ref_sid)
+
+        for pic_id in new_ids:
+            existing_sets = {
+                row.set_id
+                for row in session.exec(
+                    select(PictureSetMember).where(
+                        PictureSetMember.picture_id == pic_id
+                    )
+                ).all()
+            }
+            for sid in effective_set_ids:
+                if sid not in existing_sets:
+                    session.add(PictureSetMember(set_id=sid, picture_id=pic_id))
+
+            if project_id is not None:
+                existing_projects = {
+                    row.project_id
+                    for row in session.exec(
+                        select(PictureProjectMember).where(
+                            PictureProjectMember.picture_id == pic_id
+                        )
+                    ).all()
+                }
+                if project_id not in existing_projects:
+                    session.add(
+                        PictureProjectMember(project_id=project_id, picture_id=pic_id)
+                    )
+        session.commit()
+
+    server.vault.db.run_task(assign)
+    logger.info(
+        "Assigned %s T2I picture(s) to view context (set=%s, project=%s, character=%s)",
+        len(new_ids),
+        set_id,
+        project_id,
+        character_id,
+    )
+
+
 def _set_source_picture_id_on_pictures(
     server,
     source_picture_id: int | None,
@@ -720,6 +788,7 @@ def _process_comfyui_outputs(
     output_node_ids: list[str] | None,
     stack_id: int | None,
     source_picture_id: int | None,
+    view_context: dict | None = None,
 ) -> None:
     try:
         images = _wait_for_comfyui_outputs(base_url, prompt_id, output_node_ids)
@@ -744,6 +813,14 @@ def _process_comfyui_outputs(
                 # T2I: let face extraction run and schedule similarity-based assignment
                 _set_source_picture_id_on_pictures(server, source_picture_id, new_ids)
             _copy_set_and_project_assignments(server, source_picture_id, new_ids)
+        if new_ids and view_context:
+            _assign_pictures_to_view_context(
+                server,
+                new_ids,
+                set_id=view_context.get("set_id"),
+                project_id=view_context.get("project_id"),
+                character_id=view_context.get("character_id"),
+            )
 
         if new_ids:
             server.vault.notify(EventType.PICTURE_IMPORTED, new_ids)
@@ -1082,6 +1159,29 @@ def create_router(server) -> APIRouter:
             int(raw_source_id) if raw_source_id is not None else None
         )
 
+        raw_set_id = payload.get("set_id")
+        raw_project_id = payload.get("project_id")
+        raw_character_id = payload.get("character_id")
+        view_context: dict | None = None
+        ctx: dict = {}
+        if raw_set_id is not None:
+            try:
+                ctx["set_id"] = int(raw_set_id)
+            except (TypeError, ValueError):
+                pass
+        if raw_project_id is not None:
+            try:
+                ctx["project_id"] = int(raw_project_id)
+            except (TypeError, ValueError):
+                pass
+        if raw_character_id is not None:
+            try:
+                ctx["character_id"] = int(raw_character_id)
+            except (TypeError, ValueError):
+                pass
+        if ctx:
+            view_context = ctx
+
         workflow_path, _ = _resolve_workflow_path(workflow_name)
         if not workflow_path:
             raise HTTPException(status_code=404, detail="Workflow not found")
@@ -1145,6 +1245,7 @@ def create_router(server) -> APIRouter:
                     None,
                     source_picture_id,
                 ),
+                kwargs={"view_context": view_context},
                 daemon=True,
             )
             worker.start()

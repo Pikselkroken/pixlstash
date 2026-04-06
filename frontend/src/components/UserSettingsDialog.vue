@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, logout } from "../utils/apiClient";
 
 const appVersion = __APP_VERSION__;
 
@@ -1313,6 +1313,16 @@ const workflowImportCaptionPreview = computed(() => {
         <v-card-title class="settings-dialog-title">
           Settings
           <span class="settings-dialog-version">v{{ appVersion }}</span>
+          <v-btn
+            variant="text"
+            size="small"
+            class="settings-logout-btn"
+            title="Log out"
+            @click="logout"
+          >
+            <v-icon size="16" class="settings-logout-icon">mdi-logout</v-icon>
+            Log out
+          </v-btn>
         </v-card-title>
         <v-tabs
           v-model="settingsTab"
@@ -2114,8 +2124,24 @@ const workflowImportCaptionPreview = computed(() => {
   font-weight: 700;
   font-size: 1.2rem;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+}
+
+.settings-logout-btn {
+  margin-left: auto;
+  font-size: 0.78rem;
+  opacity: 0.6;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.settings-logout-btn:hover {
+  opacity: 1;
+}
+
+.settings-logout-icon {
+  margin-right: 3px;
 }
 
 .settings-dialog-version {

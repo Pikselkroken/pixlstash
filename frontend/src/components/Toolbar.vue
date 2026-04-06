@@ -1053,7 +1053,7 @@
                   <textarea
                     v-model="comfyuiCaption"
                     class="toolbar-comfyui-textarea"
-                    rows="8"
+                    rows="6"
                     placeholder="Optional caption for {{caption}}"
                     @keydown.stop
                   ></textarea>
@@ -1084,8 +1084,6 @@
                       max="4294967295"
                       @keydown.stop
                     />
-                  </div>
-                  <div class="toolbar-comfyui-actions">
                     <button
                       class="toolbar-comfyui-run-btn"
                       type="button"
@@ -2518,13 +2516,7 @@ defineExpose({ blurSearchInput, focusSearchInput });
   resize: vertical;
   outline: none;
   font-family: inherit;
-  min-height: 260px;
-}
-
-.toolbar-comfyui-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 4px;
+  min-height: 160px;
 }
 
 .toolbar-comfyui-run-btn {
@@ -2535,10 +2527,12 @@ defineExpose({ blurSearchInput, focusSearchInput });
   color: rgb(var(--v-theme-on-primary));
   border: none;
   border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 0.9em;
+  padding: 4px 10px;
+  font-size: 0.88em;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: background 0.15s;
 }
 
@@ -2589,6 +2583,7 @@ defineExpose({ blurSearchInput, focusSearchInput });
 .toolbar-comfyui-seed-input {
   flex: 1;
   min-width: 0;
+  max-width: 110px;
   background: rgba(var(--v-theme-surface), 0.25);
   color: rgb(var(--v-theme-on-background));
   border: 1px solid rgba(var(--v-theme-on-background), 0.15);
