@@ -11,7 +11,7 @@ from pixlstash.db_models.tag import (
     TAG_EMPTY_SENTINEL,
 )
 from pixlstash.db_models.tag_prediction import TagPrediction
-from pixlstash.picture_tagger import PictureTagger
+from pixlstash.picture_tagger import PictureTagger, QUALITY_CROP_TAG_WHITELIST
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -152,6 +152,11 @@ class TagPredictionTask(BaseTask):
                         continue
                     merged = label_scores_by_pic_id.setdefault(pic_id, {})
                     for tag, conf in tag_scores.items():
+                        # Only boost whitelist tags from crop scores — TagTask
+                        # applies the same restriction, so non-whitelist tags
+                        # must rely on their full-image score only.
+                        if tag not in QUALITY_CROP_TAG_WHITELIST:
+                            continue
                         if conf > merged.get(tag, 0.0):
                             merged[tag] = conf
         except Exception as exc:
@@ -245,6 +250,13 @@ class TagPredictionTask(BaseTask):
                     existing.model_version = model_version
                     existing.status = status
                     existing.predicted_at = now
+                    written += 1
+                elif tag_task_has_run and existing.status != status:
+                    # TagTask ran after TagPredictionTask (or vice versa) and
+                    # the tag's applied status has changed since this row was
+                    # written — sync the status without touching confidence or
+                    # model_version so the old score is preserved.
+                    existing.status = status
                     written += 1
 
             # Ensure every confirmed tag has a prediction row even if the model
