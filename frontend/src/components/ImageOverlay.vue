@@ -774,7 +774,7 @@
                   v-if="image"
                   class="section-meta-btn"
                   type="button"
-                  title="Refresh tags"
+                  title="Reset and regenerate tags — deletes all tags and predictions for this picture and requeues it for re-tagging"
                   :disabled="isTagsRefreshing"
                   @click.stop="refreshPictureTags"
                 >
@@ -4695,7 +4695,7 @@ async function removeAllTag(tag) {
 
 async function refreshPictureTags() {
   if (!image.value?.id || !backendUrl.value) return;
-  if (!allImageTags.value.length) return;
+  if (isTagsRefreshing.value) return;
   // Capture before any await in case image.value is nulled by ESC during the request
   const capturedImageId = image.value.id;
 
@@ -5492,7 +5492,7 @@ function downloadComfyWorkflow(workflow) {
 
 .overlay-sidebar.open {
   width: 320px;
-  padding: 10px 12px;
+  padding: 10px 12px 44px;
   display: flex;
   flex-direction: column;
   min-height: 0;

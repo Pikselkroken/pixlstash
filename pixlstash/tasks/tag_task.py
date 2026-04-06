@@ -223,7 +223,9 @@ class TagTask(BaseTask):
     @staticmethod
     def _resolve_pending_predictions(session: Session, picture_ids: list) -> None:
         """Flip any PENDING tag predictions to CONFIRMED or REJECTED based on
-        the tags that TagTask wrote for these pictures."""
+        the tags that TagTask wrote for these pictures.
+        Also reconciles CONFIRMED/REJECTED rows whose status no longer matches
+        the current Tag table (e.g. TagPredictionTask ran before TagTask)."""
         if not picture_ids:
             return
         for picture_id in picture_ids:
@@ -237,14 +239,16 @@ class TagTask(BaseTask):
                     )
                 ).all()
             }
-            pending_preds = session.exec(
+            all_preds = session.exec(
                 select(TagPrediction).where(
                     TagPrediction.picture_id == picture_id,
-                    TagPrediction.status == "PENDING",
+                    TagPrediction.status.in_(["PENDING", "CONFIRMED", "REJECTED"]),
                 )
             ).all()
-            for pred in pending_preds:
-                pred.status = "CONFIRMED" if pred.tag in applied_tags else "REJECTED"
+            for pred in all_preds:
+                correct_status = "CONFIRMED" if pred.tag in applied_tags else "REJECTED"
+                if pred.status != correct_status:
+                    pred.status = correct_status
         session.commit()
 
     def _tag_pictures_batch(self) -> list:
