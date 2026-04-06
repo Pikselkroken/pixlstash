@@ -33,6 +33,7 @@
         <div
           v-if="selectedCount > 0 && !isScrapheapView && pluginOptions.length"
           class="plugin-run-controls"
+          @keydown.esc="handlePluginMenuEsc"
         >
           <v-menu
             v-model="pluginMenuOpen"
@@ -53,7 +54,7 @@
                 <span>Filters</span>
               </button>
             </template>
-            <div class="plugin-menu-panel" @keydown.esc="handlePluginMenuEsc">
+            <div class="plugin-menu-panel">
               <div class="plugin-menu-header">Apply Filters</div>
               <div class="plugin-menu-body">
                 <label class="plugin-menu-label">Filters</label>
@@ -94,6 +95,7 @@
         <div
           v-if="selectedCount > 0 && !isScrapheapView"
           class="plugin-run-controls"
+          @keydown.esc="handleComfyuiMenuEsc"
         >
           <v-menu
             v-if="props.comfyuiConfigured"
@@ -115,7 +117,7 @@
                 <span>ComfyUI</span>
               </button>
             </template>
-            <div class="plugin-menu-panel" @keydown.esc="handleComfyuiMenuEsc">
+            <div class="plugin-menu-panel">
               <div class="plugin-menu-header">ComfyUI I2I</div>
               <div class="plugin-menu-body">
                 <div v-if="comfyuiWorkflowLoading" class="plugin-menu-note">
@@ -835,6 +837,7 @@ function runSelectedPlugin() {
 }
 
 function handlePluginMenuEsc(event) {
+  if (!pluginMenuOpen.value) return;
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") {
@@ -844,6 +847,7 @@ function handlePluginMenuEsc(event) {
 }
 
 function handleComfyuiMenuEsc(event) {
+  if (!comfyuiMenuOpen.value) return;
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === "function") {
