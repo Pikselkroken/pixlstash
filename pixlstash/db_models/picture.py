@@ -539,7 +539,7 @@ class Picture(SQLModel, table=True):
             for i, tag in enumerate(tags_rejected_filter):
                 stmt = stmt.where(
                     text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :rejected_tag_filter_{i} AND tag_prediction.status = 'REJECTED')"
+                        f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
                     ).bindparams(**{f"rejected_tag_filter_{i}": tag})
                 )
 
@@ -740,7 +740,7 @@ class Picture(SQLModel, table=True):
             for i, tag in enumerate(tags_rejected_filter):
                 query = query.where(
                     text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :rejected_tag_filter_{i} AND tag_prediction.status = 'REJECTED')"
+                        f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
                     ).bindparams(**{f"rejected_tag_filter_{i}": tag})
                 )
 
@@ -948,7 +948,7 @@ class Picture(SQLModel, table=True):
             for i, tag in enumerate(tags_rejected_filter):
                 query = query.where(
                     text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :rejected_tag_filter_{i} AND tag_prediction.status = 'REJECTED')"
+                        f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
                     ).bindparams(**{f"rejected_tag_filter_{i}": tag})
                 )
 
