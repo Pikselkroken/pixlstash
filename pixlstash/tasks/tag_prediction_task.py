@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
 
+from PIL import Image as PILImage
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture
+from pixlstash.db_models.face import Face
 from pixlstash.db_models.tag import (
     Tag,
     TAG_EMPTY_SENTINEL,
@@ -77,16 +79,93 @@ class TagPredictionTask(BaseTask):
             min_confidence=_PREDICTION_MIN_CONFIDENCE,
         )
 
-        updates: list[dict] = []
+        # Accumulate full-image scores per picture id.
+        label_scores_by_pic_id: dict[int, dict[str, float]] = {}
         for path, label_scores in scores_by_path.items():
             pic = pic_by_path.get(str(path))
             if pic is None or not label_scores:
+                continue
+            label_scores_by_pic_id[pic.id] = dict(label_scores)
+
+        # Quality crop pass: score face crops and merge confidences.
+        # This ensures tags detected only at crop resolution (e.g. "pixelated")
+        # receive a real confidence score rather than the 0.0 fallback.
+        try:
+            pic_ids = [p.id for p in self._pictures if p.file_path]
+
+            def _fetch_faces(session):
+                faces = session.exec(
+                    select(Face).where(Face.picture_id.in_(pic_ids))
+                ).all()
+                result = {}
+                for face in faces:
+                    result.setdefault(face.picture_id, []).append(face)
+                return result
+
+            faces_by_pic = self._db.run_task(_fetch_faces, priority=DBPriority.LOW)
+            target = self._picture_tagger.custom_tagger_image_size_quality_crop()
+            quality_items = []
+            key_to_pic_id: dict[str, int] = {}
+            for pic in self._pictures:
+                if not pic.file_path:
+                    continue
+                faces = faces_by_pic.get(pic.id, [])
+                valid_faces = [
+                    f for f in faces if f.bbox and getattr(f, "face_index", 0) >= 0
+                ]
+                if not valid_faces:
+                    continue
+                file_path = str(
+                    ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
+                )
+                try:
+                    img = PILImage.open(file_path).convert("RGB")
+                    w, h = img.size
+                    largest_face = max(
+                        valid_faces,
+                        key=lambda f: max(
+                            0,
+                            (float(f.bbox[2]) - float(f.bbox[0]))
+                            * (float(f.bbox[3]) - float(f.bbox[1])),
+                        ),
+                    )
+                    expanded = PictureTagger._expand_bbox_to_square(
+                        largest_face.bbox, w, h, target
+                    )
+                    crop = img.crop(expanded)
+                    key = f"{file_path}#face{largest_face.id}"
+                    quality_items.append((key, crop))
+                    key_to_pic_id[key] = pic.id
+                except Exception as exc:
+                    logger.warning(
+                        "Could not load %s for prediction crop scoring: %s",
+                        file_path,
+                        exc,
+                    )
+            if quality_items:
+                crop_scores = self._picture_tagger.score_quality_crops_raw(
+                    quality_items
+                )
+                for key, tag_scores in crop_scores.items():
+                    pic_id = key_to_pic_id.get(key)
+                    if pic_id is None:
+                        continue
+                    merged = label_scores_by_pic_id.setdefault(pic_id, {})
+                    for tag, conf in tag_scores.items():
+                        if conf > merged.get(tag, 0.0):
+                            merged[tag] = conf
+        except Exception as exc:
+            logger.warning("Quality crop prediction scoring failed: %s", exc)
+
+        updates: list[dict] = []
+        for pic_id, label_scores in label_scores_by_pic_id.items():
+            if not label_scores:
                 continue
             confs = list(label_scores.values())
             uncertainty = float(max(min(c, 1.0 - c) for c in confs))
             updates.append(
                 {
-                    "picture_id": pic.id,
+                    "picture_id": pic_id,
                     "label_scores": label_scores,
                     "uncertainty": uncertainty,
                 }

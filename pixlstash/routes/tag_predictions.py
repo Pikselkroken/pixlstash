@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, HTTPException
 from sqlmodel import Session, delete, or_, select
 
@@ -5,13 +7,41 @@ from pixlstash.db_models import Tag
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
-from pixlstash.picture_tagger import CUSTOM_TAGGER_THRESHOLD_FULL
+from pixlstash.picture_tagger import (
+    CUSTOM_TAGGER_META_PATH,
+    CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS,
+    CUSTOM_TAGGER_THRESHOLD_FULL,
+)
 from pixlstash.pixl_logging import get_logger
+from pixlstash.tag_naturaliser import TagNaturaliser
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
 
 logger = get_logger(__name__)
+
+
+def _load_label_thresholds() -> dict[str, float]:
+    """Load per-label acceptance thresholds from the custom tagger meta JSON.
+
+    Keys are naturalized to match the values stored in TagPrediction.tag.
+    Returns an empty dict if the file is missing or lacks label_thresholds.
+    """
+    try:
+        with open(CUSTOM_TAGGER_META_PATH, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        raw = meta.get("label_thresholds", {})
+        if not raw:
+            return {}
+        return {
+            TagNaturaliser.get_natural_tag(k) or k: min(
+                float(v) + CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS,
+                CUSTOM_TAGGER_THRESHOLD_FULL,
+            )
+            for k, v in raw.items()
+        }
+    except Exception:
+        return {}
 
 
 def create_router(server) -> APIRouter:
@@ -61,6 +91,7 @@ def create_router(server) -> APIRouter:
             "tag_predictions": payload,
             "meta": {
                 "acceptance_threshold": float(CUSTOM_TAGGER_THRESHOLD_FULL),
+                "label_thresholds": _load_label_thresholds(),
             },
         }
 

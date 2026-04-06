@@ -545,21 +545,84 @@
               Tag confidence
             </div>
             <div class="confidence-filter-row">
-              <input
-                v-model="confidenceTagInput"
-                class="tag-filter-input confidence-filter-tag-input"
-                placeholder="Tag…"
-                autocomplete="off"
-                @keydown.enter.prevent="addConfidenceFilter"
-              />
-              <input
-                v-model.number="confidenceThreshold"
-                type="number"
-                min="0"
-                max="1"
-                step="0.05"
-                class="confidence-threshold-input"
-              />
+              <div class="tag-filter-input-wrap confidence-filter-tag-wrap">
+                <input
+                  v-model="confidenceTagInput"
+                  class="tag-filter-input confidence-filter-tag-input"
+                  placeholder="Tag…"
+                  autocomplete="off"
+                  @keydown.enter.prevent="
+                    confidenceTagIndex >= 0 && confidenceTagSuggestions.length
+                      ? addConfidenceFilter(confidenceTagSuggestions[confidenceTagIndex])
+                      : addConfidenceFilter(confidenceTagInput.trim())
+                  "
+                  @keydown.tab.prevent="
+                    confidenceTagSuggestions.length
+                      ? addConfidenceFilter(
+                          confidenceTagSuggestions[
+                            confidenceTagIndex >= 0 ? confidenceTagIndex : 0
+                          ],
+                        )
+                      : addConfidenceFilter(confidenceTagInput.trim())
+                  "
+                  @keydown.down.prevent="
+                    confidenceTagIndex = Math.min(
+                      confidenceTagIndex + 1,
+                      confidenceTagSuggestions.length - 1,
+                    )
+                  "
+                  @keydown.up.prevent="
+                    confidenceTagIndex = Math.max(confidenceTagIndex - 1, -1)
+                  "
+                  @keydown.escape.prevent="confidenceTagSuggestions = []"
+                />
+                <div
+                  v-if="confidenceTagSuggestions.length"
+                  class="tag-filter-dropdown"
+                  :class="{
+                    'tag-filter-dropdown--hover-enabled': confidenceTagHoverEnabled,
+                  }"
+                  @mousemove.once="confidenceTagHoverEnabled = true"
+                >
+                  <button
+                    v-for="(tag, idx) in confidenceTagSuggestions"
+                    :key="tag"
+                    class="tag-filter-suggestion"
+                    :class="{
+                      'tag-filter-suggestion--active': idx === confidenceTagIndex,
+                    }"
+                    type="button"
+                    @mousedown.prevent="addConfidenceFilter(tag)"
+                    @mousemove="confidenceTagIndex = idx"
+                  >
+                    {{ tag }}
+                  </button>
+                </div>
+              </div>
+              <div class="confidence-threshold-stepper">
+                <button
+                  class="threshold-step-btn"
+                  type="button"
+                  tabindex="-1"
+                  :disabled="confidenceThreshold <= 0"
+                  @click="confidenceThreshold = Math.max(0, +(confidenceThreshold - 0.05).toFixed(2))"
+                >−</button>
+                <input
+                  v-model.number="confidenceThreshold"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  class="confidence-threshold-input"
+                />
+                <button
+                  class="threshold-step-btn"
+                  type="button"
+                  tabindex="-1"
+                  :disabled="confidenceThreshold >= 1"
+                  @click="confidenceThreshold = Math.min(1, +(confidenceThreshold + 0.05).toFixed(2))"
+                >+</button>
+              </div>
               <button
                 class="confidence-mode-btn"
                 type="button"
@@ -1397,11 +1460,37 @@ function toggleTagRejected(tag) {
 }
 
 const confidenceTagInput = ref("");
+const confidenceTagSuggestions = ref([]);
+const confidenceTagHoverEnabled = ref(false);
+const confidenceTagIndex = ref(-1);
 const confidenceThreshold = ref(0.7);
 const confidenceMode = ref("above");
 
-function addConfidenceFilter() {
-  const tag = confidenceTagInput.value.trim();
+async function loadConfidenceTagSuggestions(input) {
+  if (!input || input.length < 1) {
+    confidenceTagSuggestions.value = [];
+    return;
+  }
+  try {
+    const res = await apiClient.get(`${props.backendUrl}/tags`);
+    const all = Array.isArray(res.data) ? res.data : [];
+    const q = input.toLowerCase();
+    confidenceTagSuggestions.value = all
+      .filter((t) => t.tag.toLowerCase().includes(q))
+      .slice(0, 8)
+      .map((t) => t.tag);
+  } catch {
+    confidenceTagSuggestions.value = [];
+  }
+}
+
+watch(confidenceTagInput, (val) => {
+  confidenceTagIndex.value = -1;
+  loadConfidenceTagSuggestions(val);
+});
+
+function addConfidenceFilter(tagArg) {
+  const tag = (tagArg ?? confidenceTagInput.value).trim();
   if (!tag) return;
   const entry = `${tag}:${confidenceThreshold.value.toFixed(2)}`;
   if (confidenceMode.value === "above") {
@@ -1420,6 +1509,8 @@ function addConfidenceFilter() {
     }
   }
   confidenceTagInput.value = "";
+  confidenceTagSuggestions.value = [];
+  confidenceTagIndex.value = -1;
 }
 
 function removeConfidenceAboveFilter(entry) {
@@ -2304,9 +2395,9 @@ defineExpose({ blurSearchInput, focusSearchInput });
 
 .toolbar-filter-panel {
   padding: 10px 12px;
-  min-width: 220px;
-  max-width: 280px;
-  width: 280px;
+  min-width: 260px;
+  max-width: 320px;
+  width: 320px;
   max-height: 70vh;
   overflow-y: auto;
   background: rgba(var(--v-theme-background), 0.92);
@@ -2606,19 +2697,57 @@ defineExpose({ blurSearchInput, focusSearchInput });
   width: 100%;
 }
 
-.confidence-filter-tag-input {
+.confidence-filter-tag-wrap {
   flex: 1;
   min-width: 0;
-  width: auto;
+  position: relative;
+}
+
+.confidence-filter-tag-input {
+  width: 100%;
+}
+
+.confidence-threshold-stepper {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid rgba(var(--v-theme-on-background), 0.18);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.threshold-step-btn {
+  background: rgba(var(--v-theme-on-background), 0.06);
+  color: rgb(var(--v-theme-on-background));
+  border: none;
+  border-radius: 0;
+  padding: 0 6px;
+  font-size: 1em;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.threshold-step-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-primary), 0.18);
+}
+
+.threshold-step-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .confidence-threshold-input {
-  width: 52px;
-  background: rgba(var(--v-theme-on-background), 0.06);
+  width: 40px;
+  background: rgba(var(--v-theme-on-background), 0.04);
   color: rgb(var(--v-theme-on-background));
-  border: 1px solid rgba(var(--v-theme-on-background), 0.2);
-  border-radius: 6px;
-  padding: 5px 6px;
+  border: none;
+  border-left: 1px solid rgba(var(--v-theme-on-background), 0.12);
+  border-right: 1px solid rgba(var(--v-theme-on-background), 0.12);
+  padding: 5px 2px;
   font-size: 0.82em;
   outline: none;
   box-sizing: border-box;
@@ -2626,7 +2755,18 @@ defineExpose({ blurSearchInput, focusSearchInput });
 }
 
 .confidence-threshold-input:focus {
-  border-color: rgba(var(--v-theme-primary), 0.6);
+  background: rgba(var(--v-theme-primary), 0.07);
+}
+
+.confidence-threshold-input::-webkit-inner-spin-button,
+.confidence-threshold-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+.confidence-threshold-input[type="number"] {
+  -moz-appearance: textfield;
 }
 
 .confidence-mode-btn {

@@ -858,10 +858,6 @@
             <div class="section-header">
               <span class="section-header-title-with-meta">
                 Rejected Tags
-                <span class="rejected-threshold-label"
-                  >(> {{ (predictionAcceptanceThreshold * 100).toFixed(0) }}% to
-                  be auto-applied)</span
-                >
               </span>
               <button
                 class="section-meta-btn"
@@ -1276,6 +1272,7 @@ const penalisedTags = ref(new Set());
 const penalisedTagsLoading = ref(false);
 const tagPredictions = ref([]);
 const predictionAcceptanceThreshold = ref(0.95);
+const labelThresholds = ref({});
 const nearMissesCollapsed = ref(loadOverlayRejectedTagsCollapsed());
 const lastTagUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
@@ -3463,6 +3460,7 @@ async function fetchTagPredictions(imageId) {
     if (Number.isFinite(threshold) && threshold > 0 && threshold <= 1) {
       predictionAcceptanceThreshold.value = threshold;
     }
+    labelThresholds.value = payload?.meta?.label_thresholds || {};
     tagPredictions.value = predictions;
   } catch {
     tagPredictions.value = [];
@@ -3513,25 +3511,41 @@ function predictionStyleForTag(label) {
   return { "--pred-confidence": pred.confidence };
 }
 
+function _predThreshold(tag) {
+  const perLabel = tag != null ? labelThresholds.value[tag] : undefined;
+  return typeof perLabel === "number" && Number.isFinite(perLabel)
+    ? perLabel
+    : Number(predictionAcceptanceThreshold.value) || 0.95;
+}
+
 function predictionTitleForTag(label) {
   if (!label) return null;
   const pred = pendingPredictionMap.value.get(label.trim().toLowerCase());
   if (!pred) return null;
-  return `Prediction confidence: ${(pred.confidence * 100).toFixed(1)}% (needs +${(
-    predictionNeededToAccept(pred.confidence) * 100
-  ).toFixed(1)}% to auto-accept)`;
+  const threshold = _predThreshold(pred.tag);
+  const threshPct = Math.round(threshold * 100);
+  const confPct = Math.round(pred.confidence * 100);
+  const needed = predictionNeededToAccept(pred.confidence, pred.tag);
+  if (needed <= 0) {
+    return `Prediction confidence: ${confPct}% (auto-applied > ${threshPct}%)`;
+  }
+  return `Prediction confidence: ${confPct}% (needs +${Math.round(needed * 100)}% to auto-accept)`;
 }
 
-function predictionNeededToAccept(confidence) {
+function predictionNeededToAccept(confidence, tag) {
   const current = Number(confidence) || 0;
-  const threshold = Number(predictionAcceptanceThreshold.value) || 0.95;
-  return Math.max(0, threshold - current);
+  return Math.max(0, _predThreshold(tag) - current);
 }
 
 function rejectedTagTitle(pred) {
-  const threshold = Number(predictionAcceptanceThreshold.value) || 0.95;
-  const needed = predictionNeededToAccept(pred.confidence);
-  return `Confidence: ${(pred.confidence * 100).toFixed(1)}% | Auto-accept threshold: ${(threshold * 100).toFixed(0)}% | Needed: +${(needed * 100).toFixed(1)}%`;
+  const threshold = _predThreshold(pred?.tag);
+  const threshPct = Math.round(threshold * 100);
+  const confPct = Math.round((pred.confidence || 0) * 100);
+  const needed = predictionNeededToAccept(pred.confidence, pred.tag);
+  if (needed <= 0) {
+    return `Confidence: ${confPct}% | > ${threshPct}% but manually rejected`;
+  }
+  return `Confidence: ${confPct}% | Needs +${Math.round(needed * 100)}% to reach ${threshPct}%`;
 }
 
 async function confirmPrediction(tag) {
