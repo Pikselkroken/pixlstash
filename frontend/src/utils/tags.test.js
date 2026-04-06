@@ -165,18 +165,18 @@ const W_HEAVY = { blur: 5, noise: 4, grain: 4 }; // blur+noise+grain→13 (sever
 describe('penalisedTagIcon', () => {
   it('returns neutral icon for low total weight (< 7)', () => {
     // 1 tag, weight 2 → total 2 → mild
-    expect(penalisedTagIcon({ penalised_tags: ['blur'] }, W_LOW)).toBe('mdi-emoticon-neutral-outline')
+    expect(penalisedTagIcon({ penalised_tags: ['blur'] }, W_LOW)).toBe('mdi-emoticon-neutral')
     // 1 tag, weight 4 → total 4 → mild
-    expect(penalisedTagIcon({ penalised_tags: ['blur'] }, W_MED)).toBe('mdi-emoticon-neutral-outline')
+    expect(penalisedTagIcon({ penalised_tags: ['blur'] }, W_MED)).toBe('mdi-emoticon-neutral')
     // 2 tags, weights 2+1=3 → mild
-    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_LOW)).toBe('mdi-emoticon-neutral-outline')
+    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_LOW)).toBe('mdi-emoticon-neutral')
   })
 
   it('returns sad icon for moderate total weight (7-12)', () => {
     // 2 tags, weights 4+3=7 → moderate
-    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_MED)).toBe('mdi-emoticon-sad-outline')
+    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_MED)).toBe('mdi-emoticon-sad')
     // 2 tags, weights 5+5=10 → moderate
-    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_HIGH)).toBe('mdi-emoticon-sad-outline')
+    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise'] }, W_HIGH)).toBe('mdi-emoticon-sad')
   })
 
   it('returns angry icon for high total weight (> 12)', () => {
@@ -201,11 +201,11 @@ describe('penalisedTagIcon', () => {
 
 describe('penalisedTagColor', () => {
   it('returns yellow for low total weight (< 7)', () => {
-    expect(penalisedTagColor({ penalised_tags: ['blur'] }, W_MED)).toBe('#f9a825')
+    expect(penalisedTagColor({ penalised_tags: ['blur'] }, W_MED)).toBe('#ffea00')
   })
 
   it('returns orange for moderate total weight (7-12)', () => {
-    expect(penalisedTagColor({ penalised_tags: ['blur', 'noise'] }, W_MED)).toBe('#e65100')
+    expect(penalisedTagColor({ penalised_tags: ['blur', 'noise'] }, W_MED)).toBe('#ff9100')
   })
 
   it('returns deep red for high total weight (> 12)', () => {
