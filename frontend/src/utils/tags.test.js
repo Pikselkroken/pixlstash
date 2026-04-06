@@ -181,21 +181,21 @@ describe('penalisedTagIcon', () => {
 
   it('returns angry icon for high total weight (> 12)', () => {
     // 3 tags, weights 5+4+4=13 → severe
-    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise', 'grain'] }, W_HEAVY)).toBe('mdi-emoticon-angry')
+    expect(penalisedTagIcon({ penalised_tags: ['blur', 'noise', 'grain'] }, W_HEAVY, true)).toBe('mdi-emoticon-angry-outline')
   })
 
   it('falls back to count=1-per-tag when no weights map given', () => {
     // 6 tags, no weights → total 6 → mild
-    expect(penalisedTagIcon({ penalised_tags: ['a', 'b', 'c', 'd', 'e', 'f'] })).toBe('mdi-emoticon-neutral-outline')
+    expect(penalisedTagIcon({ penalised_tags: ['a', 'b', 'c', 'd', 'e', 'f'] })).toBe('mdi-emoticon-neutral')
     // 7 tags, no weights → total 7 → moderate
-    expect(penalisedTagIcon({ penalised_tags: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] })).toBe('mdi-emoticon-sad-outline')
+    expect(penalisedTagIcon({ penalised_tags: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] })).toBe('mdi-emoticon-sad')
     // 13 tags, no weights → total 13 → severe
     expect(penalisedTagIcon({ penalised_tags: ['a','b','c','d','e','f','g','h','i','j','k','l','m'] })).toBe('mdi-emoticon-angry')
   })
 
   it('falls back to neutral for empty/null', () => {
-    expect(penalisedTagIcon({})).toBe('mdi-emoticon-neutral-outline')
-    expect(penalisedTagIcon(null)).toBe('mdi-emoticon-neutral-outline')
+    expect(penalisedTagIcon({})).toBe('mdi-emoticon-neutral')
+    expect(penalisedTagIcon(null)).toBe('mdi-emoticon-neutral')
   })
 })
 

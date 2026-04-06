@@ -83,18 +83,20 @@ function _penalisedSeverity(img, weights) {
   return 0;
 }
 
-// Icon grading: neutral mouth → sad → dead (X-eyes).
-export function penalisedTagIcon(img, weights) {
+// Icon grading: neutral mouth → sad → angry.
+// Use outline variant in dark mode; filled in light mode (better contrast on bright backgrounds).
+export function penalisedTagIcon(img, weights, outline = false) {
+  const suffix = outline ? '-outline' : '';
   const level = _penalisedSeverity(img, weights);
-  if (level === 2) return 'mdi-emoticon-angry';
-  if (level === 1) return 'mdi-emoticon-sad-outline';
-  return 'mdi-emoticon-neutral-outline';
+  if (level === 2) return `mdi-emoticon-angry${suffix}`;
+  if (level === 1) return `mdi-emoticon-sad${suffix}`;
+  return `mdi-emoticon-neutral${suffix}`;
 }
 
-// Colour grading: yellow → orange → deep red.
+// Colour grading: bright yellow → bright orange → deep red.
 export function penalisedTagColor(img, weights) {
   const level = _penalisedSeverity(img, weights);
   if (level === 2) return '#c62828';
-  if (level === 1) return '#e65100';
-  return '#f9a825';
+  if (level === 1) return '#ff9100';
+  return '#ffea00';
 }
