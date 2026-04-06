@@ -41,12 +41,14 @@ function handleClick(n) {
   display: flex;
   flex-direction: row;
   align-items: center;
+  gap: 0;
   box-shadow: none;
 }
 
 .star-overlay--compact {
   z-index: 120;
-  font-size: 0.65em;
+  font-size: 0.6em;
+  gap: 0;
 }
 
 .star-overlay--compact:hover {

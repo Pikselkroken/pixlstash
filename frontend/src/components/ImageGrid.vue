@@ -6763,7 +6763,7 @@ function handleEmptyStateReset() {
 .thumbnail-badge {
   background: rgba(var(--v-theme-dark-surface), 0.65);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
-  border-radius: 6px;
+  border-radius: 8px;
   color: rgb(var(--v-theme-on-dark-surface));
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   font-size: 0.8em;
@@ -6929,10 +6929,15 @@ function handleEmptyStateReset() {
   margin: 0;
   transition:
     box-shadow 0.2s,
-    border 0.2s;
+    border 0.2s,
+    z-index 0s;
   position: relative;
-  z-index: 0; /* Ensure stacking context */
+  z-index: 0;
   border: 0px solid transparent;
+}
+
+.image-card:hover {
+  z-index: 20;
 }
 
 .image-card-stack-reorder-left::after,
@@ -7019,12 +7024,12 @@ function handleEmptyStateReset() {
 .thumbnail-img:hover {
   box-shadow: 1px 1px 2px 2px rgba(var(--v-theme-shadow), 0.3);
   transform: scale(1.03);
-  z-index: 2;
+  z-index: 20;
 }
 .stack-hover-active .thumbnail-img {
   box-shadow: 1px 1px 2px 2px rgba(var(--v-theme-shadow), 0.3);
   transform: scale(1.03);
-  z-index: 2;
+  z-index: 20;
 }
 .thumbnail-card {
   width: 100%;
@@ -7061,7 +7066,8 @@ function handleEmptyStateReset() {
   transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1);
 }
 .compact-mode .thumbnail-card:has(.compact-group-label):hover::before {
-  transform: scale(1.03);
+  transform: scale(1.05);
+  z-index: 20;
 }
 .compact-mode .thumbnail-img {
   border-radius: 0;
@@ -7101,7 +7107,7 @@ function handleEmptyStateReset() {
 .compact-group-label {
   position: absolute;
   top: 0;
-  left: 30%;
+  left: 50%;
 }
 
 .thumbnail-card-new {

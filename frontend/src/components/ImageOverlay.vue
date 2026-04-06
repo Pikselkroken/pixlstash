@@ -915,78 +915,108 @@
           </div>
 
           <div class="sidebar-section">
-            <div class="section-header">Metadata</div>
             <div
-              v-if="
-                !metadataEntries.length &&
-                !comfyMetadata &&
-                !pictureInfoEntries.length
-              "
-              class="metadata-empty"
+              class="section-header section-header--collapsible"
+              @click="metadataCollapsed = !metadataCollapsed"
             >
-              No metadata available
+              <span>Metadata</span>
+              <v-icon size="16" style="opacity: 0.6">{{
+                metadataCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+              }}</v-icon>
             </div>
-            <div v-else class="metadata-list">
-              <div v-if="pictureInfoEntries.length" class="metadata-info-card">
-                <div class="metadata-info-header">{{ infoHeaderLabel }}</div>
-                <div class="metadata-info-grid">
-                  <div
-                    v-for="entry in pictureInfoEntries"
-                    :key="entry.label"
-                    class="metadata-info-item"
+            <template v-if="!metadataCollapsed">
+              <div
+                v-if="
+                  !metadataEntries.length &&
+                  !comfyMetadata &&
+                  !pictureInfoEntries.length
+                "
+                class="metadata-empty"
+              >
+                No metadata available
+              </div>
+              <div v-else class="metadata-tabbox">
+                <div class="metadata-tab-strip">
+                  <button
+                    v-if="pictureInfoEntries.length"
+                    class="metadata-tab-btn"
+                    :class="{ active: metadataTab === 'info' }"
+                    @click="metadataTab = 'info'"
                   >
-                    <div class="metadata-info-label">{{ entry.label }}</div>
-                    <div class="metadata-info-value">{{ entry.value }}</div>
+                    {{ infoHeaderLabel }}
+                  </button>
+                  <button
+                    v-if="comfyMetadata"
+                    class="metadata-tab-btn"
+                    :class="{ active: metadataTab === 'comfy' }"
+                    @click="metadataTab = 'comfy'"
+                  >
+                    ComfyUI
+                  </button>
+                </div>
+                <div
+                  v-if="metadataTab === 'info' && pictureInfoEntries.length"
+                  class="metadata-tab-panel"
+                >
+                  <div class="metadata-info-grid">
+                    <div
+                      v-for="entry in pictureInfoEntries"
+                      :key="entry.label"
+                      class="metadata-info-item"
+                    >
+                      <div class="metadata-info-label">{{ entry.label }}</div>
+                      <div class="metadata-info-value">{{ entry.value }}</div>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div v-if="comfyMetadata" class="metadata-comfy-card">
-                <div class="metadata-comfy-header">
-                  <span>ComfyUI</span>
-                  <span class="metadata-comfy-subtitle">
-                    {{ comfyMetadata.summary }}
-                  </span>
-                </div>
-                <details
-                  v-if="comfyMetadata.workflow"
-                  class="metadata-comfy-details"
+                <div
+                  v-if="metadataTab === 'comfy' && comfyMetadata"
+                  class="metadata-tab-panel"
                 >
-                  <summary class="metadata-comfy-summary">
-                    <span class="metadata-comfy-summary-left">
-                      <span style="font-weight: 500; color: #fff">{{
-                        comfyMetadata.isApiFormat
-                          ? "API Workflow JSON"
-                          : "Workflow JSON"
-                      }}</span>
-                    </span>
-                    <button
-                      v-if="!comfyMetadata.isApiFormat"
-                      class="metadata-comfy-workflow-action"
-                      type="button"
-                      @click.stop="copyMetadataValue(comfyMetadata.workflow)"
-                    >
-                      <v-icon size="14">mdi-content-copy</v-icon>
-                      Copy
-                    </button>
-                    <button
-                      class="metadata-comfy-workflow-action"
-                      type="button"
-                      @click.stop="
-                        downloadComfyWorkflow(comfyMetadata.workflow)
-                      "
-                    >
-                      <v-icon size="14">mdi-download</v-icon>
-                      Download
-                    </button>
-                  </summary>
-                  <textarea
-                    class="metadata-comfy-textarea"
-                    readonly
-                    :value="stringifyMetadata(comfyMetadata.workflow)"
-                  ></textarea>
-                </details>
+                  <div class="metadata-comfy-subtitle">
+                    {{ comfyMetadata.summary }}
+                  </div>
+                  <details
+                    v-if="comfyMetadata.workflow"
+                    class="metadata-comfy-details"
+                  >
+                    <summary class="metadata-comfy-summary">
+                      <span class="metadata-comfy-summary-left">
+                        <span style="font-weight: 500; color: #fff">{{
+                          comfyMetadata.isApiFormat
+                            ? "API Workflow JSON"
+                            : "Workflow JSON"
+                        }}</span>
+                      </span>
+                      <button
+                        v-if="!comfyMetadata.isApiFormat"
+                        class="metadata-comfy-workflow-action"
+                        type="button"
+                        @click.stop="copyMetadataValue(comfyMetadata.workflow)"
+                      >
+                        <v-icon size="14">mdi-content-copy</v-icon>
+                        Copy
+                      </button>
+                      <button
+                        class="metadata-comfy-workflow-action"
+                        type="button"
+                        @click.stop="
+                          downloadComfyWorkflow(comfyMetadata.workflow)
+                        "
+                      >
+                        <v-icon size="14">mdi-download</v-icon>
+                        Download
+                      </button>
+                    </summary>
+                    <textarea
+                      class="metadata-comfy-textarea"
+                      readonly
+                      :value="stringifyMetadata(comfyMetadata.workflow)"
+                    ></textarea>
+                  </details>
+                </div>
               </div>
-            </div>
+            </template>
           </div>
         </aside>
       </div>
@@ -4233,6 +4263,17 @@ const pictureInfoEntries = computed(() => {
 });
 
 const comfyMetadata = ref(null);
+const metadataTab = ref("info");
+const metadataCollapsed = ref(false);
+
+watch(
+  [() => !!comfyMetadata.value, () => !!pictureInfoEntries.value?.length],
+  ([hasComfy, hasInfo]) => {
+    if (metadataTab.value === "comfy" && !hasComfy) metadataTab.value = "info";
+    if (metadataTab.value === "info" && !hasInfo && hasComfy)
+      metadataTab.value = "comfy";
+  },
+);
 
 function Metadata(input) {
   if (!input || typeof input !== "object") return {};
@@ -4783,7 +4824,7 @@ function downloadComfyWorkflow(workflow) {
   --rail-width: 52px;
   --rail-open-width: 170px;
   --sidebar-width: 0px;
-  --topbar-height: 56px;
+  --topbar-height: 40px;
   position: relative;
 }
 
@@ -4799,7 +4840,7 @@ function downloadComfyWorkflow(workflow) {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 4px 10px;
   min-height: var(--topbar-height);
   background: rgba(var(--v-theme-dark-surface), 0.9);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -5508,14 +5549,15 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .sidebar-section {
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .sidebar-section--description {
-  flex: 1;
+  flex: 1 1 150px;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: 150px;
+  overflow: hidden;
 }
 
 .sidebar-section--tags {
@@ -5524,13 +5566,26 @@ function downloadComfyWorkflow(workflow) {
   flex-direction: column;
 }
 
+.section-header--collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.section-header--collapsible:hover {
+  opacity: 0.85;
+}
+
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  font-size: 0.78rem;
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   margin-bottom: 4px;
-  color: rgb(var(--v-theme-on-dark-surface));
+  padding: 2px 0;
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
 .rejected-threshold-label {
@@ -5582,7 +5637,7 @@ function downloadComfyWorkflow(workflow) {
 .description-editor textarea {
   flex: 1;
   width: 100%;
-  min-height: 120px;
+  min-height: 80px;
   border-radius: 8px;
   font-size: 0.85rem;
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
@@ -5798,8 +5853,8 @@ function downloadComfyWorkflow(workflow) {
 .face-assign-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 6px;
+  gap: 4px;
+  margin-top: 4px;
   max-height: 210px;
   overflow-y: auto;
   padding-right: 2px;
@@ -5809,7 +5864,7 @@ function downloadComfyWorkflow(workflow) {
   background: rgba(var(--v-theme-on-dark-surface), 0.06);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
   border-radius: 6px;
-  padding: 4px;
+  padding: 3px;
 }
 
 .face-assign-row {
@@ -5841,7 +5896,7 @@ function downloadComfyWorkflow(workflow) {
 .face-assign-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
   flex: 1;
 }
@@ -5860,9 +5915,9 @@ function downloadComfyWorkflow(workflow) {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
   color: rgb(var(--v-theme-on-dark-surface));
   border-radius: 8px;
-  padding: 2px 6px;
+  padding: 1px 4px;
   font-size: 0.75rem;
-  height: 26px;
+  height: 22px;
 }
 
 .face-assign-select:disabled {
@@ -5878,6 +5933,61 @@ function downloadComfyWorkflow(workflow) {
 .metadata-empty {
   font-size: 0.85rem;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+
+.metadata-tabbox {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: rgba(var(--v-theme-on-dark-surface), 0.06);
+  overflow: hidden;
+}
+
+.metadata-tab-strip {
+  display: flex;
+  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.1);
+}
+
+.metadata-tab-btn {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: rgba(var(--v-theme-on-dark-surface), 0.5);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.metadata-tab-btn:first-child {
+  border-radius: 10px 0 0 0;
+}
+
+.metadata-tab-btn:last-child {
+  border-radius: 0 10px 0 0;
+}
+
+.metadata-tab-btn:only-child {
+  border-radius: 10px 10px 0 0;
+}
+
+.metadata-tab-btn.active {
+  color: rgb(var(--v-theme-on-dark-surface));
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+}
+
+.metadata-tab-btn:hover:not(.active) {
+  color: rgba(var(--v-theme-on-dark-surface), 0.8);
+  background: rgba(var(--v-theme-on-dark-surface), 0.04);
+}
+
+.metadata-tab-panel {
+  padding: 10px;
 }
 
 .metadata-list {
