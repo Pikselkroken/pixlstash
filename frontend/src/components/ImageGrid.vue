@@ -303,7 +303,11 @@
                   :size="badgeIconSizes.penalised"
                   :color="penalisedTagColor(img, props.penalisedTagWeights)"
                   >{{
-                    penalisedTagIcon(img, props.penalisedTagWeights)
+                    penalisedTagIcon(
+                      img,
+                      props.penalisedTagWeights,
+                      props.themeMode !== "light",
+                    )
                   }}</v-icon
                 >
               </div>
@@ -6761,10 +6765,10 @@ function handleEmptyStateReset() {
 }
 
 .thumbnail-badge {
-  background: rgba(var(--v-theme-dark-surface), 0.65);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
+  background: rgba(var(--v-theme-surface), 0.92);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.22);
   border-radius: 8px;
-  color: rgb(var(--v-theme-on-dark-surface));
+  color: rgb(var(--v-theme-on-surface));
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   font-size: 0.8em;
   padding: 2px 4px;
@@ -7107,7 +7111,7 @@ function handleEmptyStateReset() {
 .compact-group-label {
   position: absolute;
   top: 0;
-  left: 50%;
+  left: 30%;
 }
 
 .thumbnail-card-new {
@@ -7156,6 +7160,16 @@ function handleEmptyStateReset() {
   z-index: 30;
   pointer-events: auto;
   padding: 0;
+}
+
+.penalised-tag-indicator {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.penalised-tag-indicator .v-icon {
+  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.55));
 }
 
 .stack-indicator {
