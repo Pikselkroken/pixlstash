@@ -1,5 +1,15 @@
+# [1.0.0rc4] - 2026-04-07:
+- Add filter on tag prediction confidence (find pictures the tagger is unsure of for specific tags)
+- Many UI improvements
+- Many bugfixes for stacks, keyboard shortcuts, ComfyUI workflows
+- Update custom tagger
+
+# [1.0.0rc3] - 2026-04-01:
+- Fix missing docker image depedency
+
 # [1.0.0rc2] - 2026-03-28:
 - Very quick update to fix a last minute regression in grid refresh progress bar.
+
 # [1.0.0rc1] - 2026-03-28
 - **Project System:** Big change to allow the creation of projects and association of pictures, sets and characters with projects.
 - **Fast Multi-Tagging:** Add tags and toggle existing tags on multiple selected images in one go. With auto-complete and keyboard shortcuts.
@@ -11,6 +21,7 @@
 - **Cleaned up API with online documentation**
 - **Fixed Florence-2 loading issues**
 - **Loads of other bugfixes**
+
 # [1.0.0b4] - 2026-03-22
 # [1.0.0b3] - 2026-03-21
 
