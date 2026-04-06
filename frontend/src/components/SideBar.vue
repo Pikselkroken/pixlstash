@@ -1877,7 +1877,7 @@ defineExpose({
               selectCharacter(props.unassignedPicturesId, 'Unassigned Pictures')
             "
           >
-            <v-icon>mdi-account-question</v-icon>
+            <v-icon>mdi-account-off-outline</v-icon>
           </div>
           <div class="sidebar-collapsed-divider"></div>
           <button
@@ -2079,7 +2079,7 @@ defineExpose({
                 "
               >
                 <span class="sidebar-list-icon">
-                  <v-icon size="44">mdi-account-question</v-icon>
+                  <v-icon size="44">mdi-account-off-outline</v-icon>
                 </span>
                 <span class="sidebar-list-label">Unassigned Pictures</span>
                 <span class="sidebar-list-count">{{
