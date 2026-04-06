@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import Session, delete, or_, select
 
 from pixlstash.db_models import Tag
+from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
 from pixlstash.picture_tagger import CUSTOM_TAGGER_THRESHOLD_FULL
@@ -188,5 +189,44 @@ def create_router(server) -> APIRouter:
             {"picture_ids": [pic_id]},
         )
         return {"status": "deleted", "count": count}
+
+    @router.post(
+        "/pictures/{id}/reset_tags",
+        summary="Reset tags and predictions for a picture",
+        description=(
+            "Atomically deletes all non-manual TagPrediction rows and all Tag rows "
+            "for the picture, then restores the empty-tag sentinel.  This is the "
+            "single-round-trip equivalent of calling tag_predictions/delete followed "
+            "by DELETE tags — it avoids the intermediate state where predictions are "
+            "gone but tags still exist, which otherwise tricks the background "
+            "MissingTagPredictionFinder into running a wasted inference pass."
+        ),
+    )
+    def reset_picture_tags(id: int):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        def _reset(session: Session):
+            # Delete non-manual predictions first (same logic as tag_predictions/delete)
+            session.exec(
+                delete(TagPrediction)
+                .where(TagPrediction.picture_id == pic_id)
+                .where(
+                    or_(
+                        TagPrediction.model_version != "manual",
+                        TagPrediction.model_version.is_(None),
+                    )
+                )
+            )
+            # Clear all tags and restore the empty sentinel
+            session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+            session.add(Tag(tag=TAG_EMPTY_SENTINEL, picture_id=pic_id))
+            session.commit()
+
+        server.vault.db.run_task(_reset)
+        server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
+        return {"status": "reset"}
 
     return router
