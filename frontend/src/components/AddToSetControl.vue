@@ -262,6 +262,13 @@ async function toggleSetMembership(set) {
       if (members) {
         idsToRemove.forEach((id) => members.delete(String(id)));
       }
+      const removedSet = sets.value.find((s) => s.id === set.id);
+      if (removedSet != null && removedSet.picture_count != null) {
+        removedSet.picture_count = Math.max(
+          0,
+          removedSet.picture_count - idsToRemove.length,
+        );
+      }
     } else {
       await Promise.all(
         idsToAdd.map((id) =>
@@ -276,6 +283,10 @@ async function toggleSetMembership(set) {
       });
       if (members) {
         idsToAdd.forEach((id) => members.add(String(id)));
+      }
+      const addedSet = sets.value.find((s) => s.id === set.id);
+      if (addedSet != null && addedSet.picture_count != null) {
+        addedSet.picture_count = addedSet.picture_count + idsToAdd.length;
       }
     }
   } catch (e) {

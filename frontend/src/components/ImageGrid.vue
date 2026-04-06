@@ -1015,6 +1015,24 @@ async function runComfyuiOnGridImages({
 } = {}) {
   if (!workflowName || !props.backendUrl) return;
   try {
+    // Build view context so the generated picture is assigned to the current
+    // set / project / character automatically.
+    const contextSetId = primarySelectedSetId.value ?? undefined;
+    const contextProjectId =
+      props.selectedProjectId != null ? props.selectedProjectId : undefined;
+    const rawChar = props.selectedCharacter;
+    const specialIds = [
+      props.allPicturesId,
+      props.unassignedPicturesId,
+      props.scrapheapPicturesId,
+    ].map((v) => String(v ?? "").toUpperCase());
+    const charNum =
+      rawChar != null && !specialIds.includes(String(rawChar).toUpperCase())
+        ? Number(rawChar)
+        : NaN;
+    const contextCharacterId =
+      Number.isFinite(charNum) && charNum > 0 ? charNum : undefined;
+
     const payload = {
       workflow_name: workflowName,
       caption: caption || "",
@@ -1025,6 +1043,9 @@ async function runComfyuiOnGridImages({
         selectedImageIds.value.length === 1
           ? selectedImageIds.value[0]
           : undefined,
+      set_id: contextSetId,
+      project_id: contextProjectId,
+      character_id: contextCharacterId,
     };
     const res = await apiClient.post(
       `${props.backendUrl}/comfyui/run_t2i`,
@@ -3752,6 +3773,9 @@ async function applyScore(img, newScore) {
     return;
   }
   try {
+    // Suppress the WS-driven gridVersion reload that the PATCH triggers;
+    // the score update is already applied locally by applyScoresByEntries.
+    skipNextWsRefresh.value = true;
     await applyScoresByEntries([[String(imageId), newScore]], {
       updateSort: false,
       emitRefreshSidebar: false,
