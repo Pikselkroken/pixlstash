@@ -628,15 +628,27 @@ class Vault:
 
     @staticmethod
     def _count_missing_tag_predictions(session: Session, model_version: str) -> int:
-        # Count eligible pictures (total) then subtract those already scored for
-        # this model_version.  Avoids a correlated NOT EXISTS which full-scans
-        # the table; the model_version index makes the scored count O(log n).
+        # Only pictures that have at least one real (non-sentinel) tag are
+        # eligible for prediction scoring — sentinel-only pictures are waiting
+        # for the tagger worker, not the prediction worker.
+        from sqlalchemy import exists as sa_exists
+
+        eligible_subq = (
+            select(Tag.picture_id)
+            .where(
+                Tag.picture_id == Picture.id,
+                Tag.tag.is_not(None),
+                Tag.tag != TAG_EMPTY_SENTINEL,
+            )
+            .correlate(Picture)
+        )
         total_result = session.exec(
             select(func.count())
             .select_from(Picture)
             .where(
                 Picture.deleted.is_(False),
                 Picture.file_path.is_not(None),
+                sa_exists(eligible_subq),
             )
         ).one()
         total = (

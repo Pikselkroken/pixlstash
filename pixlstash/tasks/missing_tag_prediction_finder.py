@@ -61,7 +61,27 @@ class MissingTagPredictionFinder(BaseTaskFinder):
     @staticmethod
     def _fetch_missing(session: Session, model_version: str, limit: int):
         """Fetch pictures that have no TagPrediction row for the current model version,
-        or that have a confirmed tag with no corresponding TagPrediction row at all."""
+        or that have a confirmed tag with no corresponding TagPrediction row at all.
+
+        Only considers pictures that have at least one real (non-sentinel) tag —
+        i.e. pictures that have already been through the tagger.  This guards
+        against the race where reset_tags clears a picture's tags and predictions
+        and the prediction task races ahead of the tag task, scoring the picture
+        while it has only the empty-sentinel tag and therefore writing all
+        predictions as REJECTED."""
+        # Guard: the picture must have been tagged (at least one real tag exists).
+        # This prevents scoring a picture that has just had its tags reset and
+        # is waiting for MissingTagFinder to re-run the tagger on it.
+        has_real_tag = (
+            select(Tag.id)
+            .where(
+                Tag.picture_id == Picture.id,
+                Tag.tag.is_not(None),
+                Tag.tag != TAG_EMPTY_SENTINEL,
+            )
+            .correlate(Picture)
+            .exists()
+        )
         has_prediction_for_version = (
             select(TagPrediction.picture_id)
             .where(
@@ -91,6 +111,7 @@ class MissingTagPredictionFinder(BaseTaskFinder):
             .where(
                 Picture.deleted.is_(False),
                 Picture.file_path.is_not(None),
+                has_real_tag,
                 or_(
                     not_(has_prediction_for_version.exists()),
                     has_tag_without_prediction,
