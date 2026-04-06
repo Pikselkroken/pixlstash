@@ -401,10 +401,12 @@
                       >
                         Rejected Tags
                         <span class="rejected-threshold-label"
-                          >(>
-                          {{
-                            (predictionAcceptanceThresholdSB * 100).toFixed(0)
-                          }}% to be auto-applied)</span
+                          >({{
+                            Object.keys(labelThresholdsSB).length
+                              ? "per-tag threshold"
+                              : `> ${(predictionAcceptanceThresholdSB * 100).toFixed(0)}%`
+                          }}
+                          to be auto-applied)</span
                         >
                         <v-icon size="12">{{
                           rejectedTagsCollapsedSB
@@ -854,6 +856,7 @@ const tagDataCapped = ref(false);
 const fetchedPredictionData = ref([]);
 const predictionLoading = ref(false);
 const predictionAcceptanceThresholdSB = ref(0.95);
+const labelThresholdsSB = ref({});
 const rejectedTagsCollapsedSB = ref(loadRejectedTagsCollapsedSB());
 const penalisedTagsSB = ref(new Set());
 let penalisedTagsFetchedAt = 0;
@@ -933,6 +936,7 @@ async function fetchSelectedImagePredictions() {
             if (Number.isFinite(threshold) && threshold > 0 && threshold <= 1) {
               predictionAcceptanceThresholdSB.value = threshold;
             }
+            labelThresholdsSB.value = payload?.meta?.label_thresholds || {};
             return { id, predictions };
           })
           .catch(() => ({ id, predictions: [] })),
@@ -1023,7 +1027,11 @@ const aggregatedPredictions = computed(() => {
     .filter((e) => e.count >= predMinCoverage.value)
     .map((e) => {
       const avgConf = e.totalConf / e.count;
-      const threshold = Number(predictionAcceptanceThresholdSB.value) || 0.95;
+      const perLabel = labelThresholdsSB.value[e.tag];
+      const threshold =
+        typeof perLabel === "number" && Number.isFinite(perLabel)
+          ? perLabel
+          : Number(predictionAcceptanceThresholdSB.value) || 0.95;
       const avgNeeded = Math.max(0, threshold - avgConf);
       return { ...e, avgConf, avgNeeded };
     })

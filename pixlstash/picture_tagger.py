@@ -114,6 +114,7 @@ CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta
 CUSTOM_TAGGER_REVISION = "0d487d0295a768696a8eb42fb02f47be8b4ff4f8"
 CUSTOM_TAGGER_REV_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.revision")
 CUSTOM_TAGGER_THRESHOLD_FULL = 0.95
+CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS = 0.2
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
 CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 384
 CUSTOM_TAGGER_BATCH = _env_int("PIXLSTASH_CUSTOM_TAGGER_BATCH", 16)
@@ -212,6 +213,7 @@ class PictureTagger:
         self._custom_tagger_meta_path = CUSTOM_TAGGER_META_PATH
         self._use_custom_tagger = True
         self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
+        self._custom_label_thresholds: dict[str, float] = {}
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
         self._custom_tagger_image_size_quality_crop = (
             CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP
@@ -1327,6 +1329,18 @@ class PictureTagger:
         )
         self._custom_labels = labels
         self._custom_label_to_idx = {label: i for i, label in enumerate(labels)}
+        self._custom_label_thresholds = {
+            k: min(
+                float(v) + CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS,
+                CUSTOM_TAGGER_THRESHOLD_FULL,
+            )
+            for k, v in meta.get("label_thresholds", {}).items()
+        }
+        if self._custom_label_thresholds:
+            logger.debug(
+                "Loaded per-label thresholds for %d labels from meta.json",
+                len(self._custom_label_thresholds),
+            )
         self._custom_model = self._build_custom_tagger_model(arch, len(labels))
         self._custom_model.load_state_dict(state_dict)
         self._custom_model.to(self._custom_device)
@@ -1762,7 +1776,10 @@ class PictureTagger:
             for path, prob in zip(batch_paths, probs):
                 tag_probs = []
                 for label, p in zip(self._custom_labels, prob):
-                    if p >= tag_threshold:
+                    per_label_threshold = self._custom_label_thresholds.get(
+                        label, tag_threshold
+                    )
+                    if p >= per_label_threshold:
                         tag_probs.append((label, float(p)))
                 all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
                 results[path] = [tag for tag, _ in all_tags_sorted]
@@ -1908,6 +1925,39 @@ class PictureTagger:
             items,
             min_confidence=min_confidence,
             image_size=self._custom_tagger_image_size_full,
+        )
+
+    def score_quality_crops_raw(
+        self,
+        items,
+        stop_event=None,
+        min_confidence: float = 0.05,
+    ) -> dict[str, dict[str, float]]:
+        """Return raw custom-tagger confidence scores for pre-cropped quality-crop images.
+
+        Mirrors ``score_images_custom`` but uses the quality-crop image size and
+        accepts pre-loaded PIL images so the caller controls how the crops are
+        generated.  Intended for use by ``TagPredictionTask`` so that face-crop-
+        detected tags receive a real confidence score rather than 0.0.
+
+        Args:
+            items: List of ``(key, PIL.Image)`` pairs (already cropped to face region).
+            stop_event: Optional threading.Event to interrupt inference.
+            min_confidence: Labels below this floor are discarded.
+
+        Returns:
+            Dict mapping key to ``{label: confidence}`` for each kept label.
+        """
+        if not items:
+            return {}
+        if not self._use_custom_tagger:
+            return {}
+        self._ensure_tagging_ready()
+        return self._score_custom_items(
+            items,
+            stop_event=stop_event,
+            min_confidence=min_confidence,
+            image_size=self._custom_tagger_image_size_quality_crop,
         )
 
     def _tag_images_custom(self, image_paths, stop_event=None, preloaded_images=None):
