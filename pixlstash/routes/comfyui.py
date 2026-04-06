@@ -1168,17 +1168,20 @@ def create_router(server) -> APIRouter:
             try:
                 ctx["set_id"] = int(raw_set_id)
             except (TypeError, ValueError):
-                pass
+                # Ignore invalid set_id values but log for debugging.
+                logger.debug("Ignoring invalid set_id value in run_comfyui_t2i: %r", raw_set_id)
         if raw_project_id is not None:
             try:
                 ctx["project_id"] = int(raw_project_id)
             except (TypeError, ValueError):
-                pass
+                # Ignore invalid project_id values but log for debugging.
+                logger.debug("Ignoring invalid project_id value in run_comfyui_t2i: %r", raw_project_id)
         if raw_character_id is not None:
             try:
                 ctx["character_id"] = int(raw_character_id)
             except (TypeError, ValueError):
-                pass
+                # Ignore invalid character_id values but log for debugging.
+                logger.debug("Ignoring invalid character_id value in run_comfyui_t2i: %r", raw_character_id)
         if ctx:
             view_context = ctx
 
