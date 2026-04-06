@@ -26,8 +26,33 @@ const importPhase = ref("");
 const importServerStage = ref("");
 const cancelImport = ref(false);
 const currentImportController = ref(null);
+const uploadStallSeconds = ref(0); // seconds elapsed with no byte progress
 
 let hideTimerId = null;
+let _stallTimerId = null;
+let _stallLastBytes = -1;
+
+function _startStallTimer() {
+  _stopStallTimer();
+  uploadStallSeconds.value = 0;
+  _stallLastBytes = uploadBytesUploaded.value;
+  _stallTimerId = setInterval(() => {
+    if (uploadBytesUploaded.value !== _stallLastBytes) {
+      uploadStallSeconds.value = 0;
+      _stallLastBytes = uploadBytesUploaded.value;
+    } else {
+      uploadStallSeconds.value += 1;
+    }
+  }, 1000);
+}
+
+function _stopStallTimer() {
+  if (_stallTimerId !== null) {
+    clearInterval(_stallTimerId);
+    _stallTimerId = null;
+  }
+  uploadStallSeconds.value = 0;
+}
 const TERMINAL_IMPORT_PHASES = new Set([
   "done",
   "duplicates",
@@ -85,6 +110,7 @@ function clearHideTimer() {
 
 function finalizeCancelled() {
   clearHideTimer();
+  _stopStallTimer();
   importPhase.value = "cancelled";
   importServerStage.value = "cancelled";
   importInProgress.value = false;
@@ -96,6 +122,7 @@ function finalizeCancelled() {
 
 function finalizeError(message) {
   clearHideTimer();
+  _stopStallTimer();
   importPhase.value = "error";
   importServerStage.value = "failed";
   importInProgress.value = false;
@@ -288,7 +315,26 @@ async function startImport(files, options = {}) {
 
         const controller = new AbortController();
         currentImportController.value = controller;
-        const timeout = setTimeout(() => controller.abort(), batchTimeoutMs);
+        const timeout = setTimeout(() => {
+          console.warn(
+            `[IMPORT] Aborting batch ${
+              i / BATCH_SIZE + 1
+            } after ${batchTimeoutMs}ms timeout (attempt ${attempt}). ` +
+              `Bytes uploaded so far: ${uploadBytesUploaded.value} / ${uploadBytesTotal.value}. ` +
+              `Stall duration: ${uploadStallSeconds.value}s.`,
+          );
+          controller.abort();
+        }, batchTimeoutMs);
+        let firstProgressLogged = false;
+        _startStallTimer();
+        logImportTrace("POST /pictures/import starting", {
+          attempt,
+          batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+          batchSize: batch.length,
+          batchBytes,
+          timeoutMs: batchTimeoutMs,
+          url: `${props.backendUrl}/pictures/import`,
+        });
         try {
           res = await apiClient.post(
             `${props.backendUrl}/pictures/import`,
@@ -301,6 +347,14 @@ async function startImport(files, options = {}) {
               },
               onUploadProgress: (progressEvent) => {
                 const loaded = progressEvent.loaded ?? 0;
+                if (!firstProgressLogged) {
+                  firstProgressLogged = true;
+                  logImportTrace("First onUploadProgress event received", {
+                    loaded,
+                    total: progressEvent.total,
+                    batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+                  });
+                }
                 uploadBytesUploaded.value = Math.min(
                   uploadBytesTotal.value,
                   uploadedBytesAccum + loaded,
@@ -308,12 +362,23 @@ async function startImport(files, options = {}) {
               },
             },
           );
+          _stopStallTimer();
           clearTimeout(timeout);
+          if (!firstProgressLogged) {
+            logImportTrace(
+              "WARNING: onUploadProgress never fired for this batch",
+              {
+                batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+                responseStatus: res?.status,
+              },
+            );
+          }
           if (controller === currentImportController.value) {
             currentImportController.value = null;
           }
           break; // Success, exit retry loop
         } catch (err) {
+          _stopStallTimer();
           clearTimeout(timeout);
           if (controller === currentImportController.value) {
             currentImportController.value = null;
@@ -327,7 +392,10 @@ async function startImport(files, options = {}) {
             console.warn(
               `[IMPORT] Batch ${
                 i / BATCH_SIZE + 1
-              } timed out (attempt ${attempt})`,
+              } timed out (attempt ${attempt}). ` +
+                `firstProgressLogged=${firstProgressLogged}, ` +
+                `stallSeconds=${uploadStallSeconds.value}, ` +
+                `bytesUploaded=${uploadBytesUploaded.value}/${uploadBytesTotal.value}`,
             );
           } else {
             lastError = err;
@@ -336,6 +404,9 @@ async function startImport(files, options = {}) {
                 i / BATCH_SIZE + 1
               } failed (attempt ${attempt}):`,
               err,
+              `name=${err.name}, message=${err.message}, code=${err.code}, ` +
+                `firstProgressLogged=${firstProgressLogged}, ` +
+                `stallSeconds=${uploadStallSeconds.value}`,
             );
           }
         }
@@ -426,6 +497,7 @@ async function startImport(files, options = {}) {
     uploadBytesUploaded.value = uploadBytesTotal.value;
     currentImportController.value = null;
     cancelImport.value = false;
+    _stopStallTimer();
     hideTimerId = setTimeout(() => {
       importInProgress.value = false;
       hideTimerId = null;
@@ -463,6 +535,11 @@ defineExpose({ startImport });
           Upload
           {{ formatBytes(uploadBytesUploaded) }} /
           {{ formatBytes(uploadBytesTotal) }}
+          <span
+            v-if="importPhase === 'uploading' && uploadStallSeconds >= 3"
+            style="margin-left: 6px; opacity: 0.65; font-size: 0.9em"
+            >(stalled {{ uploadStallSeconds }}s)</span
+          >
         </div>
         <div class="import-progress-bar-bg">
           <div
