@@ -636,8 +636,17 @@
           class="overlay-sidebar"
           :class="{ open: sidebarOpen, hidden: chromeHidden }"
         >
-          <div class="sidebar-section sidebar-section--description">
-            <div class="section-header">
+          <div
+            class="sidebar-section sidebar-section--description"
+            :class="{ 'sidebar-section--collapsed': descriptionCollapsed }"
+          >
+            <div
+              class="section-header section-header--collapsible"
+              @click="
+                descriptionCollapsed = !descriptionCollapsed;
+                descriptionCollapsed && cancelEditDescription();
+              "
+            >
               <span>Description</span>
               <span class="section-meta-group">
                 <button
@@ -658,116 +667,142 @@
                 <span class="section-meta">
                   {{ descriptionDraft.length }}
                 </span>
+                <v-icon size="16" style="opacity: 0.6">{{
+                  descriptionCollapsed
+                    ? "mdi-chevron-right"
+                    : "mdi-chevron-down"
+                }}</v-icon>
               </span>
             </div>
-            <div class="description-editor">
-              <textarea
-                ref="descriptionEditorRef"
-                v-model="descriptionDraft"
-                :readonly="!isEditingDescription"
-                @focus="startEditDescription"
-                @click="startEditDescription"
-                @keydown.enter.prevent="
-                  isEditingDescription && !$event.shiftKey && saveDescription()
-                "
-                @keydown="handleDescriptionEditorKey"
-                @blur="cancelEditDescription"
-              ></textarea>
-              <div class="description-actions">
-                <template v-if="isEditingDescription">
-                  <button
-                    class="overlay-icon-btn"
-                    type="button"
-                    title="Save description"
-                    :disabled="isSavingDescription"
-                    @click.stop="saveDescription"
-                  >
-                    <v-icon
-                      size="18"
-                      :class="{ 'mdi-spin': isSavingDescription }"
+            <template v-if="!descriptionCollapsed">
+              <div class="description-editor">
+                <textarea
+                  ref="descriptionEditorRef"
+                  v-model="descriptionDraft"
+                  :readonly="!isEditingDescription"
+                  @focus="startEditDescription"
+                  @click="startEditDescription"
+                  @keydown.enter.prevent="
+                    isEditingDescription &&
+                    !$event.shiftKey &&
+                    saveDescription()
+                  "
+                  @keydown="handleDescriptionEditorKey"
+                  @blur="cancelEditDescription"
+                ></textarea>
+                <div class="description-actions">
+                  <template v-if="isEditingDescription">
+                    <button
+                      class="overlay-icon-btn"
+                      type="button"
+                      title="Save description"
+                      :disabled="isSavingDescription"
+                      @click.stop="saveDescription"
                     >
-                      {{
-                        isSavingDescription ? "mdi-loading" : "mdi-content-save"
-                      }}
-                    </v-icon>
-                  </button>
-                  <button
-                    class="overlay-icon-btn"
-                    type="button"
-                    title="Cancel editing"
-                    :disabled="isSavingDescription"
-                    @click.stop="cancelEditDescription"
-                  >
-                    <v-icon size="18">mdi-close</v-icon>
-                  </button>
-                </template>
+                      <v-icon
+                        size="18"
+                        :class="{ 'mdi-spin': isSavingDescription }"
+                      >
+                        {{
+                          isSavingDescription
+                            ? "mdi-loading"
+                            : "mdi-content-save"
+                        }}
+                      </v-icon>
+                    </button>
+                    <button
+                      class="overlay-icon-btn"
+                      type="button"
+                      title="Cancel editing"
+                      :disabled="isSavingDescription"
+                      @click.stop="cancelEditDescription"
+                    >
+                      <v-icon size="18">mdi-close</v-icon>
+                    </button>
+                  </template>
+                </div>
               </div>
-            </div>
+            </template>
           </div>
 
           <div class="sidebar-section sidebar-section--faces">
-            <div class="section-header">
+            <div
+              class="section-header section-header--collapsible"
+              @click="facesCollapsed = !facesCollapsed"
+            >
               <span>Faces</span>
+              <v-icon size="16" style="opacity: 0.6">{{
+                facesCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+              }}</v-icon>
             </div>
-            <div v-if="faceAssignItems.length" class="face-assign-grid">
-              <div
-                v-for="face in faceAssignItems"
-                :key="face.faceKey"
-                class="face-assign-card"
-              >
-                <div class="face-assign-row">
-                  <div class="face-assign-thumb">
-                    <div
-                      class="face-assign-crop"
-                      :style="getFaceThumbStyle(face, face.faceIdx)"
-                    ></div>
-                  </div>
-                  <div class="face-assign-meta">
-                    <div
-                      class="face-assign-label"
-                      :style="{ color: faceBoxColor(face.faceIdx) }"
-                    >
-                      {{ face.label }}
+            <template v-if="!facesCollapsed">
+              <div v-if="faceAssignItems.length" class="face-assign-grid">
+                <div
+                  v-for="face in faceAssignItems"
+                  :key="face.faceKey"
+                  class="face-assign-card"
+                >
+                  <div class="face-assign-row">
+                    <div class="face-assign-thumb">
+                      <div
+                        class="face-assign-crop"
+                        :style="getFaceThumbStyle(face, face.faceIdx)"
+                      ></div>
                     </div>
-                    <select
-                      class="face-assign-select"
-                      :disabled="!face.id"
-                      :value="
-                        face.character_id != null
-                          ? String(face.character_id)
-                          : ''
-                      "
-                      @change="handleFaceAssignChange(face, $event)"
-                    >
-                      <option value="">Unassigned</option>
-                      <option
-                        v-if="
-                          face.character_id != null && !hasCharacterOption(face)
+                    <div class="face-assign-meta">
+                      <div
+                        class="face-assign-label"
+                        :style="{ color: faceBoxColor(face.faceIdx) }"
+                      >
+                        {{ face.label }}
+                      </div>
+                      <select
+                        class="face-assign-select"
+                        :disabled="!face.id"
+                        :value="
+                          face.character_id != null
+                            ? String(face.character_id)
+                            : ''
                         "
-                        :value="String(face.character_id)"
+                        @change="handleFaceAssignChange(face, $event)"
                       >
-                        {{
-                          face.character_name ||
-                          `Character ${face.character_id}`
-                        }}
-                      </option>
-                      <option
-                        v-for="char in sortedCharacters"
-                        :key="char.id"
-                        :value="String(char.id)"
-                      >
-                        {{ char.displayName }}
-                      </option>
-                    </select>
+                        <option value="">Unassigned</option>
+                        <option
+                          v-if="
+                            face.character_id != null &&
+                            !hasCharacterOption(face)
+                          "
+                          :value="String(face.character_id)"
+                        >
+                          {{
+                            face.character_name ||
+                            `Character ${face.character_id}`
+                          }}
+                        </option>
+                        <option
+                          v-for="char in sortedCharacters"
+                          :key="char.id"
+                          :value="String(char.id)"
+                        >
+                          {{ char.displayName }}
+                        </option>
+                      </select>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-            <div v-else class="face-assign-empty">No faces detected</div>
+              <div v-else class="face-assign-empty">No faces detected</div>
+            </template>
           </div>
 
-          <div class="sidebar-section sidebar-section--tags">
-            <div class="section-header">
+          <div
+            class="sidebar-section sidebar-section--tags"
+            :class="{ 'sidebar-section--collapsed': tagsCollapsed }"
+          >
+            <div
+              class="section-header section-header--collapsible"
+              @click="tagsCollapsed = !tagsCollapsed"
+            >
               <span>Tags</span>
               <span class="section-meta-group">
                 <button
@@ -789,69 +824,77 @@
                 >
                   <v-icon size="16">mdi-plus</v-icon>
                 </button>
+                <v-icon size="16" style="opacity: 0.6">{{
+                  tagsCollapsed ? "mdi-chevron-right" : "mdi-chevron-down"
+                }}</v-icon>
               </span>
             </div>
-            <div class="tag-list" ref="tagListRef">
-              <div v-if="isTagsRefreshing" class="tag-refresh-indicator">
-                <v-progress-circular
-                  indeterminate
-                  size="16"
-                  width="2"
-                  color="primary"
-                />
-              </div>
-              <div class="tag-section">
-                <div
-                  class="tag-drop-zone"
-                  :class="{
-                    'tag-drop-zone--active': isDragOver('unassigned', null),
-                  }"
-                  @dragover.prevent="handleDragOver('unassigned', null)"
-                  @dragenter.prevent="handleDragOver('unassigned', null)"
-                  @dragleave="handleDragLeave('unassigned', null)"
-                  @drop.prevent="handleDropOnAllTags"
-                >
-                  <span
-                    v-for="tag in allImageTags"
-                    :key="`unassigned-${tag.id ?? tag.tag}`"
-                    :class="[
-                      'overlay-tag',
-                      { 'overlay-tag--penalised': isPenalisedTag(tag) },
-                      predictionClassForTag(tagLabel(tag)),
-                    ]"
-                    :style="predictionStyleForTag(tagLabel(tag))"
-                    :title="predictionTitleForTag(tagLabel(tag))"
-                    draggable="true"
-                    @dragstart="
-                      startTagDrag(tagLabel(tag), 'unassigned', null, $event)
-                    "
-                    @dragend="clearTagDrag"
-                  >
-                    {{ tagLabel(tag) }}
-                    <button
-                      class="tag-delete-btn"
-                      @click.stop="removeAllTag(tag)"
-                      title="Remove tag"
-                    >
-                      <v-icon size="12">mdi-close</v-icon>
-                    </button>
-                  </span>
-                  <div v-if="!allImageTags.length" class="tag-drop-placeholder">
-                    Drop tags here
-                  </div>
-                  <input
-                    v-if="addingTag"
-                    ref="tagInputRef"
-                    v-model="newTag"
-                    @keydown.enter.prevent="confirmAddTag"
-                    @keydown="handleTagInputKey"
-                    @blur="cancelAddTag"
-                    class="tag-add-input"
-                    placeholder="New tag"
+            <template v-if="!tagsCollapsed">
+              <div class="tag-list" ref="tagListRef">
+                <div v-if="isTagsRefreshing" class="tag-refresh-indicator">
+                  <v-progress-circular
+                    indeterminate
+                    size="16"
+                    width="2"
+                    color="primary"
                   />
                 </div>
+                <div class="tag-section">
+                  <div
+                    class="tag-drop-zone"
+                    :class="{
+                      'tag-drop-zone--active': isDragOver('unassigned', null),
+                    }"
+                    @dragover.prevent="handleDragOver('unassigned', null)"
+                    @dragenter.prevent="handleDragOver('unassigned', null)"
+                    @dragleave="handleDragLeave('unassigned', null)"
+                    @drop.prevent="handleDropOnAllTags"
+                  >
+                    <span
+                      v-for="tag in allImageTags"
+                      :key="`unassigned-${tag.id ?? tag.tag}`"
+                      :class="[
+                        'overlay-tag',
+                        { 'overlay-tag--penalised': isPenalisedTag(tag) },
+                        predictionClassForTag(tagLabel(tag)),
+                      ]"
+                      :style="predictionStyleForTag(tagLabel(tag))"
+                      :title="predictionTitleForTag(tagLabel(tag))"
+                      draggable="true"
+                      @dragstart="
+                        startTagDrag(tagLabel(tag), 'unassigned', null, $event)
+                      "
+                      @dragend="clearTagDrag"
+                    >
+                      {{ tagLabel(tag) }}
+                      <button
+                        class="tag-delete-btn"
+                        @click.stop="removeAllTag(tag)"
+                        title="Remove tag"
+                      >
+                        <v-icon size="12">mdi-close</v-icon>
+                      </button>
+                    </span>
+                    <div
+                      v-if="!allImageTags.length"
+                      class="tag-drop-placeholder"
+                    >
+                      Drop tags here
+                    </div>
+                    <input
+                      v-if="addingTag"
+                      ref="tagInputRef"
+                      v-model="newTag"
+                      @keydown.enter.prevent="confirmAddTag"
+                      @keydown="handleTagInputKey"
+                      @blur="cancelAddTag"
+                      class="tag-add-input"
+                      placeholder="New tag"
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
+            </template>
           </div>
 
           <div v-if="nearMissPredictions.length" class="sidebar-section">
@@ -971,10 +1014,59 @@
                 </div>
                 <div
                   v-if="metadataTab === 'comfy' && comfyMetadata"
-                  class="metadata-tab-panel"
+                  class="metadata-tab-panel metadata-comfy-panel"
                 >
                   <div class="metadata-comfy-subtitle">
                     {{ comfyMetadata.summary }}
+                  </div>
+                  <div
+                    v-if="comfyMetadata.positive_prompt"
+                    class="metadata-comfy-field-group"
+                  >
+                    <div class="metadata-comfy-field-label">Prompt</div>
+                    <textarea
+                      class="metadata-comfy-textarea metadata-comfy-prompt"
+                      readonly
+                      :value="comfyMetadata.positive_prompt"
+                    ></textarea>
+                  </div>
+                  <div
+                    v-if="
+                      comfyMetadata.models?.length ||
+                      comfyMetadata.loras?.length
+                    "
+                    class="metadata-comfy-chips-block"
+                  >
+                    <div
+                      v-if="comfyMetadata.models?.length"
+                      class="metadata-comfy-field-group"
+                    >
+                      <div class="metadata-comfy-field-label">Models</div>
+                      <div class="metadata-comfy-chip-row">
+                        <span
+                          v-for="m in comfyMetadata.models"
+                          :key="m"
+                          class="metadata-comfy-chip"
+                          :title="m"
+                          >{{ m }}</span
+                        >
+                      </div>
+                    </div>
+                    <div
+                      v-if="comfyMetadata.loras?.length"
+                      class="metadata-comfy-field-group"
+                    >
+                      <div class="metadata-comfy-field-label">LoRAs</div>
+                      <div class="metadata-comfy-chip-row">
+                        <span
+                          v-for="l in comfyMetadata.loras"
+                          :key="l"
+                          class="metadata-comfy-chip"
+                          :title="l"
+                          >{{ l }}</span
+                        >
+                      </div>
+                    </div>
                   </div>
                   <details
                     v-if="comfyMetadata.workflow"
@@ -3410,6 +3502,9 @@ async function fetchComfyWorkflow(imageId) {
           workflow: data.workflow,
           isApiFormat: data.is_api_format,
           summary: data.summary,
+          positive_prompt: data.positive_prompt || null,
+          models: data.models || [],
+          loras: data.loras || [],
         }
       : null;
   } catch (e) {
@@ -4265,6 +4360,9 @@ const pictureInfoEntries = computed(() => {
 const comfyMetadata = ref(null);
 const metadataTab = ref("info");
 const metadataCollapsed = ref(false);
+const descriptionCollapsed = ref(false);
+const facesCollapsed = ref(false);
+const tagsCollapsed = ref(false);
 
 watch(
   [() => !!comfyMetadata.value, () => !!pictureInfoEntries.value?.length],
@@ -5553,17 +5651,27 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .sidebar-section--description {
-  flex: 1 1 150px;
+  flex: 1 1 114px;
   display: flex;
   flex-direction: column;
-  min-height: 150px;
+  min-height: 114px;
+  overflow: visible;
+}
+
+.sidebar-section--description.sidebar-section--collapsed {
+  flex: 0 0 auto;
+  min-height: 0;
   overflow: hidden;
 }
 
 .sidebar-section--tags {
-  min-height: 180px;
+  min-height: 104px;
   display: flex;
   flex-direction: column;
+}
+
+.sidebar-section--tags.sidebar-section--collapsed {
+  min-height: 0;
 }
 
 .section-header--collapsible {
@@ -5637,7 +5745,7 @@ function downloadComfyWorkflow(workflow) {
 .description-editor textarea {
   flex: 1;
   width: 100%;
-  min-height: 80px;
+  min-height: 56px;
   border-radius: 8px;
   font-size: 0.85rem;
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
@@ -6109,7 +6217,6 @@ function downloadComfyWorkflow(workflow) {
 }
 
 .metadata-comfy-textarea {
-  margin-top: 8px;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
@@ -6130,6 +6237,61 @@ function downloadComfyWorkflow(workflow) {
 
 .metadata-comfy-details:not([open]) .metadata-comfy-textarea {
   display: none;
+}
+
+.metadata-comfy-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.metadata-comfy-field-label {
+  font-size: 0.7rem;
+  color: rgba(var(--v-theme-on-dark-surface), 0.6);
+}
+
+.metadata-comfy-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metadata-comfy-prompt-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.metadata-comfy-prompt {
+  min-height: 70px;
+  max-height: 160px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.metadata-comfy-chips-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.metadata-comfy-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.metadata-comfy-chip {
+  display: inline-block;
+  font-size: 0.7rem;
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+  color: rgba(var(--v-theme-on-dark-surface), 0.85);
+  border-radius: 4px;
+  padding: 2px 6px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .face-bbox-empty {
