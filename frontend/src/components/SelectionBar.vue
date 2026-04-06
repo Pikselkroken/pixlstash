@@ -53,10 +53,7 @@
                 <span>Filters</span>
               </button>
             </template>
-            <div
-              class="plugin-menu-panel"
-              @keydown.esc.stop.prevent="tagMenuOpen = false"
-            >
+            <div class="plugin-menu-panel" @keydown.esc="handlePluginMenuEsc">
               <div class="plugin-menu-header">Apply Filters</div>
               <div class="plugin-menu-body">
                 <label class="plugin-menu-label">Filters</label>
@@ -118,7 +115,7 @@
                 <span>ComfyUI</span>
               </button>
             </template>
-            <div class="plugin-menu-panel">
+            <div class="plugin-menu-panel" @keydown.esc="handleComfyuiMenuEsc">
               <div class="plugin-menu-header">ComfyUI I2I</div>
               <div class="plugin-menu-body">
                 <div v-if="comfyuiWorkflowLoading" class="plugin-menu-note">
@@ -835,6 +832,24 @@ function runSelectedPlugin() {
     parameters: pluginParameters.value || {},
   });
   pluginMenuOpen.value = false;
+}
+
+function handlePluginMenuEsc(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") {
+    event.stopImmediatePropagation();
+  }
+  pluginMenuOpen.value = false;
+}
+
+function handleComfyuiMenuEsc(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (typeof event.stopImmediatePropagation === "function") {
+    event.stopImmediatePropagation();
+  }
+  comfyuiMenuOpen.value = false;
 }
 
 // ── Bulk tag ──────────────────────────────────────────────────────────────────
