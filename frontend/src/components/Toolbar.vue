@@ -553,17 +553,19 @@
                   autocomplete="off"
                   @keydown.enter.prevent="
                     confidenceTagIndex >= 0 && confidenceTagSuggestions.length
-                      ? addConfidenceFilter(confidenceTagSuggestions[confidenceTagIndex])
+                      ? selectConfidenceTagSuggestion(
+                          confidenceTagSuggestions[confidenceTagIndex],
+                        )
                       : addConfidenceFilter(confidenceTagInput.trim())
                   "
                   @keydown.tab.prevent="
                     confidenceTagSuggestions.length
-                      ? addConfidenceFilter(
+                      ? selectConfidenceTagSuggestion(
                           confidenceTagSuggestions[
                             confidenceTagIndex >= 0 ? confidenceTagIndex : 0
                           ],
                         )
-                      : addConfidenceFilter(confidenceTagInput.trim())
+                      : undefined
                   "
                   @keydown.down.prevent="
                     confidenceTagIndex = Math.min(
@@ -580,7 +582,8 @@
                   v-if="confidenceTagSuggestions.length"
                   class="tag-filter-dropdown"
                   :class="{
-                    'tag-filter-dropdown--hover-enabled': confidenceTagHoverEnabled,
+                    'tag-filter-dropdown--hover-enabled':
+                      confidenceTagHoverEnabled,
                   }"
                   @mousemove.once="confidenceTagHoverEnabled = true"
                 >
@@ -589,10 +592,11 @@
                     :key="tag"
                     class="tag-filter-suggestion"
                     :class="{
-                      'tag-filter-suggestion--active': idx === confidenceTagIndex,
+                      'tag-filter-suggestion--active':
+                        idx === confidenceTagIndex,
                     }"
                     type="button"
-                    @mousedown.prevent="addConfidenceFilter(tag)"
+                    @mousedown.prevent="selectConfidenceTagSuggestion(tag)"
                     @mousemove="confidenceTagIndex = idx"
                   >
                     {{ tag }}
@@ -605,8 +609,15 @@
                   type="button"
                   tabindex="-1"
                   :disabled="confidenceThreshold <= 0"
-                  @click="confidenceThreshold = Math.max(0, +(confidenceThreshold - 0.05).toFixed(2))"
-                >−</button>
+                  @click="
+                    confidenceThreshold = Math.max(
+                      0,
+                      +(confidenceThreshold - 0.05).toFixed(2),
+                    )
+                  "
+                >
+                  −
+                </button>
                 <input
                   v-model.number="confidenceThreshold"
                   type="number"
@@ -620,8 +631,15 @@
                   type="button"
                   tabindex="-1"
                   :disabled="confidenceThreshold >= 1"
-                  @click="confidenceThreshold = Math.min(1, +(confidenceThreshold + 0.05).toFixed(2))"
-                >+</button>
+                  @click="
+                    confidenceThreshold = Math.min(
+                      1,
+                      +(confidenceThreshold + 0.05).toFixed(2),
+                    )
+                  "
+                >
+                  +
+                </button>
               </div>
               <button
                 class="confidence-mode-btn"
@@ -642,7 +660,7 @@
                 class="confidence-add-btn"
                 type="button"
                 :disabled="!confidenceTagInput.trim()"
-                @click="addConfidenceFilter"
+                @click="addConfidenceFilter()"
               >
                 Add
               </button>
@@ -1465,6 +1483,7 @@ const confidenceTagHoverEnabled = ref(false);
 const confidenceTagIndex = ref(-1);
 const confidenceThreshold = ref(0.7);
 const confidenceMode = ref("above");
+let suppressConfidenceSuggestionLoad = false;
 
 async function loadConfidenceTagSuggestions(input) {
   if (!input || input.length < 1) {
@@ -1485,9 +1504,20 @@ async function loadConfidenceTagSuggestions(input) {
 }
 
 watch(confidenceTagInput, (val) => {
+  if (suppressConfidenceSuggestionLoad) {
+    suppressConfidenceSuggestionLoad = false;
+    return;
+  }
   confidenceTagIndex.value = -1;
   loadConfidenceTagSuggestions(val);
 });
+
+function selectConfidenceTagSuggestion(tag) {
+  suppressConfidenceSuggestionLoad = true;
+  confidenceTagInput.value = tag;
+  confidenceTagSuggestions.value = [];
+  confidenceTagIndex.value = -1;
+}
 
 function addConfidenceFilter(tagArg) {
   const tag = (tagArg ?? confidenceTagInput.value).trim();

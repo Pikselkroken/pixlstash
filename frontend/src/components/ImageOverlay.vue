@@ -636,7 +636,7 @@
           class="overlay-sidebar"
           :class="{ open: sidebarOpen, hidden: chromeHidden }"
         >
-          <div class="sidebar-section">
+          <div class="sidebar-section sidebar-section--description">
             <div class="section-header">
               <span>Description</span>
               <span class="section-meta-group">
@@ -5507,8 +5507,14 @@ function downloadComfyWorkflow(workflow) {
   margin-bottom: 10px;
 }
 
-.sidebar-section--tags {
+.sidebar-section--description {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-section--tags {
   min-height: 180px;
   display: flex;
   flex-direction: column;
@@ -5562,7 +5568,15 @@ function downloadComfyWorkflow(workflow) {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 
+.description-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .description-editor textarea {
+  flex: 1;
   width: 100%;
   min-height: 120px;
   border-radius: 8px;
