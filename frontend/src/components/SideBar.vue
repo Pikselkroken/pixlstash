@@ -2680,7 +2680,7 @@ defineExpose({
 
 .sidebar-no-projects-btn :deep(.v-btn__content) {
   font-size: 0.82rem;
-  padding: 0 12px;
+  padding: 2px 4px 2px 4px;
 }
 
 .sidebar-collapsed-project-wrap {
