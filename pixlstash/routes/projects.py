@@ -100,7 +100,7 @@ def create_router(server) -> APIRouter:
 
     def _attachments_dir(project_id: int) -> str:
         """Return (and create) the on-disk directory for a project's attachments."""
-        path = os.path.join(
+        path = resolve_path_within(
             server.vault.image_root, "projects", str(project_id), "attachments"
         )
         os.makedirs(path, exist_ok=True)
@@ -416,7 +416,7 @@ def create_router(server) -> APIRouter:
                 )
 
         # Remove the project attachments directory if it is now empty.
-        project_dir = os.path.join(
+        project_dir = resolve_path_within(
             server.vault.image_root,
             "projects",
             str(project_id),
@@ -784,7 +784,7 @@ def create_router(server) -> APIRouter:
         raw_ext = os.path.splitext(original_filename)[1]
         ext = re.sub(r"[^a-zA-Z0-9.]", "", raw_ext)[:16]
         stored_filename = safe_stem + ext
-        full_path = os.path.join(att_dir, stored_filename)
+        full_path = resolve_path_within(att_dir, stored_filename)
 
         with open(full_path, "wb") as f:
             f.write(contents)
