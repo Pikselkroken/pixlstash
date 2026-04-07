@@ -1,6 +1,5 @@
 from typing import Callable
 
-from sqlalchemy import not_, or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture
@@ -41,7 +40,7 @@ class MissingTagPredictionFinder(BaseTaskFinder):
         batch_limit = max(1, getattr(tagger, "_custom_tagger_batch", 16))
         pictures = self._db.run_immediate_read_task(
             lambda session: self._fetch_missing(
-                session, model_version, batch_limit * self._BATCH_MULTIPLIER
+                session, batch_limit * self._BATCH_MULTIPLIER
             )
         )
         if not pictures:
@@ -59,16 +58,20 @@ class MissingTagPredictionFinder(BaseTaskFinder):
         )
 
     @staticmethod
-    def _fetch_missing(session: Session, model_version: str, limit: int):
-        """Fetch pictures that have no TagPrediction row for the current model version,
-        or that have a confirmed tag with no corresponding TagPrediction row at all.
+    def _fetch_missing(session: Session, limit: int):
+        """Fetch pictures that have a tag with no corresponding TagPrediction row.
 
         Only considers pictures that have at least one real (non-sentinel) tag —
         i.e. pictures that have already been through the tagger.  This guards
         against the race where reset_tags clears a picture's tags and predictions
         and the prediction task races ahead of the tag task, scoring the picture
         while it has only the empty-sentinel tag and therefore writing all
-        predictions as REJECTED."""
+        predictions as REJECTED.
+
+        Version-driven rescoring (i.e. re-running all pictures after a model
+        update) is NOT handled here.  To trigger a full rescore for a new model
+        version, delete the relevant TagPrediction rows in an Alembic migration;
+        the finder will then naturally queue those pictures for rescoring."""
         # Guard: the picture must have been tagged (at least one real tag exists).
         # This prevents scoring a picture that has just had its tags reset and
         # is waiting for MissingTagFinder to re-run the tagger on it.
@@ -81,14 +84,6 @@ class MissingTagPredictionFinder(BaseTaskFinder):
             )
             .correlate(Picture)
             .exists()
-        )
-        has_prediction_for_version = (
-            select(TagPrediction.picture_id)
-            .where(
-                TagPrediction.picture_id == Picture.id,
-                TagPrediction.model_version == model_version,
-            )
-            .correlate(Picture)
         )
         # Correlated: does this picture have a Tag row with no matching TagPrediction?
         has_tag_without_prediction = (
@@ -112,10 +107,7 @@ class MissingTagPredictionFinder(BaseTaskFinder):
                 Picture.deleted.is_(False),
                 Picture.file_path.is_not(None),
                 has_real_tag,
-                or_(
-                    not_(has_prediction_for_version.exists()),
-                    has_tag_without_prediction,
-                ),
+                has_tag_without_prediction,
             )
             .order_by(Picture.id)
             .limit(limit)

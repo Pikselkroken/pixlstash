@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from PIL import Image as PILImage
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture
@@ -204,6 +204,15 @@ class TagPredictionTask(BaseTask):
             label_scores: dict[str, float] = update["label_scores"]
             uncertainty: float = update["uncertainty"]
 
+            # Delete predictions from older model versions so only the latest
+            # scores are kept.  Manual predictions are never purged.
+            session.exec(
+                delete(TagPrediction)
+                .where(TagPrediction.picture_id == picture_id)
+                .where(TagPrediction.model_version != model_version)
+                .where(TagPrediction.model_version != "manual")
+            )
+
             # Determine whether TagTask has already run for this picture.
             # TagTask always writes at least one row to the tag table (a real
             # tag or the empty sentinel for zero-tag pictures), so any tag row
@@ -244,19 +253,11 @@ class TagPredictionTask(BaseTask):
                         )
                     )
                     written += 1
-                elif existing.model_version != model_version:
-                    # New model version — update scores and re-evaluate status
+                elif tag_task_has_run and existing.status != status:
                     existing.confidence = confidence
                     existing.model_version = model_version
                     existing.status = status
                     existing.predicted_at = now
-                    written += 1
-                elif tag_task_has_run and existing.status != status:
-                    # TagTask ran after TagPredictionTask (or vice versa) and
-                    # the tag's applied status has changed since this row was
-                    # written — sync the status without touching confidence or
-                    # model_version so the old score is preserved.
-                    existing.status = status
                     written += 1
 
             # Ensure every confirmed tag has a prediction row even if the model
