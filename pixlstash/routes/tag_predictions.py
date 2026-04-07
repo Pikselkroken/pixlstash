@@ -13,7 +13,7 @@ from pixlstash.picture_tagger import (
     CUSTOM_TAGGER_THRESHOLD_FULL,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tag_naturaliser import TagNaturaliser
+from pixlstash.utils.caption_utils import sanitise_tag
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -34,7 +34,7 @@ def _load_label_thresholds() -> dict[str, float]:
         if not raw:
             return {}
         return {
-            TagNaturaliser.get_natural_tag(k) or k: min(
+            sanitise_tag(k) or k: min(
                 float(v) + CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS,
                 CUSTOM_TAGGER_THRESHOLD_FULL,
             )

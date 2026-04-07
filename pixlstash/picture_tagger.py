@@ -24,7 +24,7 @@ from platformdirs import user_data_dir
 
 from .pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
-from pixlstash.tag_naturaliser import TagNaturaliser
+from pixlstash.utils.caption_utils import sanitise_tag
 from pixlstash.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
@@ -257,8 +257,6 @@ class PictureTagger:
                 self.custom_tagger_version(),
                 self._custom_tagger_path,
             )
-
-        self._tag_naturaliser = TagNaturaliser()
 
         # Initialize Florence-2 for captioning
         logger.debug("Florence-2 captioning model is configured for lazy loading.")
@@ -541,10 +539,7 @@ class PictureTagger:
                 del self._sbert_model
                 self._sbert_model = None
                 logger.debug("Deleted _sbert_model.")
-            if hasattr(self, "_tag_naturaliser"):
-                del self._tag_naturaliser
-                self._tag_naturaliser = None
-                logger.debug("Deleted _tag_naturaliser.")
+
             if hasattr(self, "_clip_preprocess"):
                 del self._clip_preprocess
                 self._clip_preprocess = None
@@ -1557,7 +1552,7 @@ class PictureTagger:
     def _naturalize_tags(batch_result):
         # Naturalize tags for each image
         for k, tags in batch_result.items():
-            tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
+            tags = [sanitise_tag(tag) for tag in tags]
             tags = [t for t in tags if t]
             batch_result[k] = tags
         return batch_result
@@ -1867,7 +1862,7 @@ class PictureTagger:
                 for label, p in zip(self._custom_labels, prob):
                     p_f = float(p)
                     if p_f >= min_confidence:
-                        natural = TagNaturaliser.get_natural_tag(label)
+                        natural = sanitise_tag(label)
                         if natural:
                             scores[natural] = p_f
                 results[path] = scores
@@ -2181,7 +2176,7 @@ class PictureTagger:
                 logger.error(f"Tagging failed for batch: {[p for p, _ in b_imgs]}")
             else:
                 for k, tags in batch_result.items():
-                    tags = [TagNaturaliser.get_natural_tag(tag) for tag in tags]
+                    tags = [sanitise_tag(tag) for tag in tags]
                     tags = [t for t in tags if t]
                     batch_result[k] = tags
                 all_results.update(batch_result)
