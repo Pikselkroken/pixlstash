@@ -639,7 +639,7 @@ def _select_pictures_for_listing(
             pics = _deduplicate_by_stack(pics)
             pics = _enrich_stack_counts(server, pics)
         return pics
-    elif sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
+    if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
         candidate_ids = server.vault.db.run_task(
             fetch_smart_score_candidate_ids,
             character_id,
@@ -727,7 +727,7 @@ def _select_pictures_for_listing(
             pics = _deduplicate_by_stack(pics)
             pics = _enrich_stack_counts(server, pics)
         return pics
-    elif character_id == "UNASSIGNED":
+    if character_id == "UNASSIGNED":
         unassigned_project_id = None
         unassigned_project_only = False
         if project_id_raw == "UNASSIGNED":
@@ -1745,14 +1745,13 @@ def create_router(server) -> APIRouter:
         if ids_int and penalised_tag_set:
 
             def fetch_penalised_tags(session: Session):
-                rows = session.exec(
+                return session.exec(
                     select(Tag.picture_id, Tag.tag).where(
                         Tag.picture_id.in_(ids_int),
                         Tag.tag.is_not(None),
                         func.lower(Tag.tag).in_(penalised_tag_set),
                     )
                 ).all()
-                return rows
 
             rows = server.vault.db.run_task(
                 fetch_penalised_tags, priority=DBPriority.IMMEDIATE
@@ -1819,12 +1818,11 @@ def create_router(server) -> APIRouter:
         if character_ids:
 
             def fetch_character_names(session: Session):
-                rows = session.exec(
+                return session.exec(
                     select(Character.id, Character.name).where(
                         Character.id.in_(character_ids)
                     )
                 ).all()
-                return rows
 
             rows = server.vault.db.run_task(
                 fetch_character_names, priority=DBPriority.IMMEDIATE

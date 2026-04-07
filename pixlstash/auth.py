@@ -367,12 +367,11 @@ class AuthService:
         user_id = self.require_user_id(request)
 
         def fetch_tokens(session: Session, user_id: int):
-            tokens = session.exec(
+            return session.exec(
                 select(UserToken)
                 .where(UserToken.user_id == user_id)
                 .order_by(UserToken.created_at.desc())
             ).all()
-            return tokens
 
         tokens = self._db.run_task(fetch_tokens, user_id, priority=DBPriority.IMMEDIATE)
         return [
@@ -447,10 +446,9 @@ class AuthService:
                 raise HTTPException(status_code=404, detail="User not found")
 
             def fetch_tokens(session: Session, user_id: int):
-                tokens = session.exec(
+                return session.exec(
                     select(UserToken).where(UserToken.user_id == user_id)
                 ).all()
-                return tokens
 
             tokens = self._db.run_task(
                 fetch_tokens, user.id, priority=DBPriority.IMMEDIATE

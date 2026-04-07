@@ -29,7 +29,7 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
                 logger.error(f"Could not load image path: {img_path}, error: {e}")
                 return None
             return (image, img_path)
-        elif ext in [".mp4", ".avi", ".mov", ".mkv"]:
+        if ext in [".mp4", ".avi", ".mov", ".mkv"]:
             # Extract only the first frame from video and treat it as one image
             try:
                 import cv2
@@ -92,5 +92,4 @@ class ImageLoadingDatasetPrepper(torch.utils.data.Dataset):
             image, (image_size, image_size), interpolation=cv2.INTER_AREA
         )
 
-        image = image.astype(np.float32)
-        return image
+        return image.astype(np.float32)

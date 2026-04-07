@@ -70,8 +70,7 @@ class Character(SQLModel, table=True):
             if hasattr(cls, attr) and value is not None:
                 query = query.where(getattr(cls, attr) == value)
 
-        characters = session.exec(query).all()
-        return characters
+        return session.exec(query).all()
 
     @classmethod
     def scalar_fields(cls):

@@ -218,8 +218,7 @@ def create_router(server) -> APIRouter:
             session.refresh(project)
             return project
 
-        project = server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
-        return project
+        return server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
 
     @router.get(
         "/projects/{id_or_name}/picture_sets",
@@ -746,10 +745,9 @@ def create_router(server) -> APIRouter:
                 .order_by(ProjectAttachment.created_at)
             ).all()
 
-        attachments = server.vault.db.run_task(
+        return server.vault.db.run_task(
             fetch, project_id, priority=DBPriority.IMMEDIATE
         )
-        return attachments
 
     @router.post(
         "/projects/{project_id}/attachments",
@@ -808,10 +806,9 @@ def create_router(server) -> APIRouter:
             session.refresh(attachment)
             return attachment
 
-        attachment = server.vault.db.run_task(
+        return server.vault.db.run_task(
             insert_record, priority=DBPriority.IMMEDIATE
         )
-        return attachment
 
     @router.post(
         "/projects/{project_id}/attachments/url",
@@ -846,10 +843,9 @@ def create_router(server) -> APIRouter:
             session.refresh(attachment)
             return attachment
 
-        attachment = server.vault.db.run_task(
+        return server.vault.db.run_task(
             check_and_insert, priority=DBPriority.IMMEDIATE
         )
-        return attachment
 
     @router.get(
         "/projects/{project_id}/attachments/{attachment_id}",

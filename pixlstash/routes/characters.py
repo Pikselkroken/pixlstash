@@ -731,10 +731,9 @@ def create_router(server) -> APIRouter:
     def get_characters(name: str = Query(None)):
         try:
             logger.debug(f"Fetching characters with name: {name}")
-            characters = server.vault.db.run_immediate_read_task(
+            return server.vault.db.run_immediate_read_task(
                 lambda session: Character.find(session, name=name)
             )
-            return characters
         except KeyError:
             logger.error("Character not found")
             raise HTTPException(status_code=404, detail="Character not found")

@@ -79,8 +79,7 @@ class Quality(SQLModel, table=True):
         norms_b = np.linalg.norm(X_b, axis=1, keepdims=True)
         X_a_norm = X_a / (norms_a + 1e-8)
         X_b_norm = X_b / (norms_b + 1e-8)
-        likeness_values = np.sum(X_a_norm * X_b_norm, axis=1)
-        return likeness_values
+        return np.sum(X_a_norm * X_b_norm, axis=1)
 
     @staticmethod
     def calculate_quality_batch(
@@ -212,8 +211,7 @@ class Quality(SQLModel, table=True):
         """Return the color histogram as a np.ndarray (float32)."""
         if self.color_histogram is None:
             return None
-        arr = np.frombuffer(self.color_histogram, dtype=np.float32)
-        return arr
+        return np.frombuffer(self.color_histogram, dtype=np.float32)
 
     """
     Stores subjective and objective quality metrics for an image.
@@ -299,8 +297,7 @@ class Quality(SQLModel, table=True):
                     f"Face crop is empty after clamping bbox: {bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"
                 )
                 return None
-            else:
-                return Quality.calculate_quality(face_crop)
+            return Quality.calculate_quality(face_crop)
 
         logger.error(
             f"Invalid bbox after clamping: {bbox}, clamped: {(x1_clamped, y1_clamped, x2_clamped, y2_clamped)}"

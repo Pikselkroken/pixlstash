@@ -113,8 +113,7 @@ class Face(SQLModel, table=True):
                 else:
                     query = query.where(col == value)
 
-        faces = session.exec(query).all()
-        return faces
+        return session.exec(query).all()
 
     @staticmethod
     def expand_face_bbox(

@@ -207,25 +207,24 @@ class FaceUtils:
             left = max(0, min(w - side, face_cx - side // 2))
             top = max(0, min(h - side, face_cy - side // 2))
             return img.crop((left, top, left + side, top + side))
-        else:
-            h, w = img.shape[:2]
-            x1c = max(0, min(w, x1))
-            x2c = max(0, min(w, x2))
-            y1c = max(0, min(h, y1))
-            y2c = max(0, min(h, y2))
-            face_cx = (x1c + x2c) // 2
-            face_cy = (y1c + y2c) // 2
-            face_w = x2c - x1c
-            face_h = y2c - y1c
-            min_side = max(face_w, face_h)
-            max_side = min(w, h)
-            side = max(min_side, min(max_side, max(w, h)))
-            left = max(0, min(w - side, face_cx - side // 2))
-            top = max(0, min(h - side, face_cy - side // 2))
-            left = int(left)
-            top = int(top)
-            side = int(side)
-            return img[top : top + side, left : left + side]
+        h, w = img.shape[:2]
+        x1c = max(0, min(w, x1))
+        x2c = max(0, min(w, x2))
+        y1c = max(0, min(h, y1))
+        y2c = max(0, min(h, y2))
+        face_cx = (x1c + x2c) // 2
+        face_cy = (y1c + y2c) // 2
+        face_w = x2c - x1c
+        face_h = y2c - y1c
+        min_side = max(face_w, face_h)
+        max_side = min(w, h)
+        side = max(min_side, min(max_side, max(w, h)))
+        left = max(0, min(w - side, face_cx - side // 2))
+        top = max(0, min(h - side, face_cy - side // 2))
+        left = int(left)
+        top = int(top)
+        side = int(side)
+        return img[top : top + side, left : left + side]
 
     @staticmethod
     def batch_facial_likeness(facial_features_list: list) -> np.ndarray:
