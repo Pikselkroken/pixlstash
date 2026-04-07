@@ -113,7 +113,9 @@ CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta
 # already exists.  Set to "main" to always use the latest commit on the default branch.
 CUSTOM_TAGGER_REVISION = "d622340de4526e607738228c3075b59e7b989ef2"
 CUSTOM_TAGGER_REV_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.revision")
-CUSTOM_TAGGER_THRESHOLD_FULL = 0.95
+CUSTOM_TAGGER_THRESHOLD_FULL = 0.85
+# Bias to apply to the custom tagger's label-specific thresholds to produce a final binary tag decision.
+# This is to avoid false positives on borderline cases, which are common with the custom tagger's more subjective/anomaly-focused labels.
 CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS = 0.3
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
 CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 384

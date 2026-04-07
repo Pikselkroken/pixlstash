@@ -9,13 +9,21 @@ class CaptionUtils:
     """Utility methods for building caption and tag strings from pictures."""
 
     @staticmethod
-    def _build_tag_caption(picture) -> str:
-        """Build a comma-separated tag string from a picture's tags."""
+    def _build_tag_caption(picture, tag_format: str = "spaces") -> str:
+        """Build a comma-separated tag string from a picture's tags.
+
+        Args:
+            picture: Picture ORM object with a ``tags`` relationship.
+            tag_format: ``"spaces"`` (default) keeps tags as-is;
+                ``"underscores"`` replaces spaces with underscores.
+        """
         tags = []
         for tag in getattr(picture, "tags", []) or []:
             tag_value = getattr(tag, "tag", None)
             if tag_value in (None, TAG_EMPTY_SENTINEL):
                 continue
+            if tag_format == "underscores":
+                tag_value = tag_value.replace(" ", "_")
             tags.append(tag_value)
         return ", ".join(tags)
 

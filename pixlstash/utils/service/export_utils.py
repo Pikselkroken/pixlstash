@@ -92,6 +92,11 @@ class ExportUtils:
         if caption_mode_d not in {"none", "description", "tags"}:
             caption_mode_d = "description"
 
+        tag_format = background_data.get("tag_format", "spaces")
+        tag_format_d = (
+            tag_format if tag_format in {"spaces", "underscores"} else "spaces"
+        )
+
         include_character_name = background_data.get("include_character_name", False)
         include_character_name_enabled = (
             bool(include_character_name) and caption_mode_d != "none"
@@ -133,6 +138,7 @@ class ExportUtils:
             "picture_ids": picture_ids,
             "select_fields": select_fields,
             "use_original_file_names": use_original_file_names,
+            "tag_format_d": tag_format_d,
         }
 
     @staticmethod
@@ -188,6 +194,7 @@ class ExportUtils:
             picture_ids = params["picture_ids"]
             select_fields = params["select_fields"]
             use_original_file_names = params.get("use_original_file_names", False)
+            tag_format_d = params.get("tag_format_d", "spaces")
             used_names: dict = {}
 
             pics = []
@@ -429,9 +436,13 @@ class ExportUtils:
                             if caption_mode_d == "description":
                                 caption_text = pic.description or ""
                                 if not caption_text:
-                                    caption_text = CaptionUtils._build_tag_caption(pic)
+                                    caption_text = CaptionUtils._build_tag_caption(
+                                        pic, tag_format_d
+                                    )
                             elif caption_mode_d == "tags":
-                                caption_text = CaptionUtils._build_tag_caption(pic)
+                                caption_text = CaptionUtils._build_tag_caption(
+                                    pic, tag_format_d
+                                )
 
                             if include_character_name_enabled:
                                 character_names = CaptionUtils._build_character_caption(

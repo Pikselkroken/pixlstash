@@ -266,6 +266,7 @@ function disconnectUpdatesSocket() {
 const exportMenuOpen = ref(false);
 const exportType = ref("full");
 const exportCaptionMode = ref("description");
+const exportTagFormat = ref("spaces");
 const exportIncludeCharacterName = ref(true);
 const exportUseOriginalFileNames = ref(false);
 const exportResolution = ref("original");
@@ -289,6 +290,10 @@ const exportResolutionOptions = [
   { title: "Original", value: "original" },
   { title: "Half Size", value: "half" },
   { title: "Quarter Size", value: "quarter" },
+];
+const exportTagFormatOptions = [
+  { title: "Spaces", value: "spaces" },
+  { title: "Underscores", value: "underscores" },
 ];
 const exportTypeLocksCaptions = computed(() => exportType.value !== "full");
 
@@ -970,6 +975,7 @@ function confirmExportZip() {
   gridContainer.value?.exportCurrentViewToZip({
     exportType: exportType.value,
     captionMode: exportCaptionMode.value,
+    tagFormat: exportTagFormat.value,
     includeCharacterName: exportIncludeCharacterName.value,
     useOriginalFileNames: exportUseOriginalFileNames.value,
     resolution: exportResolution.value,
@@ -1302,6 +1308,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :exportCaptionOptions="exportCaptionOptions"
             :exportTypeOptions="exportTypeOptions"
             :exportResolutionOptions="exportResolutionOptions"
+            :exportTagFormatOptions="exportTagFormatOptions"
             :exportTypeLocksCaptions="exportTypeLocksCaptions"
             :sortOptions="sortOptions"
             :selectedSort="selectedSort"
@@ -1328,6 +1335,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:compactMode="compactMode"
             v-model:exportType="exportType"
             v-model:exportCaptionMode="exportCaptionMode"
+            v-model:exportTagFormat="exportTagFormat"
             v-model:exportResolution="exportResolution"
             v-model:exportIncludeCharacterName="exportIncludeCharacterName"
             v-model:exportUseOriginalFileNames="exportUseOriginalFileNames"

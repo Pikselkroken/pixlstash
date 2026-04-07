@@ -1911,6 +1911,7 @@ def create_router(server) -> APIRouter:
         use_original_file_names: bool = Query(False),
         resolution: str = Query("original"),
         export_type: str = Query("full"),
+        tag_format: str = Query("spaces"),
     ):
         task_id = str(uuid.uuid4())
         server.export_tasks[task_id] = {
@@ -1935,6 +1936,7 @@ def create_router(server) -> APIRouter:
             "use_original_file_names": use_original_file_names,
             "resolution": resolution,
             "export_type": export_type,
+            "tag_format": tag_format,
         }
         background_tasks.add_task(
             PictureServiceUtils.generate_zip,
