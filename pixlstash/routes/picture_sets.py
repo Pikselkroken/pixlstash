@@ -388,8 +388,8 @@ def create_router(server) -> APIRouter:
                     and meta.get("hidden_key") == hidden_key
                 ):
                     return FileResponse(cache_path, media_type="image/png")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to read picture set thumbnail cache: %s", exc)
 
         def fetch_picture_paths(session: Session, picture_ids: list[int]):
             rows = session.exec(
@@ -534,8 +534,8 @@ def create_router(server) -> APIRouter:
                         },
                         handle,
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to write picture set thumbnail metadata: %s", exc)
             return FileResponse(cache_path, media_type="image/png")
         except Exception:
             from io import BytesIO

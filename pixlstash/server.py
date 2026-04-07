@@ -804,8 +804,8 @@ class Server:
             ver = data.get("project", {}).get("version")
             if ver:
                 return ver
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug("Could not read version from pyproject.toml: %s", exc)
 
         # Fall back to installed package metadata (pip install / wheel deployment).
         try:
@@ -914,7 +914,7 @@ class Server:
                         }
                         client["filters"] = filters
             except WebSocketDisconnect:
-                pass
+                logger.debug("WebSocket client disconnected normally.")
             finally:
                 with self._ws_clients_lock:
                     if client in self._ws_clients:

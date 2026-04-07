@@ -221,8 +221,8 @@ def create_router(server) -> APIRouter:
                     SortMechanism.Keys.SMART_SCORE,
                 ):
                     sort_mech = candidate
-            except ValueError:
-                pass
+            except ValueError as exc:
+                logger.debug("Unrecognised sort mechanism %r: %s", sort, exc)
 
         def fetch_stack_pictures(
             session: Session,

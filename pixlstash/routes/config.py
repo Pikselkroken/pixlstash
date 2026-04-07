@@ -56,8 +56,8 @@ def create_router(server) -> APIRouter:
             for child in process.children(recursive=True):
                 child_times = child.cpu_times()
                 total_seconds += float(child_times.user + child_times.system)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to collect child process CPU times: %s", exc)
         return total_seconds
 
     def _set_vram_payload(payload: dict, used_bytes: int, total_bytes: int) -> bool:
@@ -89,8 +89,8 @@ def create_router(server) -> APIRouter:
                 total_bytes += int(getattr(props, "total_memory", 0) or 0)
                 try:
                     used_bytes += int(torch.cuda.memory_reserved(index) or 0)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to read CUDA memory for device %d: %s", index, exc)
             return _set_vram_payload(payload, used_bytes, total_bytes)
         except Exception:
             return False
@@ -288,8 +288,8 @@ def create_router(server) -> APIRouter:
                     try:
                         mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
                         total_bytes += int(getattr(mem_info, "total", 0) or 0)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to read NVML memory info for device %d: %s", index, exc)
                     processes = []
                     try:
                         processes = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
@@ -299,8 +299,8 @@ def create_router(server) -> APIRouter:
                         processes += pynvml.nvmlDeviceGetGraphicsRunningProcesses(
                             handle
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to read NVML graphics processes for device %d: %s", index, exc)
                     for entry in processes:
                         if entry.pid != pid:
                             continue
@@ -316,8 +316,8 @@ def create_router(server) -> APIRouter:
             finally:
                 try:
                     pynvml.nvmlShutdown()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("pynvml shutdown failed: %s", exc)
 
         if not vram_collected:
             vram_collected = _collect_vram_from_torch(payload)

@@ -11,10 +11,11 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0007_add_picture_project_id"  # noqa: F841
-down_revision: Union[str, None] = "0006_add_attachment_url"  # noqa: F841
-branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
-depends_on: Union[str, Sequence[str], None] = None  # noqa: F841
+revision: str = "0007_add_picture_project_id"
+down_revision: Union[str, None] = "0006_add_attachment_url"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 
 def upgrade() -> None:

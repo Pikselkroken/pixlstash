@@ -305,8 +305,8 @@ class ImageEmbeddingTask(BaseTask):
         if callable(suggest_fn):
             try:
                 batch_size_limit = max(1, int(suggest_fn()))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to get suggested batch size: %s", exc)
 
         batch = self._db.run_immediate_read_task(
             lambda session: self.fetch_work(session=session, limit=batch_size_limit)

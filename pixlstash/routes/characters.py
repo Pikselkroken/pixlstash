@@ -549,8 +549,8 @@ def create_router(server) -> APIRouter:
                         and meta.get("version") == thumbnail_cache_version
                     ):
                         return FileResponse(cache_path, media_type="image/png")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to read character thumbnail cache: %s", exc)
             char = server.vault.db.run_immediate_read_task(
                 Character.find,
                 select_fields=["reference_picture_set_id", "faces"],
@@ -692,8 +692,8 @@ def create_router(server) -> APIRouter:
                         meta_payload = dict(best_picture)
                         meta_payload["version"] = thumbnail_cache_version
                         json.dump(meta_payload, handle)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to write character thumbnail metadata: %s", exc)
                 return FileResponse(cache_path, media_type="image/png")
             except Exception:
                 from io import BytesIO

@@ -877,8 +877,8 @@ class Vault:
         if platform.system().lower().startswith("linux"):
             try:
                 ctypes.CDLL("libc.so.6").malloc_trim(0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("malloc_trim call failed: %s", exc)
         self._last_aggressive_unload_at = now
 
     def import_default_data(self, add_tagger_test_images: bool = False):

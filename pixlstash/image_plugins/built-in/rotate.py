@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from typing import Any
@@ -183,10 +184,8 @@ class RotatePlugin(ImagePlugin):
                     output_ext = candidate_ext
                     break
                 candidate_writer.release()
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(temp_path)
-                except OSError:
-                    pass
                 temp_path = ""
 
             if writer is None:
@@ -235,10 +234,8 @@ class RotatePlugin(ImagePlugin):
                 writer.release()
             cap.release()
             if temp_path and os.path.exists(temp_path):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(temp_path)
-                except OSError:
-                    pass
 
     # ------------------------------------------------------------------
     # Helpers
