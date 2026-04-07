@@ -207,7 +207,8 @@ RUN pip install --no-cache-dir \
     nvidia-ml-py \
     piexif \
     psutil \
-    python-dotenv
+    python-dotenv \
+    accelerate
 
 # Remove build tools — not needed at runtime
 RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*
