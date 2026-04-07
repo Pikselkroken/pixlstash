@@ -14,25 +14,15 @@ function deriveBackendUrl() {
     return `http://localhost:${DEFAULT_BACKEND_PORT}`;
   }
   const {protocol, hostname, port} = window.location;
-  // If the page is served by the PixlStash server itself (i.e. same host+port
-  // serves both the SPA and the API), use the same origin — no port suffix
-  // needed for standard ports (80/443).
+  // The SPA is always served by the PixlStash server itself, so the backend
+  // is always on the same origin as the page — regardless of port.
   const isStandardPort =
       (protocol === 'https:' && (port === '' || port === '443')) ||
       (protocol === 'http:' && (port === '' || port === '80'));
   if (isStandardPort) {
     return `${protocol}//${hostname}`;
   }
-  // Non-standard port: check if it looks like the backend port or if the page
-  // was loaded from the very same port (dev server / custom SSL port).
-  const pagePort = port || (protocol === 'https:' ? '443' : '80');
-  // If we're already on the backend port, reuse origin.
-  if (pagePort === String(DEFAULT_BACKEND_PORT)) {
-    return `${protocol}//${hostname}:${pagePort}`;
-  }
-  // Otherwise fall back to the default backend port, preserving the protocol
-  // so we don't downgrade https → http.
-  return `${protocol}//${hostname}:${DEFAULT_BACKEND_PORT}`;
+  return `${protocol}//${hostname}:${port}`;
 }
 
 const resolvedBaseUrl = deriveBackendUrl();
