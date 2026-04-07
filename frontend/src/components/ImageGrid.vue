@@ -201,6 +201,7 @@
         :style="{
           gridTemplateColumns: `repeat(${props.columns}, minmax(0, ${MAX_THUMBNAIL_SIZE}px))`,
           position: 'relative',
+          ...badgeCssVars,
         }"
         ref="gridContainer"
         @click="handleGridBackgroundClick"
@@ -269,7 +270,6 @@
                 :class="[
                   'stack-indicator',
                   'thumbnail-badge',
-                  `thumbnail-badge--${overlaySize}`,
                   'thumbnail-badge--top-left',
                 ]"
                 :title="stackBadgeTitle(img)"
@@ -292,7 +292,6 @@
                 :class="[
                   'penalised-tag-indicator',
                   'thumbnail-badge',
-                  `thumbnail-badge--${overlaySize}`,
                   shouldShowStackBadge(img)
                     ? 'thumbnail-badge--top-left-stack'
                     : 'thumbnail-badge--top-left',
@@ -323,7 +322,6 @@
                 :class="[
                   'resolution-hover-overlay',
                   'thumbnail-badge',
-                  `thumbnail-badge--${overlaySize}`,
                   'thumbnail-badge--bottom-right',
                 ]"
               >
@@ -443,7 +441,6 @@
                   :class="[
                     'thumbnail-id-overlay',
                     'thumbnail-badge',
-                    `thumbnail-badge--${overlaySize}`,
                     'thumbnail-badge--bottom-left',
                   ]"
                 >
@@ -468,11 +465,7 @@
                 v-if="
                   props.showStars && isThumbnailReady(img.id) && img.thumbnail
                 "
-                :class="[
-                  'thumbnail-badge',
-                  `thumbnail-badge--${overlaySize}`,
-                  'thumbnail-badge--top-right',
-                ]"
+                :class="['thumbnail-badge', 'thumbnail-badge--top-right']"
                 :score="img.score || 0"
                 :icon-size="badgeIconSizes.star"
                 :compact="true"
@@ -741,19 +734,29 @@ const selectionBarRef = ref(null);
 // GRID DATA STATE
 // ============================================================
 
-// Badge size tier driven by column count: 'lg' (≤4), 'md' (5-8), 'sm' (≥9).
-const overlaySize = computed(() => {
-  const c = props.columns || 1;
-  if (c >= 9) return "sm";
-  if (c >= 5) return "md";
-  return "lg";
+// Badge size interpolated continuously across column count (1 = lg, 12+ = sm).
+const badgeSizeT = computed(() =>
+  Math.min(1, Math.max(0, ((props.columns || 1) - 1) / 11)),
+);
+
+const badgeCssVars = computed(() => {
+  const t = badgeSizeT.value;
+  const fontSize = (0.8 - 0.3 * t).toFixed(3);
+  const paddingV = Math.round(2 * (1 - t));
+  const paddingH = Math.round(4 - 2 * t);
+  return {
+    "--badge-font-size": `${fontSize}em`,
+    "--badge-padding": `${paddingV}px ${paddingH}px`,
+  };
 });
 
 const badgeIconSizes = computed(() => {
-  const s = overlaySize.value;
-  if (s === "sm") return { stack: 12, penalised: 12, star: 10 };
-  if (s === "md") return { stack: 18, penalised: 18, star: 16 };
-  return { stack: 24, penalised: 24, star: 22 };
+  const t = badgeSizeT.value;
+  return {
+    stack: Math.round(24 - 12 * t),
+    penalised: Math.round(24 - 12 * t),
+    star: Math.round(22 - 12 * t),
+  };
 });
 
 const allGridImages = ref([]);
@@ -6794,25 +6797,13 @@ function handleEmptyStateReset() {
   border-radius: 8px;
   color: rgb(var(--v-theme-on-surface));
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
-  font-size: 0.8em;
-  padding: 2px 4px;
+  font-size: var(--badge-font-size, 0.8em);
+  padding: var(--badge-padding, 2px 4px);
   z-index: 20;
   max-width: 90%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* md: ~75% of lg */
-.thumbnail-badge--md {
-  font-size: 0.68em;
-  padding: 1px 3px;
-}
-
-/* sm: ~half of lg */
-.thumbnail-badge--sm {
-  font-size: 0.5em;
-  padding: 0 2px;
 }
 
 .thumbnail-badge--top-left,

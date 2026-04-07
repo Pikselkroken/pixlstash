@@ -6287,7 +6287,7 @@ function downloadComfyWorkflow(workflow) {
   background: rgba(var(--v-theme-on-dark-surface), 0.1);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
   border-radius: 4px;
-  padding: 2px 6px;
+  padding: 4px 6px;
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;

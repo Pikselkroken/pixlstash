@@ -1297,7 +1297,7 @@ const workflowImportCaptionPreview = computed(() => {
 <template>
   <v-dialog
     v-model="dialogOpen"
-    max-width="800"
+    max-width="950"
     @click:outside="dialogOpen = false"
   >
     <div class="settings-dialog-shell">
@@ -1326,7 +1326,7 @@ const workflowImportCaptionPreview = computed(() => {
         </v-card-title>
         <v-tabs
           v-model="settingsTab"
-          density="comfortable"
+          density="compact"
           class="settings-tabs"
           show-arrows
         >
@@ -1340,9 +1340,11 @@ const workflowImportCaptionPreview = computed(() => {
             <v-window-item value="preferences">
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
-                <div class="settings-section-title">Sidebar Thumbnails</div>
-                <div class="settings-section-desc">
-                  Adjust the sidebar thumbnail size.
+                <div
+                  class="settings-section-title"
+                  title="Adjust the sidebar thumbnail size."
+                >
+                  Sidebar Thumbnails
                 </div>
                 <div class="settings-slider-row">
                   <span class="settings-slider-value">
@@ -1362,16 +1364,18 @@ const workflowImportCaptionPreview = computed(() => {
               </div>
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
-                <div class="settings-section-title">Theme</div>
-                <div class="settings-section-desc">
-                  Choose a light or dark theme.
+                <div
+                  class="settings-section-title"
+                  title="Choose a light or dark theme."
+                >
+                  Theme
                 </div>
                 <v-select
                   v-model="themeModeModel"
                   :items="themeModeOptions"
                   item-title="title"
                   item-value="value"
-                  density="comfortable"
+                  density="compact"
                   variant="filled"
                   class="settings-add-tag-input"
                   hide-details
@@ -1379,16 +1383,18 @@ const workflowImportCaptionPreview = computed(() => {
               </div>
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
-                <div class="settings-section-title">Date Format</div>
-                <div class="settings-section-desc">
-                  Choose how dates are shown in the grid and overlays.
+                <div
+                  class="settings-section-title"
+                  title="Choose how dates are shown in the grid and overlays."
+                >
+                  Date Format
                 </div>
                 <v-select
                   v-model="dateFormatModel"
                   :items="dateFormatOptions"
                   item-title="title"
                   item-value="value"
-                  density="comfortable"
+                  density="compact"
                   variant="filled"
                   class="settings-add-tag-input"
                   hide-details
@@ -1404,7 +1410,7 @@ const workflowImportCaptionPreview = computed(() => {
                 <v-checkbox
                   v-model="keepModelsInMemory"
                   class="settings-tag-filter-toggle"
-                  density="comfortable"
+                  density="compact"
                   hide-details
                   :disabled="keepModelsInMemoryLoading"
                   label="Keep models in memory and VRAM"
@@ -1416,10 +1422,11 @@ const workflowImportCaptionPreview = computed(() => {
               </div>
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
-                <div class="settings-section-title">VRAM Budget (GB)</div>
-                <div class="settings-section-desc">
-                  Maximum VRAM budget for tagging tasks. Changes apply
-                  immediately.
+                <div
+                  class="settings-section-title"
+                  title="Maximum VRAM budget for tagging tasks. Changes apply immediately."
+                >
+                  VRAM Budget (GB)
                 </div>
                 <div class="settings-slider-row">
                   <span class="settings-slider-value"
@@ -1462,7 +1469,7 @@ const workflowImportCaptionPreview = computed(() => {
                 <v-checkbox
                   v-model="applyTagFilter"
                   class="settings-tag-filter-toggle"
-                  density="comfortable"
+                  density="compact"
                   hide-details
                   :disabled="applyTagFilterLoading"
                   label="Apply tag filter to all pictures and videos"
@@ -1497,7 +1504,7 @@ const workflowImportCaptionPreview = computed(() => {
                     <v-text-field
                       v-model="hiddenTagInput"
                       label="Add tag filter"
-                      density="comfortable"
+                      density="compact"
                       variant="filled"
                       class="settings-add-tag-input"
                       :disabled="hiddenTagsLoading"
@@ -1587,7 +1594,7 @@ const workflowImportCaptionPreview = computed(() => {
                     <v-text-field
                       v-model="smartScoreTagInput"
                       label="Add penalised tag"
-                      density="comfortable"
+                      density="compact"
                       variant="filled"
                       class="settings-add-tag-input"
                       :disabled="smartScoreTagsLoading"
@@ -1730,9 +1737,11 @@ const workflowImportCaptionPreview = computed(() => {
             </v-window-item>
             <v-window-item value="account">
               <div class="settings-section">
-                <div class="settings-section-title">Account</div>
-                <div class="settings-section-desc">
-                  Change your password or manage sign-in options.
+                <div
+                  class="settings-section-title"
+                  title="Change your password or manage sign-in options."
+                >
+                  Account
                 </div>
                 <div class="settings-account-meta">
                   <span class="settings-account-label">Username</span>
@@ -1761,8 +1770,9 @@ const workflowImportCaptionPreview = computed(() => {
                     v-model="currentPassword"
                     label="Current password"
                     type="password"
-                    density="comfortable"
+                    density="compact"
                     variant="filled"
+                    hide-details
                     autocomplete="current-password"
                     name="current-password"
                   />
@@ -1770,8 +1780,9 @@ const workflowImportCaptionPreview = computed(() => {
                     v-model="newPassword"
                     label="New password"
                     :type="showNewPassword ? 'text' : 'password'"
-                    density="comfortable"
+                    density="compact"
                     variant="filled"
+                    hide-details
                     autocomplete="new-password"
                     name="new-password"
                     :append-inner-icon="
@@ -1799,17 +1810,20 @@ const workflowImportCaptionPreview = computed(() => {
               </div>
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
-                <div class="settings-section-title">API Tokens</div>
-                <div class="settings-section-desc">
-                  Manage tokens for authenticated API access.
+                <div
+                  class="settings-section-title"
+                  title="Manage tokens for authenticated API access."
+                >
+                  API Tokens
                 </div>
                 <div class="settings-tokens">
                   <v-text-field
                     v-model="tokenDescription"
                     label="Token description"
-                    density="comfortable"
+                    density="compact"
                     variant="filled"
                     class="settings-add-tag-input"
+                    hide-details
                     :disabled="tokensLoading"
                     @keydown.enter.prevent="createUserToken"
                   />
@@ -1826,7 +1840,6 @@ const workflowImportCaptionPreview = computed(() => {
                   <div v-if="tokensError" class="settings-error">
                     {{ tokensError }}
                   </div>
-                  <div v-else class="settings-success">{{ "&nbsp;" }}</div>
                   <div class="settings-token-list">
                     <div
                       v-for="token in tokens"
@@ -1850,12 +1863,14 @@ const workflowImportCaptionPreview = computed(() => {
                       </div>
                       <v-btn
                         icon
+                        size="small"
+                        density="compact"
                         variant="text"
                         class="settings-token-delete"
                         :disabled="tokensLoading"
                         @click="confirmDeleteToken(token)"
                       >
-                        <v-icon size="18">mdi-delete</v-icon>
+                        <v-icon size="16">mdi-delete</v-icon>
                       </v-btn>
                     </div>
                     <div
@@ -1950,7 +1965,7 @@ const workflowImportCaptionPreview = computed(() => {
         <v-text-field
           v-model="workflowImportName"
           label="Workflow name"
-          density="comfortable"
+          density="compact"
           variant="filled"
         />
         <v-select
@@ -1959,7 +1974,7 @@ const workflowImportCaptionPreview = computed(() => {
           item-title="title"
           item-value="value"
           label="Image input"
-          density="comfortable"
+          density="compact"
           variant="filled"
         />
         <div v-if="workflowImportImagePreview" class="settings-token-warning">
@@ -1971,7 +1986,7 @@ const workflowImportCaptionPreview = computed(() => {
           item-title="title"
           item-value="value"
           label="Caption input"
-          density="comfortable"
+          density="compact"
           variant="filled"
         />
         <div v-if="workflowImportCaptionPreview" class="settings-token-warning">
@@ -1984,7 +1999,7 @@ const workflowImportCaptionPreview = computed(() => {
           item-value="value"
           label="SaveImage outputs"
           multiple
-          density="comfortable"
+          density="compact"
           variant="filled"
           :disabled="!workflowOutputNodeOptions.length"
         />
@@ -2028,7 +2043,7 @@ const workflowImportCaptionPreview = computed(() => {
         <v-text-field
           v-model="comfyuiEditHost"
           label="Host"
-          density="comfortable"
+          density="compact"
           variant="filled"
           :disabled="comfyuiUrlLoading"
           placeholder="e.g. 127.0.0.1"
@@ -2036,7 +2051,7 @@ const workflowImportCaptionPreview = computed(() => {
         <v-text-field
           v-model="comfyuiEditPort"
           label="Port"
-          density="comfortable"
+          density="compact"
           variant="filled"
           :disabled="comfyuiUrlLoading"
           placeholder="e.g. 8188"
@@ -2090,15 +2105,16 @@ const workflowImportCaptionPreview = computed(() => {
   display: flex !important;
   flex-direction: column !important;
   flex: 1;
-  min-height: 0;
+  min-height: 420px;
   overflow: hidden;
-  max-height: calc(85dvh - 20px);
+  max-height: calc(92dvh - 20px);
 }
 
 .settings-dialog-shell {
   position: relative;
   width: 100%;
-  max-height: 85dvh;
+  min-height: 440px;
+  max-height: 92dvh;
   display: flex;
   flex-direction: column;
   overflow: visible;
@@ -2126,6 +2142,7 @@ const workflowImportCaptionPreview = computed(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .settings-logout-btn {
@@ -2152,11 +2169,25 @@ const workflowImportCaptionPreview = computed(() => {
 
 .settings-tabs {
   margin-top: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+:deep(.settings-tabs .v-slide-group__content) {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+:deep(.settings-tabs .v-slide-group__content::-webkit-scrollbar) {
+  display: none;
 }
 
 :deep(.settings-tabs .v-tab) {
   border: 1px solid transparent;
   box-shadow: none;
+  font-size: 0.75rem;
+  min-width: 0;
+  padding: 0 8px;
 }
 
 :deep(.settings-tabs .v-tab--selected) {
@@ -2210,6 +2241,17 @@ const workflowImportCaptionPreview = computed(() => {
   overflow-y: auto !important;
   flex: 1 !important;
   min-height: 0 !important;
+}
+
+.settings-dialog-body
+  :deep(.v-select .v-field--variant-filled .v-field__input) {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  min-height: 0;
+}
+
+.settings-dialog-body :deep(.v-select .v-field--variant-filled) {
+  --v-input-control-height: 34px;
 }
 
 .settings-section {
@@ -2294,7 +2336,7 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
 }
 
 .settings-add-tag-row {
@@ -2382,7 +2424,7 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-tokens {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
 }
 
 .settings-token-loading {
@@ -2393,7 +2435,7 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-token-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 3px;
   max-height: 220px;
   overflow-y: auto;
   padding-right: 4px;
@@ -2404,15 +2446,15 @@ const workflowImportCaptionPreview = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
   background: rgba(var(--v-theme-surface), 0.2);
 }
 
 .settings-token-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 1px;
 }
 
 .settings-token-desc {
@@ -2422,8 +2464,8 @@ const workflowImportCaptionPreview = computed(() => {
 .settings-token-sub {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  font-size: 0.8em;
+  gap: 8px;
+  font-size: 0.78em;
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 

@@ -407,7 +407,7 @@
                 :aria-pressed="mediaTypeFilterModel === opt.value"
                 @click="setMediaTypeFilter(opt.value)"
               >
-                <v-icon size="20">{{ opt.icon }}</v-icon>
+                <v-icon size="16">{{ opt.icon }}</v-icon>
               </v-btn>
             </div>
             <div class="toolbar-filter-section-label" style="margin-top: 10px">
@@ -752,7 +752,7 @@
                 <div
                   style="
                     width: 100%;
-                    max-height: 220px;
+                    height: 200px;
                     overflow-y: auto;
                     margin-bottom: 8px;
                     border: 1px solid rgba(var(--v-theme-on-background), 0.18);
@@ -810,7 +810,7 @@
                 <div
                   style="
                     width: 100%;
-                    max-height: 220px;
+                    height: 200px;
                     overflow-y: auto;
                     border: 1px solid rgba(var(--v-theme-on-background), 0.18);
                     border-radius: 6px;
@@ -2364,7 +2364,7 @@ defineExpose({ blurSearchInput, focusSearchInput });
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
-  min-height: 50px;
+  min-height: 38px;
   border-radius: 10px;
   padding: 0;
   overflow: hidden;
@@ -2372,8 +2372,8 @@ defineExpose({ blurSearchInput, focusSearchInput });
 }
 
 .media-type-toggle :deep(.media-type-button) {
-  min-height: 50px !important;
-  height: 50px !important;
+  min-height: 38px !important;
+  height: 38px !important;
   width: 100%;
   min-width: 0;
   border-radius: 0 !important;
@@ -2396,7 +2396,7 @@ defineExpose({ blurSearchInput, focusSearchInput });
 }
 
 .media-type-toggle :deep(.media-type-button .v-btn__content) {
-  min-height: 50px;
+  min-height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2458,6 +2458,20 @@ defineExpose({ blurSearchInput, focusSearchInput });
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+.toolbar-filter-panel :deep(.v-checkbox .v-selection-control) {
+  min-height: 0;
+}
+
+.toolbar-filter-panel :deep(.v-checkbox .v-selection-control__wrapper) {
+  height: 20px;
+  width: 20px;
+}
+
+.toolbar-filter-panel :deep(.v-checkbox .v-label) {
+  padding-top: 1px;
+  padding-bottom: 1px;
 }
 
 .toolbar-comfyui-panel {

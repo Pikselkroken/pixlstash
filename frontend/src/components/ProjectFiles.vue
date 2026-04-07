@@ -381,40 +381,35 @@ onMounted(() => {
 
 <style scoped>
 .pf-wrapper {
-  margin: 4px 8px 8px;
-  border-radius: 6px;
   overflow: visible;
-  font-size: 0.92rem;
-  border: 1px solid rgba(var(--v-theme-border), 0.5);
-  background: rgba(var(--v-theme-surface), 0.3);
 }
 
 .pf-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 2px 12px;
+  min-height: 38px;
   cursor: pointer;
-  border-radius: 6px;
   user-select: none;
-  transition: background 0.15s;
-  color: rgb(var(--v-theme-sidebar-text));
-  font-size: 0.92rem;
+  color: rgba(var(--v-theme-sidebar-text), 0.58);
+  font-size: 1rem;
+  font-weight: 600;
   white-space: nowrap;
 }
 
 .pf-header:hover {
-  background: rgba(var(--v-theme-surface), 0.4);
+  color: rgba(var(--v-theme-sidebar-text), 0.85);
 }
 
 .pf-header.pf-drag-active {
-  background: rgba(var(--v-theme-accent), 0.2);
-  border-color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-accent), 0.1);
 }
 
 .pf-header-icon {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  opacity: 0.7;
+  color: rgba(var(--v-theme-sidebar-text), 0.5) !important;
+  margin-right: 4px;
 }
 
 .pf-title {
@@ -439,6 +434,7 @@ onMounted(() => {
 .pf-chevron {
   opacity: 0.5;
   color: rgb(var(--v-theme-sidebar-text)) !important;
+  flex-shrink: 0;
 }
 
 /* ---- Panel ---- */

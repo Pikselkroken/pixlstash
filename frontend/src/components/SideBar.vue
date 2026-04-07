@@ -2505,14 +2505,16 @@ defineExpose({
                     </span>
                   </div>
                 </template>
-                <ProjectFiles
-                  v-if="
-                    projectViewMode === 'project' && selectedProjectId !== null
-                  "
-                  :projectId="selectedProjectId"
-                  :backendUrl="props.backendUrl"
-                />
               </div>
+            </div>
+            <div
+              v-if="projectViewMode === 'project' && selectedProjectId !== null"
+              class="sidebar-section-block"
+            >
+              <ProjectFiles
+                :projectId="selectedProjectId"
+                :backendUrl="props.backendUrl"
+              />
             </div>
           </template>
         </div>
