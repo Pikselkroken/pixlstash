@@ -390,6 +390,20 @@ def create_router(server) -> APIRouter:
             )
         if "max_vram_gb" in patch_data:
             server.vault.set_max_vram_usage_gb(getattr(user, "max_vram_gb", None))
+        if "wd14_tagger_enabled" in patch_data:
+            server.vault.set_wd14_tagger_enabled(
+                getattr(user, "wd14_tagger_enabled", False)
+            )
+        if "custom_tagger_enabled" in patch_data:
+            server.vault.set_custom_tagger_enabled(
+                getattr(user, "custom_tagger_enabled", True)
+            )
+        if "wd14_threshold" in patch_data:
+            server.vault.set_wd14_threshold(getattr(user, "wd14_threshold", None))
+        if "custom_tagger_threshold_offset" in patch_data:
+            server.vault.set_custom_tagger_threshold_offset(
+                getattr(user, "custom_tagger_threshold_offset", None)
+            )
         elapsed = time.time() - start_time
         logger.debug(
             f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"

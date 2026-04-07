@@ -31,6 +31,10 @@ class MissingTagFinder(BaseTaskFinder):
         picture_tagger = self._picture_tagger_getter()
         if picture_tagger is None:
             return None
+        wd14_enabled = getattr(picture_tagger, "_use_wd14_tagger", True)
+        custom_enabled = getattr(picture_tagger, "_use_custom_tagger", False)
+        if not wd14_enabled and not custom_enabled:
+            return None
 
         batch_limit = max(
             1,

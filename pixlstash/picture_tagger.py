@@ -100,7 +100,7 @@ MAX_CONCURRENT_IMAGES_CPU = _env_int("PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU", 8)
 FLORENCE_BATCH_SIZE_GPU = _env_int("PIXLSTASH_FLORENCE_BATCH_GPU", 8)
 FLORENCE_BATCH_SIZE_CPU = _env_int("PIXLSTASH_FLORENCE_BATCH_CPU", 2)
 TAGGER_DATALOADER_TIMEOUT = 30
-GENERAL_THRESHOLD = 0.95
+GENERAL_THRESHOLD = 0.85
 UNDESIRED_TAGS = "solo, general, male_focus, meme, sensitive"
 CAPTION_SEPARATOR = ", "
 CUSTOM_TAGGER_HF_REPO = "PersonalJeebus/pixlvault-anomaly-tagger"
@@ -113,10 +113,10 @@ CUSTOM_TAGGER_META_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger_meta
 # already exists.  Set to "main" to always use the latest commit on the default branch.
 CUSTOM_TAGGER_REVISION = "d622340de4526e607738228c3075b59e7b989ef2"
 CUSTOM_TAGGER_REV_PATH = os.path.join(MODEL_DIR, "pixlstash-anomaly-tagger.revision")
-CUSTOM_TAGGER_THRESHOLD_FULL = 0.85
-# Bias to apply to the custom tagger's label-specific thresholds to produce a final binary tag decision.
-# This is to avoid false positives on borderline cases, which are common with the custom tagger's more subjective/anomaly-focused labels.
-CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS = 0.3
+CUSTOM_TAGGER_DEFAULT_THRESHOLD = 0.50
+# Threshold offset applied on top of each label's own threshold at inference time.
+# Negative values lower the effective threshold (more tags); positive values raise it.
+CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS = 0.0
 CUSTOM_TAGGER_IMAGE_SIZE_FULL = 448
 CUSTOM_TAGGER_IMAGE_SIZE_QUALITY_CROP = 384
 CUSTOM_TAGGER_BATCH = _env_int("PIXLSTASH_CUSTOM_TAGGER_BATCH", 16)
@@ -214,7 +214,9 @@ class PictureTagger:
         self._custom_tagger_path = CUSTOM_TAGGER_PATH
         self._custom_tagger_meta_path = CUSTOM_TAGGER_META_PATH
         self._use_custom_tagger = True
-        self._custom_tagger_threshold_full = CUSTOM_TAGGER_THRESHOLD_FULL
+        self._use_wd14_tagger = True
+        self._general_threshold = GENERAL_THRESHOLD
+        self._custom_tagger_threshold_offset = CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS
         self._custom_label_thresholds: dict[str, float] = {}
         self._custom_tagger_image_size_full = CUSTOM_TAGGER_IMAGE_SIZE_FULL
         self._custom_tagger_image_size_quality_crop = (
@@ -692,13 +694,14 @@ class PictureTagger:
 
     def _ensure_tagging_ready(self):
         with self._model_init_lock:
-            if getattr(self, "ort_sess", None) is None:
-                self._init_onnx_session()
-            if (
-                getattr(self, "_general_tags", None) is None
-                or getattr(self, "_rating_tags", None) is None
-            ):
-                self._load_and_preprocess_tags()
+            if self._use_wd14_tagger:
+                if getattr(self, "ort_sess", None) is None:
+                    self._init_onnx_session()
+                if (
+                    getattr(self, "_general_tags", None) is None
+                    or getattr(self, "_rating_tags", None) is None
+                ):
+                    self._load_and_preprocess_tags()
             if self._use_custom_tagger:
                 missing_custom = (
                     getattr(self, "_custom_model", None) is None
@@ -761,6 +764,27 @@ class PictureTagger:
 
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         self._keep_models_in_memory = bool(keep_models_in_memory)
+
+    def set_wd14_tagger_enabled(self, enabled: bool):
+        self._use_wd14_tagger = bool(enabled)
+
+    def set_custom_tagger_enabled(self, enabled: bool):
+        if bool(enabled) and not self._use_custom_tagger:
+            # Only enable if the model files are actually present
+            import os
+
+            if os.path.isfile(self._custom_tagger_path) and os.path.isfile(
+                self._custom_tagger_meta_path
+            ):
+                self._use_custom_tagger = True
+        elif not bool(enabled):
+            self._use_custom_tagger = False
+
+    def set_wd14_threshold(self, threshold: float):
+        self._general_threshold = float(threshold)
+
+    def set_custom_tagger_threshold_offset(self, offset: float):
+        self._custom_tagger_threshold_offset = float(offset)
 
     def loaded_model_state(self) -> dict:
         return {
@@ -1327,11 +1351,7 @@ class PictureTagger:
         self._custom_labels = labels
         self._custom_label_to_idx = {label: i for i, label in enumerate(labels)}
         self._custom_label_thresholds = {
-            k: min(
-                float(v) + CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS,
-                CUSTOM_TAGGER_THRESHOLD_FULL,
-            )
-            for k, v in meta.get("label_thresholds", {}).items()
+            k: float(v) for k, v in meta.get("label_thresholds", {}).items()
         }
         if self._custom_label_thresholds:
             logger.debug(
@@ -1528,7 +1548,7 @@ class PictureTagger:
             # General tags
             for i, p in enumerate(prob[4 : 4 + len(self._general_tags)]):
                 tag_name = self._general_tags[i]
-                if p >= GENERAL_THRESHOLD and tag_name not in undesired_tags:
+                if p >= self._general_threshold and tag_name not in undesired_tags:
                     tag_probs.append((tag_name, p))
             # Sort all tags by probability
             all_tags_sorted = sorted(tag_probs, key=lambda x: x[1], reverse=True)
@@ -1596,8 +1616,8 @@ class PictureTagger:
             and self._custom_labels is not None
         )
 
-    def custom_tagger_threshold_full(self) -> float:
-        return float(self._custom_tagger_threshold_full)
+    def custom_tagger_threshold_offset(self) -> float:
+        return float(self._custom_tagger_threshold_offset)
 
     def custom_tagger_version(self) -> int:
         """Return the version integer from the loaded custom tagger meta.json.
@@ -1679,7 +1699,7 @@ class PictureTagger:
         raw = self._tag_custom_items(
             items,
             stop_event=stop_event,
-            threshold=self._custom_tagger_threshold_full,
+            threshold=None,
             image_size=self._custom_tagger_image_size_quality_crop,
             pass_name="quality_crops",
         )
@@ -1712,7 +1732,7 @@ class PictureTagger:
         tag_threshold = (
             float(threshold)
             if threshold is not None and float(threshold) > 0
-            else self._custom_tagger_threshold_full
+            else CUSTOM_TAGGER_DEFAULT_THRESHOLD
         )
         if image_size is None:
             image_size = self._custom_tagger_image_size_full
@@ -1773,8 +1793,9 @@ class PictureTagger:
             for path, prob in zip(batch_paths, probs):
                 tag_probs = []
                 for label, p in zip(self._custom_labels, prob):
-                    per_label_threshold = self._custom_label_thresholds.get(
-                        label, tag_threshold
+                    base = self._custom_label_thresholds.get(label, tag_threshold)
+                    per_label_threshold = max(
+                        0.01, base + self._custom_tagger_threshold_offset
                     )
                     if p >= per_label_threshold:
                         tag_probs.append((label, float(p)))
@@ -1999,7 +2020,7 @@ class PictureTagger:
         results = self._tag_custom_items(
             items,
             stop_event=stop_event,
-            threshold=self._custom_tagger_threshold_full,
+            threshold=None,
             image_size=self._custom_tagger_image_size_full,
             pass_name="full_images",
         )
@@ -2123,7 +2144,10 @@ class PictureTagger:
 
         b_imgs = []
         all_results = {}
-        run_preloaded_wd14(preloaded_map, all_results)
+        if self._use_wd14_tagger:
+            run_preloaded_wd14(preloaded_map, all_results)
+        else:
+            remaining_paths = []
         try:
             if remaining_paths:
                 logger.debug(

@@ -10,13 +10,7 @@ if TYPE_CHECKING:
 DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT = 3
 DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
     "incorrect reflection": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
-    "fused fingers": 5,
-    "malformed eye": DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     "bad anatomy": 5,
-    "extra digit": 5,
-    "missing digit": 4,
-    "extra limb": 5,
-    "missing limb": 5,
     "malformed hand": 5,
     "malformed teeth": 4,
     "missing nipples": 5,
@@ -25,9 +19,6 @@ DEFAULT_SMART_SCORE_PENALIZED_TAGS = {
     "flux chin": 1,
     "silicone breasts": 0,
     "malformed foot": 4,
-    "missing toe": 4,
-    "extra toe": 4,
-    "fused toes": 3,
     "pixelated": 2,
 }
 TAG_EMPTY_SENTINEL = ""

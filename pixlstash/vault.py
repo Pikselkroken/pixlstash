@@ -93,6 +93,10 @@ class Vault:
         self._last_aggressive_unload_at = 0.0
         self._keep_models_in_memory = True
         self._max_vram_gb = None
+        self._wd14_tagger_enabled = False
+        self._custom_tagger_enabled = True
+        self._wd14_threshold = None
+        self._custom_tagger_threshold_offset = None
         self._server_config_path = server_config_path
 
         self._planner_watchers = {}
@@ -133,6 +137,14 @@ class Vault:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
             self._picture_tagger.set_max_vram_usage_gb(self._max_vram_gb)
+            self._picture_tagger.set_wd14_tagger_enabled(self._wd14_tagger_enabled)
+            self._picture_tagger.set_custom_tagger_enabled(self._custom_tagger_enabled)
+            if self._wd14_threshold is not None:
+                self._picture_tagger.set_wd14_threshold(self._wd14_threshold)
+            if self._custom_tagger_threshold_offset is not None:
+                self._picture_tagger.set_custom_tagger_threshold_offset(
+                    self._custom_tagger_threshold_offset
+                )
 
     def notify(self, event_type: EventType, data=None):
         """
@@ -218,6 +230,34 @@ class Vault:
             self._picture_tagger, "set_max_vram_usage_gb"
         ):
             self._picture_tagger.set_max_vram_usage_gb(max_vram_gb)
+
+    def set_wd14_tagger_enabled(self, enabled: bool):
+        self._wd14_tagger_enabled = bool(enabled)
+        if self._picture_tagger and hasattr(
+            self._picture_tagger, "set_wd14_tagger_enabled"
+        ):
+            self._picture_tagger.set_wd14_tagger_enabled(self._wd14_tagger_enabled)
+
+    def set_custom_tagger_enabled(self, enabled: bool):
+        self._custom_tagger_enabled = bool(enabled)
+        if self._picture_tagger and hasattr(
+            self._picture_tagger, "set_custom_tagger_enabled"
+        ):
+            self._picture_tagger.set_custom_tagger_enabled(self._custom_tagger_enabled)
+
+    def set_wd14_threshold(self, threshold: Optional[float]):
+        self._wd14_threshold = threshold
+        if self._picture_tagger and hasattr(self._picture_tagger, "set_wd14_threshold"):
+            value = threshold if threshold is not None else 0.85
+            self._picture_tagger.set_wd14_threshold(value)
+
+    def set_custom_tagger_threshold_offset(self, offset: Optional[float]):
+        self._custom_tagger_threshold_offset = offset
+        if self._picture_tagger and hasattr(
+            self._picture_tagger, "set_custom_tagger_threshold_offset"
+        ):
+            value = offset if offset is not None else 0.0
+            self._picture_tagger.set_custom_tagger_threshold_offset(value)
 
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
@@ -466,6 +506,14 @@ class Vault:
             self._picture_tagger = PictureTagger(image_root=self.image_root)
             self._picture_tagger.set_keep_models_in_memory(self._keep_models_in_memory)
             self._picture_tagger.set_max_vram_usage_gb(self._max_vram_gb)
+            self._picture_tagger.set_wd14_tagger_enabled(self._wd14_tagger_enabled)
+            self._picture_tagger.set_custom_tagger_enabled(self._custom_tagger_enabled)
+            if self._wd14_threshold is not None:
+                self._picture_tagger.set_wd14_threshold(self._wd14_threshold)
+            if self._custom_tagger_threshold_offset is not None:
+                self._picture_tagger.set_custom_tagger_threshold_offset(
+                    self._custom_tagger_threshold_offset
+                )
 
         # Register the watcher BEFORE checking the DB to avoid a TOCTOU race where
         # the task completes (and fires _notify_planner_ids_processed) in the gap
