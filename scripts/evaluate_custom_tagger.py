@@ -41,7 +41,7 @@ from pixlstash.picture_tagger import (  # noqa: E402
     QUALITY_CROP_TAG_WHITELIST,
     PictureTagger,
 )
-from pixlstash.tag_naturaliser import TagNaturaliser  # noqa: E402
+from pixlstash.utils.caption_utils import sanitise_tag  # noqa: E402
 from pixlstash.tasks.face_extraction_task import CROP_EXPAND_SCALE  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ def read_ground_truth(caption_path: Path) -> set[str]:
         return set()
     tags = set()
     for raw in text.split(","):
-        natural = TagNaturaliser.get_natural_tag(raw.strip())
+        natural = sanitise_tag(raw.strip())
         if natural:
             tags.add(natural)
     return tags
@@ -294,7 +294,7 @@ def predict_at_threshold(
     predicted = set()
     for label, p in zip(labels, probs):
         if p >= threshold:
-            natural = TagNaturaliser.get_natural_tag(label)
+            natural = sanitise_tag(label)
             if natural:
                 if tag_filter is None or natural in tag_filter:
                     predicted.add(natural)
@@ -641,9 +641,9 @@ def main() -> None:
         print("Tag filter: all tags")
     else:
         tag_filter = {
-            TagNaturaliser.get_natural_tag(t)
+            sanitise_tag(t)
             for t in DEFAULT_SMART_SCORE_PENALIZED_TAGS
-            if TagNaturaliser.get_natural_tag(t)
+            if sanitise_tag(t)
         }
         print(
             f"Tag filter: {len(tag_filter)} smart-score-penalized anomaly tags  (use --all-tags to disable)"
@@ -714,7 +714,7 @@ def main() -> None:
     )
 
     # Warn about ground-truth tags that the model has never seen
-    known = {TagNaturaliser.get_natural_tag(lbl) for lbl in labels}
+    known = {sanitise_tag(lbl) for lbl in labels}
     unknown_gt = all_tags_in_gt - known
     if unknown_gt:
         print(
