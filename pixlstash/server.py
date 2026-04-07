@@ -206,6 +206,16 @@ class Server:
             else getattr(self._user, "max_vram_gb", None)
         )
         self.vault.set_max_vram_usage_gb(effective_vram_gb)
+        self.vault.set_wd14_tagger_enabled(
+            getattr(self._user, "wd14_tagger_enabled", False)
+        )
+        self.vault.set_custom_tagger_enabled(
+            getattr(self._user, "custom_tagger_enabled", True)
+        )
+        self.vault.set_wd14_threshold(getattr(self._user, "wd14_threshold", None))
+        self.vault.set_custom_tagger_threshold_offset(
+            getattr(self._user, "custom_tagger_threshold_offset", None)
+        )
 
         self.api = FastAPI(
             title="PixlStash API",

@@ -9,8 +9,7 @@ from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
 from pixlstash.picture_tagger import (
     CUSTOM_TAGGER_META_PATH,
-    CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS,
-    CUSTOM_TAGGER_THRESHOLD_FULL,
+    CUSTOM_TAGGER_DEFAULT_THRESHOLD,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.caption_utils import sanitise_tag
@@ -21,10 +20,11 @@ from pixlstash.utils.service.tag_prediction_utils import (
 logger = get_logger(__name__)
 
 
-def _load_label_thresholds() -> dict[str, float]:
+def _load_label_thresholds(bias: float = 0.0) -> dict[str, float]:
     """Load per-label acceptance thresholds from the custom tagger meta JSON.
 
     Keys are naturalized to match the values stored in TagPrediction.tag.
+    The bias is the user-configured offset added to each label's base threshold.
     Returns an empty dict if the file is missing or lacks label_thresholds.
     """
     try:
@@ -34,12 +34,19 @@ def _load_label_thresholds() -> dict[str, float]:
         if not raw:
             return {}
         return {
-            sanitise_tag(k) or k: min(
-                float(v) + CUSTOM_TAGGER_LABEL_THRESHOLD_BIAS,
-                CUSTOM_TAGGER_THRESHOLD_FULL,
-            )
-            for k, v in raw.items()
+            sanitise_tag(k) or k: max(0.01, float(v) + bias) for k, v in raw.items()
         }
+    except Exception:
+        return {}
+
+
+def _load_raw_label_thresholds() -> dict[str, float]:
+    """Load per-label thresholds from meta JSON without any offset applied."""
+    try:
+        with open(CUSTOM_TAGGER_META_PATH, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        raw = meta.get("label_thresholds", {})
+        return {sanitise_tag(k) or k: float(v) for k, v in raw.items()}
     except Exception:
         return {}
 
@@ -87,11 +94,14 @@ def create_router(server) -> APIRouter:
         ]
         if not include_meta:
             return payload
+        bias = getattr(server.vault, "_custom_tagger_threshold_offset", None) or 0.0
         return {
             "tag_predictions": payload,
             "meta": {
-                "acceptance_threshold": float(CUSTOM_TAGGER_THRESHOLD_FULL),
-                "label_thresholds": _load_label_thresholds(),
+                "acceptance_threshold": max(
+                    0.01, float(CUSTOM_TAGGER_DEFAULT_THRESHOLD) + bias
+                ),
+                "label_thresholds": _load_label_thresholds(bias),
             },
         }
 
@@ -259,5 +269,26 @@ def create_router(server) -> APIRouter:
         server.vault.db.run_task(_reset)
         server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
         return {"status": "reset"}
+
+    @router.get(
+        "/tagger/label-thresholds",
+        summary="Get per-label thresholds for the PixlStash tagger",
+        description=(
+            "Returns each label's base threshold and the effective threshold after "
+            "applying the current user offset. Results are sorted alphabetically."
+        ),
+    )
+    def get_label_thresholds():
+        offset = getattr(server.vault, "_custom_tagger_threshold_offset", None) or 0.0
+        raw = _load_raw_label_thresholds()
+        sorted_labels = sorted(raw.items())
+        return [
+            {
+                "label": label,
+                "base_threshold": round(base, 4),
+                "effective_threshold": round(max(0.01, base + offset), 4),
+            }
+            for label, base in sorted_labels
+        ]
 
     return router

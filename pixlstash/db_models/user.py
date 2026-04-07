@@ -41,6 +41,10 @@ class User(SQLModel, table=True):
     apply_tag_filter: bool = Field(default=False)
     keep_models_in_memory: bool = Field(default=True)
     max_vram_gb: Optional[float] = Field(default=None)
+    wd14_tagger_enabled: bool = Field(default=False)
+    custom_tagger_enabled: bool = Field(default=True)
+    wd14_threshold: Optional[float] = Field(default=None)
+    custom_tagger_threshold_offset: Optional[float] = Field(default=None)
 
     tokens: List["UserToken"] = Relationship(
         back_populates="user",

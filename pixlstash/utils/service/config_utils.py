@@ -54,6 +54,10 @@ def serialize_user_config(user) -> dict:
         "apply_tag_filter",
         "keep_models_in_memory",
         "max_vram_gb",
+        "wd14_tagger_enabled",
+        "custom_tagger_enabled",
+        "wd14_threshold",
+        "custom_tagger_threshold_offset",
     }
 
     config = {
@@ -87,6 +91,10 @@ def serialize_user_config(user) -> dict:
     config["sort_order"] = config["sort"]
     if config.get("max_vram_gb") is None:
         config["max_vram_gb"] = default_max_vram_gb()
+    if config.get("wd14_threshold") is None:
+        config["wd14_threshold"] = 0.85
+    if config.get("custom_tagger_threshold_offset") is None:
+        config["custom_tagger_threshold_offset"] = 0.0
     return config
 
 
@@ -128,6 +136,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "apply_tag_filter",
         "keep_models_in_memory",
         "max_vram_gb",
+        "wd14_tagger_enabled",
+        "custom_tagger_enabled",
+        "wd14_threshold",
+        "custom_tagger_threshold_offset",
     }
 
     allowed_date_formats = {
@@ -229,6 +241,31 @@ def apply_user_config_patch(user, patch_data) -> bool:
                     raise ValueError("max_vram_gb must be greater than 0")
             if user.max_vram_gb != new_value:
                 user.max_vram_gb = new_value
+                updated = True
+            continue
+        if key in {"wd14_tagger_enabled", "custom_tagger_enabled"}:
+            new_value = bool(value)
+            if getattr(user, key) != new_value:
+                setattr(user, key, new_value)
+                updated = True
+            continue
+        if key in {"wd14_threshold", "custom_tagger_threshold_offset"}:
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = float(value)
+                if key == "wd14_threshold" and not (0.0 < new_value <= 1.0):
+                    raise ValueError(
+                        f"{key} must be between 0 (exclusive) and 1 (inclusive)"
+                    )
+                if key == "custom_tagger_threshold_offset" and not (
+                    -1.0 <= new_value <= 1.0
+                ):
+                    raise ValueError(
+                        "custom_tagger_threshold_offset must be between -1.0 and 1.0"
+                    )
+            if getattr(user, key) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "date_format":
