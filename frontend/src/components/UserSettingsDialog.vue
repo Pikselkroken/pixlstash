@@ -1351,7 +1351,9 @@ async function submitPasswordChange() {
           password: newPasswordValue,
         });
         await navigator.credentials.store(credential);
-      } catch (credentialError) {}
+      } catch {
+        // Storing credentials is best-effort; ignore failures.
+      }
     }
   } catch (e) {
     settingsError.value =

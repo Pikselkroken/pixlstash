@@ -74,7 +74,8 @@ async function login(username, password) {
           password,
         });
         await navigator.credentials.store(credential);
-      } catch (credentialError) {
+      } catch {
+        // Storing credentials is best-effort; ignore failures.
       }
     }
     return response.data;  // Return response data for further use if needed

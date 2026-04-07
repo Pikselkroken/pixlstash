@@ -6,7 +6,7 @@
 
 export function getPictureStackId(img) {
   const stackId = img?.stack_id ?? img?.stackId ?? null;
-  if (stackId === null || stackId === undefined) return null;
+  if (stackId == null) return null;
   return String(stackId);
 }
 
@@ -20,14 +20,14 @@ export function normalizeStackIdValue(stackId) {
 export function getStackPositionValue(img) {
   if (!img) return null;
   const raw = img.stack_position ?? img.stackPosition ?? null;
-  if (raw === null || raw === undefined) return null;
+  if (raw == null) return null;
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
 }
 
 export function getStackSmartScoreValue(img) {
   const raw = img?.smartScore ?? img?.smart_score ?? null;
-  if (raw === null || raw === undefined) return 0;
+  if (raw == null) return 0;
   const value = Number(raw);
   return Number.isFinite(value) ? value : 0;
 }
