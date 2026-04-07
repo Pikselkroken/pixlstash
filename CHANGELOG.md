@@ -1,3 +1,6 @@
+# [1.0.0rc5] - 2026-04-08:
+- Fixed git tag to ensure a proper build
+
 # [1.0.0rc4] - 2026-04-07:
 - Add filter on tag prediction confidence (find pictures the tagger is unsure of for specific tags)
 - Many UI improvements
