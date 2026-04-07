@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from typing import Any
@@ -31,10 +32,10 @@ class BlurSharpenPlugin(ImagePlugin):
                 "default": "blur",
                 "enum": sorted(self.MODES),
                 "description": (
-                    "blur – Gaussian blur. "
-                    "sharpen – Unsharp sharpen. "
-                    "motion_blur – Linear directional smear (use 'angle' to set direction). "
-                    "camera_shake – Curved arc blur that mimics hand-held camera shake."
+                    "blur - Gaussian blur. "
+                    "sharpen - Unsharp sharpen. "
+                    "motion_blur - Linear directional smear (use 'angle' to set direction). "
+                    "camera_shake - Curved arc blur that mimics hand-held camera shake."
                 ),
             },
             {
@@ -160,10 +161,8 @@ class BlurSharpenPlugin(ImagePlugin):
                     output_ext = candidate_ext
                     break
                 candidate_writer.release()
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(temp_path)
-                except OSError:
-                    pass
                 temp_path = ""
 
             if writer is None:
@@ -214,10 +213,8 @@ class BlurSharpenPlugin(ImagePlugin):
                 writer.release()
             cap.release()
             if temp_path and os.path.exists(temp_path):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(temp_path)
-                except OSError:
-                    pass
 
     @staticmethod
     def _coerce_positive_number(value: Any, default: float) -> float:

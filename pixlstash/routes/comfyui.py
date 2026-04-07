@@ -905,8 +905,8 @@ def create_router(server) -> APIRouter:
                     await websocket.send_text(message)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("ComfyUI WebSocket upstream forward failed: %s", exc)
 
         async def forward_downstream(upstream):
             try:
@@ -917,9 +917,9 @@ def create_router(server) -> APIRouter:
             except asyncio.CancelledError:
                 raise
             except WebSocketDisconnect:
-                pass
-            except Exception:
-                pass
+                logger.debug("ComfyUI WebSocket client disconnected normally.")
+            except Exception as exc:
+                logger.debug("ComfyUI WebSocket downstream receive failed: %s", exc)
 
         try:
             async with websockets.connect(
@@ -936,8 +936,8 @@ def create_router(server) -> APIRouter:
         finally:
             try:
                 await websocket.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to close WebSocket cleanly: %s", exc)
 
     @router.get(
         "/comfyui/workflows",

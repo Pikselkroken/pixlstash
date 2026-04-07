@@ -237,7 +237,7 @@ def create_router(server) -> APIRouter:
                 project = session.get(Project, numeric_id)
             except (TypeError, ValueError):
                 # If parsing as an integer fails, treat pid_or_name as a project name instead.
-                pass
+                logger.debug("Could not parse project identifier %r as integer.", pid_or_name)
             if project is None:
                 project = session.exec(
                     select(Project).where(
@@ -280,7 +280,7 @@ def create_router(server) -> APIRouter:
                 project = session.get(Project, int(value))
             except (TypeError, ValueError):
                 # Value is not a valid integer project ID; fall back to lookup by name.
-                pass
+                logger.debug("Could not parse project value %r as integer ID.", value)
             if project is None:
                 project = session.exec(
                     select(Project).where(func.lower(Project.name) == value.lower())
@@ -667,8 +667,8 @@ def create_router(server) -> APIRouter:
                         fname = f"{char_slug}_{i:03d}{ext}"
                         try:
                             zf.write(full, f"{char_dir}/pictures/{fname}")
-                        except OSError:
-                            pass
+                        except OSError as exc:
+                            logger.debug("Failed to add character picture to export ZIP: %s", exc)
 
             # Picture sets
             for pset in picture_sets_data:
@@ -694,8 +694,8 @@ def create_router(server) -> APIRouter:
                         fname = f"{set_slug}_{i:03d}{ext}"
                         try:
                             zf.write(full, f"{set_dir}/pictures/{fname}")
-                        except OSError:
-                            pass
+                        except OSError as exc:
+                            logger.debug("Failed to add picture set image to export ZIP: %s", exc)
 
             # Attachments
             used_attachment_names: set = set()
@@ -711,8 +711,8 @@ def create_router(server) -> APIRouter:
                 fname = _unique_name(used_attachment_names, att["original_filename"])
                 try:
                     zf.write(full, f"{root}/attachments/{fname}")
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.debug("Failed to add attachment to export ZIP: %s", exc)
 
         buf.seek(0)
         safe_filename = re.sub(r"[^\w\-.]", "_", project_data["name"] or "project")

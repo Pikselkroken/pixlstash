@@ -138,8 +138,8 @@ class FaceExtractionTask(BaseTask):
             trim = getattr(libc, "malloc_trim", None)
             if trim is not None:
                 trim(0)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("malloc_trim call failed: %s", exc)
 
     def _init_insightface_app(self):
         if self._insightface_app is not None:

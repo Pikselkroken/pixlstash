@@ -102,8 +102,8 @@ class ImageUtils:
                             )
                         if exif_map:
                             metadata["exif"] = exif_map
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to extract EXIF tags from image: %s", exc)
         except Exception as exc:
             logger.warning("Failed to extract embedded metadata: %s", exc)
         return metadata
@@ -318,10 +318,10 @@ class ImageUtils:
                                 datetime.now().astimezone().tzinfo or timezone.utc
                             )
                             return dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+                        except Exception as exc:
+                            logger.debug("Failed to parse EXIF datetime: %s", exc)
+        except Exception as exc:
+            logger.debug("Failed to extract EXIF metadata from image: %s", exc)
 
         # Try to read creation time from the video container (MP4/MOV mvhd box)
         # before falling back to the filesystem mtime, which reflects the import
@@ -330,15 +330,15 @@ class ImageUtils:
             video_dt = VideoUtils.extract_created_at_from_bytes(image_bytes)
             if video_dt is not None:
                 return video_dt
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to extract video container creation time: %s", exc)
 
         if fallback_file_path and os.path.exists(fallback_file_path):
             try:
                 ts = os.path.getmtime(fallback_file_path)
                 return datetime.fromtimestamp(ts, tz=timezone.utc)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to read file mtime for %s: %s", fallback_file_path, exc)
         return None
 
     @staticmethod
@@ -358,8 +358,8 @@ class ImageUtils:
                 else:
                     c = len(img.getbands())
                 return (h, w, c)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("PIL failed to read metadata for %s: %s", file_path, exc)
         try:
             cap = cv2.VideoCapture(file_path)
             ret, frame = cap.read()
@@ -368,8 +368,8 @@ class ImageUtils:
                 h, w = frame.shape[:2]
                 c = frame.shape[2] if len(frame.shape) > 2 else 1
                 return (h, w, c)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("cv2 failed to read metadata for %s: %s", file_path, exc)
         logger.error(f"Failed to read metadata for {file_path}")
         return None
 
@@ -381,8 +381,8 @@ class ImageUtils:
                 with Image.open(file_path) as img:
                     img = ImageOps.exif_transpose(img)
                     return np.array(img.convert("RGB"))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("PIL failed to load image %s; trying video: %s", file_path, exc)
             frame = VideoUtils._read_first_video_frame_bgr(file_path)
             if frame is not None:
                 return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

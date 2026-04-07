@@ -41,6 +41,11 @@ class DatabaseTask:
     def __lt__(self, other):
         return self.priority < other.priority
 
+    def __eq__(self, other):
+        if not isinstance(other, DatabaseTask):
+            return NotImplemented
+        return self.priority == other.priority
+
 
 logger = get_logger(__name__)
 

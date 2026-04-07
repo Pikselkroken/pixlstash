@@ -15,10 +15,11 @@ import pixlstash.db_models  # noqa: F401
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0001_baseline"  # noqa: F841
-down_revision: Union[str, None] = None  # noqa: F841
-branch_labels: Union[str, Sequence[str], None] = None  # noqa: F841
-depends_on: Union[str, Sequence[str], None] = None  # noqa: F841
+revision: str = "0001_baseline"
+down_revision: Union[str, None] = None
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 
 def upgrade() -> None:

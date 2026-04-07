@@ -497,7 +497,7 @@ def fetch_smart_score_data(
 
         if candidate_ids is not None:
             if not candidate_ids:
-                return good, bad, [], {}
+                return good, bad, []
             query = query.where(Picture.id.in_(candidate_ids))
 
         if format:
@@ -713,7 +713,7 @@ def find_pictures_by_smart_score(
             )
         except Exception:
             # Progress reporting should never break sorting.
-            pass
+            logger.debug("Progress reporting failed during sort.", exc_info=True)
 
     # 1. Fetch data
     good_anchors, bad_anchors, candidates = fetch_smart_score_data(

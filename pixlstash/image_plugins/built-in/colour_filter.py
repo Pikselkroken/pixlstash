@@ -47,6 +47,7 @@ Minimal skeleton:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from typing import Any
@@ -185,11 +186,8 @@ class ColourFilterPlugin(ImagePlugin):
                     output_ext = candidate_ext
                     break
                 candidate_writer.release()
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(temp_path)
-                except OSError:
-                    # Best-effort cleanup: continue if temp file deletion fails.
-                    pass
                 temp_path = ""
 
             if writer is None:
@@ -238,10 +236,8 @@ class ColourFilterPlugin(ImagePlugin):
                 writer.release()
             cap.release()
             if temp_path and os.path.exists(temp_path):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(temp_path)
-                except OSError:
-                    pass
 
     def _apply_mode(self, image: Image.Image, mode: str) -> Image.Image:
         rgb = image.convert("RGB")
