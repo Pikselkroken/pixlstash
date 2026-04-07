@@ -790,9 +790,9 @@ def create_router(server) -> APIRouter:
             f.write(contents)
 
         mime_type = file.content_type or mimetypes.guess_type(original_filename)[0]
-        rel_path = os.path.join(
-            "projects", str(project_id), "attachments", stored_filename
-        )
+        # Derive rel_path from the already-validated full_path so the stored
+        # value is guaranteed to be within image_root (CodeQL sanitizer path).
+        rel_path = os.path.relpath(full_path, server.vault.image_root)
 
         def insert_record(session: Session):
             attachment = ProjectAttachment(
