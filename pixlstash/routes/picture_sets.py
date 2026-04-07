@@ -29,6 +29,7 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
 
@@ -330,8 +331,8 @@ def create_router(server) -> APIRouter:
         thumbnail_cache_version = 16
         cache_dir = os.path.join(server.vault.image_root, "tmp", "set_thumbnails")
         os.makedirs(cache_dir, exist_ok=True)
-        cache_path = os.path.join(cache_dir, f"picture_set_{id}.png")
-        meta_path = os.path.join(cache_dir, f"picture_set_{id}.json")
+        cache_path = resolve_path_within(cache_dir, f"picture_set_{id}.png")
+        meta_path = resolve_path_within(cache_dir, f"picture_set_{id}.json")
         hidden_tags = _get_hidden_tags_from_request(request)
         hidden_key = "|".join(sorted(tag for tag in hidden_tags if tag))
 

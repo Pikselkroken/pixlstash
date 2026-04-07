@@ -29,6 +29,7 @@ from pixlstash.picture_scoring import (
     select_reference_faces_for_character,
 )
 from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 
 logger = get_logger(__name__)
@@ -500,8 +501,8 @@ def create_router(server) -> APIRouter:
             thumbnail_cache_version = 6
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
             os.makedirs(cache_dir, exist_ok=True)
-            cache_path = os.path.join(cache_dir, f"character_{id}.png")
-            meta_path = os.path.join(cache_dir, f"character_{id}.json")
+            cache_path = resolve_path_within(cache_dir, f"character_{id}.png")
+            meta_path = resolve_path_within(cache_dir, f"character_{id}.json")
 
             def fetch_best_picture_id(session: Session, character_id: int):
                 _video_exts = (".mp4", ".mov", ".webm", ".avi", ".mkv")

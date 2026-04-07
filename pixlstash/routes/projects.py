@@ -29,6 +29,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import _normalize_hidden_tags
+from pixlstash.utils.service.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
 
@@ -399,7 +400,13 @@ def create_router(server) -> APIRouter:
 
         # Remove attachment files from disk after the transaction commits.
         for stored_path in attachment_paths:
-            full_path = os.path.join(server.vault.image_root, stored_path)
+            try:
+                full_path = resolve_path_within(server.vault.image_root, stored_path)
+            except ValueError:
+                logger.warning(
+                    "Refusing to delete suspicious stored_path: %r", stored_path
+                )
+                continue
             try:
                 if os.path.isfile(full_path):
                     os.remove(full_path)
@@ -649,7 +656,12 @@ def create_router(server) -> APIRouter:
                     for i, file_path in enumerate(
                         char_pictures.get(char["id"], []), start=1
                     ):
-                        full = os.path.join(server.vault.image_root, file_path)
+                        try:
+                            full = resolve_path_within(
+                                server.vault.image_root, file_path
+                            )
+                        except ValueError:
+                            continue
                         if not os.path.isfile(full):
                             continue
                         ext = os.path.splitext(file_path)[1].lower()
@@ -671,7 +683,12 @@ def create_router(server) -> APIRouter:
                     for i, file_path in enumerate(
                         set_pictures.get(pset["id"], []), start=1
                     ):
-                        full = os.path.join(server.vault.image_root, file_path)
+                        try:
+                            full = resolve_path_within(
+                                server.vault.image_root, file_path
+                            )
+                        except ValueError:
+                            continue
                         if not os.path.isfile(full):
                             continue
                         ext = os.path.splitext(file_path)[1].lower()
@@ -684,7 +701,12 @@ def create_router(server) -> APIRouter:
             # Attachments
             used_attachment_names: set = set()
             for att in attachments_data:
-                full = os.path.join(server.vault.image_root, att["stored_path"])
+                try:
+                    full = resolve_path_within(
+                        server.vault.image_root, att["stored_path"]
+                    )
+                except ValueError:
+                    continue
                 if not os.path.isfile(full):
                     continue
                 fname = _unique_name(used_attachment_names, att["original_filename"])
@@ -759,7 +781,8 @@ def create_router(server) -> APIRouter:
         att_dir = _attachments_dir(project_id)
         safe_stem = uuid.uuid4().hex
         original_filename = file.filename or "attachment"
-        ext = os.path.splitext(original_filename)[1]
+        raw_ext = os.path.splitext(original_filename)[1]
+        ext = re.sub(r"[^a-zA-Z0-9.]", "", raw_ext)[:16]
         stored_filename = safe_stem + ext
         full_path = os.path.join(att_dir, stored_filename)
 
@@ -844,7 +867,12 @@ def create_router(server) -> APIRouter:
         attachment = server.vault.db.run_task(
             fetch, project_id, attachment_id, priority=DBPriority.IMMEDIATE
         )
-        full_path = os.path.join(server.vault.image_root, attachment.stored_path)
+        try:
+            full_path = resolve_path_within(
+                server.vault.image_root, attachment.stored_path
+            )
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Forbidden")
         if not os.path.isfile(full_path):
             raise HTTPException(
                 status_code=404, detail="Attachment file not found on disk"
@@ -876,7 +904,13 @@ def create_router(server) -> APIRouter:
             remove, project_id, attachment_id, priority=DBPriority.IMMEDIATE
         )
         if stored_path:
-            full_path = os.path.join(server.vault.image_root, stored_path)
+            try:
+                full_path = resolve_path_within(server.vault.image_root, stored_path)
+            except ValueError:
+                logger.warning(
+                    "Refusing to delete suspicious stored_path: %r", stored_path
+                )
+                return {"status": "deleted", "id": attachment_id}
             try:
                 if os.path.isfile(full_path):
                     os.remove(full_path)

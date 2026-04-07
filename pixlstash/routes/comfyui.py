@@ -30,6 +30,7 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.service.path_utils import resolve_path_within
 from pixlstash.stacking import (
     build_stack_filename_prefix,
     get_or_create_stack_for_picture,
@@ -71,7 +72,10 @@ def _resolve_workflow_path(name: str) -> tuple[str | None, str | None]:
     if not normalized:
         return None, None
     for source, folder in _workflow_dirs():
-        path = os.path.join(folder, normalized)
+        try:
+            path = resolve_path_within(folder, normalized)
+        except ValueError:
+            return None, None
         if os.path.isfile(path):
             return path, source
     return None, None
@@ -992,7 +996,10 @@ def create_router(server) -> APIRouter:
         if not normalized:
             raise HTTPException(status_code=400, detail="workflow_name is required")
         workflow_dir = _workflow_user_dir()
-        path = os.path.join(workflow_dir, normalized)
+        try:
+            path = resolve_path_within(workflow_dir, normalized)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid workflow name")
         if not os.path.isfile(path):
             raise HTTPException(status_code=404, detail="Workflow not found in user")
         try:
@@ -1169,19 +1176,27 @@ def create_router(server) -> APIRouter:
                 ctx["set_id"] = int(raw_set_id)
             except (TypeError, ValueError):
                 # Ignore invalid set_id values but log for debugging.
-                logger.debug("Ignoring invalid set_id value in run_comfyui_t2i: %r", raw_set_id)
+                logger.debug(
+                    "Ignoring invalid set_id value in run_comfyui_t2i: %r", raw_set_id
+                )
         if raw_project_id is not None:
             try:
                 ctx["project_id"] = int(raw_project_id)
             except (TypeError, ValueError):
                 # Ignore invalid project_id values but log for debugging.
-                logger.debug("Ignoring invalid project_id value in run_comfyui_t2i: %r", raw_project_id)
+                logger.debug(
+                    "Ignoring invalid project_id value in run_comfyui_t2i: %r",
+                    raw_project_id,
+                )
         if raw_character_id is not None:
             try:
                 ctx["character_id"] = int(raw_character_id)
             except (TypeError, ValueError):
                 # Ignore invalid character_id values but log for debugging.
-                logger.debug("Ignoring invalid character_id value in run_comfyui_t2i: %r", raw_character_id)
+                logger.debug(
+                    "Ignoring invalid character_id value in run_comfyui_t2i: %r",
+                    raw_character_id,
+                )
         if ctx:
             view_context = ctx
 
@@ -1280,7 +1295,10 @@ def create_router(server) -> APIRouter:
 
         workflow_dir = _workflow_user_dir()
         os.makedirs(workflow_dir, exist_ok=True)
-        path = os.path.join(workflow_dir, name)
+        try:
+            path = resolve_path_within(workflow_dir, name)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid workflow name")
         if os.path.exists(path) and not overwrite:
             raise HTTPException(status_code=409, detail="Workflow already exists")
 
