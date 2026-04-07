@@ -84,20 +84,18 @@ class PictureLikeness(SQLModel, table=True):
             # Always order so a < b
             a, b = sorted([picture_id_a, picture_id_b])
             query = query.where((cls.picture_id_a == a) & (cls.picture_id_b == b))
-            result = session.exec(query).first()
-            return result
-        elif picture_id_a:
+            return session.exec(query).first()
+        if picture_id_a:
             query = query.where(
                 (cls.picture_id_a == picture_id_a) | (cls.picture_id_b == picture_id_a)
             )
             return session.exec(query).all()
-        elif picture_id_b:
+        if picture_id_b:
             query = query.where(
                 (cls.picture_id_a == picture_id_b) | (cls.picture_id_b == picture_id_b)
             )
             return session.exec(query).all()
-        else:
-            return session.exec(query).all()
+        return session.exec(query).all()
 
     @classmethod
     def exists(cls, session, picture_id_a: int, picture_id_b: int) -> bool:

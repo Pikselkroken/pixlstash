@@ -390,7 +390,7 @@ def main():
             logger.info("All text and image embeddings cleared.")
 
         vault.db.run_task(clear_embeddings, priority=1)
-        return
+        return None
 
     server.vault.ensure_ready()
     server.run()

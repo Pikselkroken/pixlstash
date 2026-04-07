@@ -80,10 +80,9 @@ def softmin(distances, beta=1.0):
     sum_exp = sum(exp_neg_dists)
     if sum_exp == 0:
         return float("inf")  # Avoid division by zero
-    softmin_value = (
+    return (
         sum(d * exp_neg for d, exp_neg in zip(distances, exp_neg_dists)) / sum_exp
     )
-    return softmin_value
 
 
 def _levenshtein_internal(concatenated_tags, query, picture_id=None):
@@ -457,8 +456,7 @@ class VaultDatabase:
         if self._closed or self._engine is None:
             raise RuntimeError("VaultDatabase is closed.")
         with Session(self._engine) as session:
-            result = func(session, *args, **kwargs)
-        return result
+            return func(session, *args, **kwargs)
 
     @staticmethod
     def result_or_throw(future: Future):

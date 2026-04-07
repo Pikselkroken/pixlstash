@@ -834,8 +834,7 @@ class Picture(SQLModel, table=True):
         if offset > 0 or limit != sys.maxsize:
             query = query.offset(offset).limit(limit)
 
-        results = session.exec(query).all()
-        return results
+        return session.exec(query).all()
 
     @classmethod
     def metadata_fields(cls):

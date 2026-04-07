@@ -336,8 +336,7 @@ class ImageUtils:
         if fallback_file_path and os.path.exists(fallback_file_path):
             try:
                 ts = os.path.getmtime(fallback_file_path)
-                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-                return dt
+                return datetime.fromtimestamp(ts, tz=timezone.utc)
             except Exception:
                 pass
         return None
@@ -386,10 +385,8 @@ class ImageUtils:
                 pass
             frame = VideoUtils._read_first_video_frame_bgr(file_path)
             if frame is not None:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                return frame_rgb
-            else:
-                raise ValueError("Could not read image or first frame from video.")
+                return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            raise ValueError("Could not read image or first frame from video.")
         except Exception as e:
             logger.error(f"Failed to load image at {file_path} for quality worker: {e}")
             return None
@@ -646,7 +643,7 @@ class ImageUtils:
             comfyui_models_json = json.dumps(models)
             comfyui_loras_json = json.dumps(loras)
 
-        pic = Picture(
+        return Picture(
             file_path=file_name,
             format=img_format,
             width=width,
@@ -659,7 +656,6 @@ class ImageUtils:
             comfyui_models=comfyui_models_json,
             comfyui_loras=comfyui_loras_json,
         )
-        return pic
 
     @staticmethod
     def cosine_similarity(a: bytes, b: bytes) -> float:
@@ -701,5 +697,4 @@ class ImageUtils:
         arr_a_norm = arr_a / np.linalg.norm(arr_a, axis=1, keepdims=True)
         arr_b_norm = arr_b / np.linalg.norm(arr_b, axis=1, keepdims=True)
         sims = np.sum(arr_a_norm * arr_b_norm, axis=1)
-        sims = 0.5 * (sims + 1.0)
-        return sims
+        return 0.5 * (sims + 1.0)

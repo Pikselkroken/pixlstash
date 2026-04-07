@@ -103,8 +103,7 @@ class ImagePluginManager:
                     PluginLoadError(file=path, message="No ImagePlugin subclass found")
                 )
                 return None
-            plugin = plugin_class()
-            return plugin
+            return plugin_class()
         except Exception as exc:
             message = f"Failed to initialize plugin: {exc}"
             self._errors.append(PluginLoadError(file=path, message=message))

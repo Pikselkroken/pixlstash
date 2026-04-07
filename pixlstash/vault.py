@@ -288,8 +288,7 @@ class Vault:
         Returns:
             list[str]: Preprocessed list of words.
         """
-        preprocessed_words = self._picture_tagger.preprocess_query_words(words=words)
-        return preprocessed_words
+        return self._picture_tagger.preprocess_query_words(words=words)
 
     def set_description(self, description: str):
         def op(session: Session):

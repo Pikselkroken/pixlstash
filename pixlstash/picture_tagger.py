@@ -810,8 +810,7 @@ class PictureTagger:
     def max_concurrent_images(self):
         if self._device == "cpu":
             return MAX_CONCURRENT_IMAGES_CPU
-        else:
-            return MAX_CONCURRENT_IMAGES_GPU
+        return MAX_CONCURRENT_IMAGES_GPU
 
     def description_batch_size(self):
         max_concurrent = max(1, int(self.max_concurrent_images()))
@@ -1526,8 +1525,7 @@ class PictureTagger:
         The 'None's in the batch are removed.
         """
         # Filter out all the Nones (corrupted examples)
-        batch = list(filter(lambda x: x is not None, batch))
-        return batch
+        return list(filter(lambda x: x is not None, batch))
 
     def _run_batch(self, path_imgs, undesired_tags):
         imgs = np.array([im for _, im in path_imgs])
@@ -1591,8 +1589,7 @@ class PictureTagger:
             else:
                 merged_results[path] = set(tags)
         # Convert sets back to sorted lists
-        merged_results = {k: sorted(list(v)) for k, v in merged_results.items()}
-        return merged_results
+        return {k: sorted(list(v)) for k, v in merged_results.items()}
 
     @staticmethod
     def _filter_texts(texts):
@@ -1601,12 +1598,11 @@ class PictureTagger:
             r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
         )
         date_regex = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z$")
-        texts = [
+        return [
             t
             for t in texts
             if t and not uuid_regex.match(t) and not date_regex.match(t)
         ]
-        return texts
 
     def custom_tagger_ready(self) -> bool:
         return bool(

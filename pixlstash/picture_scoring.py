@@ -353,8 +353,7 @@ def find_pictures_by_character_likeness(
             if not candidate_ids:
                 return []
             query = query.where(Face.picture_id.in_(candidate_ids))
-        faces = session.exec(query).all()
-        return faces
+        return session.exec(query).all()
 
     candidate_faces = server.vault.db.run_task(
         get_all_faces, character_id, candidate_ids
