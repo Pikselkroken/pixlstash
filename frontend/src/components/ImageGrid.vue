@@ -6610,6 +6610,7 @@ function getExportCount() {
 async function exportCurrentViewToZip(options = {}) {
   const exportType = options.exportType || "full";
   const captionMode = options.captionMode || "description";
+  const tagFormat = options.tagFormat || "spaces";
   const includeCharacterName = options.includeCharacterName !== false;
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
@@ -6631,6 +6632,9 @@ async function exportCurrentViewToZip(options = {}) {
   }
   if (captionMode) {
     extraParams.append("caption_mode", captionMode);
+  }
+  if (captionMode === "tags" && tagFormat === "underscores") {
+    extraParams.append("tag_format", "underscores");
   }
   if (includeCharacterName) {
     extraParams.append("include_character_name", "true");

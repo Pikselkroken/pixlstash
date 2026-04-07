@@ -983,6 +983,17 @@
               label="Resolution"
               density="comfortable"
             />
+            <v-select
+              v-if="exportCaptionMode === 'tags'"
+              v-model="exportTagFormatModel"
+              :background-color="'surface'"
+              :color="'on-surface'"
+              :items="exportTagFormatOptions"
+              item-title="title"
+              item-value="value"
+              label="Tag format"
+              density="comfortable"
+            />
             <v-switch
               v-model="exportIncludeCharacterNameModel"
               label="Include character name"
@@ -1140,6 +1151,7 @@ const props = defineProps({
   exportCount: { type: Number, default: 0 },
   exportType: { type: String, default: "full" },
   exportCaptionMode: { type: String, default: "description" },
+  exportTagFormat: { type: String, default: "spaces" },
   exportIncludeCharacterName: { type: Boolean, default: true },
   exportUseOriginalFileNames: { type: Boolean, default: false },
   exportResolution: { type: String, default: "original" },
@@ -1147,6 +1159,7 @@ const props = defineProps({
   exportCaptionOptions: { type: Array, default: () => [] },
   exportTypeOptions: { type: Array, default: () => [] },
   exportResolutionOptions: { type: Array, default: () => [] },
+  exportTagFormatOptions: { type: Array, default: () => [] },
   mediaTypeFilter: { type: String, default: "all" },
   comfyuiConfigured: { type: Boolean, default: false },
   comfyuiModelFilter: { type: Array, default: () => [] },
@@ -1183,6 +1196,7 @@ const emit = defineEmits([
   "collapse-all-stacks",
   "update:exportType",
   "update:exportCaptionMode",
+  "update:exportTagFormat",
   "update:exportResolution",
   "update:exportIncludeCharacterName",
   "update:exportUseOriginalFileNames",
@@ -1349,6 +1363,11 @@ const exportTypeModel = computed({
 const exportCaptionModeModel = computed({
   get: () => props.exportCaptionMode,
   set: (value) => emit("update:exportCaptionMode", value),
+});
+
+const exportTagFormatModel = computed({
+  get: () => props.exportTagFormat,
+  set: (value) => emit("update:exportTagFormat", value),
 });
 
 const exportResolutionModel = computed({
