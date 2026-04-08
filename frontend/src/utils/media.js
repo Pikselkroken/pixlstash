@@ -63,27 +63,6 @@ function _addIfSupportedFile(file, uniqueMap) {
   }
 }
 
-async function _collectFromFileSystemHandle(handle, uniqueMap) {
-  if (!handle) return;
-  if (handle.kind === 'file') {
-    try {
-      const file = await handle.getFile();
-      _addIfSupportedFile(file, uniqueMap);
-    } catch {
-      // Ignore inaccessible file handles.
-    }
-    return;
-  }
-  if (handle.kind !== 'directory') return;
-  try {
-    for await (const entry of handle.values()) {
-      await _collectFromFileSystemHandle(entry, uniqueMap);
-    }
-  } catch {
-    // Ignore directory traversal errors and continue with other items.
-  }
-}
-
 function _readAllWebkitDirectoryEntries(reader) {
   return new Promise((resolve) => {
     const entries = [];
@@ -133,43 +112,48 @@ export async function extractSupportedImportFilesFromDataTransfer(dataTransfer) 
   const unique = new Map();
   const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
 
+  // IMPORTANT: Safari clears the DataTransfer object after the first `await`,
+  // so all synchronous DataTransfer access must complete before any async work.
+  // webkitGetAsEntry() is the primary method — it is synchronous, handles
+  // directories, and is supported in all modern browsers (Chrome, Edge, Firefox,
+  // Safari). getAsFile() serves as a per-item fallback.
+  const webkitEntries = [];
+  const fallbackFiles = [];
+
   for (const item of items) {
     if (!item || item.kind !== 'file') continue;
 
-    // Chromium: File System Access API
-    if (typeof item.getAsFileSystemHandle === 'function') {
-      try {
-        const handle = await item.getAsFileSystemHandle();
-        if (handle) {
-          await _collectFromFileSystemHandle(handle, unique);
-          continue;
-        }
-      } catch {
-        // Fallback to other extraction paths.
-      }
-    }
-
-    // Chromium/Safari legacy directory API
     if (typeof item.webkitGetAsEntry === 'function') {
       try {
         const entry = item.webkitGetAsEntry();
         if (entry) {
-          await _collectFromWebkitEntry(entry, unique);
+          webkitEntries.push(entry);
           continue;
         }
       } catch {
-        // Fallback to direct file extraction.
+        // Fall through to getAsFile().
       }
     }
 
-    // Firefox and generic fallback for file items.
     if (typeof item.getAsFile === 'function') {
-      _addIfSupportedFile(item.getAsFile(), unique);
+      fallbackFiles.push(item.getAsFile());
     }
   }
 
-  // Final fallback path for browsers that only expose dataTransfer.files.
+  // Capture dataTransfer.files synchronously before any awaits (final fallback
+  // for browsers that expose no items list at all).
   const directFiles = Array.from(dataTransfer.files || []);
+
+  // --- All synchronous DataTransfer access is done. Now we can safely await. ---
+
+  for (const entry of webkitEntries) {
+    await _collectFromWebkitEntry(entry, unique);
+  }
+
+  for (const file of fallbackFiles) {
+    _addIfSupportedFile(file, unique);
+  }
+
   for (const file of directFiles) {
     _addIfSupportedFile(file, unique);
   }
