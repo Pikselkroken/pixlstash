@@ -2,11 +2,15 @@
 Pytest configuration and fixtures for test suite.
 """
 
+import gc
 import socket
 
 from fastapi.testclient import TestClient
 from pixlstash.picture_tagger import PictureTagger
 from pixlstash.server import Server
+from pixlstash.tasks.face_extraction_task import FaceExtractionTask
+from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
+from pixlstash.tasks.tag_task import TagTask
 
 _API_V1_PREFIX = "/api/v1"
 _NON_API_ROOT_PATHS = {
@@ -88,3 +92,25 @@ def pytest_configure(config):
     Server.DEFAULT_FORCE_CPU = True if force_cpu else None
     PictureTagger.FAST_CAPTIONS = config.getoption("--fast-captions")
     Server.DEFAULT_MAX_VRAM_GB = config.getoption("--max-vram-gb")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Release native model/session resources before interpreter teardown."""
+    try:
+        # Drain optional CPU spillover tagger if one was created by tag tasks.
+        TagTask._release_idle_cpu_spillover_tagger(force=True)
+    except Exception:
+        pass
+
+    try:
+        FaceExtractionTask.release_detection_models()
+    except Exception:
+        pass
+
+    try:
+        ImageEmbeddingTask.release_models()
+    except Exception:
+        pass
+
+    # Encourage deterministic finalization of native-backed objects.
+    gc.collect()
