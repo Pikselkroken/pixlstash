@@ -101,7 +101,7 @@ COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
 RUN pip install --no-cache-dir --no-deps -e .
 
 # Copy the pre-built frontend into the package's expected location
-COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/
+COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/frontend/dist pixlstash/frontend/dist/
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 USER root
@@ -121,17 +121,7 @@ EXPOSE 9537
 ENTRYPOINT ["docker-entrypoint.sh"]
 
 
-WORKDIR /build/frontend
-COPY frontend/package*.json ./
-RUN npm ci
-
-COPY frontend/ ./
-# Copy pyproject.toml so Vite can read the version at build time
-COPY pyproject.toml /build/pyproject.toml
-RUN npm run build
-
-
-# ── Stage 2: Runtime image ────────────────────────────────────────────────────
+# ── Stage 3: Runtime image (GPU) ────────────────────────────────────────────────
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 # Prevent interactive prompts during apt installs
@@ -233,7 +223,7 @@ COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
 RUN pip install --no-cache-dir --no-deps -e .
 
 # Copy the pre-built frontend into the package's expected location
-COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/
+COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/frontend/dist pixlstash/frontend/dist/
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 # Entrypoint is installed as root so it can be found on PATH, then we switch
