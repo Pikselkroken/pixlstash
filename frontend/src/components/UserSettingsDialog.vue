@@ -1530,15 +1530,20 @@ const workflowImportCaptionPreview = computed(() => {
                   threshold. Changes apply immediately.
                 </div>
                 <div class="settings-tagger-row">
-                  <v-checkbox
-                    v-model="wd14TaggerEnabled"
-                    class="settings-tag-filter-toggle settings-tagger-checkbox"
-                    density="compact"
-                    hide-details
-                    :disabled="wd14TaggerLoading"
-                    label="WD14 Tagger"
-                    @update:model-value="setWd14TaggerEnabled"
-                  />
+                  <v-tooltip text="Primarily trained on anime" location="top">
+                    <template #activator="{ props: tooltipProps }">
+                      <v-checkbox
+                        v-bind="tooltipProps"
+                        v-model="wd14TaggerEnabled"
+                        class="settings-tag-filter-toggle settings-tagger-checkbox"
+                        density="compact"
+                        hide-details
+                        :disabled="wd14TaggerLoading"
+                        label="WD14 Tagger"
+                        @update:model-value="setWd14TaggerEnabled"
+                      />
+                    </template>
+                  </v-tooltip>
                   <div
                     class="settings-stepper"
                     :class="{
@@ -1591,15 +1596,23 @@ const workflowImportCaptionPreview = computed(() => {
                       </button>
                     </div>
                   </div>
-                  <v-checkbox
-                    v-model="customTaggerEnabled"
-                    class="settings-tag-filter-toggle settings-tagger-checkbox"
-                    density="compact"
-                    hide-details
-                    :disabled="customTaggerLoading"
-                    label="PixlStash Tagger"
-                    @update:model-value="setCustomTaggerEnabled"
-                  />
+                  <v-tooltip
+                    text="Primarily trained on real/realistic images"
+                    location="top"
+                  >
+                    <template #activator="{ props: tooltipProps }">
+                      <v-checkbox
+                        v-bind="tooltipProps"
+                        v-model="customTaggerEnabled"
+                        class="settings-tag-filter-toggle settings-tagger-checkbox"
+                        density="compact"
+                        hide-details
+                        :disabled="customTaggerLoading"
+                        label="PixlStash Tagger"
+                        @update:model-value="setCustomTaggerEnabled"
+                      />
+                    </template>
+                  </v-tooltip>
                   <div
                     class="settings-stepper"
                     :class="{
