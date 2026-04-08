@@ -85,9 +85,7 @@ def softmin(distances, beta=1.0):
     sum_exp = sum(exp_neg_dists)
     if sum_exp == 0:
         return float("inf")  # Avoid division by zero
-    return (
-        sum(d * exp_neg for d, exp_neg in zip(distances, exp_neg_dists)) / sum_exp
-    )
+    return sum(d * exp_neg for d, exp_neg in zip(distances, exp_neg_dists)) / sum_exp
 
 
 def _levenshtein_internal(concatenated_tags, query, picture_id=None):

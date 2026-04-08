@@ -693,7 +693,9 @@ def create_router(server) -> APIRouter:
                         meta_payload["version"] = thumbnail_cache_version
                         json.dump(meta_payload, handle)
                 except Exception as exc:
-                    logger.debug("Failed to write character thumbnail metadata: %s", exc)
+                    logger.debug(
+                        "Failed to write character thumbnail metadata: %s", exc
+                    )
                 return FileResponse(cache_path, media_type="image/png")
             except Exception:
                 from io import BytesIO

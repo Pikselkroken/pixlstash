@@ -90,7 +90,9 @@ def create_router(server) -> APIRouter:
                 try:
                     used_bytes += int(torch.cuda.memory_reserved(index) or 0)
                 except Exception as exc:
-                    logger.debug("Failed to read CUDA memory for device %d: %s", index, exc)
+                    logger.debug(
+                        "Failed to read CUDA memory for device %d: %s", index, exc
+                    )
             return _set_vram_payload(payload, used_bytes, total_bytes)
         except Exception:
             return False
@@ -289,7 +291,11 @@ def create_router(server) -> APIRouter:
                         mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
                         total_bytes += int(getattr(mem_info, "total", 0) or 0)
                     except Exception as exc:
-                        logger.debug("Failed to read NVML memory info for device %d: %s", index, exc)
+                        logger.debug(
+                            "Failed to read NVML memory info for device %d: %s",
+                            index,
+                            exc,
+                        )
                     processes = []
                     try:
                         processes = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
@@ -300,7 +306,11 @@ def create_router(server) -> APIRouter:
                             handle
                         )
                     except Exception as exc:
-                        logger.debug("Failed to read NVML graphics processes for device %d: %s", index, exc)
+                        logger.debug(
+                            "Failed to read NVML graphics processes for device %d: %s",
+                            index,
+                            exc,
+                        )
                     for entry in processes:
                         if entry.pid != pid:
                             continue

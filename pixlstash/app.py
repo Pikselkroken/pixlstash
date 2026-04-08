@@ -25,7 +25,9 @@ def _resolve_log_level(value):
     try:
         return int(value)
     except (TypeError, ValueError):
-        logger.debug("Could not parse log level %r as integer; trying string lookup.", value)
+        logger.debug(
+            "Could not parse log level %r as integer; trying string lookup.", value
+        )
 
     if isinstance(value, str):
         level_name = value.strip().upper()
@@ -224,7 +226,9 @@ def _bootstrap_server_config(server_config_path: str, force: bool = False) -> bo
                 port = parsed
                 break
         except Exception:
-            logger.debug("Port input %r is not a valid integer; prompting again.", port_input)
+            logger.debug(
+                "Port input %r is not a valid integer; prompting again.", port_input
+            )
         print("Please enter a valid port between 1 and 65535.")
 
     ssl_default = bool(config.get("require_ssl", False))
