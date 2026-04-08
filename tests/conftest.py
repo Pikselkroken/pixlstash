@@ -113,6 +113,7 @@ def pytest_sessionfinish(session, exitstatus):
     try:
         ImageEmbeddingTask.release_models()
     except Exception:
+        # Best-effort teardown: ignore cleanup failures during session shutdown.
         pass
 
     # Encourage deterministic finalization of native-backed objects.
