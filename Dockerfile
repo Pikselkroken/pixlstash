@@ -212,7 +212,7 @@ RUN python -m spacy download en_core_web_sm
 # UIDs pre-allocated in the nvidia/cuda base image (which already uses 1000).
 RUN groupadd -f -g 10001 pixlstash \
     && useradd -r -u 10001 -g 10001 -m -d /home/pixlstash pixlstash \
-    && chown -R pixlstash:pixlstash /app /opt/venv
+    && chown -R pixlstash:pixlstash /app
 
 USER pixlstash
 
