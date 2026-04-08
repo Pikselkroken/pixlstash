@@ -1463,14 +1463,14 @@ class PictureTagger:
                 filename=CUSTOM_TAGGER_FILENAME,
                 local_dir=dest_dir,
                 revision=CUSTOM_TAGGER_REVISION,
-                force_download=True,
+                force_download=False,
             )
             hf_hub_download(
                 repo_id=CUSTOM_TAGGER_HF_REPO,
                 filename=CUSTOM_TAGGER_META_FILENAME,
                 local_dir=dest_dir,
                 revision=CUSTOM_TAGGER_REVISION,
-                force_download=True,
+                force_download=False,
             )
             # Record the pinned revision so we can detect future changes.
             try:
@@ -1500,7 +1500,6 @@ class PictureTagger:
             logger.debug(
                 f"downloading wd14 tagger model from hf_hub. id: {DEFAULT_WD14_TAGGER_REPO}"
             )
-            # Always download ONNX model and selected_tags.csv
             from huggingface_hub import hf_hub_download
 
             # Download ONNX model
@@ -1509,14 +1508,14 @@ class PictureTagger:
                 repo_id=DEFAULT_WD14_TAGGER_REPO,
                 filename="model.onnx",
                 local_dir=self._model_location,
-                force_download=True,
+                force_download=force_download,
             )
             logger.debug(f"Downloading selected_tags.csv to {tags_csv_path}")
             hf_hub_download(
                 repo_id=DEFAULT_WD14_TAGGER_REPO,
                 filename="selected_tags.csv",
                 local_dir=self._model_location,
-                force_download=True,
+                force_download=force_download,
             )
 
     def _collate_fn_remove_corrupted(self, batch):
