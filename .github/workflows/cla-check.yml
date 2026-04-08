@@ -1,0 +1,73 @@
+name: CLA Check
+
+permissions:
+  contents: read
+  pull-requests: read
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  cla-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce CLA acknowledgment for backend changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.info("No pull request payload found; skipping.");
+              return;
+            }
+
+            // Maintainer exemption: skip CLA gate for trusted owner account(s).
+            // NOTE: GitHub Actions gives us the PR author login, not a verified email.
+            const exemptLogins = new Set(["lindkvis"]);
+            const prAuthor = String(pr.user?.login || "").toLowerCase();
+            if (exemptLogins.has(prAuthor)) {
+              core.info(`PR author '${prAuthor}' is exempt from CLA check.`);
+              return;
+            }
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100,
+              }
+            );
+
+            const touchesBackend = files.some((f) =>
+              String(f.filename || "").startsWith("pixlstash/")
+            );
+
+            if (!touchesBackend) {
+              core.info("PR does not touch pixlstash/**; CLA check not required.");
+              return;
+            }
+
+            const labels = (pr.labels || []).map((l) => String(l.name || "").toLowerCase());
+            if (labels.includes("cla-signed")) {
+              core.info("Found cla-signed label; passing CLA check.");
+              return;
+            }
+
+            const body = String(pr.body || "");
+            const hasAck =
+              /-\s*\[(x|X)\]\s*I have read and agree to the CLA in `pixlstash\/CLA\.md`\./.test(body) ||
+              /I have read and agree to the CLA in `pixlstash\/CLA\.md`\./.test(body);
+
+            if (!hasAck) {
+              core.setFailed(
+                "This PR modifies pixlstash/** and requires CLA acknowledgment. " +
+                "Add this line to the PR description: '- [x] I have read and agree to the CLA in `pixlstash/CLA.md`.' " +
+                "(Maintainers may alternatively apply the 'cla-signed' label.)"
+              );
+              return;
+            }
+
+            core.info("CLA acknowledgment found in PR body.");

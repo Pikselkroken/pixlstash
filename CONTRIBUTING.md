@@ -50,6 +50,11 @@ agree to the CLA located at: pixlstash/CLA.md
 By opening a pull request that touches backend code, you indicate your acceptance
 of the CLA terms.
 
+PRs that touch `pixlstash/**` must include this acknowledgment in the PR
+description:
+
+- [x] I have read and agree to the CLA in `pixlstash/CLA.md`.
+
 If your PR only affects files outside `pixlstash/**`, no CLA is required.
 
 The CLA lets you retain full copyright and confirms that backend contributions do
