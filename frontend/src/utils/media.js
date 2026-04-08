@@ -38,20 +38,23 @@ export function isSupportedMediaFile(file) {
 }
 
 export function isSupportedCaptionFile(file) {
-  const ext = (typeof file === 'string' ? file : file?.name || '').split('.').pop().toLowerCase();
+  const ext = (typeof file === 'string' ? file : file?.name || '')
+                  .split('.')
+                  .pop()
+                  .toLowerCase();
   return CAPTION_EXTENSIONS.includes(ext);
 }
 
 export function isSupportedImportFile(file) {
-  return isSupportedMediaFile(file) || isSupportedArchiveFile(file) || isSupportedCaptionFile(file);
+  return isSupportedMediaFile(file) || isSupportedArchiveFile(file) ||
+      isSupportedCaptionFile(file);
 }
 
 function _fileDedupKey(file) {
   const name = file?.name || '';
   const size = Number.isFinite(file?.size) ? file.size : 0;
-  const lastModified = Number.isFinite(file?.lastModified)
-    ? file.lastModified
-    : 0;
+  const lastModified =
+      Number.isFinite(file?.lastModified) ? file.lastModified : 0;
   return `${name}::${size}::${lastModified}`;
 }
 
@@ -85,11 +88,11 @@ async function _collectFromWebkitEntry(entry, uniqueMap) {
   if (entry.isFile) {
     await new Promise((resolve) => {
       entry.file(
-        (file) => {
-          _addIfSupportedFile(file, uniqueMap);
-          resolve();
-        },
-        () => resolve(),
+          (file) => {
+            _addIfSupportedFile(file, uniqueMap);
+            resolve();
+          },
+          () => resolve(),
       );
     });
     return;
@@ -106,7 +109,8 @@ async function _collectFromWebkitEntry(entry, uniqueMap) {
   }
 }
 
-export async function extractSupportedImportFilesFromDataTransfer(dataTransfer) {
+export async function extractSupportedImportFilesFromDataTransfer(
+    dataTransfer) {
   if (!dataTransfer) return [];
 
   const unique = new Map();
@@ -115,8 +119,8 @@ export async function extractSupportedImportFilesFromDataTransfer(dataTransfer) 
   // IMPORTANT: Safari clears the DataTransfer object after the first `await`,
   // so all synchronous DataTransfer access must complete before any async work.
   // webkitGetAsEntry() is the primary method — it is synchronous, handles
-  // directories, and is supported in all modern browsers (Chrome, Edge, Firefox,
-  // Safari). getAsFile() serves as a per-item fallback.
+  // directories, and is supported in all modern browsers (Chrome, Edge,
+  // Firefox, Safari). getAsFile() serves as a per-item fallback.
   const webkitEntries = [];
   const fallbackFiles = [];
 
@@ -144,7 +148,8 @@ export async function extractSupportedImportFilesFromDataTransfer(dataTransfer) 
   // for browsers that expose no items list at all).
   const directFiles = Array.from(dataTransfer.files || []);
 
-  // --- All synchronous DataTransfer access is done. Now we can safely await. ---
+  // --- All synchronous DataTransfer access is done. Now we can safely await.
+  // ---
 
   for (const entry of webkitEntries) {
     await _collectFromWebkitEntry(entry, unique);
