@@ -100,6 +100,7 @@ def pytest_sessionfinish(session, exitstatus):
         # Drain optional CPU spillover tagger if one was created by tag tasks.
         TagTask._release_idle_cpu_spillover_tagger(force=True)
     except Exception:
+        # Best-effort teardown: ignore spillover tagger cleanup failures.
         pass
 
     try:
