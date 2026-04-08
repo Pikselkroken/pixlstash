@@ -53,6 +53,14 @@
 - Always create a new migration file for each schema change, with a descriptive name.
 - The Alembic revision identifier variables (`revision`, `down_revision`, `branch_labels`, `depends_on`) are read by Alembic at runtime via module import, not by explicit code references. Declare them as exported by including `__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]` after the `depends_on` line. This prevents false "unused variable" warnings from static analysers (including CodeQL) without needing `# noqa` comments. The script template (`migrations/script.py.mako`) already includes this line, so new migrations will have it automatically.
 - When a code change requires existing data to be regenerated (e.g. tags, embeddings, quality scores), trigger reprocessing by resetting the relevant column(s) to `NULL` in the Alembic migration script. The `Missing*Finder` classes in `pixlstash/tasks/` query for pictures with `NULL` values and will automatically pick up those rows for reprocessing when the server next runs. Alembic migrations should only contain schema changes and this kind of targeted `NULL`-reset; no application logic should be placed in migrations.
+- **All `op.add_column` calls must be conditional.** Always use `sa.inspect(op.get_bind())` to fetch existing columns and skip the `add_column` if the column already exists. The baseline migration (`0001_baseline`) uses `SQLModel.metadata.create_all()`, which creates tables with all current model columns; later migrations that blindly run `ALTER TABLE … ADD COLUMN` will therefore fail on a fresh database. The standard pattern is:
+  ```python
+  bind = op.get_bind()
+  inspector = sa.inspect(bind)
+  existing_cols = {col["name"] for col in inspector.get_columns("<table>")}
+  if "<column>" not in existing_cols:
+      op.add_column("<table>", sa.Column(...))
+  ```
 ## Developer Workflows
 
 - **Install dependencies:** `pip install -e .`
