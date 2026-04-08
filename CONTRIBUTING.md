@@ -4,6 +4,8 @@ Thanks for your interest in contributing! PixlStash is split into two parts with
 different licenses and contribution requirements. This document explains how to
 contribute safely and easily.
 
+For a repository-wide licensing map, see `docs/licensing.md`.
+
 ---
 
 ## Project Structure
