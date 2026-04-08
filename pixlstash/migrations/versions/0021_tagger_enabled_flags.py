@@ -24,28 +24,37 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 
 def upgrade() -> None:
-    op.add_column(
-        "user",
-        sa.Column(
-            "wd14_tagger_enabled",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.false(),
-        ),
-    )
-    op.add_column(
-        "user",
-        sa.Column(
-            "custom_tagger_enabled",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.true(),
-        ),
-    )
-    op.add_column("user", sa.Column("wd14_threshold", sa.Float(), nullable=True))
-    op.add_column(
-        "user", sa.Column("custom_tagger_threshold_offset", sa.Float(), nullable=True)
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_cols = {col["name"] for col in inspector.get_columns("user")}
+
+    if "wd14_tagger_enabled" not in existing_cols:
+        op.add_column(
+            "user",
+            sa.Column(
+                "wd14_tagger_enabled",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            ),
+        )
+    if "custom_tagger_enabled" not in existing_cols:
+        op.add_column(
+            "user",
+            sa.Column(
+                "custom_tagger_enabled",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.true(),
+            ),
+        )
+    if "wd14_threshold" not in existing_cols:
+        op.add_column("user", sa.Column("wd14_threshold", sa.Float(), nullable=True))
+    if "custom_tagger_threshold_offset" not in existing_cols:
+        op.add_column(
+            "user",
+            sa.Column("custom_tagger_threshold_offset", sa.Float(), nullable=True),
+        )
 
 
 def downgrade() -> None:
