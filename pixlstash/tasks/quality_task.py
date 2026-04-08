@@ -47,6 +47,7 @@ class QualityTask(BaseTask):
         self._preloaded_images: dict[str, np.ndarray | None] = {}
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
+        self._preload_cancel = threading.Event()
         self._preload_started_at: float | None = None
         self._preload_finished_at: float | None = None
 
@@ -54,11 +55,11 @@ class QualityTask(BaseTask):
         """Start background I/O preload as soon as the task is queued."""
         if self._preload_thread is not None and self._preload_thread.is_alive():
             return
+        self._preload_cancel.clear()
         self._preload_started_at = time.perf_counter()
         self._preload_thread = threading.Thread(
             target=self._preload_images,
             name=f"QualityTaskPreload-{self.id[:8]}",
-            daemon=True,
         )
         self._preload_thread.start()
 
@@ -66,6 +67,8 @@ class QualityTask(BaseTask):
         """Load every image in the batch from disk into memory (background thread)."""
         preloaded: dict[str, np.ndarray | None] = {}
         for pic in self._pictures:
+            if self._preload_cancel.is_set():
+                break
             file_path = None
             try:
                 file_path = str(
@@ -91,6 +94,17 @@ class QualityTask(BaseTask):
                 self.id,
                 len(preloaded),
                 self._preload_finished_at - started_at,
+            )
+
+    def on_cancel(self) -> None:
+        self._preload_cancel.set()
+        if self._preload_thread is None:
+            return
+        self._preload_thread.join(timeout=10)
+        if self._preload_thread.is_alive():
+            logger.warning(
+                "QualityTask preload thread did not stop in time for task %s",
+                self.id,
             )
 
     def _wait_for_preload(self) -> dict[str, np.ndarray | None]:

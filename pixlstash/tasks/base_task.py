@@ -78,6 +78,9 @@ class BaseTask(ABC):
     def enable_cpu_spillover(self) -> None:
         return None
 
+    def on_cancel(self) -> None:
+        return None
+
     @abstractmethod
     def _run_task(self) -> Any:
         raise NotImplementedError

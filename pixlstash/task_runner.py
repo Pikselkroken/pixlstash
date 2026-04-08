@@ -8,9 +8,10 @@ import time
 import torch
 
 from typing import Any, Callable, Optional
+from datetime import datetime, UTC
 
 from .pixl_logging import get_logger
-from .tasks.base_task import BaseTask, TaskPriority
+from .tasks.base_task import BaseTask, TaskPriority, TaskStatus
 
 
 logger = get_logger(__name__)
@@ -402,6 +403,28 @@ class TaskRunner:
                 return
             self._closed = True
             self._stop.set()
+
+        # Cancel tasks still waiting in the queue so task-specific background
+        # resources (such as preload threads) can be released deterministically.
+        while True:
+            try:
+                _priority, _seq, queued_task = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(queued_task, _StopTask):
+                continue
+            try:
+                queued_task.on_cancel()
+            except Exception as exc:
+                logger.warning(
+                    "Task %s (%s) cancel hook failed: %s",
+                    queued_task.id,
+                    queued_task.type,
+                    exc,
+                )
+            queued_task.status = TaskStatus.CANCELLED
+            queued_task.completed_at = datetime.now(UTC)
+
         # Unblock every worker with a dedicated stop sentinel.
         for _ in range(self._num_workers):
             self._queue.put((TaskPriority.HIGH, next(self._queue_seq), _StopTask()))
@@ -449,6 +472,20 @@ class TaskRunner:
                 continue
 
             if isinstance(task, _StopTask):
+                continue
+
+            if self._stop.is_set():
+                try:
+                    task.on_cancel()
+                except Exception as exc:
+                    logger.warning(
+                        "Task %s (%s) cancel hook failed after stop: %s",
+                        task.id,
+                        task.type,
+                        exc,
+                    )
+                task.status = TaskStatus.CANCELLED
+                task.completed_at = datetime.datetime.now(UTC)
                 continue
 
             logger.debug(
