@@ -1,6 +1,7 @@
 include README.md
 include LICENSE
 recursive-include frontend package.json package-lock.json
+prune frontend/node_modules
 recursive-include pixlstash/frontend/dist *
 include pixlstash/alembic.ini
 recursive-include pixlstash/migrations *
