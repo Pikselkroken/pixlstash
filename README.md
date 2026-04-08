@@ -203,6 +203,18 @@ Use the template from `pixlstash/image_plugins/built-in/plugin_template.py` in t
 
 `plugin_template.py` is ignored by plugin discovery and will not be loaded as a plugin.
 
+### Plugin licensing
+
+PixlStash backend core is GPL-3.0, but the plugin authoring API files
+`pixlstash/image_plugins/base.py` and
+`pixlstash/image_plugins/built-in/plugin_template.py` are MIT-licensed.
+
+This means user plugins that only rely on that plugin API/template may use any
+license chosen by the plugin author.
+
+If a plugin copies substantial GPL backend code or depends directly on other
+GPL-only backend internals, different obligations may apply.
+
 
 ## Troubleshooting
 

@@ -1,123 +1,99 @@
-# PixlStash
+# Contributing to PixlStash
 
-A REST API server for PixlStash
+Thanks for your interest in contributing! PixlStash is split into two parts with
+different licenses and contribution requirements. This document explains how to
+contribute safely and easily.
 
-## Development
+---
 
-- Install dependencies: `pip install -e .`
-- Run server: `python -m pixlstash.server`
+## Project Structure
 
-## Tagger Benchmark
+PixlStash consists of two main components:
 
-- Benchmark tagging throughput on a folder of media:
-	- `python scripts/benchmark_tagger.py /path/to/images --limit 256 --runs 3`
-- Tune batch/concurrency between runs via env vars:
-	- `PIXLSTASH_TAGGER_MAX_CONCURRENT_GPU=96`
-	- `PIXLSTASH_TAGGER_MAX_CONCURRENT_CPU=8`
-	- `PIXLSTASH_CUSTOM_TAGGER_BATCH=24`
+- **Backend (`pixlstash/`)**  
+  - License: GPL-3.0  
+  - Contributions require agreeing to the CLA (see below)
 
-## Image Plugins
+- **Frontend (`frontend/`)**  
+  - License: MIT  
+  - No CLA required
 
-- Built-in plugins live in `image-plugins/built-in/`.
-- Current built-ins: `colour_filter`, `scaling`, `brightness_contrast`, `blur_sharpen`.
-- User plugins live in `image-plugins/user/`.
-- Start from the template: `image-plugins/user/plugin_template.py`.
-- Copy the template to a new `.py` file in `image-plugins/user/`, then rename class/id and implement `run()`.
-- `plugin_template.py` is intentionally ignored by plugin discovery.
+Please make sure your contributions follow the rules for the part of the project
+you are modifying.
 
-## Database Migrations (Alembic)
+---
 
-PixlStash uses Alembic for schema changes. The server runs migrations on startup.
+## Contributing to the Backend (GPL-3.0)
 
-- Set the database URL with `PIXLSTASH_DB_URL` (defaults to `sqlite:///vault.db`).
-- Create a new migration after model changes:
-	- `python -m alembic revision --autogenerate -m "describe change"`
-- Apply migrations manually if needed:
-	- `python -m alembic upgrade head`
+The backend is licensed under GPL-3.0 and powers the core functionality of
+PixlStash. To keep the project legally clean and allow the maintainer to build
+optional commercial plugins and extensions, contributions to the backend require
+agreement to the **Contributor License Agreement (CLA)**.
 
-## Publishing
+### CLA Scope (Path-based)
 
-- Build frontend: `cd frontend && npm ci && npm run build && cd ..`
-- Build Python package: `python -m build`
-- Upload: `twine upload dist/*`
+The backend CLA applies only to contributions that modify files under:
 
-## Docker
+- `pixlstash/**`
 
-The Docker image is a two-stage build — Node builds the frontend, then Python + CUDA form the runtime layer.
+No CLA is required for contributions that only modify files outside `pixlstash/**`,
+including frontend, documentation, CI/workflow files, scripts, tests, and website
+assets.
 
-### Build
+### Backend CLA
 
-```bash
-docker build -t pixlstash:dev .
-```
+Before submitting a pull request that modifies the backend, you must read and
+agree to the CLA located at: pixlstash/CLA.md
 
-Or via Compose (also starts the container):
+By opening a pull request that touches backend code, you indicate your acceptance
+of the CLA terms.
 
-```bash
-docker compose up --build
-```
+If your PR only affects files outside `pixlstash/**`, no CLA is required.
 
-### Run (without rebuilding)
+The CLA lets you retain full copyright and confirms that backend contributions do
+not prevent the maintainer from creating commercial plugins and extensions as
+independent works that interoperate with the PixlStash backend.
 
-```bash
-docker compose up
-```
+**It does not give PixlStash owner the right to create closed source forks of your contributions**.
 
-### Useful flags during development
+---
 
-```bash
-# Rebuild only the runtime stage (faster if only Python source changed)
-docker build --target frontend-builder -t pixlstash:frontend .
-docker build -t pixlstash:dev .
+## Contributing to the Frontend (MIT)
 
-# Open a shell inside a running container
-docker exec -it pixlstash bash
+The frontend is licensed under the MIT License. This means:
 
-# Tail logs
-docker logs -f pixlstash
+- You do **not** need to sign a CLA  
+- You are free to fork, modify, and reuse the UI  
+- Contributions are welcome without extra steps
 
-# Inspect the persistent data volume
-docker volume inspect pixlstash_pixlstash-data
-```
+Just open a pull request and follow normal GitHub etiquette.
 
-### GPU access
+---
 
-The image expects the NVIDIA Container Toolkit to be installed on the host. See the **Option 4: Docker** section in [README.md](README.md) for setup instructions.
+## Pull Request Guidelines
 
-To test GPU visibility inside the container:
+To help keep the project maintainable:
 
-```bash
-docker run --rm --gpus all pixlstash:dev python -c \
-  "import torch; print(torch.cuda.get_device_name(0))"
-```
+1. Keep PRs focused and scoped to a single change when possible.
+2. Include a clear description of what the PR does and why.
+3. For backend PRs, confirm that you have read and agree to the CLA.
+4. Ensure code is formatted consistently with the existing style.
+5. Add tests when appropriate.
+6. Be respectful and constructive in discussions.
 
-### CPU-only build (no GPU required)
+---
 
-Remove the `deploy.resources` block from `docker-compose.yml` and set `"default_device": "cpu"` in the generated `server-config.json` (located in the `pixlstash-data` volume at `/data/config/server-config.json`).
+## Reporting Issues
 
+If you find a bug or have a feature request:
 
+- Search existing issues first  
+- Open a new issue if needed  
+- Provide clear steps to reproduce or a detailed description of the idea  
 
-### GitHub tagged releases to PyPI
+---
 
-- Workflow file: [.github/workflows/publish-pypi.yml](.github/workflows/publish-pypi.yml)
-- Trigger: push tag matching `v*` (for example `v0.7.0`)
-- Behavior:
-	- builds frontend bundle
-	- verifies tag matches `[project].version` in [pyproject.toml](pyproject.toml)
-	- builds wheel/sdist
-	- publishes to PyPI using Trusted Publishing
+## Thank You
 
-One-time PyPI setup:
-
-- In PyPI, open your project → **Publishing** → **Add a new pending publisher**
-- Set:
-	- **Owner**: your GitHub org/user
-	- **Repository**: `pixlstash`
-	- **Workflow name**: `publish-pypi.yml`
-	- **Environment name**: leave blank (unless you add one in the workflow)
-
-Release command sequence:
-
-- Update version in [pyproject.toml](pyproject.toml)
-- Commit and push
-- Create/push tag: `git tag v0.7.0 && git push origin v0.7.0`
+PixlStash is an open project, and contributions of all kinds, including bug reports, code, docs, ideas,
+and feedback, are appreciated. Thanks for helping make it better!

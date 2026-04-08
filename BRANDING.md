@@ -1,0 +1,2 @@
+PixlStash name and logo are property of the project’s copyright owner.
+You may not use the PixlStash name, logo, or branding in a way that suggests official endorsement or affiliation without explicit permission.

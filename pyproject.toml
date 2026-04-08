@@ -3,8 +3,11 @@ name = "pixlstash"
 version = "1.0.0rc7"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
-license = "GPL-3.0-only"
-license-files = ["LICENSE"]
+license = "GPL-3.0-only AND MIT"
+license-files = [
+  "pixlstash/LICENSE",
+  "frontend/LICENSE",
+]
 authors = [
     { name = "Gaute Lindkvist" }
 ]
