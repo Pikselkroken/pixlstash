@@ -100,8 +100,9 @@ COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
 # Install the pixlstash package itself (no deps — already installed above)
 RUN pip install --no-cache-dir --no-deps -e .
 
-# Copy the pre-built frontend into the package's expected location
-COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/frontend/dist pixlstash/frontend/dist/
+# Copy the pre-built frontend into the package's expected location.
+# Vite outDir is ../pixlstash/frontend/dist relative to /build/frontend.
+COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 USER root
@@ -222,8 +223,9 @@ COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
 # Install the pixlstash package itself (no deps — already installed above)
 RUN pip install --no-cache-dir --no-deps -e .
 
-# Copy the pre-built frontend into the package's expected location
-COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/frontend/dist pixlstash/frontend/dist/
+# Copy the pre-built frontend into the package's expected location.
+# Vite outDir is ../pixlstash/frontend/dist relative to /build/frontend.
+COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 # Entrypoint is installed as root so it can be found on PATH, then we switch
