@@ -106,6 +106,8 @@ def pytest_sessionfinish(session, exitstatus):
     try:
         FaceExtractionTask.release_detection_models()
     except Exception:
+        # Best-effort teardown: model release can fail during interpreter
+        # shutdown, and this should not affect test session completion.
         pass
 
     try:
