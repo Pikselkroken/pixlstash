@@ -237,7 +237,9 @@ def create_router(server) -> APIRouter:
                 project = session.get(Project, numeric_id)
             except (TypeError, ValueError):
                 # If parsing as an integer fails, treat pid_or_name as a project name instead.
-                logger.debug("Could not parse project identifier %r as integer.", pid_or_name)
+                logger.debug(
+                    "Could not parse project identifier %r as integer.", pid_or_name
+                )
             if project is None:
                 project = session.exec(
                     select(Project).where(
@@ -668,7 +670,9 @@ def create_router(server) -> APIRouter:
                         try:
                             zf.write(full, f"{char_dir}/pictures/{fname}")
                         except OSError as exc:
-                            logger.debug("Failed to add character picture to export ZIP: %s", exc)
+                            logger.debug(
+                                "Failed to add character picture to export ZIP: %s", exc
+                            )
 
             # Picture sets
             for pset in picture_sets_data:
@@ -695,7 +699,9 @@ def create_router(server) -> APIRouter:
                         try:
                             zf.write(full, f"{set_dir}/pictures/{fname}")
                         except OSError as exc:
-                            logger.debug("Failed to add picture set image to export ZIP: %s", exc)
+                            logger.debug(
+                                "Failed to add picture set image to export ZIP: %s", exc
+                            )
 
             # Attachments
             used_attachment_names: set = set()
@@ -806,9 +812,7 @@ def create_router(server) -> APIRouter:
             session.refresh(attachment)
             return attachment
 
-        return server.vault.db.run_task(
-            insert_record, priority=DBPriority.IMMEDIATE
-        )
+        return server.vault.db.run_task(insert_record, priority=DBPriority.IMMEDIATE)
 
     @router.post(
         "/projects/{project_id}/attachments/url",
@@ -843,9 +847,7 @@ def create_router(server) -> APIRouter:
             session.refresh(attachment)
             return attachment
 
-        return server.vault.db.run_task(
-            check_and_insert, priority=DBPriority.IMMEDIATE
-        )
+        return server.vault.db.run_task(check_and_insert, priority=DBPriority.IMMEDIATE)
 
     @router.get(
         "/projects/{project_id}/attachments/{attachment_id}",

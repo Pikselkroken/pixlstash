@@ -338,7 +338,9 @@ class ImageUtils:
                 ts = os.path.getmtime(fallback_file_path)
                 return datetime.fromtimestamp(ts, tz=timezone.utc)
             except Exception as exc:
-                logger.debug("Failed to read file mtime for %s: %s", fallback_file_path, exc)
+                logger.debug(
+                    "Failed to read file mtime for %s: %s", fallback_file_path, exc
+                )
         return None
 
     @staticmethod
@@ -382,7 +384,9 @@ class ImageUtils:
                     img = ImageOps.exif_transpose(img)
                     return np.array(img.convert("RGB"))
             except Exception as exc:
-                logger.debug("PIL failed to load image %s; trying video: %s", file_path, exc)
+                logger.debug(
+                    "PIL failed to load image %s; trying video: %s", file_path, exc
+                )
             frame = VideoUtils._read_first_video_frame_bgr(file_path)
             if frame is not None:
                 return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
