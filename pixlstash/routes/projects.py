@@ -144,18 +144,6 @@ def create_router(server) -> APIRouter:
         if session.exec(query).first() is not None:
             raise HTTPException(status_code=409, detail="Project name already exists")
 
-    def _resolve_project_id_by_name(session: Session, project_name: str) -> int:
-        normalized_name = _normalise_project_name(project_name)
-        if not normalized_name:
-            raise HTTPException(status_code=404, detail="Project not found")
-
-        project = session.exec(
-            select(Project).where(func.lower(Project.name) == normalized_name.lower())
-        ).first()
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-        return int(project.id)
-
     # -------------------------------------------------------------------------
     # Projects CRUD
     # -------------------------------------------------------------------------
