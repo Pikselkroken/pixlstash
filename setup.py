@@ -42,10 +42,7 @@ def _build_frontend() -> None:
         )
 
     node_modules = frontend_dir / "node_modules"
-    vite_bin = (
-        node_modules / ".bin" / ("vite.cmd" if sys.platform == "win32" else "vite")
-    )
-    if not node_modules.is_dir() or not vite_bin.is_file():
+    if not node_modules.is_dir():
         print("setup.py: running npm ci in frontend/", flush=True)
         subprocess.check_call(
             ["npm", "ci"],

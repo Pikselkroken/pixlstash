@@ -11,6 +11,10 @@ class _FakeDb:
 
 
 def test_quality_task_on_cancel_stops_preload_thread(monkeypatch):
+    SLOW_LOADER_DELAY_SECONDS = 0.02
+    # Wait several loader cycles so preloading has time to start before cancellation.
+    PRELOAD_START_WAIT_SECONDS = SLOW_LOADER_DELAY_SECONDS * 4
+
     pictures = [SimpleNamespace(id=i, file_path=f"img-{i}.jpg") for i in range(1, 100)]
     task = QualityTask(database=_FakeDb(), pictures=pictures)
 
@@ -21,14 +25,15 @@ def test_quality_task_on_cancel_stops_preload_thread(monkeypatch):
     )
 
     def _slow_loader(_file_path):
-        time.sleep(0.02)
+        time.sleep(SLOW_LOADER_DELAY_SECONDS)
         return None
 
     monkeypatch.setattr(ImageUtils, "load_image_or_video", staticmethod(_slow_loader))
 
     task.on_queued()
-    time.sleep(0.08)
+    time.sleep(PRELOAD_START_WAIT_SECONDS)
     task.on_cancel()
 
+    assert task._preload_cancel.is_set()
     assert task._preload_thread is not None
     assert not task._preload_thread.is_alive()

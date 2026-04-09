@@ -45,7 +45,7 @@ assets.
 ### Backend CLA
 
 Before submitting a pull request that modifies the backend, you must read and
-agree to the CLA located at: pixlstash/CLA.md
+agree to the CLA located at: `pixlstash/CLA.md`
 
 By opening a pull request that touches backend code, you indicate your acceptance
 of the CLA terms.
@@ -61,7 +61,7 @@ The CLA lets you retain full copyright and confirms that backend contributions d
 not prevent the maintainer from creating commercial plugins and extensions as
 independent works that interoperate with the PixlStash backend.
 
-**It does not give PixlStash owner the right to create closed source forks of your contributions**.
+**It does not give the PixlStash owner the right to create closed source forks of your contributions**.
 
 ---
 

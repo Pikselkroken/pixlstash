@@ -15,7 +15,7 @@ This is an open source project using two separate licenses:
 ### PixlStash Backend
 
 Basics:
-- located in the "pixlstash" directory
+- Located in the "pixlstash" directory
 - Licensed under the GNU General Public License v3.0 (GPL-3.0).
 - See pixlstash/LICENSE for the full license text.
 - Contributions to the backend require agreement to the CLA in pixlstash/CLA.md.
@@ -29,7 +29,7 @@ Basics:
 - See frontend/LICENSE for the full license text.
 - No CLA is required for frontend contributions.
 
-### The Project website, logos, example images and utility scripts
+### The Project Website, Logos, Example Images and Utility Scripts
 - Located in the "website", "pictures" and "scripts" directories.
 - Licensed under the MIT License.
 - However: PixlStash name and logo are property of the project’s copyright owner. You may not use the PixlStash name, logo, or branding in a way that suggests official endorsement or affiliation without explicit permission.
