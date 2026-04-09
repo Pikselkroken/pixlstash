@@ -37,27 +37,6 @@ logger = get_logger(__name__)
 
 _REGRESSION_DIR = Path(__file__).resolve().parent / "regression"
 
-# Monkey-patch os.remove and shutil.rmtree to log deletions
-
-LOG_OS_REMOVES = False  # Set to True to enable logging of file deletions
-
-if LOG_OS_REMOVES:
-    original_remove = os.remove
-
-    def logged_remove(path, *args, **kwargs):
-        logging.error(f"File deleted: {path}")
-        return original_remove(path, *args, **kwargs)
-
-    os.remove = logged_remove
-
-    original_rmtree = shutil.rmtree
-
-    def logged_rmtree(path, *args, **kwargs):
-        logging.error(f"Directory deleted: {path}")
-        return original_rmtree(path, *args, **kwargs)
-
-    shutil.rmtree = logged_rmtree
-
 # CI runs in a reduced-size mode, but some tests intentionally reference
 # fixture indices up to 15.
 TEST_SIZE = 16 if os.getenv("GITHUB_ACTIONS") == "true" else 50
