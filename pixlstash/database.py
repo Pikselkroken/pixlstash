@@ -1,4 +1,5 @@
 import inspect
+import itertools
 import math
 import os
 import threading
@@ -31,20 +32,30 @@ class DBPriority(IntEnum):
 
 # Database task for the queue
 class DatabaseTask:
+    _sequence = itertools.count()
+
     def __init__(self, priority, func, args=(), kwargs=None):
         self.priority = priority
+        self.sequence = next(self._sequence)
         self.func = func
         self.args = args
         self.kwargs = kwargs or {}
         self.future = Future()
 
     def __lt__(self, other):
-        return self.priority < other.priority
+        if not isinstance(other, DatabaseTask):
+            return NotImplemented
+        return (self.priority, self.sequence) < (other.priority, other.sequence)
+
+    def __le__(self, other):
+        if not isinstance(other, DatabaseTask):
+            return NotImplemented
+        return (self.priority, self.sequence) <= (other.priority, other.sequence)
 
     def __eq__(self, other):
         if not isinstance(other, DatabaseTask):
             return NotImplemented
-        return self.priority == other.priority
+        return (self.priority, self.sequence) == (other.priority, other.sequence)
 
 
 logger = get_logger(__name__)
