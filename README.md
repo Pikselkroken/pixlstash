@@ -222,6 +222,38 @@ GPL-only backend internals, different obligations may apply.
 - If port `9537` is in use, set a different port in your server config file.
 - If frontend assets are missing, rebuild frontend with `npm run build` and restart the server.
 
+## Docker Images
+
+PixlStash maintains separate Dockerfiles:
+
+- `Dockerfile`: CPU image
+- `Dockerfile.gpu`: GPU image (NVIDIA CUDA)
+
+Build locally:
+
+```bash
+# CPU
+docker build -f Dockerfile -t pixlstash:cpu .
+
+# GPU
+docker build -f Dockerfile.gpu -t pixlstash:gpu .
+```
+
+Run locally:
+
+```bash
+# CPU
+docker run --rm -p 9537:9537 -v pixlstash_data:/home/pixlstash pixlstash:cpu
+
+# GPU
+docker run --rm --gpus all -p 9537:9537 -v pixlstash_data:/home/pixlstash pixlstash:gpu
+```
+
+GitHub Actions uses the same split in `.github/workflows/docker-publish.yml`:
+
+- CPU publish job builds from `Dockerfile`
+- GPU publish job builds from `Dockerfile.gpu`
+
 ### GPU startup fails (`CUDAExecutionProvider` unavailable)
 
 If startup reports that ONNX `CUDAExecutionProvider` is unavailable, you likely have CPU-only ONNX Runtime installed.
