@@ -65,6 +65,7 @@ def _read_rss_bytes() -> int:
                     if len(parts) >= 2:
                         return int(parts[1]) * 1024
         except Exception:
+            # Ignore errors. This is a best-effort measurement and shouldn't cause failures if it doesn't work.
             pass
     return 0
 
@@ -93,11 +94,13 @@ def _read_nvidia_smi_vram_bytes(pid: int) -> int:
                 line_pid = int(parts[0])
                 used_mb = int(parts[1])
             except ValueError:
+                # Ignore errors. This is a best-effort measurement and shouldn't cause failures if it doesn't work.
                 continue
             if line_pid == pid:
                 total_mb += used_mb
         return total_mb * 1024 * 1024
     except Exception:
+        # Ignore errors. This is a best-effort measurement and shouldn't cause failures if it doesn't work.
         return 0
 
 
@@ -143,6 +146,7 @@ def load_pictures_for_paths(
         try:
             rel_set.add(str(p.relative_to(root)))
         except Exception:
+            # Ignore errors. This is a best-effort measurement and shouldn't cause failures if it doesn't work.
             continue
 
     def fetch_candidates(session):
@@ -205,6 +209,7 @@ def _run_with_instrumentation(
         try:
             torch.cuda.reset_peak_memory_stats()
         except Exception:
+            # Ignore errors. This is a best-effort measurement and shouldn't cause failures if it doesn't work.
             pass
 
     def monitor_memory() -> None:
@@ -221,6 +226,7 @@ def _run_with_instrumentation(
                         int(torch.cuda.max_memory_reserved()),
                     )
                 except Exception:
+                    # Ignore errors. This is a best-effort measurement and shouldn't cause failures if it doesn't work.
                     pass
                 peak_vram_nvidia_bytes = max(
                     peak_vram_nvidia_bytes,
@@ -283,6 +289,7 @@ def _run_with_instrumentation(
                 int(torch.cuda.max_memory_reserved()),
             )
         except Exception:
+            # Ignore errors. This is a best-effort measurement and shouldn't cause failures if it doesn't work.
             pass
         peak_vram_nvidia_bytes = max(
             peak_vram_nvidia_bytes,

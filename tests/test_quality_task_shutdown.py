@@ -11,10 +11,7 @@ class _FakeDb:
 
 
 def test_quality_task_on_cancel_stops_preload_thread(monkeypatch):
-    pictures = [
-        SimpleNamespace(id=i, file_path=f"img-{i}.jpg")
-        for i in range(1, 100)
-    ]
+    pictures = [SimpleNamespace(id=i, file_path=f"img-{i}.jpg") for i in range(1, 100)]
     task = QualityTask(database=_FakeDb(), pictures=pictures)
 
     monkeypatch.setattr(

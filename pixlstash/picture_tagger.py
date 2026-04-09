@@ -2189,12 +2189,17 @@ class PictureTagger:
                 all_results.update(dataloader_results)
             else:
                 _tagging_failed = True
+        if _tagging_failed:
+            logger.warning(
+                "Tagging failed due to dataloader issues; no tags will be returned."
+            )
+            return {}
 
         if len(b_imgs) > 0 and not (stop_event is not None and stop_event.is_set()):
             b_imgs = [(str(image_path), image) for image_path, image in b_imgs]
             batch_result = self._run_batch(b_imgs, undesired_tags)
             if batch_result is None:
-                logger.error(f"Tagging failed for batch: {[p for p, _ in b_imgs]}")
+                logger.warning(f"Tagging failed for batch: {[p for p, _ in b_imgs]}")
             else:
                 for k, tags in batch_result.items():
                     tags = [sanitise_tag(tag) for tag in tags]

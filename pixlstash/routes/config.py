@@ -279,6 +279,7 @@ def create_router(server) -> APIRouter:
             vram_collected = True
 
         if not vram_collected and pynvml:
+            logger.debug("Collecting VRAM usage via NVML")
             try:
                 pynvml.nvmlInit()
                 pid = os.getpid()

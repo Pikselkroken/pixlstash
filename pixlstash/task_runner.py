@@ -213,7 +213,6 @@ class TaskRunner:
         last_log_s = -1.0
         LOG_INTERVAL_S = 5.0
         spillover_allowed = bool(getattr(task, "allow_cpu_spillover", lambda: False)())
-        spillover_applied = False
         while not self._stop.is_set():
             used_mb = self._get_process_vram_mb()
             waited_s = time.perf_counter() - wait_started_at
@@ -305,10 +304,9 @@ class TaskRunner:
             # If the task supports CPU spillover, try that first so we don't
             # pile more GPU work onto an already-full device.
             if reserved_mb == 0 and waited_s >= self.SPILLOVER_GRACE_SECONDS:
-                if spillover_allowed and not spillover_applied:
+                if spillover_allowed:
                     try:
                         getattr(task, "enable_cpu_spillover", lambda: None)()
-                        spillover_applied = True
                         logger.warning(
                             "Task %s (%s) VRAM gate escape (external VRAM pressure): "
                             "enabling CPU spillover (used=%sMB estimated=%sMB budget=%sMB overflow=%sMB).",
@@ -347,10 +345,9 @@ class TaskRunner:
                 time.sleep(0.1)
                 continue
 
-            if spillover_allowed and not spillover_applied:
+            if spillover_allowed:
                 try:
                     getattr(task, "enable_cpu_spillover", lambda: None)()
-                    spillover_applied = True
                     logger.debug(
                         "Task %s (%s) switched to CPU spillover (used=%sMB reserved=%sMB estimated=%sMB budget=%sMB).",
                         task.id,

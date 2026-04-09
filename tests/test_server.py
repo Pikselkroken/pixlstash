@@ -1,6 +1,5 @@
 import numpy as np
 import logging
-import shutil
 import os
 import json
 import random
@@ -2134,7 +2133,6 @@ def test_pictures_thumbnails():
 
 def test_pictures_export():
     """Test /pictures/export endpoint returns 200 and zip content."""
-    import zipfile
 
     log_resources("START test_pictures_export")
     with tempfile.TemporaryDirectory() as temp_dir:
