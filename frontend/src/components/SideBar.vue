@@ -364,7 +364,7 @@ async function projectDeleted(deletedId) {
   projectViewMode.value = "global";
   await fetchProjects();
   await fetchCharacters();
-  await fetchCounts();
+  await fetchSidebarData();
 }
 
 const sortedProjects = computed(() =>
