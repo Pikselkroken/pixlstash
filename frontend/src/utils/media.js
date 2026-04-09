@@ -16,7 +16,8 @@ export const ARCHIVE_EXTENSIONS = ['zip'];
 export const CAPTION_EXTENSIONS = ['txt'];
 
 export function isSupportedImageFile(file) {
-  const ext = (file.name || file).split('.').pop().toLowerCase();
+  const filename = typeof file === 'string' ? file : file?.name || '';
+  const ext = filename.split('.').pop().toLowerCase();
   return PIL_IMAGE_EXTENSIONS.includes(ext);
 }
 
@@ -38,10 +39,11 @@ export function isSupportedMediaFile(file) {
 }
 
 export function isSupportedCaptionFile(file) {
-  const ext = (typeof file === 'string' ? file : file?.name || '')
-                  .split('.')
-                  .pop()
-                  .toLowerCase();
+  const filename = typeof file === 'string' ? file : file?.name || '';
+  const lastDot = filename.lastIndexOf('.');
+  const ext =  lastDot > 0 && lastDot < filename.length - 1 ?
+      filename.slice(lastDot + 1).toLowerCase() :
+      '';
   return CAPTION_EXTENSIONS.includes(ext);
 }
 
@@ -203,7 +205,7 @@ export function MediaFormat(source) {
     const stripped = trimmed.split('?')[0].split('#')[0];
     if (!stripped) return '';
     const parts = stripped.split('.');
-    return parts.length > 1 ? parts.pop() : stripped;
+    return parts.length > 1 ? parts.pop() : '';
   }
   if (source.format) return MediaFormat(source.format);
   if (source.filename) return MediaFormat(source.filename);
