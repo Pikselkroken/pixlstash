@@ -4159,7 +4159,7 @@ function handleTagInputKey(event) {
 
 const metadataEntries = computed(() => {
   const base = Metadata(image.value?.metadata);
-  const entries = Object.entries(stripComfyMetadata(base) || {});
+  const entries = Object.entries(stripComfyMetadata(base));
   return entries.map(([key, value]) => ({ key, value }));
 });
 
@@ -4457,7 +4457,6 @@ function getDisplayDimensions() {
 }
 
 function formatAspectRatio(width, height) {
-  if (!width || !height) return "";
   const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
   const divisor = gcd(width, height);
   const ratioW = Math.round(width / divisor);

@@ -5270,10 +5270,10 @@ async function fetchAllGridImages(options = {}) {
     sortedFetchStartedAt = getNowMs();
     startSmartScoreProgress(loadId, activeSortKey);
   }
+  const requestId = Date.now();
+  fetchAllGridImages.lastRequestId = requestId;
   try {
     let images = [];
-    const requestId = Date.now();
-    fetchAllGridImages.lastRequestId = requestId;
     if (props.selectedSort === STACKS_SORT_KEY) {
       const threshold = getStackThreshold(props.stackThreshold);
       const stackParams = buildStackQueryParams();
@@ -5938,7 +5938,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     // indices would overwrite expanded members with wrong images and leave
     // placeholder thumbnails permanently broken.
     images = allGridImages.value.slice(start, end);
-    ids = images.map((img) => img.id);
     // Prepare grid image objects
     const gridImages = images.map((img, idx) => ({
       ...img,
