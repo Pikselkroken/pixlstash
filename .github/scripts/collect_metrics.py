@@ -174,25 +174,25 @@ def fetch_pypi_downloads():
 
 
 def fetch_cloudflare_upgrade_visits(date):
-    """Return the number of unique visitors to /upgrade.html on *date* (YYYY-MM-DD).
+    """Return the number of visits to /upgrade.html on *date* (YYYY-MM-DD).
 
-    Requires CF_API_TOKEN (Account Analytics: Read) and CF_ACCOUNT_ID to be set
-    as environment variables / GitHub Actions secrets.
+    Requires:
+      CF_API_TOKEN — Cloudflare API token with Zone Analytics: Read permission
+      CF_ZONE_ID   — Zone ID for the domain (found in the Cloudflare dashboard)
     """
     api_token = os.environ.get("CF_API_TOKEN")
-    account_id = os.environ.get("CF_ACCOUNT_ID")
-    if not api_token or not account_id:
+    zone_id = os.environ.get("CF_ZONE_ID")
+    if not api_token or not zone_id:
         print(
-            "WARNING: CF_API_TOKEN or CF_ACCOUNT_ID not set — skipping Cloudflare analytics."
+            "WARNING: CF_API_TOKEN or CF_ZONE_ID not set — skipping Cloudflare analytics."
         )
         return None
 
-    # Cloudflare GraphQL Analytics API — zone-level http requests adaptive groups.
-    # clientRequestPath filter matches the path portion of the URL.
+    # httpRequestsAdaptiveGroups is a zone-level dataset — query via zones, not accounts.
     query = """
-    query($accountTag: String!, $date: Date!) {
+    query($zoneTag: String!, $date: Date!) {
       viewer {
-        accounts(filter: {accountTag: $accountTag}) {
+        zones(filter: {zoneTag: $zoneTag}) {
           httpRequestsAdaptiveGroups(
             filter: {
               AND: [
@@ -213,7 +213,7 @@ def fetch_cloudflare_upgrade_visits(date):
     payload = json.dumps(
         {
             "query": query,
-            "variables": {"accountTag": account_id, "date": date},
+            "variables": {"zoneTag": zone_id, "date": date},
         }
     ).encode()
     req = urllib.request.Request(
@@ -228,12 +228,14 @@ def fetch_cloudflare_upgrade_visits(date):
     try:
         with urllib.request.urlopen(req) as resp:
             data = json.loads(resp.read())
-        groups = (
-            data.get("data", {})
-            .get("viewer", {})
-            .get("accounts", [{}])[0]
-            .get("httpRequestsAdaptiveGroups", [])
-        )
+        if data.get("errors"):
+            print(f"WARNING: Cloudflare GraphQL errors: {data['errors']}")
+            return None
+        zones = (data.get("data") or {}).get("viewer", {}).get("zones") or []
+        if not zones:
+            print("WARNING: Cloudflare GraphQL returned no zones — check CF_ZONE_ID.")
+            return None
+        groups = zones[0].get("httpRequestsAdaptiveGroups") or []
         if not groups:
             return 0
         return groups[0].get("sum", {}).get("visits", 0)
