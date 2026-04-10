@@ -205,7 +205,7 @@ export function MediaFormat(source) {
     const stripped = trimmed.split('?')[0].split('#')[0];
     if (!stripped) return '';
     const parts = stripped.split('.');
-    return parts.length > 1 ? parts.pop() : '';
+    return parts.length > 1 ? parts.pop() : stripped;
   }
   if (source.format) return MediaFormat(source.format);
   if (source.filename) return MediaFormat(source.filename);
