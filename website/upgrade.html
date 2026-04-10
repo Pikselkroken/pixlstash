@@ -69,6 +69,27 @@
         background: rgba(240, 80, 50, 0.1);
       }
 
+      .latest-release {
+        display: block;
+        margin: 0 0 20px;
+        text-align: center;
+      }
+
+      .latest-release-version {
+        color: var(--accent);
+        font-size: 0.9em;
+        font-weight: 700;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+
+      .latest-release-date {
+        font-size: 1.05rem;
+        color: var(--muted);
+        font-weight: 500;
+        margin-top: 6px;
+      }
+
       .method-title {
         font-size: 1.2rem;
         font-weight: 700;
@@ -101,7 +122,16 @@
       </nav>
 
       <div class="page-hero">
-        <h1>Upgrading PixlStash</h1>
+        <h1>
+          Upgrading PixlStash to version
+          <span
+            id="latest-release-version"
+            class="latest-release-version"
+          ></span>
+        </h1>
+        <div id="latest-release" class="latest-release" style="display: none">
+          <span class="latest-release-date" id="latest-release-date"></span>
+        </div>
         <p>
           Choose the box that matches how you installed PixlStash and follow the
           steps to get the latest version.
@@ -329,6 +359,30 @@
     </div>
 
     <script>
+      fetch(
+        "https://api.github.com/repos/pikselkroken/pixlstash/releases/latest",
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (!data || !data.tag_name) return;
+          const version = data.tag_name.replace(/^v/, "");
+          const date = data.published_at
+            ? new Date(data.published_at).toLocaleDateString("en-GB", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+              })
+            : null;
+          document.getElementById("latest-release-version").textContent =
+            version;
+          if (date) {
+            document.getElementById("latest-release-date").textContent =
+              "Released " + date;
+          }
+          document.getElementById("latest-release").style.display = "block";
+        })
+        .catch(() => {});
+
       document.querySelectorAll(".copy-btn[data-copy]").forEach((btn) => {
         btn.addEventListener("click", () => {
           navigator.clipboard.writeText(btn.dataset.copy).then(() => {
