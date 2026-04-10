@@ -1158,7 +1158,8 @@
         "last_week": 432,
         "last_month": 1609
       },
-      "ghcr_pulls": null
+      "ghcr_pulls": null,
+      "upgrade_page_visits": null
     }
   ]
 }
