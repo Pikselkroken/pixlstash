@@ -334,7 +334,7 @@ def create_router(server) -> APIRouter:
             vram_collected = _collect_vram_from_torch(payload)
 
         if not vram_collected:
-            vram_collected = _collect_vram_from_nvidia_smi(payload)
+            _collect_vram_from_nvidia_smi(payload)
 
         # Cache whichever VRAM keys were populated (even if still N/A, cache
         # the negative result briefly to avoid re-spawning nvidia-smi every poll).

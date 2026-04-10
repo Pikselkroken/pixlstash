@@ -969,12 +969,6 @@ class Server:
             tags=["comfyui"],
         )
 
-        ###############################
-        # Config endpoints            #
-        ###############################
-        def _ensure_secure_when_required(request: Request):
-            self.auth.ensure_secure_when_required(request)
-
         @self.api.middleware("http")
         async def auth_middleware(request: Request, call_next):
             return await self.auth.auth_middleware(
