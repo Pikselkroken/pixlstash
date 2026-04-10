@@ -173,6 +173,75 @@ def fetch_pypi_downloads():
         return {"last_day": None, "last_week": None, "last_month": None}
 
 
+def fetch_cloudflare_upgrade_visits(date):
+    """Return the number of unique visitors to /upgrade.html on *date* (YYYY-MM-DD).
+
+    Requires CF_API_TOKEN (Account Analytics: Read) and CF_ACCOUNT_ID to be set
+    as environment variables / GitHub Actions secrets.
+    """
+    api_token = os.environ.get("CF_API_TOKEN")
+    account_id = os.environ.get("CF_ACCOUNT_ID")
+    if not api_token or not account_id:
+        print(
+            "WARNING: CF_API_TOKEN or CF_ACCOUNT_ID not set — skipping Cloudflare analytics."
+        )
+        return None
+
+    # Cloudflare GraphQL Analytics API — zone-level http requests adaptive groups.
+    # clientRequestPath filter matches the path portion of the URL.
+    query = """
+    query($accountTag: String!, $date: Date!) {
+      viewer {
+        accounts(filter: {accountTag: $accountTag}) {
+          httpRequestsAdaptiveGroups(
+            filter: {
+              AND: [
+                { date: $date }
+                { clientRequestPath_like: "%/upgrade.html%" }
+              ]
+            }
+            limit: 1
+          ) {
+            sum {
+              visits
+            }
+          }
+        }
+      }
+    }
+    """
+    payload = json.dumps(
+        {
+            "query": query,
+            "variables": {"accountTag": account_id, "date": date},
+        }
+    ).encode()
+    req = urllib.request.Request(
+        "https://api.cloudflare.com/client/v4/graphql",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read())
+        groups = (
+            data.get("data", {})
+            .get("viewer", {})
+            .get("accounts", [{}])[0]
+            .get("httpRequestsAdaptiveGroups", [])
+        )
+        if not groups:
+            return 0
+        return groups[0].get("sum", {}).get("visits", 0)
+    except Exception as e:
+        print(f"WARNING: Could not fetch Cloudflare analytics ({e}) — skipping.")
+        return None
+
+
 def load_history():
     os.makedirs("metrics", exist_ok=True)
     try:
@@ -210,6 +279,7 @@ def main():
     clones = fetch_clones_today()
     releases = fetch_release_downloads()
     pypi = fetch_pypi_downloads()
+    cf_upgrade_visits = fetch_cloudflare_upgrade_visits(today)
 
     entry = {
         "date": today,
@@ -222,6 +292,7 @@ def main():
         # (the /orgs/{org}/packages/container/{name}/versions endpoint returns
         # only version metadata — no download_count field).
         "ghcr_pulls": None,
+        "upgrade_page_visits": cf_upgrade_visits,
     }
 
     # Replace any existing entry for today (re-runs overwrite rather than duplicate).
@@ -234,7 +305,8 @@ def main():
         f"stars={stars}, "
         f"release_downloads={releases['total']}, "
         f"pypi_last_month={pypi['last_month']}, "
-        f"clones_today={clones['count']}"
+        f"clones_today={clones['count']}, "
+        f"upgrade_page_visits={cf_upgrade_visits}"
         + (
             f" (source_date={clones['source_date']})"
             if clones.get("source_date")
