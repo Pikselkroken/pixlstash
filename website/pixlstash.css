@@ -248,6 +248,17 @@ a {
   line-height: 1.55;
 }
 
+.method-warning a {
+  color: #8a5f00;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.method-warning a:hover {
+  color: #6f4d00;
+}
+
 .method-info {
   background: rgba(47, 139, 95, 0.08);
   border: 1px solid rgba(47, 139, 95, 0.22);

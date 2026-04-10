@@ -123,11 +123,13 @@
               <span class="step-label"
                 >1 — Activate your virtual environment</span
               >
-              <div class="cmd-block">
-                <code
-                  ># Linux / macOS source .venv/bin/activate # Windows
-                  .venv\Scripts\activate</code
-                >
+              Linux / MacOS:
+              <div class="cmd-block" style="margin-top: 8px">
+                <code>.venv/bin/activate</code>
+              </div>
+              Windows
+              <div class="cmd-block" style="margin-top: 8px">
+                <code>.venv\Scripts\activate</code>
               </div>
             </div>
             <div class="step">
@@ -252,7 +254,9 @@
             </div>
             <div class="method-warning">
               ⚠️ Make sure your data folder is mounted as a volume so it
-              survives the container replacement.
+              survives the container replacement. See
+              <a href="install.html#docker-cpu">CPU mount setup</a> or
+              <a href="install.html#docker-gpu">GPU mount setup</a>.
             </div>
           </div>
         </div>
