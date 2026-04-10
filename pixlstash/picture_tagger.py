@@ -1008,7 +1008,7 @@ class PictureTagger:
                             (new_width, new_height), Image.Resampling.LANCZOS
                         )
                         logger.debug(
-                            f"Resised video frame to {new_width}x{new_height} for faster processing"
+                            f"Resized video frame to {new_width}x{new_height} for faster processing"
                         )
                     inputs = self._florence_processor(
                         text="<MORE_DETAILED_CAPTION>",
@@ -1065,7 +1065,7 @@ class PictureTagger:
                         (new_width, new_height), Image.Resampling.LANCZOS
                     )
                     logger.debug(
-                        f"Resised image to {new_width}x{new_height} for faster processing"
+                        f"Resized image to {new_width}x{new_height} for faster processing"
                     )
                 inputs = self._florence_processor(
                     text="<MORE_DETAILED_CAPTION>", images=image, return_tensors="pt"
@@ -1158,7 +1158,7 @@ class PictureTagger:
                             (new_width, new_height), Image.Resampling.LANCZOS
                         )
                         logger.debug(
-                            "Resised image to %dx%d for faster processing",
+                            "Resized image to %dx%d for faster processing",
                             new_width,
                             new_height,
                         )
