@@ -37,6 +37,7 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
         ".bmp",
         ".heic",
         ".heif",
+        ".avif",
     }
 
     def __init__(self, database, config_path: str):

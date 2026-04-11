@@ -273,7 +273,16 @@ class FaceExtractionTask(BaseTask):
             thumbnail_bytes = None
             thumbnail_crop = None
 
-            if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"]:
+            if ext in [
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".webp",
+                ".bmp",
+                ".heic",
+                ".heif",
+                ".avif",
+            ]:
                 read_start = time.time()
                 img = cv2.imread(file_path)
                 image_load_s += time.time() - read_start

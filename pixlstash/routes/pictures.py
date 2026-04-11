@@ -83,6 +83,7 @@ MEDIA_TYPE_BY_FORMAT = {
     "gif": "image/gif",
     "bmp": "image/bmp",
     "tiff": "image/tiff",
+    "avif": "image/avif",
     "mp4": "video/mp4",
     "webm": "video/webm",
     "mov": "video/quicktime",
@@ -2440,6 +2441,7 @@ def create_router(server) -> APIRouter:
             ".tif",
             ".heic",
             ".heif",
+            ".avif",
             ".mp4",
             ".webm",
             ".mov",
@@ -2518,10 +2520,11 @@ def create_router(server) -> APIRouter:
                         )
                         continue
                     if ext not in allowed_media_exts:
-                        logger.error("Invalid file extension: %s", ext)
-                        raise HTTPException(
-                            status_code=400, detail="Invalid file extension"
+                        logger.warning(
+                            "Skipping file with unsupported extension: %s",
+                            upload.filename,
                         )
+                        continue
                     uploaded_files.append((contents, ext, upload.filename))
                     uploaded_file_stems.append(_normalise_sidecar_stem(upload.filename))
         else:
