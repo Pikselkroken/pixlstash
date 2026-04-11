@@ -564,7 +564,7 @@ const emit = defineEmits([
   "tags-applied",
 ]);
 
-const STACKS_SORT_KEY = "PICTURE_STACKS";
+const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 
 // ── Tag-panel mini-grid ───────────────────────────────────────────────────────
 const previewImages = computed(() => {
@@ -639,7 +639,9 @@ const deleteButtonLabel = computed(() => {
 
 const showGroupStackButton = computed(() => {
   if (isScrapheapView.value) return false;
-  return props.selectedCount > 0 && props.selectedSort === STACKS_SORT_KEY;
+  return (
+    props.selectedCount > 0 && props.selectedSort === LIKENESS_GROUPS_SORT_KEY
+  );
 });
 
 const showRemoveStackButton = computed(() => {

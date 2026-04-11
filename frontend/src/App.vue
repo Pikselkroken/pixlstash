@@ -213,7 +213,7 @@ function connectUpdatesSocket() {
         : [];
       if (
         pictureIds.length > 0 &&
-        selectedSort.value === "PICTURE_STACKS" &&
+        selectedSort.value === "LIKENESS_GROUPS" &&
         payload?.type !== "picture_imported"
       ) {
         const nextKey = (wsTagUpdate.value?.key || 0) + 1;

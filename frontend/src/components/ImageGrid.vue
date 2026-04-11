@@ -660,7 +660,7 @@ const props = defineProps({
 // ============================================================
 // CONSTANTS
 // ============================================================
-const STACKS_SORT_KEY = "PICTURE_STACKS";
+const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 const MIN_THUMBNAIL_SIZE = 128;
 const MAX_THUMBNAIL_SIZE = 384;
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
@@ -941,7 +941,7 @@ function getSortProgressLabel(sortKey) {
   if (key.includes("CHARACTER_LIKENESS")) return "character likeness";
   if (key === "TEXT_CONTENT") return "text content";
   if (key === "SCORE") return "score";
-  if (key === STACKS_SORT_KEY) return "stacks";
+  if (key === LIKENESS_GROUPS_SORT_KEY) return "likeness groups";
   return key.replace(/_/g, " ").toLowerCase();
 }
 
@@ -1811,7 +1811,7 @@ function getThumbnailInfoItems(img) {
       text: formatUserDate(img.created_at, props.dateFormat),
     });
   } else if (
-    selectedSort === STACKS_SORT_KEY &&
+    selectedSort === LIKENESS_GROUPS_SORT_KEY &&
     (typeof img.stackIndex === "number" || typeof img.stack_index === "number")
   ) {
     if (!props.showStacks) {
@@ -3156,7 +3156,7 @@ async function refreshGridImage(imageId, options = {}) {
     };
     allGridImages.value = nextImages;
   }
-  if (props.selectedSort === STACKS_SORT_KEY) {
+  if (props.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
     const stackIndex = getStackIndexFromItem(allGridImages.value[idx]);
     if (typeof stackIndex === "number") {
       reorderStackByScore(stackIndex);
@@ -3410,7 +3410,7 @@ function getLikenessGroupId(img) {
 }
 
 async function createStacksFromSelectedGroups() {
-  if (props.selectedSort !== STACKS_SORT_KEY) return;
+  if (props.selectedSort !== LIKENESS_GROUPS_SORT_KEY) return;
   const ids = Array.isArray(selectedImageIds.value)
     ? selectedImageIds.value
     : [];
@@ -4240,7 +4240,7 @@ function buildPictureIdsQueryParams() {
   return params.toString();
 }
 
-function buildStackQueryParams() {
+function buildLikenessGroupQueryParams() {
   const params = new URLSearchParams();
   _appendSelectionParams(params);
   _appendMediaTypeParams(params);
@@ -4603,14 +4603,16 @@ function getLocalStackMembers(stackId) {
   if (!source.length) return [];
   const members = source.filter((img) => getPictureStackId(img) === stackId);
   const activeSort = String(props.selectedSort || "").toUpperCase();
-  const useBackendOrder = !!activeSort && activeSort !== STACKS_SORT_KEY;
+  const useBackendOrder =
+    !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
   return useBackendOrder ? members : sortStackMembers(members);
 }
 
 function cacheExpandedStackMembers(stackId, members) {
   if (!stackId || !Array.isArray(members) || members.length === 0) return false;
   const activeSort = String(props.selectedSort || "").toUpperCase();
-  const useBackendOrder = !!activeSort && activeSort !== STACKS_SORT_KEY;
+  const useBackendOrder =
+    !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
   const sorted = useBackendOrder ? members.slice() : sortStackMembers(members);
   const ordered = sorted
     .filter((img) => img && img.id != null)
@@ -4644,7 +4646,8 @@ function buildExpandedStackImages(stackId, fallbackImg, stackCount) {
   const ids = Array.isArray(entry?.ids) ? entry.ids : [];
   const images = Array.isArray(entry?.images) ? entry.images : [];
   const activeSort = String(props.selectedSort || "").toUpperCase();
-  const useBackendOrder = !!activeSort && activeSort !== STACKS_SORT_KEY;
+  const useBackendOrder =
+    !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
   const sourceImages = ids.length
     ? images
     : useBackendOrder
@@ -4957,7 +4960,8 @@ async function ensureStackMembersLoaded(stackId, expectedCount = null) {
       );
       stackUrl.searchParams.set("fields", "grid");
       const activeSort = props.selectedSort ?? "";
-      const isStackSort = !activeSort || activeSort === STACKS_SORT_KEY;
+      const isStackSort =
+        !activeSort || activeSort === LIKENESS_GROUPS_SORT_KEY;
       if (activeSort) {
         stackUrl.searchParams.set("sort", activeSort);
       }
@@ -4971,7 +4975,7 @@ async function ensureStackMembersLoaded(stackId, expectedCount = null) {
       const picsData = await picsRes.data;
       const pics = Array.isArray(picsData) ? picsData : [];
       // When a real sort is active the backend already ordered the members;
-      // only fall back to client-side stack-order sorting for PICTURE_STACKS
+      // only fall back to client-side stack-order sorting for LIKENESS_GROUPS
       // or when no sort is selected.
       const sorted = isStackSort ? sortStackMembers(pics) : pics;
       const ordered = sorted
@@ -5293,13 +5297,13 @@ async function fetchAllGridImages(options = {}) {
   fetchAllGridImages.lastRequestId = requestId;
   try {
     let images = [];
-    if (props.selectedSort === STACKS_SORT_KEY) {
+    if (props.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
       const threshold = getStackThreshold(props.stackThreshold);
-      const stackParams = buildStackQueryParams();
+      const likenessGroupParams = buildLikenessGroupQueryParams();
       const url = `${
         props.backendUrl
-      }/pictures/stacks?threshold=${encodeURIComponent(threshold)}${
-        stackParams ? `&${stackParams}` : ""
+      }/pictures/likeness-groups?threshold=${encodeURIComponent(threshold)}${
+        likenessGroupParams ? `&${likenessGroupParams}` : ""
       }`;
       const res = await apiClient.get(url);
       const data = await res.data;
@@ -5308,8 +5312,8 @@ async function fetchAllGridImages(options = {}) {
           completeSmartScoreProgress(loadId, 0, false);
         return;
       }
-      const stackImages = Array.isArray(data) ? data : [];
-      images = stackImages.map((img) => {
+      const likenessGroupImages = Array.isArray(data) ? data : [];
+      images = likenessGroupImages.map((img) => {
         const stackIndex =
           typeof img.stack_index === "number"
             ? img.stack_index
