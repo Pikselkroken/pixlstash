@@ -256,21 +256,14 @@ For each plugin: open the ImageOverlay on a test picture, apply the plugin, conf
 - [ ] Deleting a tag causes it to drop down to prediction IF it had a > 0.0 prediction
 ---
 
-## 15. Picture Sharing
-
-> **Note:** Picture sharing (share links / public access) is not yet implemented as of this version.
-> When the feature is added, add API tests and expand this section with manual browser checks.
-
----
-
-## 16. Export
+## 15. Export
 
 - [ ] Select 3 pictures in the grid (click while holding Ctrl/Cmd) → open the **Export** menu in the toolbar → choose **Full resolution** → click **Download ZIP** → verify the downloaded file opens correctly and contains 3 image files
 - [ ] In the sidebar, open a project → open the **Export** menu → download a project export ZIP → verify it contains a `project.json` and the expected image assets
 
 ---
 
-## 17. Background Task System
+## 16. Background Task System
 
 - [ ] After importing a batch of 5+ pictures: a task progress overlay or indicator appears in the UI showing live status (percentage or picture count)
 - [ ] Wait for processing to complete — open a processed picture in the ImageOverlay and confirm quality metrics (blur, noise, contrast) are populated with numeric values
@@ -279,20 +272,7 @@ For each plugin: open the ImageOverlay on a test picture, apply the plugin, conf
 
 ---
 
-## 18. Performance & Stability
+## 17. Performance & Stability
 
 - [ ] Import 200+ pictures; after thumbnails load, scroll through the full grid at normal speed — no thumbnails remain broken (grey/placeholder) and the browser does not freeze
 - [ ] While a face extraction background task is processing 20+ images: interact with the grid (scroll, sort, open ImageOverlay) — the UI remains responsive with no full-page freeze
-
----
-
-## Changelog Reference
-
-Update this section after each release noting any test items added, removed, or changed.
-
-| Release | Notes |
-|---------|-------|
-| (initial) | Plan created; covers all features as of April 2026 |
-| v-next | Automated all `[A-py]` items into pytest; this plan now covers manual-only checks |
-| v-next | Added §0 cross-platform installation checks (macOS, Ubuntu 24.04, Windows) |
-| v-next | Removed WSL2 from all test matrices; expanded all checklist items to step-by-step instructions |
