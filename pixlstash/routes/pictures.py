@@ -1181,6 +1181,13 @@ def create_router(server) -> APIRouter:
         character_id: str = Query(None),
         project_id: str = Query(None),
         format: list[str] = Query(None),
+        tag: list[str] = Query(None),
+        rejected_tag: list[str] = Query(None),
+        tag_confidence_above: list[str] = Query(None),
+        tag_confidence_below: list[str] = Query(None),
+        comfyui_model: list[str] = Query(None),
+        comfyui_lora: list[str] = Query(None),
+        min_score: int = Query(None),
     ):
         candidate_ids = None
         only_deleted = character_id == "SCRAPHEAP"
@@ -1480,6 +1487,121 @@ def create_router(server) -> APIRouter:
 
         if not ordered_ids:
             return []
+
+        # Post-group filter: if tag/score/comfyui filters are active, keep only
+        # groups where at least one member satisfies all the criteria. The full
+        # group is still returned — the filter just decides whether the group is
+        # shown at all.
+        has_extra_filters = any(
+            [
+                min_score is not None,
+                tag,
+                rejected_tag,
+                tag_confidence_above,
+                tag_confidence_below,
+                comfyui_model,
+                comfyui_lora,
+            ]
+        )
+        if has_extra_filters:
+
+            def fetch_extra_filtered_ids(
+                session,
+                candidate_ids_list,
+                deleted_only: bool,
+                min_score_value,
+                tags_filter_value,
+                tags_rejected_filter_value,
+                tags_confidence_above_filter_value,
+                tags_confidence_below_filter_value,
+                comfyui_models_filter_value,
+                comfyui_loras_filter_value,
+            ):
+                query = select(Picture.id).where(Picture.id.in_(candidate_ids_list))
+                if deleted_only:
+                    query = query.where(Picture.deleted.is_(True))
+                else:
+                    query = query.where(Picture.deleted.is_(False))
+                if min_score_value is not None:
+                    query = query.where(Picture.score >= min_score_value)
+                if comfyui_models_filter_value:
+                    for i, m in enumerate(comfyui_models_filter_value):
+                        query = query.where(
+                            text(
+                                f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :comfyui_model_{i})"
+                            ).bindparams(**{f"comfyui_model_{i}": m})
+                        )
+                if comfyui_loras_filter_value:
+                    for i, m in enumerate(comfyui_loras_filter_value):
+                        query = query.where(
+                            text(
+                                f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :comfyui_lora_{i})"
+                            ).bindparams(**{f"comfyui_lora_{i}": m})
+                        )
+                if tags_filter_value:
+                    for i, t in enumerate(tags_filter_value):
+                        query = query.where(
+                            text(
+                                f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :tag_filter_{i})"
+                            ).bindparams(**{f"tag_filter_{i}": t})
+                        )
+                if tags_rejected_filter_value:
+                    for i, t in enumerate(tags_rejected_filter_value):
+                        query = query.where(
+                            text(
+                                f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :rejected_tag_filter_{i})"
+                            ).bindparams(**{f"rejected_tag_filter_{i}": t})
+                        )
+                if tags_confidence_above_filter_value:
+                    for i, entry in enumerate(tags_confidence_above_filter_value):
+                        t, thresh = entry.rsplit(":", 1)
+                        query = query.where(
+                            text(
+                                f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                                f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                                f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                            ).bindparams(
+                                **{f"ca_tag_{i}": t, f"ca_thresh_{i}": float(thresh)}
+                            )
+                        )
+                if tags_confidence_below_filter_value:
+                    for i, entry in enumerate(tags_confidence_below_filter_value):
+                        t, thresh = entry.rsplit(":", 1)
+                        query = query.where(
+                            text(
+                                f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                                f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
+                                f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
+                            ).bindparams(
+                                **{f"cb_tag_{i}": t, f"cb_thresh_{i}": float(thresh)}
+                            )
+                        )
+                return set(session.exec(query).all())
+
+            matching_ids = server.vault.db.run_immediate_read_task(
+                fetch_extra_filtered_ids,
+                ordered_ids,
+                only_deleted,
+                min_score,
+                tag or None,
+                rejected_tag or None,
+                tag_confidence_above or None,
+                tag_confidence_below or None,
+                comfyui_model or None,
+                comfyui_lora or None,
+            )
+            # Determine which group indices have at least one matching picture.
+            matching_group_indices = {
+                stack_index_map[pid] for pid in matching_ids if pid in stack_index_map
+            }
+            # Keep all pictures that belong to a kept group.
+            ordered_ids = [
+                pid
+                for pid in ordered_ids
+                if stack_index_map.get(pid) in matching_group_indices
+            ]
+            if not ordered_ids:
+                return []
 
         hidden_ids = _fetch_hidden_picture_ids(server, request, ordered_ids)
         if hidden_ids:

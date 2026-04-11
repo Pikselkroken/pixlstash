@@ -4244,6 +4244,25 @@ function buildStackQueryParams() {
   const params = new URLSearchParams();
   _appendSelectionParams(params);
   _appendMediaTypeParams(params);
+  (props.comfyuiModelFilter || []).forEach((m) =>
+    params.append("comfyui_model", m),
+  );
+  (props.comfyuiLoraFilter || []).forEach((l) =>
+    params.append("comfyui_lora", l),
+  );
+  if (props.minScoreFilter != null) {
+    params.append("min_score", props.minScoreFilter);
+  }
+  (props.tagFilter || []).forEach((t) => params.append("tag", t));
+  (props.tagRejectedFilter || []).forEach((t) =>
+    params.append("rejected_tag", t),
+  );
+  (props.tagConfidenceAboveFilter || []).forEach((e) =>
+    params.append("tag_confidence_above", e),
+  );
+  (props.tagConfidenceBelowFilter || []).forEach((e) =>
+    params.append("tag_confidence_below", e),
+  );
   if (props.applyTagFilter) {
     params.append("apply_tag_filter", "true");
   }
