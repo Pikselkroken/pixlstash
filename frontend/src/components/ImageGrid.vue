@@ -2405,16 +2405,67 @@ function handleAddToCharacter(payload) {
 async function deleteSelected() {
   if (!selectedImageIds.value.length) return;
   const isScrapheapSelection = isScrapheapView.value;
-  const idsToRemove = selectedImageIds.value.slice();
+
+  // For non-scrapheap deletions, expand collapsed stacks to all their members
+  // while only deleting the selected pictures from expanded stacks.
+  let idsToRemove;
+  if (!isScrapheapSelection) {
+    const imageById = new Map(
+      (allGridImages.value || [])
+        .filter((img) => img && img.id != null)
+        .map((img) => [String(img.id), img]),
+    );
+
+    const resolved = new Set();
+    const collapsedStackIds = new Set();
+
+    for (const id of selectedImageIds.value) {
+      const img = imageById.get(String(id));
+      const stackId = getPictureStackId(img);
+      if (!stackId || expandedStackIds.value.has(stackId)) {
+        // No stack, or stack is expanded: delete only this picture.
+        resolved.add(id);
+      } else {
+        // Collapsed stack: delete all members.
+        collapsedStackIds.add(stackId);
+      }
+    }
+
+    for (const stackId of collapsedStackIds) {
+      try {
+        const res = await apiClient.get(
+          `${props.backendUrl}/stacks/${stackId}`,
+        );
+        const memberIds = res.data?.picture_ids;
+        if (Array.isArray(memberIds) && memberIds.length) {
+          for (const mid of memberIds) resolved.add(mid);
+        }
+      } catch (e) {
+        console.error(
+          "Failed to fetch stack members for delete, falling back to selected ids:",
+          e,
+        );
+        // Fallback: delete the originally-selected picture(s) from this stack.
+        for (const id of selectedImageIds.value) {
+          const img = imageById.get(String(id));
+          if (getPictureStackId(img) === stackId) resolved.add(id);
+        }
+      }
+    }
+
+    idsToRemove = [...resolved];
+  } else {
+    idsToRemove = selectedImageIds.value.slice();
+  }
+
   if (isScrapheapSelection) {
     if (
-      !confirm(
-        `Permanently delete ${selectedImageIds.value.length} selected image(s)?`,
-      )
+      !confirm(`Permanently delete ${idsToRemove.length} selected image(s)?`)
     ) {
       return;
     }
   }
+
   const backendUrl = props.backendUrl;
   try {
     if (isScrapheapSelection) {
