@@ -2321,6 +2321,13 @@ async function applyAllImagesUpdate() {
   });
   if (overlayStackReloadToken.value !== reloadToken) return;
 
+  // Only navigate to the new stack leader when the stack structure genuinely
+  // changed while we were already watching it (previousSignature is truthy).
+  // When previousSignature is "" this is just the first time we record the
+  // signature; navigating away from the user's deliberate non-leader selection
+  // here would be wrong (and is the root cause of the tag-change nav bug).
+  if (!previousSignature) return;
+
   const refreshed = overlayExpandedStackMembers.value.get(stackId);
   const ids = Array.isArray(refreshed?.ids) ? refreshed.ids : [];
   const localMembers = getOverlayLocalStackMembers(stackId);
