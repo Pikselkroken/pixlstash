@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Getting Started — PixlStash</title>
+    <meta
+      name="description"
+      content="A quick tour of PixlStash — import, tag, score, search and export your image library."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="pixlstash.css" />
+    <style>
+      .shell {
+        max-width: 960px;
+      }
+
+      /* Nav shell matches the full-width layout of index.html */
+      .shell:not(.intro-shell) {
+        max-width: 1320px;
+        padding-bottom: 0;
+      }
+
+      .page-content {
+        padding: 0 48px;
+      }
+
+      .btn {
+        padding: 11px 20px;
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 0.93rem;
+        border: 1px solid transparent;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease;
+        cursor: pointer;
+        text-decoration: none;
+      }
+
+      .btn-primary {
+        background: linear-gradient(130deg, var(--accent), var(--accent-2));
+        color: #fff;
+        box-shadow: 0 10px 28px rgba(97, 117, 12, 0.22);
+      }
+
+      .btn-secondary {
+        background: rgba(34, 38, 44, 0.06);
+        color: var(--text);
+        border-color: rgba(34, 38, 44, 0.16);
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 14px 28px rgba(142, 166, 4, 0.26);
+      }
+
+      /* ── Responsive ── */
+      .nav-links {
+        flex-shrink: 1;
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+
+      .nav-actions {
+        flex-shrink: 0;
+      }
+
+      @media (max-width: 680px) {
+        .page-content {
+          padding: 0 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div id="nav-placeholder"></div>
+      <script src="nav.js"></script>
+    </div>
+    <!-- /nav-shell -->
+
+    <div class="shell intro-shell">
+      <div class="page-content">
+        <div class="page-hero">
+          <h1>Getting started with PixlStash</h1>
+          <p>
+            Six short clips covering everything from your first import to
+            exporting a training dataset.
+          </p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="install.html">Install now</a>
+            <a
+              class="btn btn-secondary"
+              href="https://github.com/pikselkroken/pixlstash"
+              >View on GitHub</a
+            >
+          </div>
+        </div>
+        <!-- /page-hero -->
+
+        <div class="features">
+          <!-- 01 Import -->
+          <div class="feature">
+            <div class="feature-text">
+              <span class="feature-number">01 — Import</span>
+              <h2>Drag, drop, done</h2>
+              <p>
+                Import single images, whole folders, ZIP or TAR archives in one
+                go. PixlStash deduplicates and starts tagging your library the
+                moment files land.
+              </p>
+            </div>
+            <div class="video-card">
+              <video
+                src="assets/01-PictureImport.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+              ></video>
+            </div>
+          </div>
+
+          <!-- 02 Character Assignment -->
+          <div class="feature feature--reverse">
+            <div class="feature-text">
+              <span class="feature-number">02 — Characters</span>
+              <h2>Put names to faces</h2>
+              <p>
+                PixlStash detects every face and groups them by similarity.
+                Assign a character name once and it propagates across your
+                entire library, making face-based sorting instant.
+              </p>
+            </div>
+            <div class="video-card">
+              <video
+                src="assets/02-CharacterAssignment.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+              ></video>
+            </div>
+          </div>
+
+          <!-- 03 Tagging -->
+          <div class="feature">
+            <div class="feature-text">
+              <span class="feature-number">03 — Tagging</span>
+              <h2>Bulk-tag in seconds</h2>
+              <p>
+                The PixlStash tagger run automatically. Review AI predictions,
+                accept or reject with a click, and apply new tags across any
+                selection without leaving the grid.
+              </p>
+            </div>
+            <div class="video-card">
+              <video
+                src="assets/03-Tagging.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+              ></video>
+            </div>
+          </div>
+
+          <!-- 04 Smart Score -->
+          <div class="feature feature--reverse">
+            <div class="feature-text">
+              <span class="feature-number">04 — Smart Score</span>
+              <h2>Surface your best shots</h2>
+              <p>
+                A composite quality score weighs aesthetics and anomaly tags to
+                help you clear the worst images. Filter and sort by smart score
+                to find the real duds.
+              </p>
+            </div>
+            <div class="video-card">
+              <video
+                src="assets/04-SmartScore.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+              ></video>
+            </div>
+          </div>
+
+          <!-- 05 Semantic Search -->
+          <div class="feature">
+            <div class="feature-text">
+              <span class="feature-number">05 — Search</span>
+              <h2>Find anything by description</h2>
+              <p>
+                CLIP-powered semantic search understands natural language. Type
+                "outdoors golden hour" or "close-up smiling" and get relevant
+                results immediately — no exact tag match needed.
+              </p>
+            </div>
+            <div class="video-card">
+              <video
+                src="assets/05-SemanticSearch.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+              ></video>
+            </div>
+          </div>
+
+          <!-- 06 Export -->
+          <div class="feature feature--reverse">
+            <div class="feature-text">
+              <span class="feature-number">06 — Export</span>
+              <h2>Dataset-ready in one click</h2>
+              <p>
+                Export the current view as a ZIP of images paired with tag or
+                description captions. Choose full images or face crops, pick
+                caption mode, and hand off a clean dataset to your trainer.
+              </p>
+            </div>
+            <div class="video-card">
+              <video
+                src="assets/06-Export.mp4"
+                autoplay
+                loop
+                muted
+                playsinline
+              ></video>
+            </div>
+          </div>
+        </div>
+        <!-- /features -->
+      </div>
+      <!-- /page-content -->
+    </div>
+    <!-- /intro-shell -->
+  </body>
+</html>

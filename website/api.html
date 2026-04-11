@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>API — PixlStash</title>
+    <meta
+      name="description"
+      content="PixlStash REST API — integrate with scripts, pipelines, and external tools."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="pixlstash.css" />
+    <style>
+      .section {
+        margin-top: 64px;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-bottom: 24px;
+      }
+
+      .section-title {
+        font-size: 2rem;
+        margin: 0;
+      }
+
+      .section-subtitle {
+        color: var(--muted);
+        max-width: 520px;
+        line-height: 1.6;
+      }
+
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+      }
+
+      .feature-card {
+        background: var(--panel);
+        border-radius: var(--radius-md);
+        padding: 18px;
+        border: 1px solid rgba(34, 38, 44, 0.1);
+      }
+
+      .feature-card h3 {
+        margin: 0 0 8px;
+      }
+
+      .feature-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+        font-size: 0.95rem;
+      }
+
+      @media (max-width: 700px) {
+        .section-title {
+          font-size: 1.5rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div id="nav-placeholder"></div>
+      <script src="nav.js"></script>
+
+      <div class="page-hero">
+        <h1>API</h1>
+        <p>
+          A REST API so you can integrate with scripts, pipelines, and external
+          tools. Fetch images, metadata, tags and more.
+        </p>
+      </div>
+
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">API features</h2>
+          <p class="section-subtitle">
+            Read the generated
+            <a href="api/" target="_blank" rel="noopener noreferrer"
+              >API reference docs</a
+            >.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <h3>Picture management</h3>
+            <p>List, filter, and update image metadata programmatically.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Tags and labels</h3>
+            <p>Add, remove, and audit tags for images and faces.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Sets and exports</h3>
+            <p>Build sets and trigger filtered exports from the API.</p>
+          </div>
+          <div class="feature-card">
+            <h3>Authentication</h3>
+            <p>Use username/password or API tokens.</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="page-footer">
+        <p>
+          <a href="api/" target="_blank" rel="noopener noreferrer"
+            >Open API reference docs</a
+          >
+          &nbsp;·&nbsp;
+          <a href="index.html">Back to PixlStash home</a>
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

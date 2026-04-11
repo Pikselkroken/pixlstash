@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Use Cases — PixlStash</title>
+    <meta
+      name="description"
+      content="PixlStash for photographers, AI creators, and hobbyists — creative workflows built around your images."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="pixlstash.css" />
+    <style>
+
+      .section {
+        margin-top: 64px;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-bottom: 24px;
+      }
+
+      .section-title {
+        font-size: 2rem;
+        margin: 0;
+      }
+
+      .section-subtitle {
+        color: var(--muted);
+        max-width: 520px;
+        line-height: 1.6;
+      }
+
+      .use-case-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+      }
+
+      .use-case {
+        background: rgba(255, 255, 255, 0.8);
+        border-radius: var(--radius-md);
+        padding: 16px;
+        border: 1px solid rgba(34, 38, 44, 0.1);
+      }
+
+      .use-case h4 {
+        margin: 0 0 6px;
+        font-size: 1rem;
+      }
+
+      .use-case p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 700px) {
+        .section-title {
+          font-size: 1.5rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div id="nav-placeholder"></div>
+      <script src="nav.js"></script>
+
+      <div class="page-hero">
+        <h1>Use cases</h1>
+        <p>Designed for creative workflows, whatever your medium.</p>
+      </div>
+
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Designed for creative workflows</h2>
+          <p class="section-subtitle">
+            Whether you shoot or generate, PixlStash helps you organize, review,
+            and share your work.
+          </p>
+        </div>
+        <div class="use-case-grid">
+          <div class="use-case">
+            <h4>Photographers</h4>
+            <p>Curate, rate, and find your strongest shots quicker.</p>
+          </div>
+          <div class="use-case">
+            <h4>AI creators</h4>
+            <p>Tag, group, and export datasets for training and fine-tuning.</p>
+          </div>
+          <div class="use-case">
+            <h4>Hobbyists</h4>
+            <p>
+              Organise your home photos. Detect duplicates and family members.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <div class="page-footer">
+        <p>
+          <a href="introduction.html">See PixlStash in action</a>
+          &nbsp;·&nbsp;
+          <a href="index.html">Back to PixlStash home</a>
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

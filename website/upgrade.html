@@ -18,10 +18,6 @@
     <style>
       /* ── upgrade.html page-specific ── */
 
-      .shell {
-        max-width: 1400px;
-      }
-
       .method-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
@@ -105,21 +101,8 @@
   </head>
   <body>
     <div class="shell">
-      <nav class="nav">
-        <a href="index.html" class="brand">
-          <img src="assets/logo.png" alt="PixlStash logo" />
-          <span class="brand-name">PixlStash</span>
-        </a>
-        <div class="nav-links">
-          <a href="index.html#features">Features</a>
-          <a href="index.html#workflows">Use cases</a>
-          <a href="index.html#api">API</a>
-          <a href="https://github.com/pikselkroken/pixlstash">GitHub</a>
-        </div>
-        <div class="nav-actions">
-          <a class="download-btn" href="install.html">Install</a>
-        </div>
-      </nav>
+      <div id="nav-placeholder"></div>
+      <script src="nav.js"></script>
 
       <div class="page-hero">
         <h1>

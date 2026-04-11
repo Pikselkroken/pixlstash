@@ -95,8 +95,18 @@ a {
   color: var(--toolbar-text);
 }
 
+.nav-links a {
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
 .nav-links a:hover {
   color: var(--accent);
+}
+
+.nav-link--active {
+  color: var(--accent) !important;
+  background: rgba(159, 177, 31, 0.14);
 }
 
 .nav-actions {
@@ -125,8 +135,8 @@ a {
 
 /* ── Page hero (inner pages) ── */
 .page-hero {
-  margin-top: 48px;
-  margin-bottom: 48px;
+  margin-top: 20px;
+  margin-bottom: 24px;
   text-align: center;
 }
 
@@ -140,8 +150,15 @@ a {
   font-size: 1.1rem;
   color: var(--muted);
   line-height: 1.6;
-  margin: 0 auto;
+  margin: 0 auto 24px;
   max-width: 560px;
+}
+
+.page-hero .cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
 }
 
 /* ── Steps / instructions ── */
@@ -283,6 +300,79 @@ a {
   text-underline-offset: 2px;
 }
 
+/* ── Feature sections ── */
+.features {
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  padding-bottom: 40px;
+}
+
+.feature {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  align-items: center;
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.feature--reverse {
+  direction: rtl;
+}
+
+.feature--reverse > * {
+  direction: ltr;
+}
+
+.feature-text {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feature-number {
+  font-family: var(--sans);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.feature-text h2 {
+  font-size: 1.55rem;
+  font-weight: 700;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.feature-text p {
+  font-size: 0.96rem;
+  color: var(--muted);
+  line-height: 1.65;
+  margin: 0;
+}
+
+/* ── Video card ── */
+.video-card {
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(34, 38, 44, 0.11);
+  box-shadow: 0 16px 48px var(--shadow);
+  overflow: hidden;
+  position: relative;
+}
+
+.video-card video,
+.video-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-height: 320px;
+  object-fit: cover;
+}
+
 /* ── Responsive base ── */
 @media (max-width: 700px) {
   .shell {
@@ -298,5 +388,15 @@ a {
   .nav-links {
     flex-wrap: wrap;
     gap: 12px;
+  }
+}
+
+@media (max-width: 680px) {
+  .feature {
+    grid-template-columns: 1fr;
+  }
+
+  .feature--reverse {
+    direction: ltr;
   }
 }
