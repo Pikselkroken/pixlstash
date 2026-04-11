@@ -329,6 +329,7 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .feature-number {
@@ -362,11 +363,14 @@ a {
   box-shadow: 0 16px 48px var(--shadow);
   overflow: hidden;
   position: relative;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .video-card video,
 .video-card img {
   width: 100%;
+  max-width: 100%;
   height: auto;
   display: block;
   max-height: 320px;
