@@ -173,8 +173,8 @@ def fetch_pypi_downloads():
         return {"last_day": None, "last_week": None, "last_month": None}
 
 
-def fetch_cloudflare_upgrade_visits(date):
-    """Return the number of visits to /upgrade.html on *date* (YYYY-MM-DD).
+def fetch_cloudflare_path_visits(date, path_pattern):
+    """Return the number of visits matching *path_pattern* on *date* (YYYY-MM-DD).
 
     Requires:
       CF_API_TOKEN — Cloudflare API token with Zone Analytics: Read permission
@@ -190,20 +190,20 @@ def fetch_cloudflare_upgrade_visits(date):
 
     # httpRequestsAdaptiveGroups is a zone-level dataset — query via zones, not accounts.
     query = """
-    query($zoneTag: String!, $date: Date!) {
+    query($zoneTag: String!, $date: Date!, $pathPattern: String!) {
       viewer {
         zones(filter: {zoneTag: $zoneTag}) {
           httpRequestsAdaptiveGroups(
             filter: {
               AND: [
                 { date: $date }
-                { clientRequestPath_like: "%/upgrade.html%" }
+                { clientRequestPath_like: $pathPattern }
               ]
             }
             limit: 1
           ) {
-            sum {
-              visits
+            uniq {
+              uniques
             }
           }
         }
@@ -213,7 +213,11 @@ def fetch_cloudflare_upgrade_visits(date):
     payload = json.dumps(
         {
             "query": query,
-            "variables": {"zoneTag": zone_id, "date": date},
+            "variables": {
+                "zoneTag": zone_id,
+                "date": date,
+                "pathPattern": path_pattern,
+            },
         }
     ).encode()
     req = urllib.request.Request(
@@ -238,7 +242,7 @@ def fetch_cloudflare_upgrade_visits(date):
         groups = zones[0].get("httpRequestsAdaptiveGroups") or []
         if not groups:
             return 0
-        return groups[0].get("sum", {}).get("visits", 0)
+        return groups[0].get("uniq", {}).get("uniques", 0)
     except Exception as e:
         print(f"WARNING: Could not fetch Cloudflare analytics ({e}) — skipping.")
         return None
@@ -281,7 +285,8 @@ def main():
     clones = fetch_clones_today()
     releases = fetch_release_downloads()
     pypi = fetch_pypi_downloads()
-    cf_upgrade_visits = fetch_cloudflare_upgrade_visits(today)
+    cf_upgrade_visits = fetch_cloudflare_path_visits(today, "%/upgrade.html%")
+    cf_version_checks = fetch_cloudflare_path_visits(today, "%/latest-version.json%")
 
     entry = {
         "date": today,
@@ -295,6 +300,7 @@ def main():
         # only version metadata — no download_count field).
         "ghcr_pulls": None,
         "upgrade_page_visits": cf_upgrade_visits,
+        "version_check_requests": cf_version_checks,
     }
 
     # Replace any existing entry for today (re-runs overwrite rather than duplicate).
@@ -308,7 +314,8 @@ def main():
         f"release_downloads={releases['total']}, "
         f"pypi_last_month={pypi['last_month']}, "
         f"clones_today={clones['count']}, "
-        f"upgrade_page_visits={cf_upgrade_visits}"
+        f"upgrade_page_visits={cf_upgrade_visits}, "
+        f"version_check_requests={cf_version_checks}"
         + (
             f" (source_date={clones['source_date']})"
             if clones.get("source_date")

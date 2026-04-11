@@ -46,6 +46,18 @@ jobs:
         run: |
           python scripts/generate_openapi_docs.py --output-dir website/api
 
+      - name: Generate latest-version.json
+        run: |
+          python - <<'EOF'
+          import json, tomllib
+          with open("pyproject.toml", "rb") as f:
+              data = tomllib.load(f)
+          version = data["project"]["version"]
+          with open("website/latest-version.json", "w") as out:
+              json.dump({"version": version}, out)
+          print(f"latest-version.json: {version}")
+          EOF
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
         with:
