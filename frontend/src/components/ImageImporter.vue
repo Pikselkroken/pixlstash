@@ -156,71 +156,6 @@ function logImportTrace(message, details = null) {
   console.info(`[IMPORT TRACE] ${message}`);
 }
 
-async function pollImportStatus(taskId, importProgressAccum, importTotalAccum) {
-  const maxAttempts = 600;
-  const intervalMs = 1000;
-  let lastLoggedStatus = null;
-  let lastLoggedStage = null;
-  let lastLoggedProcessed = -1;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (cancelImport.value) {
-      finalizeCancelled();
-      return null;
-    }
-
-    const statusRes = await apiClient.get(
-      `${props.backendUrl}/pictures/import/status`,
-      { params: { task_id: taskId } },
-    );
-    const status = statusRes?.data?.status || "in_progress";
-    const stage = statusRes?.data?.stage || "unknown";
-    const processed = statusRes?.data?.processed ?? 0;
-    const serverTotal = statusRes?.data?.total ?? 0;
-
-    if (
-      status !== lastLoggedStatus ||
-      stage !== lastLoggedStage ||
-      processed !== lastLoggedProcessed ||
-      attempt % 10 === 0
-    ) {
-      logImportTrace("Import status poll", {
-        taskId,
-        attempt: attempt + 1,
-        status,
-        stage,
-        processed,
-        total: serverTotal,
-      });
-      lastLoggedStatus = status;
-      lastLoggedStage = stage;
-      lastLoggedProcessed = processed;
-    }
-
-    importPhase.value = "processing";
-    importServerStage.value = stage;
-    if (serverTotal > 0) {
-      importTotal.value = Math.max(
-        importTotal.value,
-        importTotalAccum + serverTotal,
-      );
-    }
-    importProgress.value = importProgressAccum + processed;
-    importTotal.value = Math.max(importTotal.value, importProgress.value);
-
-    if (status === "completed") {
-      return statusRes.data;
-    }
-    if (status === "failed") {
-      throw new Error(statusRes?.data?.error || "Import failed");
-    }
-
-    await sleep(intervalMs);
-  }
-
-  throw new Error("Import timed out");
-}
-
 async function startImport(files, options = {}) {
   if (!files || !files.length) return;
   if (importInProgress.value) {
@@ -260,7 +195,7 @@ async function startImport(files, options = {}) {
 
   const BATCH_SIZE = 100;
   const MAX_RETRIES = 3;
-  const MIN_TIMEOUT_MS = 60000; // allow long-running server-side processing
+  const MIN_TIMEOUT_MS = 60000;
   const TIMEOUT_PER_FILE_MS = 4000;
   const overrideTimeout =
     typeof options.timeoutMs === "number" && options.timeoutMs > 0
@@ -268,12 +203,16 @@ async function startImport(files, options = {}) {
       : null;
 
   let uploadedBytesAccum = 0;
-  let importProgressAccum = 0;
-  let importTotalAccum = 0;
   let importedCount = 0;
   const allResults = [];
 
   try {
+    // ── Phase 1: Upload all batches without waiting for processing ──
+    // Each POST immediately returns a task_id; backend processing runs in
+    // parallel for batches already uploaded while the next batch is uploading.
+    const taskIds = [];
+    const batchFileCounts = [];
+
     for (let i = 0; i < files.length; i += BATCH_SIZE) {
       if (cancelImport.value) {
         finalizeCancelled();
@@ -281,21 +220,18 @@ async function startImport(files, options = {}) {
       }
 
       const batch = files.slice(i, i + BATCH_SIZE);
-      importPhase.value = "uploading";
-      importTotal.value = Math.max(
-        importTotal.value,
-        importTotalAccum + batch.length,
-      );
       const batchBytes = batch.reduce((sum, f) => sum + (f.size || 0), 0);
       const batchTimeoutMs =
         overrideTimeout ??
         Math.max(MIN_TIMEOUT_MS, batch.length * TIMEOUT_PER_FILE_MS);
+
       logImportTrace("Uploading batch", {
         batchIndex: Math.floor(i / BATCH_SIZE) + 1,
         batchSize: batch.length,
         batchBytes,
         timeoutMs: batchTimeoutMs,
       });
+
       const formData = new FormData();
       batch.forEach((file) => {
         formData.append("file", file);
@@ -317,9 +253,7 @@ async function startImport(files, options = {}) {
         currentImportController.value = controller;
         const timeout = setTimeout(() => {
           console.warn(
-            `[IMPORT] Aborting batch ${
-              i / BATCH_SIZE + 1
-            } after ${batchTimeoutMs}ms timeout (attempt ${attempt}). ` +
+            `[IMPORT] Aborting batch ${i / BATCH_SIZE + 1} after ${batchTimeoutMs}ms timeout (attempt ${attempt}). ` +
               `Bytes uploaded so far: ${uploadBytesUploaded.value} / ${uploadBytesTotal.value}. ` +
               `Stall duration: ${uploadStallSeconds.value}s.`,
           );
@@ -335,6 +269,7 @@ async function startImport(files, options = {}) {
           timeoutMs: batchTimeoutMs,
           url: `${props.backendUrl}/pictures/import`,
         });
+
         try {
           res = await apiClient.post(
             `${props.backendUrl}/pictures/import`,
@@ -342,9 +277,7 @@ async function startImport(files, options = {}) {
             {
               signal: controller.signal,
               timeout: batchTimeoutMs,
-              headers: {
-                "Content-Type": "multipart/form-data", // Ensure this is set correctly
-              },
+              headers: { "Content-Type": "multipart/form-data" },
               onUploadProgress: (progressEvent) => {
                 const loaded = progressEvent.loaded ?? 0;
                 if (!firstProgressLogged) {
@@ -376,7 +309,7 @@ async function startImport(files, options = {}) {
           if (controller === currentImportController.value) {
             currentImportController.value = null;
           }
-          break; // Success, exit retry loop
+          break;
         } catch (err) {
           _stopStallTimer();
           clearTimeout(timeout);
@@ -390,23 +323,17 @@ async function startImport(files, options = {}) {
           if (err.name === "AbortError") {
             lastError = new Error("Upload timed out");
             console.warn(
-              `[IMPORT] Batch ${
-                i / BATCH_SIZE + 1
-              } timed out (attempt ${attempt}). ` +
-                `firstProgressLogged=${firstProgressLogged}, ` +
-                `stallSeconds=${uploadStallSeconds.value}, ` +
+              `[IMPORT] Batch ${i / BATCH_SIZE + 1} timed out (attempt ${attempt}). ` +
+                `firstProgressLogged=${firstProgressLogged}, stallSeconds=${uploadStallSeconds.value}, ` +
                 `bytesUploaded=${uploadBytesUploaded.value}/${uploadBytesTotal.value}`,
             );
           } else {
             lastError = err;
             console.warn(
-              `[IMPORT] Batch ${
-                i / BATCH_SIZE + 1
-              } failed (attempt ${attempt}):`,
+              `[IMPORT] Batch ${i / BATCH_SIZE + 1} failed (attempt ${attempt}):`,
               err,
               `name=${err.name}, message=${err.message}, code=${err.code}, ` +
-                `firstProgressLogged=${firstProgressLogged}, ` +
-                `stallSeconds=${uploadStallSeconds.value}`,
+                `firstProgressLogged=${firstProgressLogged}, stallSeconds=${uploadStallSeconds.value}`,
             );
           }
         }
@@ -419,15 +346,13 @@ async function startImport(files, options = {}) {
             ? `Upload failed with status ${res.status}`
             : "No response received",
         );
-
         if (attempt < MAX_RETRIES) {
           await sleep(1000);
         }
       }
 
       if (!res || res.status < 200 || res.status >= 300) {
-        const message = lastError ? lastError.message : "Upload failed.";
-        finalizeError(message);
+        finalizeError(lastError ? lastError.message : "Upload failed.");
         return;
       }
 
@@ -446,38 +371,96 @@ async function startImport(files, options = {}) {
         batchIndex: Math.floor(i / BATCH_SIZE) + 1,
       });
 
-      importPhase.value = "processing";
-      const statusPayload = await pollImportStatus(
-        taskId,
-        importProgressAccum,
-        importTotalAccum,
-      );
-      if (!statusPayload) {
+      taskIds.push(taskId);
+      batchFileCounts.push(batch.length);
+    }
+
+    // All bytes are now in flight on the server; mark upload complete.
+    uploadBytesUploaded.value = uploadBytesTotal.value;
+    _stopStallTimer();
+
+    // ── Phase 2: Poll all task IDs in parallel until every batch is done ──
+    importPhase.value = "processing";
+    importTotal.value = files.length;
+    importProgress.value = 0;
+
+    // Per-task tracking state
+    const taskStatuses = taskIds.map((_, idx) => ({
+      processed: 0,
+      total: batchFileCounts[idx],
+      stage: "queued",
+      done: false,
+      result: null,
+    }));
+
+    const maxAttempts = 600;
+    const intervalMs = 1000;
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      if (cancelImport.value) {
+        finalizeCancelled();
         return;
       }
 
-      logImportTrace("Batch import finished", {
-        taskId,
-        status: statusPayload.status,
-        results: Array.isArray(statusPayload.results)
-          ? statusPayload.results.length
-          : 0,
-      });
+      // Fire one status request per incomplete task, all concurrently.
+      await Promise.all(
+        taskIds.map(async (taskId, idx) => {
+          if (taskStatuses[idx].done) return;
+          const statusRes = await apiClient.get(
+            `${props.backendUrl}/pictures/import/status`,
+            { params: { task_id: taskId } },
+          );
+          const status = statusRes?.data?.status || "in_progress";
+          const stage = statusRes?.data?.stage || "unknown";
+          const processed = statusRes?.data?.processed ?? 0;
+          const serverTotal = statusRes?.data?.total ?? taskStatuses[idx].total;
+          taskStatuses[idx].processed = processed;
+          taskStatuses[idx].total = serverTotal;
+          taskStatuses[idx].stage = stage;
+          if (status === "completed") {
+            taskStatuses[idx].done = true;
+            taskStatuses[idx].result = statusRes.data;
+          } else if (status === "failed") {
+            throw new Error(statusRes?.data?.error || "Import failed");
+          }
+        }),
+      );
 
-      const batchResults = Array.isArray(statusPayload.results)
-        ? statusPayload.results
+      // Aggregate progress across all tasks.
+      const totalProcessed = taskStatuses.reduce((s, t) => s + t.processed, 0);
+      const totalFiles = taskStatuses.reduce((s, t) => s + t.total, 0);
+      importProgress.value = totalProcessed;
+      importTotal.value = Math.max(importTotal.value, totalFiles);
+
+      // Show the stage of the first task that isn't finished yet.
+      const firstIncomplete = taskStatuses.find((t) => !t.done);
+      if (firstIncomplete) {
+        importServerStage.value = firstIncomplete.stage;
+      }
+
+      if (taskStatuses.every((t) => t.done)) break;
+
+      await sleep(intervalMs);
+      attempts++;
+    }
+
+    if (attempts >= maxAttempts) {
+      throw new Error("Import timed out");
+    }
+
+    logImportTrace("All batches complete", { taskCount: taskIds.length });
+
+    // Collect results from every completed task.
+    for (const ts of taskStatuses) {
+      if (!ts.result) continue;
+      const batchResults = Array.isArray(ts.result.results)
+        ? ts.result.results
         : [];
       allResults.push(...batchResults);
       importedCount += batchResults.filter(
         (r) => r.status === "success",
       ).length;
-
-      const batchTotal = statusPayload.total ?? batch.length;
-      importTotalAccum += batchTotal;
-      importProgressAccum += batchTotal;
-      importProgress.value = importProgressAccum;
-      importTotal.value = Math.max(importTotal.value, importTotalAccum);
-      await nextTick();
     }
 
     if (importedCount === 0) {
@@ -487,17 +470,14 @@ async function startImport(files, options = {}) {
     } else {
       importPhase.value = "done";
       importServerStage.value = "completed";
-      importError.value = `Imported ${importedCount} image${
-        importedCount !== 1 ? "s" : ""
-      }.`;
+      importError.value = `Imported ${importedCount} image${importedCount !== 1 ? "s" : ""}.`;
     }
 
-    importTotal.value = Math.max(importTotal.value, importTotalAccum);
+    importTotal.value = Math.max(importTotal.value, files.length);
     importProgress.value = importTotal.value;
     uploadBytesUploaded.value = uploadBytesTotal.value;
     currentImportController.value = null;
     cancelImport.value = false;
-    _stopStallTimer();
     hideTimerId = setTimeout(() => {
       importInProgress.value = false;
       hideTimerId = null;

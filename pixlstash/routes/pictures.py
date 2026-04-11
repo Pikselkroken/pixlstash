@@ -2959,7 +2959,11 @@ def create_router(server) -> APIRouter:
                 )
                 logger.error(f"Import task {task_id} failed: {exc}")
 
-        background_tasks.add_task(run_import_task, server)
+        async def run_import_task_async(server):
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, run_import_task, server)
+
+        background_tasks.add_task(run_import_task_async, server)
         return {"task_id": task_id}
 
     @router.get(
