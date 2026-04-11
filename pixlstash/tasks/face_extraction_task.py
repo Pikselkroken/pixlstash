@@ -10,6 +10,7 @@ from typing import List
 import cv2
 from insightface.app import FaceAnalysis
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import NO_VALUE
 from sqlmodel import select
 
@@ -472,7 +473,15 @@ class FaceExtractionTask(BaseTask):
                         bbox=None,
                     )
                     session.add(face)
-                    session.commit()
+                    try:
+                        session.commit()
+                    except IntegrityError:
+                        session.rollback()
+                        logger.warning(
+                            "Skipping sentinel insert for picture %s — picture was deleted.",
+                            pic.id,
+                        )
+                        return None
                     session.refresh(face)
                     return face.id
 
@@ -483,10 +492,20 @@ class FaceExtractionTask(BaseTask):
             elif need_faces:
 
                 def insert_faces(session, faces_to_insert):
-                    face_ids = []
                     for face in faces_to_insert:
                         session.add(face)
-                    session.commit()
+                    try:
+                        session.commit()
+                    except IntegrityError:
+                        session.rollback()
+                        logger.warning(
+                            "Skipping face insert for picture %s — picture was deleted.",
+                            faces_to_insert[0].picture_id
+                            if faces_to_insert
+                            else "unknown",
+                        )
+                        return []
+                    face_ids = []
                     for face in faces_to_insert:
                         session.refresh(face)
                         face_ids.append(face.id)
