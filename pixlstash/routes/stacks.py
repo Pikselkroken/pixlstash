@@ -211,13 +211,13 @@ def create_router(server) -> APIRouter:
         _ensure_secure_when_required(request)
         server.auth.require_user_id(request)
 
-        # Resolve sort mechanism; treat PICTURE_STACKS as "no sort" (stack order).
+        # Resolve sort mechanism; treat LIKENESS_GROUPS as "no sort" (stack order).
         sort_mech = None
         if sort:
             try:
                 candidate = SortMechanism.from_string(sort, descending=descending)
                 if candidate.key not in (
-                    SortMechanism.Keys.PICTURE_STACKS,
+                    SortMechanism.Keys.LIKENESS_GROUPS,
                     SortMechanism.Keys.SMART_SCORE,
                 ):
                     sort_mech = candidate

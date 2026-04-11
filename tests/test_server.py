@@ -1460,7 +1460,7 @@ def test_stack_query_respects_project_filter():
             server.vault.db.run_task(seed_likeness)
 
             stacks_a_resp = client.get(
-                "/pictures/stacks",
+                "/pictures/likeness-groups",
                 params={"threshold": 0.9, "project_id": str(project_a_id)},
             )
             assert stacks_a_resp.status_code == 200
@@ -1471,7 +1471,7 @@ def test_stack_query_respects_project_filter():
             assert pic_b2 not in stacks_a_ids
 
             stacks_b_resp = client.get(
-                "/pictures/stacks",
+                "/pictures/likeness-groups",
                 params={"threshold": 0.9, "project_id": str(project_b_id)},
             )
             assert stacks_b_resp.status_code == 200
@@ -1955,9 +1955,9 @@ def test_characters_summary():
     log_resources("END test_characters_summary")
 
 
-def test_pictures_stacks():
-    """Test /pictures/stacks endpoint returns 200 and valid structure."""
-    log_resources("START test_pictures_stacks")
+def test_pictures_likeness_groups():
+    """Test /pictures/likeness-groups endpoint returns 200 and valid structure."""
+    log_resources("START test_pictures_likeness_groups")
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(server_config_path) as server:
@@ -1967,18 +1967,20 @@ def test_pictures_stacks():
                 "/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert response.status_code == 200
-            resp = client.get("/pictures/stacks")
+            resp = client.get("/pictures/likeness-groups")
             assert resp.status_code == 200
             data = resp.json()
             assert isinstance(data, list)
     gc.collect()
-    log_resources("END test_pictures_stacks")
+    log_resources("END test_pictures_likeness_groups")
 
 
-def test_pictures_stacks_supports_set_intersection_filter():
-    """/pictures/stacks should support repeated set_ids with intersection mode."""
+def test_pictures_likeness_groups_supports_set_intersection_filter():
+    """/pictures/likeness-groups should support repeated set_ids with intersection mode."""
 
-    log_resources("START test_pictures_stacks_supports_set_intersection_filter")
+    log_resources(
+        "START test_pictures_likeness_groups_supports_set_intersection_filter"
+    )
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
         with Server(server_config_path=server_config_path) as server:
@@ -2042,7 +2044,7 @@ def test_pictures_stacks_supports_set_intersection_filter():
             assert set_a_id is not None
             assert set_b_id is not None
 
-            # /pictures/stacks groups are built from likeness edges, so seed a chain.
+            # /pictures/likeness-groups groups are built from likeness edges, so seed a chain.
             def seed_likeness_edges(session, a: int, b: int, c: int):
                 ab_a, ab_b = sorted((a, b))
                 bc_a, bc_b = sorted((b, c))
@@ -2084,7 +2086,7 @@ def test_pictures_stacks_supports_set_intersection_filter():
             )
 
             union_resp = client.get(
-                "/pictures/stacks",
+                "/pictures/likeness-groups",
                 params=[("set_ids", str(set_a_id)), ("set_ids", str(set_b_id))],
             )
             assert union_resp.status_code == 200
@@ -2093,7 +2095,7 @@ def test_pictures_stacks_supports_set_intersection_filter():
             assert pic_c in union_ids
 
             intersection_resp = client.get(
-                "/pictures/stacks",
+                "/pictures/likeness-groups",
                 params=[
                     ("set_ids", str(set_a_id)),
                     ("set_ids", str(set_b_id)),
@@ -2108,7 +2110,7 @@ def test_pictures_stacks_supports_set_intersection_filter():
             assert pic_a not in intersection_ids
 
     gc.collect()
-    log_resources("END test_pictures_stacks_supports_set_intersection_filter")
+    log_resources("END test_pictures_likeness_groups_supports_set_intersection_filter")
 
 
 def test_pictures_thumbnails():

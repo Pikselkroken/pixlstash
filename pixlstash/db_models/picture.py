@@ -49,7 +49,7 @@ class SortMechanism:
         IMPORTED_AT = auto()
         SCORE = auto()
         CHARACTER_LIKENESS = auto()
-        PICTURE_STACKS = auto()
+        LIKENESS_GROUPS = auto()
         IMAGE_SIZE = auto()
         SMART_SCORE = auto()
         TEXT_CONTENT = auto()
@@ -83,7 +83,7 @@ class SortMechanism:
             "field": "character_likeness",
             "description": "Similarity to ...",
         },
-        Keys.PICTURE_STACKS: {
+        Keys.LIKENESS_GROUPS: {
             "field": "id",
             "description": "Likeness Groups ...",
         },

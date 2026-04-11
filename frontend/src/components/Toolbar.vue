@@ -226,7 +226,7 @@
               </div>
             </div>
             <div
-              v-if="sortMenuModel === STACKS_SORT_KEY"
+              v-if="sortMenuModel === LIKENESS_GROUPS_SORT_KEY"
               class="toolbar-sort-similarity-row"
             >
               <span>Group strictness</span>
@@ -1592,7 +1592,7 @@ const sortModel = computed({
 });
 
 const SIMILARITY_SORT_KEY = "CHARACTER_LIKENESS";
-const STACKS_SORT_KEY = "PICTURE_STACKS";
+const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 
 const sortMenuModel = computed(() => {
   return pendingSortSelection.value ?? sortModel.value;
@@ -1623,7 +1623,7 @@ const isPendingSimilarityParameter = computed(() => {
 const isPendingStackParameter = computed(() => {
   return (
     isPendingParameterSortCommit.value &&
-    pendingSortKey.value === STACKS_SORT_KEY
+    pendingSortKey.value === LIKENESS_GROUPS_SORT_KEY
   );
 });
 
@@ -1694,7 +1694,7 @@ const sortButtonLabel = computed(() => {
       ? `Similarity: ${selectedSimilarityOption.value.text}`
       : "Similarity";
   }
-  if (sortModel.value === STACKS_SORT_KEY) {
+  if (sortModel.value === LIKENESS_GROUPS_SORT_KEY) {
     return selectedStackThresholdOption.value?.label
       ? `Groups: ${selectedStackThresholdOption.value.label}`
       : "Groups";
@@ -1723,7 +1723,7 @@ const SORT_ICON_MAP = {
   RANDOM: "mdi-shuffle",
   TEXT_CONTENT: "mdi-text-recognition",
   CHARACTER_LIKENESS: "mdi-account-search",
-  PICTURE_STACKS: "mdi-layers",
+  LIKENESS_GROUPS: "mdi-layers",
 };
 
 function getSortIcon(value) {
@@ -1747,7 +1747,7 @@ function toggleSortDirection() {
 
 function sortRequiresParameter(sortValue) {
   const key = String(sortValue || "").toUpperCase();
-  return key === SIMILARITY_SORT_KEY || key === STACKS_SORT_KEY;
+  return key === SIMILARITY_SORT_KEY || key === LIKENESS_GROUPS_SORT_KEY;
 }
 
 function commitSortSelection(sortValue) {
@@ -1773,8 +1773,10 @@ function handleSimilarityOptionClick(_value) {
 }
 
 function handleStackThresholdOptionClick(_value) {
-  if (String(sortMenuModel.value || "").toUpperCase() === STACKS_SORT_KEY) {
-    commitSortSelection(STACKS_SORT_KEY);
+  if (
+    String(sortMenuModel.value || "").toUpperCase() === LIKENESS_GROUPS_SORT_KEY
+  ) {
+    commitSortSelection(LIKENESS_GROUPS_SORT_KEY);
     sortMenuOpen.value = false;
   }
 }

@@ -524,6 +524,13 @@ def _select_pictures_for_listing(
         deleted_only: bool,
         formats: list[str] | None,
         project_id_value: str | None,
+        min_score_value: int | None = None,
+        tags_filter_value: list[str] | None = None,
+        tags_rejected_filter_value: list[str] | None = None,
+        tags_confidence_above_filter_value: list[str] | None = None,
+        tags_confidence_below_filter_value: list[str] | None = None,
+        comfyui_models_filter_value: list[str] | None = None,
+        comfyui_loras_filter_value: list[str] | None = None,
     ):
         if deleted_only:
             query = select(Picture.id).where(
@@ -552,7 +559,17 @@ def _select_pictures_for_listing(
                 Picture.deleted.is_(False),
             )
         elif character_id_value is None or character_id_value == "":
-            if project_id_value is None and not formats:
+            if (
+                project_id_value is None
+                and not formats
+                and min_score_value is None
+                and not tags_filter_value
+                and not tags_rejected_filter_value
+                and not tags_confidence_above_filter_value
+                and not tags_confidence_below_filter_value
+                and not comfyui_models_filter_value
+                and not comfyui_loras_filter_value
+            ):
                 return None
             query = select(Picture.id).where(
                 Picture.deleted.is_(False),
@@ -584,6 +601,68 @@ def _select_pictures_for_listing(
 
         if formats:
             query = query.where(Picture.format.in_(formats))
+
+        if min_score_value is not None:
+            query = query.where(Picture.score >= min_score_value)
+
+        if tags_filter_value:
+            for i, tag in enumerate(tags_filter_value):
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_tag_filter_{i})"
+                    ).bindparams(**{f"ss_tag_filter_{i}": tag})
+                )
+
+        if tags_rejected_filter_value:
+            for i, tag in enumerate(tags_rejected_filter_value):
+                query = query.where(
+                    text(
+                        f"NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_rejected_tag_{i})"
+                    ).bindparams(**{f"ss_rejected_tag_{i}": tag})
+                )
+
+        if tags_confidence_above_filter_value:
+            for i, entry in enumerate(tags_confidence_above_filter_value):
+                tag, threshold = entry.rsplit(":", 1)
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                        f" AND tag_prediction.tag = :ss_ca_tag_{i} AND tag_prediction.confidence >= :ss_ca_thresh_{i})"
+                        f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_ca_tag_{i})"
+                    ).bindparams(
+                        **{f"ss_ca_tag_{i}": tag, f"ss_ca_thresh_{i}": float(threshold)}
+                    )
+                )
+
+        if tags_confidence_below_filter_value:
+            for i, entry in enumerate(tags_confidence_below_filter_value):
+                tag, threshold = entry.rsplit(":", 1)
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                        f" AND tag_prediction.tag = :ss_cb_tag_{i} AND tag_prediction.confidence < :ss_cb_thresh_{i})"
+                        f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_cb_tag_{i})"
+                    ).bindparams(
+                        **{f"ss_cb_tag_{i}": tag, f"ss_cb_thresh_{i}": float(threshold)}
+                    )
+                )
+
+        if comfyui_models_filter_value:
+            for i, m in enumerate(comfyui_models_filter_value):
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_models) WHERE value = :ss_comfyui_model_{i})"
+                    ).bindparams(**{f"ss_comfyui_model_{i}": m})
+                )
+
+        if comfyui_loras_filter_value:
+            for i, m in enumerate(comfyui_loras_filter_value):
+                query = query.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM json_each(picture.comfyui_loras) WHERE value = :ss_comfyui_lora_{i})"
+                    ).bindparams(**{f"ss_comfyui_lora_{i}": m})
+                )
+
         return list(session.exec(query).all())
 
     logger.info("Getting pictures with project id = %s", project_id_raw)
@@ -600,6 +679,17 @@ def _select_pictures_for_listing(
             only_deleted,
             format,
             project_id_raw,
+            min_score_value=min_score,
+            tags_filter_value=query_params.get("tags_filter"),
+            tags_rejected_filter_value=query_params.get("tags_rejected_filter"),
+            tags_confidence_above_filter_value=query_params.get(
+                "tags_confidence_above_filter"
+            ),
+            tags_confidence_below_filter_value=query_params.get(
+                "tags_confidence_below_filter"
+            ),
+            comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
+            comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
         )
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
@@ -646,6 +736,17 @@ def _select_pictures_for_listing(
             only_deleted,
             format,
             project_id_raw,
+            min_score_value=min_score,
+            tags_filter_value=query_params.get("tags_filter"),
+            tags_rejected_filter_value=query_params.get("tags_rejected_filter"),
+            tags_confidence_above_filter_value=query_params.get(
+                "tags_confidence_above_filter"
+            ),
+            tags_confidence_below_filter_value=query_params.get(
+                "tags_confidence_below_filter"
+            ),
+            comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
+            comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
         )
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
@@ -1167,11 +1268,11 @@ def create_router(server) -> APIRouter:
         return server.vault.db.run_immediate_read_task(fetch)
 
     @router.get(
-        "/pictures/stacks",
-        summary="List computed picture stack groups",
-        description="Builds stack-like groups from likeness edges using filtering options such as character, set, format, and threshold.",
+        "/pictures/likeness-groups",
+        summary="List computed likeness groups",
+        description="Builds groups from likeness edges using filtering options such as character, set, format, and threshold.",
     )
-    def get_picture_stacks(
+    def get_likeness_groups(
         request: Request,
         threshold: float = 0.0,
         min_group_size: int = 2,
