@@ -188,16 +188,15 @@ pixlstash-server
 
 ## 6. Star Rating / Quality Score
 
-- [ ] In the grid, hover over a picture — the star overlay appears; click the 3rd star — the rating saves (star stays filled after moving the mouse away)
+- [ ] In the grid; click the 3rd star — the rating saves. Refersh the grid. It stays.
 - [ ] Open the ImageOverlay for the same picture — verify it shows 3 filled stars
-- [ ] In the ImageOverlay side panel: scroll to the **Quality** section and verify that blur, noise, and contrast numeric scores are displayed (not blank)
-
+- [ ] In the ImageOverlay for the same picture — click 4 stars. Verify it shows 4 filled stars. Exit the Image overlay. Confirm that it displays 4 active stars in the grid.
 ---
 
 ## 7. Picture Sets
 
 - [ ] In the sidebar, click a set with a known picture count — the grid shows only pictures in that set
-- [ ] Open the ImageOverlay on one of those pictures → click **Remove from set** (or drag the picture out of the set) — confirm the sidebar count for that set decreases by 1
+- [ ] Open the ImageOverlay on one of those pictures → Open the set menu. Uncheck the current set - exit the image overlay - confirm the sidebar count for that set decreases by 1 and the picture disappears from the set.
 
 ---
 
@@ -231,7 +230,7 @@ pixlstash-server
 
 ## 12. ComfyUI Integration
 
-- [ ] Open **Settings** → **Workflows** tab → enter the ComfyUI server URL → click **Save** → confirm "Connected" status appears
+- [ ] Open **Settings** → **Workflows** tab → enter the ComfyUI server URL → click **Save** → confirm the host appears in the dialog.
 - [ ] In the toolbar, open the ComfyUI menu → select a text-to-image workflow → fill in a prompt → click **Run** — a progress indicator appears and, after completion, the output picture appears in the grid
 - [ ] Repeat with an image-to-image workflow: select a source picture → run — output appears and is linked to the source
 - [ ] While a workflow is running: click **Abort** — execution stops and the progress indicator disappears
@@ -243,7 +242,7 @@ pixlstash-server
 For each plugin: open the ImageOverlay on a test picture, apply the plugin, confirm the result is visible.
 
 - [ ] **Blur/Sharpen**: apply blur level 5 → the saved picture is visibly blurrier than the original
-- [ ] **Brightness/Contrast**: increase brightness by 50 → the saved picture is visibly brighter
+- [ ] **Brightness/Contrast**: increase brightness by 2 → the saved picture is visibly brighter
 - [ ] **Colour Filter**: apply a colour tint → the saved picture shows the colour shift
 
 ---
@@ -259,14 +258,14 @@ For each plugin: open the ImageOverlay on a test picture, apply the plugin, conf
 ## 15. Export
 
 - [ ] Select 3 pictures in the grid (click while holding Ctrl/Cmd) → open the **Export** menu in the toolbar → choose **Full resolution** → click **Download ZIP** → verify the downloaded file opens correctly and contains 3 image files
-- [ ] In the sidebar, open a project → open the **Export** menu → download a project export ZIP → verify it contains a `project.json` and the expected image assets
+- [ ] In the sidebar, open a character → open the **Export** menu → download a project export ZIP → verify it contains the pictures from the character
+- [ ] In the sidebar, open a picture set → open the **Export** menu → download a project export ZIP → verify it contains the pictures from the set
 
 ---
 
 ## 16. Background Task System
 
 - [ ] After importing a batch of 5+ pictures: a task progress overlay or indicator appears in the UI showing live status (percentage or picture count)
-- [ ] Wait for processing to complete — open a processed picture in the ImageOverlay and confirm quality metrics (blur, noise, contrast) are populated with numeric values
 - [ ] Open a picture that contains faces — the **Faces** section in the side panel shows at least one face crop
 - [ ] Open a picture's ImageOverlay → scroll to the **Description** section — a generated caption is present (not blank)
 
