@@ -45,7 +45,6 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
         "/favicon.ico",
         "/",
         "/version",
-        "/version/latest",
         "/check-session",
         "/logout",
     }

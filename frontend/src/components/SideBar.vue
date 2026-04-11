@@ -26,6 +26,9 @@ const updateAvailable = computed(
   () => latestVersion.value && latestVersion.value !== appVersion,
 );
 
+const LATEST_VERSION_URL = "https://pixlstash.dev/latest-version.json";
+const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
+
 const props = defineProps({
   collapsed: { type: Boolean, default: false },
   selectedCharacter: { type: [String, Number, null], default: null },
@@ -42,6 +45,7 @@ const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 48 },
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
+  checkForUpdates: { type: Boolean, default: null },
 });
 
 const emit = defineEmits([
@@ -69,6 +73,7 @@ const emit = defineEmits([
   "open-import-dialog",
   "update:project-view-mode",
   "update:selected-project-id",
+  "update:check-for-updates",
 ]);
 
 const imageImporterRef = ref(null);
@@ -1393,15 +1398,34 @@ async function characterSaved() {
   closeCharacterEditor();
 }
 
-onMounted(() => {
-  // Check for a newer version on PyPI (fire-and-forget, never throws)
-  apiClient
-    .get("/version/latest")
-    .then((resp) => {
-      latestVersion.value = resp.data.latest_version;
-      latestVersionUrl.value = resp.data.release_url;
+function checkForUpdatesNow() {
+  fetch(LATEST_VERSION_URL)
+    .then((r) => r.json())
+    .then((data) => {
+      const remote = data?.version;
+      if (remote && remote !== appVersion) {
+        latestVersion.value = remote;
+        latestVersionUrl.value = UPDATE_PAGE_URL;
+      }
     })
     .catch(() => {});
+}
+
+watch(
+  () => props.checkForUpdates,
+  (val) => {
+    if (val === true && !latestVersion.value) {
+      checkForUpdatesNow();
+    }
+  },
+);
+
+onMounted(() => {
+  // Fetch latest version directly from pixlstash.dev when the user has opted in.
+  // Also handled by a watcher above for when the prop resolves after mount.
+  if (props.checkForUpdates === true) {
+    checkForUpdatesNow();
+  }
 
   const handleNoticeReflow = () => {
     updateSidebarNoticePosition();
@@ -1697,10 +1721,14 @@ defineExpose({
     v-model:sidebar-thumbnail-size="sidebarThumbnailSizeModel"
     v-model:date-format="dateFormatModel"
     v-model:theme-mode="themeModeModel"
+    :checkForUpdates="props.checkForUpdates"
     @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
     @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
     @update:comfyui-configured="
       (value) => emit('update:comfyui-configured', value)
+    "
+    @update:check-for-updates="
+      (value) => emit('update:check-for-updates', value)
     "
   />
 
@@ -2088,7 +2116,14 @@ defineExpose({
               </div>
             </div>
 
-            <div class="sidebar-section-block">
+            <div
+              class="sidebar-section-block"
+              :style="
+                peopleSectionCollapsed
+                  ? {}
+                  : { flex: `${Math.max(1, visibleCharacters.length)} 1 0` }
+              "
+            >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
                 @click.stop="peopleSectionCollapsed = !peopleSectionCollapsed"
@@ -2308,7 +2343,14 @@ defineExpose({
               </div>
             </div>
 
-            <div class="sidebar-section-block">
+            <div
+              class="sidebar-section-block"
+              :style="
+                setsSectionCollapsed
+                  ? {}
+                  : { flex: `${Math.max(1, visibleSets.length)} 1 0` }
+              "
+            >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
                 @click.stop="setsSectionCollapsed = !setsSectionCollapsed"
@@ -2691,10 +2733,6 @@ defineExpose({
   flex: 0 0 auto;
 }
 
-.sidebar-section-block:has(.sidebar-section-scroll) {
-  flex: 1 1 0;
-}
-
 .sidebar-section-scroll {
   flex: 1 1 0;
   min-height: 0;
@@ -3053,13 +3091,18 @@ defineExpose({
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
+  position: relative;
 }
 
 .sidebar-update-available {
-  font-size: 0.8rem;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  font-size: 0.65rem;
+  line-height: 1;
   color: rgba(var(--v-theme-accent), 0.8);
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .sidebar-update-available:hover {

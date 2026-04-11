@@ -120,6 +120,10 @@ const tagRejectedFilter = ref([]);
 const tagConfidenceAboveFilter = ref([]);
 const tagConfidenceBelowFilter = ref([]);
 
+// null = undecided (show dialog), true/false = user's explicit choice
+const checkForUpdates = ref(null);
+const updateCheckDialogOpen = ref(false);
+
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
 const wsTagUpdate = ref({ key: 0, pictureIds: [] });
@@ -651,6 +655,16 @@ function handleUpdateThemeMode(value) {
   themeMode.value = String(value);
 }
 
+async function handleUpdateCheckForUpdates(value) {
+  // value is true, false, or null (reset to undecided)
+  checkForUpdates.value = value;
+  try {
+    await apiClient.patch("/users/me/config", { check_for_updates: value });
+  } catch (e) {
+    console.error("Failed to save check_for_updates preference:", e);
+  }
+}
+
 function handleUpdateSidebarThumbnailSize(value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
@@ -815,6 +829,12 @@ async function fetchConfig() {
       apply_tag_filter: applyTagFilter.value,
     };
     comfyuiConfigured.value = Boolean(res.data?.comfyui_url);
+    // tri-state: null = undecided → show dialog after config loads
+    const cfu = res.data?.check_for_updates;
+    checkForUpdates.value = cfu === true ? true : cfu === false ? false : null;
+    if (checkForUpdates.value === null) {
+      updateCheckDialogOpen.value = true;
+    }
   } catch (e) {
     console.error("Failed to fetch /users/me/config:", e);
   } finally {
@@ -1251,6 +1271,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :sidebarThumbnailSize="sidebarThumbnailSize"
             :dateFormat="dateFormat"
             :themeMode="themeMode"
+            :checkForUpdates="checkForUpdates"
             @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
             @update:hidden-tags="handleUpdateHiddenTags"
@@ -1272,6 +1293,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @open-import-dialog="openImportDialog"
             @update:set-error="error = $event"
             @update:set-loading="loading = $event"
+            @update:check-for-updates="handleUpdateCheckForUpdates"
           />
         </div>
         <Transition name="backdrop-fade">
@@ -1281,6 +1303,46 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @click="sidebarVisible = false"
           ></div>
         </Transition>
+
+        <!-- Update-check consent dialog -->
+        <v-dialog v-model="updateCheckDialogOpen" max-width="420" persistent>
+          <v-card class="update-check-dialog">
+            <v-card-title class="update-check-title"
+              >Check for updates automatically?</v-card-title
+            >
+            <v-card-text class="update-check-body">
+              When enabled, PixlStash checks for a newer version on startup.
+              <br />
+              <span class="update-check-note"
+                >The update page counts accesses anonymously. No IP addresses
+                are stored.</span
+              >
+            </v-card-text>
+            <v-card-actions class="update-check-actions">
+              <v-btn
+                variant="tonal"
+                @click="
+                  () => {
+                    updateCheckDialogOpen = false;
+                    handleUpdateCheckForUpdates(false);
+                  }
+                "
+                >No</v-btn
+              >
+              <v-btn
+                color="primary"
+                variant="elevated"
+                @click="
+                  () => {
+                    updateCheckDialogOpen = false;
+                    handleUpdateCheckForUpdates(true);
+                  }
+                "
+                >Yes</v-btn
+              >
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
         <PhotosImportDialog
           v-model:open="photosDialogOpen"
           :default-project-id="sidebarRef?.currentProjectId ?? null"

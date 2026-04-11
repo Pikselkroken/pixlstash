@@ -9,6 +9,7 @@ const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 48 },
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
+  checkForUpdates: { type: Boolean, default: null },
 });
 
 const emit = defineEmits([
@@ -19,6 +20,7 @@ const emit = defineEmits([
   "update:hidden-tags",
   "update:apply-tag-filter",
   "update:comfyui-configured",
+  "update:check-for-updates",
 ]);
 
 const dialogOpen = computed({
@@ -72,7 +74,12 @@ const themeModeOptions = [
   { title: "Dark", value: "dark" },
 ];
 
-const settingsTab = ref("preferences");
+const checkForUpdatesModel = computed({
+  get: () => props.checkForUpdates ?? false,
+  set: (value) => emit("update:check-for-updates", value),
+});
+
+const settingsTab = ref("appearance");
 const settingsUsername = ref("");
 const settingsHasPassword = ref(false);
 const settingsLoading = ref(false);
@@ -1368,7 +1375,7 @@ watch(
   (isOpen) => {
     if (isOpen) {
       resetSettingsForm();
-      settingsTab.value = "preferences";
+      settingsTab.value = "appearance";
       fetchSettingsAuth();
       fetchUserTokens();
       fetchSmartScoreSettings();
@@ -1452,14 +1459,15 @@ const workflowImportCaptionPreview = computed(() => {
           class="settings-tabs"
           show-arrows
         >
-          <v-tab value="preferences">Preferences</v-tab>
+          <v-tab value="appearance">Appearance</v-tab>
+          <v-tab value="behaviour">Behaviour</v-tab>
           <v-tab value="smart-score">Smart Score</v-tab>
           <v-tab value="workflows">Workflows</v-tab>
           <v-tab value="account">Account Settings</v-tab>
         </v-tabs>
         <v-card-text class="settings-dialog-body">
           <v-window v-model="settingsTab" class="settings-tab-body">
-            <v-window-item value="preferences">
+            <v-window-item value="appearance">
               <v-divider class="settings-section-divider" />
               <div class="settings-section">
                 <div
@@ -1520,6 +1528,18 @@ const workflowImportCaptionPreview = computed(() => {
                   variant="filled"
                   class="settings-add-tag-input"
                   hide-details
+                />
+              </div>
+            </v-window-item>
+            <v-window-item value="behaviour">
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <div class="settings-section-title">Updates</div>
+                <v-checkbox
+                  v-model="checkForUpdatesModel"
+                  density="compact"
+                  hide-details
+                  label="Check for updates automatically (anonymous count only)"
                 />
               </div>
               <v-divider class="settings-section-divider" />

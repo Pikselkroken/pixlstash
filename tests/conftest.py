@@ -16,7 +16,6 @@ _API_V1_PREFIX = "/api/v1"
 _NON_API_ROOT_PATHS = {
     "/",
     "/version",
-    "/version/latest",
     "/favicon.ico",
 }
 

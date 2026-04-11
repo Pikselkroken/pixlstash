@@ -446,3 +446,29 @@ kbd {
   border-radius: 3px;
   line-height: 1.5;
 }
+
+.update-check-dialog {
+  padding: 8px 4px;
+}
+
+.update-check-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  padding-bottom: 4px;
+}
+
+.update-check-body {
+  color: rgb(var(--v-theme-on-surface));
+  line-height: 1.6;
+}
+
+.update-check-note {
+  font-size: 0.82rem;
+  opacity: 0.7;
+}
+
+.update-check-actions {
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+}

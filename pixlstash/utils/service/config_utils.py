@@ -58,6 +58,7 @@ def serialize_user_config(user) -> dict:
         "custom_tagger_enabled",
         "wd14_threshold",
         "custom_tagger_threshold_offset",
+        "check_for_updates",
     }
 
     config = {
@@ -68,6 +69,9 @@ def serialize_user_config(user) -> dict:
         )
         for key in allowed_fields
     }
+    # check_for_updates is tri-state: serialise as-is, including None (undecided)
+    config["check_for_updates"] = getattr(source, "check_for_updates", None)
+
     config["expand_all_stacks"] = (
         getattr(source, "show_stacks")
         if getattr(source, "show_stacks") is not None
@@ -140,6 +144,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "custom_tagger_enabled",
         "wd14_threshold",
         "custom_tagger_threshold_offset",
+        "check_for_updates",
     }
 
     allowed_date_formats = {
@@ -266,6 +271,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
                     )
             if getattr(user, key) != new_value:
                 setattr(user, key, new_value)
+                updated = True
+            continue
+        if key == "check_for_updates":
+            if value in ("", "null"):
+                new_value = None
+            elif value is None:
+                new_value = None
+            else:
+                new_value = bool(value)
+            if user.check_for_updates != new_value:
+                user.check_for_updates = new_value
                 updated = True
             continue
         if key == "date_format":
