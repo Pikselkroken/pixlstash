@@ -1211,8 +1211,8 @@
         "last_month": 1437
       },
       "ghcr_pulls": null,
-      "upgrade_page_visits": null,
-      "version_check_requests": null
+      "upgrade_page_visits": 7,
+      "version_check_requests": 0
     }
   ]
 }
