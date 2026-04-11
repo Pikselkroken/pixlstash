@@ -2519,6 +2519,7 @@ def create_router(server) -> APIRouter:
         _MAX_UPLOAD_BYTES = 5 * 1024**3  # 5 GB per uploaded file / zip
         _MAX_ZIP_ENTRIES = 5_000  # max files inside a zip
         _MAX_ZIP_DECOMPRESSED_BYTES = 10 * 1024**3  # 10 GB total decompressed
+
         if not server.vault.is_worker_running(TaskType.FACE_EXTRACTION):
             raise HTTPException(
                 status_code=400,
@@ -2639,12 +2640,13 @@ def create_router(server) -> APIRouter:
                 detail="No valid media files found for import",
             )
 
+        total_import_bytes_log = sum(len(data) for data, *_ in uploaded_files)
         logger.info(
             "Import request received: files=%d, sidecar_txt=%d, project_id=%s, total_bytes=%d",
             len(uploaded_files),
             len(sidecar_text_by_stem),
             project_id,
-            sum(len(data) for data, *_ in uploaded_files),
+            total_import_bytes_log,
         )
 
         sidecar_tags_by_stem: dict[str, list[str]] = {}

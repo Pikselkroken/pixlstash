@@ -601,6 +601,8 @@ const emit = defineEmits([
   "search-all",
   "update:selected-sort",
   "update:stack-stats",
+  "import-started",
+  "import-ended",
 ]);
 
 // Props
@@ -2870,6 +2872,7 @@ const imageImporterRef = ref(null);
 async function handleImagesUploaded(payload) {
   pauseGridAutoUpdates.value = false;
   pendingGridRefreshAfterImport.value = false;
+  emit("import-ended");
   const results = Array.isArray(payload?.results) ? payload.results : [];
   const pictureIds = Array.from(
     new Set(
@@ -2919,6 +2922,7 @@ async function handleImagesUploaded(payload) {
 function handleImportStarted() {
   pauseGridAutoUpdates.value = true;
   pendingGridRefreshAfterImport.value = false;
+  emit("import-started");
 }
 
 function runDeferredGridRefreshAfterImport() {
@@ -2933,11 +2937,13 @@ function runDeferredGridRefreshAfterImport() {
 
 function handleImportCancelled() {
   pauseGridAutoUpdates.value = false;
+  emit("import-ended");
   runDeferredGridRefreshAfterImport();
 }
 
 function handleImportErrored() {
   pauseGridAutoUpdates.value = false;
+  emit("import-ended");
   runDeferredGridRefreshAfterImport();
 }
 
