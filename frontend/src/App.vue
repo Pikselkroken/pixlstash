@@ -128,6 +128,7 @@ const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
 const wsTagUpdate = ref({ key: 0, pictureIds: [] });
 const wsPluginProgress = ref({ key: 0, payload: null });
+const isUploadInProgress = ref(false);
 const columnsMenuOpen = ref(false);
 const overlaysMenuOpen = ref(false);
 const configLoaded = ref(false);
@@ -207,7 +208,9 @@ function connectUpdatesSocket() {
       payload?.type === "pictures_changed" ||
       payload?.type === "picture_imported";
     if (isPictureChange) {
-      refreshSidebarPicturesDebounced(true);
+      if (!isUploadInProgress.value) {
+        refreshSidebarPicturesDebounced(true);
+      }
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
@@ -1481,6 +1484,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               @refresh-sidebar="refreshSidebar"
               @reset-to-all="handleResetToAll"
               @update:stack-stats="handleStackStatsUpdate"
+              @import-started="isUploadInProgress = true"
+              @import-ended="isUploadInProgress = false"
             />
           </div>
         </main>

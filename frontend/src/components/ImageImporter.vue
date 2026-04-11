@@ -31,7 +31,6 @@ const uploadStallSeconds = ref(0); // seconds elapsed with no byte progress
 let hideTimerId = null;
 let _stallTimerId = null;
 let _stallLastBytes = -1;
-
 function _startStallTimer() {
   _stopStallTimer();
   uploadStallSeconds.value = 0;
