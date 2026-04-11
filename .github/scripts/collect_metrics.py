@@ -189,6 +189,7 @@ def fetch_cloudflare_path_visits(date, path_pattern):
         return None
 
     # httpRequestsAdaptiveGroups is a zone-level dataset — query via zones, not accounts.
+    # Note: uniq is not available on httpRequestsAdaptiveGroups; use sum { visits } instead.
     query = """
     query($zoneTag: String!, $date: Date!, $pathPattern: String!) {
       viewer {
@@ -202,8 +203,8 @@ def fetch_cloudflare_path_visits(date, path_pattern):
             }
             limit: 1
           ) {
-            uniq {
-              uniques
+            sum {
+              visits
             }
           }
         }
@@ -242,7 +243,7 @@ def fetch_cloudflare_path_visits(date, path_pattern):
         groups = zones[0].get("httpRequestsAdaptiveGroups") or []
         if not groups:
             return 0
-        return groups[0].get("uniq", {}).get("uniques", 0)
+        return groups[0].get("sum", {}).get("visits", 0)
     except Exception as e:
         print(f"WARNING: Could not fetch Cloudflare analytics ({e}) — skipping.")
         return None
