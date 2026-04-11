@@ -1171,8 +1171,9 @@
         "source_date": "2026-04-10"
       },
       "release_downloads": {
-        "total": 80,
+        "total": 81,
         "by_release": {
+          "v1.0.0rc11": 1,
           "v1.0.0rc10": 7,
           "v1.0.0rc9": 0,
           "v1.0.0rc8": 2,
@@ -1210,7 +1211,8 @@
         "last_month": 1437
       },
       "ghcr_pulls": null,
-      "upgrade_page_visits": 0
+      "upgrade_page_visits": null,
+      "version_check_requests": null
     }
   ]
 }
