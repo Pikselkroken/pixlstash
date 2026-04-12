@@ -140,6 +140,59 @@
           align-items: flex-start;
         }
       }
+
+      .video-card img,
+      .video-card video {
+        cursor: zoom-in;
+      }
+
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(18, 20, 24, 0.72);
+        z-index: 2000;
+        padding: 28px;
+      }
+
+      .lightbox.open {
+        display: flex;
+      }
+
+      .lightbox-image,
+      .lightbox-video {
+        max-width: min(1200px, 92vw);
+        max-height: 82vh;
+        width: auto;
+        height: auto;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45);
+      }
+
+      .lightbox-video {
+        display: none;
+      }
+
+      .lightbox-close {
+        position: absolute;
+        top: 24px;
+        right: 24px;
+        border: none;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.9);
+        color: #1b1f24;
+        cursor: pointer;
+      }
+
+      .lightbox-close:hover {
+        background: rgba(255, 255, 255, 1);
+      }
     </style>
   </head>
   <body>
@@ -182,11 +235,11 @@
         <div class="feature feature--reverse">
           <div class="feature-text">
             <span class="feature-number">Built for</span>
-            <h2>Creators who work at scale</h2>
+            <h2>Anyone drowning in images</h2>
             <p>
               Whether you're a photographer culling shoots, an AI trainer
-              curating datasets, or a digital artist managing references,
-              PixlStash brings structure to large image collections.
+              curating datasets or a hobbyist with a large image collection,
+              PixlStash helps you bring order to the chaos.
             </p>
             <p>
               Handle tens of thousands of images with ease, and spend more time
@@ -220,5 +273,59 @@
         <span><a href="metrics.html">Project metrics</a></span>
       </footer>
     </div>
+
+    <div class="lightbox" id="lightbox" aria-hidden="true">
+      <button class="lightbox-close" type="button">Close</button>
+      <img class="lightbox-image" alt="" />
+      <video class="lightbox-video" controls playsinline></video>
+    </div>
+    <script>
+      const lightbox = document.getElementById("lightbox");
+      const lightboxImage = lightbox.querySelector(".lightbox-image");
+      const lightboxVideo = lightbox.querySelector(".lightbox-video");
+      const lightboxClose = lightbox.querySelector(".lightbox-close");
+
+      function openLightbox(el) {
+        if (el.tagName === "VIDEO") {
+          lightboxImage.style.display = "none";
+          lightboxVideo.style.display = "block";
+          lightboxVideo.src = el.src;
+          lightboxVideo.currentTime = 0;
+          lightboxVideo.play();
+        } else {
+          lightboxVideo.style.display = "none";
+          lightboxImage.style.display = "block";
+          lightboxImage.src = el.dataset.full || el.src;
+          lightboxImage.alt = el.alt || "Screenshot";
+        }
+        lightbox.classList.add("open");
+        lightbox.setAttribute("aria-hidden", "false");
+      }
+
+      function closeLightbox() {
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+        lightboxImage.src = "";
+        lightboxVideo.pause();
+        lightboxVideo.src = "";
+      }
+
+      document
+        .querySelectorAll(".video-card img, .video-card video")
+        .forEach((el) => {
+          el.addEventListener("click", () => openLightbox(el));
+        });
+
+      lightboxClose.addEventListener("click", closeLightbox);
+
+      lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox) closeLightbox();
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && lightbox.classList.contains("open"))
+          closeLightbox();
+      });
+    </script>
   </body>
 </html>

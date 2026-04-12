@@ -79,6 +79,53 @@
           padding: 0 16px;
         }
       }
+
+      .video-card video {
+        cursor: zoom-in;
+      }
+
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(18, 20, 24, 0.72);
+        z-index: 2000;
+        padding: 28px;
+      }
+
+      .lightbox.open {
+        display: flex;
+      }
+
+      .lightbox-video {
+        max-width: min(1200px, 92vw);
+        max-height: 82vh;
+        width: auto;
+        height: auto;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45);
+      }
+
+      .lightbox-close {
+        position: absolute;
+        top: 24px;
+        right: 24px;
+        border: none;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.9);
+        color: #1b1f24;
+        cursor: pointer;
+      }
+
+      .lightbox-close:hover {
+        background: rgba(255, 255, 255, 1);
+      }
     </style>
   </head>
   <body>
@@ -125,12 +172,13 @@
           <!-- 02 Character Assignment -->
           <div class="feature feature--reverse">
             <div class="feature-text">
-              <span class="feature-number">02 — Characters</span>
+              <span class="feature-number">02 — People</span>
               <h2>Put names to faces</h2>
               <p>
-                PixlStash detects every face and groups them by similarity.
-                Assign a character name once and it propagates across your
-                entire library, making face-based sorting instant.
+                PixlStash detects faces for every picture. Assign pictures to a
+                person and PixlStash will build up a profile for that person
+                letting you sort by likeness to find all the other pictures of
+                them.
               </p>
             </div>
             <div class="video-card">
@@ -170,7 +218,7 @@
           <div class="feature feature--reverse">
             <div class="feature-text">
               <span class="feature-number">04 — Smart Score</span>
-              <h2>Surface your best shots</h2>
+              <h2>Get rid of the rubbish</h2>
               <p>
                 A composite quality score weighs aesthetics and anomaly tags to
                 help you clear the worst images. Filter and sort by smart score
@@ -195,7 +243,7 @@
               <h2>Find anything by description</h2>
               <p>
                 CLIP-powered semantic search understands natural language. Type
-                "outdoors golden hour" or "close-up smiling" and get relevant
+                "walking in the park" or "close-up smiling" and get relevant
                 results immediately — no exact tag match needed.
               </p>
             </div>
@@ -237,5 +285,45 @@
       <!-- /page-content -->
     </div>
     <!-- /intro-shell -->
+
+    <div class="lightbox" id="lightbox" aria-hidden="true">
+      <button class="lightbox-close" type="button">Close</button>
+      <video class="lightbox-video" controls playsinline></video>
+    </div>
+    <script>
+      const lightbox = document.getElementById("lightbox");
+      const lightboxVideo = lightbox.querySelector(".lightbox-video");
+      const lightboxClose = lightbox.querySelector(".lightbox-close");
+
+      function openLightbox(el) {
+        lightboxVideo.src = el.src;
+        lightboxVideo.currentTime = 0;
+        lightboxVideo.play();
+        lightbox.classList.add("open");
+        lightbox.setAttribute("aria-hidden", "false");
+      }
+
+      function closeLightbox() {
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+        lightboxVideo.pause();
+        lightboxVideo.src = "";
+      }
+
+      document.querySelectorAll(".video-card video").forEach((el) => {
+        el.addEventListener("click", () => openLightbox(el));
+      });
+
+      lightboxClose.addEventListener("click", closeLightbox);
+
+      lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox) closeLightbox();
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && lightbox.classList.contains("open"))
+          closeLightbox();
+      });
+    </script>
   </body>
 </html>
