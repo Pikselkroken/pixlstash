@@ -62,6 +62,7 @@ pixlstash-server
 Works on Linux, macOS, and Windows (Docker Desktop / Docker Engine required).
 
 ```bash
+docker pull ghcr.io/pikselkroken/pixlstash:latest
 docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537 \
   ghcr.io/pikselkroken/pixlstash:latest
 ```
