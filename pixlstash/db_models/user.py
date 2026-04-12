@@ -46,6 +46,7 @@ class User(SQLModel, table=True):
     wd14_threshold: Optional[float] = Field(default=None)
     custom_tagger_threshold_offset: Optional[float] = Field(default=None)
     check_for_updates: Optional[bool] = Field(default=None)
+    show_keyboard_hint: bool = Field(default=True)
 
     tokens: List["UserToken"] = Relationship(
         back_populates="user",

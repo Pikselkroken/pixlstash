@@ -58,6 +58,7 @@ const filteredSearchHistory = computed(() => {
   );
 });
 const showStars = ref(true);
+const showKeyboardHint = ref(true);
 const showFaceBboxes = ref(false);
 const showFormat = ref(true);
 const showResolution = ref(true);
@@ -696,6 +697,8 @@ async function fetchConfig() {
     }
     if (typeof res.data.show_stars === "boolean")
       showStars.value = res.data.show_stars;
+    if (typeof res.data.show_keyboard_hint === "boolean")
+      showKeyboardHint.value = res.data.show_keyboard_hint;
     if (typeof res.data.show_face_bboxes === "boolean") {
       showFaceBboxes.value = res.data.show_face_bboxes;
     }
@@ -815,6 +818,7 @@ async function fetchConfig() {
           ? sidebarThumbnailSize.value
           : null,
       show_stars: showStars.value,
+      show_keyboard_hint: showKeyboardHint.value,
       show_face_bboxes: showFaceBboxes.value,
       show_format: showFormat.value,
       show_resolution: showResolution.value,
@@ -859,6 +863,8 @@ async function patchConfigUIOptions() {
     patch.sidebar_thumbnail_size = sidebarThumbnailSize.value;
   }
   if (typeof showStars.value === "boolean") patch.show_stars = showStars.value;
+  if (typeof showKeyboardHint.value === "boolean")
+    patch.show_keyboard_hint = showKeyboardHint.value;
   if (typeof showFaceBboxes.value === "boolean") {
     patch.show_face_bboxes = showFaceBboxes.value;
   }
@@ -1148,6 +1154,11 @@ watch(showStars, () => {
   patchConfigUIOptions();
 });
 
+watch(showKeyboardHint, () => {
+  if (!configLoaded.value) return;
+  patchConfigUIOptions();
+});
+
 watch(
   [
     showFaceBboxes,
@@ -1275,6 +1286,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :dateFormat="dateFormat"
             :themeMode="themeMode"
             :checkForUpdates="checkForUpdates"
+            :showKeyboardHint="showKeyboardHint"
+            @update:show-keyboard-hint="showKeyboardHint = $event"
             @update:similarity-options="handleUpdateSimilarityOptions"
             @update:sort-options="handleUpdateSortOptions"
             @update:hidden-tags="handleUpdateHiddenTags"
@@ -1498,6 +1511,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
       />
     </div>
     <button
+      v-show="showKeyboardHint"
       class="shortcuts-fab"
       type="button"
       title="Keyboard shortcuts (F1)"

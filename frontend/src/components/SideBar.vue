@@ -46,6 +46,7 @@ const props = defineProps({
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
   checkForUpdates: { type: Boolean, default: null },
+  showKeyboardHint: { type: Boolean, default: true },
 });
 
 const emit = defineEmits([
@@ -74,6 +75,7 @@ const emit = defineEmits([
   "update:project-view-mode",
   "update:selected-project-id",
   "update:check-for-updates",
+  "update:show-keyboard-hint",
 ]);
 
 const imageImporterRef = ref(null);
@@ -537,6 +539,11 @@ const dateFormatModel = computed({
 const themeModeModel = computed({
   get: () => props.themeMode ?? "light",
   set: (value) => emit("update:theme-mode", value ?? "light"),
+});
+
+const showKeyboardHintModel = computed({
+  get: () => props.showKeyboardHint ?? true,
+  set: (value) => emit("update:show-keyboard-hint", value ?? true),
 });
 
 const sidebarThumbnailSizeLarge = computed(
@@ -1722,6 +1729,7 @@ defineExpose({
     v-model:date-format="dateFormatModel"
     v-model:theme-mode="themeModeModel"
     :checkForUpdates="props.checkForUpdates"
+    v-model:show-keyboard-hint="showKeyboardHintModel"
     @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
     @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
     @update:comfyui-configured="

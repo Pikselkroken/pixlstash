@@ -10,6 +10,7 @@ const props = defineProps({
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
   checkForUpdates: { type: Boolean, default: null },
+  showKeyboardHint: { type: Boolean, default: true },
 });
 
 const emit = defineEmits([
@@ -21,6 +22,7 @@ const emit = defineEmits([
   "update:apply-tag-filter",
   "update:comfyui-configured",
   "update:check-for-updates",
+  "update:show-keyboard-hint",
 ]);
 
 const dialogOpen = computed({
@@ -77,6 +79,14 @@ const themeModeOptions = [
 const checkForUpdatesModel = computed({
   get: () => props.checkForUpdates ?? false,
   set: (value) => emit("update:check-for-updates", value),
+});
+
+const showKeyboardHintModel = computed({
+  get: () => props.showKeyboardHint ?? true,
+  set: (value) => {
+    if (value === (props.showKeyboardHint ?? true)) return;
+    emit("update:show-keyboard-hint", value);
+  },
 });
 
 const settingsTab = ref("appearance");
@@ -1528,6 +1538,15 @@ const workflowImportCaptionPreview = computed(() => {
                   variant="filled"
                   class="settings-add-tag-input"
                   hide-details
+                />
+              </div>
+              <v-divider class="settings-section-divider" />
+              <div class="settings-section">
+                <v-checkbox
+                  v-model="showKeyboardHintModel"
+                  density="compact"
+                  hide-details
+                  label="Show keyboard shortcut (F1) indicator"
                 />
               </div>
             </v-window-item>

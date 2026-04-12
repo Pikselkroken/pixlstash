@@ -59,6 +59,7 @@ def serialize_user_config(user) -> dict:
         "wd14_threshold",
         "custom_tagger_threshold_offset",
         "check_for_updates",
+        "show_keyboard_hint",
     }
 
     config = {
@@ -145,6 +146,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "wd14_threshold",
         "custom_tagger_threshold_offset",
         "check_for_updates",
+        "show_keyboard_hint",
     }
 
     allowed_date_formats = {
