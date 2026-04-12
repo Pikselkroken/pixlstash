@@ -221,6 +221,7 @@ GPL-only backend internals, different obligations may apply.
 - If the page does not load, confirm the server process is running.
 - If port `9537` is in use, set a different port in your server config file.
 - If frontend assets are missing, rebuild frontend with `npm run build` and restart the server.
+- **Mobile browsers:** the UI is designed for desktop. Mobile may work for basic browsing but is not a supported layout in 1.0.0.
 
 ## Docker Images
 
