@@ -285,7 +285,7 @@ class FaceExtractionTask(BaseTask):
                 ".avif",
             ]:
                 read_start = time.time()
-                img = cv2.imread(file_path)
+                img = ImageUtils.load_image_or_video_bgr(file_path)
                 image_load_s += time.time() - read_start
                 if img is not None:
                     if need_faces:
