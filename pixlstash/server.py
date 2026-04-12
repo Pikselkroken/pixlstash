@@ -635,7 +635,12 @@ class Server:
         return server_config
 
     def _ensure_ssl_certificates(self):
-        import subprocess
+        import datetime
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
 
         keyfile = self._server_config.get("ssl_keyfile")
         certfile = self._server_config.get("ssl_certfile")
@@ -645,25 +650,38 @@ class Server:
             os.makedirs(os.path.dirname(certfile), exist_ok=True)
             print(f"[SSL] Generating self-signed certificate: {certfile}, {keyfile}")
             try:
-                subprocess.run(
-                    [
-                        "openssl",
-                        "req",
-                        "-x509",
-                        "-nodes",
-                        "-days",
-                        "365",
-                        "-newkey",
-                        "rsa:2048",
-                        "-keyout",
-                        keyfile,
-                        "-out",
-                        certfile,
-                        "-subj",
-                        "/CN=localhost",
-                    ],
-                    check=True,
+                private_key = rsa.generate_private_key(
+                    public_exponent=65537,
+                    key_size=2048,
                 )
+                subject = issuer = x509.Name(
+                    [x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]
+                )
+                now = datetime.datetime.now(datetime.timezone.utc)
+                cert = (
+                    x509.CertificateBuilder()
+                    .subject_name(subject)
+                    .issuer_name(issuer)
+                    .public_key(private_key.public_key())
+                    .serial_number(x509.random_serial_number())
+                    .not_valid_before(now)
+                    .not_valid_after(now + datetime.timedelta(days=365))
+                    .add_extension(
+                        x509.SubjectAlternativeName([x509.DNSName("localhost")]),
+                        critical=False,
+                    )
+                    .sign(private_key, hashes.SHA256())
+                )
+                with open(keyfile, "wb") as f:
+                    f.write(
+                        private_key.private_bytes(
+                            serialization.Encoding.PEM,
+                            serialization.PrivateFormat.TraditionalOpenSSL,
+                            serialization.NoEncryption(),
+                        )
+                    )
+                with open(certfile, "wb") as f:
+                    f.write(cert.public_bytes(serialization.Encoding.PEM))
             except Exception as e:
                 print(f"[SSL] Failed to generate self-signed certificate: {e}")
                 raise
