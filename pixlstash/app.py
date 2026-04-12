@@ -372,7 +372,7 @@ def main():
         _prompt_bootstrap_credentials(server)
 
     if args.remove_password:
-        server.remove_password_hash()
+        server.auth.remove_password_hash()
         # Continue running the server after removing the password hash
 
     if args.clear_embeddings:
