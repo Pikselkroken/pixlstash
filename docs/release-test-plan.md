@@ -82,6 +82,7 @@ Requires NVIDIA Container Toolkit installed and Docker restarted.
 Verify GPU access first: `docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi`
 
 ```bash
+docker pull ghcr.io/pikselkroken/pixlstash:latest-gpu
 mkdir -p ~/Pictures/pixlstash
 docker run -d \
   --runtime nvidia \
@@ -95,6 +96,8 @@ docker run -d \
   --name pixlstash \
   ghcr.io/pikselkroken/pixlstash:latest-gpu
 ```
+
+> **If the container exits immediately with a permission error:** a previous run may have created `~/Pictures/pixlstash/.config` owned by root. Fix with `sudo chown -R $(id -u):$(id -g) ~/Pictures/pixlstash`, then re-run the `docker run` command above.
 
 | Check | Ubuntu 24.04 |
 |-------|--------------|
