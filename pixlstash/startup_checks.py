@@ -240,13 +240,15 @@ class StartupChecks:
                 outcome.warnings.append(f"Watch folder does not exist: {folder}")
 
     def _check_optional_dependencies(self, outcome: StartupCheckOutcome) -> None:
-        openssl_path = shutil.which("openssl")
-        if self._server_config.get("require_ssl", False) and not openssl_path:
-            outcome.hard_failures.append(
-                "require_ssl is enabled but openssl is not available on PATH."
-            )
-        elif not openssl_path:
-            outcome.warnings.append("Optional dependency missing: openssl")
+        if self._server_config.get("require_ssl", False):
+            keyfile = self._server_config.get("ssl_keyfile", "")
+            certfile = self._server_config.get("ssl_certfile", "")
+            certs_exist = os.path.exists(keyfile) and os.path.exists(certfile)
+            if not certs_exist and not shutil.which("openssl"):
+                outcome.hard_failures.append(
+                    "require_ssl is enabled but openssl is not available on PATH "
+                    "and no existing certificate files were found."
+                )
 
         if not shutil.which("nvidia-smi"):
             outcome.warnings.append(
