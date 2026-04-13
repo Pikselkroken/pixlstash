@@ -3,16 +3,18 @@
   <img src="website/assets/ScreenshotGrid.jpg" alt="PixlStash Screenshot" width="800"/>
 </p>
 
-PixlStash is a local picture library server for organizing, filtering, and reviewing large image collections. It was just renamed from PixlVault due to name conflicts.
+PixlStash is a local picture library server for organizing, filtering, and reviewing large image collections.
 
 It provides:
 
 - A browser-based interface
+- Automatic tagging of images
 - Fast metadata and tag filtering
 - Smart score sorting
 - Character and set organization
 - Local storage of your library data
-- Simple keyboard shortcuts for scoring, selection, deletion and navigation.
+- API for integrating with other tools
+- Simple keyboard shortcuts for scoring, selection, tagging, deletion and navigation.
 - Integration with ComfyUI for running workflows on selected images within PixlStash.
 - Plugin system for defining new filter operations that can be performed on a set of images.
 
