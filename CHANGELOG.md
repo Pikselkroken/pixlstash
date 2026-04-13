@@ -1,3 +1,12 @@
+# [1.0.0]
+- Improved tagging interface
+- Improved speed and reliability of image uploads
+- Support more file formats
+- Make the choice of tagger(s) optional
+- Improved keyboard shortcuts
+- Improved PixlStash tagger
+- Many bug fixes
+
 # [1.0.0rc5] - 2026-04-08:
 - Fixed git tag to ensure a proper build
 
