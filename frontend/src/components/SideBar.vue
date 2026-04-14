@@ -22,8 +22,36 @@ const appVersion = __APP_VERSION__;
 
 const latestVersion = ref(null);
 const latestVersionUrl = ref(null);
+
+// PEP 440-aware version comparison: treats rc/a/b/dev as pre-releases.
+function parseVersion(v) {
+  const m = String(v).match(
+    /^(\d+)\.(\d+)\.(\d+)(?:(\.?(?:a|b|rc|dev))(\d+))?/i,
+  );
+  if (!m) return null;
+  const preTag = m[4]?.toLowerCase().replace(/^\./, "");
+  const preWeight = { dev: -4, a: -3, b: -2, rc: -1 }[preTag] ?? 0;
+  return [
+    Number(m[1]),
+    Number(m[2]),
+    Number(m[3]),
+    preWeight,
+    Number(m[5] || 0),
+  ];
+}
+function isRemoteNewer(current, remote) {
+  const a = parseVersion(current);
+  const b = parseVersion(remote);
+  if (!a || !b) return false; // conservatively: don't advertise if we can't parse
+  for (let i = 0; i < a.length; i++) {
+    if (b[i] > a[i]) return true;
+    if (b[i] < a[i]) return false;
+  }
+  return false;
+}
+
 const updateAvailable = computed(
-  () => latestVersion.value && latestVersion.value !== appVersion,
+  () => latestVersion.value && isRemoteNewer(appVersion, latestVersion.value),
 );
 
 const LATEST_VERSION_URL = "https://pixlstash.dev/latest-version.json";
@@ -1410,7 +1438,7 @@ function checkForUpdatesNow() {
     .then((r) => r.json())
     .then((data) => {
       const remote = data?.version;
-      if (remote && remote !== appVersion) {
+      if (remote && isRemoteNewer(appVersion, remote)) {
         latestVersion.value = remote;
         latestVersionUrl.value = UPDATE_PAGE_URL;
       }
