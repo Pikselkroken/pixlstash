@@ -1,6 +1,6 @@
 [project]
 name = "pixlstash"
-version = "1.0.1rc2"
+version = "1.0.1rc3"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
 license = "GPL-3.0-only AND MIT"
@@ -20,7 +20,7 @@ keywords = [
     "comfyui",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
