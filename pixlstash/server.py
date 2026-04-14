@@ -534,6 +534,12 @@ class Server:
             await loop.run_in_executor(None, self._cleanup_missing_pictures)
         if self._server_config.get("generate_thumbnails_on_startup", True):
             await loop.run_in_executor(None, self._generate_missing_thumbnails)
+        host = self._server_config.get("host", "127.0.0.1")
+        port = self._server_config.get("port", 9537)
+        scheme = "https" if self._server_config.get("require_ssl", False) else "http"
+        logger.info(
+            "PixlStash is ready. Open in your browser: %s://%s:%s/", scheme, host, port
+        )
         yield
         # Shutdown logic — only clear _ws_loop if this lifespan instance set it
         if was_set_by_us:
