@@ -1,3 +1,7 @@
+# [1.0.1]
+- Updated two dependencies (pillow and npm_and_yarn) due to vulnerabilities
+- Shifted to a self-contained Python way of generating SSL certs so we don't rely on external OpenSSL.
+
 # [1.0.0]
 - Improved tagging interface
 - Improved speed and reliability of image uploads
