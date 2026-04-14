@@ -173,8 +173,15 @@ def fetch_pypi_downloads():
         return {"last_day": None, "last_week": None, "last_month": None}
 
 
-def fetch_cloudflare_path_visits(date, path_pattern):
-    """Return the number of visits matching *path_pattern* on *date* (YYYY-MM-DD).
+def fetch_cloudflare_path_visits(date, path_pattern, field="visits"):
+    """Return the Cloudflare analytics count for *path_pattern* on *date* (YYYY-MM-DD).
+
+    Args:
+        date: Date string in YYYY-MM-DD format.
+        path_pattern: SQL LIKE pattern matched against clientRequestPath.
+        field: Which sum field to return — ``"visits"`` for browser page views
+            (HTML pages) or ``"requests"`` for all HTTP requests including
+            programmatic fetches (JSON files, API calls, etc.).
 
     Requires:
       CF_API_TOKEN — Cloudflare API token with Zone Analytics: Read permission
@@ -189,7 +196,9 @@ def fetch_cloudflare_path_visits(date, path_pattern):
         return None
 
     # httpRequestsAdaptiveGroups is a zone-level dataset — query via zones, not accounts.
-    # Note: uniq is not available on httpRequestsAdaptiveGroups; use sum { visits } instead.
+    # Use sum { requests } for programmatic fetches (e.g. JSON files fetched via JS) and
+    # sum { visits } for browser page views (e.g. HTML pages). Both are returned so the
+    # caller can pick the appropriate field via the `field` parameter.
     query = """
     query($zoneTag: String!, $date: Date!, $pathPattern: String!) {
       viewer {
@@ -204,6 +213,7 @@ def fetch_cloudflare_path_visits(date, path_pattern):
             limit: 1
           ) {
             sum {
+              requests
               visits
             }
           }
@@ -243,7 +253,7 @@ def fetch_cloudflare_path_visits(date, path_pattern):
         groups = zones[0].get("httpRequestsAdaptiveGroups") or []
         if not groups:
             return 0
-        return groups[0].get("sum", {}).get("visits", 0)
+        return groups[0].get("sum", {}).get(field, 0)
     except Exception as e:
         print(f"WARNING: Could not fetch Cloudflare analytics ({e}) — skipping.")
         return None
@@ -286,8 +296,8 @@ def main():
     clones = fetch_clones_today()
     releases = fetch_release_downloads()
     pypi = fetch_pypi_downloads()
-    cf_upgrade_visits = fetch_cloudflare_path_visits(today, "%/upgrade.html%")
-    cf_version_checks = fetch_cloudflare_path_visits(today, "%/latest-version.json%")
+    cf_upgrade_visits = fetch_cloudflare_path_visits(today, "%/upgrade.html%", field="visits")
+    cf_version_checks = fetch_cloudflare_path_visits(today, "%/latest-version.json%", field="requests")
 
     entry = {
         "date": today,
