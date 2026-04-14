@@ -2,7 +2,9 @@
 set PIXLSTASH_APP_DIR=%~dp0
 set PIXLSTASH_PORT=9537
 
-start "" /B powershell -NoProfile -WindowStyle Hidden -Command "$healthUrl = 'http://localhost:%PIXLSTASH_PORT%/version'; $appUrl = 'http://localhost:%PIXLSTASH_PORT%/'; $deadline = [DateTime]::UtcNow.AddSeconds(60); while ([DateTime]::UtcNow -lt $deadline) { try { Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null; Start-Process $appUrl; break } catch { Start-Sleep -Seconds 1 } }"
+echo PixlStash is starting...
+echo Open in your browser: http://localhost:%PIXLSTASH_PORT%/
+echo.
 
 if exist "%PIXLSTASH_APP_DIR%venv\Scripts\pixlstash-server.exe" (
     "%PIXLSTASH_APP_DIR%venv\Scripts\pixlstash-server.exe" %*
