@@ -16,7 +16,6 @@
     />
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
-
       .metrics-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -216,6 +215,16 @@
             Estimated PyPI total + release downloads total
           </p>
         </div>
+        <div class="metric-card">
+          <p class="metric-label">Upgrade page visits</p>
+          <p class="metric-value" id="latest-upgrade-visits">-</p>
+          <p class="metric-note">Latest daily visits to the upgrade page</p>
+        </div>
+        <div class="metric-card">
+          <p class="metric-label">Version check requests</p>
+          <p class="metric-value" id="latest-version-checks">-</p>
+          <p class="metric-note">Daily requests to latest-version.json</p>
+        </div>
       </div>
 
       <div class="chart-stack">
@@ -233,9 +242,6 @@
 
         <section class="chart-card">
           <h2 class="chart-title">Downloads over time</h2>
-          <p class="chart-subtitle">
-            Includes the running total you asked for.
-          </p>
           <div class="chart-wrap">
             <canvas
               id="downloads-chart"
@@ -243,6 +249,21 @@
             ></canvas>
           </div>
           <div class="chart-legend" id="downloads-legend"></div>
+        </section>
+
+        <section class="chart-card">
+          <h2 class="chart-title">Upgrade &amp; version check activity</h2>
+          <p class="chart-subtitle">
+            Daily visits to the upgrade page and requests to
+            latest-version.json.
+          </p>
+          <div class="chart-wrap">
+            <canvas
+              id="upgrade-visits-chart"
+              aria-label="Upgrade page visits and version check requests chart"
+            ></canvas>
+          </div>
+          <div class="chart-legend" id="upgrade-visits-legend"></div>
         </section>
       </div>
 
@@ -269,6 +290,8 @@
         releaseDownloads: document.getElementById("latest-release-downloads"),
         totalDownloads: document.getElementById("latest-total-downloads"),
         combinedDownloads: document.getElementById("latest-combined-downloads"),
+        upgradeVisits: document.getElementById("latest-upgrade-visits"),
+        versionChecks: document.getElementById("latest-version-checks"),
       };
 
       const numberFormatter = new Intl.NumberFormat("en-US");
@@ -574,11 +597,25 @@
           (value, index) => value + toNumber(releaseTotal[index]),
         );
 
-        const ghcrSeries = entries.map((entry) => {
-          const value = entry.ghcr_pulls;
-          return value === null || value === undefined ? null : toNumber(value);
-        });
-        const hasGhcrData = ghcrSeries.some((value) => value !== null);
+        const upgradePageVisits = entries.map((entry) =>
+          entry.upgrade_page_visits === null ||
+          entry.upgrade_page_visits === undefined
+            ? null
+            : toNumber(entry.upgrade_page_visits),
+        );
+        const hasUpgradeData = upgradePageVisits.some(
+          (value) => value !== null,
+        );
+
+        const versionCheckRequests = entries.map((entry) =>
+          entry.version_check_requests === null ||
+          entry.version_check_requests === undefined
+            ? null
+            : toNumber(entry.version_check_requests),
+        );
+        const hasVersionCheckData = versionCheckRequests.some(
+          (value) => value !== null,
+        );
 
         const communityChart = new Chart(
           document.getElementById("community-chart"),
@@ -721,22 +758,6 @@
           },
         ];
 
-        if (hasGhcrData) {
-          downloadDatasets.push({
-            label: "GHCR pulls",
-            data: ghcrSeries,
-            borderColor: "#6f6f7b",
-            backgroundColor: "rgba(111, 111, 123, 0.12)",
-            borderWidth: 2,
-            tension: 0.2,
-            pointStyle: "crossRot",
-            pointRadius: 3,
-            pointHoverRadius: 5,
-            yAxisID: "y",
-            spanGaps: false,
-          });
-        }
-
         const downloadsChart = new Chart(
           document.getElementById("downloads-chart"),
           {
@@ -799,6 +820,77 @@
         );
         renderCustomLegend(downloadsChart, "downloads-legend");
 
+        if (hasUpgradeData || hasVersionCheckData) {
+          const upgradeChartDatasets = [];
+          if (hasUpgradeData) {
+            upgradeChartDatasets.push({
+              label: "Upgrade page visits",
+              data: upgradePageVisits,
+              borderColor: "#6f4e9c",
+              backgroundColor: "rgba(111, 78, 156, 0.14)",
+              borderWidth: 2,
+              tension: 0.22,
+              pointStyle: "circle",
+              pointRadius: 3,
+              pointHoverRadius: 5,
+              spanGaps: false,
+            });
+          }
+          if (hasVersionCheckData) {
+            upgradeChartDatasets.push({
+              label: "Version check requests",
+              data: versionCheckRequests,
+              borderColor: "#3a7bd5",
+              backgroundColor: "rgba(58, 123, 213, 0.14)",
+              borderWidth: 2,
+              tension: 0.22,
+              pointStyle: "rectRot",
+              pointRadius: 3,
+              pointHoverRadius: 5,
+              spanGaps: false,
+            });
+          }
+          const upgradeChart = new Chart(
+            document.getElementById("upgrade-visits-chart"),
+            {
+              type: "line",
+              data: { labels, datasets: upgradeChartDatasets },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: "index", intersect: false },
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    callbacks: {
+                      title(context) {
+                        const dateString = context[0]?.label || "";
+                        const date = parseIsoDate(dateString);
+                        return date
+                          ? tooltipDateFormatter.format(date)
+                          : dateString;
+                      },
+                      label(context) {
+                        return `${context.dataset.label}: ${formatNumber(context.parsed.y)}`;
+                      },
+                    },
+                  },
+                },
+                scales: {
+                  x: createXAxisOptions(labels),
+                  y: {
+                    beginAtZero: true,
+                    ticks: {
+                      callback: (value) => formatNumber(value),
+                    },
+                  },
+                },
+              },
+            },
+          );
+          renderCustomLegend(upgradeChart, "upgrade-visits-legend");
+        }
+
         const latestIndex = entries.length - 1;
         metricEls.stars.textContent = formatNumber(stars[latestIndex]);
         metricEls.forks.textContent = formatNumber(forks[latestIndex]);
@@ -811,6 +903,24 @@
         metricEls.combinedDownloads.textContent = formatNumber(
           combinedTotalEstimated[latestIndex],
         );
+        if (hasUpgradeData) {
+          const latestUpgrade = upgradePageVisits
+            .slice()
+            .reverse()
+            .find((v) => v !== null);
+          metricEls.upgradeVisits.textContent =
+            latestUpgrade !== undefined ? formatNumber(latestUpgrade) : "-";
+        }
+        if (hasVersionCheckData) {
+          const latestVersionCheck = versionCheckRequests
+            .slice()
+            .reverse()
+            .find((v) => v !== null);
+          metricEls.versionChecks.textContent =
+            latestVersionCheck !== undefined
+              ? formatNumber(latestVersionCheck)
+              : "-";
+        }
       }
 
       async function init() {
