@@ -296,10 +296,6 @@ def main():
         "clones_today": clones,
         "release_downloads": releases,
         "pypi_downloads": pypi,
-        # GHCR pull counts are not exposed via the GitHub Packages API
-        # (the /orgs/{org}/packages/container/{name}/versions endpoint returns
-        # only version metadata — no download_count field).
-        "ghcr_pulls": None,
         "upgrade_page_visits": cf_upgrade_visits,
         "version_check_requests": cf_version_checks,
     }
