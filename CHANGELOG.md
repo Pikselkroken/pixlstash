@@ -1,3 +1,6 @@
+# [1.0.2]
+- Fix problem where the "update available" check thought 1.0.1rc3 was newer than 1.0.1.
+
 # [1.0.1]
 - Updated two dependencies (pillow and npm_and_yarn) due to vulnerabilities
 - Shifted to a self-contained Python way of generating SSL certs so we don't rely on external OpenSSL.
