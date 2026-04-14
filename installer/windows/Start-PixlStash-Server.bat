@@ -3,8 +3,6 @@ set PIXLSTASH_APP_DIR=%~dp0
 set PIXLSTASH_PORT=9537
 
 echo PixlStash is starting...
-echo Open in your browser: http://localhost:%PIXLSTASH_PORT%/
-echo.
 
 if exist "%PIXLSTASH_APP_DIR%venv\Scripts\pixlstash-server.exe" (
     "%PIXLSTASH_APP_DIR%venv\Scripts\pixlstash-server.exe" %*
