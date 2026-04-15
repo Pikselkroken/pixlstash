@@ -1377,14 +1377,14 @@
       "stars": 28,
       "forks": 2,
       "clones_today": {
-        "count": 70,
-        "uniques": 26,
-        "source_date": "2026-04-13"
+        "count": 670,
+        "uniques": 126,
+        "source_date": "2026-04-14"
       },
       "release_downloads": {
-        "total": 127,
+        "total": 134,
         "by_release": {
-          "v1.0.2": 4,
+          "v1.0.2": 11,
           "v1.0.1rc3": 2,
           "v1.0.1rc2": 0,
           "v1.0.1rc1": 1,
@@ -1421,8 +1421,8 @@
         "last_week": 890,
         "last_month": 1831
       },
-      "upgrade_page_visits": 4,
-      "version_check_requests": 0
+      "upgrade_page_visits": 10,
+      "version_check_requests": 3
     }
   ]
 }
