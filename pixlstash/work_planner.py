@@ -47,6 +47,7 @@ class WorkPlanner:
         from pixlstash.tasks.missing_source_face_likeness_finder import (
             MissingSourceFaceLikenessCharacterFinder,
         )
+        from pixlstash.tasks.missing_file_purge_finder import MissingFilePurgeFinder
 
         return {
             TaskType.FACE_EXTRACTION: MissingFaceExtractionFinder(
@@ -94,6 +95,9 @@ class WorkPlanner:
                 picture_tagger_getter=picture_tagger_getter,
             ),
             TaskType.SOURCE_FACE_LIKENESS: MissingSourceFaceLikenessCharacterFinder(
+                database=database,
+            ),
+            TaskType.MISSING_FILE_PURGE: MissingFilePurgeFinder(
                 database=database,
             ),
         }
