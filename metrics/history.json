@@ -1382,9 +1382,9 @@
         "source_date": "2026-04-13"
       },
       "release_downloads": {
-        "total": 127,
+        "total": 131,
         "by_release": {
-          "v1.0.2": 4,
+          "v1.0.2": 8,
           "v1.0.1rc3": 2,
           "v1.0.1rc2": 0,
           "v1.0.1rc1": 1,
@@ -1421,8 +1421,8 @@
         "last_week": 890,
         "last_month": 1831
       },
-      "upgrade_page_visits": 4,
-      "version_check_requests": 0
+      "upgrade_page_visits": 6,
+      "version_check_requests": 2
     }
   ]
 }
