@@ -183,6 +183,7 @@ const labelMap = {
   watch_folder_import: "Folder import",
   comfyui_extraction: "ComfyUI backfill",
   tag_predictions_scored: "Tag Predictions",
+  missing_file_purge: "File cleanup",
 };
 
 function seedSnapshotsIfEmpty() {

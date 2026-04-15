@@ -17,6 +17,7 @@ class TaskType(str, Enum):
     COMFYUI_EXTRACTION = "ComfyUIExtractionTask"
     TAG_PREDICTION = "TagPredictionTask"
     SOURCE_FACE_LIKENESS = "SourceFaceLikenessTask"
+    MISSING_FILE_PURGE = "MissingFilePurgeTask"
 
     @staticmethod
     def all():

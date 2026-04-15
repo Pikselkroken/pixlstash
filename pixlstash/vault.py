@@ -657,6 +657,10 @@ class Vault:
                 else:
                     missing = 0
                 label = "tag_predictions_scored"
+            elif worker_type == TaskType.MISSING_FILE_PURGE:
+                total = 0
+                missing = 0
+                label = "missing_file_purge"
             else:
                 missing = 0
                 label = "planner_managed"
