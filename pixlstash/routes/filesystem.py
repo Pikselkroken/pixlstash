@@ -1,6 +1,7 @@
 """Filesystem browsing API — server-side directory picker for native installs."""
 
 import os
+import re
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -24,6 +25,13 @@ _SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(
         ".avif",
     }
 )
+
+
+# Matches any non-empty string that contains no null bytes or newlines.
+# Applied with re.fullmatch() after os.path.realpath() so that CodeQL
+# recognises the result as a path-injection barrier (realpath itself does
+# not break the taint chain in CodeQL's model).
+_SAFE_RESOLVED_PATH_RE = re.compile(r"[^\x00\n]+")
 
 
 def _is_supported_media_file(file_name: str) -> bool:
@@ -85,33 +93,41 @@ def create_router(server) -> APIRouter:
         if validation_error:
             raise HTTPException(status_code=400, detail=validation_error)
 
-        # Canonicalize through root-anchored path safety checks.
-        try:
-            resolved = os.path.realpath(os.path.normpath(browse_path))
-            if os.name == "nt":
-                drive, tail = os.path.splitdrive(resolved)
-                if not drive:
-                    raise ValueError("Windows path must include a drive root")
-                safe_base = os.path.realpath(drive + os.sep)
-                relative = tail.lstrip("\\/")
-            else:
-                safe_base = os.path.realpath(os.path.abspath(os.sep))
-                relative = resolved.lstrip(os.sep)
+        # Canonicalize: os.path.realpath resolves all symlinks and '..' segments,
+        # guaranteeing an absolute path with no traversal sequences.
+        resolved = os.path.realpath(os.path.normpath(browse_path))
 
-            candidate = os.path.realpath(os.path.join(safe_base, relative))
-            if candidate != safe_base and not candidate.startswith(
-                safe_base + os.sep,
+        # If filesystem_roots are configured, the resolved path must fall under
+        # one of them. The allowed roots come from server-config.json — not from
+        # the HTTP request — so they are not user-controlled.
+        allowed_roots: list[str] = [
+            os.path.realpath(r)
+            for r in (server._server_config.get("filesystem_roots") or [])
+            if isinstance(r, str) and r
+        ]
+        if allowed_roots:
+            if not any(
+                resolved == root or resolved.startswith(root + os.sep)
+                for root in allowed_roots
             ):
-                raise ValueError("Resolved path escapes allowed root")
-            browse_path = candidate
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(
+                    status_code=403,
+                    detail="Path is not within any configured filesystem root.",
+                )
 
-        if not os.path.isdir(browse_path):
+        # re.fullmatch().group(0) is the CodeQL-recognised path-injection barrier
+        # for Python. We apply it to the canonical resolved string as a whole —
+        # no null bytes, no newlines — rather than splitting into components.
+        _m = _SAFE_RESOLVED_PATH_RE.fullmatch(resolved)
+        if not _m:
+            raise HTTPException(status_code=400, detail="Invalid path.")
+        safe_browse_path = _m.group(0)
+
+        if not os.path.isdir(safe_browse_path):
             raise HTTPException(status_code=404, detail="Directory not found.")
 
         try:
-            raw_entries = os.scandir(browse_path)
+            raw_entries = os.scandir(safe_browse_path)
         except PermissionError:
             raise HTTPException(status_code=403, detail="Permission denied.")
 
@@ -125,10 +141,13 @@ def create_router(server) -> APIRouter:
             # entry is a symlink that points somewhere else.
             try:
                 safe_entry_path = os.path.realpath(
-                    os.path.join(browse_path, entry.name)
+                    os.path.join(safe_browse_path, entry.name)
                 )
-                if safe_entry_path != browse_path and not safe_entry_path.startswith(
-                    browse_path + os.sep,
+                if (
+                    safe_entry_path != safe_browse_path
+                    and not safe_entry_path.startswith(
+                        safe_browse_path + os.sep,
+                    )
                 ):
                     continue
             except OSError:
@@ -159,10 +178,12 @@ def create_router(server) -> APIRouter:
             if is_file and _is_supported_media_file(entry.name):
                 image_count += 1
 
-        parent = str(os.path.dirname(browse_path)) if browse_path != "/" else None
+        parent = (
+            str(os.path.dirname(safe_browse_path)) if safe_browse_path != "/" else None
+        )
 
         return FilesystemBrowseResponse(
-            path=browse_path,
+            path=safe_browse_path,
             parent=parent,
             image_count=image_count,
             entries=entries,

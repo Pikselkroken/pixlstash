@@ -596,6 +596,7 @@ class Server:
                 "cors_origins": [],
                 "watch_folders": [],
                 "max_attachment_size_mb": 50,
+                "filesystem_roots": [],
             }
             with open(server_config_path, "w") as f:
                 json.dump(server_config, f, indent=2)
@@ -638,6 +639,8 @@ class Server:
                     server_config["max_attachment_size_mb"] = 50
                 if "generate_thumbnails_on_startup" not in server_config:
                     server_config["generate_thumbnails_on_startup"] = True
+                if "filesystem_roots" not in server_config:
+                    server_config["filesystem_roots"] = []
 
         # Resolve SSL paths that are relative: interpret them relative to the
         # config file's directory, not the process's CWD, so that the certs

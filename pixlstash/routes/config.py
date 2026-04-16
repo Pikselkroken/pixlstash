@@ -496,6 +496,25 @@ def create_router(server) -> APIRouter:
             "watch_folders": folders,
         }
 
+    @router.get(
+        "/server-config/filesystem-roots",
+        summary="List filesystem browser roots",
+        description=(
+            "Returns the configured filesystem browser root paths. "
+            "When non-empty, the filesystem browser is restricted to these directories. "
+            "An empty list means the browser is unrestricted."
+        ),
+    )
+    def get_filesystem_roots(request: Request):
+        _ensure_secure_when_required(request)
+        server.auth.require_user_id(request)
+        roots = [
+            r
+            for r in (server._server_config.get("filesystem_roots") or [])
+            if isinstance(r, str) and r
+        ]
+        return {"status": "success", "filesystem_roots": roots}
+
     @router.post(
         "/server-config/open",
         summary="Open server config location",
