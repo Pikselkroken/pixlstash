@@ -327,7 +327,6 @@ class ReferenceFolderScanTask(BaseTask):
                 "Failed to process image file %s for reference folder scan.",
                 file_path,
             )
-            pass
 
         # Write thumbnail into image_root/.ref_thumbs/ so it doesn't land
         # inside the reference folder and get re-indexed on the next scan.
