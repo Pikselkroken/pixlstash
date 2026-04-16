@@ -229,9 +229,22 @@ def _save_output_images(image: Any, source_format: str) -> tuple[bytes, str]:
     return buf.getvalue(), ext
 
 
+def _unique_edit_filename(output_dir: str, stem: str, ext: str) -> str:
+    """Return ``{stem}_edit{n}{ext}`` with the first n >= 1 that is unused in output_dir."""
+    n = 1
+    while True:
+        candidate = f"{stem}_edit{n}{ext}"
+        if not os.path.exists(os.path.join(output_dir, candidate)):
+            return candidate
+        n += 1
+
+
 def _import_output_images(
     server,
     output_entries: list[tuple[bytes, str]],
+    output_dirs: list[str | None] | None = None,
+    reference_folder_ids: list[int | None] | None = None,
+    source_file_names: list[str | None] | None = None,
 ) -> tuple[list[int], list[int], list[int]]:
     if not output_entries:
         return [], [], []
@@ -247,20 +260,28 @@ def _import_output_images(
     existing_map = {pic.pixel_sha: pic for pic in existing}
 
     new_entries = [
-        (entry, sha)
-        for entry, sha in zip(output_entries, shas)
+        (orig_idx, entry, sha)
+        for orig_idx, (entry, sha) in enumerate(zip(output_entries, shas))
         if sha not in existing_map
     ]
 
     new_pictures = []
-    for (img_bytes, ext), sha in new_entries:
-        picture_uuid = f"{uuid.uuid4()}{ext}"
+    for orig_idx, (img_bytes, ext), sha in new_entries:
+        out_dir = output_dirs[orig_idx] if output_dirs else None
+        ref_id = reference_folder_ids[orig_idx] if reference_folder_ids else None
+        source_stem = source_file_names[orig_idx] if source_file_names else None
+        if out_dir and source_stem:
+            picture_uuid = _unique_edit_filename(out_dir, source_stem, ext)
+        else:
+            picture_uuid = f"{uuid.uuid4()}{ext}"
         new_pictures.append(
             ImageUtils.create_picture_from_bytes(
                 image_root_path=server.vault.image_root,
                 image_bytes=img_bytes,
                 picture_uuid=picture_uuid,
                 pixel_sha=sha,
+                output_dir=out_dir,
+                reference_folder_id=ref_id,
             )
         )
 
@@ -298,7 +319,7 @@ def _import_output_images(
     ]
 
     new_map: dict[str, int] = {}
-    for (_entry, sha), pic in zip(new_entries, new_pictures):
+    for (_orig_idx, _entry, sha), pic in zip(new_entries, new_pictures):
         if pic.id is not None:
             new_map[sha] = pic.id
 
@@ -768,15 +789,35 @@ def apply_plugin_to_pictures(
         )
 
     output_entries: list[tuple[bytes, str]] = []
+    output_dirs: list[str | None] = []
+    reference_folder_ids: list[int | None] = []
+    source_file_names: list[str | None] = []
     source_picture_ids: list[int] = []
     for idx, output in enumerate(outputs):
         pic, _, source_format, _source_path = loaded[idx]
         output_bytes, ext = _save_output_images(output, source_format)
         output_entries.append((output_bytes, ext))
         source_picture_ids.append(pic.id)
+        if (
+            pic.reference_folder_id is not None
+            and pic.file_path
+            and os.path.isabs(pic.file_path)
+        ):
+            output_dirs.append(os.path.dirname(pic.file_path))
+            reference_folder_ids.append(pic.reference_folder_id)
+            raw = pic.original_file_name or os.path.basename(pic.file_path)
+            source_file_names.append(os.path.splitext(raw)[0] if raw else None)
+        else:
+            output_dirs.append(None)
+            reference_folder_ids.append(None)
+            source_file_names.append(None)
 
     new_ids, duplicate_ids, ordered_output_ids = _import_output_images(
-        server, output_entries
+        server,
+        output_entries,
+        output_dirs=output_dirs,
+        reference_folder_ids=reference_folder_ids,
+        source_file_names=source_file_names,
     )
 
     _propagate_output_picture_sets(server, source_picture_ids, ordered_output_ids)

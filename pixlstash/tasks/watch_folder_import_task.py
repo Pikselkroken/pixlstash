@@ -90,6 +90,10 @@ class WatchFolderImportTask(BaseTask):
         self._candidate_files = candidate_files or []
         self._updated_watch_folders = updated_watch_folders or []
         self._total_candidates = int(total_candidates or 0)
+        self._stop_event = threading.Event()
+
+    def on_cancel(self) -> None:
+        self._stop_event.set()
 
     def _run_task(self):
         new_pictures = []
@@ -97,6 +101,12 @@ class WatchFolderImportTask(BaseTask):
         delete_paths = []
 
         for candidate in self._candidate_files:
+            if self._stop_event.is_set():
+                logger.debug(
+                    "WatchFolderImportTask cancelled, stopping early at task %s",
+                    self.id,
+                )
+                break
             file_path = candidate.get("file_path")
             if not file_path:
                 continue

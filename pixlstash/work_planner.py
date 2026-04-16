@@ -15,7 +15,11 @@ class WorkPlanner:
 
     @staticmethod
     def work_finders(
-        database, picture_tagger_getter, config_path=None, image_root=None
+        database,
+        picture_tagger_getter,
+        config_path=None,
+        image_root=None,
+        path_mapper=None,
     ):
         from pixlstash.tasks import TaskType
         from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
@@ -48,6 +52,13 @@ class WorkPlanner:
             MissingSourceFaceLikenessCharacterFinder,
         )
         from pixlstash.tasks.missing_file_purge_finder import MissingFilePurgeFinder
+        from pixlstash.tasks.reference_folder_scan_finder import (
+            ReferenceFolderScanFinder,
+        )
+
+        from pixlstash.utils.path_mapper import PathMapper
+
+        effective_path_mapper = path_mapper if path_mapper is not None else PathMapper()
 
         return {
             TaskType.FACE_EXTRACTION: MissingFaceExtractionFinder(
@@ -99,6 +110,10 @@ class WorkPlanner:
             ),
             TaskType.MISSING_FILE_PURGE: MissingFilePurgeFinder(
                 database=database,
+            ),
+            TaskType.REFERENCE_FOLDER_SCAN: ReferenceFolderScanFinder(
+                database=database,
+                path_mapper=effective_path_mapper,
             ),
         }
 

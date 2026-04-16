@@ -5,6 +5,7 @@ import base64
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -44,6 +45,7 @@ from pixlstash.db_models import (
     SortMechanism,
     Tag,
 )
+from pixlstash.db_models.reference_folder import ReferenceFolder
 from pixlstash.event_types import EventType
 from pixlstash.image_plugins.registry import get_image_plugin_manager
 from pixlstash.image_plugins.service import apply_plugin_to_pictures
@@ -59,6 +61,7 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
+from pixlstash.utils.caption_file_utils import write_caption_file
 from pixlstash.utils.service.caption_utils import (
     _normalize_hidden_tags,
     serialize_tag_objects,
@@ -491,6 +494,7 @@ def _select_pictures_for_listing(
     min_score_raw = query_params.pop("min_score", None)
     min_score = int(min_score_raw) if min_score_raw is not None else None
     project_id_raw = query_params.pop("project_id", None)
+    file_path_prefix = query_params.pop("file_path_prefix", None) or None
     only_deleted = False
     set_mode = _normalize_set_mode(set_mode_raw)
     set_filter_ids = _collect_set_filter_ids(
@@ -991,6 +995,7 @@ def _select_pictures_for_listing(
             include_unimported=True,
             stack_leaders_only=stack_leaders_only,
             min_score=min_score,
+            file_path_prefix=file_path_prefix,
             **query_params,
         )
     if pics:
@@ -3686,17 +3691,29 @@ def create_router(server) -> APIRouter:
                     )
                 if not value:
                     continue
-                tags = [
+                tag_values = [
                     tag if isinstance(tag, str) else str(tag)
                     for tag in value
                     if tag is not None
                 ]
-                if tags:
-                    server.vault.db.run_task(Picture.clear_field, [pic.id], "tags")
-                    for tag in tags:
-                        server.vault.db.run_task(
-                            Picture.set_tag, pic.id, tag, priority=DBPriority.IMMEDIATE
-                        )
+                if tag_values:
+                    pic_id = pic.id
+
+                    def _replace_tags(
+                        session: Session,
+                        pid: int,
+                        new_tags: list[str],
+                    ) -> None:
+                        session.exec(delete(Tag).where(Tag.picture_id == pid))
+                        session.add_all([Tag(picture_id=pid, tag=t) for t in new_tags])
+                        session.commit()
+
+                    server.vault.db.run_task(
+                        _replace_tags,
+                        pic_id,
+                        tag_values,
+                        priority=DBPriority.IMMEDIATE,
+                    )
                     updated = True
                 continue
             if key == "score":
@@ -3731,6 +3748,44 @@ def create_router(server) -> APIRouter:
             except KeyError:
                 raise HTTPException(status_code=404, detail="Picture not found")
             server.vault.notify(EventType.CHANGED_PICTURES, [picture_id])
+
+        # Write back tags and description to caption sidecar when enabled.
+        if pic.reference_folder_id and pic.caption_file:
+
+            def _write_sidecar(
+                session: Session,
+                rf_id: int,
+                pic_id: int,
+                caption_path: str,
+                description: str | None,
+            ) -> None:
+                rf = session.get(ReferenceFolder, rf_id)
+                if rf is None or not rf.sync_captions:
+                    return
+                current_tags = [
+                    t.tag
+                    for t in session.exec(
+                        select(Tag).where(Tag.picture_id == pic_id)
+                    ).all()
+                ]
+                new_mtime = write_caption_file(caption_path, current_tags, description)
+                if new_mtime is not None:
+                    # Persist the new mtime so the next folder scan does not
+                    # treat this write-back as an external change.
+                    pic_db = session.get(Picture, pic_id)
+                    if pic_db is not None:
+                        pic_db.caption_file_mtime = new_mtime
+                        session.add(pic_db)
+                        session.commit()
+
+            server.vault.db.run_task(
+                _write_sidecar,
+                pic.reference_folder_id,
+                pic.id,
+                pic.caption_file,
+                pic.description,
+                priority=DBPriority.IMMEDIATE,
+            )
 
         return {"status": "success", "picture": safe_model_dict(pic)}
 
@@ -3919,5 +3974,41 @@ def create_router(server) -> APIRouter:
             stack_leaders_only=(fields == "grid"),
             project_id=project_id,
         )
+
+    @router.post(
+        "/pictures/{id}/open-location",
+        summary="Open picture location",
+        description="Opens the containing folder of a reference picture in the OS file manager.",
+    )
+    def open_picture_location(id: str):
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        def get_path(session: Session):
+            pic = session.get(Picture, pic_id)
+            return pic.file_path if pic else None
+
+        file_path = server.vault.db.run_immediate_read_task(get_path)
+        if not file_path:
+            raise HTTPException(status_code=404, detail="Picture not found")
+
+        folder = os.path.dirname(file_path)
+        if not os.path.isdir(folder):
+            raise HTTPException(status_code=404, detail="Location not found on disk")
+
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(folder)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", folder], check=False)
+            else:
+                subprocess.run(["xdg-open", folder], check=False)
+        except Exception as exc:
+            logger.warning("Failed to open folder %s: %s", folder, exc)
+            raise HTTPException(status_code=500, detail="Failed to open location")
+
+        return {"status": "ok"}
 
     return router

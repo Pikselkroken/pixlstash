@@ -462,9 +462,22 @@ def _download_comfyui_image(base_url: str, entry: dict) -> tuple[bytes, str]:
     return response.content, ext
 
 
+def _unique_edit_filename(output_dir: str, stem: str, ext: str) -> str:
+    """Return ``{stem}_edit{n}{ext}`` with the first n >= 1 that is unused in output_dir."""
+    n = 1
+    while True:
+        candidate = f"{stem}_edit{n}{ext}"
+        if not os.path.exists(os.path.join(output_dir, candidate)):
+            return candidate
+        n += 1
+
+
 def _import_comfyui_outputs(
     server,
     image_entries: list[tuple[bytes, str]],
+    output_dir: str | None = None,
+    reference_folder_id: int | None = None,
+    source_file_stem: str | None = None,
 ) -> tuple[list[int], list[int]]:
     if not image_entries:
         return [], []
@@ -487,13 +500,18 @@ def _import_comfyui_outputs(
 
     new_pictures = []
     for (img_bytes, ext), sha in new_entries:
-        pic_uuid = f"{uuid.uuid4()}{ext}"
+        if output_dir and source_file_stem:
+            pic_uuid = _unique_edit_filename(output_dir, source_file_stem, ext)
+        else:
+            pic_uuid = f"{uuid.uuid4()}{ext}"
         new_pictures.append(
             ImageUtils.create_picture_from_bytes(
                 image_root_path=server.vault.image_root,
                 image_bytes=img_bytes,
                 picture_uuid=pic_uuid,
                 pixel_sha=sha,
+                output_dir=output_dir,
+                reference_folder_id=reference_folder_id,
             )
         )
 
@@ -805,7 +823,31 @@ def _process_comfyui_outputs(
             if img_bytes:
                 entries.append((img_bytes, ext))
 
-        new_ids, duplicate_ids = _import_comfyui_outputs(server, entries)
+        output_dir: str | None = None
+        ref_folder_id: int | None = None
+        source_file_stem: str | None = None
+        if source_picture_id is not None:
+            src_pic = server.vault.db.run_immediate_read_task(
+                lambda session: session.get(Picture, source_picture_id)
+            )
+            if (
+                src_pic is not None
+                and src_pic.reference_folder_id is not None
+                and src_pic.file_path
+                and os.path.isabs(src_pic.file_path)
+            ):
+                output_dir = os.path.dirname(src_pic.file_path)
+                ref_folder_id = src_pic.reference_folder_id
+                raw = src_pic.original_file_name or os.path.basename(src_pic.file_path)
+                source_file_stem = os.path.splitext(raw)[0] if raw else None
+
+        new_ids, duplicate_ids = _import_comfyui_outputs(
+            server,
+            entries,
+            output_dir=output_dir,
+            reference_folder_id=ref_folder_id,
+            source_file_stem=source_file_stem,
+        )
         all_ids = [pid for pid in new_ids + duplicate_ids if pid is not None]
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(server, stack_id, new_ids)

@@ -6,7 +6,7 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto, IntEnum
-from sqlalchemy import String, and_, desc, func, or_, text
+from sqlalchemy import Float, String, and_, desc, func, or_, text
 from sqlalchemy.orm import aliased, load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from .character import Character
     from .picture_likeness import PictureLikeness
     from .project import Project
+    from .reference_folder import ReferenceFolder
 
 
 # Configure logging for the module
@@ -234,6 +235,23 @@ class Picture(SQLModel, table=True):
     source_picture_id: Optional[int] = Field(
         default=None, foreign_key="picture.id", index=True
     )
+    reference_folder_id: Optional[int] = Field(
+        default=None, foreign_key="reference_folder.id", index=True
+    )
+    # Absolute path to the sidecar caption file (.txt or .caption) that was
+    # present when this reference-folder picture was first indexed.  NULL when
+    # no sidecar existed at scan time or for non-reference-folder pictures.
+    caption_file: Optional[str] = Field(
+        default=None,
+        sa_column=Column("caption_file", String, default=None, nullable=True),
+    )
+    # Unix timestamp (float) of the sidecar file's mtime when it was last read
+    # into the database.  Used to detect changes or new appearances on
+    # subsequent scans without reading file content unnecessarily.
+    caption_file_mtime: Optional[float] = Field(
+        default=None,
+        sa_column=Column("caption_file_mtime", Float, default=None, nullable=True),
+    )
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
@@ -280,6 +298,9 @@ class Picture(SQLModel, table=True):
     stack: Optional["PictureStack"] = Relationship(back_populates="pictures")
     projects: List["Project"] = Relationship(
         back_populates="pictures", link_model=PictureProjectMember
+    )
+    reference_folder: Optional["ReferenceFolder"] = Relationship(
+        back_populates="pictures"
     )
 
     likeness_a: List["PictureLikeness"] = Relationship(
@@ -643,6 +664,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_above_filter: Optional[List[str]] = None,
         tags_confidence_below_filter: Optional[List[str]] = None,
         min_score: Optional[int] = None,
+        file_path_prefix: Optional[str] = None,
         **search,
     ) -> List["Picture"]:
         """
@@ -706,6 +728,23 @@ class Picture(SQLModel, table=True):
                     query = query.where(getattr(cls, attr).in_(value))
                 else:
                     query = query.where(getattr(cls, attr) == value)
+
+        if file_path_prefix is not None:
+            # Normalise to always end with a path separator so that a prefix
+            # like "/ref/photos" does not accidentally match "/ref/photos2/a.jpg".
+            prefix = (
+                file_path_prefix
+                if file_path_prefix.endswith("/")
+                else file_path_prefix + "/"
+            )
+            # Escape LIKE special characters in the literal prefix.
+            escaped = (
+                prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            query = query.where(cls.file_path.like(escaped + "%", escape="\\"))
+            # Only show direct children — exclude files that have another path
+            # separator after the prefix (i.e. files in sub-directories).
+            query = query.where(~cls.file_path.like(escaped + "%/%", escape="\\"))
 
         if format:
             query = query.where(cls.format.in_(format))
@@ -860,6 +899,8 @@ class Picture(SQLModel, table=True):
             "stack_position",
             "tag_uncertainty",
             "anomaly_tag_uncertainty",
+            "reference_folder_id",
+            "file_path",
         }
 
     @classmethod

@@ -343,10 +343,29 @@ def main():
             "before thumbnail generation."
         ),
     )
+    parser.add_argument(
+        "--path-map",
+        action="append",
+        metavar="HOST_PATH:CONTAINER_PATH",
+        default=[],
+        help=(
+            "Map a host-side path prefix to its mounted container path. "
+            "May be repeated for multiple mappings. Docker use only. "
+            "Example: --path-map /mnt/photos:/data/photos"
+        ),
+    )
     args = parser.parse_args()
 
     ran_bootstrap = _bootstrap_server_config(args.server_config, force=args.bootstrap)
     Server.DEFAULT_CLEANUP_MISSING_PICTURES = bool(args.cleanup_missing_pictures)
+
+    path_map: dict[str, str] = {}
+    for entry in args.path_map or []:
+        parts = entry.split(":", 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            print(f"Invalid --path-map entry (expected HOST:CONTAINER): {entry!r}")
+            return 1
+        path_map[parts[0]] = parts[1]
 
     server_config = Server._init_server_config(args.server_config)
 
@@ -361,7 +380,7 @@ def main():
         setup_logging(log_level=log_level)
 
     try:
-        server = Server(server_config_path=args.server_config)
+        server = Server(server_config_path=args.server_config, path_map=path_map)
     except StartupCheckError as exc:
         print("Startup checks failed. Please resolve the following issues:")
         for failure in exc.failures:

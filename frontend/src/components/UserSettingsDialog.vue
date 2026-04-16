@@ -175,6 +175,35 @@ const workflowList = ref([]);
 const workflowListLoading = ref(false);
 const workflowListError = ref("");
 
+const referenceFolders = ref([]);
+const refFoldersLoading = ref(false);
+const refFoldersError = ref("");
+const inDocker = ref(false);
+const hasPendingFolders = ref(false);
+const imageRoot = ref(null);
+const addFolderPath = ref("");
+const addFolderLabel = ref("");
+const addFolderError = ref("");
+const addFolderLoading = ref(false);
+const editFolderDialogOpen = ref(false);
+const editingFolder = ref(null);
+const editFolderLabel = ref("");
+const editFolderAllowDelete = ref(false);
+const editFolderSyncCaptions = ref(false);
+const editFolderError = ref("");
+const editFolderLoading = ref(false);
+const deleteFolderConfirmOpen = ref(false);
+const folderToDelete = ref(null);
+const deleteFolderLoading = ref(false);
+const restartLoading = ref(false);
+const serverRestarting = ref(false);
+const browseDialogOpen = ref(false);
+const browsePath = ref("/");
+const browseEntries = ref([]);
+const browseLoading = ref(false);
+const browseError = ref("");
+const browseShowHidden = ref(false);
+
 const smartScoreImportanceOptions = [
   { value: 1, label: "Mild" },
   { value: 2, label: "Low" },
@@ -239,6 +268,16 @@ function resetSettingsForm() {
   workflowImportOutputTargets.value = [];
   workflowImportSaving.value = false;
   workflowListError.value = "";
+  refFoldersError.value = "";
+  addFolderPath.value = "";
+  addFolderLabel.value = "";
+  addFolderError.value = "";
+  editFolderDialogOpen.value = false;
+  editingFolder.value = null;
+  editFolderError.value = "";
+  deleteFolderConfirmOpen.value = false;
+  folderToDelete.value = null;
+  browseDialogOpen.value = false;
   if (maxVramGbSaveTimer) {
     clearTimeout(maxVramGbSaveTimer);
     maxVramGbSaveTimer = null;
@@ -613,6 +652,173 @@ async function fetchWorkflowList() {
   } finally {
     workflowListLoading.value = false;
   }
+}
+
+async function fetchReferenceFolders() {
+  refFoldersLoading.value = true;
+  refFoldersError.value = "";
+  try {
+    const res = await apiClient.get("/reference-folders");
+    referenceFolders.value = Array.isArray(res.data?.folders)
+      ? res.data.folders
+      : [];
+    inDocker.value = Boolean(res.data?.in_docker);
+    hasPendingFolders.value = Boolean(res.data?.has_pending);
+    imageRoot.value = res.data?.image_root ?? null;
+  } catch (e) {
+    refFoldersError.value = "Failed to load reference folders.";
+  } finally {
+    refFoldersLoading.value = false;
+  }
+}
+
+async function addReferenceFolder() {
+  const path = addFolderPath.value.trim();
+  if (!path) return;
+  addFolderLoading.value = true;
+  addFolderError.value = "";
+  try {
+    await apiClient.post("/reference-folders", {
+      folder: path,
+      label: addFolderLabel.value.trim() || undefined,
+    });
+    addFolderPath.value = "";
+    addFolderLabel.value = "";
+    await fetchReferenceFolders();
+  } catch (e) {
+    addFolderError.value =
+      e?.response?.data?.detail || "Failed to add reference folder.";
+  } finally {
+    addFolderLoading.value = false;
+  }
+}
+
+function openEditFolder(rf) {
+  editingFolder.value = rf;
+  editFolderLabel.value = rf.label || "";
+  editFolderAllowDelete.value = Boolean(rf.allow_delete_file);
+  editFolderSyncCaptions.value = Boolean(rf.sync_captions);
+  editFolderError.value = "";
+  editFolderDialogOpen.value = true;
+}
+
+async function saveEditFolder() {
+  if (!editingFolder.value) return;
+  editFolderLoading.value = true;
+  editFolderError.value = "";
+  try {
+    await apiClient.patch(`/reference-folders/${editingFolder.value.id}`, {
+      label: editFolderLabel.value.trim() || null,
+      allow_delete_file: editFolderAllowDelete.value,
+      sync_captions: editFolderSyncCaptions.value,
+    });
+    editFolderDialogOpen.value = false;
+    editingFolder.value = null;
+    await fetchReferenceFolders();
+  } catch (e) {
+    editFolderError.value =
+      e?.response?.data?.detail || "Failed to update reference folder.";
+  } finally {
+    editFolderLoading.value = false;
+  }
+}
+
+function confirmDeleteFolder(rf) {
+  folderToDelete.value = rf;
+  deleteFolderConfirmOpen.value = true;
+}
+
+async function deleteFolder() {
+  if (!folderToDelete.value) return;
+  deleteFolderLoading.value = true;
+  try {
+    await apiClient.delete(`/reference-folders/${folderToDelete.value.id}`);
+    deleteFolderConfirmOpen.value = false;
+    folderToDelete.value = null;
+    await fetchReferenceFolders();
+  } catch (e) {
+    // keep dialog open, show nothing (folder may already be gone)
+    deleteFolderConfirmOpen.value = false;
+  } finally {
+    deleteFolderLoading.value = false;
+  }
+}
+
+async function restartServer() {
+  restartLoading.value = true;
+  try {
+    await apiClient.post("/server/restart");
+  } catch (_) {
+    // Server terminates mid-request — network error is expected
+  }
+  restartLoading.value = false;
+  serverRestarting.value = true;
+  // Wait for the server process to go down before polling
+  await new Promise((r) => setTimeout(r, 2000));
+  // Poll until the server responds again, then reload
+  for (;;) {
+    try {
+      await apiClient.get("/reference-folders");
+      window.location.reload();
+      return;
+    } catch (_) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
+async function openBrowseDialog() {
+  browseError.value = "";
+  browseEntries.value = [];
+  browsePath.value = "";
+  browseShowHidden.value = false;
+  browseDialogOpen.value = true;
+  await browseDir(null);
+}
+
+async function browseDir(path) {
+  browseLoading.value = true;
+  browseError.value = "";
+  try {
+    const res = await apiClient.get("/filesystem/browse", {
+      params: { path: path ?? undefined, show_hidden: browseShowHidden.value },
+    });
+    browseEntries.value = res.data?.entries ?? [];
+    browsePath.value = res.data?.path ?? path ?? "/";
+  } catch (e) {
+    browseError.value =
+      e?.response?.data?.detail || "Cannot browse this directory.";
+    browseEntries.value = [];
+  } finally {
+    browseLoading.value = false;
+  }
+}
+
+watch(browseShowHidden, () => {
+  if (browseDialogOpen.value) {
+    browseDir(browsePath.value || null);
+  }
+});
+
+const registeredFolderPaths = computed(() =>
+  referenceFolders.value.map((rf) => rf.folder.replace(/\/$/, "")),
+);
+
+function browseEntryDisabledReason(entryPath) {
+  const norm = entryPath.replace(/\/$/, "");
+  if (imageRoot.value) {
+    const root = imageRoot.value.replace(/\/$/, "");
+    if (norm === root) return "PixlStash data folder";
+  }
+  for (const registered of registeredFolderPaths.value) {
+    if (norm === registered) return "Already a reference folder";
+  }
+  return null;
+}
+
+function selectBrowsedPath() {
+  addFolderPath.value = browsePath.value;
+  browseDialogOpen.value = false;
 }
 
 async function deleteWorkflow(workflow) {
@@ -1390,6 +1596,7 @@ watch(
       fetchUserTokens();
       fetchSmartScoreSettings();
       fetchWorkflowList();
+      fetchReferenceFolders();
     }
   },
 );
@@ -1440,6 +1647,11 @@ const workflowImportCaptionPreview = computed(() => {
     @click:outside="dialogOpen = false"
   >
     <div class="settings-dialog-shell">
+      <!-- Restarting overlay -->
+      <div v-if="serverRestarting" class="settings-restarting-overlay">
+        <v-progress-circular indeterminate size="48" color="primary" />
+        <p class="settings-restarting-text">Restarting PixlStash…</p>
+      </div>
       <v-btn
         icon
         size="36px"
@@ -1473,6 +1685,7 @@ const workflowImportCaptionPreview = computed(() => {
           <v-tab value="behaviour">Behaviour</v-tab>
           <v-tab value="smart-score">Smart Score</v-tab>
           <v-tab value="workflows">Workflows</v-tab>
+          <v-tab value="folders">Folders</v-tab>
           <v-tab value="account">Account Settings</v-tab>
         </v-tabs>
         <v-card-text class="settings-dialog-body">
@@ -2123,6 +2336,180 @@ const workflowImportCaptionPreview = computed(() => {
                 </div>
               </div>
             </v-window-item>
+            <v-window-item value="folders">
+              <!-- Pending restart banner -->
+              <div
+                v-if="hasPendingFolders"
+                class="settings-folders-restart-banner"
+              >
+                <v-icon size="18" style="margin-right: 6px">mdi-restart</v-icon>
+                Restart PixlStash to mount the new folder(s).
+                <v-btn
+                  size="small"
+                  color="warning"
+                  variant="flat"
+                  class="settings-folders-restart-btn"
+                  :loading="restartLoading"
+                  @click="restartServer"
+                >
+                  Restart PixlStash
+                </v-btn>
+              </div>
+
+              <v-divider
+                v-if="hasPendingFolders"
+                class="settings-section-divider"
+              />
+
+              <!-- Folder list -->
+              <div class="settings-section">
+                <div class="settings-section-title">Reference Folders</div>
+                <div class="settings-section-desc">
+                  Index images that live outside your vault — directly from
+                  their original location on disk. Files are not copied.
+                </div>
+                <div class="settings-form">
+                  <div v-if="refFoldersLoading" class="settings-success">
+                    Loading folders…
+                  </div>
+                  <div v-else-if="refFoldersError" class="settings-error">
+                    {{ refFoldersError }}
+                  </div>
+                  <div
+                    v-else-if="!referenceFolders.length"
+                    class="settings-success"
+                  >
+                    No reference folders added yet.
+                  </div>
+                  <div v-else class="settings-tag-list">
+                    <div
+                      v-for="rf in referenceFolders"
+                      :key="rf.id"
+                      class="settings-tag-chip settings-tag-chip--row"
+                    >
+                      <v-icon
+                        size="15"
+                        :color="
+                          rf.status === 'mount_error'
+                            ? 'error'
+                            : rf.status === 'pending_mount'
+                              ? 'warning'
+                              : 'success'
+                        "
+                        style="flex-shrink: 0"
+                        :title="
+                          rf.status === 'mount_error'
+                            ? 'Mount error'
+                            : rf.status === 'pending_mount'
+                              ? 'Pending restart'
+                              : 'Active'
+                        "
+                      >
+                        {{
+                          rf.status === "mount_error"
+                            ? "mdi-alert-circle-outline"
+                            : rf.status === "pending_mount"
+                              ? "mdi-clock-outline"
+                              : "mdi-check-circle-outline"
+                        }}
+                      </v-icon>
+                      <span class="settings-tag-label" :title="rf.folder">
+                        {{ rf.label || rf.folder }}
+                      </span>
+                      <span
+                        class="settings-tag-label settings-folders-path"
+                        :title="rf.folder"
+                      >
+                        {{ rf.folder }}
+                      </span>
+                      <v-btn
+                        icon
+                        variant="text"
+                        class="settings-tag-delete"
+                        title="Edit"
+                        @click="openEditFolder(rf)"
+                      >
+                        <v-icon size="15">mdi-pencil-outline</v-icon>
+                      </v-btn>
+                      <v-btn
+                        icon
+                        variant="text"
+                        class="settings-tag-delete"
+                        title="Remove"
+                        @click="confirmDeleteFolder(rf)"
+                      >
+                        <v-icon size="15">mdi-delete</v-icon>
+                      </v-btn>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <v-divider class="settings-section-divider" />
+
+              <!-- Add folder -->
+              <div class="settings-section">
+                <div class="settings-section-title">Add Reference Folder</div>
+                <div class="settings-section-desc">
+                  <span v-if="inDocker">
+                    Enter the <strong>host path</strong> to the folder (as
+                    configured via <code>--path-map</code>).
+                  </span>
+                  <span v-else>
+                    Enter the folder path directly or click
+                    <strong>Browse…</strong> to pick a directory.
+                  </span>
+                </div>
+                <div class="settings-form">
+                  <v-text-field
+                    v-model="addFolderPath"
+                    label="Folder path"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    placeholder="/path/to/folder"
+                    class="settings-folders-input"
+                  />
+                  <v-text-field
+                    v-model="addFolderLabel"
+                    label="Display label (optional)"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    placeholder="My Photos"
+                    class="settings-folders-input"
+                    style="margin-top: 8px"
+                  />
+                  <div class="settings-folders-add-actions">
+                    <v-btn
+                      v-if="!inDocker"
+                      variant="outlined"
+                      size="small"
+                      prepend-icon="mdi-folder-open-outline"
+                      class="settings-action-btn"
+                      @click="openBrowseDialog"
+                    >
+                      Browse…
+                    </v-btn>
+                    <v-btn
+                      variant="flat"
+                      color="primary"
+                      size="small"
+                      prepend-icon="mdi-plus"
+                      class="settings-action-btn"
+                      :loading="addFolderLoading"
+                      :disabled="!addFolderPath.trim()"
+                      @click="addReferenceFolder"
+                    >
+                      Add Folder
+                    </v-btn>
+                  </div>
+                  <div v-if="addFolderError" class="settings-error">
+                    {{ addFolderError }}
+                  </div>
+                </div>
+              </div>
+            </v-window-item>
             <v-window-item value="account">
               <div class="settings-section">
                 <div
@@ -2478,6 +2865,209 @@ const workflowImportCaptionPreview = computed(() => {
           @click="saveComfyuiUrl"
         >
           Save
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <!-- Edit reference folder dialog -->
+  <v-dialog v-model="editFolderDialogOpen" max-width="480">
+    <v-card class="settings-inner-dialog">
+      <v-card-title class="settings-inner-dialog-title"
+        >Edit Reference Folder</v-card-title
+      >
+      <v-card-text>
+        <div class="settings-section-desc" style="margin-bottom: 12px">
+          <strong>Path:</strong> {{ editingFolder?.folder }}
+        </div>
+        <v-text-field
+          v-model="editFolderLabel"
+          label="Display label"
+          density="compact"
+          variant="outlined"
+          placeholder="Leave blank to show path"
+          hide-details
+        />
+        <div style="margin-top: 16px">
+          <v-checkbox
+            v-model="editFolderSyncCaptions"
+            label="Sync caption files (write tags back to .txt sidecar)"
+            density="compact"
+            hide-details
+          />
+          <div style="margin-top: 4px; font-size: 0.78rem; opacity: 0.7">
+            When enabled, tag changes made in PixlStash are written back to a
+            <code>.txt</code> sidecar file next to each image.
+          </div>
+        </div>
+        <div style="margin-top: 12px">
+          <v-checkbox
+            v-model="editFolderAllowDelete"
+            label="Allow deleting source files from PixlStash"
+            density="compact"
+            hide-details
+            color="error"
+          />
+          <div
+            v-if="editFolderAllowDelete"
+            class="settings-error"
+            style="margin-top: 4px; font-size: 0.78rem"
+          >
+            Warning: enabling this allows PixlStash to permanently delete files
+            from your disk.
+          </div>
+        </div>
+        <div
+          v-if="editFolderError"
+          class="settings-error"
+          style="margin-top: 8px"
+        >
+          {{ editFolderError }}
+        </div>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="editFolderDialogOpen = false"
+          >Cancel</v-btn
+        >
+        <v-btn
+          variant="outlined"
+          color="primary"
+          :loading="editFolderLoading"
+          @click="saveEditFolder"
+        >
+          Save
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <!-- Delete reference folder confirmation -->
+  <v-dialog v-model="deleteFolderConfirmOpen" max-width="420">
+    <v-card class="settings-inner-dialog">
+      <v-card-title class="settings-inner-dialog-title"
+        >Remove Reference Folder?</v-card-title
+      >
+      <v-card-text>
+        <p>
+          Remove
+          <strong>{{ folderToDelete?.label || folderToDelete?.folder }}</strong>
+          from PixlStash?
+        </p>
+        <p class="settings-section-desc" style="margin-top: 6px">
+          The original files on disk will not be deleted. Only the index entries
+          will be removed from PixlStash.
+        </p>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="deleteFolderConfirmOpen = false"
+          >Cancel</v-btn
+        >
+        <v-btn
+          variant="flat"
+          color="error"
+          :loading="deleteFolderLoading"
+          @click="deleteFolder"
+        >
+          Remove
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <!-- Browse dialog (native only) -->
+  <v-dialog v-model="browseDialogOpen" max-width="720">
+    <v-card class="settings-inner-dialog">
+      <v-card-title class="settings-inner-dialog-title"
+        >Browse for Folder</v-card-title
+      >
+      <v-card-text style="padding: 0">
+        <div class="settings-browse-path">
+          <v-icon size="16" style="opacity: 0.6; margin-right: 4px"
+            >mdi-folder</v-icon
+          >
+          <span class="settings-browse-path-text">{{ browsePath }}</span>
+        </div>
+        <div class="settings-browse-entries">
+          <div v-if="browseLoading" class="settings-browse-loading">
+            <v-progress-circular indeterminate size="24" />
+          </div>
+          <div
+            v-else-if="browseError"
+            class="settings-error"
+            style="padding: 12px"
+          >
+            {{ browseError }}
+          </div>
+          <div v-else-if="!browseEntries.length" class="settings-browse-empty">
+            No subdirectories
+          </div>
+          <div
+            v-for="entry in browseEntries"
+            :key="entry.path"
+            :class="[
+              'settings-browse-entry',
+              browseEntryDisabledReason(entry.path)
+                ? 'settings-browse-entry--disabled'
+                : '',
+            ]"
+            :title="
+              browseEntryDisabledReason(entry.path) || 'Browse into this folder'
+            "
+            @click="
+              !browseEntryDisabledReason(entry.path) && browseDir(entry.path)
+            "
+          >
+            <v-icon size="16" style="opacity: 0.65; flex-shrink: 0"
+              >mdi-folder</v-icon
+            >
+            <span class="settings-browse-entry-name">{{ entry.name }}</span>
+            <span
+              v-if="browseEntryDisabledReason(entry.path)"
+              class="settings-browse-entry-conflict"
+              >{{ browseEntryDisabledReason(entry.path) }}</span
+            >
+          </div>
+        </div>
+      </v-card-text>
+      <v-card-actions>
+        <v-btn
+          variant="text"
+          size="small"
+          prepend-icon="mdi-chevron-up"
+          :disabled="browsePath === '/' || browseLoading"
+          @click="browseDir(browsePath.replace(/\/[^/]+\/?$/, '') || '/')"
+        >
+          Up
+        </v-btn>
+        <v-btn
+          variant="text"
+          size="small"
+          :prepend-icon="
+            browseShowHidden ? 'mdi-eye-outline' : 'mdi-eye-off-outline'
+          "
+          :title="
+            browseShowHidden ? 'Hide hidden folders' : 'Show hidden folders'
+          "
+          @click="browseShowHidden = !browseShowHidden"
+        >
+          Hidden
+        </v-btn>
+        <v-spacer />
+        <v-btn variant="text" @click="browseDialogOpen = false">Cancel</v-btn>
+        <v-btn
+          variant="outlined"
+          color="primary"
+          class="settings-browse-select-btn"
+          :title="browsePath"
+          @click="selectBrowsedPath"
+        >
+          <span class="settings-browse-select-label"
+            >Select "{{
+              browsePath.replace(/\/$/, "").split("/").pop() || browsePath
+            }}"</span
+          >
         </v-btn>
       </v-card-actions>
     </v-card>
@@ -3208,5 +3798,146 @@ const workflowImportCaptionPreview = computed(() => {
 
 .settings-dialog-actions {
   padding-top: 0;
+}
+
+.settings-restarting-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: rgba(var(--v-theme-surface), 0.88);
+  backdrop-filter: blur(4px);
+  border-radius: inherit;
+}
+
+.settings-restarting-text {
+  font-size: 1rem;
+  opacity: 0.8;
+  margin: 0;
+}
+
+/* ── Reference Folders settings ─────────────────────────────────── */
+.settings-folders-restart-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(var(--v-theme-warning), 0.12);
+  border-left: 3px solid rgb(var(--v-theme-warning));
+  font-size: 0.85rem;
+  margin: 0 0 4px;
+}
+
+.settings-folders-restart-btn {
+  margin-left: auto;
+}
+
+.settings-folders-path {
+  opacity: 0.52;
+  font-size: 0.77rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.settings-folders-input {
+  width: 100%;
+}
+
+.settings-folders-add-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-browse-path {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  font-size: 0.82rem;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.25);
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.settings-browse-path-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-browse-select-btn {
+  max-width: 260px;
+  min-width: 0;
+}
+
+.settings-browse-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  min-width: 0;
+}
+
+.settings-browse-entries {
+  min-height: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.settings-browse-loading {
+  display: flex;
+  justify-content: center;
+  padding: 32px;
+}
+
+.settings-browse-empty {
+  padding: 24px 16px;
+  font-size: 0.82rem;
+  opacity: 0.5;
+  text-align: center;
+}
+
+.settings-browse-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 0.84rem;
+}
+
+.settings-browse-entry:hover:not(.settings-browse-entry--disabled) {
+  background: rgba(var(--v-theme-accent), 0.1);
+}
+
+.settings-browse-entry--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-browse-entry-conflict {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  opacity: 0.7;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.settings-browse-entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

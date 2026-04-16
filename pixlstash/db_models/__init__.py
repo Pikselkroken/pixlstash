@@ -16,5 +16,6 @@ from .tag import (  # noqa: F401
     TAG_EMPTY_SENTINEL,
 )
 from .tag_prediction import TagPrediction  # noqa: F401
+from .reference_folder import ReferenceFolder, ReferenceFolderStatus  # noqa: F401
 from .user import User  # noqa: F401
 from .user_token import UserToken  # noqa: F401

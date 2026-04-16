@@ -9,12 +9,19 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.service.caption_utils import serialize_tag_objects
+from pixlstash.utils.service.caption_utils import (
+    serialize_tag_objects,
+    sync_picture_sidecar,
+)
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
 
 logger = get_logger(__name__)
+
+
+def _sync_sidecar(server, pic_id: int) -> list[dict]:
+    return sync_picture_sidecar(server, pic_id)
 
 
 def create_router(server) -> APIRouter:
@@ -74,10 +81,12 @@ def create_router(server) -> APIRouter:
                     session.refresh(pic)
                     return pic
 
-                pic = server.vault.db.run_task(update_picture, pic.id, tag)
+                server.vault.db.run_task(update_picture, pic.id, tag)
                 server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
 
-            return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
+            fresh_tags = _sync_sidecar(server, pic_id)
+
+            return {"status": "success", "tags": fresh_tags}
         except HTTPException:
             raise
         except Exception as e:
@@ -175,10 +184,12 @@ def create_router(server) -> APIRouter:
                 session.refresh(pic)
                 return pic
 
-            pic = server.vault.db.run_task(update_picture, pic_id, tag_id_int)
+            server.vault.db.run_task(update_picture, pic_id, tag_id_int)
             server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
 
-            return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
+            fresh_tags = _sync_sidecar(server, pic_id)
+
+            return {"status": "success", "tags": fresh_tags}
         except HTTPException:
             raise
         except Exception as e:
@@ -237,9 +248,10 @@ def create_router(server) -> APIRouter:
             session.refresh(pic)
             return pic
 
-        pic = server.vault.db.run_task(update_picture, pic_id, tag_value)
+        server.vault.db.run_task(update_picture, pic_id, tag_value)
         server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
-        return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
+        fresh_tags = _sync_sidecar(server, pic_id)
+        return {"status": "success", "tags": fresh_tags}
 
     @router.delete(
         "/pictures/{id}/tags",
@@ -271,9 +283,10 @@ def create_router(server) -> APIRouter:
             session.refresh(pic)
             return pic
 
-        pic = server.vault.db.run_task(do_clear, pic_id)
+        server.vault.db.run_task(do_clear, pic_id)
         server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
-        return {"status": "success", "tags": serialize_tag_objects(pic.tags)}
+        fresh_tags = _sync_sidecar(server, pic_id)
+        return {"status": "success", "tags": fresh_tags}
 
     @router.get(
         "/tags",

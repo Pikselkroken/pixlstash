@@ -432,19 +432,31 @@
                 </template>
                 <div
                   v-if="
-                    props.showFormat &&
-                    img.format &&
-                    img.format !== 'unknown' &&
                     isThumbnailReady(img.id) &&
-                    img.thumbnail
+                    img.thumbnail &&
+                    ((props.showFormat &&
+                      img.format &&
+                      img.format !== 'unknown') ||
+                      img.reference_folder_id)
                   "
-                  :class="[
-                    'thumbnail-id-overlay',
-                    'thumbnail-badge',
-                    'thumbnail-badge--bottom-left',
-                  ]"
+                  class="thumbnail-bottom-left-badges"
                 >
-                  {{ img.format.toUpperCase() }}
+                  <div
+                    v-if="
+                      props.showFormat && img.format && img.format !== 'unknown'
+                    "
+                    class="thumbnail-id-overlay thumbnail-badge"
+                  >
+                    {{ img.format.toUpperCase() }}
+                  </div>
+                  <div
+                    v-if="img.reference_folder_id"
+                    class="thumbnail-reference-badge thumbnail-badge"
+                    :title="img.file_path || 'Reference picture'"
+                    @click.stop="openReferenceLocation(img.id)"
+                  >
+                    <v-icon size="10">mdi-link-variant</v-icon>
+                  </div>
                 </div>
               </template>
               <template v-else>
@@ -657,6 +669,8 @@ const props = defineProps({
   applyTagFilter: { type: Boolean, default: false },
   projectViewMode: { type: String, default: "global" },
   selectedProjectId: { type: Number, default: null },
+  referenceFolderIdFilter: { type: Number, default: null },
+  filePathPrefixFilter: { type: String, default: null },
 });
 
 // ============================================================
@@ -2864,6 +2878,14 @@ async function confirmRestoreScrapheap() {
   }
 }
 
+async function openReferenceLocation(picId) {
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/${picId}/open-location`);
+  } catch {
+    // silently ignore — the OS might not support it
+  }
+}
+
 // ============================================================
 // IMPORT
 // ============================================================
@@ -4187,6 +4209,8 @@ function buildGridFetchKey() {
     similarityCharacter: props.similarityCharacter ?? null,
     comfyuiModelFilter: props.comfyuiModelFilter ?? [],
     comfyuiLoraFilter: props.comfyuiLoraFilter ?? [],
+    referenceFolderIdFilter: props.referenceFolderIdFilter ?? null,
+    filePathPrefixFilter: props.filePathPrefixFilter ?? null,
   });
 }
 
@@ -4293,6 +4317,12 @@ function buildPictureIdsQueryParams() {
   );
   if (props.applyTagFilter) {
     params.append("apply_tag_filter", "true");
+  }
+  if (props.referenceFolderIdFilter != null) {
+    params.append("reference_folder_id", String(props.referenceFolderIdFilter));
+  }
+  if (props.filePathPrefixFilter != null) {
+    params.append("file_path_prefix", props.filePathPrefixFilter);
   }
   return params.toString();
 }
@@ -6882,7 +6912,7 @@ function handleEmptyStateReset() {
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   font-size: var(--badge-font-size, 0.8em);
   padding: var(--badge-padding, 2px 4px);
-  z-index: 20;
+  z-index: 30;
   max-width: 90%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6909,6 +6939,28 @@ function handleEmptyStateReset() {
 .thumbnail-badge--bottom-left {
   left: 2px;
   bottom: 2px;
+}
+
+.thumbnail-bottom-left-badges {
+  position: absolute;
+  bottom: 2px;
+  left: 2px;
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  max-width: 90%;
+}
+
+.thumbnail-bottom-left-badges > .thumbnail-badge {
+  max-width: 100%;
+}
+
+.thumbnail-reference-badge {
+  opacity: 0.65;
+  padding: 1px 2px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
 }
 
 .thumbnail-badge--bottom-right {
