@@ -41,7 +41,7 @@ from pixlstash.picture_tagger import (  # noqa: E402
     QUALITY_CROP_TAG_WHITELIST,
     PictureTagger,
 )
-from pixlstash.utils.caption_utils import sanitise_tag  # noqa: E402
+from pixlstash.utils.service.caption_utils import sanitise_tag  # noqa: E402
 from pixlstash.tasks.face_extraction_task import CROP_EXPAND_SCALE  # noqa: E402
 
 # ---------------------------------------------------------------------------

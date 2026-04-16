@@ -12,7 +12,7 @@ from pixlstash.picture_tagger import (
     CUSTOM_TAGGER_DEFAULT_THRESHOLD,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.caption_utils import sanitise_tag
+from pixlstash.utils.service.caption_utils import sanitise_tag
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,

@@ -125,6 +125,7 @@ def write_caption_file(
             try:
                 os.unlink(tmp_path)
             except OSError:
+                # Best effort to clean up the temp file, but ignore any errors since it's not critical.
                 pass
             raise
     except OSError as exc:
