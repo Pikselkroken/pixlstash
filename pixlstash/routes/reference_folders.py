@@ -14,6 +14,7 @@ from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from sqlmodel import Session, select
 
 logger = get_logger(__name__)
@@ -236,6 +237,7 @@ def create_router(server) -> APIRouter:
             pictures = session.exec(
                 select(Picture).where(Picture.reference_folder_id == folder_id)
             ).all()
+            file_paths = [p.file_path for p in pictures if p.file_path]
             for pic in pictures:
                 session.delete(pic)
             session.delete(rf)
@@ -245,11 +247,35 @@ def create_router(server) -> APIRouter:
                 folder_path,
                 len(pictures),
             )
-            return folder_path
+            return folder_path, file_paths
 
-        folder_path = server.vault.db.run_task(remove, priority=DBPriority.IMMEDIATE)
+        folder_path, file_paths = server.vault.db.run_task(
+            remove, priority=DBPriority.IMMEDIATE
+        )
         logger.info("Reference folder removed: %s", folder_path)
         server.vault.unwatch_reference_folder(folder_id)
+
+        # Remove orphaned thumbnails generated for this folder's pictures.
+        image_root = getattr(server.vault, "image_root", None)
+        if image_root:
+            removed_thumbs = 0
+            for rel_path in file_paths:
+                thumb_path = ImageUtils.get_thumbnail_path(image_root, rel_path)
+                if thumb_path and os.path.isfile(thumb_path):
+                    try:
+                        os.remove(thumb_path)
+                        removed_thumbs += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to delete orphan thumbnail %s: %s", thumb_path, exc
+                        )
+            if removed_thumbs:
+                logger.info(
+                    "Removed %d orphan thumbnails for reference folder: %s",
+                    removed_thumbs,
+                    folder_path,
+                )
+
         return {"status": "success", "id": folder_id}
 
     # -------------------------------------------------------------------------

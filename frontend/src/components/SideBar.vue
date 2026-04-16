@@ -14,6 +14,7 @@ import ProjectEditor from "./ProjectEditor.vue";
 import ProjectFiles from "./ProjectFiles.vue";
 import TaskManager from "./TaskManager.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
+import FolderTreeNode from "./FolderTreeNode.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import { apiClient } from "../utils/apiClient";
 import { extractSupportedImportFilesFromDataTransfer } from "../utils/media.js";
@@ -212,7 +213,7 @@ const sidebarPrimaryTab = ref("library"); // 'library' | 'folders'
 const referenceFolders = ref([]);
 const referenceFoldersLoading = ref(false);
 const expandedFolderIds = ref(new Set());
-const folderBrowseCache = ref({}); // keyed by path → { entries, loading }
+const folderBrowseCache = ref({}); // keyed by path → { entries, loading, image_count }
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | null
 
 async function fetchReferenceFolders() {
@@ -222,20 +223,15 @@ async function fetchReferenceFolders() {
     referenceFolders.value = res.data?.folders ?? [];
     // Eagerly browse all root folders so we know which have subdirectories
     // (controls whether the expand chevron is shown)
-    referenceFolders.value.forEach((rf) => browseFolderPath(rf.folder));
+    referenceFolders.value.forEach((rf) => browseFolderPath(rf.folder, true));
+    // If any folder is still pending, start polling for status updates.
+    if (sidebarPrimaryTab.value === "folders") {
+      _startFolderStatusPoll();
+    }
   } catch (e) {
     console.error("Failed to fetch reference folders:", e);
   } finally {
     referenceFoldersLoading.value = false;
-  }
-}
-
-async function openReferenceFolder(rfId, subpath = null) {
-  try {
-    const params = subpath ? { params: { subpath } } : {};
-    await apiClient.post(`/reference-folders/${rfId}/open`, null, params);
-  } catch (e) {
-    console.warn("Failed to open reference folder:", e);
   }
 }
 
@@ -249,34 +245,126 @@ function toggleFolderExpanded(folderId) {
   expandedFolderIds.value = set;
 }
 
-async function browseFolderPath(path) {
-  if (folderBrowseCache.value[path]) return;
+async function browseFolderPath(path, prefetchChildren = false) {
+  const cached = folderBrowseCache.value[path];
+  if (cached) {
+    if (prefetchChildren && !cached.loading && !cached.error) {
+      const childEntries = cached.entries ?? [];
+      childEntries.forEach((entry) => {
+        void browseFolderPath(entry.path, false);
+      });
+    }
+    return;
+  }
   folderBrowseCache.value = {
     ...folderBrowseCache.value,
-    [path]: { entries: [], loading: true },
+    [path]: { entries: [], loading: true, image_count: null },
   };
   try {
     const res = await apiClient.get(
       `/filesystem/browse?path=${encodeURIComponent(path)}`,
     );
     const entries = res.data?.entries ?? [];
+    const imageCount = Number(res.data?.image_count);
     folderBrowseCache.value = {
       ...folderBrowseCache.value,
-      [path]: { entries, loading: false },
+      [path]: {
+        entries,
+        loading: false,
+        image_count: Number.isFinite(imageCount) ? imageCount : null,
+      },
     };
+    if (prefetchChildren && entries.length > 0) {
+      entries.forEach((entry) => {
+        void browseFolderPath(entry.path, false);
+      });
+    }
   } catch (e) {
     folderBrowseCache.value = {
       ...folderBrowseCache.value,
-      [path]: { entries: [], loading: false, error: true },
+      [path]: { entries: [], loading: false, image_count: null, error: true },
     };
   }
+}
+
+function handleFolderNodeSelect(key, payload) {
+  selectedFolderKey.value = key;
+  emit("select-folder", payload);
+}
+
+async function handleFolderNodeToggle(path) {
+  if (expandedFolderIds.value.has(path)) {
+    toggleFolderExpanded(path);
+    return;
+  }
+  await browseFolderPath(path, true);
+  const cached = folderBrowseCache.value[path];
+  const childCount = cached?.entries?.length ?? 0;
+  if (cached?.error || childCount === 0) {
+    return;
+  }
+  toggleFolderExpanded(path);
 }
 
 watch(sidebarPrimaryTab, (tab) => {
   if (tab === "folders") {
     fetchReferenceFolders();
+    _startFolderStatusPoll();
+  } else {
+    _stopFolderStatusPoll();
   }
 });
+
+// Poll for reference folder status updates while the Folders tab is open.
+// Stops automatically once all folders have reached a terminal state (active / mount_error).
+let _folderStatusPollTimer = null;
+
+async function _pollFolderStatus() {
+  try {
+    const res = await apiClient.get("/reference-folders");
+    const folders = res.data?.folders ?? [];
+    // Merge status updates into existing list without clobbering browse cache.
+    referenceFolders.value = referenceFolders.value.map((rf) => {
+      const updated = folders.find((f) => f.id === rf.id);
+      return updated
+        ? { ...rf, status: updated.status, last_scanned: updated.last_scanned }
+        : rf;
+    });
+    // Add any newly created folders that weren't in the list yet.
+    for (const f of folders) {
+      if (!referenceFolders.value.find((rf) => rf.id === f.id)) {
+        referenceFolders.value = [...referenceFolders.value, f];
+      }
+    }
+    // Stop polling when no folder is still pending.
+    const anyPending = referenceFolders.value.some(
+      (rf) => rf.status === "pending_mount",
+    );
+    if (!anyPending) {
+      _stopFolderStatusPoll();
+    }
+  } catch {
+    // Ignore transient errors — just try again next tick.
+  }
+}
+
+function _startFolderStatusPoll() {
+  _stopFolderStatusPoll();
+  const anyPending = referenceFolders.value.some(
+    (rf) => rf.status === "pending_mount",
+  );
+  if (!anyPending) return;
+  _folderStatusPollTimer = setInterval(_pollFolderStatus, 5000);
+}
+
+function _stopFolderStatusPoll() {
+  if (_folderStatusPollTimer !== null) {
+    clearInterval(_folderStatusPollTimer);
+    _folderStatusPollTimer = null;
+  }
+}
+
+onBeforeUnmount(() => _stopFolderStatusPoll());
 
 function selectFoldersTab() {
   sidebarPrimaryTab.value = "folders";
@@ -2146,9 +2234,8 @@ defineExpose({
                 @click="
                   if (!expandedFolderIds.has(rf.id))
                     toggleFolderExpanded(rf.id);
-                  browseFolderPath(rf.folder);
-                  selectedFolderKey = 'rf-' + rf.id;
-                  emit('select-folder', {
+                  browseFolderPath(rf.folder, true);
+                  handleFolderNodeSelect('rf-' + rf.id, {
                     referenceFolderId: rf.id,
                     pathPrefix: rf.folder,
                     label: rf.label || rf.folder,
@@ -2168,7 +2255,7 @@ defineExpose({
                   }"
                   @click.stop="
                     toggleFolderExpanded(rf.id);
-                    browseFolderPath(rf.folder);
+                    browseFolderPath(rf.folder, true);
                   "
                 >
                   {{
@@ -2184,28 +2271,32 @@ defineExpose({
                   rf.label || rf.folder
                 }}</span>
                 <span
-                  class="sidebar-folder-status-badge"
-                  :class="`sidebar-folder-status--${rf.status}`"
-                  :title="
-                    rf.status === 'mount_error'
-                      ? 'Folder not accessible — check mount'
-                      : rf.status === 'pending_mount'
-                        ? 'Restart required'
-                        : 'Open folder'
-                  "
-                  @click.stop="
-                    rf.status === 'active'
-                      ? openReferenceFolder(rf.id)
-                      : undefined
-                  "
+                  v-if="rf.status === 'mount_error'"
+                  class="sidebar-folder-status-badge sidebar-folder-status--mount_error"
+                  title="Folder not accessible — check mount"
                 >
-                  <v-icon v-if="rf.status === 'mount_error'" size="12"
-                    >mdi-alert-circle-outline</v-icon
-                  >
-                  <v-icon v-else-if="rf.status === 'pending_mount'" size="12"
-                    >mdi-clock-outline</v-icon
-                  >
-                  <v-icon v-else size="12">mdi-open-in-new</v-icon>
+                  <v-icon size="12">mdi-alert-circle-outline</v-icon>
+                </span>
+                <span
+                  v-else-if="rf.status === 'pending_mount'"
+                  class="sidebar-folder-status-badge sidebar-folder-status--pending_mount"
+                  title="Scan pending — will start automatically"
+                >
+                  <v-icon size="12">mdi-clock-outline</v-icon>
+                </span>
+                <span
+                  v-else-if="
+                    folderBrowseCache[rf.folder]?.loading ||
+                    (folderBrowseCache[rf.folder]?.image_count ?? 0) > 0
+                  "
+                  class="sidebar-folder-count-badge"
+                  title="Direct images in folder"
+                >
+                  {{
+                    folderBrowseCache[rf.folder]?.loading
+                      ? "..."
+                      : (folderBrowseCache[rf.folder]?.image_count ?? 0)
+                  }}
                 </span>
               </div>
               <div
@@ -2219,35 +2310,21 @@ defineExpose({
                   <v-progress-circular indeterminate size="14" />
                 </div>
                 <template v-else>
-                  <div
+                  <template
                     v-for="entry in folderBrowseCache[rf.folder]?.entries ?? []"
                     :key="entry.path"
-                    class="sidebar-folder-row sidebar-folder-child-row"
-                    :class="{
-                      active: selectedFolderKey === 'path-' + entry.path,
-                    }"
-                    :title="entry.path"
-                    @click="
-                      selectedFolderKey = 'path-' + entry.path;
-                      emit('select-folder', {
-                        referenceFolderId: rf.id,
-                        pathPrefix: entry.path,
-                        label: entry.name,
-                      });
-                    "
                   >
-                    <v-icon size="16" class="sidebar-folder-icon"
-                      >mdi-folder-outline</v-icon
-                    >
-                    <span class="sidebar-folder-label">{{ entry.name }}</span>
-                    <span
-                      class="sidebar-folder-status-badge sidebar-folder-status--active"
-                      title="Open folder"
-                      @click.stop="openReferenceFolder(rf.id, entry.path)"
-                    >
-                      <v-icon size="12">mdi-open-in-new</v-icon>
-                    </span>
-                  </div>
+                    <FolderTreeNode
+                      :entry="entry"
+                      :rf-id="rf.id"
+                      :depth="1"
+                      :selected-folder-key="selectedFolderKey"
+                      :folder-browse-cache="folderBrowseCache"
+                      :expanded-folder-ids="expandedFolderIds"
+                      @select="handleFolderNodeSelect"
+                      @toggle="handleFolderNodeToggle"
+                    />
+                  </template>
                   <div
                     v-if="folderBrowseCache[rf.folder]?.error"
                     class="sidebar-folder-empty-row sidebar-folder-error-row"
@@ -4351,9 +4428,9 @@ defineExpose({
 }
 
 .sidebar-folder-children {
-  padding-left: 8px;
+  padding-left: 4px;
   border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: 22px;
+  margin-left: 11px;
 }
 
 .sidebar-folder-label {
@@ -4374,6 +4451,20 @@ defineExpose({
   flex-shrink: 0;
   margin-left: 2px;
   opacity: 0.75;
+}
+
+.sidebar-folder-count-badge {
+  flex-shrink: 0;
+  margin-left: 4px;
+  min-width: 22px;
+  text-align: right;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-sidebar-text), 0.6);
+}
+
+.sidebar-folder-row.active .sidebar-folder-count-badge {
+  color: rgba(var(--v-theme-on-primary), 0.9);
 }
 
 .sidebar-folder-status--active {
