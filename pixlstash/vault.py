@@ -447,6 +447,12 @@ class Vault:
                 self._queue_changed_tags_notification(picture_ids)
             return
 
+        if task.type == "ReferenceFolderScanTask":
+            picture_ids = result.get("caption_updated_picture_ids") or []
+            if picture_ids:
+                self._queue_changed_tags_notification(picture_ids)
+            return
+
         changed = result.get("changed") if isinstance(result, dict) else None
         if not changed:
             return
@@ -501,11 +507,6 @@ class Vault:
             if picture_ids:
                 self.notify(EventType.CHANGED_PICTURES, picture_ids)
                 self.notify(EventType.PICTURE_IMPORTED, picture_ids)
-
-        if task.type == "ReferenceFolderScanTask":
-            picture_ids = result.get("caption_updated_picture_ids") or []
-            if picture_ids:
-                self._queue_changed_tags_notification(picture_ids)
 
     def _process_pending_character_assignments(self, picture_ids: list[int]) -> None:
         """Honour deferred face-to-character assignments after face extraction runs.
