@@ -420,6 +420,7 @@ class ImageUtils:
         try:
             if isinstance(img, Image.Image):
                 pil_img = img.copy()
+                pil_img = ImageOps.exif_transpose(pil_img)
             else:
                 pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             if pil_img.mode not in ("RGB", "L"):
