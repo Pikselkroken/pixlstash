@@ -33,25 +33,6 @@ def _is_supported_media_file(file_name: str) -> bool:
     return VideoUtils.is_video_file(file_name)
 
 
-def _count_supported_media_files(path: str, show_hidden: bool) -> int:
-    count = 0
-    try:
-        with os.scandir(path) as child_entries:
-            for child in child_entries:
-                if not show_hidden and child.name.startswith("."):
-                    continue
-                try:
-                    if not child.is_file(follow_symlinks=True):
-                        continue
-                except OSError:
-                    continue
-                if _is_supported_media_file(child.name):
-                    count += 1
-    except (PermissionError, FileNotFoundError, OSError):
-        return 0
-    return count
-
-
 class FilesystemEntry(BaseModel):
     name: str
     path: str
@@ -104,6 +85,28 @@ def create_router(server) -> APIRouter:
         if validation_error:
             raise HTTPException(status_code=400, detail=validation_error)
 
+        # Canonicalize through root-anchored path safety checks.
+        try:
+            resolved = os.path.realpath(os.path.normpath(browse_path))
+            if os.name == "nt":
+                drive, tail = os.path.splitdrive(resolved)
+                if not drive:
+                    raise ValueError("Windows path must include a drive root")
+                safe_base = os.path.realpath(drive + os.sep)
+                relative = tail.lstrip("\\/")
+            else:
+                safe_base = os.path.realpath(os.path.abspath(os.sep))
+                relative = resolved.lstrip(os.sep)
+
+            candidate = os.path.realpath(os.path.join(safe_base, relative))
+            if candidate != safe_base and not candidate.startswith(
+                safe_base + os.sep,
+            ):
+                raise ValueError("Resolved path escapes allowed root")
+            browse_path = candidate
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
         if not os.path.isdir(browse_path):
             raise HTTPException(status_code=404, detail="Directory not found.")
 
@@ -117,21 +120,33 @@ def create_router(server) -> APIRouter:
         for entry in sorted(raw_entries, key=lambda e: e.name.lower()):
             if not show_hidden and entry.name.startswith("."):
                 continue
+
+            # Keep results constrained to the browsed directory even if an
+            # entry is a symlink that points somewhere else.
+            try:
+                safe_entry_path = os.path.realpath(
+                    os.path.join(browse_path, entry.name)
+                )
+                if safe_entry_path != browse_path and not safe_entry_path.startswith(
+                    browse_path + os.sep,
+                ):
+                    continue
+            except OSError:
+                # Skip entries that cannot be resolved within the parent directory (e.g. broken symlinks or entries with permission issues).
+                continue
+
             try:
                 is_dir = entry.is_dir(follow_symlinks=True)
             except OSError:
+                # Skip entries that cannot be accessed (e.g. permission issues).
                 continue
             if is_dir:
-                child_image_count = _count_supported_media_files(
-                    entry.path,
-                    show_hidden,
-                )
                 entries.append(
                     FilesystemEntry(
                         name=entry.name,
-                        path=entry.path,
+                        path=safe_entry_path,
                         is_dir=True,
-                        image_count=child_image_count,
+                        image_count=0,
                     )
                 )
                 continue
@@ -139,6 +154,7 @@ def create_router(server) -> APIRouter:
             try:
                 is_file = entry.is_file(follow_symlinks=True)
             except OSError:
+                # Skip entries that cannot be accessed (e.g. permission issues).
                 continue
             if is_file and _is_supported_media_file(entry.name):
                 image_count += 1
