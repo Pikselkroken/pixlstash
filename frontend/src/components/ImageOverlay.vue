@@ -507,6 +507,7 @@
             class="overlay-nav overlay-nav-left"
             :class="{ hidden: chromeHidden }"
             @click.stop="showPrevImage"
+            @dblclick.stop
             aria-label="Previous (←)"
             title="Previous (←)"
           >
@@ -516,6 +517,7 @@
             class="overlay-nav overlay-nav-right"
             :class="{ hidden: chromeHidden }"
             @click.stop="showNextImage"
+            @dblclick.stop
             aria-label="Next (→)"
             title="Next (→)"
           >
@@ -2845,7 +2847,12 @@ function openSidebarFromTeaser() {
   startEditDescription();
 }
 
-function toggleZoom() {
+function toggleZoom(event = null) {
+  if (event?.target instanceof HTMLElement) {
+    if (event.target.closest(".overlay-nav")) {
+      return;
+    }
+  }
   const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
   const nextIndex = (currentIndex + 1) % zoomSteps.length;
   zoomMode.value = zoomSteps[nextIndex];
