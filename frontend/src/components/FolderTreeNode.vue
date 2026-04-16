@@ -22,6 +22,20 @@ function hasChildren() {
   if (!cached || cached.error) return false;
   return (cached.entries?.length ?? 0) > 0;
 }
+
+function childImageCount() {
+  const cachedCount = Number(
+    props.folderBrowseCache[props.entry.path]?.image_count,
+  );
+  if (Number.isFinite(cachedCount) && cachedCount >= 0) {
+    return cachedCount;
+  }
+  const entryCount = Number(props.entry?.image_count);
+  if (Number.isFinite(entryCount) && entryCount >= 0) {
+    return entryCount;
+  }
+  return 0;
+}
 </script>
 
 <template>
@@ -49,17 +63,11 @@ function hasChildren() {
       <v-icon size="16" class="sidebar-folder-icon">mdi-folder-outline</v-icon>
       <span class="sidebar-folder-label">{{ entry.name }}</span>
       <span
-        v-if="
-          folderBrowseCache[entry.path]?.loading || (entry.image_count ?? 0) > 0
-        "
+        v-if="folderBrowseCache[entry.path]?.loading || childImageCount() > 0"
         class="sidebar-folder-count-badge"
         title="Direct images in folder"
       >
-        {{
-          folderBrowseCache[entry.path]?.loading
-            ? "..."
-            : (entry.image_count ?? 0)
-        }}
+        {{ folderBrowseCache[entry.path]?.loading ? "..." : childImageCount() }}
       </span>
     </div>
 
