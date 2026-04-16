@@ -18,6 +18,7 @@ class TaskType(str, Enum):
     TAG_PREDICTION = "TagPredictionTask"
     SOURCE_FACE_LIKENESS = "SourceFaceLikenessTask"
     MISSING_FILE_PURGE = "MissingFilePurgeTask"
+    REFERENCE_FOLDER_SCAN = "ReferenceFolderScanTask"
 
     @staticmethod
     def all():

@@ -49,7 +49,12 @@ from pixlstash.routes.comfyui import create_router as create_comfyui_router
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
 )
+from pixlstash.routes.reference_folders import (
+    create_router as create_reference_folders_router,
+)
+from pixlstash.routes.filesystem import create_router as create_filesystem_router
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 
 
@@ -138,21 +143,31 @@ class Server:
     DEFAULT_PORT: int | None = None
     DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
 
+    @staticmethod
+    def running_in_docker() -> bool:
+        """Return True when the server is running inside a Docker container."""
+        return os.environ.get("PIXLSTASH_IN_DOCKER", "") == "1"
+
     def __init__(
         self,
         server_config_path,
+        path_map: dict[str, str] | None = None,
     ):
         """
         Initialize the Server instance.
 
         Args:
             server_config_path (str): Path to the server-only config file.
+            path_map: Optional dict mapping host path prefixes to their
+                container equivalents. Set by the ``--path-map`` CLI arg.
         """
         # Ensure garbage collection before starting server to free up memory.
         # This is mainly to ensure repeated runs within the testing framework do not accumulate memory usage.
         gc.collect()
 
         self._server_config_path = server_config_path
+
+        self.path_mapper = PathMapper(path_map)
 
         self._server_config = self._init_server_config(server_config_path)
         self._startup_check_report = StartupChecks(
@@ -181,6 +196,7 @@ class Server:
             image_root=self._server_config["image_root"],
             description=User().description,
             server_config_path=self._server_config_path,
+            path_mapper=self.path_mapper,
         )
 
         self._ws_clients = []
@@ -939,6 +955,16 @@ class Server:
             create_comfyui_router(self),
             prefix=API_V1_PREFIX,
             tags=["comfyui"],
+        )
+        self.api.include_router(
+            create_reference_folders_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["config"],
+        )
+        self.api.include_router(
+            create_filesystem_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["config"],
         )
 
         @self.api.middleware("http")

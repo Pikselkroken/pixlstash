@@ -51,6 +51,7 @@ class TagTask(BaseTask):
         self._preloaded_images: dict[str, PILImage.Image] = {}
         self._preload_lock = threading.Lock()
         self._preload_thread: threading.Thread | None = None
+        self._preload_cancel = threading.Event()
         self._preload_started_at: float | None = None
         self._preload_finished_at: float | None = None
         self._cpu_spillover_enabled = False
@@ -58,6 +59,7 @@ class TagTask(BaseTask):
     def on_queued(self) -> None:
         if self._preload_thread is not None and self._preload_thread.is_alive():
             return
+        self._preload_cancel.clear()
         self._preload_started_at = time.perf_counter()
         self._preload_finished_at = None
         self._preload_thread = threading.Thread(
@@ -67,10 +69,23 @@ class TagTask(BaseTask):
         )
         self._preload_thread.start()
 
+    def on_cancel(self) -> None:
+        self._preload_cancel.set()
+        if self._preload_thread is None:
+            return
+        self._preload_thread.join(timeout=10)
+        if self._preload_thread.is_alive():
+            logger.warning(
+                "TagTask preload thread did not stop in time for task %s",
+                self.id,
+            )
+
     def _preload_images(self) -> None:
         preloaded = {}
         video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
         for pic in self._pictures:
+            if self._preload_cancel.is_set():
+                break
             try:
                 file_path = ImageUtils.resolve_picture_path(
                     self._db.image_root, pic.file_path

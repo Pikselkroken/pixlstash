@@ -25,6 +25,8 @@ from .source_face_likeness_task import SourceFaceLikenessTask
 from .missing_source_face_likeness_finder import (
     MissingSourceFaceLikenessCharacterFinder,
 )
+from .reference_folder_scan_task import ReferenceFolderScanTask
+from .reference_folder_scan_finder import ReferenceFolderScanFinder
 
 __all__ = [
     "TaskType",
@@ -53,4 +55,6 @@ __all__ = [
     "LikenessTask",
     "SourceFaceLikenessTask",
     "MissingSourceFaceLikenessCharacterFinder",
+    "ReferenceFolderScanTask",
+    "ReferenceFolderScanFinder",
 ]

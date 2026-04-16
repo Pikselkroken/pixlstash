@@ -73,6 +73,7 @@ const props = defineProps({
   sidebarThumbnailSize: { type: Number, default: 48 },
   dateFormat: { type: String, default: "locale" },
   themeMode: { type: String, default: "light" },
+  hasFolderFilter: { type: Boolean, default: false },
   checkForUpdates: { type: Boolean, default: null },
   showKeyboardHint: { type: Boolean, default: true },
 });
@@ -104,6 +105,7 @@ const emit = defineEmits([
   "update:selected-project-id",
   "update:check-for-updates",
   "update:show-keyboard-hint",
+  "select-folder",
 ]);
 
 const imageImporterRef = ref(null);
@@ -204,6 +206,99 @@ const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
 const settingsDialogOpen = ref(false);
 const taskManagerOpen = ref(false);
+
+// --- Reference Folders (Folders tab) ---
+const sidebarPrimaryTab = ref("library"); // 'library' | 'folders'
+const referenceFolders = ref([]);
+const referenceFoldersLoading = ref(false);
+const expandedFolderIds = ref(new Set());
+const folderBrowseCache = ref({}); // keyed by path → { entries, loading }
+const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | null
+
+async function fetchReferenceFolders() {
+  referenceFoldersLoading.value = true;
+  try {
+    const res = await apiClient.get("/reference-folders");
+    referenceFolders.value = res.data?.folders ?? [];
+    // Eagerly browse all root folders so we know which have subdirectories
+    // (controls whether the expand chevron is shown)
+    referenceFolders.value.forEach((rf) => browseFolderPath(rf.folder));
+  } catch (e) {
+    console.error("Failed to fetch reference folders:", e);
+  } finally {
+    referenceFoldersLoading.value = false;
+  }
+}
+
+async function openReferenceFolder(rfId, subpath = null) {
+  try {
+    const params = subpath ? { params: { subpath } } : {};
+    await apiClient.post(`/reference-folders/${rfId}/open`, null, params);
+  } catch (e) {
+    console.warn("Failed to open reference folder:", e);
+  }
+}
+
+function toggleFolderExpanded(folderId) {
+  const set = new Set(expandedFolderIds.value);
+  if (set.has(folderId)) {
+    set.delete(folderId);
+  } else {
+    set.add(folderId);
+  }
+  expandedFolderIds.value = set;
+}
+
+async function browseFolderPath(path) {
+  if (folderBrowseCache.value[path]) return;
+  folderBrowseCache.value = {
+    ...folderBrowseCache.value,
+    [path]: { entries: [], loading: true },
+  };
+  try {
+    const res = await apiClient.get(
+      `/filesystem/browse?path=${encodeURIComponent(path)}`,
+    );
+    const entries = res.data?.entries ?? [];
+    folderBrowseCache.value = {
+      ...folderBrowseCache.value,
+      [path]: { entries, loading: false },
+    };
+  } catch (e) {
+    folderBrowseCache.value = {
+      ...folderBrowseCache.value,
+      [path]: { entries: [], loading: false, error: true },
+    };
+  }
+}
+
+watch(sidebarPrimaryTab, (tab) => {
+  if (tab === "folders") {
+    fetchReferenceFolders();
+  }
+});
+
+function selectFoldersTab() {
+  sidebarPrimaryTab.value = "folders";
+  // Reset project mode so the grid isn't filtered by a project while on the
+  // folders tab. Setting projectViewMode triggers its own watcher which emits
+  // update:project-view-mode to App.vue.
+  projectViewMode.value = "global";
+  // Clear character / set selection so the folders view starts unfiltered.
+  emit("select-character", { id: props.allPicturesId, label: "All Pictures" });
+  emit("select-set", null);
+}
+
+function selectLibraryTab(mode) {
+  sidebarPrimaryTab.value = "library";
+  if (mode === "project") {
+    switchToProjectView();
+  } else {
+    projectViewMode.value = "global";
+  }
+  // Clear the folder filter so the library view is not restricted to a folder.
+  emit("select-folder", null);
+}
 function updateLabelOverflow(key, el = null) {
   const element = el || labelRefs.get(key);
   if (!element) return;
@@ -881,13 +976,16 @@ function isCountSelected(id) {
 }
 
 const isAllPicturesRowActive = computed(() => {
+  if (props.hasFolderFilter) return false;
   if (props.selectedCharacter !== props.allPicturesId) return false;
   if (selectedSetIdSet.value.size > 0) return false;
   return true;
 });
 
 const isUnassignedPicturesRowActive = computed(
-  () => props.selectedCharacter === props.unassignedPicturesId,
+  () =>
+    !props.hasFolderFilter &&
+    props.selectedCharacter === props.unassignedPicturesId,
 );
 
 const allPicturesRowLabel = computed(() => {
@@ -1892,25 +1990,36 @@ defineExpose({
       </Teleport>
     </div>
     <div v-else class="sidebar-view-tabs-row">
-      <span class="sidebar-view-tabs-label"
-        >Library <span class="sidebar-view-tabs-arrow">→</span></span
-      >
       <div class="sidebar-view-tabs">
         <button
           class="sidebar-view-tab"
-          :class="{ active: projectViewMode === 'global' }"
-          @click="projectViewMode = 'global'"
+          :class="{
+            active:
+              sidebarPrimaryTab === 'library' && projectViewMode === 'global',
+          }"
+          @click="selectLibraryTab('global')"
         >
           <v-icon size="14">mdi-earth</v-icon>
           Global
         </button>
         <button
           class="sidebar-view-tab"
-          :class="{ active: projectViewMode === 'project' }"
-          @click="switchToProjectView"
+          :class="{
+            active:
+              sidebarPrimaryTab === 'library' && projectViewMode === 'project',
+          }"
+          @click="selectLibraryTab('project')"
         >
           <v-icon size="14">mdi-folder-outline</v-icon>
           Projects
+        </button>
+        <button
+          class="sidebar-view-tab"
+          :class="{ active: sidebarPrimaryTab === 'folders' }"
+          @click="selectFoldersTab()"
+        >
+          <v-icon size="14">mdi-folder-network-outline</v-icon>
+          Folders
         </button>
       </div>
     </div>
@@ -1950,7 +2059,8 @@ defineExpose({
             :class="[
               'sidebar-collapsed-thumb',
               {
-                active: props.selectedCharacter === char.id,
+                active:
+                  props.selectedCharacter === char.id && !props.hasFolderFilter,
                 droppable: dragOverCharacter === char.id,
               },
             ]"
@@ -1981,7 +2091,7 @@ defineExpose({
             :class="[
               'sidebar-collapsed-item',
               {
-                active: selectedSetIdSet.has(pset.id),
+                active: selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
                 droppable: dragOverSet === pset.id,
               },
             ]"
@@ -2006,7 +2116,153 @@ defineExpose({
         </div>
       </template>
       <template v-else>
-        <div class="sidebar-tab-panel">
+        <!-- Folders tab panel -->
+        <div v-if="sidebarPrimaryTab === 'folders'" class="sidebar-tab-panel">
+          <div v-if="referenceFoldersLoading" class="sidebar-folders-loading">
+            <v-progress-circular indeterminate size="24" />
+          </div>
+          <div
+            v-else-if="referenceFolders.length === 0"
+            class="sidebar-no-projects-empty"
+          >
+            <v-icon size="52" class="sidebar-no-projects-icon"
+              >mdi-folder-network-outline</v-icon
+            >
+            <p class="sidebar-no-projects-text">
+              No reference folders configured.<br />
+              Add folders in <strong>Settings → Folders</strong>.
+            </p>
+          </div>
+          <div v-else class="sidebar-folders-list">
+            <div
+              v-for="rf in referenceFolders"
+              :key="rf.id"
+              class="sidebar-folder-root"
+            >
+              <div
+                class="sidebar-folder-row sidebar-folder-root-row"
+                :class="{ active: selectedFolderKey === 'rf-' + rf.id }"
+                :title="rf.folder"
+                @click="
+                  if (!expandedFolderIds.has(rf.id))
+                    toggleFolderExpanded(rf.id);
+                  browseFolderPath(rf.folder);
+                  selectedFolderKey = 'rf-' + rf.id;
+                  emit('select-folder', {
+                    referenceFolderId: rf.id,
+                    pathPrefix: rf.folder,
+                    label: rf.label || rf.folder,
+                  });
+                "
+              >
+                <v-icon
+                  size="16"
+                  class="sidebar-folder-chevron"
+                  :style="{
+                    visibility:
+                      !folderBrowseCache[rf.folder] ||
+                      folderBrowseCache[rf.folder].loading ||
+                      (folderBrowseCache[rf.folder]?.entries?.length ?? 0) > 0
+                        ? 'visible'
+                        : 'hidden',
+                  }"
+                  @click.stop="
+                    toggleFolderExpanded(rf.id);
+                    browseFolderPath(rf.folder);
+                  "
+                >
+                  {{
+                    expandedFolderIds.has(rf.id)
+                      ? "mdi-chevron-down"
+                      : "mdi-chevron-right"
+                  }}
+                </v-icon>
+                <v-icon size="16" class="sidebar-folder-icon"
+                  >mdi-folder-network-outline</v-icon
+                >
+                <span class="sidebar-folder-label">{{
+                  rf.label || rf.folder
+                }}</span>
+                <span
+                  class="sidebar-folder-status-badge"
+                  :class="`sidebar-folder-status--${rf.status}`"
+                  :title="
+                    rf.status === 'mount_error'
+                      ? 'Folder not accessible — check mount'
+                      : rf.status === 'pending_mount'
+                        ? 'Restart required'
+                        : 'Open folder'
+                  "
+                  @click.stop="
+                    rf.status === 'active'
+                      ? openReferenceFolder(rf.id)
+                      : undefined
+                  "
+                >
+                  <v-icon v-if="rf.status === 'mount_error'" size="12"
+                    >mdi-alert-circle-outline</v-icon
+                  >
+                  <v-icon v-else-if="rf.status === 'pending_mount'" size="12"
+                    >mdi-clock-outline</v-icon
+                  >
+                  <v-icon v-else size="12">mdi-open-in-new</v-icon>
+                </span>
+              </div>
+              <div
+                v-if="expandedFolderIds.has(rf.id)"
+                class="sidebar-folder-children"
+              >
+                <div
+                  v-if="folderBrowseCache[rf.folder]?.loading"
+                  class="sidebar-folder-loading-row"
+                >
+                  <v-progress-circular indeterminate size="14" />
+                </div>
+                <template v-else>
+                  <div
+                    v-for="entry in folderBrowseCache[rf.folder]?.entries ?? []"
+                    :key="entry.path"
+                    class="sidebar-folder-row sidebar-folder-child-row"
+                    :class="{
+                      active: selectedFolderKey === 'path-' + entry.path,
+                    }"
+                    :title="entry.path"
+                    @click="
+                      selectedFolderKey = 'path-' + entry.path;
+                      emit('select-folder', {
+                        referenceFolderId: rf.id,
+                        pathPrefix: entry.path,
+                        label: entry.name,
+                      });
+                    "
+                  >
+                    <v-icon size="16" class="sidebar-folder-icon"
+                      >mdi-folder-outline</v-icon
+                    >
+                    <span class="sidebar-folder-label">{{ entry.name }}</span>
+                    <span
+                      class="sidebar-folder-status-badge sidebar-folder-status--active"
+                      title="Open folder"
+                      @click.stop="openReferenceFolder(rf.id, entry.path)"
+                    >
+                      <v-icon size="12">mdi-open-in-new</v-icon>
+                    </span>
+                  </div>
+                  <div
+                    v-if="folderBrowseCache[rf.folder]?.error"
+                    class="sidebar-folder-empty-row sidebar-folder-error-row"
+                  >
+                    <v-icon size="13">mdi-alert-circle-outline</v-icon> Cannot
+                    browse (Docker mode or permission error)
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Library tab panel (Global / Projects) -->
+        <div v-else class="sidebar-tab-panel">
           <div
             v-if="projectViewMode === 'project' && projects.length === 0"
             class="sidebar-no-projects-empty"
@@ -2313,7 +2569,9 @@ defineExpose({
                     :class="[
                       'sidebar-list-item',
                       {
-                        active: selectedCharacter === char.id,
+                        active:
+                          selectedCharacter === char.id &&
+                          !props.hasFolderFilter,
                         droppable: dragOverCharacter === char.id,
                       },
                     ]"
@@ -2512,7 +2770,9 @@ defineExpose({
                       'sidebar-list-item',
                       'sidebar-set-item',
                       {
-                        active: selectedSetIdSet.has(pset.id),
+                        active:
+                          selectedSetIdSet.has(pset.id) &&
+                          !props.hasFolderFilter,
                         droppable: dragOverSet === pset.id,
                       },
                     ]"
@@ -2596,6 +2856,7 @@ defineExpose({
             </div>
           </template>
         </div>
+        <!-- end Library tab panel -->
       </template>
     </div>
     <!-- end sidebar-scroll -->
@@ -2628,7 +2889,11 @@ defineExpose({
         :class="[
           'sidebar-footer-btn',
           'sidebar-footer-btn--scrapheap',
-          { active: props.selectedCharacter === props.scrapheapPicturesId },
+          {
+            active:
+              props.selectedCharacter === props.scrapheapPicturesId &&
+              !props.hasFolderFilter,
+          },
         ]"
         title="Scrapheap"
         @click.stop="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
@@ -2679,12 +2944,12 @@ defineExpose({
 .sidebar-view-tabs-row {
   display: flex;
   align-items: center;
-  padding: 0 4px 0 8px;
+  padding: 0 4px 0 4px;
   position: relative;
   z-index: 1;
   margin-top: 6px;
   margin-bottom: 0;
-  gap: 8px;
+  gap: 0;
 }
 
 .sidebar-view-tabs-icon {
@@ -2709,18 +2974,20 @@ defineExpose({
 .sidebar-view-tabs {
   display: flex;
   gap: 0;
+  flex: 1;
 }
 
 .sidebar-view-tab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 4px 8px;
+  gap: 3px;
+  padding: 4px 4px;
+  flex: 1;
   border-radius: 0;
   border: none;
   border-bottom: none;
-  font-size: 0.87rem;
+  font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
@@ -4036,5 +4303,115 @@ defineExpose({
     min-width: 44px;
     min-height: 44px;
   }
+}
+
+/* ── Reference Folders panel ──────────────────────────────── */
+.sidebar-folders-loading {
+  display: flex;
+  justify-content: center;
+  padding: 32px;
+}
+
+.sidebar-folders-list {
+  flex: 1 1 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+  scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
+}
+
+.sidebar-folder-root {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: rgba(var(--v-theme-sidebar-text), 0.85);
+  user-select: none;
+}
+
+.sidebar-folder-root-row {
+  font-weight: 600;
+  border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
+}
+
+.sidebar-folder-row:hover {
+  background: rgba(var(--v-theme-accent), 0.1);
+}
+
+.sidebar-folder-row.active {
+  background: rgba(var(--v-theme-primary), 0.6);
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.sidebar-folder-children {
+  padding-left: 8px;
+  border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
+  margin-left: 22px;
+}
+
+.sidebar-folder-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sidebar-folder-chevron,
+.sidebar-folder-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.sidebar-folder-status-badge {
+  flex-shrink: 0;
+  margin-left: 2px;
+  opacity: 0.75;
+}
+
+.sidebar-folder-status--active {
+  color: rgba(var(--v-theme-sidebar-text), 0.4);
+  cursor: pointer;
+  border-radius: 3px;
+  transition:
+    color 0.15s,
+    opacity 0.15s;
+}
+
+.sidebar-folder-status--active:hover {
+  color: rgb(var(--v-theme-sidebar-text));
+  opacity: 1;
+}
+
+.sidebar-folder-status--pending_mount {
+  color: rgb(var(--v-theme-warning, 255, 152, 0));
+}
+
+.sidebar-folder-status--mount_error {
+  color: rgb(var(--v-theme-error, 244, 67, 54));
+}
+
+.sidebar-folder-loading-row {
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+}
+
+.sidebar-folder-empty-row {
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  color: rgba(var(--v-theme-sidebar-text), 0.45);
+  font-style: italic;
+}
+
+.sidebar-folder-error-row {
+  color: rgba(var(--v-theme-error, 244, 67, 54), 0.8);
 }
 </style>

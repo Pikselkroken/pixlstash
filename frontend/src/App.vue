@@ -36,6 +36,7 @@ const selectedSet = ref(null);
 const selectedSetIds = ref([]);
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = unassigned in project mode
+const selectedFolderFilter = ref(null); // null | { referenceFolderId, pathPrefix, label }
 const selectedSort = ref("");
 const selectedDescending = ref(true);
 const stackThreshold = ref(null);
@@ -73,6 +74,9 @@ const themeMode = ref("light");
 const theme = useTheme();
 
 const activeCategoryLabel = computed(() => {
+  if (selectedFolderFilter.value) {
+    return selectedFolderFilter.value.label || "Folder";
+  }
   if (selectedSetIds.value.length > 1) {
     return `Set Overlap (${selectedSetIds.value.length})`;
   }
@@ -500,6 +504,7 @@ function clearSearchForCategoryChange() {
 }
 
 async function handleSelectCharacter(payload) {
+  selectedFolderFilter.value = null;
   const { id: charId, label } = SelectionPayload(payload);
   clearSearchForCategoryChange();
   if (charId == null) {
@@ -527,6 +532,7 @@ async function handleSelectCharacter(payload) {
 }
 
 async function handleSelectSet(payload) {
+  selectedFolderFilter.value = null;
   const { id: setId, label, ids } = SelectionPayload(payload);
   clearSearchForCategoryChange();
   const nextIds = ids.length
@@ -561,7 +567,19 @@ function handleSearchAllPictures() {
   selectedCharacter.value = ALL_PICTURES_ID;
   selectedSet.value = null;
   selectedSetIds.value = [];
+  selectedFolderFilter.value = null;
   lastSelectedCharacterLabel.value = "All Pictures";
+}
+
+function handleSelectFolder(payload) {
+  if (!payload) {
+    selectedFolderFilter.value = null;
+    return;
+  }
+  selectedFolderFilter.value = payload;
+  selectedCharacter.value = ALL_PICTURES_ID;
+  selectedSet.value = null;
+  selectedSetIds.value = [];
 }
 
 async function handleUpdateSearchQuery(value) {
@@ -1285,6 +1303,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :sidebarThumbnailSize="sidebarThumbnailSize"
             :dateFormat="dateFormat"
             :themeMode="themeMode"
+            :hasFolderFilter="selectedFolderFilter != null"
             :checkForUpdates="checkForUpdates"
             :showKeyboardHint="showKeyboardHint"
             @update:show-keyboard-hint="showKeyboardHint = $event"
@@ -1300,6 +1319,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @update:selected-project-id="handleUpdateSelectedProjectId"
             @select-character="handleSelectCharacter"
             @select-set="handleSelectSet"
+            @select-folder="handleSelectFolder"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMovedToSet"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
@@ -1490,6 +1510,10 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
               :projectViewMode="projectViewMode"
               :selectedProjectId="selectedProjectId"
+              :referenceFolderIdFilter="
+                selectedFolderFilter?.referenceFolderId ?? null
+              "
+              :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
               :columns="columns"
               @clear-search="handleClearSearch"
               @search-all="handleSearchAllPictures"

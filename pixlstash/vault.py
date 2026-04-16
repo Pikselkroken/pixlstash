@@ -39,6 +39,7 @@ from .tasks.base_task import TaskStatus
 from .task_runner import TaskRunner
 from .work_planner import WorkPlanner
 from .tasks import TaskType
+from .utils.reference_folder_watcher import ReferenceFolderWatcher
 
 from pixlstash.event_types import EventType
 
@@ -67,6 +68,7 @@ class Vault:
         image_root: str,
         description: Optional[str] = None,
         server_config_path: Optional[str] = None,
+        path_mapper=None,
     ):
         """
         Initialize a Vault instance.
@@ -107,12 +109,14 @@ class Vault:
         self._changed_tags_flush_delay_s = 2.0
         self._event_listeners = []
         self._event_listeners_lock = threading.Lock()
+        self._path_mapper = path_mapper
         self._task_runner = TaskRunner(name="vault-task-runner", num_workers=4)
         self._planner_work_finders = WorkPlanner.work_finders(
             database=self.db,
             picture_tagger_getter=lambda: self._picture_tagger,
             config_path=self._server_config_path,
             image_root=self.image_root,
+            path_mapper=path_mapper,
         )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
@@ -126,6 +130,12 @@ class Vault:
         )
         self._task_runner.start()
         self._work_planner.start()
+
+        self._ref_folder_watcher = ReferenceFolderWatcher(
+            on_folder_changed=self._on_reference_folder_fs_changed,
+        )
+        self._ref_folder_watcher.start()
+        self._start_existing_folder_watches()
 
     def ensure_ready(self):
         """Initialise the picture tagger so the planner can process work immediately.
@@ -171,6 +181,104 @@ class Vault:
             if listener not in self._event_listeners:
                 self._event_listeners.append(listener)
 
+    # -------------------------------------------------------------------------
+    # Reference folder filesystem watching
+    # -------------------------------------------------------------------------
+
+    def _start_existing_folder_watches(self) -> None:
+        """Start filesystem watches for all reference folders already in the DB."""
+        from pixlstash.db_models.reference_folder import ReferenceFolder
+        from pixlstash.utils.path_mapper import PathMapper
+
+        effective_mapper = (
+            self._path_mapper if self._path_mapper is not None else PathMapper()
+        )
+
+        def fetch(session: Session) -> list[ReferenceFolder]:
+            return list(session.exec(select(ReferenceFolder)).all())
+
+        try:
+            folders = self.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
+        except Exception as exc:
+            logger.warning("Could not fetch reference folders for FS watching: %s", exc)
+            return
+
+        for rf in folders:
+            try:
+                resolved = effective_mapper.resolve(rf.folder)
+                self._ref_folder_watcher.watch_folder(rf.id, resolved)
+            except Exception as exc:
+                logger.warning(
+                    "Could not start FS watch for reference folder %d (%s): %s",
+                    rf.id,
+                    rf.folder,
+                    exc,
+                )
+
+    def watch_reference_folder(self, folder_id: int, folder_path: str) -> None:
+        """Start watching *folder_path* for reference folder *folder_id*.
+
+        Should be called after a new reference folder is created so that
+        filesystem changes are picked up immediately.
+
+        Args:
+            folder_id: Primary key of the reference folder.
+            folder_path: Stored (host) path of the folder.
+        """
+        from pixlstash.utils.path_mapper import PathMapper
+
+        effective_mapper = (
+            self._path_mapper if self._path_mapper is not None else PathMapper()
+        )
+        try:
+            resolved = effective_mapper.resolve(folder_path)
+            self._ref_folder_watcher.watch_folder(folder_id, resolved)
+        except Exception as exc:
+            logger.warning(
+                "Could not start FS watch for new reference folder %d (%s): %s",
+                folder_id,
+                folder_path,
+                exc,
+            )
+
+    def unwatch_reference_folder(self, folder_id: int) -> None:
+        """Stop watching the directory for *folder_id*.
+
+        Should be called after a reference folder is deleted.
+
+        Args:
+            folder_id: Primary key of the reference folder to stop watching.
+        """
+        self._ref_folder_watcher.unwatch_folder(folder_id)
+
+    def _on_reference_folder_fs_changed(self, folder_id: int) -> None:
+        """Callback invoked by the filesystem watcher when a relevant file changes.
+
+        Resets ``last_scanned`` to zero so the
+        :class:`~pixlstash.tasks.reference_folder_scan_finder.ReferenceFolderScanFinder`
+        schedules an immediate rescan, then wakes the work-planner thread.
+        """
+        from pixlstash.db_models.reference_folder import ReferenceFolder
+
+        def reset_last_scanned(session: Session, fid: int) -> None:
+            rf = session.get(ReferenceFolder, fid)
+            if rf is not None:
+                rf.last_scanned = 0.0
+                session.commit()
+
+        try:
+            self.db.run_task(
+                reset_last_scanned, folder_id, priority=DBPriority.IMMEDIATE
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to reset last_scanned for reference folder %d: %s",
+                folder_id,
+                exc,
+            )
+        if self._work_planner and self._work_planner.is_running():
+            self._work_planner.wake()
+
     def __repr__(self):
         """
         Return a string representation of the Vault instance.
@@ -193,6 +301,7 @@ class Vault:
             self._changed_tags_pending_ids.clear()
         if timer is not None:
             timer.cancel()
+        self._ref_folder_watcher.stop()
         self._work_planner.stop()
         self._task_runner.stop()
         FaceExtractionTask.release_detection_models()
@@ -392,6 +501,11 @@ class Vault:
             if picture_ids:
                 self.notify(EventType.CHANGED_PICTURES, picture_ids)
                 self.notify(EventType.PICTURE_IMPORTED, picture_ids)
+
+        if task.type == "ReferenceFolderScanTask":
+            picture_ids = result.get("caption_updated_picture_ids") or []
+            if picture_ids:
+                self._queue_changed_tags_notification(picture_ids)
 
     def _process_pending_character_assignments(self, picture_ids: list[int]) -> None:
         """Honour deferred face-to-character assignments after face extraction runs.

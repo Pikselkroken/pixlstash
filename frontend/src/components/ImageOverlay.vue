@@ -1005,7 +1005,15 @@
                     <div
                       v-for="entry in pictureInfoEntries"
                       :key="entry.label"
-                      class="metadata-info-item"
+                      :class="[
+                        'metadata-info-item',
+                        entry.fullWidth && 'metadata-info-item--full-width',
+                        entry.clickable && 'metadata-info-item--clickable',
+                      ]"
+                      :title="entry.fullWidth ? entry.value : undefined"
+                      @click="
+                        entry.clickable ? openSourceFileLocation() : undefined
+                      "
                     >
                       <div class="metadata-info-label">{{ entry.label }}</div>
                       <div class="metadata-info-value">{{ entry.value }}</div>
@@ -4361,10 +4369,29 @@ const pictureInfoEntries = computed(() => {
     }
   }
 
+  if (image.value.reference_folder_id && image.value.file_path) {
+    entries.push({
+      label: "Source file",
+      value: image.value.file_path,
+      fullWidth: true,
+      clickable: true,
+    });
+  }
+
   return entries;
 });
 
-const comfyMetadata = ref(null);
+async function openSourceFileLocation() {
+  if (!image.value?.id) return;
+  try {
+    await apiClient.post(
+      `${backendUrl.value}/pictures/${image.value.id}/open-location`,
+    );
+  } catch {
+    // silently ignore
+  }
+}
+
 const metadataTab = ref("info");
 const metadataCollapsed = ref(false);
 const descriptionCollapsed = ref(false);
@@ -6140,6 +6167,18 @@ function downloadComfyWorkflow(workflow) {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.metadata-info-item--full-width {
+  grid-column: 1 / -1;
+}
+
+.metadata-info-item--clickable {
+  cursor: pointer;
+}
+
+.metadata-info-item--clickable:hover .metadata-info-value {
+  text-decoration: underline;
 }
 
 .metadata-info-label {
