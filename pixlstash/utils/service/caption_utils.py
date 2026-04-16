@@ -16,6 +16,21 @@ class CaptionUtils:
     """Utility methods for building caption and tag strings from pictures."""
 
     @staticmethod
+    def sanitise_tag(tag: str) -> str:
+        """Return a human-readable form of a WD14 tag.
+
+        Replaces underscores with spaces and strips surrounding whitespace,
+        preserving the original tag vocabulary that diffusion users expect.
+
+        Args:
+            tag: Raw WD14 tag string, e.g. ``'1girl'`` or ``'open_mouth'``.
+
+        Returns:
+            Sanitised tag string, e.g. ``'open mouth'``.
+        """
+        return tag.replace("_", " ").strip().lower()
+
+    @staticmethod
     def _build_tag_caption(picture, tag_format: str = "spaces") -> str:
         """Build a comma-separated tag string from a picture's tags.
 
@@ -43,6 +58,11 @@ class CaptionUtils:
             if name_value:
                 character_names.append(name_value)
         return ", ".join(character_names)
+
+
+# Module-level alias so existing `from ... import sanitise_tag` call sites work
+# without modification.
+sanitise_tag = CaptionUtils.sanitise_tag
 
 
 def serialize_tag_objects(tags: list | None, empty_sentinel: str = "") -> list[dict]:

@@ -24,7 +24,7 @@ from platformdirs import user_data_dir
 
 from .pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
-from pixlstash.utils.caption_utils import sanitise_tag
+from pixlstash.utils.service.caption_utils import sanitise_tag
 from pixlstash.image_loading_dataset_prepper import ImageLoadingDatasetPrepper
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
