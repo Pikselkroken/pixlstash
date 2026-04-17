@@ -2848,10 +2848,9 @@ function openSidebarFromTeaser() {
 }
 
 function toggleZoom(event = null) {
-  if (event?.target instanceof HTMLElement) {
-    if (event.target.closest(".overlay-nav")) {
-      return;
-    }
+  const target = event?.target;
+  if (target instanceof HTMLElement && target.closest(".overlay-nav")) {
+    return;
   }
   const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
   const nextIndex = (currentIndex + 1) % zoomSteps.length;
