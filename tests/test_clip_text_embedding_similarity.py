@@ -295,13 +295,15 @@ def test_embedding_storage_and_retrieval():
     import os
     from sqlalchemy import create_engine
 
+    from sqlalchemy.pool import NullPool
+
     class EmbeddingTest(SQLModel, table=True):
         id: int = Field(default=None, primary_key=True)
         embedding: bytes
 
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = os.path.join(temp_dir, "test.db")
-        engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        engine = create_engine(f"sqlite:///{db_path}", echo=False, poolclass=NullPool)
         SQLModel.metadata.create_all(engine)
         # Create and store embedding
         arr = np.random.randn(384).astype(np.float32)
@@ -331,9 +333,11 @@ def test_picture_embedding_storage_and_retrieval():
     import os
     from sqlalchemy import create_engine
 
+    from sqlalchemy.pool import NullPool
+
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = os.path.join(temp_dir, "test.db")
-        engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        engine = create_engine(f"sqlite:///{db_path}", echo=False, poolclass=NullPool)
         # Create tables
         from sqlmodel import SQLModel
 
