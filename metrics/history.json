@@ -1527,6 +1527,58 @@
       },
       "upgrade_page_visits": 1,
       "version_check_requests": 0
+    },
+    {
+      "date": "2026-04-18",
+      "stars": 29,
+      "forks": 2,
+      "clones_today": {
+        "count": 361,
+        "uniques": 45,
+        "source_date": "2026-04-17"
+      },
+      "release_downloads": {
+        "total": 150,
+        "by_release": {
+          "v1.0.2": 27,
+          "v1.0.1rc3": 2,
+          "v1.0.1rc2": 0,
+          "v1.0.1rc1": 1,
+          "v1.0.1": 1,
+          "v1.0.0": 40,
+          "v1.0.0rc11": 3,
+          "v1.0.0rc10": 7,
+          "v1.0.0rc9": 0,
+          "v1.0.0rc8": 2,
+          "v1.0.0rc7": 0,
+          "v1.0.0rc6": 1,
+          "v1.0.0rc5": 0,
+          "v1.0.0rc3": 30,
+          "v1.0.0rc2": 1,
+          "v1.0.0rc1": 0,
+          "v1.0.0b4": 3,
+          "v1.0.0b3": 2,
+          "v1.0.0b2": 11,
+          "v0.9.8": 2,
+          "v0.9.7": 1,
+          "v0.9.6": 3,
+          "v0.9.5": 1,
+          "v0.9.4": 1,
+          "v0.9.3": 1,
+          "v0.9.2.dev0": 1,
+          "v0.9.2": 1,
+          "v0.9.0": 5,
+          "v0.8.7": 1,
+          "v0.8.6": 2
+        }
+      },
+      "pypi_downloads": {
+        "last_day": 7,
+        "last_week": 749,
+        "last_month": 1715
+      },
+      "upgrade_page_visits": 0,
+      "version_check_requests": 5
     }
   ]
 }
