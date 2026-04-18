@@ -1,3 +1,6 @@
+# [1.0.4]
+- Fix issue where the sort menu didn't show entries until the first character was created
+
 # [1.0.3]
 - Attempt at fixing the sort menu not showing any entries.
 
