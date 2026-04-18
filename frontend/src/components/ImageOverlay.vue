@@ -4019,6 +4019,8 @@ function preloadAdjacentImages() {
   });
 }
 
+const comfyMetadata = ref(null);
+
 watch(
   () => image.value?.id,
   (newId) => {
@@ -4364,7 +4366,6 @@ const pictureInfoEntries = computed(() => {
   return entries;
 });
 
-const comfyMetadata = ref(null);
 const metadataTab = ref("info");
 const metadataCollapsed = ref(false);
 const descriptionCollapsed = ref(false);
