@@ -247,6 +247,7 @@
           />
           <v-menu
             v-if="image && isMobile"
+            v-model="starMenuOpen"
             location="bottom end"
             origin="top end"
             transition="scale-transition"
@@ -1410,6 +1411,8 @@ const lastTagUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
+const starMenuOpen = ref(false);
+let menuWasOpenOnPointerDown = false;
 const comfyuiWorkflows = ref([]);
 const comfyuiWorkflowLoading = ref(false);
 const comfyuiWorkflowError = ref("");
@@ -2797,6 +2800,14 @@ function handleWheelActivity() {
   handleUserActivity();
 }
 
+function handleOverlayPointerDown() {
+  menuWasOpenOnPointerDown = !!(
+    document.querySelector(".v-overlay--active") ||
+    document.querySelector(".add-to-set.open") ||
+    document.querySelector(".add-to-project.open")
+  );
+}
+
 function handleOverlayClick(event) {
   if (touchTapConsumed) {
     touchTapConsumed = false;
@@ -2815,6 +2826,10 @@ function handleOverlayClick(event) {
     console.log(
       "Aborting overlay click handling to avoid immediate re-hiding of chrome",
     );
+    return;
+  }
+  if (menuWasOpenOnPointerDown) {
+    menuWasOpenOnPointerDown = false;
     return;
   }
   const interactiveSelector =
@@ -3352,6 +3367,7 @@ onMounted(() => {
   updateViewportMetrics();
   window.addEventListener("resize", updateViewportMetrics);
   window.addEventListener("keydown", handleKeydown);
+  window.addEventListener("pointerdown", handleOverlayPointerDown, true);
   fetchPenalisedTags();
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
@@ -3369,6 +3385,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("resize", updateViewportMetrics);
   window.removeEventListener("keydown", handleKeydown);
+  window.removeEventListener("pointerdown", handleOverlayPointerDown, true);
   if (overlayResizeObserver) {
     overlayResizeObserver.disconnect();
     overlayResizeObserver = null;
