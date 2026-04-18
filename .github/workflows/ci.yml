@@ -127,3 +127,73 @@ jobs:
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_smart_score_consistency.py
       - name: Test VRAM Batch Budget
         run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_vram_batch_budget.py
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip packages
+        uses: actions/cache@v5
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-py3.12-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[test,dev]
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~\.cache\huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/picture_tagger.py') }}
+          restore-keys: hf-models-${{ runner.os }}-
+
+      - name: Test Florence-2 Captioning
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_florence.py
+      - name: Test Server Endpoints and Integration
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_server.py
+      - name: Test Tag Worker and Tagging
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_tag_worker.py
+      - name: Test Picture Likeness Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_likeness_worker.py
+      - name: Test Picture Stack Utilities
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_stack_utils.py
+      - name: Test Picture Set Management
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_sets.py
+      - name: Test Quality Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_quality_worker.py
+      - name: Test CLIP Text Embedding Similarity
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_clip_text_embedding_similarity.py
+      - name: Test Backend Order Stability
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_backend_order_stability.py
+      - name: Test Facial Features Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_facial_features_worker.py
+      - name: Test Many-to-Many Face Data
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_many_to_many_face_data.py
+      - name: Test ComfyUI Workflow Extraction
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_comfyui_workflow_extraction.py
+      - name: Test Authentication
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_authentication.py
+      - name: Test Rate Limiter
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_rate_limiter.py
+      - name: Test Picture Plugins
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_picture_plugins.py
+      - name: Test Watch Folder Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_watch_folder_worker.py
+      - name: Test Work Planner
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_work_planner.py
+      - name: Test Image Embedding Worker
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_image_embedding_worker.py
+      - name: Test Smart Score Consistency
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_smart_score_consistency.py
+      - name: Test VRAM Batch Budget
+        run: python -m pytest -s -vvv --fast-captions --force-cpu --log-cli-level=INFO tests/test_vram_batch_budget.py
