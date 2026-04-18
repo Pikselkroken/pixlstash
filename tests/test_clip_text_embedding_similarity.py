@@ -320,6 +320,7 @@ def test_embedding_storage_and_retrieval():
             print(f"First 5 values loaded: {arr_loaded[:5]}")
             assert arr_loaded.shape == arr.shape
             assert np.allclose(arr_loaded, arr)
+        engine.dispose()
 
 
 def test_picture_embedding_storage_and_retrieval():
@@ -362,6 +363,7 @@ def test_picture_embedding_storage_and_retrieval():
             print(f"First 5 values loaded: {arr_loaded[:5]}")
             assert arr_loaded.shape == arr.shape
             assert np.allclose(arr_loaded, arr)
+        engine.dispose()
 
 
 @pytest.fixture
