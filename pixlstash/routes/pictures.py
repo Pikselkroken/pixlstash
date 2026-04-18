@@ -29,7 +29,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import delete, exists, func, text
+from sqlalchemy import and_, delete, desc, exists, func, or_, text
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -71,6 +71,9 @@ from pixlstash.tasks import TaskType
 from pixlstash.db_models.tag import TAG_EMPTY_SENTINEL
 
 logger = get_logger(__name__)
+
+_stats_cache: dict = {}
+_STATS_TTL = 60.0
 
 _SIDECAR_TAG_PATTERN = re.compile(
     r"^[a-z0-9]+(?:[ _-][a-z0-9]+){0,2}$",
@@ -3975,5 +3978,237 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=500, detail="Failed to open location")
 
         return {"status": "ok"}
+
+    @router.get(
+        "/pictures/stats",
+        summary="Get picture statistics",
+        description="Returns tag statistics for the current view filter, cached for 60 seconds.",
+    )
+    def get_picture_stats(request: Request):
+        cache_key = str(sorted(request.query_params.multi_items()))
+        now = time.monotonic()
+        cached = _stats_cache.get(cache_key)
+        if cached is not None:
+            ts, data = cached
+            if now - ts < _STATS_TTL:
+                return data
+
+        only_penalised_raw = request.query_params.get("only_penalised") or ""
+        only_penalised = only_penalised_raw in ("1", "true", "one", "both")
+        penalised_cooc_both = only_penalised_raw == "both"
+        penalised_tag_set: set[str] | None = None
+        if only_penalised:
+            raw_penalised = get_smart_score_penalised_tags_from_request(server, request)
+            penalised_tag_set = {
+                str(t).strip().lower() for t in (raw_penalised or {}).keys() if t
+            } or None
+
+        character_id_raw = request.query_params.get("character_id")
+        set_id_raw = request.query_params.get("set_id")
+        set_ids_raw = request.query_params.getlist("set_ids")
+        set_mode_raw = request.query_params.get("set_mode", "union")
+        project_id_raw = request.query_params.get("project_id")
+        tags_filter = request.query_params.getlist("tag")
+        rejected_tags = request.query_params.getlist("rejected_tag")
+        format_filter = request.query_params.getlist("format")
+        min_score_raw = request.query_params.get("min_score")
+        file_path_prefix = request.query_params.get("file_path_prefix") or None
+
+        only_deleted = character_id_raw == "SCRAPHEAP"
+        if only_deleted:
+            character_id_raw = None
+        set_mode = _normalize_set_mode(set_mode_raw)
+        set_filter_ids = _collect_set_filter_ids(
+            set_id_value=set_id_raw,
+            set_ids_values=set_ids_raw or None,
+        )
+        min_score = int(min_score_raw) if min_score_raw is not None else None
+
+        def compute(session):
+            def _empty():
+                return {
+                    "total": 0,
+                    "tagged": 0,
+                    "untagged": 0,
+                    "avg_tags_per_image": 0.0,
+                    "top_tags": [],
+                    "top_cooccurrences": [],
+                }
+
+            deleted_clause = (
+                Picture.deleted.is_(True)
+                if only_deleted
+                else Picture.deleted.is_(False)
+            )
+            pic_q = select(Picture.id).where(deleted_clause)
+
+            if set_filter_ids:
+                candidate_ids = _fetch_set_candidate_ids(
+                    session,
+                    set_ids=set_filter_ids,
+                    set_mode=set_mode,
+                    deleted_only=only_deleted,
+                )
+                if not candidate_ids:
+                    return _empty()
+                pic_q = pic_q.where(Picture.id.in_(candidate_ids))
+            elif character_id_raw == "UNASSIGNED":
+                unassigned_conditions = Picture.build_unassigned_conditions(
+                    enforce_stack_assignment=True,
+                )
+                pic_q = pic_q.where(*unassigned_conditions)
+            elif character_id_raw is not None and character_id_raw not in ("", "ALL"):
+                try:
+                    char_id_int = int(character_id_raw)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="Invalid character_id")
+                pic_q = pic_q.where(
+                    exists(
+                        select(Face.id).where(
+                            Face.picture_id == Picture.id,
+                            Face.character_id == char_id_int,
+                        )
+                    )
+                )
+
+            if project_id_raw == "UNASSIGNED":
+                pic_q = pic_q.where(_project_unassigned_clause(Picture))
+            elif project_id_raw is not None:
+                try:
+                    pid_int = int(project_id_raw)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="Invalid project_id")
+                pic_q = pic_q.where(_project_membership_exists_clause(pid_int, Picture))
+
+            if format_filter:
+                pic_q = pic_q.where(
+                    Picture.format.in_([f.upper() for f in format_filter])
+                )
+            if min_score is not None:
+                pic_q = pic_q.where(Picture.smart_score >= min_score)
+            if file_path_prefix:
+                pic_q = pic_q.where(Picture.file_path.startswith(file_path_prefix))
+            for tag in tags_filter:
+                pic_q = pic_q.where(
+                    exists(
+                        select(Tag.id).where(
+                            Tag.picture_id == Picture.id,
+                            Tag.tag == tag,
+                        )
+                    )
+                )
+            for tag in rejected_tags:
+                pic_q = pic_q.where(
+                    ~exists(
+                        select(Tag.id).where(
+                            Tag.picture_id == Picture.id,
+                            Tag.tag == tag,
+                        )
+                    )
+                )
+
+            pic_subq = pic_q.subquery()
+
+            total = session.exec(select(func.count()).select_from(pic_subq)).one()
+
+            tagged_subq = (
+                select(Tag.picture_id)
+                .where(
+                    Tag.picture_id.in_(select(pic_subq.c.id)),
+                    Tag.tag != TAG_EMPTY_SENTINEL,
+                    Tag.tag.is_not(None),
+                )
+                .distinct()
+                .subquery()
+            )
+            tagged = session.exec(select(func.count()).select_from(tagged_subq)).one()
+
+            tag_count_subq = (
+                select(
+                    Tag.picture_id,
+                    func.count(Tag.id).label("cnt"),
+                )
+                .where(
+                    Tag.picture_id.in_(select(pic_subq.c.id)),
+                    Tag.tag != TAG_EMPTY_SENTINEL,
+                    Tag.tag.is_not(None),
+                )
+                .group_by(Tag.picture_id)
+                .subquery()
+            )
+            avg_row = session.exec(select(func.avg(tag_count_subq.c.cnt))).one()
+            avg_tags = float(avg_row) if avg_row is not None else 0.0
+
+            top_tags_q = select(Tag.tag, func.count(Tag.id).label("cnt")).where(
+                Tag.picture_id.in_(select(pic_subq.c.id)),
+                Tag.tag != TAG_EMPTY_SENTINEL,
+                Tag.tag.is_not(None),
+            )
+            if penalised_tag_set:
+                top_tags_q = top_tags_q.where(
+                    func.lower(Tag.tag).in_(penalised_tag_set)
+                )
+            top_tags_rows = session.exec(
+                top_tags_q.group_by(Tag.tag).order_by(desc("cnt")).limit(20)
+            ).all()
+            top_tags = [{"tag": row[0], "count": row[1]} for row in top_tags_rows]
+
+            t1 = Tag.__table__.alias("t1")
+            t2 = Tag.__table__.alias("t2")
+            cooc_base = (
+                select(
+                    t1.c.tag,
+                    t2.c.tag,
+                    func.count().label("cnt"),
+                )
+                .select_from(
+                    t1.join(
+                        t2,
+                        and_(
+                            t1.c.picture_id == t2.c.picture_id,
+                            t1.c.tag < t2.c.tag,
+                        ),
+                    )
+                )
+                .where(
+                    t1.c.picture_id.in_(select(pic_subq.c.id)),
+                    t1.c.tag != TAG_EMPTY_SENTINEL,
+                    t2.c.tag != TAG_EMPTY_SENTINEL,
+                )
+            )
+            if penalised_tag_set:
+                if penalised_cooc_both:
+                    cooc_base = cooc_base.where(
+                        and_(
+                            func.lower(t1.c.tag).in_(penalised_tag_set),
+                            func.lower(t2.c.tag).in_(penalised_tag_set),
+                        )
+                    )
+                else:
+                    cooc_base = cooc_base.where(
+                        or_(
+                            func.lower(t1.c.tag).in_(penalised_tag_set),
+                            func.lower(t2.c.tag).in_(penalised_tag_set),
+                        )
+                    )
+            cooc_rows = session.execute(
+                cooc_base.group_by(t1.c.tag, t2.c.tag).order_by(desc("cnt")).limit(10)
+            ).fetchall()
+            top_cooccurrences = [
+                {"tags": [row[0], row[1]], "count": row[2]} for row in cooc_rows
+            ]
+
+            return {
+                "total": int(total),
+                "tagged": int(tagged),
+                "untagged": int(total) - int(tagged),
+                "avg_tags_per_image": round(avg_tags, 2),
+                "top_tags": top_tags,
+                "top_cooccurrences": top_cooccurrences,
+            }
+
+        result = server.vault.db.run_immediate_read_task(compute)
+        _stats_cache[cache_key] = (now, result)
+        return result
 
     return router

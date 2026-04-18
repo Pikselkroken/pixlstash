@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
-from sqlalchemy import desc, exists, func, nullslast
+from sqlalchemy import and_, desc, exists, func, nullslast
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from pixlstash.database import DBPriority

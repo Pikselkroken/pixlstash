@@ -17,6 +17,7 @@ import PhotosImportDialog from "./components/PhotosImportDialog.vue";
 import ImageGrid from "./components/ImageGrid.vue";
 import SearchOverlay from "./components/SearchOverlay.vue";
 import Toolbar from "./components/Toolbar.vue";
+import StatsSidebar from "./components/StatsSidebar.vue";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -1463,66 +1464,97 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
           />
           <div
             :class="['main-content', selectedCharacter ? 'accent-border' : '']"
-            style="margin-top: 0"
+            style="margin-top: 0; flex-direction: row; align-items: stretch"
           >
-            <ImageGrid
-              ref="gridContainer"
-              :thumbnailSize="thumbnailSize"
-              :sidebarVisible="sidebarVisible"
+            <div
+              style="
+                flex: 1;
+                min-width: 0;
+                position: relative;
+                overflow: hidden;
+              "
+            >
+              <ImageGrid
+                ref="gridContainer"
+                :thumbnailSize="thumbnailSize"
+                :sidebarVisible="sidebarVisible"
+                :backendUrl="BACKEND_URL"
+                :selectedCharacter="selectedCharacter"
+                :selectedSet="selectedSet"
+                :selectedSetIds="selectedSetIds"
+                :searchQuery="searchQuery"
+                :activeCategoryLabel="activeCategoryLabel"
+                :isAllPicturesActive="isAllPicturesActive"
+                :selectedSort="selectedSort"
+                :selectedDescending="selectedDescending"
+                :similarityCharacter="selectedSimilarityCharacter"
+                :stackThreshold="stackThreshold"
+                :showStars="showStars"
+                :gridVersion="gridVersion"
+                :wsUpdateKey="wsUpdateKey"
+                :wsTagUpdate="wsTagUpdate"
+                :wsPluginProgress="wsPluginProgress"
+                :mediaTypeFilter="mediaTypeFilter"
+                :comfyuiModelFilter="comfyuiModelFilter"
+                :comfyuiLoraFilter="comfyuiLoraFilter"
+                :comfyuiConfigured="comfyuiConfigured"
+                :minScoreFilter="minScoreFilter"
+                :tagFilter="tagFilter"
+                :tagRejectedFilter="tagRejectedFilter"
+                :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
+                :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
+                :showFaceBboxes="showFaceBboxes"
+                :showFormat="showFormat"
+                :showResolution="showResolution"
+                :showProblemIcon="showProblemIcon"
+                :penalisedTagWeights="penalisedTagWeights"
+                :showStacks="showStacks"
+                :compactMode="compactMode"
+                :themeMode="themeMode"
+                :dateFormat="dateFormat"
+                :hiddenTags="hiddenTags"
+                :applyTagFilter="applyTagFilter"
+                :allPicturesId="ALL_PICTURES_ID"
+                :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+                :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
+                :projectViewMode="projectViewMode"
+                :selectedProjectId="selectedProjectId"
+                :referenceFolderIdFilter="
+                  selectedFolderFilter?.referenceFolderId ?? null
+                "
+                :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
+                :columns="columns"
+                @clear-search="handleClearSearch"
+                @search-all="handleSearchAllPictures"
+                @update:selected-sort="handleUpdateSelectedSort"
+                @refresh-sidebar="refreshSidebar"
+                @reset-to-all="handleResetToAll"
+                @update:stack-stats="handleStackStatsUpdate"
+                @import-started="isUploadInProgress = true"
+                @import-ended="isUploadInProgress = false"
+              />
+            </div>
+            <StatsSidebar
               :backendUrl="BACKEND_URL"
               :selectedCharacter="selectedCharacter"
               :selectedSet="selectedSet"
               :selectedSetIds="selectedSetIds"
-              :searchQuery="searchQuery"
-              :activeCategoryLabel="activeCategoryLabel"
-              :isAllPicturesActive="isAllPicturesActive"
-              :selectedSort="selectedSort"
-              :selectedDescending="selectedDescending"
-              :similarityCharacter="selectedSimilarityCharacter"
-              :stackThreshold="stackThreshold"
-              :showStars="showStars"
-              :gridVersion="gridVersion"
-              :wsUpdateKey="wsUpdateKey"
-              :wsTagUpdate="wsTagUpdate"
-              :wsPluginProgress="wsPluginProgress"
-              :mediaTypeFilter="mediaTypeFilter"
-              :comfyuiModelFilter="comfyuiModelFilter"
-              :comfyuiLoraFilter="comfyuiLoraFilter"
-              :comfyuiConfigured="comfyuiConfigured"
-              :minScoreFilter="minScoreFilter"
+              :projectViewMode="projectViewMode"
+              :selectedProjectId="selectedProjectId"
               :tagFilter="tagFilter"
               :tagRejectedFilter="tagRejectedFilter"
-              :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
-              :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
-              :showFaceBboxes="showFaceBboxes"
-              :showFormat="showFormat"
-              :showResolution="showResolution"
-              :showProblemIcon="showProblemIcon"
-              :penalisedTagWeights="penalisedTagWeights"
-              :showStacks="showStacks"
-              :compactMode="compactMode"
-              :themeMode="themeMode"
-              :dateFormat="dateFormat"
-              :hiddenTags="hiddenTags"
-              :applyTagFilter="applyTagFilter"
+              :mediaTypeFilter="mediaTypeFilter"
+              :minScoreFilter="minScoreFilter"
+              :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-              :projectViewMode="projectViewMode"
-              :selectedProjectId="selectedProjectId"
-              :referenceFolderIdFilter="
-                selectedFolderFilter?.referenceFolderId ?? null
+              :penalisedTagWeights="penalisedTagWeights"
+              @filter-tag="
+                (tag) => {
+                  tagFilter = [tag];
+                }
               "
-              :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
-              :columns="columns"
-              @clear-search="handleClearSearch"
-              @search-all="handleSearchAllPictures"
-              @update:selected-sort="handleUpdateSelectedSort"
-              @refresh-sidebar="refreshSidebar"
-              @reset-to-all="handleResetToAll"
-              @update:stack-stats="handleStackStatsUpdate"
-              @import-started="isUploadInProgress = true"
-              @import-ended="isUploadInProgress = false"
             />
           </div>
         </main>
