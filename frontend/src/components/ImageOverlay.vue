@@ -4033,6 +4033,13 @@ function preloadAdjacentImages() {
   });
 }
 
+const comfyMetadata = ref(null);
+const metadataTab = ref("info");
+const metadataCollapsed = ref(false);
+const descriptionCollapsed = ref(false);
+const facesCollapsed = ref(false);
+const tagsCollapsed = ref(false);
+
 watch(
   () => image.value?.id,
   (newId) => {
@@ -4397,12 +4404,6 @@ async function openSourceFileLocation() {
     // silently ignore
   }
 }
-
-const metadataTab = ref("info");
-const metadataCollapsed = ref(false);
-const descriptionCollapsed = ref(false);
-const facesCollapsed = ref(false);
-const tagsCollapsed = ref(false);
 
 watch(
   [() => !!comfyMetadata.value, () => !!pictureInfoEntries.value?.length],
