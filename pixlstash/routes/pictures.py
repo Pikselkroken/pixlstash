@@ -45,7 +45,6 @@ from pixlstash.db_models import (
     SortMechanism,
     Tag,
 )
-from pixlstash.db_models.reference_folder import ReferenceFolder
 from pixlstash.event_types import EventType
 from pixlstash.image_plugins.registry import get_image_plugin_manager
 from pixlstash.image_plugins.service import apply_plugin_to_pictures
@@ -61,10 +60,10 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
-from pixlstash.utils.caption_file_utils import write_caption_file
 from pixlstash.utils.service.caption_utils import (
     _normalize_hidden_tags,
     serialize_tag_objects,
+    sync_picture_sidecar,
 )
 from pixlstash.utils.service.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import _deduplicate_by_stack
@@ -3666,6 +3665,7 @@ def create_router(server) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=404, detail="Picture not found")
 
+        picture_id = pic.id
         logger.debug(f"Updating picture id={id}")
         if json_body and isinstance(json_body, dict):
             params.update(json_body)
@@ -3726,7 +3726,6 @@ def create_router(server) -> APIRouter:
                 updated = True
 
         if updated:
-            picture_id = pic.id
 
             def apply_picture_updates(session: Session, picture_id: int, fields: dict):
                 pic_db = session.get(Picture, picture_id)
@@ -3736,6 +3735,7 @@ def create_router(server) -> APIRouter:
                     setattr(pic_db, field_name, field_value)
                 session.add(pic_db)
                 session.commit()
+                session.refresh(pic_db)
                 return pic_db
 
             try:
@@ -3749,43 +3749,8 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Picture not found")
             server.vault.notify(EventType.CHANGED_PICTURES, [picture_id])
 
-        # Write back tags and description to caption sidecar when enabled.
-        if pic.reference_folder_id and pic.caption_file:
-
-            def _write_sidecar(
-                session: Session,
-                rf_id: int,
-                pic_id: int,
-                caption_path: str,
-                description: str | None,
-            ) -> None:
-                rf = session.get(ReferenceFolder, rf_id)
-                if rf is None or not rf.sync_captions:
-                    return
-                current_tags = [
-                    t.tag
-                    for t in session.exec(
-                        select(Tag).where(Tag.picture_id == pic_id)
-                    ).all()
-                ]
-                new_mtime = write_caption_file(caption_path, current_tags, description)
-                if new_mtime is not None:
-                    # Persist the new mtime so the next folder scan does not
-                    # treat this write-back as an external change.
-                    pic_db = session.get(Picture, pic_id)
-                    if pic_db is not None:
-                        pic_db.caption_file_mtime = new_mtime
-                        session.add(pic_db)
-                        session.commit()
-
-            server.vault.db.run_task(
-                _write_sidecar,
-                pic.reference_folder_id,
-                pic.id,
-                pic.caption_file,
-                pic.description,
-                priority=DBPriority.IMMEDIATE,
-            )
+        # Write back description to caption sidecar when enabled.
+        sync_picture_sidecar(server, picture_id)
 
         return {"status": "success", "picture": safe_model_dict(pic)}
 
