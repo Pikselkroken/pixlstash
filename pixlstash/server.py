@@ -872,11 +872,13 @@ class Server:
             if index_path:
                 favicon_path = os.path.join(os.path.dirname(index_path), "favicon.ico")
                 if os.path.isfile(favicon_path):
-                    return FileResponse(favicon_path)
+                    return FileResponse(
+                        favicon_path, media_type="image/vnd.microsoft.icon"
+                    )
             favicon_path = os.path.join(
                 os.path.dirname(__file__), "..", "frontend", "public", "favicon.ico"
             )
-            return FileResponse(favicon_path)
+            return FileResponse(favicon_path, media_type="image/vnd.microsoft.icon")
 
         @self.api.websocket(f"{API_V1_PREFIX}/ws/updates")
         async def websocket_updates(websocket: WebSocket):
