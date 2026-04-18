@@ -1751,6 +1751,7 @@ watch(
   () => {
     fetchSortOptions();
   },
+  { immediate: true },
 );
 
 watch(
