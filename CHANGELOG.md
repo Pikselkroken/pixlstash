@@ -1,3 +1,6 @@
+# [1.0.3]
+- Attempt at fixing the sort menu not showing any entries.
+
 # [1.0.2]
 - Fix problem where the "update available" check thought 1.0.1rc3 was newer than 1.0.1.
 
