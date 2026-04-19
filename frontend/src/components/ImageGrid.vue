@@ -660,10 +660,14 @@ const props = defineProps({
   comfyuiLoraFilter: { type: Array, default: () => [] },
   comfyuiConfigured: { type: Boolean, default: false },
   minScoreFilter: { type: Number, default: null },
+  maxScoreFilter: { type: Number, default: null },
+  smartScoreBucketFilter: { type: String, default: null },
+  resolutionBucketFilter: { type: String, default: null },
   tagFilter: { type: Array, default: () => [] },
   tagRejectedFilter: { type: Array, default: () => [] },
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
+  faceBboxFilter: { type: String, default: null },
   columns: { type: Number, required: true },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
@@ -2765,7 +2769,10 @@ const selectedExpandedCount = computed(() => {
     props.mediaTypeFilter === "all" &&
     (props.comfyuiModelFilter || []).length === 0 &&
     (props.comfyuiLoraFilter || []).length === 0 &&
-    props.minScoreFilter == null;
+    props.minScoreFilter == null &&
+    props.maxScoreFilter == null &&
+    props.smartScoreBucketFilter == null &&
+    props.resolutionBucketFilter == null;
 
   // Keep the info count aligned with sidebar summary for full category selections.
   if (
@@ -4305,6 +4312,15 @@ function buildPictureIdsQueryParams() {
   if (props.minScoreFilter != null) {
     params.append("min_score", props.minScoreFilter);
   }
+  if (props.maxScoreFilter != null) {
+    params.append("max_score", props.maxScoreFilter);
+  }
+  if (props.smartScoreBucketFilter != null) {
+    params.append("smart_score_bucket", props.smartScoreBucketFilter);
+  }
+  if (props.resolutionBucketFilter != null) {
+    params.append("resolution_bucket", props.resolutionBucketFilter);
+  }
   (props.tagFilter || []).forEach((t) => params.append("tag", t));
   (props.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
@@ -4324,6 +4340,9 @@ function buildPictureIdsQueryParams() {
   if (props.filePathPrefixFilter != null) {
     params.append("file_path_prefix", props.filePathPrefixFilter);
   }
+  if (props.faceBboxFilter != null) {
+    params.append("face_filter", props.faceBboxFilter);
+  }
   return params.toString();
 }
 
@@ -4340,6 +4359,15 @@ function buildLikenessGroupQueryParams() {
   if (props.minScoreFilter != null) {
     params.append("min_score", props.minScoreFilter);
   }
+  if (props.maxScoreFilter != null) {
+    params.append("max_score", props.maxScoreFilter);
+  }
+  if (props.smartScoreBucketFilter != null) {
+    params.append("smart_score_bucket", props.smartScoreBucketFilter);
+  }
+  if (props.resolutionBucketFilter != null) {
+    params.append("resolution_bucket", props.resolutionBucketFilter);
+  }
   (props.tagFilter || []).forEach((t) => params.append("tag", t));
   (props.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
@@ -4350,6 +4378,9 @@ function buildLikenessGroupQueryParams() {
   (props.tagConfidenceBelowFilter || []).forEach((e) =>
     params.append("tag_confidence_below", e),
   );
+  if (props.faceBboxFilter != null) {
+    params.append("face_filter", props.faceBboxFilter);
+  }
   if (props.applyTagFilter) {
     params.append("apply_tag_filter", "true");
   }
@@ -5679,10 +5710,14 @@ watch(
     () => props.comfyuiModelFilter,
     () => props.comfyuiLoraFilter,
     () => props.minScoreFilter,
+    () => props.maxScoreFilter,
+    () => props.smartScoreBucketFilter,
+    () => props.resolutionBucketFilter,
     () => props.tagFilter,
     () => props.tagRejectedFilter,
     () => props.tagConfidenceAboveFilter,
     () => props.tagConfidenceBelowFilter,
+    () => props.faceBboxFilter,
   ],
   () => {
     _resetGridState();

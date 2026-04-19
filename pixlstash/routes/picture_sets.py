@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
-from sqlalchemy import and_, desc, exists, func, nullslast
+from sqlalchemy import desc, exists, func, nullslast
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from pixlstash.database import DBPriority
@@ -566,6 +566,9 @@ def create_router(server) -> APIRouter:
         project_id: str | None = Query(None),
         fields: str = Query(None),
         min_score: int | None = Query(None),
+        max_score: int | None = Query(None),
+        smart_score_bucket: str | None = Query(None),
+        resolution_bucket: str | None = Query(None),
         expand_stacks: bool = Query(False),
     ):
         tags_filter = request.query_params.getlist("tag") or None
@@ -733,6 +736,9 @@ def create_router(server) -> APIRouter:
                 include_unimported=True,
                 stack_leaders_only=deduplicate_stacks,
                 min_score=min_score,
+                max_score=max_score,
+                smart_score_bucket=smart_score_bucket,
+                resolution_bucket=resolution_bucket,
                 tags_filter=tags_filter,
                 tags_rejected_filter=tags_rejected_filter,
                 tags_confidence_above_filter=tags_confidence_above_filter,

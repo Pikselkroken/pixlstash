@@ -29,7 +29,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import and_, delete, desc, exists, func, or_, text
+from sqlalchemy import Integer, and_, case, cast, delete, desc, exists, func, or_, text
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -44,6 +44,7 @@ from pixlstash.db_models import (
     Quality,
     SortMechanism,
     Tag,
+    TagPrediction,
 )
 from pixlstash.event_types import EventType
 from pixlstash.image_plugins.registry import get_image_plugin_manager
@@ -53,7 +54,6 @@ from pixlstash.picture_scoring import (
     compute_character_likeness_for_faces,
     fetch_smart_score_data,
     find_pictures_by_character_likeness,
-    find_pictures_by_smart_score,
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,
     select_reference_faces_for_character,
@@ -469,6 +469,9 @@ def _select_pictures_for_listing(
             set_ids = request.query_params.getlist("set_ids")
             if set_ids:
                 query_params["set_ids"] = set_ids
+            face_filter_param = request.query_params.get("face_filter")
+            if face_filter_param in ("with_face", "without_face"):
+                query_params["face_filter"] = face_filter_param
         return format, query_params
 
     def _character_id(value):
@@ -495,8 +498,13 @@ def _select_pictures_for_listing(
     reference_character_id = query_params.pop("reference_character_id", None)
     min_score_raw = query_params.pop("min_score", None)
     min_score = int(min_score_raw) if min_score_raw is not None else None
+    max_score_raw = query_params.pop("max_score", None)
+    max_score = int(max_score_raw) if max_score_raw is not None else None
+    smart_score_bucket = query_params.pop("smart_score_bucket", None) or None
+    resolution_bucket = query_params.pop("resolution_bucket", None) or None
     project_id_raw = query_params.pop("project_id", None)
     file_path_prefix = query_params.pop("file_path_prefix", None) or None
+    face_filter = query_params.pop("face_filter", None)
     only_deleted = False
     set_mode = _normalize_set_mode(set_mode_raw)
     set_filter_ids = _collect_set_filter_ids(
@@ -532,12 +540,16 @@ def _select_pictures_for_listing(
         formats: list[str] | None,
         project_id_value: str | None,
         min_score_value: int | None = None,
+        max_score_value: int | None = None,
+        smart_score_bucket_value: str | None = None,
+        resolution_bucket_value: str | None = None,
         tags_filter_value: list[str] | None = None,
         tags_rejected_filter_value: list[str] | None = None,
         tags_confidence_above_filter_value: list[str] | None = None,
         tags_confidence_below_filter_value: list[str] | None = None,
         comfyui_models_filter_value: list[str] | None = None,
         comfyui_loras_filter_value: list[str] | None = None,
+        face_filter_value: str | None = None,
     ):
         if deleted_only:
             query = select(Picture.id).where(
@@ -570,12 +582,16 @@ def _select_pictures_for_listing(
                 project_id_value is None
                 and not formats
                 and min_score_value is None
+                and max_score_value is None
+                and smart_score_bucket_value is None
+                and resolution_bucket_value is None
                 and not tags_filter_value
                 and not tags_rejected_filter_value
                 and not tags_confidence_above_filter_value
                 and not tags_confidence_below_filter_value
                 and not comfyui_models_filter_value
                 and not comfyui_loras_filter_value
+                and not face_filter_value
             ):
                 return None
             query = select(Picture.id).where(
@@ -611,6 +627,57 @@ def _select_pictures_for_listing(
 
         if min_score_value is not None:
             query = query.where(Picture.score >= min_score_value)
+        if max_score_value is not None:
+            query = query.where(Picture.score <= max_score_value)
+
+        if smart_score_bucket_value == "unscored":
+            query = query.where(Picture.smart_score.is_(None))
+        elif smart_score_bucket_value == "1-2":
+            query = query.where(
+                Picture.smart_score.is_not(None), Picture.smart_score < 2.0
+            )
+        elif smart_score_bucket_value == "2-3":
+            query = query.where(Picture.smart_score >= 2.0, Picture.smart_score < 3.0)
+        elif smart_score_bucket_value == "3-4":
+            query = query.where(Picture.smart_score >= 3.0, Picture.smart_score < 4.0)
+        elif smart_score_bucket_value == "4-5":
+            query = query.where(Picture.smart_score >= 4.0)
+
+        if resolution_bucket_value == "unknown":
+            query = query.where(or_(Picture.width.is_(None), Picture.height.is_(None)))
+        elif resolution_bucket_value == "lt1mp":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height < 1_000_000,
+            )
+        elif resolution_bucket_value == "1-4mp":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height >= 1_000_000,
+                Picture.width * Picture.height < 4_000_000,
+            )
+        elif resolution_bucket_value == "4-8mp":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height >= 4_000_000,
+                Picture.width * Picture.height < 8_000_000,
+            )
+        elif resolution_bucket_value == "8-16mp":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height >= 8_000_000,
+                Picture.width * Picture.height < 16_000_000,
+            )
+        elif resolution_bucket_value == "16plus":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height >= 16_000_000,
+            )
 
         if tags_filter_value:
             for i, tag in enumerate(tags_filter_value):
@@ -631,15 +698,37 @@ def _select_pictures_for_listing(
         if tags_confidence_above_filter_value:
             for i, entry in enumerate(tags_confidence_above_filter_value):
                 tag, threshold = entry.rsplit(":", 1)
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                        f" AND tag_prediction.tag = :ss_ca_tag_{i} AND tag_prediction.confidence >= :ss_ca_thresh_{i})"
-                        f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_ca_tag_{i})"
-                    ).bindparams(
-                        **{f"ss_ca_tag_{i}": tag, f"ss_ca_thresh_{i}": float(threshold)}
+                if float(threshold) <= 0.0:
+                    query = query.where(
+                        text(
+                            f"("
+                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                            f" AND tag_prediction.tag = :ss_ca_tag_{i} AND tag_prediction.confidence >= :ss_ca_thresh_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_ca_tag_{i})"
+                            f") OR ("
+                            f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_ca_tag_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :ss_ca_tag_{i})"
+                            f")"
+                        ).bindparams(
+                            **{
+                                f"ss_ca_tag_{i}": tag,
+                                f"ss_ca_thresh_{i}": float(threshold),
+                            }
+                        )
                     )
-                )
+                else:
+                    query = query.where(
+                        text(
+                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                            f" AND tag_prediction.tag = :ss_ca_tag_{i} AND tag_prediction.confidence >= :ss_ca_thresh_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ss_ca_tag_{i})"
+                        ).bindparams(
+                            **{
+                                f"ss_ca_tag_{i}": tag,
+                                f"ss_ca_thresh_{i}": float(threshold),
+                            }
+                        )
+                    )
 
         if tags_confidence_below_filter_value:
             for i, entry in enumerate(tags_confidence_below_filter_value):
@@ -670,6 +759,19 @@ def _select_pictures_for_listing(
                     ).bindparams(**{f"ss_comfyui_lora_{i}": m})
                 )
 
+        if face_filter_value == "with_face":
+            query = query.where(
+                text(
+                    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
+                )
+            )
+        elif face_filter_value == "without_face":
+            query = query.where(
+                text(
+                    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
+                )
+            )
+
         return list(session.exec(query).all())
 
     logger.info("Getting pictures with project id = %s", project_id_raw)
@@ -687,6 +789,9 @@ def _select_pictures_for_listing(
             format,
             project_id_raw,
             min_score_value=min_score,
+            max_score_value=max_score,
+            smart_score_bucket_value=smart_score_bucket,
+            resolution_bucket_value=resolution_bucket,
             tags_filter_value=query_params.get("tags_filter"),
             tags_rejected_filter_value=query_params.get("tags_rejected_filter"),
             tags_confidence_above_filter_value=query_params.get(
@@ -697,6 +802,7 @@ def _select_pictures_for_listing(
             ),
             comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
+            face_filter_value=face_filter,
         )
         if set_filter_ids:
             set_candidate_ids = server.vault.db.run_immediate_read_task(
@@ -718,105 +824,6 @@ def _select_pictures_for_listing(
             descending,
             candidate_ids=candidate_ids,
         )
-        if pics:
-            hidden_ids = _fetch_hidden_picture_ids(
-                server,
-                request,
-                [pic.get("id") for pic in pics if pic.get("id") is not None],
-            )
-            if hidden_ids:
-                pics = [
-                    pic
-                    for pic in pics
-                    if pic.get("id") is None or pic.get("id") not in hidden_ids
-                ]
-        if return_ids_only:
-            return [pic.get("id") for pic in pics if pic.get("id") is not None]
-        if stack_leaders_only:
-            pics = _deduplicate_by_stack(pics)
-            pics = _enrich_stack_counts(server, pics)
-        return pics
-    if sort_mech and sort_mech.key == SortMechanism.Keys.SMART_SCORE:
-        candidate_ids = server.vault.db.run_task(
-            fetch_smart_score_candidate_ids,
-            character_id,
-            only_deleted,
-            format,
-            project_id_raw,
-            min_score_value=min_score,
-            tags_filter_value=query_params.get("tags_filter"),
-            tags_rejected_filter_value=query_params.get("tags_rejected_filter"),
-            tags_confidence_above_filter_value=query_params.get(
-                "tags_confidence_above_filter"
-            ),
-            tags_confidence_below_filter_value=query_params.get(
-                "tags_confidence_below_filter"
-            ),
-            comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
-            comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
-        )
-        if set_filter_ids:
-            set_candidate_ids = server.vault.db.run_immediate_read_task(
-                fetch_set_candidate_ids
-            )
-            candidate_ids = (
-                set_candidate_ids
-                if candidate_ids is None
-                else set(candidate_ids) & set_candidate_ids
-            )
-        if candidate_ids is not None and not candidate_ids:
-            return []
-        penalised_tags = get_smart_score_penalised_tags_from_request(server, request)
-        smart_score_run_id = str(uuid.uuid4())
-
-        def emit_smart_score_progress(progress_payload: dict):
-            if not isinstance(progress_payload, dict):
-                return
-            server.vault.notify(
-                EventType.PLUGIN_PROGRESS,
-                {
-                    "plugin": "smart_score",
-                    "run_id": smart_score_run_id,
-                    **progress_payload,
-                },
-            )
-
-        try:
-            emit_smart_score_progress(
-                {
-                    "status": "running",
-                    "progress": 0.0,
-                    "current": 0,
-                    "total": 0,
-                    "message": "Calculating smart scores",
-                }
-            )
-            pics = find_pictures_by_smart_score(
-                server,
-                format,
-                offset,
-                limit,
-                descending,
-                candidate_ids=candidate_ids,
-                penalised_tags=penalised_tags,
-                only_deleted=only_deleted,
-                progress_reporter=emit_smart_score_progress,
-            )
-            emit_smart_score_progress(
-                {
-                    "status": "completed",
-                    "progress": 100.0,
-                    "message": "Calculated smart scores",
-                }
-            )
-        except Exception as exc:
-            emit_smart_score_progress(
-                {
-                    "status": "failed",
-                    "message": f"Smart score calculation failed: {exc}",
-                }
-            )
-            raise
         if pics:
             hidden_ids = _fetch_hidden_picture_ids(
                 server,
@@ -857,6 +864,9 @@ def _select_pictures_for_listing(
             metadata_fields=metadata_fields,
             stack_leaders_only=stack_leaders_only,
             min_score=min_score,
+            max_score=max_score,
+            smart_score_bucket=smart_score_bucket,
+            resolution_bucket=resolution_bucket,
             project_id=unassigned_project_id,
             only_unassigned_project=unassigned_project_only,
             tags_filter=query_params.get("tags_filter") or None,
@@ -869,6 +879,7 @@ def _select_pictures_for_listing(
                 "tags_confidence_below_filter"
             )
             or None,
+            face_filter=face_filter,
         )
     elif only_deleted:
         pics = server.vault.db.run_task(
@@ -882,6 +893,10 @@ def _select_pictures_for_listing(
             include_unimported=True,
             stack_leaders_only=stack_leaders_only,
             min_score=min_score,
+            max_score=max_score,
+            smart_score_bucket=smart_score_bucket,
+            resolution_bucket=resolution_bucket,
+            face_filter=face_filter,
             **query_params,
         )
     else:
@@ -997,7 +1012,11 @@ def _select_pictures_for_listing(
             include_unimported=True,
             stack_leaders_only=stack_leaders_only,
             min_score=min_score,
+            max_score=max_score,
+            smart_score_bucket=smart_score_bucket,
+            resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
+            face_filter=face_filter,
             **query_params,
         )
     if pics:
@@ -1297,6 +1316,7 @@ def create_router(server) -> APIRouter:
         comfyui_model: list[str] = Query(None),
         comfyui_lora: list[str] = Query(None),
         min_score: int = Query(None),
+        max_score: int = Query(None),
     ):
         candidate_ids = None
         only_deleted = character_id == "SCRAPHEAP"
@@ -1604,6 +1624,7 @@ def create_router(server) -> APIRouter:
         has_extra_filters = any(
             [
                 min_score is not None,
+                max_score is not None,
                 tag,
                 rejected_tag,
                 tag_confidence_above,
@@ -1619,6 +1640,7 @@ def create_router(server) -> APIRouter:
                 candidate_ids_list,
                 deleted_only: bool,
                 min_score_value,
+                max_score_value,
                 tags_filter_value,
                 tags_rejected_filter_value,
                 tags_confidence_above_filter_value,
@@ -1633,6 +1655,8 @@ def create_router(server) -> APIRouter:
                     query = query.where(Picture.deleted.is_(False))
                 if min_score_value is not None:
                     query = query.where(Picture.score >= min_score_value)
+                if max_score_value is not None:
+                    query = query.where(Picture.score <= max_score_value)
                 if comfyui_models_filter_value:
                     for i, m in enumerate(comfyui_models_filter_value):
                         query = query.where(
@@ -1664,15 +1688,37 @@ def create_router(server) -> APIRouter:
                 if tags_confidence_above_filter_value:
                     for i, entry in enumerate(tags_confidence_above_filter_value):
                         t, thresh = entry.rsplit(":", 1)
-                        query = query.where(
-                            text(
-                                f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                                f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                                f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                            ).bindparams(
-                                **{f"ca_tag_{i}": t, f"ca_thresh_{i}": float(thresh)}
+                        if float(thresh) <= 0.0:
+                            query = query.where(
+                                text(
+                                    f"("
+                                    f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                                    f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                                    f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                                    f") OR ("
+                                    f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                                    f" AND NOT EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :ca_tag_{i})"
+                                    f")"
+                                ).bindparams(
+                                    **{
+                                        f"ca_tag_{i}": t,
+                                        f"ca_thresh_{i}": float(thresh),
+                                    }
+                                )
                             )
-                        )
+                        else:
+                            query = query.where(
+                                text(
+                                    f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                                    f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                                    f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                                ).bindparams(
+                                    **{
+                                        f"ca_tag_{i}": t,
+                                        f"ca_thresh_{i}": float(thresh),
+                                    }
+                                )
+                            )
                 if tags_confidence_below_filter_value:
                     for i, entry in enumerate(tags_confidence_below_filter_value):
                         t, thresh = entry.rsplit(":", 1)
@@ -1692,6 +1738,7 @@ def create_router(server) -> APIRouter:
                 ordered_ids,
                 only_deleted,
                 min_score,
+                max_score,
                 tag or None,
                 rejected_tag or None,
                 tag_confidence_above or None,
@@ -4012,7 +4059,15 @@ def create_router(server) -> APIRouter:
         rejected_tags = request.query_params.getlist("rejected_tag")
         format_filter = request.query_params.getlist("format")
         min_score_raw = request.query_params.get("min_score")
+        max_score_raw = request.query_params.get("max_score")
+        smart_score_bucket = request.query_params.get("smart_score_bucket") or None
+        resolution_bucket = request.query_params.get("resolution_bucket") or None
         file_path_prefix = request.query_params.get("file_path_prefix") or None
+        face_filter = request.query_params.get("face_filter") or None
+        confidence_tag = request.query_params.get("confidence_tag") or None
+        confidence_above = request.query_params.getlist("tag_confidence_above") or []
+        confidence_below = request.query_params.getlist("tag_confidence_below") or []
+        include = set(request.query_params.getlist("include"))
 
         only_deleted = character_id_raw == "SCRAPHEAP"
         if only_deleted:
@@ -4023,16 +4078,23 @@ def create_router(server) -> APIRouter:
             set_ids_values=set_ids_raw or None,
         )
         min_score = int(min_score_raw) if min_score_raw is not None else None
+        max_score = int(max_score_raw) if max_score_raw is not None else None
 
         def compute(session):
             def _empty():
                 return {
                     "total": 0,
+                    "total_tags": 0,
                     "tagged": 0,
                     "untagged": 0,
                     "avg_tags_per_image": 0.0,
                     "top_tags": [],
                     "top_cooccurrences": [],
+                    "confidence_histogram": [],
+                    "regular_tags": [],
+                    "score_distribution": [],
+                    "smart_score_distribution": [],
+                    "resolution_distribution": [],
                 }
 
             deleted_clause = (
@@ -4085,7 +4147,65 @@ def create_router(server) -> APIRouter:
                     Picture.format.in_([f.upper() for f in format_filter])
                 )
             if min_score is not None:
-                pic_q = pic_q.where(Picture.smart_score >= min_score)
+                pic_q = pic_q.where(Picture.score >= min_score)
+            if max_score is not None:
+                pic_q = pic_q.where(Picture.score <= max_score)
+
+            if smart_score_bucket == "unscored":
+                pic_q = pic_q.where(Picture.smart_score.is_(None))
+            elif smart_score_bucket == "1-2":
+                pic_q = pic_q.where(
+                    Picture.smart_score.is_not(None), Picture.smart_score < 2.0
+                )
+            elif smart_score_bucket == "2-3":
+                pic_q = pic_q.where(
+                    Picture.smart_score >= 2.0, Picture.smart_score < 3.0
+                )
+            elif smart_score_bucket == "3-4":
+                pic_q = pic_q.where(
+                    Picture.smart_score >= 3.0, Picture.smart_score < 4.0
+                )
+            elif smart_score_bucket == "4-5":
+                pic_q = pic_q.where(Picture.smart_score >= 4.0)
+
+            if resolution_bucket == "unknown":
+                pic_q = pic_q.where(
+                    or_(Picture.width.is_(None), Picture.height.is_(None))
+                )
+            elif resolution_bucket == "lt1mp":
+                pic_q = pic_q.where(
+                    Picture.width.is_not(None),
+                    Picture.height.is_not(None),
+                    Picture.width * Picture.height < 1_000_000,
+                )
+            elif resolution_bucket == "1-4mp":
+                pic_q = pic_q.where(
+                    Picture.width.is_not(None),
+                    Picture.height.is_not(None),
+                    Picture.width * Picture.height >= 1_000_000,
+                    Picture.width * Picture.height < 4_000_000,
+                )
+            elif resolution_bucket == "4-8mp":
+                pic_q = pic_q.where(
+                    Picture.width.is_not(None),
+                    Picture.height.is_not(None),
+                    Picture.width * Picture.height >= 4_000_000,
+                    Picture.width * Picture.height < 8_000_000,
+                )
+            elif resolution_bucket == "8-16mp":
+                pic_q = pic_q.where(
+                    Picture.width.is_not(None),
+                    Picture.height.is_not(None),
+                    Picture.width * Picture.height >= 8_000_000,
+                    Picture.width * Picture.height < 16_000_000,
+                )
+            elif resolution_bucket == "16plus":
+                pic_q = pic_q.where(
+                    Picture.width.is_not(None),
+                    Picture.height.is_not(None),
+                    Picture.width * Picture.height >= 16_000_000,
+                )
+
             if file_path_prefix:
                 pic_q = pic_q.where(Picture.file_path.startswith(file_path_prefix))
             for tag in tags_filter:
@@ -4104,6 +4224,47 @@ def create_router(server) -> APIRouter:
                             Tag.picture_id == Picture.id,
                             Tag.tag == tag,
                         )
+                    )
+                )
+
+            if face_filter == "with_face":
+                pic_q = pic_q.where(
+                    exists(
+                        select(Face.id).where(
+                            Face.picture_id == Picture.id,
+                            Face.face_index != -1,
+                        )
+                    )
+                )
+            elif face_filter == "without_face":
+                pic_q = pic_q.where(
+                    ~exists(
+                        select(Face.id).where(
+                            Face.picture_id == Picture.id,
+                            Face.face_index != -1,
+                        )
+                    )
+                )
+            for i, entry in enumerate(confidence_above):
+                ca_tag, ca_thresh = entry.rsplit(":", 1)
+                pic_q = pic_q.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                        f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                        f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                    ).bindparams(
+                        **{f"ca_tag_{i}": ca_tag, f"ca_thresh_{i}": float(ca_thresh)}
+                    )
+                )
+            for i, entry in enumerate(confidence_below):
+                cb_tag, cb_thresh = entry.rsplit(":", 1)
+                pic_q = pic_q.where(
+                    text(
+                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                        f" AND tag_prediction.tag = :cb_tag_{i} AND tag_prediction.confidence < :cb_thresh_{i})"
+                        f" AND EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :cb_tag_{i})"
+                    ).bindparams(
+                        **{f"cb_tag_{i}": cb_tag, f"cb_thresh_{i}": float(cb_thresh)}
                     )
                 )
 
@@ -4138,6 +4299,8 @@ def create_router(server) -> APIRouter:
             )
             avg_row = session.exec(select(func.avg(tag_count_subq.c.cnt))).one()
             avg_tags = float(avg_row) if avg_row is not None else 0.0
+            total_tags_row = session.exec(select(func.sum(tag_count_subq.c.cnt))).one()
+            total_tags = int(total_tags_row) if total_tags_row is not None else 0
 
             top_tags_q = select(Tag.tag, func.count(Tag.id).label("cnt")).where(
                 Tag.picture_id.in_(select(pic_subq.c.id)),
@@ -4153,58 +4316,199 @@ def create_router(server) -> APIRouter:
             ).all()
             top_tags = [{"tag": row[0], "count": row[1]} for row in top_tags_rows]
 
-            t1 = Tag.__table__.alias("t1")
-            t2 = Tag.__table__.alias("t2")
-            cooc_base = (
-                select(
-                    t1.c.tag,
-                    t2.c.tag,
-                    func.count().label("cnt"),
-                )
-                .select_from(
-                    t1.join(
-                        t2,
-                        and_(
-                            t1.c.picture_id == t2.c.picture_id,
-                            t1.c.tag < t2.c.tag,
-                        ),
+            # ── Co-occurrences (expensive: only when requested) ───────────────
+            if "cooc" in include:
+                t1 = Tag.__table__.alias("t1")
+                t2 = Tag.__table__.alias("t2")
+                cooc_base = (
+                    select(
+                        t1.c.tag,
+                        t2.c.tag,
+                        func.count().label("cnt"),
                     )
-                )
-                .where(
-                    t1.c.picture_id.in_(select(pic_subq.c.id)),
-                    t1.c.tag != TAG_EMPTY_SENTINEL,
-                    t2.c.tag != TAG_EMPTY_SENTINEL,
-                )
-            )
-            if penalised_tag_set:
-                if penalised_cooc_both:
-                    cooc_base = cooc_base.where(
-                        and_(
-                            func.lower(t1.c.tag).in_(penalised_tag_set),
-                            func.lower(t2.c.tag).in_(penalised_tag_set),
+                    .select_from(
+                        t1.join(
+                            t2,
+                            and_(
+                                t1.c.picture_id == t2.c.picture_id,
+                                t1.c.tag < t2.c.tag,
+                            ),
                         )
                     )
-                else:
-                    cooc_base = cooc_base.where(
-                        or_(
-                            func.lower(t1.c.tag).in_(penalised_tag_set),
-                            func.lower(t2.c.tag).in_(penalised_tag_set),
-                        )
+                    .where(
+                        t1.c.picture_id.in_(select(pic_subq.c.id)),
+                        t1.c.tag != TAG_EMPTY_SENTINEL,
+                        t2.c.tag != TAG_EMPTY_SENTINEL,
                     )
-            cooc_rows = session.execute(
-                cooc_base.group_by(t1.c.tag, t2.c.tag).order_by(desc("cnt")).limit(10)
-            ).fetchall()
-            top_cooccurrences = [
-                {"tags": [row[0], row[1]], "count": row[2]} for row in cooc_rows
-            ]
+                )
+                if penalised_tag_set:
+                    if penalised_cooc_both:
+                        cooc_base = cooc_base.where(
+                            and_(
+                                func.lower(t1.c.tag).in_(penalised_tag_set),
+                                func.lower(t2.c.tag).in_(penalised_tag_set),
+                            )
+                        )
+                    else:
+                        cooc_base = cooc_base.where(
+                            or_(
+                                func.lower(t1.c.tag).in_(penalised_tag_set),
+                                func.lower(t2.c.tag).in_(penalised_tag_set),
+                            )
+                        )
+                cooc_rows = session.execute(
+                    cooc_base.group_by(t1.c.tag, t2.c.tag)
+                    .order_by(desc("cnt"))
+                    .limit(10)
+                ).fetchall()
+                top_cooccurrences = [
+                    {"tags": [row[0], row[1]], "count": row[2]} for row in cooc_rows
+                ]
+            else:
+                top_cooccurrences = []
+
+            # ── Confidence histogram + tag lists (only when requested) ────────
+            if "conf" in include:
+                conf_raw_expr = cast(TagPrediction.confidence * 5, Integer)
+                conf_bucket_expr = case(
+                    (conf_raw_expr >= 5, 4),
+                    else_=conf_raw_expr,
+                )
+                conf_q = select(
+                    conf_bucket_expr.label("bkt"), func.count().label("n")
+                ).where(TagPrediction.picture_id.in_(select(pic_subq.c.id)))
+                if confidence_tag:
+                    conf_q = conf_q.where(TagPrediction.tag == confidence_tag)
+                ch_rows = session.execute(
+                    conf_q.group_by(conf_bucket_expr).order_by(conf_bucket_expr)
+                ).fetchall()
+                ch_map = {int(row[0]): int(row[1]) for row in ch_rows}
+                if confidence_tag:
+                    # Pictures with the tag label applied but no prediction row are
+                    # treated as having an implicit confidence of 0.0 → bucket 0
+                    labelled_no_pred_count = session.execute(
+                        select(func.count())
+                        .select_from(Tag)
+                        .where(
+                            Tag.picture_id.in_(select(pic_subq.c.id)),
+                            Tag.tag == confidence_tag,
+                            ~Tag.picture_id.in_(
+                                select(TagPrediction.picture_id).where(
+                                    TagPrediction.tag == confidence_tag
+                                )
+                            ),
+                        )
+                    ).scalar_one()
+                    ch_map[0] = ch_map.get(0, 0) + labelled_no_pred_count
+                confidence_histogram = [
+                    {"label": f"{b * 20}–{b * 20 + 20}%", "count": ch_map.get(b, 0)}
+                    for b in range(5)
+                ]
+                reg_tag_rows = session.execute(
+                    select(Tag.tag)
+                    .where(
+                        Tag.picture_id.in_(select(pic_subq.c.id)),
+                        Tag.tag != TAG_EMPTY_SENTINEL,
+                        Tag.tag.is_not(None),
+                    )
+                    .distinct()
+                    .order_by(Tag.tag)
+                ).fetchall()
+                regular_tags = [row[0] for row in reg_tag_rows]
+            else:
+                confidence_histogram = []
+                regular_tags = []
+
+            # ── Picture stats (only when requested) ─────────────────────────
+            if "picture" in include:
+                # Score distribution (null=unscored, 1-5)
+                score_rows = session.execute(
+                    select(Picture.score, func.count().label("n"))
+                    .where(Picture.id.in_(select(pic_subq.c.id)))
+                    .group_by(Picture.score)
+                    .order_by(Picture.score)
+                ).fetchall()
+                score_map = {
+                    (row[0] if row[0] is not None else -1): int(row[1])
+                    for row in score_rows
+                }
+                score_distribution = [
+                    {"label": "Unscored", "count": score_map.get(-1, 0)},
+                    {"label": "1", "count": score_map.get(1, 0)},
+                    {"label": "2", "count": score_map.get(2, 0)},
+                    {"label": "3", "count": score_map.get(3, 0)},
+                    {"label": "4", "count": score_map.get(4, 0)},
+                    {"label": "5", "count": score_map.get(5, 0)},
+                ]
+
+                # Smart score distribution (null=unscored, 1-2, 2-3, 3-4, 4-5)
+                ss_bkt = case(
+                    (Picture.smart_score.is_(None), -1),
+                    (Picture.smart_score < 2, 0),
+                    (Picture.smart_score < 3, 1),
+                    (Picture.smart_score < 4, 2),
+                    else_=3,
+                )
+                ss_rows = session.execute(
+                    select(ss_bkt.label("bkt"), func.count().label("n"))
+                    .where(Picture.id.in_(select(pic_subq.c.id)))
+                    .group_by(ss_bkt)
+                    .order_by(ss_bkt)
+                ).fetchall()
+                ss_map = {int(row[0]): int(row[1]) for row in ss_rows}
+                smart_score_distribution = [
+                    {"label": "Unscored", "count": ss_map.get(-1, 0)},
+                    {"label": "1–2", "count": ss_map.get(0, 0)},
+                    {"label": "2–3", "count": ss_map.get(1, 0)},
+                    {"label": "3–4", "count": ss_map.get(2, 0)},
+                    {"label": "4–5", "count": ss_map.get(3, 0)},
+                ]
+
+                # Resolution distribution (null + <1MP, 1–4MP, 4–8MP, 8–16MP, 16+MP)
+                res_bkt = case(
+                    (
+                        or_(Picture.width.is_(None), Picture.height.is_(None)),
+                        -1,
+                    ),
+                    (Picture.width * Picture.height < 1_000_000, 0),
+                    (Picture.width * Picture.height < 4_000_000, 1),
+                    (Picture.width * Picture.height < 8_000_000, 2),
+                    (Picture.width * Picture.height < 16_000_000, 3),
+                    else_=4,
+                )
+                res_rows = session.execute(
+                    select(res_bkt.label("bkt"), func.count().label("n"))
+                    .where(Picture.id.in_(select(pic_subq.c.id)))
+                    .group_by(res_bkt)
+                    .order_by(res_bkt)
+                ).fetchall()
+                res_map = {int(row[0]): int(row[1]) for row in res_rows}
+                resolution_distribution = [
+                    {"label": "Unknown", "count": res_map.get(-1, 0)},
+                    {"label": "<1 MP", "count": res_map.get(0, 0)},
+                    {"label": "1–4 MP", "count": res_map.get(1, 0)},
+                    {"label": "4–8 MP", "count": res_map.get(2, 0)},
+                    {"label": "8–16 MP", "count": res_map.get(3, 0)},
+                    {"label": "16+ MP", "count": res_map.get(4, 0)},
+                ]
+            else:
+                score_distribution = []
+                smart_score_distribution = []
+                resolution_distribution = []
 
             return {
                 "total": int(total),
+                "total_tags": total_tags,
                 "tagged": int(tagged),
                 "untagged": int(total) - int(tagged),
                 "avg_tags_per_image": round(avg_tags, 2),
                 "top_tags": top_tags,
                 "top_cooccurrences": top_cooccurrences,
+                "confidence_histogram": confidence_histogram,
+                "regular_tags": regular_tags,
+                "score_distribution": score_distribution,
+                "smart_score_distribution": smart_score_distribution,
+                "resolution_distribution": resolution_distribution,
             }
 
         result = server.vault.db.run_immediate_read_task(compute)

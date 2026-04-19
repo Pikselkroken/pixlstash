@@ -112,6 +112,26 @@ const maxColumns = ref(12);
 const mainAreaRef = ref(null);
 let mainAreaResizeObserver = null;
 const sidebarVisible = ref(true);
+function loadStatsOpen() {
+  try {
+    return (
+      window.localStorage?.getItem("pixlstash:statsSidebarOpen") !== "false"
+    );
+  } catch {
+    return true;
+  }
+}
+function saveStatsOpen(val) {
+  try {
+    window.localStorage?.setItem(
+      "pixlstash:statsSidebarOpen",
+      val ? "true" : "false",
+    );
+  } catch {
+    // ignore
+  }
+}
+const statsOpen = ref(loadStatsOpen());
 const isMobile = ref(false);
 const MOBILE_BREAKPOINT = 1024;
 
@@ -121,10 +141,14 @@ const comfyuiModelFilter = ref([]);
 const comfyuiLoraFilter = ref([]);
 const comfyuiConfigured = ref(false);
 const minScoreFilter = ref(null);
+const maxScoreFilter = ref(null);
+const smartScoreBucketFilter = ref(null);
+const resolutionBucketFilter = ref(null);
 const tagFilter = ref([]);
 const tagRejectedFilter = ref([]);
 const tagConfidenceAboveFilter = ref([]);
 const tagConfidenceBelowFilter = ref([]);
+const faceBboxFilter = ref(null);
 
 // null = undecided (show dialog), true/false = user's explicit choice
 const checkForUpdates = ref(null);
@@ -1112,10 +1136,14 @@ function handleResetToAll() {
   comfyuiModelFilter.value = [];
   comfyuiLoraFilter.value = [];
   minScoreFilter.value = null;
+  maxScoreFilter.value = null;
+  smartScoreBucketFilter.value = null;
+  resolutionBucketFilter.value = null;
   tagFilter.value = [];
   tagRejectedFilter.value = [];
   tagConfidenceAboveFilter.value = [];
   tagConfidenceBelowFilter.value = [];
+  faceBboxFilter.value = null;
   refreshGridVersion();
   closeSidebarIfMobile();
 }
@@ -1442,15 +1470,24 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             v-model:comfyuiModelFilter="comfyuiModelFilter"
             v-model:comfyuiLoraFilter="comfyuiLoraFilter"
             v-model:minScoreFilter="minScoreFilter"
+            v-model:maxScoreFilter="maxScoreFilter"
+            v-model:smartScoreBucketFilter="smartScoreBucketFilter"
+            v-model:resolutionBucketFilter="resolutionBucketFilter"
             v-model:tagFilter="tagFilter"
             v-model:tagRejectedFilter="tagRejectedFilter"
             v-model:tagConfidenceAboveFilter="tagConfidenceAboveFilter"
             v-model:tagConfidenceBelowFilter="tagConfidenceBelowFilter"
+            v-model:faceBboxFilter="faceBboxFilter"
             @update:selected-sort="handleUpdateSelectedSort"
             @update:similarity-character="handleUpdateSimilarityCharacter"
             @update:stack-threshold="handleUpdateStackThreshold"
             @open-search-overlay="openSearchOverlay"
+            :statsOpen="statsOpen"
             @toggle-sidebar="sidebarVisible = !sidebarVisible"
+            @toggle-stats="
+              statsOpen = !statsOpen;
+              saveStatsOpen(statsOpen);
+            "
             @commit-search="commitSearch"
             @clear-search="handleClearSearch"
             @apply-search-history="applySearchHistory"
@@ -1499,10 +1536,14 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 :comfyuiLoraFilter="comfyuiLoraFilter"
                 :comfyuiConfigured="comfyuiConfigured"
                 :minScoreFilter="minScoreFilter"
+                :maxScoreFilter="maxScoreFilter"
+                :smartScoreBucketFilter="smartScoreBucketFilter"
+                :resolutionBucketFilter="resolutionBucketFilter"
                 :tagFilter="tagFilter"
                 :tagRejectedFilter="tagRejectedFilter"
                 :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
                 :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
+                :faceBboxFilter="faceBboxFilter"
                 :showFaceBboxes="showFaceBboxes"
                 :showFormat="showFormat"
                 :showResolution="showResolution"
@@ -1535,6 +1576,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               />
             </div>
             <StatsSidebar
+              :open="statsOpen"
               :backendUrl="BACKEND_URL"
               :selectedCharacter="selectedCharacter"
               :selectedSet="selectedSet"
@@ -1545,15 +1587,64 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :tagRejectedFilter="tagRejectedFilter"
               :mediaTypeFilter="mediaTypeFilter"
               :minScoreFilter="minScoreFilter"
+              :maxScoreFilter="maxScoreFilter"
+              :smartScoreBucketFilter="smartScoreBucketFilter"
+              :resolutionBucketFilter="resolutionBucketFilter"
+              :faceBboxFilter="faceBboxFilter"
               :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
               :allPicturesId="ALL_PICTURES_ID"
               :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
               :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
               :penalisedTagWeights="penalisedTagWeights"
+              :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
+              :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
               @filter-tag="
                 (tag) => {
-                  tagFilter = [tag];
+                  if (tagFilter.includes(tag))
+                    tagFilter = tagFilter.filter((t) => t !== tag);
+                  else tagFilter = [...tagFilter, tag];
                 }
+              "
+              @filter-tags="
+                (tags) => {
+                  const allPresent = tags.every((t) => tagFilter.includes(t));
+                  if (allPresent)
+                    tagFilter = tagFilter.filter((t) => !tags.includes(t));
+                  else tagFilter = [...new Set([...tagFilter, ...tags])];
+                }
+              "
+              @filter-confidence-above="
+                (entry) => {
+                  if (tagConfidenceAboveFilter.includes(entry))
+                    tagConfidenceAboveFilter = tagConfidenceAboveFilter.filter(
+                      (e) => e !== entry,
+                    );
+                  else
+                    tagConfidenceAboveFilter = [
+                      ...tagConfidenceAboveFilter,
+                      entry,
+                    ];
+                }
+              "
+              @clear-tag-filter="
+                (tags) => {
+                  tagFilter = tagFilter.filter((t) => !tags.includes(t));
+                }
+              "
+              @clear-confidence-filter="
+                (entries) => {
+                  tagConfidenceAboveFilter = tagConfidenceAboveFilter.filter(
+                    (e) => !entries.includes(e),
+                  );
+                }
+              "
+              @update:minScoreFilter="(v) => (minScoreFilter = v)"
+              @update:maxScoreFilter="(v) => (maxScoreFilter = v)"
+              @update:smartScoreBucketFilter="
+                (v) => (smartScoreBucketFilter = v)
+              "
+              @update:resolutionBucketFilter="
+                (v) => (resolutionBucketFilter = v)
               "
             />
           </div>

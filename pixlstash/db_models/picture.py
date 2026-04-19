@@ -69,7 +69,7 @@ class SortMechanism:
             "description": "Score",
         },
         Keys.SMART_SCORE: {
-            "field": None,
+            "field": "smart_score",
             "description": "Smart Score",
         },
         Keys.IMAGE_SIZE: {
@@ -189,6 +189,7 @@ class Picture(SQLModel, table=True):
     thumbnail_side: Optional[int] = Field(default=None)
     score: Optional[int] = None
     aesthetic_score: Optional[float] = None
+    smart_score: Optional[float] = Field(default=None, index=True)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
     stack_id: Optional[int] = Field(
@@ -390,6 +391,9 @@ class Picture(SQLModel, table=True):
         include_unimported: bool = True,
         candidate_ids: Optional[List[int]] = None,
         min_score: Optional[int] = None,
+        max_score: Optional[int] = None,
+        smart_score_bucket: Optional[str] = None,
+        resolution_bucket: Optional[str] = None,
         comfyui_models_filter: Optional[List[str]] = None,
         comfyui_loras_filter: Optional[List[str]] = None,
         tags_filter: Optional[List[str]] = None,
@@ -531,6 +535,55 @@ class Picture(SQLModel, table=True):
 
         if min_score is not None:
             stmt = stmt.where(cls.score >= min_score)
+        if max_score is not None:
+            stmt = stmt.where(cls.score <= max_score)
+
+        if smart_score_bucket == "unscored":
+            stmt = stmt.where(cls.smart_score.is_(None))
+        elif smart_score_bucket == "1-2":
+            stmt = stmt.where(cls.smart_score.is_not(None), cls.smart_score < 2.0)
+        elif smart_score_bucket == "2-3":
+            stmt = stmt.where(cls.smart_score >= 2.0, cls.smart_score < 3.0)
+        elif smart_score_bucket == "3-4":
+            stmt = stmt.where(cls.smart_score >= 3.0, cls.smart_score < 4.0)
+        elif smart_score_bucket == "4-5":
+            stmt = stmt.where(cls.smart_score >= 4.0)
+
+        if resolution_bucket == "unknown":
+            stmt = stmt.where(or_(cls.width.is_(None), cls.height.is_(None)))
+        elif resolution_bucket == "lt1mp":
+            stmt = stmt.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height < 1_000_000,
+            )
+        elif resolution_bucket == "1-4mp":
+            stmt = stmt.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height >= 1_000_000,
+                cls.width * cls.height < 4_000_000,
+            )
+        elif resolution_bucket == "4-8mp":
+            stmt = stmt.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height >= 4_000_000,
+                cls.width * cls.height < 8_000_000,
+            )
+        elif resolution_bucket == "8-16mp":
+            stmt = stmt.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height >= 8_000_000,
+                cls.width * cls.height < 16_000_000,
+            )
+        elif resolution_bucket == "16plus":
+            stmt = stmt.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height >= 16_000_000,
+            )
 
         if comfyui_models_filter:
             for i, m in enumerate(comfyui_models_filter):
@@ -663,7 +716,11 @@ class Picture(SQLModel, table=True):
         tags_rejected_filter: Optional[List[str]] = None,
         tags_confidence_above_filter: Optional[List[str]] = None,
         tags_confidence_below_filter: Optional[List[str]] = None,
+        face_filter: Optional[str] = None,
         min_score: Optional[int] = None,
+        max_score: Optional[int] = None,
+        smart_score_bucket: Optional[str] = None,
+        resolution_bucket: Optional[str] = None,
         file_path_prefix: Optional[str] = None,
         **search,
     ) -> List["Picture"]:
@@ -751,6 +808,55 @@ class Picture(SQLModel, table=True):
 
         if min_score is not None:
             query = query.where(cls.score >= min_score)
+        if max_score is not None:
+            query = query.where(cls.score <= max_score)
+
+        if smart_score_bucket == "unscored":
+            query = query.where(cls.smart_score.is_(None))
+        elif smart_score_bucket == "1-2":
+            query = query.where(cls.smart_score.is_not(None), cls.smart_score < 2.0)
+        elif smart_score_bucket == "2-3":
+            query = query.where(cls.smart_score >= 2.0, cls.smart_score < 3.0)
+        elif smart_score_bucket == "3-4":
+            query = query.where(cls.smart_score >= 3.0, cls.smart_score < 4.0)
+        elif smart_score_bucket == "4-5":
+            query = query.where(cls.smart_score >= 4.0)
+
+        if resolution_bucket == "unknown":
+            query = query.where(or_(cls.width.is_(None), cls.height.is_(None)))
+        elif resolution_bucket == "lt1mp":
+            query = query.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height < 1_000_000,
+            )
+        elif resolution_bucket == "1-4mp":
+            query = query.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height >= 1_000_000,
+                cls.width * cls.height < 4_000_000,
+            )
+        elif resolution_bucket == "4-8mp":
+            query = query.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height >= 4_000_000,
+                cls.width * cls.height < 8_000_000,
+            )
+        elif resolution_bucket == "8-16mp":
+            query = query.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height >= 8_000_000,
+                cls.width * cls.height < 16_000_000,
+            )
+        elif resolution_bucket == "16plus":
+            query = query.where(
+                cls.width.is_not(None),
+                cls.height.is_not(None),
+                cls.width * cls.height >= 16_000_000,
+            )
 
         # Build comfyui filter conditions (applied below, aware of stack_leaders_only)
         comfyui_conditions = []
@@ -788,15 +894,31 @@ class Picture(SQLModel, table=True):
         if tags_confidence_above_filter:
             for i, entry in enumerate(tags_confidence_above_filter):
                 tag, threshold = entry.rsplit(":", 1)
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                        f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                        f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                    ).bindparams(
-                        **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
+                if float(threshold) <= 0.0:
+                    query = query.where(
+                        text(
+                            f"("
+                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                            f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                            f") OR ("
+                            f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :ca_tag_{i})"
+                            f")"
+                        ).bindparams(
+                            **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
+                        )
                     )
-                )
+                else:
+                    query = query.where(
+                        text(
+                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                            f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                        ).bindparams(
+                            **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
+                        )
+                    )
 
         if tags_confidence_below_filter:
             for i, entry in enumerate(tags_confidence_below_filter):
@@ -810,6 +932,19 @@ class Picture(SQLModel, table=True):
                         **{f"cb_tag_{i}": tag, f"cb_thresh_{i}": float(threshold)}
                     )
                 )
+
+        if face_filter == "with_face":
+            query = query.where(
+                text(
+                    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
+                )
+            )
+        elif face_filter == "without_face":
+            query = query.where(
+                text(
+                    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
+                )
+            )
 
         if stack_leaders_only:
             leader_ids = cls._get_stack_leader_ids(session, only_deleted=only_deleted)
@@ -893,6 +1028,7 @@ class Picture(SQLModel, table=True):
             "height",
             "format",
             "score",
+            "smart_score",
             "created_at",
             "imported_at",
             "stack_id",
@@ -968,12 +1104,16 @@ class Picture(SQLModel, table=True):
         metadata_fields: list[str] | None = None,
         stack_leaders_only: bool = False,
         min_score: Optional[int] = None,
+        max_score: Optional[int] = None,
+        smart_score_bucket: Optional[str] = None,
+        resolution_bucket: Optional[str] = None,
         project_id: Optional[int] = None,
         only_unassigned_project: bool = False,
         tags_filter: Optional[List[str]] = None,
         tags_rejected_filter: Optional[List[str]] = None,
         tags_confidence_above_filter: Optional[List[str]] = None,
         tags_confidence_below_filter: Optional[List[str]] = None,
+        face_filter: Optional[str] = None,
     ):
         query = select(Picture)
         unassigned_conditions = cls.build_unassigned_conditions(
@@ -1005,6 +1145,57 @@ class Picture(SQLModel, table=True):
 
         if min_score is not None:
             query = query.where(Picture.score >= min_score)
+        if max_score is not None:
+            query = query.where(Picture.score <= max_score)
+
+        if smart_score_bucket == "unscored":
+            query = query.where(Picture.smart_score.is_(None))
+        elif smart_score_bucket == "1-2":
+            query = query.where(
+                Picture.smart_score.is_not(None), Picture.smart_score < 2.0
+            )
+        elif smart_score_bucket == "2-3":
+            query = query.where(Picture.smart_score >= 2.0, Picture.smart_score < 3.0)
+        elif smart_score_bucket == "3-4":
+            query = query.where(Picture.smart_score >= 3.0, Picture.smart_score < 4.0)
+        elif smart_score_bucket == "4-5":
+            query = query.where(Picture.smart_score >= 4.0)
+
+        if resolution_bucket == "unknown":
+            query = query.where(or_(Picture.width.is_(None), Picture.height.is_(None)))
+        elif resolution_bucket == "lt1mp":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height < 1_000_000,
+            )
+        elif resolution_bucket == "1-4mp":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height >= 1_000_000,
+                Picture.width * Picture.height < 4_000_000,
+            )
+        elif resolution_bucket == "4-8mp":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height >= 4_000_000,
+                Picture.width * Picture.height < 8_000_000,
+            )
+        elif resolution_bucket == "8-16mp":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height >= 8_000_000,
+                Picture.width * Picture.height < 16_000_000,
+            )
+        elif resolution_bucket == "16plus":
+            query = query.where(
+                Picture.width.is_not(None),
+                Picture.height.is_not(None),
+                Picture.width * Picture.height >= 16_000_000,
+            )
 
         if tags_filter:
             for i, tag in enumerate(tags_filter):
@@ -1025,15 +1216,31 @@ class Picture(SQLModel, table=True):
         if tags_confidence_above_filter:
             for i, entry in enumerate(tags_confidence_above_filter):
                 tag, threshold = entry.rsplit(":", 1)
-                query = query.where(
-                    text(
-                        f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
-                        f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
-                        f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
-                    ).bindparams(
-                        **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
+                if float(threshold) <= 0.0:
+                    query = query.where(
+                        text(
+                            f"("
+                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                            f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                            f") OR ("
+                            f"EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id AND tag_prediction.tag = :ca_tag_{i})"
+                            f")"
+                        ).bindparams(
+                            **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
+                        )
                     )
-                )
+                else:
+                    query = query.where(
+                        text(
+                            f"EXISTS (SELECT 1 FROM tag_prediction WHERE tag_prediction.picture_id = picture.id"
+                            f" AND tag_prediction.tag = :ca_tag_{i} AND tag_prediction.confidence >= :ca_thresh_{i})"
+                            f" AND NOT EXISTS (SELECT 1 FROM tag WHERE tag.picture_id = picture.id AND tag.tag = :ca_tag_{i})"
+                        ).bindparams(
+                            **{f"ca_tag_{i}": tag, f"ca_thresh_{i}": float(threshold)}
+                        )
+                    )
 
         if tags_confidence_below_filter:
             for i, entry in enumerate(tags_confidence_below_filter):
@@ -1047,6 +1254,19 @@ class Picture(SQLModel, table=True):
                         **{f"cb_tag_{i}": tag, f"cb_thresh_{i}": float(threshold)}
                     )
                 )
+
+        if face_filter == "with_face":
+            query = query.where(
+                text(
+                    "EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
+                )
+            )
+        elif face_filter == "without_face":
+            query = query.where(
+                text(
+                    "NOT EXISTS (SELECT 1 FROM face WHERE face.picture_id = picture.id AND face.face_index != -1)"
+                )
+            )
 
         select_fields = metadata_fields or cls.metadata_fields()
         if select_fields:

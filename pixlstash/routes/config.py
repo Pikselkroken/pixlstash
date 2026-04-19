@@ -17,10 +17,11 @@ except Exception:  # pragma: no cover - optional dependency
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import update
 from sqlmodel import Session
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import User
+from pixlstash.db_models import Picture, User
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.config_utils import (
     apply_user_config_patch,
@@ -381,6 +382,7 @@ def create_router(server) -> APIRouter:
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
 
+            old_penalised_tags = user.smart_score_penalised_tags
             try:
                 updated = apply_user_config_patch(user, patch_data)
             except ValueError as exc:
@@ -390,11 +392,22 @@ def create_router(server) -> APIRouter:
                 session.add(user)
                 session.commit()
                 session.refresh(user)
-            return user, updated
+            penalised_tags_changed = (
+                user.smart_score_penalised_tags != old_penalised_tags
+            )
+            return user, updated, penalised_tags_changed
 
-        user, updated = server.vault.db.run_task(
+        user, updated, penalised_tags_changed = server.vault.db.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+        if penalised_tags_changed:
+
+            def _reset_smart_scores(session: Session) -> None:
+                session.execute(update(Picture).values(smart_score=None))
+                session.commit()
+
+            server.vault.db.run_task(_reset_smart_scores, priority=DBPriority.LOW)
+            server.vault.wake()
         if "keep_models_in_memory" in patch_data:
             server.vault.set_keep_models_in_memory(
                 getattr(user, "keep_models_in_memory", True)
