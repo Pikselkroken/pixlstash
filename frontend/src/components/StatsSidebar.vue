@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed } from "vue";
+import { ref, watch, computed, onMounted } from "vue";
 import { apiClient } from "../utils/apiClient";
 
 const props = defineProps({
@@ -187,6 +187,15 @@ watch(
   },
   { immediate: true, deep: true },
 );
+
+// Belt-and-suspenders: if the immediate watch trigger fired before the component
+// was fully connected (e.g. a startup race in Root.vue's auth check), the
+// initial fetch may not have landed. Retry on mount when stats are still absent.
+onMounted(() => {
+  if (!stats.value && !loading.value) {
+    fetchStats();
+  }
+});
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;
