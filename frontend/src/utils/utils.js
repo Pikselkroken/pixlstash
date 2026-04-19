@@ -18,7 +18,19 @@ function formatDateParts(date) {
 
 export function formatUserDate(dateStr, format) {
   if (!dateStr) return '';
-  const d = new Date(dateStr);
+  // Naive ISO datetime strings from the backend represent UTC but carry no
+  // timezone marker. Append 'Z' so the browser parses them as UTC and
+  // converts to the viewer's local time correctly.
+  let normalized = dateStr;
+  if (
+    typeof dateStr === 'string' &&
+    dateStr.includes('T') &&
+    !dateStr.endsWith('Z') &&
+    !/[+-]\d{2}:\d{2}$/.test(dateStr)
+  ) {
+    normalized = dateStr + 'Z';
+  }
+  const d = new Date(normalized);
   if (Number.isNaN(d.getTime())) return dateStr;
   const {year, month, day, hour, minute} = formatDateParts(d);
   // Helper for AM/PM time
