@@ -384,10 +384,25 @@
               <v-icon :color="isFilterActive ? 'on-primary' : 'on-background'"
                 >mdi-filter</v-icon
               >
+              <span v-if="activeFilterCount > 0" class="filter-count-badge">{{
+                activeFilterCount > 99 ? "99+" : activeFilterCount
+              }}</span>
             </v-btn>
           </template>
           <div class="toolbar-filter-panel">
-            <div class="toolbar-filter-panel-title">Filters</div>
+            <div class="toolbar-filter-panel-header">
+              <div class="toolbar-filter-panel-title">Filters</div>
+              <v-btn
+                v-if="isFilterActive"
+                variant="text"
+                density="compact"
+                size="x-small"
+                color="primary"
+                class="filter-clear-all-btn"
+                @click="clearAllFilters"
+                >Clear all</v-btn
+              >
+            </div>
             <div class="toolbar-filter-section-label">Media</div>
             <div
               class="media-type-toggle"
@@ -410,45 +425,108 @@
                 <v-icon size="16">{{ opt.icon }}</v-icon>
               </v-btn>
             </div>
-            <div class="toolbar-filter-section-label" style="margin-top: 10px">
-              Min Score
+            <div class="score-range-section">
+              <div class="score-range-headers">
+                <span class="score-range-header-label">Min Score</span>
+                <span
+                  class="score-range-header-label score-range-header-label--right"
+                  >Max Score</span
+                >
+              </div>
+              <div class="score-range-filter">
+                <div class="score-range-stars">
+                  <v-btn
+                    v-for="n in 5"
+                    :key="'min-' + n"
+                    :icon="true"
+                    class="score-star-btn"
+                    variant="text"
+                    :color="
+                      minScoreFilterModel != null && n <= minScoreFilterModel
+                        ? 'warning'
+                        : undefined
+                    "
+                    :title="`Set minimum score ${n}`"
+                    @click="setMinScore(n)"
+                  >
+                    <v-icon size="14">{{
+                      minScoreFilterModel != null && n <= minScoreFilterModel
+                        ? "mdi-star"
+                        : "mdi-star-outline"
+                    }}</v-icon>
+                  </v-btn>
+                </div>
+                <div class="score-range-stars score-range-stars--right">
+                  <v-btn
+                    v-for="n in 5"
+                    :key="'max-' + n"
+                    :icon="true"
+                    class="score-star-btn"
+                    variant="text"
+                    :color="
+                      maxScoreFilterModel != null && n <= maxScoreFilterModel
+                        ? 'warning'
+                        : undefined
+                    "
+                    :title="`Set maximum score ${n}`"
+                    @click="setMaxScore(n)"
+                  >
+                    <v-icon size="14">{{
+                      maxScoreFilterModel != null && n <= maxScoreFilterModel
+                        ? "mdi-star"
+                        : "mdi-star-outline"
+                    }}</v-icon>
+                  </v-btn>
+                </div>
+              </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 2px">
+            <div class="toolbar-filter-section-label" style="margin-top: 10px">
+              Face
+            </div>
+            <div
+              class="media-type-toggle"
+              role="group"
+              aria-label="Face filter"
+            >
               <v-btn
-                v-for="n in 5"
-                :key="n"
-                :icon="true"
-                size="x-small"
+                v-for="opt in faceBboxFilterOptions"
+                :key="String(opt.value)"
+                class="media-type-button"
+                :class="{
+                  'media-type-button--active':
+                    faceBboxFilterModel === opt.value,
+                }"
                 variant="text"
-                :color="
-                  minScoreFilterModel != null && n <= minScoreFilterModel
-                    ? 'warning'
-                    : undefined
-                "
-                :title="`Show ${n}+ star pictures`"
-                @click="
-                  minScoreFilterModel = minScoreFilterModel === n ? null : n
-                "
+                :title="opt.title"
+                :aria-pressed="faceBboxFilterModel === opt.value"
+                @click="setFaceBboxFilter(opt.value)"
               >
-                <v-icon size="20">{{
-                  minScoreFilterModel != null && n <= minScoreFilterModel
-                    ? "mdi-star"
-                    : "mdi-star-outline"
-                }}</v-icon>
+                <span
+                  v-if="opt.value === 'without_face'"
+                  class="face-no-detection-icon"
+                >
+                  <v-icon size="16">{{ opt.icon }}</v-icon>
+                </span>
+                <v-icon v-else size="16">{{ opt.icon }}</v-icon>
               </v-btn>
-              <span
-                v-if="minScoreFilterModel != null"
-                style="
-                  font-size: 0.78em;
-                  margin-left: 4px;
-                  color: rgb(var(--v-theme-on-background));
-                  opacity: 0.8;
-                "
-                >{{ minScoreFilterModel }}+ stars</span
-              >
             </div>
-            <div class="toolbar-filter-section-label" style="margin-top: 10px">
-              Tags
+            <div class="toolbar-filter-section-header" style="margin-top: 10px">
+              <span class="toolbar-filter-section-label" style="margin-top: 0"
+                >Tags</span
+              >
+              <v-btn
+                v-if="tagFilterModel.length || tagRejectedFilterModel.length"
+                variant="text"
+                density="compact"
+                size="x-small"
+                color="primary"
+                class="filter-clear-all-btn"
+                @click="
+                  tagFilterModel = [];
+                  tagRejectedFilterModel = [];
+                "
+                >Clear</v-btn
+              >
             </div>
             <div class="tag-filter-input-wrap">
               <input
@@ -1116,6 +1194,16 @@
             </div>
           </div>
         </v-menu>
+
+        <v-btn
+          icon
+          :color="statsOpen ? 'primary' : 'surface'"
+          title="Toggle stats sidebar"
+          class="toolbar-action-btn"
+          @click="emit('toggle-stats')"
+        >
+          <v-icon :color="'on-background'">mdi-chart-bar</v-icon>
+        </v-btn>
       </div>
     </div>
   </div>
@@ -1165,10 +1253,15 @@ const props = defineProps({
   comfyuiModelFilter: { type: Array, default: () => [] },
   comfyuiLoraFilter: { type: Array, default: () => [] },
   minScoreFilter: { type: Number, default: null },
+  maxScoreFilter: { type: Number, default: null },
+  smartScoreBucketFilter: { type: String, default: null },
+  resolutionBucketFilter: { type: String, default: null },
   tagFilter: { type: Array, default: () => [] },
   tagRejectedFilter: { type: Array, default: () => [] },
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
+  faceBboxFilter: { type: String, default: null },
+  statsOpen: { type: Boolean, default: true },
   sortOptions: { type: Array, default: () => [] },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: true },
@@ -1204,10 +1297,14 @@ const emit = defineEmits([
   "update:comfyuiModelFilter",
   "update:comfyuiLoraFilter",
   "update:minScoreFilter",
+  "update:maxScoreFilter",
+  "update:smartScoreBucketFilter",
+  "update:resolutionBucketFilter",
   "update:tagFilter",
   "update:tagRejectedFilter",
   "update:tagConfidenceAboveFilter",
   "update:tagConfidenceBelowFilter",
+  "update:faceBboxFilter",
   "update:similarity-character",
   "update:stack-threshold",
   "open-search-overlay",
@@ -1219,6 +1316,7 @@ const emit = defineEmits([
   "confirm-export-zip",
   "open-settings",
   "toggle-sidebar",
+  "toggle-stats",
   "update:selected-sort",
   "comfyui-run-grid",
 ]);
@@ -1262,6 +1360,9 @@ const isFilterActive = computed(
   () =>
     props.mediaTypeFilter !== "all" ||
     props.minScoreFilter != null ||
+    props.maxScoreFilter != null ||
+    props.smartScoreBucketFilter != null ||
+    props.resolutionBucketFilter != null ||
     (Array.isArray(props.tagFilter) && props.tagFilter.length > 0) ||
     (Array.isArray(props.tagRejectedFilter) &&
       props.tagRejectedFilter.length > 0) ||
@@ -1272,8 +1373,46 @@ const isFilterActive = computed(
     (Array.isArray(props.comfyuiModelFilter) &&
       props.comfyuiModelFilter.length > 0) ||
     (Array.isArray(props.comfyuiLoraFilter) &&
-      props.comfyuiLoraFilter.length > 0),
+      props.comfyuiLoraFilter.length > 0) ||
+    props.faceBboxFilter != null,
 );
+
+const activeFilterCount = computed(() => {
+  let count = 0;
+  if (props.mediaTypeFilter !== "all") count++;
+  if (props.minScoreFilter != null) count++;
+  if (props.maxScoreFilter != null) count++;
+  if (props.smartScoreBucketFilter != null) count++;
+  if (props.resolutionBucketFilter != null) count++;
+  if (Array.isArray(props.tagFilter)) count += props.tagFilter.length;
+  if (Array.isArray(props.tagRejectedFilter))
+    count += props.tagRejectedFilter.length;
+  if (Array.isArray(props.tagConfidenceAboveFilter))
+    count += props.tagConfidenceAboveFilter.length;
+  if (Array.isArray(props.tagConfidenceBelowFilter))
+    count += props.tagConfidenceBelowFilter.length;
+  if (Array.isArray(props.comfyuiModelFilter))
+    count += props.comfyuiModelFilter.length;
+  if (Array.isArray(props.comfyuiLoraFilter))
+    count += props.comfyuiLoraFilter.length;
+  if (props.faceBboxFilter != null) count++;
+  return count;
+});
+
+function clearAllFilters() {
+  emit("update:mediaTypeFilter", "all");
+  emit("update:minScoreFilter", null);
+  emit("update:maxScoreFilter", null);
+  emit("update:smartScoreBucketFilter", null);
+  emit("update:resolutionBucketFilter", null);
+  emit("update:faceBboxFilter", null);
+  emit("update:tagFilter", []);
+  emit("update:tagRejectedFilter", []);
+  emit("update:tagConfidenceAboveFilter", []);
+  emit("update:tagConfidenceBelowFilter", []);
+  emit("update:comfyuiModelFilter", []);
+  emit("update:comfyuiLoraFilter", []);
+}
 
 watch(
   () => props.columns,
@@ -1400,6 +1539,30 @@ function setMediaTypeFilter(value) {
   mediaTypeFilterModel.value = value;
 }
 
+const faceBboxFilterModel = computed({
+  get: () => props.faceBboxFilter,
+  set: (value) => emit("update:faceBboxFilter", value),
+});
+
+const faceBboxFilterOptions = [
+  { value: null, icon: "mdi-all-inclusive", title: "All pictures" },
+  {
+    value: "with_face",
+    icon: "mdi-face-man",
+    title: "With detected face",
+  },
+  {
+    value: "without_face",
+    icon: "mdi-face-man",
+    title: "Without detected face",
+  },
+];
+
+function setFaceBboxFilter(value) {
+  faceBboxFilterModel.value =
+    faceBboxFilterModel.value === value && value !== null ? null : value;
+}
+
 const comfyuiModelFilterModel = computed({
   get: () => props.comfyuiModelFilter,
   set: (value) => emit("update:comfyuiModelFilter", value ?? []),
@@ -1413,6 +1576,35 @@ const minScoreFilterModel = computed({
   get: () => props.minScoreFilter,
   set: (value) => emit("update:minScoreFilter", value ?? null),
 });
+const maxScoreFilterModel = computed({
+  get: () => props.maxScoreFilter,
+  set: (value) => emit("update:maxScoreFilter", value ?? null),
+});
+
+function setMinScore(n) {
+  const newMin = props.minScoreFilter === n ? null : n;
+  emit("update:minScoreFilter", newMin);
+  if (
+    newMin !== null &&
+    props.maxScoreFilter !== null &&
+    newMin > props.maxScoreFilter
+  ) {
+    emit("update:maxScoreFilter", newMin);
+  }
+}
+
+function setMaxScore(n) {
+  const newMax = props.maxScoreFilter === n ? null : n;
+  emit("update:maxScoreFilter", newMax);
+  if (
+    newMax !== null &&
+    props.minScoreFilter !== null &&
+    newMax < props.minScoreFilter
+  ) {
+    emit("update:minScoreFilter", newMax);
+  }
+}
+
 const tagFilterModel = computed({
   get: () => props.tagFilter,
   set: (value) => emit("update:tagFilter", value ?? []),
@@ -2312,6 +2504,25 @@ defineExpose({ blurSearchInput, focusSearchInput });
   border-color: rgba(var(--v-theme-surface), 0.2) !important;
 }
 
+.filter-count-badge {
+  position: absolute;
+  top: -1px;
+  right: 8px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 10px;
+  background: #c0392b;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .toolbar-split-button {
   display: inline-flex;
   align-items: center;
@@ -2463,6 +2674,32 @@ defineExpose({ blurSearchInput, focusSearchInput });
   font-weight: 500;
   letter-spacing: 0.02em;
   margin-bottom: 2px;
+}
+
+.toolbar-filter-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.toolbar-filter-panel-header .toolbar-filter-panel-title {
+  margin-bottom: 0;
+}
+
+.toolbar-filter-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.filter-clear-all-btn {
+  min-width: 0;
+  padding: 0 4px;
+  height: 18px;
+  font-size: 0.75em;
 }
 
 .toolbar-filter-section-label {
@@ -2857,6 +3094,47 @@ defineExpose({ blurSearchInput, focusSearchInput });
   transition: background 0.15s;
 }
 
+.score-range-section {
+  margin-top: 10px;
+}
+
+.score-range-headers {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 1px;
+}
+
+.score-range-header-label {
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.5;
+  user-select: none;
+}
+
+.score-range-filter {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.score-range-stars {
+  display: flex;
+  gap: 0;
+}
+
+.score-range-stars--right {
+  justify-content: flex-end;
+}
+
+.score-range-stars :deep(.score-star-btn.v-btn) {
+  width: 20px !important;
+  height: 20px !important;
+  min-width: 20px !important;
+  padding: 0 !important;
+}
+
 .confidence-add-btn:hover:not(:disabled) {
   background: rgba(var(--v-theme-primary), 0.3);
 }
@@ -2874,5 +3152,24 @@ defineExpose({ blurSearchInput, focusSearchInput });
 
 .tag-chip-close {
   opacity: 0.6;
+}
+
+.face-no-detection-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.face-no-detection-icon::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -1px;
+  right: -1px;
+  height: 1.5px;
+  background: currentColor;
+  transform: translateY(-50%) rotate(-35deg);
+  border-radius: 1px;
 }
 </style>
