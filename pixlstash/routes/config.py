@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime
 from typing import Optional
 
 try:
@@ -353,6 +354,10 @@ def create_router(server) -> APIRouter:
 
     class CreateTokenRequest(BaseModel):
         description: Optional[str] = None
+        scope: str = "ALL"
+        resource_type: Optional[str] = None
+        resource_id: Optional[int] = None
+        expires_at: Optional[datetime] = None
 
     @router.get(
         "/users/me/config",
@@ -462,7 +467,14 @@ def create_router(server) -> APIRouter:
         description="Creates a personal access token for the authenticated user.",
     )
     def create_me_token(payload: CreateTokenRequest, request: Request):
-        return server.auth.create_token(request, payload.description)
+        return server.auth.create_token(
+            request,
+            payload.description,
+            scope=payload.scope,
+            resource_type=payload.resource_type,
+            resource_id=payload.resource_id,
+            expires_at=payload.expires_at,
+        )
 
     @router.get(
         "/users/me/token",
@@ -479,6 +491,18 @@ def create_router(server) -> APIRouter:
     )
     def delete_me_token(token_id: int, request: Request):
         return server.auth.delete_token(request, token_id)
+
+    @router.get(
+        "/session/context",
+        summary="Get session access context",
+        description=(
+            "Returns the access scope for the current session or token. "
+            "Accepts ?token= query parameter so unauthenticated share-link "
+            "recipients can discover what the token grants before loading the UI."
+        ),
+    )
+    def get_session_context(request: Request):
+        return server.auth.get_session_context(request)
 
     @router.get(
         "/workers/progress",

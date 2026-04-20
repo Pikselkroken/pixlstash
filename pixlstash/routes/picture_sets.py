@@ -196,12 +196,36 @@ def create_router(server) -> APIRouter:
             find_reference_character, picture_set_id
         )
 
+    def _require_scope_allows_picture_set(request: Request, set_id: int):
+        """Raise 403 if the token scope does not cover the requested picture set."""
+        scope = getattr(request.state, "token_scope", None)
+        if scope is None:
+            return
+        if scope.resource_type == "picture_set":
+            if scope.resource_id != set_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised for this picture set",
+                )
+        elif scope.resource_type is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Token is not authorised for this resource type",
+            )
+
     @router.get(
         "/picture_sets",
         summary="List picture sets",
         description="Returns picture sets with visible member counts, top pictures, and thumbnail URLs.",
     )
     def get_picture_sets(request: Request, project_id: str | None = Query(None)):
+        # Restrict listing to the token's resource when a scoped READ token is used
+        token_scope = getattr(request.state, "token_scope", None)
+        scope_set_id_filter = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "picture_set"
+            else None
+        )
         hidden_tags = _get_hidden_tags_from_request(request)
 
         project_filter = None
@@ -226,6 +250,8 @@ def create_router(server) -> APIRouter:
             )
             if set_project_id_filter is not None:
                 sets_query = sets_query.where(set_project_id_filter)
+            if scope_set_id_filter is not None:
+                sets_query = sets_query.where(PictureSet.id == scope_set_id_filter)
             sets = session.exec(sets_query).all()
             result = []
             for s in sets:
@@ -328,6 +354,7 @@ def create_router(server) -> APIRouter:
         description="Returns or generates a cached composite thumbnail representing top-scoring pictures in a set.",
     )
     def get_picture_set_thumbnail(id: int, request: Request):
+        _require_scope_allows_picture_set(request, id)
         thumbnail_cache_version = 16
         cache_dir = os.path.join(server.vault.image_root, "tmp", "set_thumbnails")
         os.makedirs(cache_dir, exist_ok=True)
@@ -591,6 +618,7 @@ def create_router(server) -> APIRouter:
                     "/api/v1/projects/{project_id_or_name}/picture_sets/{name}."
                 ),
             )
+        _require_scope_allows_picture_set(request, id)
 
         sort_mech = None
         if sort:
@@ -906,9 +934,12 @@ def create_router(server) -> APIRouter:
     )
     def get_picture_set_pictures(
         id: int,
+        request: Request,
         include_deleted: bool = Query(False),
         expand_stacks: bool = Query(False),
     ):
+        _require_scope_allows_picture_set(request, id)
+
         def fetch_members(session, id, include_deleted, expand_stacks):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
