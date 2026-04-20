@@ -403,7 +403,7 @@ def create_router(server) -> APIRouter:
         if penalised_tags_changed:
 
             def _reset_smart_scores(session: Session) -> None:
-                session.execute(update(Picture).values(smart_score=None))
+                session.exec(update(Picture).values(smart_score=None))
                 session.commit()
 
             server.vault.db.run_task(_reset_smart_scores, priority=DBPriority.LOW)
