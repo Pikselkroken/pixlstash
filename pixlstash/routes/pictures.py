@@ -4079,9 +4079,21 @@ def create_router(server) -> APIRouter:
             set_id_value=set_id_raw,
             set_ids_values=set_ids_raw or None,
         )
-        min_score = int(min_score_raw) if min_score_raw is not None else None
-        max_score = int(max_score_raw) if max_score_raw is not None else None
+        try:
+            min_score = int(min_score_raw) if min_score_raw is not None else None
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid min_score: must be an integer",
+            ) from exc
 
+        try:
+            max_score = int(max_score_raw) if max_score_raw is not None else None
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid max_score: must be an integer",
+            ) from exc
         def compute(session):
             def _empty():
                 return {
