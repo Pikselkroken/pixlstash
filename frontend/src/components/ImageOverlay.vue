@@ -221,7 +221,7 @@
             </v-menu>
           </div>
           <AddToSetControl
-            v-if="image"
+            v-if="image && !isReadOnly"
             :key="addToSetControlKey"
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
@@ -230,7 +230,7 @@
             @added="(payload) => emit('added-to-set', payload)"
           />
           <AddToProjectControl
-            v-if="image"
+            v-if="image && !isReadOnly"
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
             :include-deleted-members="true"
@@ -239,14 +239,14 @@
             @selected="(payload) => emit('set-project', payload)"
           />
           <StarRatingOverlay
-            v-if="image && !isMobile"
+            v-if="image && !isMobile && !isReadOnly"
             :class="{ hidden: chromeHidden }"
             :score="image?.score || 0"
             icon-size="large"
             @set-score="setScore"
           />
           <v-menu
-            v-if="image && isMobile"
+            v-if="image && isMobile && !isReadOnly"
             v-model="starMenuOpen"
             location="bottom end"
             origin="top end"
@@ -313,7 +313,7 @@
             <v-icon size="20">mdi-face-recognition</v-icon>
           </button>
           <button
-            v-if="!isMobile"
+            v-if="!isMobile && !isReadOnly"
             class="overlay-icon-btn"
             type="button"
             title="Draw face bounding box"
@@ -682,9 +682,9 @@
                 <textarea
                   ref="descriptionEditorRef"
                   v-model="descriptionDraft"
-                  :readonly="!isEditingDescription"
-                  @focus="startEditDescription"
-                  @click="startEditDescription"
+                  :readonly="!isEditingDescription || isReadOnly"
+                  @focus="!isReadOnly && startEditDescription()"
+                  @click="!isReadOnly && startEditDescription()"
                   @keydown.enter.prevent="
                     isEditingDescription &&
                     !$event.shiftKey &&
@@ -761,7 +761,7 @@
                       </div>
                       <select
                         class="face-assign-select"
-                        :disabled="!face.id"
+                        :disabled="!face.id || isReadOnly"
                         :value="
                           face.character_id != null
                             ? String(face.character_id)
@@ -809,7 +809,7 @@
               <span>Tags</span>
               <span class="section-meta-group">
                 <button
-                  v-if="image"
+                  v-if="image && !isReadOnly"
                   class="section-meta-btn"
                   type="button"
                   title="Reset and regenerate tags — deletes all tags and predictions for this picture and requeues it for re-tagging"
@@ -819,7 +819,7 @@
                   <v-icon size="16">mdi-refresh</v-icon>
                 </button>
                 <button
-                  v-if="image"
+                  v-if="image && !isReadOnly"
                   class="section-meta-btn"
                   type="button"
                   title="Add tag (T)"
@@ -871,6 +871,7 @@
                     >
                       {{ tagLabel(tag) }}
                       <button
+                        v-if="!isReadOnly"
                         class="tag-delete-btn"
                         @click.stop="removeAllTag(tag)"
                         title="Remove tag"
@@ -885,7 +886,7 @@
                       Drop tags here
                     </div>
                     <input
-                      v-if="addingTag"
+                      v-if="addingTag && !isReadOnly"
                       ref="tagInputRef"
                       v-model="newTag"
                       @keydown.enter.prevent="confirmAddTag"
@@ -1173,7 +1174,7 @@ import {
   getOverlayFormat,
   buildMediaUrl,
 } from "../utils/media.js";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../utils/apiClient";
 import AddToSetControl from "./AddToSetControl.vue";
 import AddToProjectControl from "./AddToProjectControl.vue";
 import PluginParametersUI from "./PluginParametersUI.vue";

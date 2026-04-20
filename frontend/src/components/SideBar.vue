@@ -16,7 +16,7 @@ import TaskManager from "./TaskManager.vue";
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import FolderTreeNode from "./FolderTreeNode.vue";
 import unknownPerson from "../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
-import { apiClient } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../utils/apiClient";
 import { extractSupportedImportFilesFromDataTransfer } from "../utils/media.js";
 
 const appVersion = __APP_VERSION__;
@@ -2547,6 +2547,7 @@ defineExpose({
                   </v-icon>
                   <v-icon
                     v-if="
+                      !isReadOnly &&
                       props.selectedCharacter &&
                       props.selectedCharacter !== props.allPicturesId &&
                       props.selectedCharacter !== props.unassignedPicturesId &&
@@ -2633,7 +2634,7 @@ defineExpose({
                     </Teleport>
                   </span>
                   <v-icon
-                    v-if="projectViewMode !== 'project'"
+                    v-if="!isReadOnly && projectViewMode !== 'project'"
                     class="add-character-inline"
                     @click.stop="createCharacter"
                     title="Add character"
@@ -2775,7 +2776,7 @@ defineExpose({
                     mdi-pencil
                   </v-icon>
                   <v-icon
-                    v-if="selectedSet && hasSingleSelectedSet"
+                    v-if="!isReadOnly && selectedSet && hasSingleSelectedSet"
                     class="delete-character-inline"
                     color="white"
                     @click.stop="handleDeleteSet"
@@ -2855,7 +2856,7 @@ defineExpose({
                     </Teleport>
                   </span>
                   <v-icon
-                    v-if="projectViewMode !== 'project'"
+                    v-if="!isReadOnly && projectViewMode !== 'project'"
                     class="add-character-inline"
                     @click.stop="createSet"
                     title="Create new set"
@@ -2979,6 +2980,7 @@ defineExpose({
         <span class="sidebar-footer-btn-label">Settings</span>
       </div>
       <div
+        v-if="!isReadOnly"
         class="sidebar-footer-btn sidebar-footer-btn--upload"
         title="Import photos"
         @click.stop="openImportDialog"

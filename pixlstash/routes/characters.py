@@ -76,6 +76,23 @@ def create_router(server) -> APIRouter:
             )
         )
 
+    def _require_scope_allows_character(request: Request, character_id: int):
+        """Raise 403 if the token scope does not cover the requested character."""
+        scope = getattr(request.state, "token_scope", None)
+        if scope is None:
+            return
+        if scope.resource_type == "character":
+            if scope.resource_id != character_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised for this character",
+                )
+        elif scope.resource_type is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Token is not authorised for this resource type",
+            )
+
     def _get_hidden_tags_from_request(request: Request) -> list[str]:
         if request.query_params.get("apply_tag_filter", "").lower() != "true":
             return []
@@ -236,7 +253,7 @@ def create_router(server) -> APIRouter:
         summary="List reference pictures",
         description="Returns picture ids selected as reference faces for the given character.",
     )
-    def get_character_reference_pictures(id: int):
+    def get_character_reference_pictures(request: Request, id: int):
         """Return reference picture ids for a character.
 
         Args:
@@ -245,6 +262,7 @@ def create_router(server) -> APIRouter:
         Returns:
             A dict containing reference picture ids.
         """
+        _require_scope_allows_character(request, id)
 
         def fetch_reference_pictures(session: Session, character_id: int):
             faces = select_reference_faces_for_character(
@@ -458,7 +476,8 @@ def create_router(server) -> APIRouter:
         summary="Get character by id",
         description="Returns a single character record by id.",
     )
-    def get_character_by_id(id: int):
+    def get_character_by_id(request: Request, id: int):
+        _require_scope_allows_character(request, id)
         try:
             char = server.vault.db.run_immediate_read_task(
                 lambda session: Character.find(session, id=id)
@@ -496,7 +515,8 @@ def create_router(server) -> APIRouter:
         summary="Get character field",
         description="Returns one character field value, including generated thumbnail handling for field=thumbnail.",
     )
-    def get_character_field_by_id(id: int, field: str):
+    def get_character_field_by_id(request: Request, id: int, field: str):
+        _require_scope_allows_character(request, id)
         if field == "thumbnail":
             thumbnail_cache_version = 6
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
@@ -730,9 +750,27 @@ def create_router(server) -> APIRouter:
         summary="List characters",
         description="Lists characters, optionally filtered by exact name.",
     )
-    def get_characters(name: str = Query(None)):
+    def get_characters(request: Request, name: str = Query(None)):
+        token_scope = getattr(request.state, "token_scope", None)
+        if (
+            token_scope is not None
+            and token_scope.resource_type is not None
+            and token_scope.resource_type != "character"
+        ):
+            raise HTTPException(
+                status_code=403, detail="Token is not authorised for this resource type"
+            )
+        scope_character_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "character"
+            else None
+        )
         try:
             logger.debug(f"Fetching characters with name: {name}")
+            if scope_character_id is not None:
+                return server.vault.db.run_immediate_read_task(
+                    lambda session: Character.find(session, id=scope_character_id)
+                )
             return server.vault.db.run_immediate_read_task(
                 lambda session: Character.find(session, name=name)
             )

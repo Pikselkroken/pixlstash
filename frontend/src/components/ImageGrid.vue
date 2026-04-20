@@ -481,7 +481,7 @@
                 :score="img.score || 0"
                 :icon-size="badgeIconSizes.star"
                 :compact="true"
-                @set-score="setScore(img, $event)"
+                @set-score="!isReadOnly && setScore(img, $event)"
               />
             </div>
             <!-- Compact mode group pill, straddling top edge of this row -->
@@ -564,7 +564,7 @@ import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import ComfyUiRunner from "./ComfyUiRunner.vue";
 import ProgressOverlay from "./ProgressOverlay.vue";
-import { apiClient } from "../utils/apiClient";
+import { apiClient, isReadOnly } from "../utils/apiClient";
 import {
   applyStackBackgroundAlpha,
   arraysEqualByString,

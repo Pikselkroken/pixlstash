@@ -49,6 +49,7 @@ AUTH_EXCLUDED_PATHS: frozenset[str] = frozenset(
         "/version",
         "/check-session",
         "/logout",
+        "/network/info",
     }
 )
 AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
@@ -697,7 +698,7 @@ class AuthService:
                 matched_token: Optional[UserToken] = None
                 auth_header = request.headers.get("Authorization", "")
                 if auth_header.startswith("Bearer "):
-                    token_value = auth_header[len("Bearer "):]
+                    token_value = auth_header[len("Bearer ") :]
                     matched_token = self._token_from_value(token_value)
                 if matched_token is None:
                     matched_token = self._token_from_query_param(request)

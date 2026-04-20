@@ -10,7 +10,7 @@ import {
   watch,
 } from "vue";
 import { useTheme } from "vuetify";
-import { apiClient, API_BASE_URL } from "./utils/apiClient";
+import { apiClient, API_BASE_URL, sessionContext } from "./utils/apiClient";
 
 import SideBar from "./components/SideBar.vue";
 import PhotosImportDialog from "./components/PhotosImportDialog.vue";
@@ -1276,6 +1276,22 @@ onMounted(async () => {
     }
   }).catch(() => {});
   await fetchConfig();
+  // Navigate to the scoped resource when a share token is active
+  const ctx = sessionContext.value;
+  if (ctx && ctx.scope !== "ALL") {
+    if (ctx.resource_type === "picture_set") {
+      selectedSet.value = ctx.resource_id;
+      selectedCharacter.value = ALL_PICTURES_ID;
+    } else if (ctx.resource_type === "character") {
+      selectedCharacter.value = ctx.resource_id;
+      selectedSet.value = null;
+    } else if (ctx.resource_type === "project") {
+      selectedProjectId.value = ctx.resource_id;
+      projectViewMode.value = "project";
+      selectedSet.value = null;
+      selectedCharacter.value = ALL_PICTURES_ID;
+    }
+  }
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
   window.addEventListener("keydown", handleGlobalKeydown);

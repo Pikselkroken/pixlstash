@@ -107,6 +107,14 @@ const tokenCopied = ref(false);
 const tokenDialogOpen = ref(false);
 const tokenDeleteDialogOpen = ref(false);
 const tokenToDelete = ref(null);
+// Share token creation scope fields
+const tokenScope = ref("ALL");
+const tokenResourceType = ref(null);
+const tokenResourceId = ref(null);
+const tokenExpiresAt = ref(null);
+const shareResourceOptions = ref([]);
+const shareResourceLoading = ref(false);
+const shareLinkCopied = ref(false);
 const smartScorePenalisedTags = ref([]);
 const smartScoreTagInput = ref("");
 const smartScoreTagsLoading = ref(false);
@@ -238,6 +246,12 @@ function resetSettingsForm() {
   tokenDialogOpen.value = false;
   tokenDeleteDialogOpen.value = false;
   tokenToDelete.value = null;
+  tokenScope.value = "ALL";
+  tokenResourceType.value = null;
+  tokenResourceId.value = null;
+  tokenExpiresAt.value = null;
+  shareResourceOptions.value = [];
+  shareLinkCopied.value = false;
   smartScoreTagInput.value = "";
   smartScoreTagsError.value = "";
   smartScoreTagsSuccess.value = "";
@@ -1497,12 +1511,66 @@ function copyToken() {
   }, 2000);
 }
 
+async function loadShareResourceOptions(type) {
+  if (!type) {
+    shareResourceOptions.value = [];
+    return;
+  }
+  shareResourceLoading.value = true;
+  try {
+    let items = [];
+    if (type === "picture_set") {
+      const res = await apiClient.get("/picture_sets");
+      items = (res.data || []).map((s) => ({ id: s.id, label: s.name }));
+    } else if (type === "character") {
+      const res = await apiClient.get("/characters");
+      items = (res.data || []).map((c) => ({ id: c.id, label: c.name }));
+    } else if (type === "project") {
+      const res = await apiClient.get("/projects");
+      items = (res.data || []).map((p) => ({ id: p.id, label: p.name }));
+    }
+    shareResourceOptions.value = items;
+  } catch {
+    shareResourceOptions.value = [];
+  } finally {
+    shareResourceLoading.value = false;
+  }
+}
+
+watch(tokenResourceType, (type) => {
+  tokenResourceId.value = null;
+  loadShareResourceOptions(type);
+});
+
+const shareUrl = computed(() => {
+  if (!newlyCreatedToken.value || tokenScope.value !== "READ") return null;
+  const base = window.location.origin + window.location.pathname;
+  return `${base}?token=${newlyCreatedToken.value}`;
+});
+
+async function copyShareLink() {
+  if (!shareUrl.value) return;
+  try {
+    await navigator.clipboard.writeText(shareUrl.value);
+    shareLinkCopied.value = true;
+    setTimeout(() => { shareLinkCopied.value = false; }, 2000);
+  } catch {
+    // Clipboard not available
+  }
+}
+
 async function createUserToken() {
   tokensError.value = "";
   const description = tokenDescription.value.trim() || null;
   tokensLoading.value = true;
   try {
-    const res = await apiClient.post("/users/me/token", { description });
+    const res = await apiClient.post("/users/me/token", {
+      description,
+      scope: tokenScope.value,
+      resource_type: tokenScope.value === "READ" ? tokenResourceType.value : null,
+      resource_id: tokenScope.value === "READ" ? tokenResourceId.value : null,
+      expires_at: tokenExpiresAt.value || null,
+    });
     newlyCreatedToken.value = res.data?.token || "";
     tokenDialogOpen.value = Boolean(newlyCreatedToken.value);
     tokenDescription.value = "";
@@ -2602,6 +2670,52 @@ const workflowImportCaptionPreview = computed(() => {
                     :disabled="tokensLoading"
                     @keydown.enter.prevent="createUserToken"
                   />
+                  <v-select
+                    v-model="tokenScope"
+                    :items="[{ title: 'Full access', value: 'ALL' }, { title: 'Read-only share', value: 'READ' }]"
+                    item-title="title"
+                    item-value="value"
+                    label="Access type"
+                    density="compact"
+                    variant="filled"
+                    hide-details
+                    :disabled="tokensLoading"
+                  />
+                  <template v-if="tokenScope === 'READ'">
+                    <v-select
+                      v-model="tokenResourceType"
+                      :items="[{ title: 'Picture Set', value: 'picture_set' }, { title: 'Character', value: 'character' }, { title: 'Project', value: 'project' }]"
+                      item-title="title"
+                      item-value="value"
+                      label="Resource type"
+                      density="compact"
+                      variant="filled"
+                      hide-details
+                      clearable
+                      :disabled="tokensLoading"
+                    />
+                    <v-select
+                      v-if="tokenResourceType"
+                      v-model="tokenResourceId"
+                      :items="shareResourceOptions"
+                      item-title="label"
+                      item-value="id"
+                      label="Resource"
+                      density="compact"
+                      variant="filled"
+                      hide-details
+                      :loading="shareResourceLoading"
+                      :disabled="tokensLoading || shareResourceLoading"
+                    />
+                    <v-text-field
+                      v-model="tokenExpiresAt"
+                      label="Expires at (optional, e.g. 2027-01-01)"
+                      density="compact"
+                      variant="filled"
+                      hide-details
+                      :disabled="tokensLoading"
+                    />
+                  </template>
                   <v-btn
                     variant="outlined"
                     color="primary"
@@ -2625,6 +2739,14 @@ const workflowImportCaptionPreview = computed(() => {
                         <span class="settings-token-desc">
                           {{ token.description || "Token" }}
                         </span>
+                        <v-chip
+                          v-if="token.scope"
+                          size="x-small"
+                          :color="token.scope === 'ALL' ? 'default' : 'info'"
+                          class="settings-token-scope-chip"
+                        >
+                          {{ token.scope === 'ALL' ? 'Full access' : `Read · ${token.resource_type ?? ''} ${token.resource_id != null ? '#' + token.resource_id : ''}`.trim() }}
+                        </v-chip>
                         <span class="settings-token-sub">
                           <span>
                             Created:
@@ -2686,6 +2808,26 @@ const workflowImportCaptionPreview = computed(() => {
             }}</v-icon>
           </v-btn>
         </div>
+        <template v-if="shareUrl">
+          <div class="settings-token-warning" style="margin-top:8px;">
+            Share this URL — anyone with it gets read access to the selected resource.
+          </div>
+          <div class="settings-token-value-row">
+            <div class="settings-token-value" style="word-break:break-all;font-size:11px;">{{ shareUrl }}</div>
+            <v-btn
+              icon
+              variant="text"
+              size="small"
+              class="settings-token-copy-btn"
+              :title="shareLinkCopied ? 'Copied!' : 'Copy share link'"
+              @click="copyShareLink"
+            >
+              <v-icon size="18">{{
+                shareLinkCopied ? "mdi-check" : "mdi-link"
+              }}</v-icon>
+            </v-btn>
+          </div>
+        </template>
       </v-card-text>
       <v-card-actions class="settings-dialog-actions">
         <v-spacer />

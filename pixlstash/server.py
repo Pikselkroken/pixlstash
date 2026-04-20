@@ -995,6 +995,21 @@ class Server:
         async def check_session(request: Request):
             return self.auth.check_session(request)
 
+        @self.api.get(f"{API_V1_PREFIX}/network/info")
+        def network_info():
+            try:
+                lan_ip = socket.gethostbyname(socket.gethostname())
+            except OSError:
+                lan_ip = "127.0.0.1"
+            import ipaddress
+
+            try:
+                addr = ipaddress.ip_address(lan_ip)
+                is_private = addr.is_private or addr.is_loopback
+            except ValueError:
+                is_private = True
+            return {"lan_ip": lan_ip, "is_private": is_private}
+
         @self.api.post(f"{API_V1_PREFIX}/login")
         def login(request: LoginRequest):
             response = self.auth.login(request)

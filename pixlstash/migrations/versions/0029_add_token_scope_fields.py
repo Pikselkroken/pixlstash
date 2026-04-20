@@ -44,19 +44,13 @@ def upgrade() -> None:
         )
 
     if "resource_type" not in existing_cols:
-        op.add_column(
-            "usertoken", sa.Column("resource_type", sa.String, nullable=True)
-        )
+        op.add_column("usertoken", sa.Column("resource_type", sa.String, nullable=True))
 
     if "resource_id" not in existing_cols:
-        op.add_column(
-            "usertoken", sa.Column("resource_id", sa.Integer, nullable=True)
-        )
+        op.add_column("usertoken", sa.Column("resource_id", sa.Integer, nullable=True))
 
     if "expires_at" not in existing_cols:
-        op.add_column(
-            "usertoken", sa.Column("expires_at", sa.DateTime, nullable=True)
-        )
+        op.add_column("usertoken", sa.Column("expires_at", sa.DateTime, nullable=True))
 
 
 def downgrade() -> None:

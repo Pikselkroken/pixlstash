@@ -1,8 +1,17 @@
 import axios from 'axios';
-import {ref} from 'vue';
+import {computed, ref} from 'vue';
 
 // Centralised authentication state
 const isAuthenticated = ref(false);
+
+// Share token state (set when app is loaded with ?token= query param)
+let _shareToken = null;
+const sessionContext = ref(null);
+const isReadOnly = computed(() => sessionContext.value?.scope === 'READ');
+
+function activateShareToken(token) {
+  _shareToken = token;
+}
 
 const DEFAULT_BACKEND_PORT = 9537;
 const environmentBaseUrl = import.meta?.env?.VITE_BACKEND_URL;
@@ -57,6 +66,11 @@ apiClient.interceptors.request.use((config) => {
   config.url = rawUrl.startsWith('/')
       ? `${API_PREFIX}${rawUrl}`
       : `${API_PREFIX}/${rawUrl}`;
+
+  if (_shareToken) {
+    config.params = {...(config.params || {}), token: _shareToken};
+  }
+
   return config;
 });
 
@@ -137,10 +151,13 @@ apiClient.interceptors.response.use((response) => response, (error) => {
 
 export {
   apiClient,
+  activateShareToken,
   checkLoginStatus,
   checkSession,
   isAuthenticated,
+  isReadOnly,
   login,
   logout,
+  sessionContext,
   apiBaseUrl as API_BASE_URL,
 };

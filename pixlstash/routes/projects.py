@@ -144,6 +144,23 @@ def create_router(server) -> APIRouter:
         if session.exec(query).first() is not None:
             raise HTTPException(status_code=409, detail="Project name already exists")
 
+    def _require_scope_allows_project(request: Request, project_id: int):
+        """Raise 403 if the token scope does not cover the requested project."""
+        scope = getattr(request.state, "token_scope", None)
+        if scope is None:
+            return
+        if scope.resource_type == "project":
+            if scope.resource_id != project_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised for this project",
+                )
+        elif scope.resource_type is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Token is not authorised for this resource type",
+            )
+
     # -------------------------------------------------------------------------
     # Projects CRUD
     # -------------------------------------------------------------------------
@@ -155,9 +172,26 @@ def create_router(server) -> APIRouter:
     )
     def list_projects(request: Request):
         server.auth.require_user_id(request)
+        token_scope = getattr(request.state, "token_scope", None)
+        if (
+            token_scope is not None
+            and token_scope.resource_type is not None
+            and token_scope.resource_type != "project"
+        ):
+            raise HTTPException(
+                status_code=403, detail="Token is not authorised for this resource type"
+            )
+        scope_project_id = (
+            token_scope.resource_id
+            if token_scope is not None and token_scope.resource_type == "project"
+            else None
+        )
 
         def fetch(session: Session):
-            return session.exec(select(Project).order_by(Project.created_at)).all()
+            query = select(Project).order_by(Project.created_at)
+            if scope_project_id is not None:
+                query = query.where(Project.id == scope_project_id)
+            return session.exec(query).all()
 
         projects = server.vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
         return [
@@ -236,6 +270,7 @@ def create_router(server) -> APIRouter:
                 ).first()
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
+            _require_scope_allows_project(request, project.id)
             sets = session.exec(
                 select(PictureSet)
                 .where(PictureSet.project_id == project.id)
@@ -277,6 +312,7 @@ def create_router(server) -> APIRouter:
                 ).first()
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
+            _require_scope_allows_project(request, project.id)
             return project
 
         return server.vault.db.run_task(
