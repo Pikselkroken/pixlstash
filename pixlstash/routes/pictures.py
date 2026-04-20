@@ -29,7 +29,19 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import Integer, and_, case, cast, delete, desc, exists, func, or_, text
+from sqlalchemy import (
+    Integer,
+    and_,
+    case,
+    cast,
+    delete,
+    desc,
+    exists,
+    func,
+    or_,
+    text,
+    update,
+)
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -3778,6 +3790,7 @@ def create_router(server) -> APIRouter:
                 updated = True
 
         if updated:
+            old_score = pic.score if "score" in updated_fields else None
 
             def apply_picture_updates(session: Session, picture_id: int, fields: dict):
                 pic_db = session.get(Picture, picture_id)
@@ -3799,6 +3812,28 @@ def create_router(server) -> APIRouter:
                 )
             except KeyError:
                 raise HTTPException(status_code=404, detail="Picture not found")
+            if "score" in updated_fields:
+                new_score = updated_fields["score"]
+
+                def _score_is_good_anchor(s) -> bool:
+                    """Return True if this score value places a picture in the good anchor set."""
+                    return s is not None and s >= 4
+
+                def _score_is_bad_anchor(s) -> bool:
+                    """Return True if this score value places a picture in the bad anchor set."""
+                    return s is not None and 0 < s <= 1
+
+                if _score_is_good_anchor(old_score) != _score_is_good_anchor(
+                    new_score
+                ) or _score_is_bad_anchor(old_score) != _score_is_bad_anchor(new_score):
+
+                    def _reset_smart_scores(session: Session) -> None:
+                        session.exec(update(Picture).values(smart_score=None))
+                        session.commit()
+
+                    server.vault.db.run_task(
+                        _reset_smart_scores, priority=DBPriority.LOW
+                    )
             server.vault.notify(EventType.CHANGED_PICTURES, [picture_id])
 
         # Write back description to caption sidecar when enabled.
