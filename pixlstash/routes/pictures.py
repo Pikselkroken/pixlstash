@@ -426,6 +426,8 @@ def _select_pictures_for_listing(
             }
             if "tags" in metadata_fields:
                 d["tags"] = [t.tag for t in getattr(pic, "tags", [])]
+            if "smart_score" in d:
+                d["smartScore"] = d["smart_score"]
             result.append(d)
         return result
 

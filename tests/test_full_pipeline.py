@@ -31,6 +31,7 @@ import tempfile
 import time
 
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 from sqlmodel import func, select
 
 from pixlstash.db_models import Face, Picture, Quality
@@ -39,6 +40,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.server import Server
 from pixlstash.tasks.likeness_task import LikenessTask
 from pixlstash.tasks.quality_task import QualityTask
+from pixlstash.tasks.smart_score_task import SmartScoreTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
@@ -527,6 +529,19 @@ def test_smart_score_correlates_with_reference_scores():
                     f"{_API_PREFIX}/pictures/{pic_id}", json={"score": score}
                 )
                 assert patch_resp.status_code == 200, patch_resp.text
+
+            # Smart scores may have been pre-computed before user scores were
+            # set (no good/bad anchors yet).  Reset them so the background
+            # worker recomputes with the now-available user anchors.
+            def _reset_smart_scores(session, ids):
+                session.execute(
+                    update(Picture).where(Picture.id.in_(ids)).values(smart_score=None)
+                )
+                session.commit()
+
+            server.vault.db.run_task(_reset_smart_scores, picture_ids)
+
+            _poll_until_zero(server, SmartScoreTask.count_remaining, "smart scores")
 
             smart_resp = client.get(
                 f"{_API_PREFIX}/pictures",
