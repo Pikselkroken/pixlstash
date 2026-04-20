@@ -7154,9 +7154,15 @@ function handleEmptyStateReset() {
 .selection-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(var(--v-theme-info), 0.62);
+  background: rgba(var(--v-theme-info), 0.38);
   pointer-events: none;
-  z-index: 2;
+  z-index: 25;
+  border-radius: 8px;
+  transition: transform 0.18s cubic-bezier(0.4, 2, 0.6, 1);
+}
+.image-card:hover .selection-overlay,
+.stack-hover-active .selection-overlay {
+  transform: scale(1.03);
 }
 .thumbnail-info-row {
   margin-top: 2px;

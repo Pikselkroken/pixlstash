@@ -8,9 +8,13 @@ import tempfile
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
+import time
+
+
 from pixlstash.server import Server
 from pixlstash.db_models import Picture, Face, Character
 from pixlstash.database import DBPriority
+from pixlstash.tasks.smart_score_task import SmartScoreTask
 
 API_PREFIX = "/api/v1"
 
@@ -95,6 +99,18 @@ def test_smart_score_consistency():
         for pid, emb in emb_rows:
             assert emb is not None, f"image_embedding missing for picture id={pid}"
             assert len(emb) > 0, f"image_embedding empty for picture id={pid}"
+
+        # Wait for the background SmartScoreTask to compute and store scores
+        # before querying (smart_score is now a pre-computed DB column).
+        _timeout = 60
+        _start = time.time()
+        while time.time() - _start < _timeout:
+            remaining = server.vault.db.run_immediate_read_task(
+                SmartScoreTask.count_remaining
+            )
+            if remaining == 0:
+                break
+            time.sleep(0.5)
 
         # Helper to get score for a pic from response
         def get_score(resp_json, pid):
