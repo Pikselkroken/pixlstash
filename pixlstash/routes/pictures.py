@@ -4071,6 +4071,10 @@ def create_router(server) -> APIRouter:
     def get_picture_stats(request: Request):
         cache_key = str(sorted(request.query_params.multi_items()))
         now = time.monotonic()
+        for expired_key in [
+            k for k, (ts, _) in list(_stats_cache.items()) if now - ts >= _STATS_TTL
+        ]:
+            _stats_cache.pop(expired_key, None)
         cached = _stats_cache.get(cache_key)
         if cached is not None:
             ts, data = cached

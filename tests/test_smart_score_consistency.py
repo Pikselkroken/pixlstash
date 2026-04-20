@@ -8,13 +8,11 @@ import tempfile
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
-import time
-
-
 from pixlstash.server import Server
 from pixlstash.db_models import Picture, Face, Character
 from pixlstash.database import DBPriority
 from pixlstash.tasks.smart_score_task import SmartScoreTask
+from tests.utils import poll_until_zero
 
 API_PREFIX = "/api/v1"
 
@@ -102,15 +100,9 @@ def test_smart_score_consistency():
 
         # Wait for the background SmartScoreTask to compute and store scores
         # before querying (smart_score is now a pre-computed DB column).
-        _timeout = 60
-        _start = time.time()
-        while time.time() - _start < _timeout:
-            remaining = server.vault.db.run_immediate_read_task(
-                SmartScoreTask.count_remaining
-            )
-            if remaining == 0:
-                break
-            time.sleep(0.5)
+        poll_until_zero(
+            server, SmartScoreTask.count_remaining, "smart scores", timeout_s=60
+        )
 
         # Helper to get score for a pic from response
         def get_score(resp_json, pid):
