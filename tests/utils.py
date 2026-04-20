@@ -2,6 +2,35 @@ import time
 
 API_PREFIX = "/api/v1"
 
+_DEFAULT_TIMEOUT_S = 180
+
+
+def poll_until_zero(
+    server, count_fn, label, timeout_s=_DEFAULT_TIMEOUT_S, interval=0.5
+):
+    """Poll a DB count function until it returns 0, then return.
+
+    Args:
+        server: Server instance (provides server.vault.db).
+        count_fn: Callable accepting a SQLModel Session that returns an int.
+        label: Human-readable description used in the timeout error message.
+        timeout_s: Maximum seconds to wait before raising AssertionError.
+        interval: Seconds between polls.
+
+    Raises:
+        AssertionError: If the count does not reach 0 within timeout_s.
+    """
+    start = time.time()
+    remaining = None
+    while time.time() - start < timeout_s:
+        remaining = server.vault.db.run_immediate_read_task(count_fn)
+        if remaining == 0:
+            return
+        time.sleep(interval)
+    raise AssertionError(
+        f"Timed out after {timeout_s}s waiting for {label}: {remaining} still pending"
+    )
+
 
 def wait_for_import_task(client, task_id, timeout_s=10, poll_interval=0.1):
     start = time.time()
