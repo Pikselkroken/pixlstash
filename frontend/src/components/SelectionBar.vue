@@ -1217,13 +1217,17 @@ watch(tagMenuOpen, async (isOpen) => {
     predMinCoverage.value = 1;
     return;
   }
+  // Focus the input as soon as the menu is rendered so keystrokes typed
+  // immediately after pressing T are captured, rather than waiting for all
+  // fetch calls to complete before the input receives focus.
+  await nextTick();
+  tagInputRef.value?.focus();
   await Promise.all([
     fetchTagsSB(),
     fetchPenalisedTagsSB(),
     fetchSelectedImageTags(),
     fetchSelectedImagePredictions(),
   ]);
-  nextTick(() => tagInputRef.value?.focus());
 });
 
 watch(rejectedTagsCollapsedSB, (value) => {

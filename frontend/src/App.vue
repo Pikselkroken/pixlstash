@@ -1598,6 +1598,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :penalisedTagWeights="penalisedTagWeights"
               :tagConfidenceAboveFilter="tagConfidenceAboveFilter"
               :tagConfidenceBelowFilter="tagConfidenceBelowFilter"
+              :wsTagUpdate="wsTagUpdate"
               @filter-tag="
                 (tag) => {
                   if (tagFilter.includes(tag))
