@@ -192,6 +192,12 @@ class Picture(SQLModel, table=True):
     smart_score: Optional[float] = Field(default=None, index=True)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
+    # When True, the source file could not be deleted (allow_delete_file=False on
+    # the reference folder) but the user has permanently removed the picture from
+    # the scrapheap.  The record is kept in the DB so the reference-folder scan
+    # does not re-import the file on the next pass.  These pictures are invisible
+    # to all normal queries via find().
+    import_excluded: bool = Field(default=False, index=True)
     stack_id: Optional[int] = Field(
         default=None, foreign_key="picturestack.id", index=True
     )
@@ -505,6 +511,8 @@ class Picture(SQLModel, table=True):
         elif not include_deleted:
             stmt = stmt.where(cls.deleted.is_(False))
 
+        stmt = stmt.where(cls.import_excluded.is_(False))
+
         if not include_unimported:
             stmt = stmt.where(cls.imported_at.is_not(None))
 
@@ -752,6 +760,8 @@ class Picture(SQLModel, table=True):
             query = query.where(cls.deleted.is_(True))
         elif not include_deleted:
             query = query.where(cls.deleted.is_(False))
+
+        query = query.where(cls.import_excluded.is_(False))
 
         if not include_unimported:
             query = query.where(cls.imported_at.is_not(None))

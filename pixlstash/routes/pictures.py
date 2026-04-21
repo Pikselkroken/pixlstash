@@ -54,6 +54,7 @@ from pixlstash.db_models import (
     PictureSetMember,
     Project,
     Quality,
+    ReferenceFolder,
     SortMechanism,
     Tag,
     TagPrediction,
@@ -86,6 +87,11 @@ logger = get_logger(__name__)
 
 _stats_cache: dict = {}
 _STATS_TTL = 60.0
+
+
+def clear_stats_cache() -> None:
+    """Discard all cached /pictures/stats results (e.g. after tag mutations)."""
+    _stats_cache.clear()
 
 _SIDECAR_TAG_PATTERN = re.compile(
     r"^[a-z0-9]+(?:[ _-][a-z0-9]+){0,2}$",
@@ -3859,7 +3865,10 @@ def create_router(server) -> APIRouter:
                 picture_ids = ids
 
         def restore_pictures(session: Session, ids: list[int] | None):
-            query = select(Picture).where(Picture.deleted.is_(True))
+            query = select(Picture).where(
+                Picture.deleted.is_(True),
+                Picture.import_excluded.is_(False),
+            )
             if ids is not None:
                 query = query.where(Picture.id.in_(ids))
             pics = session.exec(query).all()
@@ -3908,8 +3917,11 @@ def create_router(server) -> APIRouter:
                     )
 
         def fetch_deleted(session: Session, ids: list[int] | None):
-            query = select(Picture.id, Picture.file_path).where(
-                Picture.deleted.is_(True)
+            query = select(
+                Picture.id, Picture.file_path, Picture.reference_folder_id
+            ).where(
+                Picture.deleted.is_(True),
+                Picture.import_excluded.is_(False),
             )
             if ids is not None:
                 query = query.where(Picture.id.in_(ids))
@@ -3921,8 +3933,57 @@ def create_router(server) -> APIRouter:
         if not rows:
             return {"status": "success", "deleted_count": 0}
 
-        picture_ids = [row[0] for row in rows if row[0] is not None]
-        file_paths = [row[1] for row in rows if row[1]]
+        # Find reference folders where files must not be deleted; for those
+        # pictures keep the DB row as a scan sentinel (import_excluded=True) so
+        # the file is never re-imported on the next scan pass.
+        def fetch_no_delete_folder_ids(session: Session) -> set[int]:
+            result = session.exec(
+                select(ReferenceFolder.id).where(
+                    ReferenceFolder.allow_delete_file.is_(False),
+                )
+            ).all()
+            return {r for r in result if r is not None}
+
+        no_delete_folder_ids: set[int] = server.vault.db.run_task(
+            fetch_no_delete_folder_ids, priority=DBPriority.IMMEDIATE
+        )
+
+        full_delete_ids: list[int] = []
+        full_delete_file_paths: list[str] = []
+        sentinel_ids: list[int] = []
+
+        for row in rows:
+            pic_id, file_path, ref_folder_id = row[0], row[1], row[2]
+            if ref_folder_id is not None and ref_folder_id in no_delete_folder_ids:
+                # Source file is protected — keep the DB row as a scan sentinel.
+                if pic_id is not None:
+                    sentinel_ids.append(pic_id)
+            else:
+                if pic_id is not None:
+                    full_delete_ids.append(pic_id)
+                if file_path:
+                    full_delete_file_paths.append(file_path)
+
+        if sentinel_ids:
+            def mark_sentinels(session: Session, ids: list[int]) -> None:
+                session.exec(
+                    update(Picture)
+                    .where(Picture.id.in_(ids))
+                    .values(import_excluded=True)
+                )
+                session.commit()
+
+            server.vault.db.run_task(
+                mark_sentinels, sentinel_ids, priority=DBPriority.IMMEDIATE
+            )
+            logger.debug(
+                "Scrapheap flush: kept %d picture(s) as import sentinels "
+                "(allow_delete_file=False on reference folder).",
+                len(sentinel_ids),
+            )
+
+        picture_ids = full_delete_ids
+        file_paths = full_delete_file_paths
 
         def delete_files(image_root: str, paths: list[str]):
             for rel_path in paths:
@@ -3966,7 +4027,10 @@ def create_router(server) -> APIRouter:
             priority=DBPriority.IMMEDIATE,
         )
         server.vault.notify(EventType.CHANGED_PICTURES)
-        return {"status": "success", "deleted_count": deleted_count}
+        return {
+            "status": "success",
+            "deleted_count": deleted_count + len(sentinel_ids),
+        }
 
     @router.delete(
         "/pictures/{id}",

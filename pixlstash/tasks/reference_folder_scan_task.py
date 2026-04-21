@@ -120,13 +120,17 @@ class ReferenceFolderScanTask(BaseTask):
                 if _is_supported_file(full_path):
                     disk_paths.add(full_path)
 
-        # Fetch all picture paths already indexed for this reference folder.
+        # Fetch all picture paths already indexed for this reference folder,
+        # including scrapheap (deleted=True) pictures.  Scrapheap pictures must
+        # be present in existing_by_path so their file paths are subtracted from
+        # `new_paths`; without them, the scan would re-import the same file every
+        # time it ran while the picture sat in the scrapheap.
         def fetch_existing(session: Session) -> list[Picture]:
             return list(
                 session.exec(
                     select(Picture).where(
                         Picture.reference_folder_id == folder_id,
-                        Picture.deleted == False,  # noqa: E712
+                        Picture.import_excluded.is_(False),
                     )
                 ).all()
             )
@@ -138,9 +142,49 @@ class ReferenceFolderScanTask(BaseTask):
             p.file_path: p for p in existing_pictures if p.file_path
         }
 
+        # Fetch sentinel records: pictures the user permanently removed from the
+        # scrapheap when allow_delete_file=False.  Their files are still on disk
+        # but must not be re-imported.
+        def fetch_sentinels(session: Session) -> list[tuple[str, int]]:
+            rows = session.exec(
+                select(Picture.file_path, Picture.id).where(
+                    Picture.reference_folder_id == folder_id,
+                    Picture.import_excluded.is_(True),
+                )
+            ).all()
+            return [(row[0], row[1]) for row in rows if row[0] and row[1] is not None]
+
+        sentinel_items: list[tuple[str, int]] = self._db.run_task(
+            fetch_sentinels, priority=DBPriority.LOW
+        )
+        sentinel_paths: set[str] = {path for path, _ in sentinel_items}
+
         # Determine what is new and what has been removed.
-        new_paths = disk_paths - set(existing_by_path.keys())
+        new_paths = disk_paths - set(existing_by_path.keys()) - sentinel_paths
         removed_paths = set(existing_by_path.keys()) - disk_paths
+
+        # Clean up sentinel records whose source file has since been removed
+        # from disk — the sentinel is no longer needed.
+        stale_sentinel_ids = [
+            pic_id for path, pic_id in sentinel_items if path not in disk_paths
+        ]
+        if stale_sentinel_ids:
+            def delete_stale_sentinels(session: Session, ids: list[int]) -> None:
+                for pic_id in ids:
+                    pic = session.get(Picture, pic_id)
+                    if pic is not None:
+                        session.delete(pic)
+                session.commit()
+
+            self._db.run_task(
+                delete_stale_sentinels, stale_sentinel_ids, priority=DBPriority.LOW
+            )
+            logger.info(
+                "Reference folder %s: cleaned up %d stale sentinel record(s) "
+                "(source files removed from disk).",
+                self._folder_path,
+                len(stale_sentinel_ids),
+            )
 
         # --- Handle removed files ---
         if removed_paths:
@@ -223,6 +267,9 @@ class ReferenceFolderScanTask(BaseTask):
         caption_updates: list[tuple] = []
         for file_path, pic in existing_by_path.items():
             if file_path in removed_paths:
+                continue
+            if pic.deleted:
+                # Don't update caption data for scrapheap pictures.
                 continue
             current_caption = find_caption_file(file_path)
             current_mtime = (
