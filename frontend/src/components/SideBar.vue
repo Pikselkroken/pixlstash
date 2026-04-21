@@ -2518,7 +2518,11 @@ defineExpose({
               :style="
                 peopleSectionCollapsed
                   ? {}
-                  : { flex: `${Math.max(1, visibleCharacters.length)} 1 0` }
+                  : {
+                      flex: `${Math.max(1, visibleCharacters.length)} 1 0`,
+                      minHeight:
+                        visibleCharacters.length === 0 ? '70px' : undefined,
+                    }
               "
             >
               <div
@@ -3037,7 +3041,7 @@ defineExpose({
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 8px 4px;
+  padding: 0 4px 4px;
 }
 
 .sidebar-collections-help {
