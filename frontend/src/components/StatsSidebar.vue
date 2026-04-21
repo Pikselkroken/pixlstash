@@ -27,6 +27,7 @@ const props = defineProps({
   tagConfidenceAboveFilter: { type: Array, default: () => [] },
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   open: { type: Boolean, default: true },
+  wsTagUpdate: { type: Object, default: null },
 });
 
 const emit = defineEmits([
@@ -326,6 +327,22 @@ onMounted(() => {
     fetchStats();
   }
 });
+
+// When tags change on any picture, the backend cache is already cleared via the
+// CHANGED_TAGS event. Refetch stats so the sidebar reflects the updated counts.
+watch(
+  () => props.wsTagUpdate,
+  () => {
+    fetchStats().then(() => {
+      if (coocOpen.value) fetchCooc();
+      if (confHistOpen.value) fetchConf();
+      if (activeTab.value === "pictures") fetchPicStats();
+      if (penalisedOnlyTags.value || penalisedOnlyCooc.value > 0)
+        fetchStatsPenalised();
+      if (penalisedOnlyCooc.value === 2) fetchStatsPenalisedBoth();
+    });
+  },
+);
 
 // ─── Donut chart ──────────────────────────────────────────────────────────────
 const DONUT_R = 40;

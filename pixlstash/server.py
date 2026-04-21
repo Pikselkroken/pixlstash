@@ -44,7 +44,7 @@ from pixlstash.routes.picture_sets import create_router as create_picture_sets_r
 from pixlstash.routes.projects import create_router as create_projects_router
 from pixlstash.routes.tags import create_router as create_tags_router
 from pixlstash.routes.stacks import create_router as create_stacks_router
-from pixlstash.routes.pictures import create_router as create_pictures_router
+from pixlstash.routes.pictures import create_router as create_pictures_router, clear_stats_cache
 from pixlstash.routes.comfyui import create_router as create_comfyui_router
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
@@ -281,6 +281,8 @@ class Server:
         gc.collect()
 
     def _handle_vault_event(self, event_type: EventType, data=None):
+        if event_type in (EventType.CHANGED_TAGS, EventType.CLEARED_TAGS):
+            clear_stats_cache()
         if not self._ws_loop:
             return
         coro = self._broadcast_ws_event(event_type, data)

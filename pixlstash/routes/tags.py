@@ -82,7 +82,7 @@ def create_router(server) -> APIRouter:
                     return pic
 
                 server.vault.db.run_task(update_picture, pic.id, tag)
-                server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
+                server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
 
             fresh_tags = _sync_sidecar(server, pic_id)
 
@@ -185,7 +185,7 @@ def create_router(server) -> APIRouter:
                 return pic
 
             server.vault.db.run_task(update_picture, pic_id, tag_id_int)
-            server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
+            server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
 
             fresh_tags = _sync_sidecar(server, pic_id)
 
@@ -249,7 +249,7 @@ def create_router(server) -> APIRouter:
             return pic
 
         server.vault.db.run_task(update_picture, pic_id, tag_value)
-        server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
+        server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
         fresh_tags = _sync_sidecar(server, pic_id)
         return {"status": "success", "tags": fresh_tags}
 
@@ -284,7 +284,7 @@ def create_router(server) -> APIRouter:
             return pic
 
         server.vault.db.run_task(do_clear, pic_id)
-        server.vault.notify(EventType.CHANGED_TAGS, {"picture_ids": [pic_id]})
+        server.vault.notify(EventType.CHANGED_TAGS, [pic_id])
         fresh_tags = _sync_sidecar(server, pic_id)
         return {"status": "success", "tags": fresh_tags}
 
