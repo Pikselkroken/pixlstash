@@ -6,7 +6,7 @@ on:
   workflow_dispatch: # allow manual runs
     inputs:
       backfill_clones:
-        description: "Backfill clone metrics in metrics/history.json from GitHub traffic data"
+        description: "Backfill clone metrics in history.json from GitHub traffic data"
         type: boolean
         required: false
         default: false
@@ -15,7 +15,7 @@ on:
       - metrics
 
 permissions:
-  contents: write # needed to commit history.json back to the repo
+  contents: read
 
 jobs:
   collect:
@@ -25,13 +25,22 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: develop
+          path: pixlstash
+
+      - uses: actions/checkout@v6
+        with:
+          repository: Pikselkroken/pixlstash-metrics
+          token: ${{ secrets.METRICS_REPO_PAT }}
+          path: pixlstash-metrics
 
       - name: Fetch metrics
+        working-directory: pixlstash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           METRICS_TOKEN: ${{ secrets.METRICS_TOKEN }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          HISTORY_PATH: ${{ github.workspace }}/pixlstash-metrics/history.json
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.backfill_clones }}" = "true" ]; then
             BACKFILL_CLONES=1 python .github/scripts/collect_metrics.py
@@ -40,9 +49,10 @@ jobs:
           fi
 
       - name: Commit updated history
+        working-directory: pixlstash-metrics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add metrics/history.json
+          git add history.json
           git diff --staged --quiet || git commit -m "chore: update metrics [skip ci]"
           git push
