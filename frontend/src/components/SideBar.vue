@@ -76,6 +76,7 @@ const props = defineProps({
   themeMode: { type: String, default: "light" },
   hasFolderFilter: { type: Boolean, default: false },
   checkForUpdates: { type: Boolean, default: null },
+  installType: { type: String, default: "pip" },
   showKeyboardHint: { type: Boolean, default: true },
 });
 
@@ -1620,23 +1621,47 @@ async function characterSaved() {
 }
 
 function checkForUpdatesNow() {
-  fetch(LATEST_VERSION_URL)
+  const url = `${LATEST_VERSION_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
+  fetch(url)
     .then((r) => r.json())
     .then((data) => {
       const remote = data?.version;
       if (remote && isRemoteNewer(appVersion, remote)) {
         latestVersion.value = remote;
-        latestVersionUrl.value = UPDATE_PAGE_URL;
+        latestVersionUrl.value = `${UPDATE_PAGE_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(props.installType ?? "pip")}`;
       }
     })
     .catch(() => {});
 }
 
+let versionCheckInterval = null;
+
+function startVersionCheckInterval() {
+  if (versionCheckInterval) return;
+  versionCheckInterval = setInterval(() => {
+    if (props.checkForUpdates === true) {
+      checkForUpdatesNow();
+    }
+  }, 24 * 60 * 60 * 1000);
+}
+
+function stopVersionCheckInterval() {
+  if (versionCheckInterval) {
+    clearInterval(versionCheckInterval);
+    versionCheckInterval = null;
+  }
+}
+
 watch(
   () => props.checkForUpdates,
   (val) => {
-    if (val === true && !latestVersion.value) {
-      checkForUpdatesNow();
+    if (val === true) {
+      if (!latestVersion.value) {
+        checkForUpdatesNow();
+      }
+      startVersionCheckInterval();
+    } else {
+      stopVersionCheckInterval();
     }
   },
 );
@@ -1646,6 +1671,7 @@ onMounted(() => {
   // Also handled by a watcher above for when the prop resolves after mount.
   if (props.checkForUpdates === true) {
     checkForUpdatesNow();
+    startVersionCheckInterval();
   }
 
   const handleNoticeReflow = () => {
@@ -1703,6 +1729,7 @@ onMounted(() => {
 
 let sidebarNoticeCleanup = null;
 onBeforeUnmount(() => {
+  stopVersionCheckInterval();
   if (sidebarNoticeCleanup) {
     sidebarNoticeCleanup();
     sidebarNoticeCleanup = null;

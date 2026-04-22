@@ -44,7 +44,10 @@ from pixlstash.routes.picture_sets import create_router as create_picture_sets_r
 from pixlstash.routes.projects import create_router as create_projects_router
 from pixlstash.routes.tags import create_router as create_tags_router
 from pixlstash.routes.stacks import create_router as create_stacks_router
-from pixlstash.routes.pictures import create_router as create_pictures_router, clear_stats_cache
+from pixlstash.routes.pictures import (
+    create_router as create_pictures_router,
+    clear_stats_cache,
+)
 from pixlstash.routes.comfyui import create_router as create_comfyui_router
 from pixlstash.routes.tag_predictions import (
     create_router as create_tag_predictions_router,
@@ -866,7 +869,12 @@ class Server:
         @self.api.get("/version")
         async def read_version():
             version = self._get_version()
-            return {"message": "PixlStash REST API", "version": version}
+            install_type = "docker" if Server.running_in_docker() else "pip"
+            return {
+                "message": "PixlStash REST API",
+                "version": version,
+                "install_type": install_type,
+            }
 
         @self.api.get("/favicon.ico")
         def favicon():

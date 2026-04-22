@@ -93,6 +93,7 @@ def clear_stats_cache() -> None:
     """Discard all cached /pictures/stats results (e.g. after tag mutations)."""
     _stats_cache.clear()
 
+
 _SIDECAR_TAG_PATTERN = re.compile(
     r"^[a-z0-9]+(?:[ _-][a-z0-9]+){0,2}$",
     re.IGNORECASE,
@@ -3965,6 +3966,7 @@ def create_router(server) -> APIRouter:
                     full_delete_file_paths.append(file_path)
 
         if sentinel_ids:
+
             def mark_sentinels(session: Session, ids: list[int]) -> None:
                 session.exec(
                     update(Picture)
@@ -4197,6 +4199,7 @@ def create_router(server) -> APIRouter:
                 status_code=400,
                 detail="Invalid max_score: must be an integer",
             ) from exc
+
         def compute(session):
             def _empty():
                 return {

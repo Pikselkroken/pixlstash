@@ -153,6 +153,7 @@ const faceBboxFilter = ref(null);
 // null = undecided (show dialog), true/false = user's explicit choice
 const checkForUpdates = ref(null);
 const updateCheckDialogOpen = ref(false);
+const installType = ref("pip");
 
 const gridVersion = ref(0);
 const wsUpdateKey = ref(0);
@@ -1269,6 +1270,11 @@ watch(exportMenuOpen, async (isOpen) => {
 
 // --- Lifecycle ---
 onMounted(async () => {
+  apiClient.get('/version').then((r) => {
+    if (typeof r.data?.install_type === 'string') {
+      installType.value = r.data.install_type;
+    }
+  }).catch(() => {});
   await fetchConfig();
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
@@ -1334,6 +1340,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             :themeMode="themeMode"
             :hasFolderFilter="selectedFolderFilter != null"
             :checkForUpdates="checkForUpdates"
+            :installType="installType"
             :showKeyboardHint="showKeyboardHint"
             @update:show-keyboard-hint="showKeyboardHint = $event"
             @update:similarity-options="handleUpdateSimilarityOptions"
@@ -1376,11 +1383,12 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               >Check for updates automatically?</v-card-title
             >
             <v-card-text class="update-check-body">
-              When enabled, PixlStash checks for a newer version on startup.
+              When enabled, PixlStash checks for a newer version once per day.
               <br />
               <span class="update-check-note"
-                >The update page counts accesses anonymously. No IP addresses
-                are stored.</span
+                >The request sends your installed version and install type
+                (e.g. pip or docker) anonymously. No IP addresses are
+                stored.</span
               >
             </v-card-text>
             <v-card-actions class="update-check-actions">

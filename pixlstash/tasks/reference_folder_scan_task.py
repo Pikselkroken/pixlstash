@@ -169,6 +169,7 @@ class ReferenceFolderScanTask(BaseTask):
             pic_id for path, pic_id in sentinel_items if path not in disk_paths
         ]
         if stale_sentinel_ids:
+
             def delete_stale_sentinels(session: Session, ids: list[int]) -> None:
                 for pic_id in ids:
                     pic = session.get(Picture, pic_id)

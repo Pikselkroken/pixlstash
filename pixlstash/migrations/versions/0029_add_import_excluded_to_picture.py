@@ -40,9 +40,7 @@ def upgrade() -> None:
                 server_default="0",
             ),
         )
-        op.create_index(
-            "ix_picture_import_excluded", "picture", ["import_excluded"]
-        )
+        op.create_index("ix_picture_import_excluded", "picture", ["import_excluded"])
 
 
 def downgrade() -> None:
