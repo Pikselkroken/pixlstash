@@ -2279,10 +2279,10 @@ def test_read_version():
             response = client.get("/version")
             assert response.status_code == 200
             expected_version = get_project_version()
-            assert response.json() == {
-                "message": "PixlStash REST API",
-                "version": expected_version,
-            }
+            data = response.json()
+            assert data["message"] == "PixlStash REST API"
+            assert data["version"] == expected_version
+            assert "install_type" in data
     gc.collect()
     log_resources("END test_read_version")
 
