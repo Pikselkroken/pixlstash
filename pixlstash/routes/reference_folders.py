@@ -13,7 +13,10 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
+from pixlstash.utils.reference_folder_validator import (
+    validate_reference_folder_path,
+    validate_reference_folder_accessible,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from sqlmodel import Session, select
 
@@ -111,9 +114,10 @@ def create_router(server) -> APIRouter:
         summary="Add a reference folder",
         description=(
             "Adds a new reference folder. The path must be absolute and must not "
-            "point to a restricted system directory. The folder is created with "
-            "status 'pending_mount' and will become 'active' after the next "
-            "server restart when the path is mount-verified."
+            "point to a restricted system directory. In Docker mode the folder is "
+            "created with status 'pending_mount' and requires a server restart to "
+            "mount-verify the path. Outside Docker the path is verified immediately "
+            "and the folder becomes 'active' (or 'mount_error') right away."
         ),
         response_model=ReferenceFolderResponse,
         tags=["config"],
@@ -130,6 +134,19 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail=error)
 
         label = payload.label if payload.label is not None else os.path.basename(folder)
+
+        # Outside Docker we can check accessibility right now; inside Docker the
+        # volume may not be mounted yet so we defer to the next server restart.
+        in_docker = server.running_in_docker()
+        if not in_docker:
+            access_error = validate_reference_folder_accessible(folder)
+            initial_status = (
+                ReferenceFolderStatus.ACTIVE
+                if access_error is None
+                else ReferenceFolderStatus.MOUNT_ERROR
+            )
+        else:
+            initial_status = ReferenceFolderStatus.PENDING_MOUNT
 
         def insert(session: Session):
             existing = session.exec(
@@ -168,7 +185,7 @@ def create_router(server) -> APIRouter:
                 folder=folder,
                 label=label,
                 allow_delete_file=False,
-                status=ReferenceFolderStatus.PENDING_MOUNT,
+                status=initial_status,
             )
             session.add(rf)
             session.commit()
@@ -176,8 +193,19 @@ def create_router(server) -> APIRouter:
             return rf
 
         rf = server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
-        logger.info("Reference folder added: %s (label=%r)", folder, label)
+        logger.info(
+            "Reference folder added: %s (label=%r, status=%s)",
+            folder,
+            label,
+            initial_status,
+        )
         server.vault.watch_reference_folder(rf.id, rf.folder)
+        # For non-Docker activations wake the work planner so the initial scan
+        # starts promptly rather than waiting for the next scheduler tick.
+        if not in_docker and initial_status == ReferenceFolderStatus.ACTIVE:
+            from pixlstash.event_types import EventType
+
+            server.vault.notify(EventType.CHANGED_PICTURES)
         return _to_response(rf)
 
     @router.patch(

@@ -75,6 +75,7 @@ const selectedSetNames = ref({});
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = unassigned in project mode
 const selectedFolderFilter = ref(null); // null | { referenceFolderId, pathPrefix, label }
+const folderScanning = ref(false);
 const selectedSort = ref("");
 const selectedDescending = ref(true);
 const stackThreshold = ref(null);
@@ -1325,11 +1326,14 @@ watch(exportMenuOpen, async (isOpen) => {
 
 // --- Lifecycle ---
 onMounted(async () => {
-  apiClient.get('/version').then((r) => {
-    if (typeof r.data?.install_type === 'string') {
-      installType.value = r.data.install_type;
-    }
-  }).catch(() => {});
+  apiClient
+    .get("/version")
+    .then((r) => {
+      if (typeof r.data?.install_type === "string") {
+        installType.value = r.data.install_type;
+      }
+    })
+    .catch(() => {});
   await fetchConfig();
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
@@ -1412,6 +1416,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             @select-character="handleSelectCharacter"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
+            @update:folder-scanning="folderScanning = $event"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMovedToSet"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
@@ -1442,9 +1447,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               When enabled, PixlStash checks for a newer version once per day.
               <br />
               <span class="update-check-note"
-                >The request sends your installed version and install type
-                (e.g. pip or docker) anonymously. No IP addresses are
-                stored.</span
+                >The request sends your installed version and install type (e.g.
+                pip or docker) anonymously. No IP addresses are stored.</span
               >
             </v-card-text>
             <v-card-actions class="update-check-actions">
@@ -1633,6 +1637,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                   selectedFolderFilter?.referenceFolderId ?? null
                 "
                 :filePathPrefixFilter="selectedFolderFilter?.pathPrefix ?? null"
+                :folderScanning="folderScanning"
                 :columns="columns"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
