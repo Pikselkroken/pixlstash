@@ -2337,9 +2337,9 @@ const workflowImportCaptionPreview = computed(() => {
               </div>
             </v-window-item>
             <v-window-item value="folders">
-              <!-- Pending restart banner -->
+              <!-- Pending restart banner (Docker only) -->
               <div
-                v-if="hasPendingFolders"
+                v-if="hasPendingFolders && inDocker"
                 class="settings-folders-restart-banner"
               >
                 <v-icon size="18" style="margin-right: 6px">mdi-restart</v-icon>
@@ -2357,7 +2357,7 @@ const workflowImportCaptionPreview = computed(() => {
               </div>
 
               <v-divider
-                v-if="hasPendingFolders"
+                v-if="hasPendingFolders && inDocker"
                 class="settings-section-divider"
               />
 
@@ -2401,7 +2401,9 @@ const workflowImportCaptionPreview = computed(() => {
                           rf.status === 'mount_error'
                             ? 'Mount error'
                             : rf.status === 'pending_mount'
-                              ? 'Pending restart'
+                              ? inDocker
+                                ? 'Pending restart'
+                                : 'Pending scan'
                               : 'Active'
                         "
                       >

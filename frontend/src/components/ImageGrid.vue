@@ -126,35 +126,48 @@
     >
       <select
         class="multi-select-toolbar__mode"
-        :value="isMultiCharacterView ? props.characterMultiMode : props.setMultiMode"
-        @change="(e) => isMultiCharacterView
-          ? emit('update:character-multi-mode', e.target.value)
-          : emit('update:set-multi-mode', e.target.value)"
+        :value="
+          isMultiCharacterView ? props.characterMultiMode : props.setMultiMode
+        "
+        @change="
+          (e) =>
+            isMultiCharacterView
+              ? emit('update:character-multi-mode', e.target.value)
+              : emit('update:set-multi-mode', e.target.value)
+        "
       >
         <option value="union">Union</option>
         <option value="intersection">Overlap</option>
         <option value="difference">Difference</option>
         <option value="xor">Unique (XOR)</option>
       </select>
-      <template v-if="!isMultiCharacterView && props.setMultiMode === 'difference'">
+      <template
+        v-if="!isMultiCharacterView && props.setMultiMode === 'difference'"
+      >
         <span class="multi-select-toolbar__separator">|</span>
         <label class="multi-select-toolbar__base-label">Base:</label>
         <select
           class="multi-select-toolbar__base"
           :value="props.setDifferenceBaseId ?? normalizedSelectedSetIds[0]"
-          @change="(e) => emit('update:set-difference-base-id', Number(e.target.value))"
+          @change="
+            (e) => emit('update:set-difference-base-id', Number(e.target.value))
+          "
         >
           <option
             v-for="sid in normalizedSelectedSetIds"
             :key="sid"
             :value="sid"
-          >{{ props.selectedSetNames[sid] || `Set ${sid}` }}</option>
+          >
+            {{ props.selectedSetNames[sid] || `Set ${sid}` }}
+          </option>
         </select>
       </template>
       <span class="multi-select-toolbar__label">
-        {{ isMultiCharacterView
-          ? `${normalizedSelectedCharacterIds.length} people selected`
-          : `${normalizedSelectedSetIds.length} sets selected` }}
+        {{
+          isMultiCharacterView
+            ? `${normalizedSelectedCharacterIds.length} people selected`
+            : `${normalizedSelectedSetIds.length} sets selected`
+        }}
       </span>
       <span class="multi-select-toolbar__spacer"></span>
       <button
@@ -237,6 +250,20 @@
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
+      </div>
+      <div v-if="showFolderScanningState" class="empty-state">
+        <div class="empty-state-card">
+          <div class="empty-state-illustration" aria-hidden="true">
+            <img
+              src="/Empty.png"
+              alt="Scanning"
+              :style="emptyStateImageStyle"
+              style="width: 90%"
+            />
+          </div>
+          <div class="empty-state-title">PixlStash is scanning your folder</div>
+          <div class="empty-state-subtitle">Reticulating splines…</div>
+        </div>
       </div>
       <div v-if="showEmptyState" class="empty-state">
         <div class="empty-state-card">
@@ -750,6 +777,7 @@ const props = defineProps({
   selectedProjectId: { type: Number, default: null },
   referenceFolderIdFilter: { type: Number, default: null },
   filePathPrefixFilter: { type: String, default: null },
+  folderScanning: { type: Boolean, default: false },
   selectedCharacterIds: { type: Array, default: () => [] },
   characterMultiMode: { type: String, default: "union" },
   setMultiMode: { type: String, default: "intersection" },
@@ -1993,6 +2021,82 @@ function formatCompactDate(dateStr) {
   }
 }
 
+function formatCompactDatetime(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const fmt =
+    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+  const y = d.getFullYear();
+  const day = d.getDate();
+  const MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const mon = MONTHS[d.getMonth()];
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const time24 = `${hh}:${mm}`;
+  function ampmTime() {
+    let h = d.getHours();
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return `${h}:${mm} ${ampm}`;
+  }
+  switch (fmt) {
+    case "eu":
+    case "british":
+    case "iso":
+      return sameYear
+        ? `${day} ${mon} ${time24}`
+        : `${day} ${mon} ${y} ${time24}`;
+    case "us":
+      return sameYear
+        ? `${mon} ${day} ${ampmTime()}`
+        : `${mon} ${day}, ${y} ${ampmTime()}`;
+    case "ymd-slash":
+    case "ymd-dot":
+      return sameYear
+        ? `${mon} ${day} ${time24}`
+        : `${y} ${mon} ${day} ${time24}`;
+    case "ymd-jp":
+      return sameYear
+        ? `${d.getMonth() + 1}月${day}日 ${time24}`
+        : `${y}年${d.getMonth() + 1}月${day}日 ${time24}`;
+    case "locale":
+    default:
+      return d.toLocaleString(
+        undefined,
+        sameYear
+          ? {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            }
+          : {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            },
+      );
+  }
+}
+
 function getCompactGroupLabel(img, visualIdx) {
   if (!props.compactMode || !img) return null;
   const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
@@ -2003,7 +2107,7 @@ function getCompactGroupLabel(img, visualIdx) {
     if (isSearchMode && typeof item.likeness_score === "number")
       return Math.round(item.likeness_score * 20);
     if (sort === "IMPORTED_AT" && item.imported_at)
-      return item.imported_at.slice(0, 10);
+      return item.imported_at.slice(0, 19);
     if (sort.includes("DATE") && item.created_at)
       return item.created_at.slice(0, 10);
     const smartScore = getGridSmartScoreValue(item);
@@ -2029,7 +2133,7 @@ function getCompactGroupLabel(img, visualIdx) {
   if (isSearchMode && typeof img.likeness_score === "number")
     return `≈ ${img.likeness_score.toFixed(2)}`;
   if (sort === "IMPORTED_AT" && img.imported_at)
-    return formatCompactDate(img.imported_at);
+    return formatCompactDatetime(img.imported_at);
   if (sort.includes("DATE") && img.created_at)
     return formatCompactDate(img.created_at);
   const smartScore = getGridSmartScoreValue(img);
@@ -2055,7 +2159,7 @@ const compactStickyLabel = computed(() => {
     if (isSearchMode && typeof item.likeness_score === "number")
       return Math.round(item.likeness_score * 20);
     if (sort === "IMPORTED_AT" && item.imported_at)
-      return item.imported_at.slice(0, 10);
+      return item.imported_at.slice(0, 19);
     if (sort.includes("DATE") && item.created_at)
       return item.created_at.slice(0, 10);
     const smartScore = getGridSmartScoreValue(item);
@@ -2088,7 +2192,7 @@ const compactStickyLabel = computed(() => {
   if (isSearchMode && typeof firstImg.likeness_score === "number")
     return `≈ ${firstImg.likeness_score.toFixed(2)}`;
   if (sort === "IMPORTED_AT" && firstImg.imported_at)
-    return formatCompactDate(firstImg.imported_at);
+    return formatCompactDatetime(firstImg.imported_at);
   if (sort.includes("DATE") && firstImg.created_at)
     return formatCompactDate(firstImg.created_at);
   const smartScore = getGridSmartScoreValue(firstImg);
@@ -2519,7 +2623,9 @@ function handleAddToCharacter(payload) {
 }
 
 function handleRemoveFromCharacter(payload) {
-  const pictureIds = Array.isArray(payload?.pictureIds) ? payload.pictureIds : [];
+  const pictureIds = Array.isArray(payload?.pictureIds)
+    ? payload.pictureIds
+    : [];
   if (!pictureIds.length) return;
   const removedCharId = payload?.characterId;
   const currentChar = props.selectedCharacter;
@@ -4324,12 +4430,19 @@ function buildGridFetchKey() {
     selectedCharacter: props.selectedCharacter ?? null,
     selectedCharacterIds,
     isMultiCharacterView: selectedCharacterIds.length > 1,
-    characterMultiMode: selectedCharacterIds.length > 1 ? (props.characterMultiMode ?? "union") : null,
+    characterMultiMode:
+      selectedCharacterIds.length > 1
+        ? (props.characterMultiMode ?? "union")
+        : null,
     selectedSet: props.selectedSet ?? null,
     selectedSetIds,
     isSetOverlapView: selectedSetIds.length > 1,
-    setMultiMode: selectedSetIds.length > 1 ? (props.setMultiMode ?? "intersection") : null,
-    setDifferenceBaseId: (selectedSetIds.length > 1 && props.setMultiMode === "difference") ? (props.setDifferenceBaseId ?? null) : null,
+    setMultiMode:
+      selectedSetIds.length > 1 ? (props.setMultiMode ?? "intersection") : null,
+    setDifferenceBaseId:
+      selectedSetIds.length > 1 && props.setMultiMode === "difference"
+        ? (props.setDifferenceBaseId ?? null)
+        : null,
     projectViewMode: props.projectViewMode ?? "global",
     selectedProjectId: props.selectedProjectId ?? null,
     searchQuery: props.searchQuery ?? "",
@@ -4352,7 +4465,10 @@ function _appendSelectionParams(params) {
         params.append("set_ids", String(setId));
       }
       params.append("set_mode", props.setMultiMode ?? "intersection");
-      if (props.setMultiMode === "difference" && props.setDifferenceBaseId != null) {
+      if (
+        props.setMultiMode === "difference" &&
+        props.setDifferenceBaseId != null
+      ) {
         params.append("base_set_id", String(props.setDifferenceBaseId));
       }
     } else if (primarySelectedSetId.value != null) {
@@ -6101,11 +6217,18 @@ const emptyStateDelayPassed = ref(false);
 let emptyStateDelayTimer = null;
 
 const showEmptyState = computed(() => {
+  if (props.folderScanning) return false;
   return (
     gridReady.value &&
     !imagesLoading.value &&
     filteredGridCount.value === 0 &&
     emptyStateDelayPassed.value
+  );
+});
+
+const showFolderScanningState = computed(() => {
+  return (
+    props.folderScanning && gridReady.value && filteredGridCount.value === 0
   );
 });
 
@@ -6172,18 +6295,37 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
     emptyStateDelayTimer = null;
   }
 
-  if (loading || count > 0) {
+  if (loading || count > 0 || props.folderScanning) {
     emptyStateDelayPassed.value = false;
     return;
   }
 
   emptyStateDelayPassed.value = false;
   emptyStateDelayTimer = setTimeout(() => {
-    if (!imagesLoading.value && filteredGridCount.value === 0) {
+    if (
+      !imagesLoading.value &&
+      filteredGridCount.value === 0 &&
+      !props.folderScanning
+    ) {
       emptyStateDelayPassed.value = true;
     }
   }, EMPTY_STATE_DELAY_MS);
 });
+
+// When scanning ends the grid will reload; reset the delay so the
+// empty state only shows after images have had a chance to arrive.
+watch(
+  () => props.folderScanning,
+  (scanning) => {
+    if (!scanning) {
+      if (emptyStateDelayTimer) {
+        clearTimeout(emptyStateDelayTimer);
+        emptyStateDelayTimer = null;
+      }
+      emptyStateDelayPassed.value = false;
+    }
+  },
+);
 
 const gridImagesToRender = computed(() => {
   if (!allGridImages.value) {
