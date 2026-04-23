@@ -66,6 +66,7 @@ const props = defineProps({
   scrapheapPicturesId: { type: String, required: true },
   selectedSet: { type: [Number, null], default: null },
   selectedSetIds: { type: Array, default: () => [] },
+  selectedCharacterIds: { type: Array, default: () => [] },
   searchQuery: { type: String, default: "" },
   selectedSort: { type: String, default: "" },
   selectedDescending: { type: Boolean, default: false },
@@ -177,6 +178,14 @@ const characterMenuPos = ref({ top: 0, left: 0 });
 const setMoveMenuOpen = ref(false);
 const setMoveMenuBtnRef = ref(null);
 const setMenuPos = ref({ top: 0, left: 0 });
+
+// --- Sidebar Context Menu ---
+const sidebarCtxVisible = ref(false);
+const sidebarCtxX = ref(0);
+const sidebarCtxY = ref(0);
+const sidebarCtxCharacter = ref(null); // { id, name } or null
+const sidebarCtxSet = ref(null);       // { id, name } or null
+const sidebarCtxDeleteIds = ref([]);   // character IDs to delete via context menu
 
 function openCharacterMoveMenu() {
   if (characterMoveMenuBtnRef.value) {
@@ -640,6 +649,17 @@ const selectedSetIdSet = computed(
 
 const hasSingleSelectedSet = computed(() => selectedSetIdSet.value.size === 1);
 
+const selectedCharacterIdSet = computed(
+  () =>
+    new Set(
+      (Array.isArray(props.selectedCharacterIds) ? props.selectedCharacterIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+);
+
+const hasSingleSelectedCharacter = computed(() => selectedCharacterIdSet.value.size === 1);
+
 const nonReferenceSets = computed(() =>
   pictureSets.value.filter((pset) => !pset.reference_character),
 );
@@ -830,14 +850,50 @@ function openSettingsDialog() {
   settingsDialogOpen.value = true;
 }
 
-function selectCharacter(id, label = null) {
+function selectCharacter(id, label = null, event = null) {
   clearCountNew(id);
-  if (id === props.allPicturesId) {
-    allPicturesLastMode.value = projectViewMode.value;
-    allPicturesLastProjectId.value = selectedProjectId.value;
+  const isSpecial =
+    id === props.allPicturesId ||
+    id === props.unassignedPicturesId ||
+    id === props.scrapheapPicturesId;
+  const isMultiToggle = !isSpecial && Boolean(event?.ctrlKey || event?.metaKey);
+
+  if (!isMultiToggle) {
+    if (id === props.allPicturesId) {
+      allPicturesLastMode.value = projectViewMode.value;
+      allPicturesLastProjectId.value = selectedProjectId.value;
+    }
+    emit("select-set", null);
+    emit("select-character", { id, label, ids: isSpecial ? [] : [Number(id)] });
+    return;
   }
-  emit("select-set", null);
-  emit("select-character", { id, label });
+
+  // Ctrl/Cmd-click: toggle this character in the multi-selection
+  const numericId = Number(id);
+  const currentIds = new Set(selectedCharacterIdSet.value);
+
+  if (currentIds.size === 0) {
+    // Nothing selected yet — treat as plain click
+    emit("select-set", null);
+    emit("select-character", { id, label, ids: [numericId] });
+    return;
+  }
+
+  if (currentIds.has(numericId)) {
+    currentIds.delete(numericId);
+  } else {
+    currentIds.add(numericId);
+  }
+
+  const nextIds = Array.from(currentIds).sort((a, b) => a - b);
+  if (!nextIds.length) {
+    emit("select-character", { id: props.allPicturesId, label: null, ids: [] });
+    return;
+  }
+
+  // Keep the primary view unchanged on ctrl-click
+  const primaryId = props.selectedCharacter ?? nextIds[0];
+  emit("select-character", { id: primaryId, label: null, ids: nextIds });
 }
 
 function selectSet(setId, label = null, event = null) {
@@ -892,6 +948,75 @@ async function deleteCharacter() {
   } catch (e) {
     setError(e.message);
   }
+}
+
+async function deleteCharacterById(id) {
+  const char = characters.value.find((c) => c.id === id);
+  if (!char) return;
+  if (!window.confirm(`Delete character "${char.name}"?`)) return;
+  try {
+    await apiClient.delete(`/characters/${id}`);
+    characters.value = characters.value.filter((c) => c.id !== id);
+    await fetchCharacters();
+  } catch (e) {
+    setError(e.message);
+  }
+}
+
+async function deleteCharactersByIds(ids) {
+  if (!ids?.length) return;
+  const single = ids.length === 1;
+  const charName = single ? characters.value.find((c) => Number(c.id) === ids[0])?.name : null;
+  const msg = single
+    ? `Delete character "${charName}"?`
+    : `Delete ${ids.length} characters?`;
+  if (!window.confirm(msg)) return;
+  try {
+    await Promise.all(ids.map((id) => apiClient.delete(`/characters/${id}`)));
+    characters.value = characters.value.filter((c) => !ids.includes(Number(c.id)));
+    await fetchCharacters();
+  } catch (e) {
+    setError(e.message);
+  }
+}
+
+async function deleteSetById(id) {
+  const set = pictureSets.value.find((s) => s.id === id);
+  if (!set) return;
+  if (!window.confirm(`Delete picture set "${set.name}"? This will unassign all their images.`)) return;
+  try {
+    await apiClient.delete(`${props.backendUrl}/picture_sets/${id}`);
+    emit("select-set", null);
+    await fetchPictureSets();
+    await fetchSidebarData();
+  } catch (e) {
+    alert("Failed to delete set: " + (e.message || e));
+  }
+}
+
+function openSidebarCtxMenu(type, item, event) {
+  if (type === "character") {
+    sidebarCtxCharacter.value = item;
+    sidebarCtxSet.value = null;
+    const numId = Number(item.id);
+    // If the right-clicked char is part of a multi-selection, offer bulk delete
+    if (selectedCharacterIdSet.value.has(numId) && selectedCharacterIdSet.value.size > 1) {
+      sidebarCtxDeleteIds.value = Array.from(selectedCharacterIdSet.value);
+    } else {
+      sidebarCtxDeleteIds.value = [numId];
+    }
+  } else {
+    sidebarCtxCharacter.value = null;
+    sidebarCtxSet.value = item;
+    sidebarCtxDeleteIds.value = [];
+  }
+  sidebarCtxX.value = event.clientX;
+  sidebarCtxY.value = event.clientY;
+  sidebarCtxVisible.value = true;
+}
+
+function closeSidebarCtxMenu() {
+  sidebarCtxVisible.value = false;
 }
 
 function createCharacter() {
@@ -1727,9 +1852,27 @@ onMounted(() => {
   };
 });
 
+function onSidebarCtxOutside(event) {
+  if (!sidebarCtxVisible.value) return;
+  closeSidebarCtxMenu();
+}
+
+function onSidebarCtxKeydown(event) {
+  if (!sidebarCtxVisible.value) return;
+  if (event.key === "Escape") {
+    event.stopImmediatePropagation();
+    closeSidebarCtxMenu();
+  }
+}
+
+document.addEventListener("mousedown", onSidebarCtxOutside);
+document.addEventListener("keydown", onSidebarCtxKeydown, true);
+
 let sidebarNoticeCleanup = null;
 onBeforeUnmount(() => {
   stopVersionCheckInterval();
+  document.removeEventListener("mousedown", onSidebarCtxOutside);
+  document.removeEventListener("keydown", onSidebarCtxKeydown, true);
   if (sidebarNoticeCleanup) {
     sidebarNoticeCleanup();
     sidebarNoticeCleanup = null;
@@ -2679,13 +2822,16 @@ defineExpose({
                       'sidebar-list-item',
                       {
                         active:
-                          selectedCharacter === char.id &&
+                          (selectedCharacterIdSet.size > 0
+                            ? selectedCharacterIdSet.has(char.id)
+                            : selectedCharacter === char.id) &&
                           !props.hasFolderFilter,
                         droppable: dragOverCharacter === char.id,
                       },
                     ]"
                     :ref="(el) => registerCharacterRef(char.id, el)"
-                    @click="selectCharacter(char.id, char.name || 'Character')"
+                    @click="selectCharacter(char.id, char.name || 'Character', $event)"
+                    @contextmenu.prevent="openSidebarCtxMenu('character', char, $event)"
                     @dragover.prevent="handleDragOverCharacter(char.id)"
                     @dragleave="handleDragLeaveCharacter"
                     @drop.prevent="
@@ -2890,6 +3036,7 @@ defineExpose({
                     @click="
                       selectSet(pset.id, pset.name || 'Picture Set', $event)
                     "
+                    @contextmenu.prevent="openSidebarCtxMenu('set', pset, $event)"
                     @dragover.prevent="dragOverSetItem(pset.id)"
                     @dragleave="dragLeaveSetItem"
                     @drop.prevent="handleDropOnSet(pset.id, $event)"
@@ -3022,6 +3169,52 @@ defineExpose({
   >
     {{ sidebarNotice }}
   </div>
+
+  <!-- ── Sidebar context menu ──────────────────────────────────── -->
+  <Teleport to="body">
+    <div
+      v-if="sidebarCtxVisible"
+      class="sidebar-ctx-menu"
+      :style="{ left: sidebarCtxX + 'px', top: sidebarCtxY + 'px' }"
+      @contextmenu.prevent
+      @mousedown.stop
+    >
+      <template v-if="sidebarCtxCharacter">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="sidebarCtxDeleteIds.length > 1"
+          :class="{ 'sidebar-ctx-item--disabled': sidebarCtxDeleteIds.length > 1 }"
+          @click="sidebarCtxDeleteIds.length === 1 && (openCharacterEditor(sidebarCtxCharacter), closeSidebarCtxMenu())"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-pencil</v-icon>
+          Edit
+        </button>
+        <button
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          @click="deleteCharactersByIds(sidebarCtxDeleteIds); closeSidebarCtxMenu()"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-trash-can-outline</v-icon>
+          {{ sidebarCtxDeleteIds.length > 1 ? `Delete ${sidebarCtxDeleteIds.length} characters` : 'Delete' }}
+        </button>
+      </template>
+      <template v-if="sidebarCtxSet">
+        <button
+          class="sidebar-ctx-item"
+          @click="openSetEditor(sidebarCtxSet); closeSidebarCtxMenu()"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-pencil</v-icon>
+          Edit
+        </button>
+        <button
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          @click="deleteSetById(sidebarCtxSet.id); closeSidebarCtxMenu()"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-trash-can-outline</v-icon>
+          Delete
+        </button>
+      </template>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -4536,5 +4729,53 @@ defineExpose({
 
 .sidebar-folder-error-row {
   color: rgba(var(--v-theme-error, 244, 67, 54), 0.8);
+}
+
+/* ── Sidebar context menu ────────────────────────────── */
+.sidebar-ctx-menu {
+  position: fixed;
+  z-index: 2000;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+  padding: 4px 0;
+  min-width: 140px;
+  user-select: none;
+}
+
+.sidebar-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 14px;
+  font-size: 13px;
+  color: rgb(var(--v-theme-on-surface));
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.sidebar-ctx-item:hover {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.sidebar-ctx-item--danger {
+  color: rgb(var(--v-theme-error));
+}
+
+.sidebar-ctx-item--disabled {
+  opacity: 0.38;
+  cursor: default;
+  pointer-events: none;
+}
+
+.sidebar-ctx-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
 }
 </style>

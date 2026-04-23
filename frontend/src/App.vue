@@ -33,6 +33,7 @@ const shortcutsDialogOpen = ref(false);
 const toolbarRef = ref(null);
 
 const selectedCharacter = ref(ALL_PICTURES_ID);
+const selectedCharacterIds = ref([]);
 const selectedSet = ref(null);
 const selectedSetIds = ref([]);
 const projectViewMode = ref("global"); // 'global' | 'project'
@@ -531,7 +532,7 @@ function clearSearchForCategoryChange() {
 
 async function handleSelectCharacter(payload) {
   selectedFolderFilter.value = null;
-  const { id: charId, label } = SelectionPayload(payload);
+  const { id: charId, label, ids } = SelectionPayload(payload);
   clearSearchForCategoryChange();
   if (charId == null) {
     selectedCharacter.value = null;
@@ -548,6 +549,7 @@ async function handleSelectCharacter(payload) {
     lastSelectedCharacterLabel.value = "Scrapheap";
   }
   selectedCharacter.value = charId;
+  selectedCharacterIds.value = ids.length ? ids : [];
   if (charId === ALL_PICTURES_ID) {
     refreshGridVersion();
   }
@@ -571,6 +573,7 @@ async function handleSelectSet(payload) {
     const fallbackLabel =
       projectViewMode.value === "project" ? "Project Pictures" : "All Pictures";
     selectedCharacter.value = ALL_PICTURES_ID;
+    selectedCharacterIds.value = [];
     lastSelectedCharacterLabel.value = fallbackLabel;
     selectedSet.value = null;
     selectedSetIds.value = [];
@@ -591,6 +594,7 @@ async function handleSelectSet(payload) {
 
 function handleSearchAllPictures() {
   selectedCharacter.value = ALL_PICTURES_ID;
+  selectedCharacterIds.value = [];
   selectedSet.value = null;
   selectedSetIds.value = [];
   selectedFolderFilter.value = null;
@@ -1325,6 +1329,7 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
             ref="sidebarRef"
             :collapsed="!sidebarVisible && !isMobile"
             :selectedCharacter="selectedCharacter"
+            :selectedCharacterIds="selectedCharacterIds"
             :allPicturesId="ALL_PICTURES_ID"
             :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
             :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
