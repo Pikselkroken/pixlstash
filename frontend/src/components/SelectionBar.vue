@@ -1371,7 +1371,27 @@ function openTagInput() {
   tagBtnRef.value?.click();
 }
 
-defineExpose({ openTagInput });
+function openPluginPanel() {
+  if (pluginMenuOpen.value) return;
+  // Ensure a plugin is selected (watcher is immediate, but guard anyway)
+  if (!selectedPluginName.value && pluginOptions.value.length) {
+    selectedPluginName.value = String(pluginOptions.value[0].name);
+  }
+  // nextTick lets any in-progress Vue render cycle complete (e.g. a context
+  // menu closing on the same tick) before we open the overlay.
+  nextTick(() => {
+    pluginMenuOpen.value = true;
+  });
+}
+
+function openComfyuiPanel() {
+  if (comfyuiMenuOpen.value) return;
+  nextTick(() => {
+    comfyuiMenuOpen.value = true;
+  });
+}
+
+defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 </script>
 
 <style scoped>

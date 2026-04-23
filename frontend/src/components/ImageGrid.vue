@@ -78,6 +78,38 @@
       @comfyui-run="handleComfyuiRun"
       @tags-applied="fetchAllGridImages({ force: true, showProgress: true })"
     />
+    <ImageGridContextMenu
+      :visible="contextMenuVisible"
+      :x="contextMenuX"
+      :y="contextMenuY"
+      :selected-image-ids="selectedImageIds"
+      :selected-media-support="selectedMediaSupport"
+      :selected-character="String(props.selectedCharacter)"
+      :selected-set="String(props.selectedSet)"
+      :selected-group-name="selectedGroupName"
+      :selected-sort="props.selectedSort"
+      :all-pictures-id="String(props.allPicturesId)"
+      :unassigned-pictures-id="String(props.unassignedPicturesId)"
+      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :backend-url="props.backendUrl"
+      :comfyui-configured="props.comfyuiConfigured"
+      :show-remove-from-stack="showRemoveFromStack"
+      :selected-multiple-stack-ids="selectedMultipleStackIds"
+      :available-plugins="availablePlugins"
+      @close="contextMenuVisible = false"
+      @added-to-set="handleOverlayAddedToSet"
+      @add-to-character="handleAddToCharacter"
+      @set-project="handleSetProjectForSelected"
+      @remove-from-stack="removeSelectedFromStack"
+      @dissolve-stacks="dissolveSelectedStacks"
+      @create-stack="createStackFromSelection"
+      @create-stacks-from-groups="createStacksFromSelectedGroups"
+      @remove-from-group="removeFromGroup"
+      @delete-selected="deleteSelected"
+      @open-tag-panel="handleContextMenuOpenTagPanel"
+      @open-plugin-panel="handleContextMenuOpenPluginPanel"
+      @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
+    />
     <EmptyScrapHeap
       v-if="showScrapheapBar"
       :visible="showScrapheapBar"
@@ -240,6 +272,7 @@
           @click="handleImageCardClick(img, img.idx, $event)"
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
+          @contextmenu.prevent="handleImageContextMenu(img, $event)"
         >
           <div
             :class="[
@@ -560,6 +593,7 @@ import ImageImporter from "./ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "./EmptyScrapHeap.vue";
 import SelectionBar from "./SelectionBar.vue";
+import ImageGridContextMenu from "./ImageGridContextMenu.vue";
 import SearchResultBar from "./SearchResultBar.vue";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import ComfyUiRunner from "./ComfyUiRunner.vue";
@@ -749,6 +783,9 @@ const prefetchedFullImageOrder = [];
 const gridContainer = ref(null);
 const scrollWrapper = ref(null);
 const selectionBarRef = ref(null);
+const contextMenuVisible = ref(false);
+const contextMenuX = ref(0);
+const contextMenuY = ref(0);
 
 // ============================================================
 // GRID DATA STATE
@@ -6350,6 +6387,31 @@ function handleGridBackgroundClick(e) {
     lastSelectedImageId = null;
     cursorIdx.value = null;
   }
+}
+
+// ── Context menu ─────────────────────────────────────────────────────────────
+
+function handleImageContextMenu(img, event) {
+  if (!img?.id) return;
+  if (!selectedImageIds.value.includes(img.id)) {
+    selectedImageIds.value = [img.id];
+    lastSelectedImageId = img.id;
+  }
+  contextMenuX.value = event.clientX;
+  contextMenuY.value = event.clientY;
+  contextMenuVisible.value = true;
+}
+
+function handleContextMenuOpenTagPanel() {
+  selectionBarRef.value?.openTagInput();
+}
+
+function handleContextMenuOpenPluginPanel() {
+  selectionBarRef.value?.openPluginPanel();
+}
+
+function handleContextMenuOpenComfyuiPanel() {
+  selectionBarRef.value?.openComfyuiPanel();
 }
 
 // ============================================================

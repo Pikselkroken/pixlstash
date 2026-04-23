@@ -1,5 +1,5 @@
 <template>
-  <div ref="rootRef" class="add-to-set" :class="{ open: menuOpen, disabled }">
+  <div ref="rootRef" class="add-to-set" :class="{ open: menuOpen, disabled, 'add-to-set--flyout': placement === 'right' }">
     <button
       class="add-to-set-btn"
       type="button"
@@ -12,7 +12,7 @@
     >
       <v-icon size="18">mdi-folder-plus</v-icon>
       <span class="add-to-set-label">{{ label }}</span>
-      <v-icon size="16">mdi-chevron-down</v-icon>
+      <v-icon size="16" class="add-to-set-chevron">{{ placement === 'right' ? 'mdi-chevron-right' : 'mdi-chevron-down' }}</v-icon>
     </button>
 
     <div class="add-to-set-menu" role="menu">
@@ -78,6 +78,7 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   label: { type: String, default: "Set" },
   includeDeletedMembers: { type: Boolean, default: false },
+  placement: { type: String, default: "bottom" },
 });
 
 const emit = defineEmits(["added"]);
@@ -449,5 +450,40 @@ watch(
   padding: 6px 8px;
   font-size: 0.72rem;
   color: rgba(255, 255, 255, 0.7);
+}
+
+/* ── Flyout (right-placement) mode ──────────────────────────── */
+.add-to-set--flyout {
+  width: 100%;
+  display: flex;
+}
+
+.add-to-set--flyout .add-to-set-btn {
+  width: 100%;
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  padding: 7px 14px;
+  border-radius: 0;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.add-to-set--flyout .add-to-set-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.add-to-set--flyout .add-to-set-chevron {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+.add-to-set--flyout .add-to-set-menu {
+  top: 0;
+  left: calc(100% + 4px);
+  transform: translateX(-6px);
+}
+
+.add-to-set--flyout.open .add-to-set-menu {
+  transform: translateX(0);
 }
 </style>

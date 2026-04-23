@@ -2,7 +2,7 @@
   <div
     ref="rootRef"
     class="add-to-character"
-    :class="{ open: menuOpen, disabled }"
+    :class="{ open: menuOpen, disabled, 'add-to-character--flyout': placement === 'right' }"
   >
     <button
       class="add-to-character-btn"
@@ -16,7 +16,7 @@
     >
       <v-icon size="18">mdi-account-plus</v-icon>
       <span class="add-to-character-label">{{ label }}</span>
-      <v-icon size="16">mdi-chevron-down</v-icon>
+      <v-icon size="16" class="add-to-character-chevron">{{ placement === 'right' ? 'mdi-chevron-right' : 'mdi-chevron-down' }}</v-icon>
     </button>
 
     <div class="add-to-character-menu" role="menu">
@@ -71,6 +71,7 @@ const props = defineProps({
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
   label: { type: String, default: "Person" },
+  placement: { type: String, default: "bottom" },
 });
 
 const emit = defineEmits(["added"]);
@@ -371,5 +372,40 @@ watch(
   padding: 6px 8px;
   font-size: 0.72rem;
   color: rgba(255, 255, 255, 0.7);
+}
+
+/* ── Flyout (right-placement) mode ──────────────────────────── */
+.add-to-character--flyout {
+  width: 100%;
+  display: flex;
+}
+
+.add-to-character--flyout .add-to-character-btn {
+  width: 100%;
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  padding: 7px 14px;
+  border-radius: 0;
+  font-size: 13px;
+  gap: 8px;
+}
+
+.add-to-character--flyout .add-to-character-btn:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.add-to-character--flyout .add-to-character-chevron {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+.add-to-character--flyout .add-to-character-menu {
+  top: 0;
+  left: calc(100% + 4px);
+  transform: translateX(-6px);
+}
+
+.add-to-character--flyout.open .add-to-character-menu {
+  transform: translateX(0);
 }
 </style>
