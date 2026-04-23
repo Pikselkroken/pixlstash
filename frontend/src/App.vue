@@ -36,6 +36,42 @@ const selectedCharacter = ref(ALL_PICTURES_ID);
 const selectedCharacterIds = ref([]);
 const selectedSet = ref(null);
 const selectedSetIds = ref([]);
+function loadMultiMode(key, fallback) {
+  try {
+    const v = window.sessionStorage?.getItem(key);
+    return ["union", "intersection", "difference", "xor"].includes(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveMultiMode(key, val) {
+  try {
+    window.sessionStorage?.setItem(key, val);
+  } catch {
+    // ignore
+  }
+}
+function loadBaseId(key) {
+  try {
+    const v = window.sessionStorage?.getItem(key);
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+function saveBaseId(key, val) {
+  try {
+    window.sessionStorage?.setItem(key, val != null ? String(val) : "");
+  } catch {
+    // ignore
+  }
+}
+const characterMultiMode = ref(loadMultiMode("pixlstash:characterMultiMode", "union"));
+const setMultiMode = ref(loadMultiMode("pixlstash:setMultiMode", "intersection"));
+const setDifferenceBaseId = ref(loadBaseId("pixlstash:setDifferenceBaseId"));
+const selectedSetNames = ref({});
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = unassigned in project mode
 const selectedFolderFilter = ref(null); // null | { referenceFolderId, pathPrefix, label }
@@ -80,10 +116,15 @@ const activeCategoryLabel = computed(() => {
     return selectedFolderFilter.value.label || "Folder";
   }
   if (selectedSetIds.value.length > 1) {
-    return `Set Overlap (${selectedSetIds.value.length})`;
+    const modeLabel = { union: "Union", intersection: "Overlap", difference: "Difference" }[setMultiMode.value] || "Multi";
+    return `Sets – ${modeLabel} (${selectedSetIds.value.length})`;
   }
   if (selectedSet.value) {
     return lastSelectedSetLabel.value || "Picture Set";
+  }
+  if (selectedCharacterIds.value.length > 1) {
+    const modeLabel = { union: "Union", intersection: "Overlap", difference: "Difference" }[characterMultiMode.value] || "Multi";
+    return `People – ${modeLabel} (${selectedCharacterIds.value.length})`;
   }
   if (selectedCharacter.value === ALL_PICTURES_ID) return "All Pictures";
   if (selectedCharacter.value === UNASSIGNED_PICTURES_ID)
@@ -550,6 +591,7 @@ async function handleSelectCharacter(payload) {
   }
   selectedCharacter.value = charId;
   selectedCharacterIds.value = ids.length ? ids : [];
+  if (ids.length <= 1) { characterMultiMode.value = "union"; saveMultiMode("pixlstash:characterMultiMode", "union"); }
   if (charId === ALL_PICTURES_ID) {
     refreshGridVersion();
   }
@@ -562,6 +604,7 @@ async function handleSelectCharacter(payload) {
 async function handleSelectSet(payload) {
   selectedFolderFilter.value = null;
   const { id: setId, label, ids } = SelectionPayload(payload);
+  const names = payload && payload.names ? payload.names : {};
   clearSearchForCategoryChange();
   const nextIds = ids.length
     ? ids
@@ -589,6 +632,13 @@ async function handleSelectSet(payload) {
   selectedSetIds.value = nextIds;
   selectedSet.value = nextIds[0];
   selectedCharacter.value = null; // Clear character selection
+  selectedCharacterIds.value = [];
+  selectedSetNames.value = names;
+  if (setDifferenceBaseId.value !== null && !nextIds.includes(setDifferenceBaseId.value)) {
+    setDifferenceBaseId.value = null;
+    saveBaseId("pixlstash:setDifferenceBaseId", null);
+  }
+  if (nextIds.length === 1) { setMultiMode.value = "intersection"; saveMultiMode("pixlstash:setMultiMode", "intersection"); setDifferenceBaseId.value = null; saveBaseId("pixlstash:setDifferenceBaseId", null); }
   closeSidebarIfMobile();
 }
 
@@ -608,6 +658,7 @@ function handleSelectFolder(payload) {
   }
   selectedFolderFilter.value = payload;
   selectedCharacter.value = ALL_PICTURES_ID;
+  selectedCharacterIds.value = [];
   selectedSet.value = null;
   selectedSetIds.value = [];
 }
@@ -1530,8 +1581,11 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 :sidebarVisible="sidebarVisible"
                 :backendUrl="BACKEND_URL"
                 :selectedCharacter="selectedCharacter"
+                :selectedCharacterIds="selectedCharacterIds"
+                :characterMultiMode="characterMultiMode"
                 :selectedSet="selectedSet"
                 :selectedSetIds="selectedSetIds"
+                :setMultiMode="setMultiMode"
                 :searchQuery="searchQuery"
                 :activeCategoryLabel="activeCategoryLabel"
                 :isAllPicturesActive="isAllPicturesActive"
@@ -1573,6 +1627,8 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
                 :projectViewMode="projectViewMode"
                 :selectedProjectId="selectedProjectId"
+                :setDifferenceBaseId="setDifferenceBaseId"
+                :selectedSetNames="selectedSetNames"
                 :referenceFolderIdFilter="
                   selectedFolderFilter?.referenceFolderId ?? null
                 "
@@ -1584,6 +1640,10 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
                 @refresh-sidebar="refreshSidebar"
                 @reset-to-all="handleResetToAll"
                 @update:stack-stats="handleStackStatsUpdate"
+                @clear-multi-selection="() => { selectedCharacterIds.length > 1 ? (selectedCharacter = ALL_PICTURES_ID, selectedCharacterIds = []) : (selectedSet = null, selectedSetIds = []) }"
+                @update:character-multi-mode="(v) => { characterMultiMode = v; saveMultiMode('pixlstash:characterMultiMode', v); }"
+                @update:set-multi-mode="(v) => { setMultiMode = v; saveMultiMode('pixlstash:setMultiMode', v); }"
+                @update:set-difference-base-id="(v) => { setDifferenceBaseId = v; saveBaseId('pixlstash:setDifferenceBaseId', v); }"
                 @import-started="isUploadInProgress = true"
                 @import-ended="isUploadInProgress = false"
               />
@@ -1592,8 +1652,12 @@ defineExpose({ sidebarVisible, mediaTypeFilter });
               :open="statsOpen"
               :backendUrl="BACKEND_URL"
               :selectedCharacter="selectedCharacter"
+              :selectedCharacterIds="selectedCharacterIds"
+              :characterMode="characterMultiMode"
               :selectedSet="selectedSet"
               :selectedSetIds="selectedSetIds"
+              :setMode="setMultiMode"
+              :setDifferenceBaseId="setDifferenceBaseId"
               :projectViewMode="projectViewMode"
               :selectedProjectId="selectedProjectId"
               :tagFilter="tagFilter"

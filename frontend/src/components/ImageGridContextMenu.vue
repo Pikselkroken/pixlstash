@@ -20,6 +20,7 @@
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           @added="onAction('add-to-character', $event)"
+          @removed="onAction('remove-from-character', $event)"
         />
         <AddToProjectControl
           placement="right"
@@ -145,6 +146,7 @@ const emit = defineEmits([
   "close",
   "added-to-set",
   "add-to-character",
+  "remove-from-character",
   "set-project",
   "remove-from-stack",
   "dissolve-stacks",
@@ -217,14 +219,7 @@ const hasSetSelectionContext = computed(() => {
 
 const showRemoveButton = computed(() => {
   if (!selectedCount.value) return false;
-  if (isScrapheapView.value) return true;
-  if (hasSetSelectionContext.value) return false;
-  const char = normalizedSelectedCharacter.value;
-  return (
-    !!char &&
-    char !== String(props.allPicturesId).toUpperCase() &&
-    char !== String(props.unassignedPicturesId).toUpperCase()
-  );
+  return isScrapheapView.value;
 });
 
 const removeButtonLabel = computed(() =>

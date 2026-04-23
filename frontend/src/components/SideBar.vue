@@ -906,7 +906,7 @@ function selectSet(setId, label = null, event = null) {
 
   const isMultiToggle = Boolean(event?.ctrlKey || event?.metaKey);
   if (!isMultiToggle) {
-    emit("select-set", { id: numericSetId, label, ids: [numericSetId] });
+    emit("select-set", { id: numericSetId, label, ids: [numericSetId], names: { [numericSetId]: label || String(numericSetId) } });
     return;
   }
 
@@ -922,10 +922,16 @@ function selectSet(setId, label = null, event = null) {
     return;
   }
   const primarySet = pictureSets.value.find((pset) => pset.id === ids[0]);
+  const setNames = {};
+  for (const sid of ids) {
+    const found = pictureSets.value.find((p) => p.id === sid);
+    if (found) setNames[sid] = found.name;
+  }
   emit("select-set", {
     id: ids[0],
     label: primarySet?.name || label,
     ids,
+    names: setNames,
   });
 }
 
@@ -2680,8 +2686,16 @@ defineExpose({
                 People
                 <span class="sidebar-header-spacer"></span>
                 <div class="sidebar-header-actions" @click.stop>
+                  <button
+                    v-if="selectedCharacterIdSet.size > 1"
+                    class="clear-selection-inline"
+                    @click.stop="selectCharacter(props.allPicturesId, 'All Pictures')"
+                    title="Clear character selection"
+                  >
+                    <v-icon size="16">mdi-selection-off</v-icon>
+                  </button>
                   <v-icon
-                    v-if="selectedCharacterObj"
+                    v-if="selectedCharacterObj && hasSingleSelectedCharacter"
                     class="edit-character-inline"
                     @click.stop="openCharacterEditor(selectedCharacterObj)"
                     title="Edit selected character"
@@ -2909,9 +2923,17 @@ defineExpose({
                     ? "mdi-chevron-right"
                     : "mdi-chevron-down"
                 }}</v-icon>
-                Picture Sets
+                Sets
                 <span class="sidebar-header-spacer"></span>
                 <div class="sidebar-header-actions">
+                  <button
+                    v-if="selectedSetIdSet.size > 1"
+                    class="clear-selection-inline"
+                    @click.stop="emit('select-set', null)"
+                    title="Clear set selection"
+                  >
+                    <v-icon size="16">mdi-selection-off</v-icon>
+                  </button>
                   <v-icon
                     v-if="selectedSetObj && hasSingleSelectedSet"
                     class="edit-set-inline"
@@ -4092,8 +4114,8 @@ defineExpose({
 }
 
 .sidebar-header-actions .v-icon {
-  min-width: 36px;
-  min-height: 36px;
+  min-width: 26px;
+  min-height: 26px;
   justify-content: center;
   text-align: center;
   color: rgb(var(--v-theme-sidebar-text));
@@ -4372,8 +4394,8 @@ defineExpose({
   cursor: pointer;
   background: transparent;
   border-radius: 8px;
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4384,6 +4406,27 @@ defineExpose({
   background: rgb(var(--v-theme-accent));
 }
 
+.clear-selection-inline {
+  color: rgb(var(--v-theme-primary)) !important;
+  font-size: 1rem;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  padding: 0;
+  border-radius: 8px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 26px;
+  transition: background 0.2s;
+}
+
+.clear-selection-inline:hover {
+  background: rgba(var(--v-theme-primary), 0.18);
+}
+
 .edit-character-inline,
 .edit-set-inline {
   color: rgb(var(--v-theme-sidebar-text)) !important;
@@ -4391,12 +4434,12 @@ defineExpose({
   cursor: pointer;
   background: transparent;
   border-radius: 8px;
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 32px;
+  flex: 0 0 26px;
   transition:
     background 0.2s,
     color 0.2s;
@@ -4494,12 +4537,12 @@ defineExpose({
   cursor: pointer;
   background: transparent;
   border-radius: 8px;
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 32px;
+  flex: 0 0 26px;
   transition:
     background 0.2s,
     color 0.2s;
@@ -4596,9 +4639,10 @@ defineExpose({
   .add-character-inline,
   .delete-character-inline,
   .edit-character-inline,
-  .edit-set-inline {
-    width: 44px;
-    height: 44px;
+  .edit-set-inline,
+  .clear-selection-inline {
+    width: 36px;
+    height: 36px;
   }
 
   .sidebar-header-actions .v-icon {

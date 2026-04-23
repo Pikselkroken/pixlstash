@@ -6,9 +6,12 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
   // Filter props — mirrors the same params ImageGrid uses for fetching pictures
   selectedCharacter: { type: [String, Number, null], default: null },
+  selectedCharacterIds: { type: Array, default: () => [] },
+  characterMode: { type: String, default: "union" },
   selectedSet: { type: [Number, String, null], default: null },
   selectedSetIds: { type: Array, default: () => [] },
   setMode: { type: String, default: "union" },
+  setDifferenceBaseId: { type: Number, default: null },
   projectViewMode: { type: String, default: null },
   selectedProjectId: { type: [Number, String, null], default: null },
   tagFilter: { type: Array, default: () => [] },
@@ -142,7 +145,10 @@ function buildQueryParams() {
   if (hasSetSelection) {
     if (isSetOverlap) {
       for (const id of normalizedSetIds) params.append("set_ids", String(id));
-      params.append("set_mode", "intersection");
+      params.append("set_mode", props.setMode || "intersection");
+      if (props.setMode === "difference" && props.setDifferenceBaseId != null) {
+        params.append("base_set_id", String(props.setDifferenceBaseId));
+      }
     } else if (primarySetId != null) {
       params.append("set_id", String(primarySetId));
     }
@@ -159,7 +165,15 @@ function buildQueryParams() {
     props.selectedCharacter !== "" &&
     props.selectedCharacter !== props.allPicturesId
   ) {
-    params.append("character_id", props.selectedCharacter);
+    const normalizedCharIds = Array.isArray(props.selectedCharacterIds)
+      ? props.selectedCharacterIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+      : [];
+    if (normalizedCharIds.length > 1) {
+      for (const id of normalizedCharIds) params.append("character_ids", String(id));
+      params.append("character_mode", props.characterMode || "union");
+    } else {
+      params.append("character_id", props.selectedCharacter);
+    }
     if (props.projectViewMode === "project") {
       params.append(
         "project_id",
@@ -272,8 +286,12 @@ async function fetchConf() {
 watch(
   [
     () => props.selectedCharacter,
+    () => props.selectedCharacterIds,
+    () => props.characterMode,
     () => props.selectedSet,
     () => props.selectedSetIds,
+    () => props.setMode,
+    () => props.setDifferenceBaseId,
     () => props.projectViewMode,
     () => props.selectedProjectId,
     () => props.tagFilter,

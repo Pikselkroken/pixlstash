@@ -45,13 +45,25 @@
         :key="character.id"
         :class="[
           'add-to-character-item',
-          { 'add-to-character-item--disabled': isCharacterDisabled(character) },
+          {
+            'add-to-character-item--disabled': isCharacterDisabled(character),
+            'add-to-character-item--checked': getCharacterState(character) === 'checked',
+          },
         ]"
         type="button"
         role="menuitem"
         :disabled="isCharacterDisabled(character)"
-        @click.stop="addToCharacter(character)"
+        @click.stop="toggleCharacterMembership(character)"
       >
+        <v-icon size="16" class="add-to-character-item-check">
+          {{
+            getCharacterState(character) === "checked"
+              ? "mdi-checkbox-marked"
+              : getCharacterState(character) === "partial"
+                ? "mdi-minus-box-outline"
+                : "mdi-checkbox-blank-outline"
+          }}
+        </v-icon>
         <span class="add-to-character-item-name">{{ character.name }}</span>
       </button>
 
@@ -74,7 +86,7 @@ const props = defineProps({
   placement: { type: String, default: "bottom" },
 });
 
-const emit = defineEmits(["added"]);
+const emit = defineEmits(["added", "removed"]);
 
 const rootRef = ref(null);
 const searchInputRef = ref(null);
@@ -84,6 +96,7 @@ const isLoading = ref(false);
 const characters = ref([]);
 const statusMessage = ref("");
 const characterMembersById = ref({});
+const picturesWithFaces = ref(new Set()); // picture IDs that have ≥1 face record
 let statusTimer = null;
 
 const normalisedPictureIds = computed(() =>
@@ -110,12 +123,24 @@ const filteredCharacters = computed(() => {
   );
 });
 
-function isCharacterDisabled(character) {
+function getCharacterState(character) {
   const ids = normalisedPictureIds.value;
-  if (!ids.length) return true;
+  if (!ids.length) return "unchecked";
   const members = characterMembersById.value?.[character.id];
-  if (!members || members.size === 0) return false;
-  return ids.every((id) => members.has(String(id)));
+
+  // Only count pictures that have at least one face record; faceless pictures
+  // can't be assigned via face detection so they don't affect check state.
+  const facedIds = ids.filter((id) => picturesWithFaces.value.has(String(id)));
+  if (!facedIds.length) return "unchecked";
+
+  const matched = facedIds.filter((id) => members?.has(String(id))).length;
+  if (matched === 0) return "unchecked";
+  if (matched === facedIds.length) return "checked";
+  return "partial";
+}
+
+function isCharacterDisabled(character) {
+  return normalisedPictureIds.value.length === 0;
 }
 
 function toggleMenu() {
@@ -169,6 +194,7 @@ async function fetchCharacterMembers(list) {
   const ids = normalisedPictureIds.value;
   if (!props.backendUrl || !ids.length) {
     characterMembersById.value = {};
+    picturesWithFaces.value = new Set();
     return;
   }
   const pictureEntries = await Promise.all(
@@ -188,12 +214,15 @@ async function fetchCharacterMembers(list) {
     }),
   );
 
+  const facePictures = new Set();
+
   const next = {};
   list.forEach((character) => {
     next[character.id] = new Set();
   });
 
   pictureEntries.forEach(([pictureId, faces]) => {
+    if (faces.length > 0) facePictures.add(String(pictureId));
     faces.forEach((face) => {
       if (face?.character_id == null) return;
       const key = face.character_id;
@@ -204,39 +233,57 @@ async function fetchCharacterMembers(list) {
     });
   });
 
+  picturesWithFaces.value = facePictures;
   characterMembersById.value = next;
 }
 
-async function addToCharacter(character) {
-  if (!character?.id) return;
-  if (isCharacterDisabled(character)) return;
+async function toggleCharacterMembership(character) {
+  if (!character?.id || isCharacterDisabled(character)) return;
   const ids = normalisedPictureIds.value;
   if (!ids.length) return;
-  const members = characterMembersById.value?.[character.id];
-  const idsToAdd = members ? ids.filter((id) => !members.has(String(id))) : ids;
-  if (!idsToAdd.length) {
-    statusMessage.value = "Already assigned";
-    return;
-  }
-  statusMessage.value = "Assigning...";
-  try {
-    await apiClient.post(resolveUrl(`/characters/${character.id}/faces`), {
-      picture_ids: idsToAdd,
-    });
-    statusMessage.value = `Assigned to ${character.name}`;
-    emit("added", { characterId: character.id, pictureIds: ids });
-    if (members) {
-      idsToAdd.forEach((id) => members.add(String(id)));
+  const state = getCharacterState(character);
+
+  if (state === "checked") {
+    statusMessage.value = "Removing...";
+    try {
+      await apiClient.delete(resolveUrl(`/characters/${character.id}/faces`), {
+        data: { picture_ids: ids },
+      });
+      statusMessage.value = `Removed from ${character.name}`;
+      emit("removed", { characterId: character.id, pictureIds: ids });
+      const members = characterMembersById.value?.[character.id];
+      if (members) ids.forEach((id) => members.delete(String(id)));
+      closeMenu();
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.message || String(e);
+      statusMessage.value = detail ? String(detail) : "Failed to remove";
     }
-    closeMenu();
-  } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
-    statusMessage.value = detail ? String(detail) : "Failed to assign";
+  } else {
+    const members = characterMembersById.value?.[character.id];
+    const idsToAdd = members ? ids.filter((id) => !members.has(String(id))) : ids;
+    if (!idsToAdd.length) return;
+    statusMessage.value = "Assigning...";
+    try {
+      await apiClient.post(resolveUrl(`/characters/${character.id}/faces`), {
+        picture_ids: idsToAdd,
+      });
+      statusMessage.value = `Assigned to ${character.name}`;
+      emit("added", { characterId: character.id, pictureIds: ids });
+      // Only update the optimistic member cache for pictures that actually have
+      // faces — faceless pictures can't be reflected in characterMembersById.
+      if (members) {
+        idsToAdd
+          .filter((id) => picturesWithFaces.value.has(String(id)))
+          .forEach((id) => members.add(String(id)));
+      }
+      closeMenu();
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.message || String(e);
+      statusMessage.value = detail ? String(detail) : "Failed to assign";
+    }
   }
   if (statusTimer) clearTimeout(statusTimer);
-  statusTimer = window.setTimeout(() => {
-    statusMessage.value = "";
-  }, 2000);
+  statusTimer = window.setTimeout(() => { statusMessage.value = ""; }, 2000);
 }
 
 onBeforeUnmount(() => {
@@ -251,6 +298,7 @@ watch(
       fetchCharacters();
     } else {
       characterMembersById.value = {};
+      picturesWithFaces.value = new Set();
     }
   },
 );
@@ -347,8 +395,17 @@ watch(
   text-align: left;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   cursor: pointer;
+}
+
+.add-to-character-item-check {
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  flex-shrink: 0;
+}
+
+.add-to-character-item--checked .add-to-character-item-check {
+  color: rgb(var(--v-theme-primary));
 }
 
 .add-to-character-item:hover {

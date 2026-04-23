@@ -170,7 +170,7 @@ def _project_unassigned_clause(picture_model=Picture):
 
 def _normalize_set_mode(value: str | None) -> str:
     mode = (value or "union").strip().lower()
-    if mode not in {"union", "intersection"}:
+    if mode not in {"union", "intersection", "difference", "xor"}:
         raise HTTPException(status_code=400, detail="Invalid set_mode")
     return mode
 
@@ -234,6 +234,25 @@ def _fetch_set_candidate_ids(
             else:
                 intersection &= current
         return intersection or set()
+
+    if set_mode == "difference":
+        if not set_ids:
+            return set()
+        first_set = members_by_set.get(set_ids[0], set())
+        rest: set[int] = set()
+        for sid in set_ids[1:]:
+            rest |= members_by_set.get(sid, set())
+        return first_set - rest
+
+    if set_mode == "xor":
+        xor_union: set[int] = set()
+        for sid in set_ids:
+            xor_union |= members_by_set.get(sid, set())
+        xor_intersection: set[int] | None = None
+        for sid in set_ids:
+            cur = members_by_set.get(sid, set())
+            xor_intersection = set(cur) if xor_intersection is None else xor_intersection & cur
+        return xor_union - (xor_intersection or set())
 
     union_ids: set[int] = set()
     for sid in set_ids:
@@ -490,6 +509,9 @@ def _select_pictures_for_listing(
             set_ids = request.query_params.getlist("set_ids")
             if set_ids:
                 query_params["set_ids"] = set_ids
+            character_ids_raw = request.query_params.getlist("character_ids")
+            if character_ids_raw:
+                query_params["character_ids"] = character_ids_raw
             face_filter_param = request.query_params.get("face_filter")
             if face_filter_param in ("with_face", "without_face"):
                 query_params["face_filter"] = face_filter_param
@@ -513,9 +535,29 @@ def _select_pictures_for_listing(
     offset = int(query_params.pop("offset", offset))
     limit = int(query_params.pop("limit", limit))
     character_id = _character_id(query_params.pop("character_id", None))
+    _character_ids_raw = query_params.pop("character_ids", None)
+    character_id_list: list[int] = []
+    if _character_ids_raw:
+        for _v in (
+            _character_ids_raw
+            if isinstance(_character_ids_raw, list)
+            else [_character_ids_raw]
+        ):
+            try:
+                _cid = int(_v)
+                if _cid > 0:
+                    character_id_list.append(_cid)
+            except (TypeError, ValueError):
+                pass
+        character_id_list = sorted(set(character_id_list))
+    character_mode_raw = query_params.pop("character_mode", "union")
+    character_mode = (character_mode_raw or "union").strip().lower()
+    if character_mode not in {"union", "intersection", "difference", "xor"}:
+        character_mode = "union"
     set_id_raw = query_params.pop("set_id", None)
     set_ids_raw = query_params.pop("set_ids", None)
     set_mode_raw = query_params.pop("set_mode", "union")
+    base_set_id_raw = query_params.pop("base_set_id", None)
     reference_character_id = query_params.pop("reference_character_id", None)
     min_score_raw = query_params.pop("min_score", None)
     min_score = int(min_score_raw) if min_score_raw is not None else None
@@ -532,6 +574,13 @@ def _select_pictures_for_listing(
         set_id_value=set_id_raw,
         set_ids_values=set_ids_raw if isinstance(set_ids_raw, list) else None,
     )
+    if set_mode == "difference" and base_set_id_raw is not None:
+        try:
+            _base_id = int(base_set_id_raw)
+            if _base_id in set_filter_ids:
+                set_filter_ids = [_base_id] + [s for s in set_filter_ids if s != _base_id]
+        except (TypeError, ValueError):
+            pass
 
     def fetch_set_candidate_ids(session: Session):
         return _fetch_set_candidate_ids(
@@ -983,6 +1032,89 @@ def _select_pictures_for_listing(
 
                         picture_ids = server.vault.db.run_task(
                             _get_project_member_ids, picture_ids, proj_id_int
+                        )
+
+            if not picture_ids:
+                return []
+            query_params["id"] = picture_ids
+        elif character_id_list:
+
+            def get_picture_ids_for_characters(session, ids, mode):
+                # Fetch picture_ids keyed by character for all chars
+                rows = session.exec(
+                    select(Face.character_id, Face.picture_id).where(
+                        Face.character_id.in_(ids)
+                    )
+                ).all()
+                members_by_char: dict[int, set[int]] = {cid: set() for cid in ids}
+                for cid, pid in rows:
+                    members_by_char.setdefault(int(cid), set()).add(int(pid))
+                if mode == "intersection":
+                    result: set[int] | None = None
+                    for cid in ids:
+                        current = members_by_char.get(cid, set())
+                        result = set(current) if result is None else result & current
+                    return list(result or set())
+                if mode == "difference":
+                    first = members_by_char.get(ids[0], set())
+                    rest: set[int] = set()
+                    for cid in ids[1:]:
+                        rest |= members_by_char.get(cid, set())
+                    return list(first - rest)
+                if mode == "xor":
+                    xor_u: set[int] = set()
+                    for cid in ids:
+                        xor_u |= members_by_char.get(cid, set())
+                    xor_i: set[int] | None = None
+                    for cid in ids:
+                        cur = members_by_char.get(cid, set())
+                        xor_i = set(cur) if xor_i is None else xor_i & cur
+                    return list(xor_u - (xor_i or set()))
+                # union
+                union: set[int] = set()
+                for cid in ids:
+                    union |= members_by_char.get(cid, set())
+                return list(union)
+
+            picture_ids = server.vault.db.run_task(
+                get_picture_ids_for_characters, character_id_list, character_mode
+            )
+            if not picture_ids:
+                return []
+
+            if project_id_raw is not None:
+                if project_id_raw == "UNASSIGNED":
+
+                    def _get_project_unassigned_ids_multi(session, ids):
+                        rows = session.exec(
+                            select(Picture.id).where(
+                                Picture.id.in_(ids),
+                                _project_unassigned_clause(Picture),
+                            )
+                        ).all()
+                        return list(rows)
+
+                    picture_ids = server.vault.db.run_task(
+                        _get_project_unassigned_ids_multi, picture_ids
+                    )
+                else:
+                    try:
+                        proj_id_int = int(project_id_raw)
+                    except (TypeError, ValueError):
+                        proj_id_int = None
+                    if proj_id_int is not None:
+
+                        def _get_project_member_ids_multi(session, ids, pid):
+                            rows = session.exec(
+                                select(PictureProjectMember.picture_id).where(
+                                    PictureProjectMember.picture_id.in_(ids),
+                                    PictureProjectMember.project_id == pid,
+                                )
+                            ).all()
+                            return list(rows)
+
+                        picture_ids = server.vault.db.run_task(
+                            _get_project_member_ids_multi, picture_ids, proj_id_int
                         )
 
             if not picture_ids:
@@ -2322,6 +2454,7 @@ def create_router(server) -> APIRouter:
             set_id = query_params.pop("set_id", None)
             set_ids = request.query_params.getlist("set_ids")
             set_mode = query_params.pop("set_mode", "union")
+            base_set_id_raw = query_params.pop("base_set_id", None)
             project_id = query_params.pop("project_id", None)
             sort = query_params.pop("sort", None)
             desc_val = query_params.pop("descending", descending)
@@ -2350,6 +2483,13 @@ def create_router(server) -> APIRouter:
             set_id_value=set_id,
             set_ids_values=set_ids,
         )
+        if normalized_set_mode == "difference" and base_set_id_raw is not None:
+            try:
+                _base_id = int(base_set_id_raw)
+                if _base_id in set_filter_ids:
+                    set_filter_ids = [_base_id] + [s for s in set_filter_ids if s != _base_id]
+            except (TypeError, ValueError):
+                pass
 
         if sort:
             try:
@@ -2419,6 +2559,78 @@ def create_router(server) -> APIRouter:
                 candidate_ids = set(
                     server.vault.db.run_immediate_read_task(
                         fetch_character_ids, int(character_id)
+                    )
+                )
+        else:
+            search_character_ids_raw = request.query_params.getlist("character_ids")
+            search_character_id_list = []
+            for _v in search_character_ids_raw:
+                try:
+                    _cid = int(_v)
+                    if _cid > 0:
+                        search_character_id_list.append(_cid)
+                except (TypeError, ValueError):
+                    pass
+            if search_character_id_list:
+                search_character_mode_raw = query_params.get("character_mode", "union")
+                search_character_mode = (
+                    (search_character_mode_raw or "union").strip().lower()
+                )
+                if search_character_mode not in {"union", "intersection", "difference", "xor"}:
+                    search_character_mode = "union"
+
+                def fetch_character_ids_by_mode(session, ids, mode):
+                    rows = session.exec(
+                        select(Face.character_id, Face.picture_id).where(
+                            Face.character_id.in_(ids)
+                        )
+                    ).all()
+                    members_by_char: dict[int, set[int]] = {cid: set() for cid in ids}
+                    for cid, pid in rows:
+                        members_by_char.setdefault(int(cid), set()).add(int(pid))
+                    if mode == "intersection":
+                        result: set[int] | None = None
+                        for cid in ids:
+                            current = members_by_char.get(cid, set())
+                            result = (
+                                set(current) if result is None else result & current
+                            )
+                        candidate_pids = list(result or set())
+                    elif mode == "difference":
+                        first = members_by_char.get(ids[0], set())
+                        rest_set: set[int] = set()
+                        for cid in ids[1:]:
+                            rest_set |= members_by_char.get(cid, set())
+                        candidate_pids = list(first - rest_set)
+                    elif mode == "xor":
+                        xor_u: set[int] = set()
+                        for cid in ids:
+                            xor_u |= members_by_char.get(cid, set())
+                        xor_i: set[int] | None = None
+                        for cid in ids:
+                            cur = members_by_char.get(cid, set())
+                            xor_i = set(cur) if xor_i is None else xor_i & cur
+                        candidate_pids = list(xor_u - (xor_i or set()))
+                    else:
+                        union_pids: set[int] = set()
+                        for cid in ids:
+                            union_pids |= members_by_char.get(cid, set())
+                        candidate_pids = list(union_pids)
+                    if not candidate_pids:
+                        return []
+                    rows2 = session.exec(
+                        select(Picture.id).where(
+                            Picture.id.in_(candidate_pids),
+                            Picture.deleted.is_(False),
+                        )
+                    ).all()
+                    return list(rows2)
+
+                candidate_ids = set(
+                    server.vault.db.run_immediate_read_task(
+                        fetch_character_ids_by_mode,
+                        search_character_id_list,
+                        search_character_mode,
                     )
                 )
 

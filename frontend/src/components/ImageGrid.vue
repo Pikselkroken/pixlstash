@@ -70,6 +70,7 @@
       @delete-selected="deleteSelected"
       @set-project="handleSetProjectForSelected"
       @add-to-character="handleAddToCharacter"
+      @remove-from-character="handleRemoveFromCharacter"
       @create-stack="createStackFromSelection"
       @remove-from-stack="removeSelectedFromStack"
       @dissolve-stacks="dissolveSelectedStacks"
@@ -99,6 +100,7 @@
       @close="contextMenuVisible = false"
       @added-to-set="handleOverlayAddedToSet"
       @add-to-character="handleAddToCharacter"
+      @remove-from-character="handleRemoveFromCharacter"
       @set-project="handleSetProjectForSelected"
       @remove-from-stack="removeSelectedFromStack"
       @dissolve-stacks="dissolveSelectedStacks"
@@ -118,16 +120,51 @@
       @empty-scrapheap="confirmEmptyScrapheap"
       @restore-scrapheap="confirmRestoreScrapheap"
     />
-    <div v-if="isSetOverlapView" class="set-overlap-status-bar">
-      <div class="set-overlap-status-bar__main">
-        <v-icon size="20" class="set-overlap-status-bar__icon"
-          >mdi-set-center</v-icon
+    <div
+      v-if="isMultiCharacterView || isSetOverlapView"
+      class="multi-select-toolbar"
+    >
+      <select
+        class="multi-select-toolbar__mode"
+        :value="isMultiCharacterView ? props.characterMultiMode : props.setMultiMode"
+        @change="(e) => isMultiCharacterView
+          ? emit('update:character-multi-mode', e.target.value)
+          : emit('update:set-multi-mode', e.target.value)"
+      >
+        <option value="union">Union</option>
+        <option value="intersection">Overlap</option>
+        <option value="difference">Difference</option>
+        <option value="xor">Unique (XOR)</option>
+      </select>
+      <template v-if="!isMultiCharacterView && props.setMultiMode === 'difference'">
+        <span class="multi-select-toolbar__separator">|</span>
+        <label class="multi-select-toolbar__base-label">Base:</label>
+        <select
+          class="multi-select-toolbar__base"
+          :value="props.setDifferenceBaseId ?? normalizedSelectedSetIds[0]"
+          @change="(e) => emit('update:set-difference-base-id', Number(e.target.value))"
         >
-        <span class="set-overlap-status-bar__text">
-          Overlap mode: {{ normalizedSelectedSetIds.length }} sets selected.
-          Overlap can be cleared with the Set menu once you've selected images.
-        </span>
-      </div>
+          <option
+            v-for="sid in normalizedSelectedSetIds"
+            :key="sid"
+            :value="sid"
+          >{{ props.selectedSetNames[sid] || `Set ${sid}` }}</option>
+        </select>
+      </template>
+      <span class="multi-select-toolbar__label">
+        {{ isMultiCharacterView
+          ? `${normalizedSelectedCharacterIds.length} people selected`
+          : `${normalizedSelectedSetIds.length} sets selected` }}
+      </span>
+      <span class="multi-select-toolbar__spacer"></span>
+      <button
+        class="multi-select-toolbar__clear"
+        title="Clear selection"
+        @click="emit('clear-multi-selection')"
+      >
+        <v-icon size="16">mdi-selection-off</v-icon>
+        Clear
+      </button>
     </div>
     <ProgressOverlay
       :visible="exportProgress.visible"
@@ -649,6 +686,10 @@ const emit = defineEmits([
   "update:stack-stats",
   "import-started",
   "import-ended",
+  "clear-multi-selection",
+  "update:character-multi-mode",
+  "update:set-multi-mode",
+  "update:set-difference-base-id",
 ]);
 
 // Props
@@ -709,6 +750,11 @@ const props = defineProps({
   selectedProjectId: { type: Number, default: null },
   referenceFolderIdFilter: { type: Number, default: null },
   filePathPrefixFilter: { type: String, default: null },
+  selectedCharacterIds: { type: Array, default: () => [] },
+  characterMultiMode: { type: String, default: "union" },
+  setMultiMode: { type: String, default: "intersection" },
+  setDifferenceBaseId: { type: Number, default: null },
+  selectedSetNames: { type: Object, default: () => ({}) },
 });
 
 // ============================================================
@@ -746,6 +792,19 @@ const primarySelectedSetId = computed(() =>
   normalizedSelectedSetIds.value.length
     ? normalizedSelectedSetIds.value[0]
     : null,
+);
+
+const normalizedSelectedCharacterIds = computed(() => {
+  const ids = Array.isArray(props.selectedCharacterIds)
+    ? props.selectedCharacterIds
+    : [];
+  return ids
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .sort((a, b) => a - b);
+});
+const isMultiCharacterView = computed(
+  () => normalizedSelectedCharacterIds.value.length > 1,
 );
 
 // ============================================================
@@ -2450,6 +2509,28 @@ function handleAddToCharacter(payload) {
     props.selectedCharacter === props.unassignedPicturesId &&
     !hasSetSelection.value
   ) {
+    removeImagesById(pictureIds);
+    selectedImageIds.value = [];
+    clearFaceSelection();
+    lastSelectedImageId = null;
+    updateVisibleThumbnails();
+  }
+  emit("refresh-sidebar");
+}
+
+function handleRemoveFromCharacter(payload) {
+  const pictureIds = Array.isArray(payload?.pictureIds) ? payload.pictureIds : [];
+  if (!pictureIds.length) return;
+  const removedCharId = payload?.characterId;
+  const currentChar = props.selectedCharacter;
+  const isInRemovedCharView =
+    removedCharId != null &&
+    currentChar != null &&
+    String(currentChar) === String(removedCharId) &&
+    currentChar !== props.allPicturesId &&
+    currentChar !== props.unassignedPicturesId &&
+    currentChar !== props.scrapheapPicturesId;
+  if (isInRemovedCharView) {
     removeImagesById(pictureIds);
     selectedImageIds.value = [];
     clearFaceSelection();
@@ -4238,11 +4319,17 @@ function buildGridFetchKey() {
         .filter((id) => Number.isFinite(id) && id > 0)
         .sort((a, b) => a - b)
     : [];
+  const selectedCharacterIds = normalizedSelectedCharacterIds.value;
   return JSON.stringify({
     selectedCharacter: props.selectedCharacter ?? null,
+    selectedCharacterIds,
+    isMultiCharacterView: selectedCharacterIds.length > 1,
+    characterMultiMode: selectedCharacterIds.length > 1 ? (props.characterMultiMode ?? "union") : null,
     selectedSet: props.selectedSet ?? null,
     selectedSetIds,
     isSetOverlapView: selectedSetIds.length > 1,
+    setMultiMode: selectedSetIds.length > 1 ? (props.setMultiMode ?? "intersection") : null,
+    setDifferenceBaseId: (selectedSetIds.length > 1 && props.setMultiMode === "difference") ? (props.setDifferenceBaseId ?? null) : null,
     projectViewMode: props.projectViewMode ?? "global",
     selectedProjectId: props.selectedProjectId ?? null,
     searchQuery: props.searchQuery ?? "",
@@ -4264,10 +4351,26 @@ function _appendSelectionParams(params) {
       for (const setId of normalizedSelectedSetIds.value) {
         params.append("set_ids", String(setId));
       }
-      params.append("set_mode", "intersection");
+      params.append("set_mode", props.setMultiMode ?? "intersection");
+      if (props.setMultiMode === "difference" && props.setDifferenceBaseId != null) {
+        params.append("base_set_id", String(props.setDifferenceBaseId));
+      }
     } else if (primarySelectedSetId.value != null) {
       params.append("set_id", String(primarySelectedSetId.value));
     }
+    if (props.projectViewMode === "project") {
+      params.append(
+        "project_id",
+        props.selectedProjectId != null
+          ? props.selectedProjectId
+          : "UNASSIGNED",
+      );
+    }
+  } else if (isMultiCharacterView.value) {
+    for (const charId of normalizedSelectedCharacterIds.value) {
+      params.append("character_ids", String(charId));
+    }
+    params.append("character_mode", props.characterMultiMode ?? "union");
     if (props.projectViewMode === "project") {
       params.append(
         "project_id",
@@ -5726,6 +5829,9 @@ watch(
     () => props.selectedCharacter,
     () => props.selectedSet,
     () => props.selectedSetIds,
+    () => props.characterMultiMode,
+    () => props.setMultiMode,
+    () => props.setDifferenceBaseId,
     () => props.projectViewMode,
     () => props.selectedProjectId,
     () => props.searchQuery,
@@ -7471,59 +7577,106 @@ function handleEmptyStateReset() {
   }
 }
 
-.set-overlap-status-bar {
+.multi-select-toolbar {
   position: absolute;
-  left: 12px;
-  /* Keep clear of global F1 shortcuts FAB in bottom-right corner. */
-  right: 72px;
-  bottom: 10px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 6;
-  margin: 0;
-  padding: 10px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(var(--v-theme-on-accent), 0.28);
-  background: linear-gradient(
-    135deg,
-    rgba(var(--v-theme-accent), 0.96),
-    rgba(var(--v-theme-accent), 0.86)
-  );
-  color: rgb(var(--v-theme-on-accent));
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.015em;
-  backdrop-filter: blur(3px);
-  box-shadow:
-    0 10px 22px rgba(0, 0, 0, 0.28),
-    0 0 0 1px rgba(var(--v-theme-on-accent), 0.08) inset;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  pointer-events: none;
+  gap: 0;
+  height: 36px;
+  background: rgb(var(--v-theme-surface-variant));
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 13px;
 }
 
-.set-overlap-status-bar__main {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.set-overlap-status-bar__icon {
-  opacity: 0.95;
+.multi-select-toolbar__mode {
+  height: 100%;
+  padding: 0 10px;
+  border: none;
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  appearance: auto;
   flex: 0 0 auto;
 }
 
-.set-overlap-status-bar__text {
-  line-height: 1.35;
+.multi-select-toolbar__label {
+  padding: 0 12px;
+  white-space: nowrap;
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 13px;
+}
+
+.multi-select-toolbar__spacer {
+  flex: 1;
+}
+
+.multi-select-toolbar__separator {
+  padding: 0 2px;
+  color: rgba(var(--v-theme-on-surface), 0.3);
+  font-size: 13px;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.multi-select-toolbar__base-label {
+  padding: 0 6px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgb(var(--v-theme-on-surface-variant));
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.multi-select-toolbar__base {
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  appearance: auto;
+  flex: 0 0 auto;
+}
+
+.multi-select-toolbar__clear {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 100%;
+  padding: 0 14px;
+  border: none;
+  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface-variant));
+  font-size: 13px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 0.15s;
+}
+
+.multi-select-toolbar__clear:hover {
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 @media (max-width: 900px) {
-  .set-overlap-status-bar {
-    right: 72px;
-    font-size: 13px;
-    padding: 9px 12px;
-    gap: 8px;
+  .multi-select-toolbar {
+    height: 40px;
+    font-size: 12px;
+  }
+  .multi-select-toolbar__mode {
+    font-size: 12px;
   }
 }
 </style>
