@@ -66,14 +66,34 @@
           }}
         </v-icon>
         <span class="add-to-set-item-name">{{ set.name }}</span>
-        <span v-if="set.picture_count != null" class="add-to-set-item-count">
-          {{ set.picture_count }}
+        <span class="add-to-set-item-meta">
+          <span
+            v-if="set.picture_count != null"
+            class="add-to-set-item-count"
+          >
+            {{ set.picture_count }}
+          </span>
+          <span
+            v-if="isLastUsedSet(set)"
+            class="add-to-set-item-shortcut"
+            title="Press A to add to this set"
+            >A</span
+          >
         </span>
       </button>
 
       <div v-if="statusMessage" class="add-to-set-status">
         {{ statusMessage }}
       </div>
+    </div>
+
+    <div
+      v-if="statusMessage && !menuOpen"
+      class="add-to-set-shortcut-status"
+      role="status"
+      aria-live="polite"
+    >
+      {{ statusMessage }}
     </div>
   </div>
 </template>
@@ -149,6 +169,10 @@ function getSetState(set) {
   if (matched === 0) return "unchecked";
   if (matched === ids.length) return "checked";
   return "partial";
+}
+
+function isLastUsedSet(set) {
+  return Boolean(lastUsedSet.value && set?.id === lastUsedSet.value.id);
 }
 
 function toggleMenu() {
@@ -476,8 +500,21 @@ defineExpose({ addToLastSet, lastUsedSet });
   text-align: left;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   cursor: pointer;
+}
+
+.add-to-set-item-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-to-set-item-meta {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .add-to-set-item:hover {
@@ -495,6 +532,16 @@ defineExpose({ addToLastSet, lastUsedSet });
   color: rgba(255, 255, 255, 0.6);
 }
 
+.add-to-set-item-shortcut {
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.68rem;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .add-to-set-empty {
   padding: 6px 8px;
   font-size: 0.75rem;
@@ -506,6 +553,22 @@ defineExpose({ addToLastSet, lastUsedSet });
   padding: 6px 8px;
   font-size: 0.72rem;
   color: rgba(255, 255, 255, 0.7);
+}
+
+.add-to-set-shortcut-status {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  max-width: 220px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-dark-surface), 0.92);
+  color: rgba(var(--v-theme-on-dark-surface), 1);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  font-size: 0.74rem;
+  line-height: 1.2;
+  z-index: 12;
+  pointer-events: none;
 }
 
 /* ── Flyout (right-placement) mode ──────────────────────────── */
