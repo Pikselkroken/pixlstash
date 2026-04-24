@@ -251,7 +251,9 @@ def _fetch_set_candidate_ids(
         xor_intersection: set[int] | None = None
         for sid in set_ids:
             cur = members_by_set.get(sid, set())
-            xor_intersection = set(cur) if xor_intersection is None else xor_intersection & cur
+            xor_intersection = (
+                set(cur) if xor_intersection is None else xor_intersection & cur
+            )
         return xor_union - (xor_intersection or set())
 
     union_ids: set[int] = set()
@@ -578,7 +580,9 @@ def _select_pictures_for_listing(
         try:
             _base_id = int(base_set_id_raw)
             if _base_id in set_filter_ids:
-                set_filter_ids = [_base_id] + [s for s in set_filter_ids if s != _base_id]
+                set_filter_ids = [_base_id] + [
+                    s for s in set_filter_ids if s != _base_id
+                ]
         except (TypeError, ValueError):
             pass
 
@@ -2487,7 +2491,9 @@ def create_router(server) -> APIRouter:
             try:
                 _base_id = int(base_set_id_raw)
                 if _base_id in set_filter_ids:
-                    set_filter_ids = [_base_id] + [s for s in set_filter_ids if s != _base_id]
+                    set_filter_ids = [_base_id] + [
+                        s for s in set_filter_ids if s != _base_id
+                    ]
             except (TypeError, ValueError):
                 pass
 
@@ -2576,7 +2582,12 @@ def create_router(server) -> APIRouter:
                 search_character_mode = (
                     (search_character_mode_raw or "union").strip().lower()
                 )
-                if search_character_mode not in {"union", "intersection", "difference", "xor"}:
+                if search_character_mode not in {
+                    "union",
+                    "intersection",
+                    "difference",
+                    "xor",
+                }:
                     search_character_mode = "union"
 
                 def fetch_character_ids_by_mode(session, ids, mode):
