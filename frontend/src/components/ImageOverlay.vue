@@ -222,6 +222,7 @@
           </div>
           <AddToSetControl
             v-if="image"
+            ref="addToSetControlRef"
             :key="addToSetControlKey"
             :backend-url="backendUrl"
             :picture-ids="[image.id]"
@@ -1233,6 +1234,7 @@ const {
 } = toRefs(props);
 
 const image = ref(null);
+const addToSetControlRef = ref(null);
 const isTagsRefreshing = ref(false);
 const userVisibleHiddenTagKeys = ref(new Set());
 const sidebarOpen = ref(true);
@@ -2690,6 +2692,11 @@ function handleKeydown(e) {
     }
   } else if (e.key === "s" || e.key === "S") {
     toggleSidebar();
+  } else if (e.key === "a" || e.key === "A") {
+    if (addToSetControlRef.value?.lastUsedSet?.id) {
+      e.preventDefault();
+      addToSetControlRef.value.addToLastSet();
+    }
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
     e.preventDefault();
     beginAddTag();
