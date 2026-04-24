@@ -1,5 +1,13 @@
 <template>
-  <div ref="rootRef" class="add-to-set" :class="{ open: menuOpen, disabled, 'add-to-set--flyout': placement === 'right' }">
+  <div
+    ref="rootRef"
+    class="add-to-set"
+    :class="{
+      open: menuOpen,
+      disabled,
+      'add-to-set--flyout': placement === 'right',
+    }"
+  >
     <button
       class="add-to-set-btn"
       type="button"
@@ -12,7 +20,9 @@
     >
       <v-icon size="18">mdi-folder-plus</v-icon>
       <span class="add-to-set-label">{{ label }}</span>
-      <v-icon size="16" class="add-to-set-chevron">{{ placement === 'right' ? 'mdi-chevron-right' : 'mdi-chevron-down' }}</v-icon>
+      <v-icon size="16" class="add-to-set-chevron">{{
+        placement === "right" ? "mdi-chevron-right" : "mdi-chevron-down"
+      }}</v-icon>
     </button>
 
     <div class="add-to-set-menu" role="menu">
@@ -71,6 +81,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { apiClient } from "../utils/apiClient";
+
+// Persists the last set the user added a picture to, shared across all
+// AddToSetControl instances for the lifetime of the page.
+const lastUsedSet = ref(null); // { id, name }
 
 const props = defineProps({
   backendUrl: { type: String, required: true },
@@ -197,33 +211,31 @@ async function fetchSetMembers(list) {
     setMembersById.value = {};
     return;
   }
-  const entries = await Promise.all(
-    list.map(async (set) => {
-      try {
-        const params = new URLSearchParams({ expand_stacks: "true" });
-        if (props.includeDeletedMembers) {
-          params.set("include_deleted", "true");
-        }
-        const res = await apiClient.get(
-          resolveUrl(`/picture_sets/${set.id}/members?${params}`),
-        );
-        const data = await res.data;
-        const pictureIds = Array.isArray(data?.picture_ids)
-          ? data.picture_ids
-          : Array.isArray(data)
-            ? data
-            : [];
-        return [set.id, new Set(pictureIds.map((id) => String(id)))];
-      } catch (e) {
-        return [set.id, new Set()];
-      }
-    }),
-  );
-  const next = {};
-  entries.forEach(([setId, members]) => {
-    next[setId] = members;
-  });
-  setMembersById.value = next;
+  try {
+    const params = new URLSearchParams();
+    ids.forEach((id) => params.append("picture_id", id));
+    if (props.includeDeletedMembers) {
+      params.set("include_deleted", "true");
+    }
+    const res = await apiClient.get(
+      resolveUrl(`/picture_sets/membership?${params}`),
+    );
+    const data = res.data ?? {};
+    // data is { set_id: [picture_id, ...] }
+    const next = {};
+    // Initialise every known set to an empty Set so isSetDisabled works.
+    list.forEach((set) => {
+      next[set.id] = new Set();
+    });
+    Object.entries(data).forEach(([setId, memberIds]) => {
+      next[Number(setId)] = new Set(
+        (Array.isArray(memberIds) ? memberIds : []).map((id) => String(id)),
+      );
+    });
+    setMembersById.value = next;
+  } catch (e) {
+    setMembersById.value = {};
+  }
 }
 
 async function toggleSetMembership(set) {
@@ -282,6 +294,7 @@ async function toggleSetMembership(set) {
         pictureIds: idsToAdd,
         action: "added",
       });
+      lastUsedSet.value = { id: set.id, name: set.name };
       if (members) {
         idsToAdd.forEach((id) => members.add(String(id)));
       }
@@ -304,6 +317,47 @@ async function toggleSetMembership(set) {
   }, 2000);
 }
 
+// Adds the current picture(s) directly to the last used set without opening
+// the menu. Returns { success, setName } or { error }.
+async function addToLastSet() {
+  if (!lastUsedSet.value) return { error: "no-last-set" };
+  const ids = normalisedPictureIds.value;
+  if (!ids.length) return { error: "no-pictures" };
+  const set = lastUsedSet.value;
+  statusMessage.value = `Adding to ${set.name}...`;
+  try {
+    await Promise.all(
+      ids.map((id) =>
+        apiClient.post(resolveUrl(`/picture_sets/${set.id}/members/${id}`)),
+      ),
+    );
+    statusMessage.value = `Added to ${set.name}`;
+    // Update local membership cache if loaded.
+    const members = setMembersById.value?.[set.id];
+    if (members) ids.forEach((id) => members.add(String(id)));
+    const cachedSet = sets.value.find((s) => s.id === set.id);
+    if (cachedSet?.picture_count != null) cachedSet.picture_count += ids.length;
+    emit("added", { setId: set.id, pictureIds: ids, action: "added" });
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = window.setTimeout(() => {
+      statusMessage.value = "";
+    }, 2000);
+    return { success: true, setName: set.name };
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || String(e);
+    if (String(detail).includes("already in set")) {
+      statusMessage.value = `Already in ${set.name}`;
+    } else {
+      statusMessage.value = "Failed to add";
+    }
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = window.setTimeout(() => {
+      statusMessage.value = "";
+    }, 2000);
+    return { error: detail };
+  }
+}
+
 onBeforeUnmount(() => {
   if (statusTimer) clearTimeout(statusTimer);
   document.removeEventListener("pointerdown", handleOutsideClick, true);
@@ -319,6 +373,8 @@ watch(
     }
   },
 );
+
+defineExpose({ addToLastSet, lastUsedSet });
 </script>
 
 <style scoped>
