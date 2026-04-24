@@ -196,6 +196,7 @@ async function startImport(files, options = {}) {
   const MAX_RETRIES = 3;
   const MIN_TIMEOUT_MS = 60000;
   const TIMEOUT_PER_FILE_MS = 4000;
+  const NO_PROGRESS_ABORT_MS = 15000;
   const overrideTimeout =
     typeof options.timeoutMs === "number" && options.timeoutMs > 0
       ? options.timeoutMs
@@ -223,12 +224,14 @@ async function startImport(files, options = {}) {
       const batchTimeoutMs =
         overrideTimeout ??
         Math.max(MIN_TIMEOUT_MS, batch.length * TIMEOUT_PER_FILE_MS);
+      const batchIndex = Math.floor(i / BATCH_SIZE) + 1;
 
       logImportTrace("Uploading batch", {
-        batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+        batchIndex,
         batchSize: batch.length,
         batchBytes,
         timeoutMs: batchTimeoutMs,
+        noProgressAbortMs: NO_PROGRESS_ABORT_MS,
       });
 
       const formData = new FormData();
@@ -250,22 +253,40 @@ async function startImport(files, options = {}) {
 
         const controller = new AbortController();
         currentImportController.value = controller;
+        let firstProgressLogged = false;
+        let lastProgressAt = Date.now();
+        let noProgressAbortFired = false;
+        const noProgressTimer = setInterval(() => {
+          if (cancelImport.value) return;
+          const elapsed = Date.now() - lastProgressAt;
+          if (elapsed < NO_PROGRESS_ABORT_MS) return;
+          noProgressAbortFired = true;
+          console.warn(
+            `[IMPORT] Aborting batch ${batchIndex} attempt ${attempt} due to no upload progress for ${elapsed}ms. ` +
+              `firstProgress=${firstProgressLogged}`,
+          );
+          try {
+            controller.abort("no-upload-progress");
+          } catch {
+            controller.abort();
+          }
+        }, 1000);
         const timeout = setTimeout(() => {
           console.warn(
-            `[IMPORT] Aborting batch ${i / BATCH_SIZE + 1} after ${batchTimeoutMs}ms timeout (attempt ${attempt}). ` +
+            `[IMPORT] Aborting batch ${batchIndex} after ${batchTimeoutMs}ms timeout (attempt ${attempt}). ` +
               `Bytes uploaded so far: ${uploadBytesUploaded.value} / ${uploadBytesTotal.value}. ` +
               `Stall duration: ${uploadStallSeconds.value}s.`,
           );
           controller.abort();
         }, batchTimeoutMs);
-        let firstProgressLogged = false;
         _startStallTimer();
         logImportTrace("POST /pictures/import starting", {
           attempt,
-          batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+          batchIndex,
           batchSize: batch.length,
           batchBytes,
           timeoutMs: batchTimeoutMs,
+          noProgressAbortMs: NO_PROGRESS_ABORT_MS,
           url: `${props.backendUrl}/pictures/import`,
         });
 
@@ -279,12 +300,13 @@ async function startImport(files, options = {}) {
               headers: { "Content-Type": "multipart/form-data" },
               onUploadProgress: (progressEvent) => {
                 const loaded = progressEvent.loaded ?? 0;
+                lastProgressAt = Date.now();
                 if (!firstProgressLogged) {
                   firstProgressLogged = true;
                   logImportTrace("First onUploadProgress event received", {
                     loaded,
                     total: progressEvent.total,
-                    batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+                    batchIndex,
                   });
                 }
                 uploadBytesUploaded.value = Math.min(
@@ -295,41 +317,57 @@ async function startImport(files, options = {}) {
             },
           );
           _stopStallTimer();
+          clearInterval(noProgressTimer);
           clearTimeout(timeout);
           if (!firstProgressLogged) {
             logImportTrace(
               "WARNING: onUploadProgress never fired for this batch",
               {
-                batchIndex: Math.floor(i / BATCH_SIZE) + 1,
+                batchIndex,
                 responseStatus: res?.status,
               },
             );
           }
+          logImportTrace("POST /pictures/import completed", {
+            attempt,
+            batchIndex,
+            status: res?.status,
+            firstProgressLogged,
+          });
           if (controller === currentImportController.value) {
             currentImportController.value = null;
           }
           break;
         } catch (err) {
           _stopStallTimer();
+          clearInterval(noProgressTimer);
           clearTimeout(timeout);
           if (controller === currentImportController.value) {
             currentImportController.value = null;
           }
-          if (err.name === "AbortError" && cancelImport.value) {
+          const isAbort =
+            err?.name === "AbortError" || err?.code === "ERR_CANCELED";
+          const isTimeout = err?.code === "ECONNABORTED";
+          if (isAbort && cancelImport.value) {
             finalizeCancelled();
             return;
           }
-          if (err.name === "AbortError") {
-            lastError = new Error("Upload timed out");
+          if (isAbort || isTimeout) {
+            lastError = new Error(
+              noProgressAbortFired
+                ? "Upload stalled (no progress)"
+                : "Upload timed out",
+            );
             console.warn(
-              `[IMPORT] Batch ${i / BATCH_SIZE + 1} timed out (attempt ${attempt}). ` +
+              `[IMPORT] Batch ${batchIndex} aborted (attempt ${attempt}). ` +
                 `firstProgressLogged=${firstProgressLogged}, stallSeconds=${uploadStallSeconds.value}, ` +
-                `bytesUploaded=${uploadBytesUploaded.value}/${uploadBytesTotal.value}`,
+                `bytesUploaded=${uploadBytesUploaded.value}/${uploadBytesTotal.value}, ` +
+                `reason=${noProgressAbortFired ? "no-progress" : isTimeout ? "timeout" : "abort"}`,
             );
           } else {
             lastError = err;
             console.warn(
-              `[IMPORT] Batch ${i / BATCH_SIZE + 1} failed (attempt ${attempt}):`,
+              `[IMPORT] Batch ${batchIndex} failed (attempt ${attempt}):`,
               err,
               `name=${err.name}, message=${err.message}, code=${err.code}, ` +
                 `firstProgressLogged=${firstProgressLogged}, stallSeconds=${uploadStallSeconds.value}`,

@@ -2810,7 +2810,6 @@ def create_router(server) -> APIRouter:
         description="Starts an asynchronous import of uploaded image/video files (or zip contents) and returns a task id.",
     )
     async def import_pictures(
-        background_tasks: BackgroundTasks,
         file: list[UploadFile] = File(None),
         project_id: int | None = Form(None),
     ):
@@ -3263,7 +3262,13 @@ def create_router(server) -> APIRouter:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, run_import_task, server)
 
-        background_tasks.add_task(run_import_task_async, server)
+        # Schedule as an independent asyncio Task, detached from the ASGI
+        # request lifecycle.  Using BackgroundTasks would tie the task to the
+        # response, preventing uvicorn's h11 handler from accepting the next
+        # request on the keep-alive connection until the full 0.7-1 s SHA-
+        # hashing pass completes — causing TCP back-pressure that stalls the
+        # browser's upload for large multi-batch imports.
+        asyncio.create_task(run_import_task_async(server))
         return {"task_id": task_id}
 
     @router.get(
