@@ -89,8 +89,18 @@ def validate_reference_folder_accessible(path: str) -> str | None:
         An error message string if the path is inaccessible, or ``None`` when
         the path is a readable directory.
     """
-    if not os.path.isdir(path):
-        return f"Path is not a directory or does not exist: {path}"
-    if not os.access(path, os.R_OK | os.X_OK):
-        return f"Path is not readable: {path}"
+    if not os.path.isabs(path):
+        return "Path must be absolute."
+
+    # Canonicalize before touching the filesystem so checks operate on a
+    # normalized, symlink-resolved path.
+    secured_path = os.path.realpath(os.path.normpath(path))
+    restricted_error = validate_reference_folder_path(secured_path)
+    if restricted_error:
+        return restricted_error
+
+    if not os.path.isdir(secured_path):
+        return f"Path is not a directory or does not exist: {secured_path}"
+    if not os.access(secured_path, os.R_OK | os.X_OK):
+        return f"Path is not readable: {secured_path}"
     return None
